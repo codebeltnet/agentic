@@ -1,0 +1,252 @@
+---
+name: agent-commits
+description: >
+  Rules and workflow for creating well-structured git commits using emoji
+  prefixes (gitmoji and beyond), with support for both git bot commit
+  (AI-authored) and regular git commit (human-authored). Use this skill
+  whenever the user asks to commit changes, stage files, write a commit
+  message, or review what should be committed. Also use it when the user
+  says things like "commit this", "make a commit", "commit your changes",
+  "commit what you just did", "what should my commit message be", "stage
+  and commit", or any time git commit workflows come up. Enforces
+  conventions with emoji plus lowercase prefix (init, content, style, fix,
+  refactor, docs), max 70 chars, one logical change per commit, grouped
+  by technology type.
+---
+
+# Agent Commits
+
+This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji and prefix, and running the commit. It supports two identity modes: bot-attributed (`git bot commit`) and human-attributed (`git commit`).
+
+## Prerequisites
+
+The `git bot commit` command requires a one-time alias setup in your global git config. Run this once per machine:
+
+```bash
+git config --global alias.bot '!git -c user.name="<bot-name>" -c user.email="<bot-email>"'
+```
+
+Replace `<bot-name>` and `<bot-email>` with the identity you want AI-authored commits to appear under.
+
+Verify it works:
+
+```bash
+git bot commit --allow-empty -m "test bot identity"
+git log -1 --format="%an <%ae>"   # should show bot name and email
+git reset HEAD~1                   # undo the test commit
+```
+
+---
+
+## When to use `git bot commit` vs `git commit`
+
+In both cases, **the AI does all the work** — reviewing changes, grouping them logically, composing the message, staging files, and running the command. The only difference is which identity the commit is attributed to.
+
+| | `git bot commit` | `git commit` |
+|---|---|---|
+| **When** | User asks the AI to commit (e.g. "commit your changes", "do a git bot commit") | User asks to commit under their own identity (e.g. "please do a git commit", "commit this for me") |
+| **Who gets credit** | Bot alias (e.g. `aicia[bot]`) | Human's default git profile |
+| **Command** | `git bot commit -m "..."` | `git commit -m "..."` |
+
+The commit message format, emoji conventions, grouping strategy, and everything else is **identical** for both. The profile is the only thing that changes.
+
+Never add or modify git remotes. Never set `git user.name` or `git user.email` locally.
+
+---
+
+## Commit Message Format
+
+```
+<emoji> <prefix>: <short description>
+```
+
+- **Emoji** comes first — picked from the technology/type tables below
+- **Prefix** is lowercase (see allowed prefixes below) — **never use `feat:`**
+- **Description** is lowercase, imperative, max 70 characters total (including emoji and prefix)
+- One logical change per commit — don't bundle unrelated things
+
+### Allowed Prefixes
+
+| Prefix | Use When |
+|--------|----------|
+| `init:` | Initial setup or configuration of something new |
+| `content:` | Endpoint definitions, DTOs, contracts, data shapes |
+| `style:` | Code formatting, cleanup, aesthetic changes |
+| `fix:` | Bug fixes |
+| `refactor:` | Restructuring without behavior change |
+| `docs:` | Documentation, XML comments, OpenAPI annotations |
+
+### Emoji Selection — Gitmoji First, Fallback Second
+
+**Always prefer an official [gitmoji](https://gitmoji.dev) emoji** when the semantic meaning is a good fit. Only use a non-gitmoji emoji when no official entry matches well enough.
+
+#### Primary: Gitmoji
+
+| Emoji | Gitmoji code | Use when | Example |
+|-------|-------------|----------|---------|
+| ✨ | `:sparkles:` | Introduce new application code, modules, endpoints, features | `✨ add user submission endpoint` |
+| 🎨 | `:art:` | Code style, formatting, structure cleanup | `🎨 style: format endpoint modules` |
+| 🐛 | `:bug:` | Fix a bug | `🐛 fix: handle null optional fields in dto` |
+| 🩹 | `:adhesive_bandage:` | Simple fix for a non-critical issue | `🩹 fix: correct typo in error message` |
+| 🚑️ | `:ambulance:` | Critical hotfix | `🚑️ fix: patch auth bypass vulnerability` |
+| ♻️ | `:recycle:` | Refactor code | `♻️ refactor: extract mapper to separate class` |
+| 📝 | `:memo:` | Documentation, inline comments, API annotations | `📝 docs: add inline docs to submission handler` |
+| 🔧 | `:wrench:` | Configuration files (app config, environment settings) | `🔧 init: configure swagger and versioning` |
+| ➕ | `:heavy_plus_sign:` | Add a package dependency | `➕ add validation library` |
+| ⬆️ | `:arrow_up:` | Upgrade package dependencies | `⬆️ upgrade dependencies to latest` |
+| ➖ | `:heavy_minus_sign:` | Remove a package dependency | `➖ remove unused logging package` |
+| 🗃️ | `:card_file_box:` | Database changes, ORM models, migrations, entities | `🗃️ add submission entity and db context` |
+| ✅ | `:white_check_mark:` | Add or update tests | `✅ add integration tests for submission api` |
+| 🧪 | `:test_tube:` | Add a failing test (TDD red phase) | `🧪 add failing test for null notes field` |
+| 🦺 | `:safety_vest:` | Validation code | `🦺 add submission dto validation rules` |
+| 👔 | `:necktie:` | Business logic, service layer, domain code | `👔 add submission processing service` |
+| 🏷️ | `:label:` | Add or update types, interfaces, contracts (type-only) | `🏷️ content: add submission dto contracts` |
+| 🔒️ | `:lock:` | Security or privacy fixes | `🔒️ fix: prevent open redirect in login` |
+| 🚨 | `:rotating_light:` | Fix compiler or linter warnings | `🚨 fix: resolve nullable warnings in handler` |
+| 💡 | `:bulb:` | Add or update inline comments | `💡 add comments to submission processing logic` |
+| 🔥 | `:fire:` | Remove code or files | `🔥 remove deprecated submission handler` |
+| ⚰️ | `:coffin:` | Remove dead code | `⚰️ remove unused dto properties` |
+| 🗑️ | `:wastebasket:` | Deprecate code that needs cleanup | `🗑️ deprecate v1 submission endpoint` |
+| 🎉 | `:tada:` | Begin a brand-new project | `🎉 init: begin api project` |
+| 🚧 | `:construction:` | Work in progress (avoid where possible) | `🚧 wip: partial submission module setup` |
+
+#### Fallback: Extended Emoji Reference
+
+When no gitmoji entry fits, consult **[this curated extended reference](https://gist.github.com/marcellodesales/aba1152a91d69f9b39745a08fd73a6f9)** — a multi-source collection covering languages, platforms, cloud infra, and programming strategies that gitmoji doesn't address.
+
+Key entries from that reference, by category:
+
+**Bootstrapping & infrastructure**
+
+| Emoji | Use when | Example |
+|-------|----------|---------|
+| ⚙️ | App bootstrapping / host setup (distinct from 🔧 config files) | `⚙️ init: setup app host and middleware` |
+| 🏗 | Deployment or infrastructure changes | `🏗 init: add app service deployment config` |
+| ☁️ | Cloud provider setup or changes | `☁️ add cloud secrets integration` |
+| ☸️ | Kubernetes | `☸️ add k8s deployment manifests` |
+| 🎡 | Helm charts | `🎡 add helm chart for api service` |
+| 🧮 | Lambda / serverless functions | `🧮 add serverless function trigger` |
+
+**Containers & deployment**
+
+| Emoji | Use when | Example |
+|-------|----------|---------|
+| 🐳 | Docker | `🐳 add dockerfile for api deployment` |
+| 🚀 | Deployment / release | `🚀 deploy request api to staging` |
+
+**Data & storage**
+
+| Emoji | Use when | Example |
+|-------|----------|---------|
+| 🛢 | General database (when 🗃️ feels too narrow) | `🛢 add request storage schema` |
+| 🌱 | Migration scripts | `🌱 add initial request table migration` |
+| 🐘 | PostgreSQL-specific | `🐘 add postgres connection config` |
+
+**Documentation**
+
+| Emoji | Use when | Example |
+|-------|----------|---------|
+| 📚 | High-level docs, README, wiki (gitmoji's 📝 covers inline/XML docs) | `📚 docs: add api usage documentation` |
+
+**Observability & runtime**
+
+| Emoji | Use when | Example |
+|-------|----------|---------|
+| 🪵 | Structured logging setup | `🪵 add structured logging setup` |
+| 📢 | Notifications or event publishing | `📢 add submission event notification` |
+| 🏃 | Background workers or hosted services | `🏃 add background worker for processing` |
+
+**Patterns & architecture**
+
+| Emoji | Use when | Example |
+|-------|----------|---------|
+| 🧩 | Components, modules, DI registrations | `🧩 register services in di container` |
+| 🏭 | Factory patterns | `🏭 add submission handler factory` |
+| 📆 | Schedulers, cron, background jobs | `📆 add cron scheduler for cleanup job` |
+| 🤖 | AI / ML integrations | `🤖 add openai client integration` |
+
+**AI / tools (when relevant)**
+
+| Emoji | Use when | Example |
+|-------|----------|---------|
+| 🦾 | AI prompt or agent code | `🦾 add ai prompt template for request triage` |
+| 🧠 | LLM integrations | `🧠 integrate chatgpt for request classification` |
+
+> When in doubt between two options, pick the emoji whose meaning most closely matches *what the change actually does*. If nothing fits, use 🎭 (`:performing_arts:`) as a last resort and note the intent in the message.
+
+---
+
+## Commit Workflow
+
+### Step 1: Review changes
+
+Run `git status` and `git diff` (and `git diff --staged` if there are staged changes) to understand what has changed. Don't commit blindly — understand what each file is doing before grouping.
+
+### Step 2: Group into logical commits
+
+Group changes by technology and logical purpose. Ask yourself: if someone reads only the commit log, does each entry tell a clear, focused story?
+
+Common groupings:
+- Config/setup files together (app host, environment config, bootstrapping)
+- New feature or module code together
+- Data contracts, types, and interfaces together
+- Database models, migrations, and schema changes together
+- Tests together
+- Documentation and inline comments together
+
+When in doubt, one commit per "thing that changes" is better than one big commit.
+
+### Step 3: Stage and commit each group
+
+For each group:
+1. `git add <specific files>` — be precise, don't use `git add .` unless everything belongs in one commit
+2. Compose the commit message (see format above)
+3. Run the appropriate commit command:
+   - `git bot commit -m "<message>"` — if the user asked the AI to commit (bot identity)
+   - `git commit -m "<message>"` — if the user asked to commit under their own identity
+
+### Step 4: Verify
+
+After committing, run `git log --oneline -5` to confirm the commit looks right. Check the author with `git log -1 --format="%an <%ae>"` if needed.
+
+---
+
+## Good Examples
+
+```
+🎉 init: begin api project
+🔧 init: configure swagger and versioning
+⚙️ init: setup app host and middleware
+✨ add submission endpoint module
+🗃️ add submission entity and db context
+🏷️ content: add submission dto contracts
+🎨 style: format endpoint modules
+♻️ refactor: extract mapper to separate class
+🐛 fix: handle null optional fields in dto
+🦺 add submission dto validation rules
+✅ add integration tests for submission api
+➕ add validation library
+🐳 add dockerfile for api deployment
+```
+
+## Bad Examples (and why)
+
+```
+feat: add submission endpoint            ← "feat:" is not an allowed prefix
+✨ Feat: Add Submission Module            ← uppercase, "Feat:" not allowed
+🎉 initial commit with all files         ← vague, bundles everything
+⚙️ config: setup api                     ← "config:" is not an allowed prefix
+```
+
+---
+
+## Branching (for reference)
+
+Branch format: `[version]/[description]`
+
+Examples:
+- `v1.0.0/mvp` — initial MVP
+- `v1.1.0/validation` — adding validation
+- `v1.2.0/admin-dashboard` — new feature area
+
+Don't create, rename, or delete branches unless the user explicitly asks.
