@@ -1,5 +1,5 @@
 ---
-name: agent-commits
+name: git-commits
 description: >
   Rules and workflow for creating well-structured git commits using emoji
   prefixes (gitmoji and beyond), with support for git bot commit
@@ -15,7 +15,7 @@ description: >
   grouped by technology type.
 ---
 
-# Agent Commits
+# Git Commits
 
 This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji and prefix, and running the commit. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
 
