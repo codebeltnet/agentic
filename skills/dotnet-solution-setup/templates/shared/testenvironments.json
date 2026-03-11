@@ -1,0 +1,15 @@
+{
+    "version": "1",
+    "environments": [
+        {
+            "name": "WSL-Ubuntu",
+            "type": "wsl",
+            "wslDistribution": "Ubuntu-24.04"
+        },
+        {
+            "name": "Docker-Ubuntu",
+            "type": "docker",
+            "dockerImage": "codebeltnet/ubuntu-testrunner:net8.0.418-9.0.311-10.0.103"
+        }
+    ]
+}
