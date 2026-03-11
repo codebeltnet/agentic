@@ -2,21 +2,22 @@
 name: agent-commits
 description: >
   Rules and workflow for creating well-structured git commits using emoji
-  prefixes (gitmoji and beyond), with support for both git bot commit
-  (AI-authored) and regular git commit (human-authored). Use this skill
-  whenever the user asks to commit changes, stage files, write a commit
-  message, or review what should be committed. Also use it when the user
-  says things like "commit this", "make a commit", "commit your changes",
-  "commit what you just did", "what should my commit message be", "stage
-  and commit", or any time git commit workflows come up. Enforces
-  conventions with emoji plus lowercase prefix (init, content, style, fix,
-  refactor, docs), max 70 chars, one logical change per commit, grouped
-  by technology type.
+  prefixes (gitmoji and beyond), with support for git bot commit
+  (AI-authored), regular git commit (human-authored), and git our commit
+  (collaborative — agent analyzes authorship and human picks attribution).
+  Use this skill whenever the user asks to commit changes, stage files,
+  write a commit message, or review what should be committed. Also use it
+  when the user says things like "commit this", "make a commit", "commit
+  your changes", "commit what you just did", "what should my commit
+  message be", "stage and commit", or any time git commit workflows come
+  up. Enforces conventions with emoji plus lowercase prefix (init, content,
+  style, fix, refactor, docs), max 70 chars, one logical change per commit,
+  grouped by technology type.
 ---
 
 # Agent Commits
 
-This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji and prefix, and running the commit. It supports two identity modes: bot-attributed (`git bot commit`) and human-attributed (`git commit`).
+This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji and prefix, and running the commit. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
 
 ## Prerequisites
 
@@ -38,15 +39,31 @@ git reset HEAD~1                   # undo the test commit
 
 ---
 
-## When to use `git bot commit` vs `git commit`
+## When to use `git bot commit` vs `git commit` vs `git our commit`
 
-In both cases, **the AI does all the work** — reviewing changes, grouping them logically, composing the message, staging files, and running the command. The only difference is which identity the commit is attributed to.
+In all cases, **the AI does all the work** — reviewing changes, grouping them logically, composing the message, staging files, and running the command. The only difference is which identity the commit is attributed to.
 
-| | `git bot commit` | `git commit` |
-|---|---|---|
-| **When** | User asks the AI to commit (e.g. "commit your changes", "do a git bot commit") | User asks to commit under their own identity (e.g. "please do a git commit", "commit this for me") |
-| **Who gets credit** | Bot alias (e.g. `aicia[bot]`) | Human's default git profile |
-| **Command** | `git bot commit -m "..."` | `git commit -m "..."` |
+| | `git bot commit` | `git commit` | `git our commit` |
+|---|---|---|---|
+| **When** | User asks the AI to commit (e.g. "commit your changes", "do a git bot commit") | User asks to commit under their own identity (e.g. "please do a git commit") | User says "our commit" or the work was collaborative (both human and agent edited files) |
+| **Who gets credit** | Bot alias (e.g. `aicia[bot]`) | Human's default git profile | Agent analyzes authorship, human picks attribution |
+| **Command** | `git bot commit -m "..."` | `git commit -m "..."` | Either, based on human's choice |
+
+### How `git our commit` works
+
+When the user says "our commit" (or similar), the agent needs to figure out who did what:
+
+1. **Analyze the diff** — review all changed files and determine which were modified by the agent during the current session vs which were edited by the human outside the session
+2. **Present the breakdown** — show the user a summary:
+   ```
+   🤖 Agent-authored:  src/UserService.cs, src/UserController.cs
+   👤 Human-authored:  README.md, appsettings.json
+   🤝 Mixed/unclear:  src/Startup.cs
+   ```
+3. **Determine attribution**:
+   - If all changes are clearly by one party → auto-attribute to that party, tell the user
+   - If changes are mixed → ask: **"Who should be the author for this commit — you or bot?"**
+4. **Commit** with the chosen identity — no `Co-authored-by` trailer (GitHub's PR flow already tracks collaboration)
 
 The commit message format, emoji conventions, grouping strategy, and everything else is **identical** for both. The profile is the only thing that changes.
 
@@ -204,6 +221,7 @@ For each group:
 3. Run the appropriate commit command:
    - `git bot commit -m "<message>"` — if the user asked the AI to commit (bot identity)
    - `git commit -m "<message>"` — if the user asked to commit under their own identity
+   - For `git our commit` — use whichever command matches the attribution the human chose
 
 ### Step 4: Verify
 
