@@ -53,6 +53,7 @@ npx skillsadd codebeltnet/agentic/agent-commits
 | Skill | Description |
 |-------|-------------|
 | [agent-commits](skills/agent-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and support for both bot-attributed (`git bot commit`) and human-attributed (`git commit`) commits. The agent does all the work either way. Stack-agnostic. |
+| [dotnet-solution-setup](skills/dotnet-solution-setup/SKILL.md) | Scaffold new .NET solutions following codebeltnet engineering conventions. Supports NuGet library and standalone application variants. Generates all project files, CI pipeline, MSBuild configuration, and code quality tooling. |
 
 ## Repository structure
 
