@@ -52,7 +52,7 @@ npx skillsadd codebeltnet/agentic/trunk-first-repo
 
 | Skill | Description |
 |-------|-------------|
-| [agent-commits](skills/agent-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and support for both bot-attributed (`git bot commit`) and human-attributed (`git commit`) commits. The agent does all the work either way. Stack-agnostic. |
+| [agent-commits](skills/agent-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). The agent does all the work either way. Stack-agnostic. |
 | [dotnet-solution-setup](skills/dotnet-solution-setup/SKILL.md) | Scaffold new .NET solutions following codebeltnet engineering conventions. Supports NuGet library and standalone application variants. Generates all project files, CI pipeline, MSBuild configuration, and code quality tooling. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
 
@@ -60,11 +60,11 @@ npx skillsadd codebeltnet/agentic/trunk-first-repo
 
 Commit messages are the most-read documentation in any codebase — yet they're usually an afterthought. "fix stuff", "wip", "address PR feedback" tells you nothing six months later. Writing good commits takes discipline, and when you're in flow, it's the first thing that slips.
 
-**agent-commits** handles the entire commit workflow — staging, diffing, crafting the message, choosing the right emoji — so every commit is consistent and meaningful without breaking your flow. Whether the agent authors the commit (`git bot commit`) or you do (`git commit`), the quality is the same.
+**agent-commits** handles the entire commit workflow — staging, diffing, crafting the message, choosing the right emoji — so every commit is consistent and meaningful without breaking your flow. Whether the agent authors the commit (`git bot commit`), you do (`git commit`), or you worked on it together (`git our commit`), the quality is the same.
 
 - **Gitmoji-first** — visual commit categories that are scannable at a glance
 - **Conventional prefixes** — `fix`, `feat`, `refactor` as fallback when gitmoji isn't available
-- **Bot or human attribution** — the agent does the work either way, you choose who gets credit
+- **Three identity modes** — bot, human, or collaborative — the agent does the work either way, you choose who gets credit
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
 
