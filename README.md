@@ -34,8 +34,8 @@ If you want a bundle of skills always available, just install them all:
 
 ```bash
 npx skillsadd codebeltnet/agentic/agent-commits
+npx skillsadd codebeltnet/agentic/trunk-first-repo
 # npx skillsadd codebeltnet/agentic/another-skill
-# npx skillsadd codebeltnet/agentic/yet-another
 ```
 
 ### Scoping options
@@ -54,6 +54,18 @@ npx skillsadd codebeltnet/agentic/agent-commits
 |-------|-------------|
 | [agent-commits](skills/agent-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and support for both bot-attributed (`git bot commit`) and human-attributed (`git commit`) commits. The agent does all the work either way. Stack-agnostic. |
 | [dotnet-solution-setup](skills/dotnet-solution-setup/SKILL.md) | Scaffold new .NET solutions following codebeltnet engineering conventions. Supports NuGet library and standalone application variants. Generates all project files, CI pipeline, MSBuild configuration, and code quality tooling. |
+| [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
+
+### Why trunk-first?
+
+Most repositories start with `git init` followed by committing everything directly to `main`. This works — until someone force-pushes to main, or a half-finished feature lands without review. By the time you add branch protection, the history is already messy.
+
+**trunk-first-repo** flips this: main starts empty and stays clean from the very first commit. Every piece of content enters through a pull request. This gives you:
+
+- **Review from day one** — no "we'll add branch protection later" that never happens
+- **Clean, meaningful history** — main tells the story of reviewed, approved changes
+- **Version-aware branches** — `v0.0.1/spike-auth` vs `v1.0.0/release-prep` signals project maturity at a glance
+- **Zero-friction setup** — one skill invocation, not a 10-step checklist
 
 ## Repository structure
 
