@@ -56,6 +56,29 @@ npx skillsadd codebeltnet/agentic/trunk-first-repo
 | [dotnet-solution-setup](skills/dotnet-solution-setup/SKILL.md) | Scaffold new .NET solutions following codebeltnet engineering conventions. Supports NuGet library and standalone application variants. Generates all project files, CI pipeline, MSBuild configuration, and code quality tooling. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
 
+### Why agent-commits?
+
+Commit messages are the most-read documentation in any codebase — yet they're usually an afterthought. "fix stuff", "wip", "address PR feedback" tells you nothing six months later. Writing good commits takes discipline, and when you're in flow, it's the first thing that slips.
+
+**agent-commits** handles the entire commit workflow — staging, diffing, crafting the message, choosing the right emoji — so every commit is consistent and meaningful without breaking your flow. Whether the agent authors the commit (`git bot commit`) or you do (`git commit`), the quality is the same.
+
+- **Gitmoji-first** — visual commit categories that are scannable at a glance
+- **Conventional prefixes** — `fix`, `feat`, `refactor` as fallback when gitmoji isn't available
+- **Bot or human attribution** — the agent does the work either way, you choose who gets credit
+- **Stack-agnostic** — works with any language, framework, or project type
+- **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
+
+### Why dotnet-solution-setup?
+
+Starting a new .NET solution "from scratch" usually means copying from your last project, deleting half of it, and spending an hour wiring up CI, MSBuild props, versioning, and code quality tooling. Every new repo drifts slightly from the last one. Six months later, no two solutions look the same.
+
+**dotnet-solution-setup** encodes the full codebeltnet convention into a repeatable scaffold — from `Directory.Build.props` to CI pipelines to DocFX. Every solution starts identical, and every deviation is intentional.
+
+- **Convention over configuration** — opinionated defaults that match real production setups
+- **Variant-aware** — NuGet library and standalone app have different needs; the skill knows the difference
+- **Complete from the start** — CI pipeline, code quality, test infrastructure, and governance docs on day one
+- **Template-driven** — real files, not generated strings, so you can inspect and evolve the templates
+
 ### Why trunk-first?
 
 Most repositories start with `git init` followed by committing everything directly to `main`. This works — until someone force-pushes to main, or a half-finished feature lands without review. By the time you add branch protection, the history is already messy.
