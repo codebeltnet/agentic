@@ -51,7 +51,7 @@ In all cases, **the AI does all the work** — reviewing changes, grouping them 
 
 ### How `git our commit` works
 
-When the user says "our commit" (or similar), the agent **must always ask before committing**:
+When the user says "our commit" (or similar), the agent attributes each commit to whoever authored the files in it:
 
 1. **Analyze the diff** — review all changed files and determine which were modified by the agent during the current session vs which were edited by the human outside the session
 2. **Present the breakdown** — show the user a summary:
@@ -60,10 +60,21 @@ When the user says "our commit" (or similar), the agent **must always ask before
    👤 Human-authored:  README.md, appsettings.json
    🤝 Mixed/unclear:  src/Startup.cs
    ```
-3. **Always ask attribution** — for every commit group, ask: **"Who should be the author — you or bot?"**
-   - Never assume. Never auto-attribute. Never skip this question.
-   - The human decides — even if all files were clearly authored by one party.
-4. **Commit** with the chosen identity — no `Co-authored-by` trailer (GitHub's PR flow already tracks collaboration)
+3. **Group into commits** (Step 2 of the main workflow) — then assign attribution per group:
+   - If all files in a group are agent-authored → `git bot commit`
+   - If all files in a group are human-authored → `git commit`
+   - If a group has mixed/unclear files → ask: **"Who should be the author for this group — you or bot?"**
+4. **Present the commit plan with attribution already assigned** — show which commits use which identity:
+   ```
+   1. 🙈 add gitignore                          (👤 you)
+      Files: .gitignore
+   2. 🦾 init: add agent agreements              (🤖 bot)
+      Files: AGENTS.md
+   3. 🍱 add photo and hero image assets         (👤 you)
+      Files: assets/dj-photo.jpg, assets/hero.png
+   ```
+   The user confirms or adjusts the plan — they can override any attribution.
+5. **Commit** each group with its assigned identity — no `Co-authored-by` trailer (GitHub's PR flow already tracks collaboration)
 
 The commit message format, emoji conventions, grouping strategy, and everything else is **identical** for both. The profile is the only thing that changes.
 
