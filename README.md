@@ -53,7 +53,8 @@ npx skillsadd codebeltnet/agentic/trunk-first-repo
 | Skill | Description |
 |-------|-------------|
 | [git-commits](skills/git-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). The agent does all the work either way. Stack-agnostic. |
-| [dotnet-solution-setup](skills/dotnet-solution-setup/SKILL.md) | Scaffold new .NET solutions following codebeltnet engineering conventions. Supports NuGet library and standalone application variants. Generates all project files, CI pipeline, MSBuild configuration, and code quality tooling. |
+| [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Multi-target frameworks, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
+| [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web API, and Worker host types with Startup or Minimal hosting patterns, functional tests, and simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
 
 ### Why git-commits?
@@ -68,14 +69,14 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
 
-### Why dotnet-solution-setup?
+### Why dotnet-new-lib-slnx and dotnet-new-app-slnx?
 
 Starting a new .NET solution "from scratch" usually means copying from your last project, deleting half of it, and spending an hour wiring up CI, MSBuild props, versioning, and code quality tooling. Every new repo drifts slightly from the last one. Six months later, no two solutions look the same.
 
-**dotnet-solution-setup** encodes the full codebeltnet convention into a repeatable scaffold — from `Directory.Build.props` to CI pipelines to DocFX. Every solution starts identical, and every deviation is intentional.
+**dotnet-new-lib-slnx** and **dotnet-new-app-slnx** encode the full codebeltnet convention into repeatable scaffolds — from `Directory.Build.props` to CI pipelines to DocFX. Each skill is focused on its domain: libraries get multi-target frameworks, signing, and NuGet packaging; apps get host type selection, hosting patterns, and functional tests. No conditional branching, no wrong questions asked.
 
 - **Convention over configuration** — opinionated defaults that match real production setups
-- **Variant-aware** — NuGet library and standalone app have different needs; the skill knows the difference
+- **Focused skills** — library and app concerns are fully separated, no variant confusion
 - **Complete from the start** — CI pipeline, code quality, test infrastructure, and governance docs on day one
 - **Template-driven** — real files, not generated strings, so you can inspect and evolve the templates
 
