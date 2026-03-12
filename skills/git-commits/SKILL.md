@@ -51,7 +51,7 @@ In all cases, **the AI does all the work** — reviewing changes, grouping them 
 
 ### How `git our commit` works
 
-When the user says "our commit" (or similar), the agent needs to figure out who did what:
+When the user says "our commit" (or similar), the agent **must always ask before committing**:
 
 1. **Analyze the diff** — review all changed files and determine which were modified by the agent during the current session vs which were edited by the human outside the session
 2. **Present the breakdown** — show the user a summary:
@@ -60,9 +60,9 @@ When the user says "our commit" (or similar), the agent needs to figure out who 
    👤 Human-authored:  README.md, appsettings.json
    🤝 Mixed/unclear:  src/Startup.cs
    ```
-3. **Determine attribution**:
-   - If all changes are clearly by one party → auto-attribute to that party, tell the user
-   - If changes are mixed → ask: **"Who should be the author for this commit — you or bot?"**
+3. **Always ask attribution** — for every commit group, ask: **"Who should be the author — you or bot?"**
+   - Never assume. Never auto-attribute. Never skip this question.
+   - The human decides — even if all files were clearly authored by one party.
 4. **Commit** with the chosen identity — no `Co-authored-by` trailer (GitHub's PR flow already tracks collaboration)
 
 The commit message format, emoji conventions, grouping strategy, and everything else is **identical** for both. The profile is the only thing that changes.
