@@ -1,0 +1,124 @@
+name: CI Pipeline
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      configuration:
+        type: choice
+        description: The build configuration to use in the deploy stage.
+        required: true
+        default: Release
+        options:
+          - Debug
+          - Release
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: call-build
+    strategy:
+      matrix:
+        arch: [X64, ARM64]
+        configuration: [Debug, Release]
+    uses: codebeltnet/jobs-dotnet-build/.github/workflows/default.yml@v3
+    with:
+      projects: src/**/*.csproj
+      configuration: ${{ matrix.configuration }}
+      strong-name-key-filename: {SNK_FILE}
+      runs-on: ${{ matrix.arch == 'ARM64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+      upload-build-artifact-name: build-${{ matrix.configuration }}-${{ matrix.arch }}
+    secrets:
+      GCP_TOKEN: ${{ secrets.GCP_TOKEN }}
+      GCP_BUCKETNAME: ${{ secrets.GCP_BUCKETNAME }}
+
+  pack:
+    name: call-pack
+    needs: [build]
+    strategy:
+      matrix:
+        configuration: [Debug, Release]
+    uses: codebeltnet/jobs-dotnet-pack/.github/workflows/default.yml@v3
+    with:
+      configuration: ${{ matrix.configuration }}
+      version: ${{ needs.build.outputs.version }}
+      download-build-artifact-pattern: build-${{ matrix.configuration }}-X64
+
+  test_linux:
+    name: call-test-linux
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [X64, ARM64]
+        configuration: [Debug, Release]
+    uses: codebeltnet/jobs-dotnet-test/.github/workflows/default.yml@v3
+    with:
+      runs-on: ${{ matrix.arch == 'ARM64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+      projects: test/**/*.csproj
+      configuration: ${{ matrix.configuration }}
+      verbosity-level: normal
+      build-switches: -p:SkipSignAssembly=true
+      restore: true
+      build: true
+      download-pattern: build-${{ matrix.configuration }}-${{ matrix.arch }}
+
+  test_windows:
+    name: call-test-windows
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [X64, ARM64]
+        configuration: [Debug, Release]
+    uses: codebeltnet/jobs-dotnet-test/.github/workflows/default.yml@v3
+    with:
+      runs-on: ${{ matrix.arch == 'ARM64' && 'windows-11-arm' || 'windows-2025' }}
+      projects: test/**/*.csproj
+      configuration: ${{ matrix.configuration }}
+      verbosity-level: normal
+      build-switches: -p:SkipSignAssembly=true
+      restore: true
+      build: true
+      download-pattern: build-${{ matrix.configuration }}-${{ matrix.arch }}
+
+  sonarcloud:
+    name: call-sonarcloud
+    needs: [build, test_linux, test_windows]
+    uses: codebeltnet/jobs-sonarcloud/.github/workflows/default.yml@v3
+    with:
+      organization: {SONARCLOUD_ORG}
+      projectKey: {SONARCLOUD_KEY}
+      version: ${{ needs.build.outputs.version }}
+    secrets: inherit
+
+  codecov:
+    name: call-codecov
+    needs: [build, test_linux, test_windows]
+    uses: codebeltnet/jobs-codecov/.github/workflows/default.yml@v1
+    with:
+      repository: {REPO_OWNER}/{REPO_SLUG}
+    secrets: inherit
+
+  codeql:
+    name: call-codeql
+    needs: [build, test_linux, test_windows]
+    uses: codebeltnet/jobs-codeql/.github/workflows/default.yml@v3
+    permissions:
+      security-events: write
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    name: call-nuget
+    needs: [build, pack, test_linux, test_windows, sonarcloud, codecov, codeql]
+    uses: codebeltnet/jobs-nuget-push/.github/workflows/default.yml@v2
+    with:
+      version: ${{ needs.build.outputs.version }}
+      environment: Production
+      configuration: ${{ inputs.configuration == '' && 'Release' || inputs.configuration }}
+    permissions:
+      contents: write
+      packages: write
+    secrets: inherit

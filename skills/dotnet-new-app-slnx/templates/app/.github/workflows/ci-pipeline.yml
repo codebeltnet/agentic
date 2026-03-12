@@ -1,0 +1,44 @@
+name: CI Pipeline
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: call-build
+    strategy:
+      matrix:
+        configuration: [Debug, Release]
+    uses: codebeltnet/jobs-dotnet-build/.github/workflows/default.yml@v3
+    with:
+      projects: src/**/*.csproj
+      configuration: ${{ matrix.configuration }}
+
+  test:
+    name: call-test
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+    uses: codebeltnet/jobs-dotnet-test/.github/workflows/default.yml@v3
+    with:
+      projects: test/**/*.csproj
+      configuration: ${{ matrix.configuration }}
+      verbosity-level: normal
+      restore: true
+      build: true
+
+  # sonarcloud:
+  #   name: call-sonarcloud
+  #   needs: [build, test]
+  #   uses: codebeltnet/jobs-sonarcloud/.github/workflows/default.yml@v3
+  #   with:
+  #     organization: {SONARCLOUD_ORG}
+  #     projectKey: {SONARCLOUD_KEY}
+  #     version: ${{ needs.build.outputs.version }}
+  #   secrets: inherit
