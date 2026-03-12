@@ -164,6 +164,7 @@ Prefixes are **optional** — only include one when it adds clarity beyond what 
 | 🦖 | `:t-rex:` | Code that adds backwards compatibility | `🦖 add v1 compatibility shim` |
 | ✈️ | `:airplane:` | Improve offline support | `✈️ add service worker for offline mode` |
 | 🚸 | `:children_crossing:` | Improve user experience / usability | `🚸 simplify onboarding flow` |
+| ⚗️ | `:alembic:` | Perform experiments | `⚗️ spike alternative caching strategy` |
 | 🚧 | `:construction:` | Work in progress (avoid where possible) | `🚧 wip: partial submission module setup` |
 
 #### Fallback: Extended Emoji Reference
