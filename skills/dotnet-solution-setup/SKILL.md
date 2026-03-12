@@ -28,10 +28,17 @@ Ask the user for all parameters before generating anything. Present them as a st
 | **Copyright year** | "Copyright year?" | Current year (from system time) |
 | **Package URL** | "Product/documentation URL?" | `https://github.com/{owner}/{repo}` |
 | **Repository URL** | "GitHub repository URL?" | Required |
-| **Target frameworks** | "Target frameworks? (semicolon-separated)" | `net10.0;net9.0` |
-| **Strong-name signing** | "Enable assembly signing (.snk)? Signing requires committing a key file." | `yes` |
 | **SonarCloud org** | "SonarCloud organization slug? (skip if not using SonarCloud)" | Optional |
 | **SonarCloud key** | "SonarCloud project key?" | Optional |
+
+#### Library-only parameters
+
+These are **only asked when the solution type is NuGet Library** — skip them for apps:
+
+| Parameter | Prompt | Default / Notes |
+|-----------|--------|-----------------|
+| **Target frameworks** | "Target frameworks? (semicolon-separated)" | `net10.0;net9.0` |
+| **Strong-name signing** | "Enable assembly signing (.snk)? Signing requires committing a key file." | `yes` |
 
 ### Solution Types
 
@@ -102,7 +109,7 @@ Follow the variant guide (Step 2) for the remaining files: project structure, `.
 After generating, verify:
 
 - [ ] `.slnx` references all generated src/ and test/ projects
-- [ ] `Directory.Build.props` references the correct `.snk` filename
+- [ ] `Directory.Build.props` references the correct `.snk` filename *(NuGet Library only)*
 - [ ] Each packable project has a `.nuget/{ProjectName}/` folder with `PackageReleaseNotes.txt`, `icon.png` (placeholder), and `README.md`
 - [ ] `Directory.Packages.props` lists all `<PackageReference>` packages used in the solution
 - [ ] `ci-pipeline.yml` has the correct settings *(library: SNK, SonarCloud keys; apps: build + test only)*
