@@ -249,7 +249,27 @@ Common groupings:
 
 When in doubt, one commit per "thing that changes" is better than one big commit.
 
-### Step 3: Stage and commit each group
+### Step 3: Present commit plan for review
+
+Before staging or committing anything, present the full commit plan to the user. For each proposed commit, show:
+
+```
+1. 🚚 rename auth module to identity
+   Files: src/Auth/ → src/Identity/, README.md
+
+2. ✅ add integration tests for identity module
+   Files: tests/Identity.Tests/
+```
+
+Wait for the user to confirm or adjust. They may say things like:
+- "Looks good" → proceed to stage and commit
+- "Change #1 to ♻️" → swap the emoji and re-present
+- "Merge 1 and 2 into one commit" → regroup and re-present
+- "Use refactor: prefix on #1" → adjust and re-present
+
+Only proceed to Step 4 after the user approves the plan.
+
+### Step 4: Stage and commit each group
 
 For each group:
 1. `git add <specific files>` — be precise, don't use `git add .` unless everything belongs in one commit
@@ -259,7 +279,7 @@ For each group:
    - `git commit -m "<message>"` — if the user asked to commit under their own identity
    - For `git our commit` — use whichever command matches the attribution the human chose
 
-### Step 4: Verify
+### Step 5: Verify
 
 After committing, run `git log --oneline -5` to confirm the commit looks right. Check the author with `git log -1 --format="%an <%ae>"` if needed.
 
