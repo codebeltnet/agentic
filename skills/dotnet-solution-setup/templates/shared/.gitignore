@@ -1,8 +1,0 @@
-# Strong-Name Key
-*.snk
-
-# Resharper
-*.DotSettings
-
-# Bot workspace (local-only AI agent ideation, PRDs, and agentic loop state)
-.bot/
