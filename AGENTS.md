@@ -33,6 +33,8 @@ Skills are developed in `skills/<name>/` but Claude loads them from `~/.claude/s
 Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
 ```
 
+When renaming a skill, update **both** locations — the repo folder and the local install folder under `~/.claude/skills/`. The folder name and the `name:` field in the SKILL.md frontmatter must match. A mismatch causes the skill to not appear in IDE tooling.
+
 Forgetting this step means Claude keeps running the stale version, which leads to confusing eval results and wasted iterations.
 
 ## Skill Directory Structure
