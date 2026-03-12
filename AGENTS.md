@@ -27,15 +27,15 @@ Never modify skills maintained by others (e.g. `skill-creator` by Anthropic). If
 
 ## Local Install Sync
 
-Skills are developed in `skills/<name>/` but Claude loads them from `~/.claude/skills/<name>/`. These two locations must stay in sync — changes can originate from either side:
+Skills are developed in `~/.claude/skills/<name>/` (where agents load them) and persisted in `skills/<name>/` (source control). These two locations must stay in sync — changes typically start local and get copied to the repo:
 
-- **Repo → local** (after editing in the repo during development):
-  ```powershell
-  Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
-  ```
-- **Local → repo** (after tweaking a skill during a session):
+- **Local → repo** (primary flow — persist changes to source control):
   ```powershell
   Copy-Item "$HOME/.claude/skills/<name>/<file>" "skills/<name>/<file>" -Force
+  ```
+- **Repo → local** (after pulling changes or cloning fresh):
+  ```powershell
+  Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
   ```
 
 When renaming a skill, update **both** locations — the repo folder and the local install folder under `~/.claude/skills/`. The folder name and the `name:` field in the SKILL.md frontmatter must match. A mismatch causes the skill to not appear in IDE tooling.
