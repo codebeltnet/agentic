@@ -90,13 +90,13 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 ```
 <emoji> <prefix>: <short description>
 
-<optional body>
+<body>
 ```
 
 - **Emoji** comes first — picked from the technology/type tables below
 - **Prefix** is lowercase (see allowed prefixes below) — **never use `feat:`**
 - **Description** is lowercase, imperative, max 70 characters total (including emoji and prefix)
-- **Body** is optional — a short paragraph (2–4 lines) explaining *why* or *what changed* when the subject alone isn't enough. Separate from the subject with a blank line. Wrap at 72 characters. Omit when the subject is self-explanatory.
+- **Body** is included by default — a short paragraph (2–4 lines) explaining *why* the change was made, not just *what* changed. Separate from the subject with a blank line. Wrap at 72 characters. Can be suppressed with `no-body` (see below).
 - One logical change per commit — don't bundle unrelated things
 
 ### Allowed Prefixes
@@ -276,6 +276,26 @@ Say **"enable yolo mode"** or **"enable auto mode"** to activate auto-approval f
 
 ---
 
+## No-Body Mode
+
+By default, every commit includes a body paragraph explaining *why* the change was made. This can be suppressed when only a subject line is desired.
+
+### Per-request activation
+
+Include the word **"no-body"** anywhere in your request:
+
+- "git bot commit, no-body"
+- "commit this no-body"
+- "yolo no-body" (combines both modes)
+
+### Session-level activation
+
+Say **"enable no-body mode"** to suppress commit bodies for the rest of the session. All subsequent commits will be subject-only until the user says **"disable no-body mode"**.
+
+> **Note:** No-body mode suppresses the body paragraph only. The subject line, emoji, prefix, classification, and grouping rules all still apply.
+
+---
+
 ## Commit Workflow
 
 ### Step 1: Review changes
@@ -318,11 +338,13 @@ When only two files changed but their rationales differ, **explicitly state that
 
 #### Commit body guidance
 
-For non-obvious changes, add a commit body explaining the *why*:
+Unless **no-body mode** is active, every commit includes a body explaining the *why*:
 
 - **Config/environment commits** → explain the operational intent (e.g. "Switch to shared-runner testing strategy with multi-image matrix")
 - **Test assertion changes** → explain why the expectation changed (e.g. "net11 changed the default precision for DateTime, updating expected value")
 - **Refactors** → explain what motivated the restructuring
+- **New features** → explain the purpose and scope
+- **Bug fixes** → explain what was broken and how this fixes it
 
 Common groupings:
 - Config/setup files together (app host, bootstrapping)
