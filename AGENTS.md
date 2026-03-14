@@ -92,3 +92,123 @@ Presentation rules (enforced in every `FORMS.md`):
 
 This applies to all skills that collect user input, not just scaffolding skills.
 
+## Anthropic Skill Authoring Reference
+
+Essential conventions from [The Complete Guide to Building Skills for Claude](https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf) (Anthropic, Jan 2026). All skills in this repo must follow these rules.
+
+### File Structure
+
+```
+skill-name/
+├── SKILL.md              # Required — exact spelling, case-sensitive
+├── scripts/              # Optional — executable code (Python, Bash, etc.)
+├── references/           # Optional — documentation loaded as needed
+└── assets/               # Optional — templates, fonts, icons used in output
+```
+
+- **No `README.md`** inside the skill folder — all documentation goes in `SKILL.md` or `references/`
+- Folder name must be **kebab-case** (no spaces, no underscores, no capitals)
+- Folder name must match the `name:` field in YAML frontmatter
+
+### Progressive Disclosure (Three Levels)
+
+| Level | When loaded | Token cost | Content |
+|-------|------------|------------|---------|
+| **Level 1: Metadata** | Always (at startup) | ~100 tokens | `name` and `description` from YAML frontmatter |
+| **Level 2: Instructions** | When skill is triggered | Under 5k tokens | SKILL.md body — workflows, steps, guidance |
+| **Level 3: Resources** | As needed | Effectively unlimited | Linked files: scripts, references, assets, FORMS.md |
+
+Keep SKILL.md under **500 lines / 5,000 words**. Move detailed content to `references/`. Keep references **one level deep** from SKILL.md — nested references cause partial reads.
+
+### YAML Frontmatter
+
+Required fields:
+
+```yaml
+---
+name: kebab-case-name      # max 64 chars, lowercase + numbers + hyphens only
+description: >              # max 1024 chars, must include WHAT + WHEN + triggers
+  What it does. Use when user asks to [specific phrases].
+---
+```
+
+Optional fields:
+
+```yaml
+license: MIT                # for open-source skills
+compatibility: >            # max 500 chars — environment requirements
+  Requires network access and Python 3.10+
+metadata:                   # custom key-value pairs
+  author: Company Name
+  version: 1.0.0
+  mcp-server: server-name
+```
+
+**Forbidden**: XML angle brackets (`< >`), names containing "claude" or "anthropic" (reserved).
+
+### Description Field — The Most Important Part
+
+Structure: `[What it does] + [When to use it] + [Key capabilities]`
+
+```yaml
+# ✅ Good — specific, actionable, includes triggers
+description: >
+  Manages Linear project workflows including sprint planning,
+  task creation, and status tracking. Use when user mentions
+  "sprint", "Linear tasks", "project planning", or asks to
+  "create tickets".
+
+# ❌ Bad — too vague, no triggers
+description: Helps with projects.
+```
+
+- Include trigger phrases users would actually say
+- Mention file types if relevant
+- Add negative triggers to prevent over-triggering: `Do NOT use for simple data exploration`
+
+### Writing Instructions
+
+- Be **specific and actionable** — `Run scripts/validate.py --input {filename}` not `Validate the data`
+- Include **error handling** — common errors, causes, and solutions
+- Use **feedback loops** — run validator → fix errors → repeat
+- Put **critical instructions at the top** — use `## Critical` or `## Important` headers
+- For critical validations, **use scripts over language instructions** — code is deterministic
+
+### Skill Categories
+
+| Category | Purpose | Example |
+|----------|---------|---------|
+| **Document & Asset Creation** | Consistent, high-quality output (docs, code, designs) | `frontend-design`, `docx`, `xlsx` |
+| **Workflow Automation** | Multi-step processes with validation gates | `skill-creator`, scaffolding skills |
+| **MCP Enhancement** | Workflow guidance layered on top of MCP tool access | `sentry-code-review` |
+
+### Common Patterns
+
+1. **Sequential workflow** — explicit step ordering with dependencies and rollback
+2. **Multi-MCP coordination** — phase separation, data passing between services
+3. **Iterative refinement** — draft → validate → fix → repeat until quality threshold
+4. **Context-aware selection** — decision trees for choosing the right tool/approach
+5. **Domain-specific intelligence** — compliance checks, governance, audit trails
+
+### Testing Checklist
+
+Before shipping a skill, verify:
+
+- [ ] Triggers on obvious tasks
+- [ ] Triggers on paraphrased requests
+- [ ] Does **not** trigger on unrelated topics
+- [ ] Functional tests pass (correct outputs, error handling, edge cases)
+- [ ] Performance improves over baseline (fewer messages, fewer errors, fewer tokens)
+
+Debug triggering: ask Claude `"When would you use the [skill name] skill?"` — it will quote the description back.
+
+### Troubleshooting Quick Reference
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| Skill won't upload | `SKILL.md` misspelled or YAML invalid | Exact case `SKILL.md`, check `---` delimiters |
+| Skill never triggers | Description too vague | Add trigger phrases, mention file types |
+| Skill triggers too often | Description too broad | Add negative triggers, narrow scope |
+| Instructions not followed | Too verbose or ambiguous | Shorten, use bullets, move detail to `references/` |
+| Slow / degraded responses | Too much content loaded | Keep SKILL.md under 5k words, use progressive disclosure |
+
