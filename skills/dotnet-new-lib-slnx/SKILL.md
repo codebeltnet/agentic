@@ -47,13 +47,13 @@ When copying template files, replace these placeholders in file contents:
 Generate files in this order:
 
 ### 1. Copy shared templates
-Copy every file from `templates/shared/` to the project root, preserving directory structure. Apply placeholder substitution (Step 3) to all file contents during the copy.
+Copy every file from `assets/shared/` to the project root, preserving directory structure. Apply placeholder substitution (Step 3) to all file contents during the copy.
 
 ### 2. Copy library `Directory.Build.props`
-Copy `templates/library/Directory.Build.props` to the project root, applying placeholder substitution.
+Copy `assets/library/Directory.Build.props` to the project root, applying placeholder substitution.
 
 ### 3. Copy DocFX templates
-Copy `templates/library/.docfx/` to the project root, applying placeholder substitution. DocFX generates API reference documentation for NuGet packages.
+Copy `assets/library/.docfx/` to the project root, applying placeholder substitution. DocFX generates API reference documentation for NuGet packages.
 
 ### 4. Generate library-specific files
 Follow the variant guide (Step 2) for the remaining files: project structure, `.csproj` files, `.nuget/{ProjectName}/` metadata folders (per packable project), and the `.slnx` solution file.

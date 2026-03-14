@@ -1,6 +1,6 @@
 # Standalone Application Variant Reference
 
-Slim guide for runnable applications. All file templates live in `templates/app/`.
+Slim guide for runnable applications. All file templates live in `assets/app/`.
 
 ## Folder Structure
 
@@ -32,11 +32,11 @@ Apps use **functional tests** (not unit tests). The test project exercises the r
 
 | Template source                  | Destination                                                        |
 |----------------------------------|--------------------------------------------------------------------|
-| `templates/app/Directory.Build.props` | `Directory.Build.props` (repo root)                           |
-| `templates/app/console.csproj`   | `src/{NS}.Console/{NS}.Console.csproj`                             |
-| `templates/app/web.csproj`       | `src/{NS}.Api/{NS}.Api.csproj`                                     |
-| `templates/app/worker.csproj`    | `src/{NS}.Worker/{NS}.Worker.csproj`                               |
-| `templates/app/test.csproj`      | `test/{NS}.{AppType}.FunctionalTests/{NS}.{AppType}.FunctionalTests.csproj` |
+| `assets/app/Directory.Build.props` | `Directory.Build.props` (repo root)                           |
+| `assets/app/console.csproj`   | `src/{NS}.Console/{NS}.Console.csproj`                             |
+| `assets/app/web.csproj`       | `src/{NS}.Api/{NS}.Api.csproj`                                     |
+| `assets/app/worker.csproj`    | `src/{NS}.Worker/{NS}.Worker.csproj`                               |
+| `assets/app/test.csproj`      | `test/{NS}.{AppType}.FunctionalTests/{NS}.{AppType}.FunctionalTests.csproj` |
 
 ## Startup vs Minimal Pattern
 
@@ -46,8 +46,8 @@ Ask the user: **"Hosting pattern: Startup (aka Classic Hosting — Program.cs + 
 
 | Pattern | Also known as | Files to copy | Source template |
 |---------|---------------|---------------|-----------------|
-| **Startup** | Classic Hosting | `Program.cs` + `Startup.cs` | `templates/app/{type}/Program.startup.cs` and `templates/app/{type}/Startup.cs` |
-| **Minimal** | Minimal Hosting | `Program.cs` only | `templates/app/{type}/Program.minimal.cs` |
+| **Startup** | Classic Hosting | `Program.cs` + `Startup.cs` | `assets/app/{type}/Program.startup.cs` and `assets/app/{type}/Startup.cs` |
+| **Minimal** | Minimal Hosting | `Program.cs` only | `assets/app/{type}/Program.minimal.cs` |
 
 Where `{type}` = `console`, `web`, or `worker`.
 

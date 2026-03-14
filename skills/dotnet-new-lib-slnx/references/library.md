@@ -1,6 +1,6 @@
 # NuGet Library Variant Reference
 
-Slim guide for scaffolding a NuGet library solution. All file templates live in `templates/library/`.
+Slim guide for scaffolding a NuGet library solution. All file templates live in `assets/library/`.
 
 ---
 
@@ -33,12 +33,12 @@ Slim guide for scaffolding a NuGet library solution. All file templates live in 
 
 | Template                                  | Destination                                                        |
 |-------------------------------------------|--------------------------------------------------------------------|
-| `templates/library/Directory.Build.props` | `Directory.Build.props` (repo root)                                |
-| `templates/library/source.csproj`         | `src/{PROJECT_NAME}/{PROJECT_NAME}.csproj`                         |
-| `templates/library/test.csproj`           | `test/{PROJECT_NAME}.Tests/{PROJECT_NAME}.Tests.csproj`            |
-| `templates/library/benchmark.csproj`      | `tuning/{PROJECT_NAME}.Benchmarks/{PROJECT_NAME}.Benchmarks.csproj`|
-| `templates/library/PackageReleaseNotes.txt` | `.nuget/{PROJECT_NAME}/PackageReleaseNotes.txt`                  |
-| `templates/library/nuget-readme.md`       | `.nuget/{PROJECT_NAME}/README.md`                                  |
+| `assets/library/Directory.Build.props` | `Directory.Build.props` (repo root)                                |
+| `assets/library/source.csproj`         | `src/{PROJECT_NAME}/{PROJECT_NAME}.csproj`                         |
+| `assets/library/test.csproj`           | `test/{PROJECT_NAME}.Tests/{PROJECT_NAME}.Tests.csproj`            |
+| `assets/library/benchmark.csproj`      | `tuning/{PROJECT_NAME}.Benchmarks/{PROJECT_NAME}.Benchmarks.csproj`|
+| `assets/library/PackageReleaseNotes.txt` | `.nuget/{PROJECT_NAME}/PackageReleaseNotes.txt`                  |
+| `assets/library/nuget-readme.md`       | `.nuget/{PROJECT_NAME}/README.md`                                  |
 | *(create manually)*                       | `.nuget/{PROJECT_NAME}/icon.png` — 128×128 PNG placeholder         |
 
 ---

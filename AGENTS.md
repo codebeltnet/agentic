@@ -50,18 +50,19 @@ Every skill follows this layout:
 skills/<name>/
 ├── SKILL.md              # Required — the skill definition (loaded by Claude)
 ├── FORMS.md              # Optional — structured form fields for parameter collection
-├── templates/            # Optional — literal file templates the agent generates from
+├── assets/               # Optional — file templates, fonts, icons used in output
 │   └── <variant>/        # Group by variant when a skill supports multiple (e.g. library/, app/)
+├── scripts/              # Optional — executable code (Python, Bash, etc.)
 └── references/           # Optional — detailed reference docs the agent consults during generation
 ```
 
 - `SKILL.md` is the entry point — it contains the workflow, conventions, and step-by-step instructions
-- `templates/` holds actual file content with placeholders (not a templating engine — the agent reads and substitutes)
+- `assets/` holds file templates, fonts, icons, and other static content used in output (the agent reads and substitutes placeholders)
 - `references/` holds detailed specs that `SKILL.md` references but are too long to inline
 
 ## Template Files Are Literal
 
-Template files in `templates/` are **not** processed by a templating engine. They contain real file content with placeholder values (e.g. `{ProjectName}`, `{TargetFramework}`) that the agent must read, understand, and substitute during generation. Agents should never copy template files blindly — always read the content and adapt it to the user's specific parameters.
+Asset files in `assets/` are **not** processed by a templating engine. They contain real file content with placeholder values (e.g. `{ProjectName}`, `{TargetFramework}`) that the agent must read, understand, and substitute during generation. Agents should never copy asset files blindly — always read the content and adapt it to the user's specific parameters.
 
 ## Commit Discipline
 

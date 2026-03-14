@@ -38,13 +38,13 @@ When copying template files, replace these placeholders in file contents:
 Generate files in this order:
 
 ### 1. Copy shared templates
-Copy every file from `templates/shared/` to the project root, preserving directory structure. Apply placeholder substitution (Step 3) to all file contents during the copy.
+Copy every file from `assets/shared/` to the project root, preserving directory structure. Apply placeholder substitution (Step 3) to all file contents during the copy.
 
 ### 2. Copy app `Directory.Build.props`
-Copy `templates/app/Directory.Build.props` to the project root, applying placeholder substitution.
+Copy `assets/app/Directory.Build.props` to the project root, applying placeholder substitution.
 
 ### 3. Copy app CI pipeline
-Overwrite the shared CI pipeline with `templates/app/.github/workflows/ci-pipeline.yml`. Apps have a simplified pipeline (build + test only).
+Overwrite the shared CI pipeline with `assets/app/.github/workflows/ci-pipeline.yml`. Apps have a simplified pipeline (build + test only).
 
 ### 4. Generate app-specific files
 Follow the variant guide (Step 2) for the remaining files: project structure per host type, `.csproj` files, `Program.cs` (and `Startup.cs` if startup pattern), functional test projects, and the `.slnx` solution file.
