@@ -1,5 +1,5 @@
 ---
-name: git-commits
+name: git-visual-commits
 description: >
   Rules and workflow for creating well-structured git commits using emoji
   prefixes (gitmoji and beyond), with support for git bot commit
@@ -10,12 +10,15 @@ description: >
   when the user says things like "commit this", "make a commit", "commit
   your changes", "commit what you just did", "what should my commit
   message be", "stage and commit", or any time git commit workflows come
-  up. Enforces conventions with emoji plus lowercase prefix (init, content,
-  style, fix, refactor, docs), max 70 chars, one logical change per commit,
-  grouped by technology type.
+  up. Supports auto-approval mode — when the user says "yolo" or "auto"
+  in their request, or enables it for the session, the agent shows the
+  commit plan but proceeds without waiting for confirmation. Enforces
+  conventions with emoji plus lowercase prefix (init, content, style, fix,
+  refactor, docs), max 70 chars, one logical change per commit, grouped
+  by technology type.
 ---
 
-# Git Commits
+# Git Visual Commits
 
 This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji and prefix, and running the commit. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
 
@@ -241,13 +244,56 @@ Key entries from that reference, by category:
 
 ---
 
+## Auto-Approval Mode
+
+By default, the agent presents a commit plan and waits for user confirmation before staging and committing (Step 4). Auto-approval mode skips this wait — the plan is still displayed for transparency, but the agent proceeds immediately.
+
+**What auto-approval skips:** user confirmation only.
+**What auto-approval never skips:** classification (Step 2), grouping validation (Step 3), and the mixed-scope guard. These self-checks run unconditionally — they exist to catch bad groupings before they become commits, regardless of whether a human is reviewing the plan.
+
+### Per-request activation
+
+Include the word **"yolo"** or **"auto"** anywhere in your request:
+
+- "yolo commit this"
+- "auto commit my changes"
+- "do a git bot commit, yolo"
+
+The agent will show a one-line commit plan summary and proceed without waiting. Example:
+
+```
+Auto-committing: 🔧 build/toolchain → 🚚 moved types → 💥 breaking shim removal → 📝 release notes
+```
+
+### Session-level activation
+
+Say **"enable yolo mode"** or **"enable auto mode"** to activate auto-approval for the rest of the session. All subsequent commits skip the approval gate until the user says **"disable yolo mode"** or **"disable auto mode"**.
+
+> **Note:** Auto-approval applies to all three identity modes (`git commit`, `git bot commit`, `git our commit`). For `git our commit`, the agent still presents the authorship breakdown and attribution — but proceeds with its best-guess attribution without waiting for confirmation. The user can always say "undo" or "reset" if the result isn't right.
+
+---
+
 ## Commit Workflow
 
 ### Step 1: Review changes
 
 Run `git status` and `git diff` (and `git diff --staged` if there are staged changes) to understand what has changed. Don't commit blindly — understand what each file is doing before grouping.
 
-### Step 2: Group into logical commits
+### Step 2: Classify changes
+
+Before composing any commit message, bucket every changed file by its intent. Derive categories from the actual diff — don't assume a fixed set. Common categories include:
+
+- **Project/solution files** — build system metadata that defines project structure
+- **Preprocessor/build-only changes** — conditional compilation, build-target switches
+- **Build/tooling** — CI workflows, container definitions, build scripts, environment config
+- **Source moves/renames** — renamed files, moved namespaces, updated imports
+- **Breaking removals** — removed public types, deleted forwarding attributes, dropped compatibility shims
+- **Documentation** — readmes, changelogs, contributing guides, release notes, inline doc comments
+- **Application code** — new features, bug fixes, refactors, tests, validation, business logic
+
+This classification drives grouping in Step 3. Files in different categories almost never belong in the same commit.
+
+### Step 3: Group into logical commits
 
 Group changes by technology and logical purpose. Ask yourself: if someone reads only the commit log, does each entry tell a clear, focused story?
 
@@ -261,7 +307,26 @@ Common groupings:
 
 When in doubt, one commit per "thing that changes" is better than one big commit.
 
-### Step 3: Present commit plan for review
+#### Mixed-scope guard
+
+After grouping, validate each proposed commit. If a single commit contains files from **three or more different categories** from Step 2 (e.g. docs + package props + solution files + API removals), **force a split**. A commit that touches documentation, build configuration, and source code at the same time is almost always an umbrella commit that should be broken apart.
+
+This guard runs unconditionally — including in auto-approval mode.
+
+#### Documentation separation rule
+
+Documentation files (`CHANGELOG.md`, `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, release notes) are **separate-by-default**. They only belong in the same commit as non-doc files when the commit is explicitly documentation-focused (e.g. `📝 docs: add api usage guide` where the docs are the point, not a side effect).
+
+#### Rename vs removal distinction
+
+Treat **renamed/moved source files** and **removed type-forwarding or compatibility metadata** as different signals — never group them together:
+
+- **Renames** (file moved, namespace changed, `using` updated) → move/refactor commit (`🚚` or `♻️`)
+- **Removed forwarding** (deleted `[TypeForwardedTo]`, removed public-API compatibility shims, dropped re-exports) → breaking-change commit (`💥`)
+
+Even when renames and removals happen in the same PR, they represent different intents and must be separate commits.
+
+### Step 4: Present commit plan for review
 
 Before staging or committing anything, present the full commit plan to the user. For each proposed commit, show:
 
@@ -273,15 +338,28 @@ Before staging or committing anything, present the full commit plan to the user.
    Files: tests/Identity.Tests/
 ```
 
-Wait for the user to confirm or adjust. They may say things like:
+**If auto-approval is active** (via "yolo"/"auto" keyword or session-level setting), display a one-line summary and proceed immediately to Step 5:
+
+```
+Auto-committing: 🔧 build config → 🚚 rename auth to identity → ✅ identity tests → 📝 update changelog
+```
+
+**Otherwise**, wait for the user to confirm or adjust. They may say things like:
 - "Looks good" → proceed to stage and commit
 - "Change #1 to ♻️" → swap the emoji and re-present
 - "Merge 1 and 2 into one commit" → regroup and re-present
 - "Use refactor: prefix on #1" → adjust and re-present
 
-Only proceed to Step 4 after the user approves the plan.
+Only proceed to Step 5 after the user approves the plan.
 
-### Step 4: Stage and commit each group
+#### Commit-message validation
+
+Before committing, validate each message against its file list:
+
+- **Breaking-change check:** If the commit subject contains "breaking" or uses 💥, verify that the majority of files in that commit directly implement or document the breaking change. Build-matrix files, CI config, environment files, and unrelated tooling changes **fail this check** — move them to a separate commit.
+- **Scope consistency:** The commit message should accurately describe what the files do. If the message says "rename" but the commit includes deletions of compatibility shims, split them.
+
+### Step 5: Stage and commit each group
 
 For each group:
 1. `git add <specific files>` — be precise, don't use `git add .` unless everything belongs in one commit
@@ -291,7 +369,7 @@ For each group:
    - `git commit -m "<message>"` — if the user asked to commit under their own identity
    - For `git our commit` — use whichever command matches the attribution the human chose
 
-### Step 5: Verify
+### Step 6: Verify
 
 After committing, run `git log --oneline -5` to confirm the commit looks right. Check the author with `git log -1 --format="%an <%ae>"` if needed.
 
