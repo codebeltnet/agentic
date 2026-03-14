@@ -52,7 +52,7 @@ npx skillsadd codebeltnet/agentic/trunk-first-repo
 
 | Skill | Description |
 |-------|-------------|
-| [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Supports auto-approval mode (`yolo` / `auto`) to skip the review gate. The agent does all the work either way. Stack-agnostic. |
+| [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Multi-target frameworks, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web API, and Worker host types with Startup or Minimal hosting patterns, functional tests, and simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
@@ -67,6 +67,8 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Conventional prefixes** — `fix`, `feat`, `refactor` as fallback when gitmoji isn't available
 - **Three identity modes** — bot, human, or collaborative — the agent does the work either way, you choose who gets credit
 - **Auto-approval** — say "yolo" or "auto" to skip the review gate when you trust the agent's judgment
+- **Commit body by default** — every commit explains *why*, not just *what* — opt out with `no-body`
+- **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
 
@@ -79,7 +81,7 @@ Starting a new .NET solution "from scratch" usually means copying from your last
 - **Convention over configuration** — opinionated defaults that match real production setups
 - **Focused skills** — library and app concerns are fully separated, no variant confusion
 - **Complete from the start** — CI pipeline, code quality, test infrastructure, and governance docs on day one
-- **Template-driven** — real files, not generated strings, so you can inspect and evolve the templates
+- **Template-driven** — real files with placeholders in `assets/`, not generated strings, so you can inspect and evolve them
 
 ### Why trunk-first?
 
@@ -97,8 +99,11 @@ Most repositories start with `git init` followed by committing everything direct
 ```
 skills/
   <skill-name>/
-    SKILL.md          # The skill itself — loaded by the AI
-    evals/            # Optional: test prompts used to validate the skill
+    SKILL.md          # Required — the skill definition (loaded by the AI)
+    FORMS.md          # Optional — structured form fields for parameter collection
+    assets/           # Optional — file templates, fonts, icons used in output
+    scripts/          # Optional — executable code (Python, Bash, etc.)
+    references/       # Optional — detailed reference docs
 ```
 
 ## Contributing
