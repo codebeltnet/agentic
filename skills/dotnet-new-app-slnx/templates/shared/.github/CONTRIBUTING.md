@@ -12,8 +12,6 @@ Thank you for your interest in contributing!
 ## Development Setup
 
 ```bash
-git clone {REPOSITORY_URL}
-cd {REPO_SLUG}
 dotnet restore
 dotnet build
 dotnet test

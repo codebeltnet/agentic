@@ -32,13 +32,3 @@ jobs:
       verbosity-level: normal
       restore: true
       build: true
-
-  # sonarcloud:
-  #   name: call-sonarcloud
-  #   needs: [build, test]
-  #   uses: codebeltnet/jobs-sonarcloud/.github/workflows/default.yml@v3
-  #   with:
-  #     organization: {SONARCLOUD_ORG}
-  #     projectKey: {SONARCLOUD_KEY}
-  #     version: ${{ needs.build.outputs.version }}
-  #   secrets: inherit
