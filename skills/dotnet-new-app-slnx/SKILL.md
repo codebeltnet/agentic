@@ -14,6 +14,8 @@ description: >
 
 Scaffold new .NET standalone application solutions following the codebeltnet engineering conventions — the same pattern used across [codebeltnet](https://github.com/codebeltnet). Produces a fully wired solution with CI pipeline, centralized build config, semantic versioning, code quality tooling, and proper folder structure.
 
+> **CRITICAL:** All application projects **must** use the `Codebelt.Bootstrapper.*` framework — never vanilla `WebApplication.CreateBuilder()` or raw `Host.CreateDefaultBuilder()`. The bootstrapper provides a uniform, convention-driven `Program.cs` (and `Startup.cs` for classic hosting). The asset templates in `assets/app/` already wire this up correctly — **always copy from templates, never write Program.cs from scratch**.
+
 ## Step 1: Collect Parameters
 
 Read `FORMS.md` and collect all parameters by presenting each field to the user one at a time using the agent's native input mechanism. Follow the presentation rules defined in the form. Do not proceed to Step 2 until all required fields are collected and the user confirms the summary.
@@ -47,7 +49,16 @@ Copy `assets/app/Directory.Build.props` to the project root, applying placeholde
 Overwrite the shared CI pipeline with `assets/app/.github/workflows/ci-pipeline.yml`. Apps have a simplified pipeline (build + test only).
 
 ### 4. Generate app-specific files
-Follow the variant guide (Step 2) for the remaining files: project structure per host type, `.csproj` files, `Program.cs` (and `Startup.cs` if startup pattern), functional test projects, and the `.slnx` solution file.
+Follow the variant guide (Step 2) for the remaining files. **Do not write these files from scratch** — use the asset templates in `assets/app/` as the source of truth:
+
+- **`.csproj` files** → copy from `assets/app/{type}.csproj` (already includes `Codebelt.Bootstrapper.*` package reference)
+- **`Program.cs`** → copy from `assets/app/{type}/Program.minimal.cs` (Minimal pattern) or `assets/app/{type}/Program.startup.cs` (Startup pattern)
+- **`Startup.cs`** → copy from `assets/app/{type}/Startup.cs` (Startup pattern only)
+- **Test `.csproj`** → copy from `assets/app/test.csproj`
+
+Apply placeholder substitution (Step 3) to all copied files. The user's business logic, endpoints, and service registrations go into `Startup.cs` (Startup pattern) or the `Program.cs` configure methods (Minimal pattern) — but the bootstrapper base classes must remain intact.
+
+Generate the `.slnx` solution file and functional test project structure per the variant guide.
 
 ## Step 5: Post-Generation Checklist
 
