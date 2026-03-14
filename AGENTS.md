@@ -49,6 +49,7 @@ Every skill follows this layout:
 ```
 skills/<name>/
 ├── SKILL.md              # Required — the skill definition (loaded by Claude)
+├── FORMS.md              # Optional — structured form fields for parameter collection
 ├── templates/            # Optional — literal file templates the agent generates from
 │   └── <variant>/        # Group by variant when a skill supports multiple (e.g. library/, app/)
 └── references/           # Optional — detailed reference docs the agent consults during generation
@@ -69,4 +70,24 @@ When committing changes to this repo, group by technology and logical purpose �
 - Skill instruction changes (`SKILL.md`) get their own commit
 - Template files (`.csproj`, `.yml`, `.cs`) get their own commit(s)
 - Documentation updates (`README.md`, `CONTRIBUTING.md`) get their own commit
+
+## User Input UX
+
+When a skill collects parameters from the user, define the form in a dedicated `FORMS.md` file (Level 3 resource) rather than inlining field definitions in `SKILL.md`. This separates form structure from workflow logic and gives agents a parseable format to present fields correctly.
+
+`FORMS.md` defines each field with:
+- **type** — `text`, `single-choice`, or `multi-choice`
+- **prompt** — the question to ask
+- **choices** — options for choice types
+- **default** — pre-filled value (mark as Recommended)
+- **required** — whether the field is mandatory
+
+Presentation rules (enforced in every `FORMS.md`):
+- Ask one field at a time — never bundle multiple questions
+- Use selectable choices for `single-choice` and `multi-choice` fields — not free text
+- When a default exists, present it first and append "(Recommended)"
+- For `text` fields with a computed default, offer the computed value as a selectable choice alongside free text
+- After all fields are collected, present a summary and ask for confirmation
+
+This applies to all skills that collect user input, not just scaffolding skills.
 
