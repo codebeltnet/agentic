@@ -17,7 +17,7 @@ npx skillsadd codebeltnet/agentic/<skill-name>
 For example:
 
 ```bash
-npx skillsadd codebeltnet/agentic/git-commits
+npx skillsadd codebeltnet/agentic/git-visual-commits
 ```
 
 Then activate it in your agent. For example, in GitHub Copilot CLI:
@@ -28,12 +28,12 @@ Use the skill tool to invoke the "<skill-name>" skill.
 
 ## Always-on skills
 
-Skills installed via `npx skillsadd` are placed in `~/.claude/skills/` and **automatically loaded in every session** — no manual invocation needed. The agent reads the skill's description and activates it when relevant (e.g. you say "commit this" and the `git-commits` skill kicks in).
+Skills installed via `npx skillsadd` are placed in `~/.claude/skills/` and **automatically loaded in every session** — no manual invocation needed. The agent reads the skill's description and activates it when relevant (e.g. you say "commit this" and the `git-visual-commits` skill kicks in).
 
 If you want a bundle of skills always available, just install them all:
 
 ```bash
-npx skillsadd codebeltnet/agentic/git-commits
+npx skillsadd codebeltnet/agentic/git-visual-commits
 npx skillsadd codebeltnet/agentic/trunk-first-repo
 # npx skillsadd codebeltnet/agentic/another-skill
 ```
@@ -52,20 +52,21 @@ npx skillsadd codebeltnet/agentic/trunk-first-repo
 
 | Skill | Description |
 |-------|-------------|
-| [git-commits](skills/git-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). The agent does all the work either way. Stack-agnostic. |
+| [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Supports auto-approval mode (`yolo` / `auto`) to skip the review gate. The agent does all the work either way. Stack-agnostic. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Multi-target frameworks, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web API, and Worker host types with Startup or Minimal hosting patterns, functional tests, and simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
 
-### Why git-commits?
+### Why git-visual-commits?
 
 Commit messages are the most-read documentation in any codebase — yet they're usually an afterthought. "fix stuff", "wip", "address PR feedback" tells you nothing six months later. Writing good commits takes discipline, and when you're in flow, it's the first thing that slips.
 
-**git-commits** handles the entire commit workflow— staging, diffing, crafting the message, choosing the right emoji — so every commit is consistent and meaningful without breaking your flow. Whether the agent authors the commit (`git bot commit`), you do (`git commit`), or you worked on it together (`git our commit`), the quality is the same.
+**git-visual-commits** handles the entire commit workflow— staging, diffing, crafting the message, choosing the right emoji — so every commit is consistent and meaningful without breaking your flow. Whether the agent authors the commit (`git bot commit`), you do (`git commit`), or you worked on it together (`git our commit`), the quality is the same.
 
 - **Gitmoji-first** — visual commit categories that are scannable at a glance
 - **Conventional prefixes** — `fix`, `feat`, `refactor` as fallback when gitmoji isn't available
 - **Three identity modes** — bot, human, or collaborative — the agent does the work either way, you choose who gets credit
+- **Auto-approval** — say "yolo" or "auto" to skip the review gate when you trust the agent's judgment
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
 
