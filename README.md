@@ -67,7 +67,7 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Conventional prefixes** — `fix`, `feat`, `refactor` as fallback when gitmoji isn't available
 - **Three identity modes** — bot, human, or collaborative — the agent does the work either way, you choose who gets credit
 - **Auto-approval** — say "yolo" or "auto" to skip the review gate when you trust the agent's judgment
-- **Commit body by default** — every commit explains *why*, not just *what* — opt out with `no-body`
+- **Commit body by default** — every commit explains *why*, not just *what* — opt out with "tmi" or "no-body"
 - **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog

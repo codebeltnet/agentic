@@ -72,6 +72,10 @@ When committing changes to this repo, group by technology and logical purpose â€
 - Template files (`.csproj`, `.yml`, `.cs`) get their own commit(s)
 - Documentation updates (`README.md`, `CONTRIBUTING.md`) get their own commit
 
+## README Sync
+
+After modifying any skill (`SKILL.md`, `FORMS.md`) or repo-level config (`AGENTS.md`), **always check if `README.md` needs updating**. The README's "Available Skills" table and feature bullet lists describe each skill's capabilities â€” if those capabilities changed, the README must reflect it. Treat this as a mandatory post-change step, not an afterthought.
+
 ## User Input UX
 
 When a skill collects parameters from the user, define the form in a dedicated `FORMS.md` file (Level 3 resource) rather than inlining field definitions in `SKILL.md`. This separates form structure from workflow logic and gives agents a parseable format to present fields correctly.
