@@ -28,7 +28,7 @@ Use the skill tool to invoke the "<skill-name>" skill.
 
 ## Always-on skills
 
-Skills installed via `npx skillsadd` are placed in `~/.claude/skills/` and **automatically loaded in every session** — no manual invocation needed. The agent reads the skill's description and activates it when relevant (e.g. you say "commit this" and the `git-visual-commits` skill kicks in).
+Depending on the agent runtime, skills installed via `npx skillsadd` may live in `~/.claude/skills/` and/or `~/.agents/skills/`. Treat both as personal global skill folders: if you use both toolchains, keep repo-authored skills mirrored between them so each agent sees the same version. Either way, installed skills are **automatically loaded in every session** — no manual invocation needed. The agent reads the skill's description and activates it when relevant (e.g. you say "commit this" and the `git-visual-commits` skill kicks in).
 
 If you want a bundle of skills always available, just install them all:
 
@@ -43,11 +43,12 @@ npx skillsadd codebeltnet/agentic/dotnet-strong-name-signing
 
 | Location | Scope | When to use |
 |----------|-------|-------------|
+| `~/.agents/skills/` | All sessions, all projects | Global skills for agents that read the shared `~/.agents` install |
 | `~/.claude/skills/` | All sessions, all projects | Your personal defaults — always on everywhere |
 | `.claude/skills/` (in a repo) | Project-scoped | Shared team conventions for a specific codebase |
 | `.github/skills/` (in a repo) | GitHub Copilot / VS Code | When your team uses Copilot agent mode in the IDE |
 
-> **Tip:** You can mix scopes. Install your personal favorites globally, and add project-specific skills to the repo so your whole team gets them.
+> **Tip:** You can mix scopes. Install your personal favorites globally, and add project-specific skills to the repo so your whole team gets them. If you use both `~/.claude/skills/` and `~/.agents/skills/`, mirror repo-authored skills to both so sessions stay consistent.
 
 ## Available Skills
 

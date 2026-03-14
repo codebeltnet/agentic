@@ -31,20 +31,35 @@ Never modify skills maintained by others (e.g. `skill-creator` by Anthropic). If
 
 ## Local Install Sync
 
-Skills are developed in `~/.claude/skills/<name>/` (where agents load them) and persisted in `skills/<name>/` (source control). These two locations must stay in sync — changes typically start local and get copied to the repo:
+Repo-managed skills live in three places that must stay in sync:
 
-- **Local → repo** (primary flow — persist changes to source control):
+- `skills/<name>/` — source control
+- `~/.claude/skills/<name>/` — local Claude install
+- `~/.agents/skills/<name>/` — local global agent install
+
+Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo and the global install:
+
+- **Claude local → repo** (persist changes to source control):
   ```powershell
   Copy-Item "$HOME/.claude/skills/<name>/<file>" "skills/<name>/<file>" -Force
   ```
-- **Repo → local** (after pulling changes or cloning fresh):
+- **Claude local → global agent install** (keep `~/.agents` current):
+  ```powershell
+  Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
+  ```
+- **Repo → both local installs** (after pulling changes or cloning fresh):
   ```powershell
   Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
+  Copy-Item "skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
   ```
 
-When renaming a skill, update **both** locations — the repo folder and the local install folder under `~/.claude/skills/`. The folder name and the `name:` field in the SKILL.md frontmatter must match. A mismatch causes the skill to not appear in IDE tooling.
+If you edit the `~/.agents/skills/<name>/` copy first, mirror it back to the repo and to `~/.claude/skills/<name>/` using the same pattern.
+
+When renaming a skill, update **all three** locations — the repo folder, the local Claude install folder, and the local global agent install folder. The folder name and the `name:` field in the SKILL.md frontmatter must match. A mismatch causes the skill to disappear from tooling or show stale instructions.
 
 A sync mismatch means one side runs a stale version, which leads to confusing eval results and wasted iterations.
+
+After changing any repo-managed skill, sync the touched files across the repo copy, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/` before considering the task done.
 
 ## Skill Directory Structure
 

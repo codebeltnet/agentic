@@ -14,6 +14,16 @@ skills/
       evals.json
 ```
 
+## Local sync
+
+Repo-managed skills should be mirrored across all three locations:
+
+- `skills/<name>/` in this repo
+- `~/.claude/skills/<name>/`
+- `~/.agents/skills/<name>/`
+
+If you edit a local install copy first, copy the changed files back into the repo and into the other local install so every agent sees the same skill version.
+
 ## SKILL.md format
 
 Every `SKILL.md` must start with a YAML front matter block:
@@ -75,4 +85,5 @@ Aim for 3–5 evals that cover distinct scenarios: happy path, edge cases, and c
 - [ ] Skill is stack-agnostic (or clearly scoped to a specific tech in the name/description)
 - [ ] Examples are generic — no personal emails, usernames, or project-specific identifiers
 - [ ] At least one eval in `evals/evals.json`
+- [ ] Changed skill files are synced across `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/`
 - [ ] Skill added to the table in `README.md`
