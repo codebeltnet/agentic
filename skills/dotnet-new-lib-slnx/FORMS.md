@@ -27,6 +27,13 @@ Collect these parameters from the user before generating anything. Present each 
 ### author
 - **type:** text
 - **prompt:** "Author name? (for NuGet metadata and git)"
+- **computed_default:** Git user name (via `git config user.name`). Falls back to asking the user if not configured.
+- **required:** true
+
+### author_email
+- **type:** text
+- **prompt:** "Author email? (for NuGet metadata and signing conditions)"
+- **computed_default:** Git user email (via `git config user.email`). Falls back to asking the user if not configured.
 - **required:** true
 
 ### company

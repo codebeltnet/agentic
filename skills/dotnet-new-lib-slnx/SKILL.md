@@ -31,6 +31,7 @@ When copying template files, replace these placeholders in file contents:
 | `{SOLUTION_NAME}` | Solution name (e.g. `MyLibrary`) |
 | `{ROOT_NAMESPACE}` | Root namespace prefix (e.g. `Acme`) |
 | `{AUTHOR}` | Author name |
+| `{AUTHOR_EMAIL}` | Author email |
 | `{COMPANY}` | Company name |
 | `{COPYRIGHT_YEAR}` | Copyright year (e.g. `2026`) |
 | `{PACKAGE_URL}` | Product/docs URL |
@@ -74,4 +75,8 @@ After generating, verify:
 - [ ] `.github/copilot-instructions.md` has project-specific patterns
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
 
-Summarize what was generated and note any manual steps (e.g. creating the `.snk` file, registering with SonarCloud, populating `.docfx/images/` with logo/favicon).
+Summarize what was generated and note any manual steps (e.g. registering with SonarCloud, populating `.docfx/images/` with logo/favicon).
+
+## Step 6: Generate Strong Name Key
+
+After scaffolding is complete, invoke the `dotnet-strong-name-signing` skill to generate the `.snk` file. The skill will default the key name to the repository folder name and place it at the repo root — which is exactly where `Directory.Build.props` expects it via `{SNK_FILE}`.
