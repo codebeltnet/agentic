@@ -89,11 +89,14 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 
 ```
 <emoji> <prefix>: <short description>
+
+<optional body>
 ```
 
 - **Emoji** comes first — picked from the technology/type tables below
 - **Prefix** is lowercase (see allowed prefixes below) — **never use `feat:`**
 - **Description** is lowercase, imperative, max 70 characters total (including emoji and prefix)
+- **Body** is optional — a short paragraph (2–4 lines) explaining *why* or *what changed* when the subject alone isn't enough. Separate from the subject with a blank line. Wrap at 72 characters. Omit when the subject is self-explanatory.
 - One logical change per commit — don't bundle unrelated things
 
 ### Allowed Prefixes
@@ -365,9 +368,10 @@ For each group:
 1. `git add <specific files>` — be precise, don't use `git add .` unless everything belongs in one commit
 2. Compose the commit message (see format above)
 3. Run the appropriate commit command:
-   - `git bot commit -m "<message>"` — if the user asked the AI to commit (bot identity)
-   - `git commit -m "<message>"` — if the user asked to commit under their own identity
+   - `git bot commit -m "<subject>"` — if the user asked the AI to commit (bot identity)
+   - `git commit -m "<subject>"` — if the user asked to commit under their own identity
    - For `git our commit` — use whichever command matches the attribution the human chose
+   - **With body:** use `-m "<subject>" -m "<body>"` to add the optional description paragraph
 
 ### Step 6: Verify
 
@@ -377,20 +381,28 @@ After committing, run `git log --oneline -5` to confirm the commit looks right. 
 
 ## Good Examples
 
+Subject-only (when the change is self-explanatory):
 ```
 🎉 init: begin api project
-🔧 init: configure swagger and versioning
-⚙️ init: setup app host and middleware
 ✨ add submission endpoint module
-🗃️ add submission entity and db context
-🏷️ content: add submission dto contracts
-🎨 style: format endpoint modules
-♻️ refactor: extract mapper to separate class
 🐛 fix: handle null optional fields in dto
-🦺 add submission dto validation rules
-✅ add integration tests for submission api
 ➕ add validation library
-🐳 add dockerfile for api deployment
+```
+
+With body (when context adds value):
+```
+🚚 rename templates/ to assets/ per Anthropic skill conventions
+
+Align with the official skill directory structure: SKILL.md, scripts/,
+references/, and assets/. Updates all path references in SKILL.md,
+reference docs, and AGENTS.md for both app and library skills.
+```
+
+```
+♻️ refactor: streamline app skill with FORMS.md wizard
+
+Replace inline parameter table with structured FORMS.md form definition.
+Step 1 now references FORMS.md instead of listing 12 fields inline.
 ```
 
 ## Bad Examples (and why)
