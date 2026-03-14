@@ -284,28 +284,53 @@ Run `git status` and `git diff` (and `git diff --staged` if there are staged cha
 
 ### Step 2: Classify changes
 
-Before composing any commit message, bucket every changed file by its intent. Derive categories from the actual diff — don't assume a fixed set. Common categories include:
+Before composing any commit message, bucket every changed file by its **semantic intent** — not just its file type. Read the actual diff for each file and ask: *"What is this change trying to accomplish?"* Two files of the same type (e.g. two test files) may have completely different intents and belong in separate commits.
+
+Derive categories from the actual diff — don't assume a fixed set. Common categories include:
 
 - **Project/solution files** — build system metadata that defines project structure
 - **Preprocessor/build-only changes** — conditional compilation, build-target switches
-- **Build/tooling** — CI workflows, container definitions, build scripts, environment config
+- **Build/tooling** — CI workflows, container definitions, build scripts
+- **Environment/configuration** — test environment config, connection strings, runner settings, infra setup
 - **Source moves/renames** — renamed files, moved namespaces, updated imports
 - **Breaking removals** — removed public types, deleted forwarding attributes, dropped compatibility shims
 - **Documentation** — readmes, changelogs, contributing guides, release notes, inline doc comments
-- **Application code** — new features, bug fixes, refactors, tests, validation, business logic
+- **Application code** — new features, bug fixes, refactors, business logic
+- **Test logic** — changed assertions, updated expectations, new test cases, modified test behavior
 
-This classification drives grouping in Step 3. Files in different categories almost never belong in the same commit.
+**Critical distinction:** "Environment/configuration" and "Test logic" are separate categories even when both live under a test project. A test environment config file (`testenvironments.json`, `appsettings.test.json`) describes *how tests run*. A test assertion file describes *what tests verify*. These are different intents.
+
+This classification drives grouping in Step 3. Files with different semantic intents almost never belong in the same commit.
 
 ### Step 3: Group into logical commits
 
-Group changes by technology and logical purpose. Ask yourself: if someone reads only the commit log, does each entry tell a clear, focused story?
+Group changes by **semantic intent**, not just by file type or directory. Ask yourself: *"Could I explain each commit in one sentence without using the word 'and'?"* If you need "and" to describe what a commit does, it's likely two commits.
+
+#### Semantic intent splitting
+
+For every proposed commit, verify that all files share the same *rationale*. Prefer multiple commits when:
+
+- One change is **environment/configuration** and another is **test logic or code behavior** — even if both are "test-related"
+- The **explanation for why each file changed** differs materially
+- One file changed because of an **operational/infrastructure decision** and another because of a **framework or API change**
+
+When only two files changed but their rationales differ, **explicitly state that two commits are warranted** in the commit plan. Small file count does not justify bundling.
+
+#### Commit body guidance
+
+For non-obvious changes, add a commit body explaining the *why*:
+
+- **Config/environment commits** → explain the operational intent (e.g. "Switch to shared-runner testing strategy with multi-image matrix")
+- **Test assertion changes** → explain why the expectation changed (e.g. "net11 changed the default precision for DateTime, updating expected value")
+- **Refactors** → explain what motivated the restructuring
 
 Common groupings:
-- Config/setup files together (app host, environment config, bootstrapping)
+- Config/setup files together (app host, bootstrapping)
+- Environment and infrastructure config together (test runners, CI matrix, container settings)
 - New feature or module code together
 - Data contracts, types, and interfaces together
 - Database models, migrations, and schema changes together
-- Tests together
+- Test logic and assertions together (when they share the same rationale)
 - Documentation and inline comments together
 
 When in doubt, one commit per "thing that changes" is better than one big commit.
