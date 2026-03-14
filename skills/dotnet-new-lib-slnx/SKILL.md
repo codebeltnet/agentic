@@ -16,22 +16,7 @@ Scaffold new .NET NuGet library solutions following the codebeltnet engineering 
 
 ## Step 1: Collect Parameters
 
-Ask the user for all parameters before generating anything. Present them as a structured list and wait for all answers:
-
-| Parameter | Prompt | Default / Notes |
-|-----------|--------|-----------------|
-| **Solution name** | "Solution/product name? (e.g. `MyLibrary`)" | Required |
-| **Root namespace** | "Root namespace prefix? (e.g. `Acme`, `MyCompany`)" | Defaults to solution name |
-| **Project names** | "Library project name(s)? (e.g. `{Namespace}`, `{Namespace}.Extensions.Logging`)" | At least one required |
-| **Author** | "Author name (for NuGet metadata and git)?" | Required |
-| **Company** | "Company name (for copyright and NuGet metadata)?" | Required |
-| **Copyright year** | "Copyright year?" | Current year (from system time) |
-| **Package URL** | "Product/documentation URL?" | `https://github.com/{owner}/{repo}` |
-| **Repository URL** | "GitHub repository URL?" | Required |
-| **Target frameworks** | "Target frameworks? (semicolon-separated)" | `net10.0;net9.0` |
-| **Strong-name signing** | "Enable assembly signing (.snk)? Signing requires committing a key file." | `yes` |
-| **SonarCloud org** | "SonarCloud organization slug? (skip if not using SonarCloud)" | Optional |
-| **SonarCloud key** | "SonarCloud project key?" | Optional |
+Read `FORMS.md` and collect all parameters by presenting each field to the user one at a time using the agent's native input mechanism. Follow the presentation rules defined in the form. Do not proceed to Step 2 until all required fields are collected and the user confirms the summary.
 
 ## Step 2: Load the Variant Guide
 
