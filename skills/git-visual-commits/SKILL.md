@@ -282,15 +282,15 @@ By default, every commit includes a body paragraph explaining *why* the change w
 
 ### Per-request activation
 
-Include the word **"no-body"** anywhere in your request:
+Include **"no-body"** or **"tmi"** anywhere in your request:
 
 - "git bot commit, no-body"
-- "commit this no-body"
-- "yolo no-body" (combines both modes)
+- "commit this tmi"
+- "yolo tmi" (combines both modes)
 
 ### Session-level activation
 
-Say **"enable no-body mode"** to suppress commit bodies for the rest of the session. All subsequent commits will be subject-only until the user says **"disable no-body mode"**.
+Say **"enable no-body mode"** or **"enable tmi mode"** to suppress commit bodies for the rest of the session. All subsequent commits will be subject-only until the user says **"disable no-body mode"** or **"disable tmi mode"**.
 
 > **Note:** No-body mode suppresses the body paragraph only. The subject line, emoji, prefix, classification, and grouping rules all still apply.
 
