@@ -21,6 +21,10 @@ When running evals or testing skills, create all workspaces in a temp location:
 
 Never set or override `git user.name`, `git user.email`, or `alias.bot` in the **local** git config of this repository. Always use the global config. Local overrides silently shadow global settings and produce commits with the wrong author.
 
+## Skill Creation
+
+Always use the `skill-creator` skill (by Anthropic) when creating new skills, modifying existing skills, or running evals. It enforces best practices for structure, description quality, testing, and progressive disclosure. Do not create or edit skills manually without invoking it first.
+
 ## Third-Party Skills
 
 Never modify skills maintained by others (e.g. `skill-creator` by Anthropic). If a third-party skill needs repo-specific behavior, add the rule here in `AGENTS.md` — not in the skill file itself. Upstream updates will overwrite local edits without warning.
@@ -74,7 +78,7 @@ When committing changes to this repo, group by technology and logical purpose �
 
 ## README Sync
 
-After modifying any skill (`SKILL.md`, `FORMS.md`) or repo-level config (`AGENTS.md`), **always check if `README.md` needs updating**. The README's "Available Skills" table and feature bullet lists describe each skill's capabilities — if those capabilities changed, the README must reflect it. Treat this as a mandatory post-change step, not an afterthought.
+After modifying any skill (`SKILL.md`, `FORMS.md`) or repo-level config (`AGENTS.md`), **always update `README.md` before considering the task done**. This is a mandatory gate — not a nice-to-have. The README's "Available Skills" table, install examples, and "Why" sections must reflect the current state of all skills. A new skill without a README entry is incomplete work.
 
 ## User Input UX
 
