@@ -35,6 +35,7 @@ If you want a bundle of skills always available, just install them all:
 ```bash
 npx skillsadd codebeltnet/agentic/git-visual-commits
 npx skillsadd codebeltnet/agentic/trunk-first-repo
+npx skillsadd codebeltnet/agentic/dotnet-strong-name-signing
 # npx skillsadd codebeltnet/agentic/another-skill
 ```
 
@@ -56,6 +57,7 @@ npx skillsadd codebeltnet/agentic/trunk-first-repo
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Multi-target frameworks, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web API, and Worker host types with Startup or Minimal hosting patterns, functional tests, and simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
+| [dotnet-strong-name-signing](skills/dotnet-strong-name-signing/SKILL.md) | Generate a strong name key (`.snk`) file for signing .NET assemblies using pure .NET cryptography — no Visual Studio Developer PowerShell or `sn.exe` required. Works in any terminal. Defaults to 1024-bit RSA (matching `sn.exe`), with 2048 and 4096 available as options. |
 
 ### Why git-visual-commits?
 
@@ -82,6 +84,15 @@ Starting a new .NET solution "from scratch" usually means copying from your last
 - **Focused skills** — library and app concerns are fully separated, no variant confusion
 - **Complete from the start** — CI pipeline, code quality, test infrastructure, and governance docs on day one
 - **Template-driven** — real files with placeholders in `assets/`, not generated strings, so you can inspect and evolve them
+
+### Why dotnet-strong-name-signing?
+
+Generating a `.snk` file traditionally requires `sn.exe`, which is only available in the Visual Studio Developer PowerShell — a common pain point for developers using VS Code, Rider, or plain terminals. This skill uses `RSACryptoServiceProvider` from the .NET runtime itself, so it works in **any PowerShell or terminal** without special tooling.
+
+- **No `sn.exe` dependency** — uses pure .NET crypto available in any PowerShell session
+- **Matches `sn.exe` defaults** — 1024-bit RSA by default, with 2048 and 4096 as options
+- **Cross-platform** — works on Windows, macOS, and Linux with PowerShell 7+ or .NET runtime
+- **Identity, not security** — [Microsoft's guidance](https://github.com/dotnet/runtime/blob/main/docs/project/strong-name-signing.md) is clear: strong names are about assembly identity, not cryptographic security
 
 ### Why trunk-first?
 
