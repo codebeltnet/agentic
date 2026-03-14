@@ -20,23 +20,7 @@ This matters because it prevents accidental pushes to main, establishes a clean 
 
 ### Step 1: Collect Parameters
 
-Ask the user for these parameters before doing anything:
-
-| Parameter | Prompt | Default |
-|-----------|--------|---------|
-| **Version prefix** | "What stage is this project? `v0.0.1` (PoC/experimental), `v0.1.0` (MVP), or `v1.0.0` (production-grade)?" | `v0.1.0` |
-| **Branch context** | "Short context for this feature branch? (e.g. `init-api`, `add-auth`, `setup-infra`)" | `init` |
-| **Remote origin** | "Remote URL? (skip if not ready yet)" | Skip |
-
-#### Version Prefix Guide
-
-The version prefix signals the project's maturity and intent:
-
-| Prefix | Stage | When to use |
-|--------|-------|-------------|
-| `v0.0.1` | PoC / Experimental | Throwaway prototype, exploring an idea, not meant for production |
-| `v0.1.0` | MVP | Building something real but still finding its shape — the most common starting point |
-| `v1.0.0` | Production-grade | Confident in the API/contracts, ready for consumers to depend on it |
+Read `FORMS.md` and collect all parameters by presenting each field to the user one at a time using the agent's native input mechanism. Follow the presentation rules defined in the form. Do not proceed to Step 2 until all required fields are collected and the user confirms the summary.
 
 ### Step 2: Initialize the Repository
 
