@@ -16,21 +16,7 @@ Scaffold new .NET standalone application solutions following the codebeltnet eng
 
 ## Step 1: Collect Parameters
 
-Ask the user for all parameters before generating anything. Present them as a structured list and wait for all answers:
-
-| Parameter | Prompt | Default / Notes |
-|-----------|--------|-----------------|
-| **Solution name** | "Solution/product name? (e.g. `PaymentService`)" | Required |
-| **Root namespace** | "Root namespace prefix? (e.g. `Acme`, `MyCompany`)" | Defaults to solution name |
-| **App host type(s)** | "App host type(s)? (`Console`, `Web API`, `Worker` — can be multiple)" | At least one required |
-| **Hosting pattern** | "Hosting pattern: **Startup** (aka Classic Hosting — Program.cs + Startup.cs) or **Minimal** (aka Minimal Hosting — Program.cs only)?" | Default: **Minimal**. Do not assume — always ask this explicitly. |
-| **Author** | "Author name (for git)?" | Required |
-| **Company** | "Company name (for copyright)?" | Required |
-| **Copyright year** | "Copyright year?" | Current year (from system time) |
-| **Package URL** | "Product/documentation URL?" | `https://github.com/{owner}/{repo}` |
-| **Repository URL** | "GitHub repository URL?" | Required |
-| **SonarCloud org** | "SonarCloud organization slug? (skip if not using SonarCloud)" | Optional |
-| **SonarCloud key** | "SonarCloud project key?" | Optional |
+Read `FORMS.md` and collect all parameters by presenting each field to the user one at a time using the agent's native input mechanism. Follow the presentation rules defined in the form. Do not proceed to Step 2 until all required fields are collected and the user confirms the summary.
 
 ## Step 2: Load the Variant Guide
 
@@ -44,16 +30,8 @@ When copying template files, replace these placeholders in file contents:
 |-------------|-------|
 | `{SOLUTION_NAME}` | Solution name (e.g. `PaymentService`) |
 | `{ROOT_NAMESPACE}` | Root namespace prefix (e.g. `Acme`) |
-| `{AUTHOR}` | Author name |
-| `{COMPANY}` | Company name |
-| `{COPYRIGHT_YEAR}` | Copyright year (e.g. `2026`) |
-| `{PACKAGE_URL}` | Product/docs URL |
-| `{REPOSITORY_URL}` | Full GitHub URL |
-| `{REPO_OWNER}` | GitHub org/user (from URL) |
-| `{REPO_SLUG}` | Repo name (last URL segment, lowercased) |
+| `{REPO_SLUG}` | Derived from solution name (lowercased, e.g. `PaymentService` → `paymentservice`) |
 | `{TARGET_FRAMEWORK}` | e.g. `net10.0` (single target) |
-| `{SONARCLOUD_ORG}` | SonarCloud org slug (or omit job if skipped) |
-| `{SONARCLOUD_KEY}` | SonarCloud project key |
 
 ## Step 4: Generate All Files
 
@@ -66,7 +44,7 @@ Copy every file from `templates/shared/` to the project root, preserving directo
 Copy `templates/app/Directory.Build.props` to the project root, applying placeholder substitution.
 
 ### 3. Copy app CI pipeline
-Overwrite the shared CI pipeline with `templates/app/.github/workflows/ci-pipeline.yml`. Apps have a simplified pipeline (build + test only, no pack/deploy/codecov/codeql). SonarCloud is commented out — uncomment if needed.
+Overwrite the shared CI pipeline with `templates/app/.github/workflows/ci-pipeline.yml`. Apps have a simplified pipeline (build + test only).
 
 ### 4. Generate app-specific files
 Follow the variant guide (Step 2) for the remaining files: project structure per host type, `.csproj` files, `Program.cs` (and `Startup.cs` if startup pattern), functional test projects, and the `.slnx` solution file.
@@ -78,11 +56,11 @@ After generating, verify:
 - [ ] `.slnx` references all generated src/ and test/ projects
 - [ ] `Directory.Packages.props` lists all `<PackageReference>` packages used in the solution (including host-type-specific packages)
 - [ ] `ci-pipeline.yml` has the correct settings (build + test only)
-- [ ] Root governance docs exist: `README.md`, `CHANGELOG.md`, `LICENSE`, `.github/CODE_OF_CONDUCT.md`, `.github/CONTRIBUTING.md`
+- [ ] Root governance docs exist: `README.md`, `CHANGELOG.md`, `.github/CODE_OF_CONDUCT.md`, `.github/CONTRIBUTING.md`
 - [ ] `.editorconfig` is present with file-scoped namespace enforcement
 - [ ] `AGENTS.md` references `.bot/` and coding guidelines
 - [ ] `.github/copilot-instructions.md` has project-specific patterns
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
 - [ ] Correct hosting pattern files generated (`Program.cs` only for Minimal, `Program.cs` + `Startup.cs` for Startup)
 
-Summarize what was generated and note any manual steps (e.g. registering with SonarCloud).
+Summarize what was generated and note any manual steps.
