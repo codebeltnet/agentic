@@ -172,7 +172,7 @@ Internal classes and methods must be validated by exercising the public API that
 
 ---
 description: 'Writing Performance Tests'
-applyTo: "tuning/**, **/*Benchmark*.cs"
+applyTo: "tooling/**, tuning/**, **/*Benchmark*.cs"
 ---
 
 # Writing Performance Tests
@@ -253,15 +253,15 @@ namespace YourProject
 ## 6. Reporting and CI
 
 - Benchmarks are primarily for local and tuning runs; be cautious about running heavy BenchmarkDotNet workloads in CI. Prefer targeted runs or harnesses for CI where appropriate.
-- Keep benchmark projects isolated (e.g., `tuning/*.csproj`) so they don't affect package builds or production artifacts.
+- Keep benchmark projects isolated under `tuning/`, keep the runner isolated under `tooling/`, and write reports to `reports/`.
 
 ## 7. Additional Guidelines
 
 - Keep benchmarks readable and well-documented; add comments explaining non-obvious choices.
 - If a benchmark exposes regressions or optimizations, add a short note in the benchmark file referencing the relevant issue or PR.
-- For any shared helpers for benchmarking, prefer small utility classes inside the `tuning` projects rather than cross-cutting changes to production code.
+- For any shared helpers for benchmarking, prefer small utility classes inside the benchmark projects under `tuning/` or inside the runner under `tooling/` rather than cross-cutting changes to production code.
 
-For further examples, refer to the benchmark files under the `tuning/` folder.
+For further examples, refer to the benchmark projects under `tuning/`, the runner under `tooling/`, and the generated reports under `reports/`.
 
 ---
 description: 'Writing XML documentation'

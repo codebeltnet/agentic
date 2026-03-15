@@ -29,6 +29,8 @@ When presenting `target_frameworks`, compute two presets from that same releases
 - Recommended: newest generally supported LTS only
 - Expanded scope: all generally supported `.NET` channels, newest to oldest, excluding preview channels
 
+Default `benchmark_runner_project_name` to `benchmark-runner`. Treat it as a solution-level tooling project name, not a per-library package name.
+
 ## Step 2: Load the Variant Guide
 
 Read `references/library.md` for the library-specific project structure, template file mapping, `.slnx` format, multi-project guidance, and project reference conventions.
@@ -42,6 +44,12 @@ Before writing `Directory.Packages.props`, resolve every `*_VERSION` placeholder
 - If registration metadata is unavailable, fall back to the package base address versions list from the same service index and still exclude prerelease versions
 - Resolve each package independently by package ID; never reuse one generic "latest" value across multiple packages
 - Never hardcode version numbers from stale examples, screenshots, or prior scaffolds
+
+This includes the benchmark-related packages:
+
+- `BenchmarkDotNet`
+- `BenchmarkDotNet.Diagnostics.Windows`
+- `Codebelt.Extensions.BenchmarkDotNet.Console`
 
 ## Step 4: Apply the Substitution Map
 
@@ -60,11 +68,15 @@ When copying template files, replace these placeholders in file contents:
 | `{REPO_OWNER}` | GitHub org/user (from URL) |
 | `{REPO_SLUG}` | Repo name (last URL segment, lowercased) |
 | `{TARGET_FRAMEWORKS}` | Computed from the official .NET releases index; default to newest generally supported LTS, or use all generally supported non-preview channels for broader scope |
+| `{BENCHMARK_RUNNER_PROJECT_NAME}` | Tooling project name for the benchmark host (default `benchmark-runner`) |
+| `{BENCHMARK_RUNNER_NAMESPACE}` | Benchmark runner namespace derived from the tooling project name, replacing invalid identifier characters such as `-` with `_` |
+| `{BENCHMARK_RUNNER_TARGET_FRAMEWORK}` | Highest selected LTS TFM from `target_frameworks`; if the selected TFMs do not include an LTS runtime, require a manual runner TFM decision instead of guessing |
+| `{BENCHMARK_RUNTIME_JOBS}` | One `.AddJob(...)` line per selected executable benchmark runtime, derived from `target_frameworks` |
 | `{SNK_FILE}` | e.g. `{repo-slug}.snk` |
 | `{SONARCLOUD_ORG}` | SonarCloud org slug (or omit job if skipped) |
 | `{SONARCLOUD_KEY}` | SonarCloud project key |
 
-`Directory.Packages.props` also contains package-specific placeholders such as `{BENCHMARKDOTNET_VERSION}` and `{MICROSOFT_NET_TEST_SDK_VERSION}`. Resolve each of them from NuGet.org in Step 3 before writing the final file.
+`Directory.Packages.props` also contains package-specific placeholders such as `{BENCHMARKDOTNET_VERSION}`, `{BENCHMARKDOTNET_DIAGNOSTICS_WINDOWS_VERSION}`, `{CODEBELT_EXTENSIONS_BENCHMARKDOTNET_CONSOLE_VERSION}`, and `{MICROSOFT_NET_TEST_SDK_VERSION}`. Resolve each of them from NuGet.org in Step 3 before writing the final file.
 
 ## Step 5: Generate All Files
 
@@ -72,6 +84,8 @@ Generate files in this order:
 
 ### 1. Copy shared templates
 Copy every file from `assets/shared/` to the project root, preserving directory structure. Apply placeholder substitution (Step 4) to all file contents during the copy.
+
+Do this as a recursive, dotfile-aware copy. Hidden folders and files under `assets/shared/` are part of the scaffold and must not be skipped. In particular, copy `assets/shared/.bot/README.md` as a real file in the generated repo; do not replace it with a synthetic `.gitkeep` or placeholder note.
 
 Exception: generate `testenvironments.json` instead of copying it verbatim. Always include the `WSL-Ubuntu` entry, then add one `Docker-Ubuntu` entry per selected target framework using the Docker image tag `codebeltnet/ubuntu-testrunner:{major}` where `{major}` comes from the TFM.
 
@@ -93,20 +107,42 @@ Copy `assets/library/Directory.Build.props` to the project root, applying placeh
 Copy `assets/library/.docfx/` to the project root, applying placeholder substitution. DocFX generates API reference documentation for NuGet packages.
 
 ### 4. Generate library-specific files
-Follow the variant guide (Step 2) for the remaining files: project structure, `.csproj` files, `.nuget/{ProjectName}/` metadata folders (per packable project), and the `.slnx` solution file.
+Follow the variant guide (Step 2) for the remaining files: project structure, `.csproj` files, tuning benchmark projects under `tuning/`, the solution-level benchmark runner under `tooling/`, `.nuget/{ProjectName}/` metadata folders (per packable project), and the `.slnx` solution file.
 
 For the default single-project case, use `solution_name` as `{PROJECT_NAME}` everywhere. Only branch into multiple `{PROJECT_NAME}` values when the user explicitly wants multiple library packages in the same solution.
+
+Generate benchmarking in two layers:
+
+- Benchmark project: `tuning/{PROJECT_NAME}.Benchmarks/{PROJECT_NAME}.Benchmarks.csproj`
+- Benchmark runner host: `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/{BENCHMARK_RUNNER_PROJECT_NAME}.csproj`
+- Runner entry point: `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/Program.cs`
+- Reports/output folder: `reports/`
+
+The tuning benchmark project holds the actual benchmark types and references the source project. The tooling benchmark runner invokes those tuning projects.
+
+`Program.cs` in the benchmark runner must call `BenchmarkProgram.Run(...)` and add one benchmark job per selected executable TFM from `target_frameworks`. Examples:
+
+- `net48` → `.AddJob(slimJob.WithRuntime(ClrRuntime.Net48))`
+- `net9.0` → `.AddJob(slimJob.WithRuntime(CoreRuntime.Core90))`
+- `net10.0` → `.AddJob(slimJob.WithRuntime(CoreRuntime.Core10_0))`
+
+Skip non-executable TFMs such as `netstandard*` when building the benchmark job list. If no executable runtime remains, note that the benchmark runner needs a manual runtime decision before it can be used.
+
+Set the benchmark runner project `TargetFramework` to the highest selected LTS TFM from `target_frameworks`. If the selected TFMs do not include an LTS runtime, do not guess; require a manual runner TFM decision instead.
 
 ## Step 6: Post-Generation Checklist
 
 After generating, verify:
 
-- [ ] `.slnx` references all generated src/, test/, and tuning/ projects
+- [ ] `.slnx` references all generated src/, test/, tuning/, and tooling/ projects
 - [ ] `Directory.Build.props` references the correct `.snk` filename
 - [ ] Each packable project has a `.nuget/{ProjectName}/` folder with `PackageReleaseNotes.txt`, `icon.png` (placeholder), and `README.md`
 - [ ] `Directory.Packages.props` lists all `<PackageReference>` packages used in the solution
 - [ ] `Directory.Packages.props` contains concrete version numbers with no unresolved `*_VERSION` placeholders
 - [ ] Every `Directory.Packages.props` version was resolved from the latest stable listed NuGet.org package version at generation time
+- [ ] `tuning/{PROJECT_NAME}.Benchmarks/{PROJECT_NAME}.Benchmarks.csproj` references the main source project and relies on central package management
+- [ ] `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/Program.cs` contains one runtime job per selected executable TFM
+- [ ] `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/{BENCHMARK_RUNNER_PROJECT_NAME}.csproj` references the default tuning benchmark project and relies on central package management
 - [ ] `ci-pipeline.yml` has the correct SNK and SonarCloud settings
 - [ ] Root governance docs exist: `README.md`, `CHANGELOG.md`, `LICENSE`, `.github/CODE_OF_CONDUCT.md`, `.github/CONTRIBUTING.md`
 - [ ] `.docfx/docfx.json` lists all source projects and has correct metadata
@@ -114,6 +150,7 @@ After generating, verify:
 - [ ] `AGENTS.md` references `.bot/` and coding guidelines
 - [ ] `.github/copilot-instructions.md` has project-specific patterns
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
+- [ ] `.bot/README.md` exists in the generated repo and came from the shared asset template, not from a synthetic `.gitkeep` fallback
 - [ ] `.github/dependabot.yml` watches the repo root so central NuGet package management stays current after scaffolding
 
 Summarize what was generated and note any manual steps (e.g. registering with SonarCloud, populating `.docfx/images/` with logo/favicon).

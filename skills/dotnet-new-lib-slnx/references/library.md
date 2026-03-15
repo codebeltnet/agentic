@@ -22,6 +22,13 @@ Slim guide for scaffolding a NuGet library solution. All file templates live in 
 ├── tuning/
 │   └── {PROJECT_NAME}.Benchmarks/
 │       └── {PROJECT_NAME}.Benchmarks.csproj
+├── tooling/
+│   └── {BENCHMARK_RUNNER_PROJECT_NAME}/
+│       ├── {BENCHMARK_RUNNER_PROJECT_NAME}.csproj
+│       └── Program.cs
+├── reports/
+│   └── tuning/
+│       └── (benchmark reports and tuning output)
 ├── Directory.Build.props
 ├── {REPO_SLUG}.slnx
 └── (shared skeleton files — see shared-files.md)
@@ -36,7 +43,9 @@ Slim guide for scaffolding a NuGet library solution. All file templates live in 
 | `assets/library/Directory.Build.props` | `Directory.Build.props` (repo root)                                |
 | `assets/library/source.csproj`         | `src/{PROJECT_NAME}/{PROJECT_NAME}.csproj`                         |
 | `assets/library/test.csproj`           | `test/{PROJECT_NAME}.Tests/{PROJECT_NAME}.Tests.csproj`            |
-| `assets/library/benchmark.csproj`      | `tuning/{PROJECT_NAME}.Benchmarks/{PROJECT_NAME}.Benchmarks.csproj`|
+| `assets/library/benchmark.csproj`      | `tuning/{PROJECT_NAME}.Benchmarks/{PROJECT_NAME}.Benchmarks.csproj` |
+| `assets/library/benchmark-runner.csproj` | `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/{BENCHMARK_RUNNER_PROJECT_NAME}.csproj` |
+| `assets/library/benchmark-program.cs`  | `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/Program.cs`               |
 | `assets/library/PackageReleaseNotes.txt` | `.nuget/{PROJECT_NAME}/PackageReleaseNotes.txt`                  |
 | `assets/library/nuget-readme.md`       | `.nuget/{PROJECT_NAME}/README.md`                                  |
 | *(create manually)*                       | `.nuget/{PROJECT_NAME}/icon.png` — 128×128 PNG placeholder         |
@@ -57,10 +66,13 @@ Slim guide for scaffolding a NuGet library solution. All file templates live in 
   <Folder Name="/tuning/">
     <Project Path="tuning/{PROJECT_NAME}.Benchmarks/{PROJECT_NAME}.Benchmarks.csproj" />
   </Folder>
+  <Folder Name="/tooling/">
+    <Project Path="tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/{BENCHMARK_RUNNER_PROJECT_NAME}.csproj" />
+  </Folder>
 </Solution>
 ```
 
-Add a `/tooling/` folder when tooling projects exist.
+Benchmark reports are written under `reports/`, not under the `tuning/` project folder.
 
 ---
 
@@ -106,7 +118,8 @@ Fallback data source:
 Practical guidance:
 
 - `BenchmarkDotNet` should resolve separately from `Microsoft.NET.Test.Sdk`
-- `Codebelt.Bootstrapper.Console`, `.Web`, and `.Worker` may land on different latest stable versions; do not assume they move in lockstep
+- `BenchmarkDotNet.Diagnostics.Windows` should resolve separately from `BenchmarkDotNet`
+- `Codebelt.Extensions.BenchmarkDotNet.Console` should resolve separately from the test and bootstrapper packages
 - Leave Dependabot enabled after scaffolding so the repo keeps tracking newer stable packages over time
 
 The generated `.github/dependabot.yml` should watch the repo root (`directory: "/"`) because both `Directory.Packages.props` and `Directory.Build.props` live there.
@@ -194,14 +207,88 @@ As of March 15, 2026, the major tags `8`, `9`, and `10` are present and active i
 
 Default to a single library project and set `{PROJECT_NAME}` equal to `{SOLUTION_NAME}`.
 
+Default the benchmark runner tooling project to `{BENCHMARK_RUNNER_PROJECT_NAME} = benchmark-runner`.
+
+Derive its namespace separately from the library namespace by converting the tooling project name into a valid C# identifier, for example:
+
+- `benchmark-runner` → `benchmark_runner`
+
 Example:
 
 - Solution: `Codebelt.Agentic`
 - Source project: `src/Codebelt.Agentic/Codebelt.Agentic.csproj`
 - Test project: `test/Codebelt.Agentic.Tests/Codebelt.Agentic.Tests.csproj`
-- Benchmark project: `tuning/Codebelt.Agentic.Benchmarks/Codebelt.Agentic.Benchmarks.csproj`
+- Tuning benchmark project: `tuning/Codebelt.Agentic.Benchmarks/Codebelt.Agentic.Benchmarks.csproj`
+- Tooling benchmark runner: `tooling/benchmark-runner/benchmark-runner.csproj`
+- Benchmark reports: `reports/`
 
 Only switch to multiple project names when the user explicitly asks for a multi-project solution such as core + extensions or multiple NuGet packages.
+
+---
+
+## Benchmark Runner
+
+Generate one tuning benchmark project per primary source project and one solution-level benchmark runner in `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/`.
+
+Purpose split:
+
+- `tuning/` holds the actual benchmark projects and benchmark types
+- `tooling/` holds executable tooling projects such as the benchmark runner host
+- `reports/` holds the reports and benchmark output produced by those tools
+
+`Program.cs` should follow this shape:
+
+```csharp
+using Codebelt.Extensions.BenchmarkDotNet;
+using Codebelt.Extensions.BenchmarkDotNet.Console;
+using BenchmarkDotNet.Environments;
+
+namespace {BENCHMARK_RUNNER_NAMESPACE}
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            BenchmarkProgram.Run(args, o =>
+            {
+                o.AllowDebugBuild = BenchmarkProgram.IsDebugBuild;
+                o.SkipBenchmarksWithReports = true;
+                o.ConfigureBenchmarkDotNet(c =>
+                {
+                    var slimJob = BenchmarkWorkspaceOptions.Slim;
+                    return c
+{BENCHMARK_RUNTIME_JOBS};
+                });
+            });
+        }
+    }
+}
+```
+
+Generate `{BENCHMARK_RUNTIME_JOBS}` from the selected executable TFMs:
+
+- `net48` → `.AddJob(slimJob.WithRuntime(ClrRuntime.Net48))`
+- `net9.0` → `.AddJob(slimJob.WithRuntime(CoreRuntime.Core90))`
+- `net10.0` → `.AddJob(slimJob.WithRuntime(CoreRuntime.Core10_0))`
+
+Keep the jobs in the same order as `target_frameworks` after filtering out non-executable TFMs such as `netstandard*`.
+
+The benchmark runner project should:
+
+- live under `tooling/`
+- reference the default tuning benchmark project by default
+- rely on central package management for `BenchmarkDotNet` and `Codebelt.Extensions.BenchmarkDotNet.Console`
+- target the highest selected LTS TFM from `target_frameworks` so the runner itself stays on an LTS runtime by default
+- if the selected TFMs do not include an LTS runtime, require a manual runner TFM decision instead of guessing
+
+The tuning benchmark project should:
+
+- live under `tuning/`
+- reference the main source project
+- rely on central package management for `BenchmarkDotNet` and `BenchmarkDotNet.Diagnostics.Windows`
+- keep benchmark types in the same namespace as the production code they measure
+
+If the user later wants more benchmark coverage, add benchmark classes to the tuning projects or make the runner reference additional tuning projects without changing the role split between `tuning/`, `tooling/`, and `reports/`.
 
 ---
 
@@ -232,8 +319,9 @@ For multiple library projects (e.g. core + extensions), repeat per project:
 1. `src/{PROJECT_NAME}/` — source project (from `source.csproj` template)
 2. `test/{PROJECT_NAME}.Tests/` — test project (from `test.csproj` template)
 3. `tuning/{PROJECT_NAME}.Benchmarks/` — benchmark project (from `benchmark.csproj` template)
-4. `.nuget/{PROJECT_NAME}/` — NuGet metadata (release notes, readme, icon)
-5. Add each project to the `.slnx` under the appropriate folder
+4. Reuse one solution-level benchmark runner under `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/`
+5. `.nuget/{PROJECT_NAME}/` — NuGet metadata (release notes, readme, icon)
+6. Add each project to the `.slnx` under the appropriate folder
 
 ---
 
@@ -241,4 +329,5 @@ For multiple library projects (e.g. core + extensions), repeat per project:
 
 - **Test → Source:** `<ProjectReference Include="..\..\src\{PROJECT_NAME}\{PROJECT_NAME}.csproj" />`
 - **Benchmark → Source:** `<ProjectReference Include="..\..\src\{PROJECT_NAME}\{PROJECT_NAME}.csproj" />`
+- **Benchmark runner → Benchmark:** `<ProjectReference Include="..\..\tuning\{PROJECT_NAME}.Benchmarks\{PROJECT_NAME}.Benchmarks.csproj" />`
 - **Extension → Core:** extension projects reference the core project via `<ProjectReference>`

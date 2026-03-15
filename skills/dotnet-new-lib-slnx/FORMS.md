@@ -64,6 +64,13 @@ Collect these parameters from the user before generating anything. Present each 
 - **description:** Default to the newest generally supported .NET LTS for new libraries based on the official releases index. Also offer an expanded compatibility preset built from all generally supported `.NET` channels in that same index, sorted newest to oldest and formatted as semicolon-separated TFMs. Exclude preview channels. Allow custom TFMs when needed.
 - **required:** true
 
+### benchmark_runner_project_name
+- **type:** text
+- **prompt:** "Benchmark runner project name?"
+- **default:** `benchmark-runner`
+- **description:** Solution-level tooling project that hosts `Program.cs` for BenchmarkDotNet runs. Keep the default unless the repo already uses another tooling naming convention.
+- **required:** true
+
 ### strong_name_signing
 - **type:** single-choice
 - **prompt:** "Enable assembly signing (.snk)?"

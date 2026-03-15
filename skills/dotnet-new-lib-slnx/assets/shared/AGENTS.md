@@ -19,6 +19,9 @@ This document provides guidance for AI agents working in this repository.
 
 - `src/` — Production source code
 - `test/` — Unit and integration tests (project names end with `Tests`)
+- `tuning/` — Benchmark projects and benchmark source code
+- `tooling/` — Solution-level executable tooling such as the benchmark runner host
+- `reports/` — Benchmark reports and tuning output produced by tooling
 - `.nuget/` — Per-package NuGet metadata (icon, README, release notes)
 - `.docfx/` — DocFX documentation configuration
 - `.github/` — CI/CD workflows, contributing guidelines, Copilot instructions
