@@ -8,6 +8,8 @@ This document provides guidance for AI agents working in this repository.
 
 ## Coding Standards
 
+- **Text encoding:** UTF-8 for text files (enforced via `.editorconfig`)
+- **Template rewrites:** Preserve UTF-8 explicitly when scripts or tools rewrite text files; avoid locale-dependent encoding defaults
 - **Namespaces:** File-scoped namespaces are required (enforced via `.editorconfig`)
 - **Top-level statements:** Not allowed (enforced via `.editorconfig`)
 - **Language version:** Always use the latest C# features (`LangVersion=latest`)

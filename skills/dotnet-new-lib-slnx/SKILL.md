@@ -87,6 +87,23 @@ Copy every file from `assets/shared/` to the project root, preserving directory 
 
 Do this as a recursive, dotfile-aware copy. Hidden folders and files under `assets/shared/` are part of the scaffold and must not be skipped. In particular, copy `assets/shared/.bot/README.md` as a real file in the generated repo; do not replace it with a synthetic `.gitkeep` or placeholder note.
 
+Preserve UTF-8 when reading, copying, and writing text files. Do not transcode templates to ANSI, OEM, Windows-1252, or any system-default code page during generation. The shared `.editorconfig` in the scaffold declares `charset = utf-8`, and generated text files should match it from the start.
+
+When a text file does not need substitutions, prefer a byte-preserving file copy instead of read/transform/write.
+
+When a text file does need substitutions, use explicit UTF-8 APIs end-to-end. In PowerShell, prefer .NET file APIs with an explicit `UTF8Encoding` instance rather than locale-dependent text cmdlets. For example:
+
+```powershell
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$content = [System.IO.File]::ReadAllText($src, $utf8NoBom)
+$updated = Apply-Replacements -Content $content -Map $replaceMap
+[System.IO.File]::WriteAllText($dest, $updated, $utf8NoBom)
+```
+
+Avoid `Get-Content` / `Set-Content` or other default-encoding text paths unless you have explicitly verified they preserve UTF-8 correctly for BOM-less templates.
+
+Preserve the template's BOM policy by default. If the source template is UTF-8 without BOM, write UTF-8 without BOM unless the target file format or tool explicitly requires a BOM.
+
 Exception: generate `testenvironments.json` instead of copying it verbatim. Always include the `WSL-Ubuntu` entry, then add one `Docker-Ubuntu` entry per selected target framework using the Docker image tag `codebeltnet/ubuntu-testrunner:{major}` where `{major}` comes from the TFM.
 
 Exception: do not leave `Directory.Packages.props` with unresolved placeholder tokens. Resolve each package version placeholder to the latest stable listed NuGet.org version for that exact package ID before writing the file.
@@ -146,7 +163,8 @@ After generating, verify:
 - [ ] `ci-pipeline.yml` has the correct SNK and SonarCloud settings
 - [ ] Root governance docs exist: `README.md`, `CHANGELOG.md`, `LICENSE`, `.github/CODE_OF_CONDUCT.md`, `.github/CONTRIBUTING.md`
 - [ ] `.docfx/docfx.json` lists all source projects and has correct metadata
-- [ ] `.editorconfig` is present with file-scoped namespace enforcement
+- [ ] `.editorconfig` is present, sets `charset = utf-8`, and keeps file-scoped namespace enforcement
+- [ ] Generated text files do not contain common mojibake markers such as `â€”`, `â€“`, `â€`, or `�`
 - [ ] `AGENTS.md` references `.bot/` and coding guidelines
 - [ ] `.github/copilot-instructions.md` has project-specific patterns
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
