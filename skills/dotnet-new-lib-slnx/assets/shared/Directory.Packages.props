@@ -13,9 +13,7 @@
     <PackageVersion Include="xunit.v3.runner.console" Version="{XUNIT_V3_RUNNER_CONSOLE_VERSION}" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="{XUNIT_RUNNER_VISUALSTUDIO_VERSION}" />
     <PackageVersion Include="BenchmarkDotNet" Version="{BENCHMARKDOTNET_VERSION}" />
-    <PackageVersion Include="Codebelt.Bootstrapper.Console" Version="{CODEBELT_BOOTSTRAPPER_CONSOLE_VERSION}" />
-    <PackageVersion Include="Codebelt.Bootstrapper.Web" Version="{CODEBELT_BOOTSTRAPPER_WEB_VERSION}" />
-    <PackageVersion Include="Codebelt.Bootstrapper.Worker" Version="{CODEBELT_BOOTSTRAPPER_WORKER_VERSION}" />
-    <PackageVersion Include="Codebelt.SharedKernel" Version="{CODEBELT_SHAREDKERNEL_VERSION}" />
+    <PackageVersion Include="BenchmarkDotNet.Diagnostics.Windows" Version="{BENCHMARKDOTNET_DIAGNOSTICS_WINDOWS_VERSION}" />
+    <PackageVersion Include="Codebelt.Extensions.BenchmarkDotNet.Console" Version="{CODEBELT_EXTENSIONS_BENCHMARKDOTNET_CONSOLE_VERSION}" />
   </ItemGroup>
 </Project>

@@ -86,7 +86,6 @@
 
   <PropertyGroup Condition="'$(IsBenchmarkProject)' == 'true'">
     <TargetFrameworks>{TARGET_FRAMEWORKS}</TargetFrameworks>
-    <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <RunAnalyzers>false</RunAnalyzers>
     <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>
@@ -100,6 +99,7 @@
 
   <ItemGroup Condition="'$(IsBenchmarkProject)' == 'true'">
     <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="BenchmarkDotNet.Diagnostics.Windows" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(IsToolingProject)' == 'true'">
