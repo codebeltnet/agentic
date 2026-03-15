@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>{ROOT_NAMESPACE}</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\{ROOT_NAMESPACE}\{ROOT_NAMESPACE}.csproj" />
+  </ItemGroup>
+
+</Project>
