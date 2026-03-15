@@ -83,6 +83,15 @@ skills/<name>/
 
 Asset files in `assets/` are **not** processed by a templating engine. They contain real file content with placeholder values (e.g. `{ProjectName}`, `{TargetFramework}`) that the agent must read, understand, and substitute during generation. Agents should never copy asset files blindly — always read the content and adapt it to the user's specific parameters.
 
+## Prefer Dynamic Defaults
+
+When a skill needs time-sensitive or environment-sensitive values, prefer computing them from a reliable source instead of hardcoding them into prompts, defaults, or examples.
+
+- Prefer repo state, git metadata, official APIs, or vendor-maintained machine-readable feeds over date-stamped literals
+- Use hardcoded fallback examples only when a dynamic source is unavailable or would add unreasonable complexity
+- When a dynamic default exists, describe both the source and the fallback behavior in `FORMS.md` / `SKILL.md`
+- If a value changes over time (supported frameworks, current versions, generated paths, repo-derived names), assume hardcoding will drift and design for refreshable computation
+
 ## Commit Discipline
 
 When committing changes to this repo, group by technology and logical purpose — don't mix unrelated changes. For example:
@@ -196,6 +205,7 @@ description: Helps with projects.
 - Use **feedback loops** — run validator → fix errors → repeat
 - Put **critical instructions at the top** — use `## Critical` or `## Important` headers
 - For critical validations, **use scripts over language instructions** — code is deterministic
+- Prefer **dynamic defaults over hardcoded values** when the source data is available from the repo, environment, or an official machine-readable feed
 
 ### Skill Categories
 

@@ -6,6 +6,8 @@ A curated collection of [skills](https://skills.sh) — reusable instruction set
 
 Skills are Markdown files that an AI agent reads before responding. When a skill is active, the agent follows the rules it contains — consistently, across any tool or model that supports them. They're a lightweight way to encode your team's conventions once and apply them everywhere.
 
+One repo-wide convention matters especially for scaffolding skills: prefer dynamic defaults over hardcoded values whenever a reliable source exists. Derive time-sensitive or environment-sensitive values from git metadata, repo state, or official machine-readable feeds so skills age gracefully instead of drifting.
+
 ## Install a skill
 
 Skills are published to [skills.sh](https://skills.sh) — the open agent skills ecosystem. Install any skill with a single command:
@@ -55,7 +57,7 @@ npx skillsadd codebeltnet/agentic/dotnet-strong-name-signing
 | Skill | Description |
 |-------|-------------|
 | [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
-| [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Multi-target frameworks, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
+| [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web API, and Worker host types with Startup or Minimal hosting patterns, functional tests, and simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
 | [dotnet-strong-name-signing](skills/dotnet-strong-name-signing/SKILL.md) | Generate a strong name key (`.snk`) file for signing .NET assemblies using pure .NET cryptography — no Visual Studio Developer PowerShell or `sn.exe` required. Works in any terminal. Defaults to 1024-bit RSA (matching `sn.exe`), with 2048 and 4096 available as options. |
@@ -83,6 +85,14 @@ Starting a new .NET solution "from scratch" usually means copying from your last
 
 - **Convention over configuration** — opinionated defaults that match real production setups
 - **Focused skills** — library and app concerns are fully separated, no variant confusion
+- **Lower cognitive load** — the library scaffold defaults the main project name from the solution name, pre-fills the repository URL from the repo root folder name, and lets the package website reuse that value unless you override it
+- **Modern TFM default** — new libraries compute their default TFM from the official .NET releases index, with an opt-in preset that expands to all generally supported non-preview channels
+- **Latest stable dependencies** — `Directory.Packages.props` is generated from NuGet.org package metadata at scaffold time instead of carrying stale hardcoded NuGet package versions
+- **TFM-aware test runners** — generated `testenvironments.json` Docker entries now follow the selected target frameworks instead of using a hardcoded runner tag
+- **Source-backed runner tags** — Docker runner tags can be validated against the `codebeltnet/ubuntu-testrunner` Docker Hub tags feed instead of being assumed
+- **Root-aware Dependabot** — the generated repo watches `/` for NuGet updates so central package management keeps moving after day one
+- **Clear NuGet metadata mapping** — prompts and placeholders line up with package metadata such as `PackageProjectUrl`
+- **Solo-friendly defaults** — company/publisher metadata can default straight from the author name for individual maintainers
 - **Complete from the start** — CI pipeline, code quality, test infrastructure, and governance docs on day one
 - **Template-driven** — real files with placeholders in `assets/`, not generated strings, so you can inspect and evolve them
 

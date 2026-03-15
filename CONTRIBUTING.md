@@ -79,6 +79,13 @@ Evals let you verify the skill works and measure improvement over a baseline. Ad
 
 Aim for 3–5 evals that cover distinct scenarios: happy path, edge cases, and cases where the skill should *not* do something.
 
+## Prefer dynamic defaults
+
+When a skill needs defaults for versions, paths, repository names, or support windows, prefer deriving them from a reliable source instead of baking in values that will drift.
+
+- Good sources: git metadata, repo folder names, environment values, official JSON feeds, vendor docs APIs
+- Use hardcoded examples as examples only — not as the real defaulting mechanism — when the value can be computed
+
 ## Checklist before submitting
 
 - [ ] `SKILL.md` has valid front matter with `name` and `description`
