@@ -33,9 +33,11 @@ This document provides guidance for AI agents working in this repository.
 ## Build & CI
 
 - Centralized package versions via `Directory.Packages.props`
+- Resolve new or updated `Directory.Packages.props` versions from NuGet.org and keep them on the latest stable listed releases
 - Centralized build configuration via `Directory.Build.props`
 - MinVer for semantic versioning from Git tags
 - Strong-name signing is enabled in CI environments (`CI=true`)
+- Keep `.github/dependabot.yml` enabled at the repo root so central NuGet package management stays current
 
 ## .bot/ Folder
 

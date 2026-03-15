@@ -14,4 +14,4 @@ dotnet add package {ROOT_NAMESPACE}
 // Show a minimal usage example
 ```
 
-For full documentation visit [{PACKAGE_URL}]({PACKAGE_URL}).
+For full documentation visit [{PACKAGE_PROJECT_URL}]({PACKAGE_PROJECT_URL}).

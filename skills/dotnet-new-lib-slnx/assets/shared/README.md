@@ -27,7 +27,7 @@ dotnet add package {ROOT_NAMESPACE}
 
 ## Documentation
 
-Full documentation is available at [{PACKAGE_URL}]({PACKAGE_URL}).
+Full documentation is available at [{PACKAGE_PROJECT_URL}]({PACKAGE_PROJECT_URL}).
 
 ## Contributing
 

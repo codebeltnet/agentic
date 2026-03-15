@@ -17,13 +17,13 @@
 
   <PropertyGroup Condition="'$(IsSourceProject)' == 'true'">
     <TargetFrameworks>{TARGET_FRAMEWORKS}</TargetFrameworks>
-    <Copyright>Copyright © {COMPANY} {COPYRIGHT_YEAR}. All rights reserved.</Copyright>
+    <Copyright>Copyright © {COMPANY_OR_PERSON} {COPYRIGHT_YEAR}. All rights reserved.</Copyright>
     <Authors>{AUTHOR}</Authors>
-    <Company>{COMPANY}</Company>
+    <Company>{COMPANY_OR_PERSON}</Company>
     <Product>{SOLUTION_NAME}</Product>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageProjectUrl>{PACKAGE_URL}</PackageProjectUrl>
+    <PackageProjectUrl>{PACKAGE_PROJECT_URL}</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>{REPOSITORY_URL}</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
