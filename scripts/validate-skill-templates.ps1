@@ -288,6 +288,36 @@ Add-ValidationResult -Results $results -Name 'All repo-managed skills include va
     }
 }
 
+Add-ValidationResult -Results $results -Name 'All repo-managed skills keep YAML frontmatter descriptions within 1024 characters' -Action {
+    $skillRoot = Join-Path $repoRoot 'skills'
+    $skillDirectories = Get-ChildItem -Path $skillRoot -Directory | Sort-Object Name
+
+    foreach ($skillDir in $skillDirectories) {
+        $skillRelativePath = ('skills/{0}/SKILL.md' -f $skillDir.Name)
+        $skill = Get-FileText -RepoRoot $repoRoot -RelativePath $skillRelativePath -GitRef $Ref
+
+        if ($skill -notmatch '(?ms)^---\r?\n(?<frontmatter>.*?)\r?\n---') {
+            throw "$skillRelativePath must include YAML frontmatter delimited by ---"
+        }
+
+        $frontmatter = $matches['frontmatter']
+        if ($frontmatter -notmatch '(?ms)^description:\s*>\s*\r?\n(?<description>(?:[ \t].*\r?\n?)*)') {
+            throw "$skillRelativePath must include a folded YAML description block"
+        }
+
+        $descriptionLines = @(
+            $matches['description'] -split '\r?\n' |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -ne '' }
+        )
+
+        $description = [string]::Join(' ', $descriptionLines)
+        if ($description.Length -gt 1024) {
+            throw "$skillRelativePath frontmatter description must be 1024 characters or fewer; found $($description.Length)"
+        }
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'App skill collects target framework and conditional web_variant' -Action {
     $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/FORMS.md' -GitRef $Ref
     Assert-Contains -Name 'dotnet-new-app-slnx/FORMS.md' -Content $forms -Needle '### target_framework'
