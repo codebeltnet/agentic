@@ -3,50 +3,61 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Summarize this branch into one squash commit message. There are 14 commits including fixups, rename follow-ups, and one final docs touch. Give me the message only and do not commit anything.",
-      "expected_output": "A single squash-ready subject line that reflects the net effect, not a chronological recap, and does not mutate git state.",
+      "prompt": "Summarize this branch into a grouped squash summary. There are 14 commits including fixups, rename follow-ups, and one final docs touch. Give me the summary lines only and do not commit anything.",
+      "expected_output": "A grouped squash summary that reflects the distinct retained work, not a chronological recap, and does not mutate git state.",
       "expectations": [
         "Inspects git history and net diff before summarizing",
-        "Produces one final squash-ready subject line instead of a commit plan",
-        "Detects and centers the dominant theme of the commit stack",
-        "Returns a subject only and never adds a body",
+        "Produces grouped summary lines instead of a commit plan",
+        "Returns grouped lines only and never adds a title or body",
+        "Merges repetition and overlapping commits into retained groups",
         "Does not run mutating git commands"
       ]
     },
     {
       "id": 2,
-      "prompt": "Turn these commits into one polished squash summary for the PR. Preserve identifiers like ValidateSkillTemplates and git-visual-squash-summary exactly where possible.",
-      "expected_output": "A polished squash subject that keeps important technical identifiers intact and uses the shared git-visual wording style.",
+      "prompt": "Turn these commits into a polished grouped squash summary for the PR. Preserve identifiers like ValidateSkillTemplates and git-visual-squash-summary exactly where possible.",
+      "expected_output": "A polished grouped summary that keeps important technical identifiers intact and uses the shared git-visual wording style.",
       "expectations": [
         "Preserves technical identifiers exactly where possible",
         "Uses the same emoji and prefix language as git-visual-commits",
         "Reads like a curated human-written condensed history rather than a dump of commit subjects",
-        "Returns a single subject line with no body",
+        "Keeps distinct meaningful efforts on separate lines",
         "Avoids inventing unsupported changes"
       ]
     },
     {
       "id": 3,
-      "prompt": "I only want the squash commit message for this branch versus main. The history is noisy and repetitive, with several tiny follow-up commits. Keep every output line under 72 characters.",
-      "expected_output": "A concise squash-ready subject with a strict 72-character maximum that collapses repetitive history into intent-based wording.",
+      "prompt": "I only want the grouped squash summary for this branch versus main. The history is noisy and repetitive, with several tiny follow-up commits and typo fixes. Keep every output line under 72 characters.",
+      "expected_output": "A concise grouped summary with a strict 72-character maximum per line that collapses repetitive history into intent-based wording and drops low-signal noise.",
       "expectations": [
         "Groups by intent rather than chronology",
-        "Merges repetition and overlapping commits into one summary",
+        "Drops low-signal noise such as typo-only or trivial follow-up commits",
         "Favors readable GitHub and terminal output",
-        "Keeps the subject at or below 72 characters",
-        "Returns one line only"
+        "Keeps every output line at or below 72 characters",
+        "Does not prepend a title, bullets, or numbering"
       ]
     },
     {
       "id": 4,
-      "prompt": "Draft a squash-and-merge message for this range, but do not claim anything the diff does not support. Avoid vague filler like various improvements.",
-      "expected_output": "A truthful squash subject with strong concrete verbs and no unsupported claims or vague filler.",
+      "prompt": "Draft a grouped squash-and-merge summary for this range, but do not claim anything the diff does not support. Avoid vague filler like various improvements.",
+      "expected_output": "A truthful grouped summary with strong concrete verbs and no unsupported claims or vague filler.",
       "expectations": [
         "Uses strong concrete verbs and concise phrasing",
         "Avoids vague filler such as various improvements",
-        "Does not treat the result as a changelog entry",
-        "Returns only the subject line without a body",
+        "Does not treat the result as a changelog entry or commit-subject dump",
+        "Returns grouped lines only without a title or body",
         "Does not invent unsupported changes"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "We have about 100 commits here: 30 overlap heavily, 20 are typo-level noise, and the remaining work collapses into five real categories. Give me the curated grouped summary only.",
+      "expected_output": "A grouped summary that preserves the five meaningful categories, merges overlap, and drops typo-level noise.",
+      "expectations": [
+        "Highlights distinct meaningful efforts instead of forcing one dominant umbrella theme",
+        "Retains only distinct high-signal change groups",
+        "Does not collapse several unique top-level efforts into one stitched sentence",
+        "Outputs grouped lines only"
       ]
     }
   ]
