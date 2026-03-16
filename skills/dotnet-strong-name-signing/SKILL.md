@@ -25,7 +25,7 @@ Strong names in .NET are about **identity, not security** ([Microsoft's guidance
 
 ### Step 1: Collect Parameters
 
-Read `FORMS.md` and collect all parameters by presenting each field to the user one at a time using the agent's native input mechanism. Follow the presentation rules defined in the form. Do not proceed to Step 2 until all required fields are collected and the user confirms the summary.
+Read `FORMS.md`, compute the defaults silently, and present a single summary for confirmation. Only ask follow-up questions for individual fields if the user wants to override a computed or default value. Do not proceed to Step 2 until the user confirms the summary.
 
 ### Step 2: Generate the Key File
 
@@ -39,7 +39,7 @@ $rsa.Dispose()
 ```
 
 Where:
-- `{KEY_SIZE}` — RSA key size from parameters (default: 4096)
+- `{KEY_SIZE}` — RSA key size from parameters (default: 1024)
 - `{OUTPUT_PATH}` — full path combining `{OUTPUT_DIR}` and `{KEY_NAME}.snk`
 
 The `ExportCspBlob($true)` method exports the full key pair (public + private) in the exact CSP blob format that `sn.exe -k` produces. The `$true` parameter includes the private key — essential for signing during builds.

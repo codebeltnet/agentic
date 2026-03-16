@@ -1,0 +1,58 @@
+{
+  "skill_name": "dotnet-new-lib-slnx",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Scaffold a new .NET library solution named MyLibrary with root namespace Acme and the default target frameworks.",
+      "expected_output": "A single-project library scaffold with PROJECT_NAME-based paths, NuGet package metadata, DocFX files, and resolved package versions.",
+      "expectations": [
+        "Uses {PROJECT_NAME} as the default packable project name",
+        "Offers all active non-preview LTS and STS target framework quick picks before free text",
+        "Resolves package-specific version placeholders from NuGet before writing Directory.Packages.props",
+        "Creates DocFX config using {DOCFX_TARGET_FRAMEWORK} rather than a hardcoded net10.0",
+        "Uses the current working directory as the scaffold root instead of creating a nested MyLibrary folder"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Create a library solution named SavvyIo under the root namespace Codebelt with benchmark runner project name benchmark-runner and target frameworks net10.0;net8.0.",
+      "expected_output": "A scaffold that keeps the wildcard benchmark runner project reference, generates benchmark jobs from the selected TFMs, and writes PROJECT_NAME-based project references.",
+      "expectations": [
+        "Preserves the wildcard ProjectReference in benchmark-runner.csproj",
+        "Uses PROJECT_NAME in benchmark and test project references to src",
+        "Generates BENCHMARK_RUNTIME_JOBS from the selected executable TFMs"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Scaffold a new library for an individual maintainer and keep the repository URL as the package project URL unless I override it.",
+      "expected_output": "A scaffold that carries the repository URL through as the recommended package project URL, uses COMPANY_OR_PERSON in DocFX branding, and includes the shared .bot asset.",
+      "expectations": [
+        "Collects repository_url before package_project_url",
+        "Uses COMPANY_OR_PERSON in DocFX metadata instead of a separate COMPANY placeholder",
+        "Copies assets/shared/.bot/README.md into the generated repo"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Create a new library named ReleaseRail and let me choose between the active LTS and STS target frameworks.",
+      "expected_output": "A library scaffold flow that offers every active non-preview LTS and STS target framework quick pick and can target DocFX plus the benchmark runner at the highest selected supported runtime.",
+      "expectations": [
+        "Offers the newest active LTS channel as the recommended target framework choice",
+        "Offers every other active LTS and STS channel as additional first-class quick-picks when they are supported",
+        "Uses the highest selected supported TFM for DOCFX_TARGET_FRAMEWORK and BENCHMARK_RUNNER_TARGET_FRAMEWORK when only STS is selected"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Scaffold a new library named MyLibrary and keep the recommended root namespace if I do not type a custom value.",
+      "expected_output": "A scaffold flow that presents the solution name as the recommended root namespace and accepts that default without a second clarification loop when the user leaves the root namespace response blank.",
+      "expectations": [
+        "Presents solution_name as the recommended root_namespace choice",
+        "Treats a blank response on root_namespace as accepting the shown default",
+        "Continues to the summary instead of asking a second root_namespace clarification question",
+        "Uses native structured inputs when available and a one-field-at-a-time plain-text fallback when they are not"
+      ]
+    }
+  ]
+}

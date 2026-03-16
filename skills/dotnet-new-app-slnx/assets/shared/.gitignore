@@ -2,4 +2,5 @@
 *.DotSettings
 
 # Bot workspace (local-only AI agent ideation, PRDs, and agentic loop state)
-.bot/
+.bot/*
+!.bot/README.md

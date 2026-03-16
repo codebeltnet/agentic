@@ -1,6 +1,6 @@
 # Parameter Form
 
-Collect these parameters from the user before generating anything. Present each field **one at a time** using the agent's native input mechanism (e.g. `ask_user` with `choices`). Do not bundle multiple fields into a single message.
+Collect these parameters from the user before generating anything. Present each field **one at a time** using the agent's native input mechanism (e.g. `ask_user` with `choices`) when the host supports it. If native structured input widgets are unavailable, fall back to the deterministic plain-text interaction format described in the presentation rules below. Do not bundle multiple fields into a single message.
 
 ## Fields
 
@@ -15,6 +15,7 @@ Collect these parameters from the user before generating anything. Present each 
 - **prompt:** "Root namespace prefix?"
 - **placeholder:** "e.g. Acme, MyCompany"
 - **default:** `{solution_name}`
+- **description:** Present `{solution_name}` as the recommended namespace prefix. If the user leaves this field blank after seeing that default, accept `{solution_name}` and continue instead of asking again.
 - **required:** true
 
 ### author
@@ -61,7 +62,7 @@ Collect these parameters from the user before generating anything. Present each 
 - **prompt:** "Target frameworks? (semicolon-separated)"
 - **computed_default:** Newest generally supported .NET LTS channel from `https://raw.githubusercontent.com/dotnet/core/refs/heads/main/release-notes/releases-index.json` (filter `.NET` entries where `support-phase` is `active` or `maintenance`, then pick the highest `release-type: lts` channel and format it as `net{major}.0`).
 - **placeholder:** "e.g. net10.0"
-- **description:** Default to the newest generally supported .NET LTS for new libraries based on the official releases index. Also offer an expanded compatibility preset built from all generally supported `.NET` channels in that same index, sorted newest to oldest and formatted as semicolon-separated TFMs. Exclude preview channels. Allow custom TFMs when needed.
+- **description:** Default to the newest generally supported .NET LTS for new libraries based on the official releases index, but also offer every other generally supported non-preview .NET LTS and STS channel so the user can choose any actively supported track. Also offer an expanded compatibility preset built from all generally supported `.NET` channels in that same index, sorted newest to oldest and formatted as semicolon-separated TFMs. Exclude preview channels. Allow custom TFMs when needed.
 - **required:** true
 
 ### benchmark_runner_project_name
@@ -95,10 +96,19 @@ Collect these parameters from the user before generating anything. Present each 
 ## Presentation Rules
 
 1. Ask one field at a time — wait for the answer before presenting the next field.
-2. For `single-choice` and `multi-choice` fields, present options as selectable choices — not as free text prompts.
-3. When a field has a `default`, present it as the first choice and append "(Recommended)" if not already labeled.
-4. For `text` fields with a computed default (e.g. `{solution_name}` or `repository_url`), offer the computed value as a selectable choice alongside free text input.
-5. For `target_frameworks`, compute two quick-pick suggestions from `https://raw.githubusercontent.com/dotnet/core/refs/heads/main/release-notes/releases-index.json`:
-   - Recommended: newest generally supported LTS channel only (for example `net10.0` as of March 15, 2026)
-   - Expanded scope: all generally supported `.NET` channels, newest to oldest, excluding preview channels (for example `net10.0;net9.0;net8.0` as of March 15, 2026)
-6. After all fields are collected, present a summary and ask for confirmation before proceeding.
+2. Prefer the host's native structured input controls for every field when they are available.
+3. If native structured input controls are unavailable, use this exact plain-text fallback:
+   - Start with `Field: <field-name>`
+   - Repeat the field prompt verbatim from this file
+   - For `single-choice` and `multi-choice`, show a numbered option list and let the user answer with the number or the exact option text
+   - For `text` fields with a `default` or `computed_default`, show `1. Use "<value>" (Recommended)` and `2. Enter a custom value`
+   - After the user answers, restate the normalized value in one short line before moving on
+4. For `single-choice` and `multi-choice` fields, present options as selectable choices when possible — otherwise use the numbered plain-text fallback above instead of an open free-text prompt.
+5. When a field has a `default`, present it as the first choice and append "(Recommended)" if not already labeled.
+6. For `text` fields with a computed default (e.g. `{solution_name}` or `repository_url`), offer the computed value as a selectable choice alongside free text input.
+7. If a field with a `default` or `computed_default` is shown to the user and they leave it blank, treat that as accepting the presented recommended value. Do not ask a second clarification question just because the typed response was empty.
+8. For `target_frameworks`, compute quick-pick suggestions from `https://raw.githubusercontent.com/dotnet/core/refs/heads/main/release-notes/releases-index.json`:
+   - Recommended: newest generally supported LTS channel only (for example `net10.0` as of March 16, 2026)
+   - Include one additional single-target quick-pick for every other supported LTS or STS channel, sorted newest to oldest and labeled with its support track (for example `net9.0` and `net8.0` as of March 16, 2026)
+   - Expanded scope: all generally supported `.NET` channels, newest to oldest, excluding preview channels (for example `net10.0;net9.0;net8.0` as of March 16, 2026)
+9. After all fields are collected, present a summary and ask for confirmation before proceeding.

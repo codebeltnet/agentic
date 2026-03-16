@@ -1,0 +1,73 @@
+{
+  "skill_name": "git-visual-commits",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review the current git changes and propose the commit plan only. The diff mixes source changes, README updates, and CI config. Do not commit yet.",
+      "expected_output": "A commit plan grouped by semantic intent, with no commit executed before approval.",
+      "expectations": [
+        "Inspects git state before proposing commit groups",
+        "Splits documentation changes away from unrelated code or config changes",
+        "Does not run a commit command before user approval"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Please do a git bot commit for my changes, yolo. The changes include one logical code fix and one README update.",
+      "expected_output": "A concise auto-approval summary followed by grouped bot-attributed commits using the repo's emoji and prefix rules.",
+      "expectations": [
+        "Uses git bot commit identity flow",
+        "Applies auto-approval behavior for yolo mode",
+        "Keeps documentation changes separate by default when intent differs",
+        "Does not let yolo collapse multiple semantic intents into one umbrella commit",
+        "Verifies the commit author after commit and confirms it matches bot identity",
+        "Verifies the stored commit body does not contain literal \\n escape sequences",
+        "Does not hard-wrap a short commit body mid-sentence just to satisfy a column limit"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "We worked on this together. Please create a git our commit and show me which groups should be mine versus bot-authored.",
+      "expected_output": "An authorship-aware commit plan that distinguishes human, bot, and mixed groups before committing.",
+      "expectations": [
+        "Explains git our commit attribution workflow",
+        "Presents commit groups with attributed identity",
+        "Requests clarification only for mixed or unclear groups"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Do a git bot commit, yolo. The diff mixes skill docs, scaffold templates, the validator script, and README updates.",
+      "expected_output": "An auto-approved bot commit flow that still surfaces 3-5 commit buckets, keeps bot identity locked, and refuses a single umbrella commit.",
+      "expectations": [
+        "Treats the explicit git bot commit request as locking the identity mode to git bot commit",
+        "Splits skill docs, template/runtime files, validation/tooling, and README or repo docs into separate commit groups",
+        "Shows the grouped commit buckets even in yolo mode before proceeding",
+        "Does not use a single umbrella commit for the mixed diff"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Please do a git bot commit for these changes and make sure the final author is the bot identity, not me.",
+      "expected_output": "A bot-attributed commit flow that explicitly verifies the resulting author after commit and treats a wrong author as a failure to repair.",
+      "expectations": [
+        "Uses git bot commit instead of git commit",
+        "Runs post-commit author verification with git log -1 --format=\"%an <%ae>\"",
+        "Runs post-commit body verification with git log -1 --format=%B",
+        "Treats author mismatch as an invalid result that must be repaired before success is reported",
+        "Treats literal \\n escape sequences in the stored commit body as an invalid result that must be repaired before success is reported",
+        "Treats an unnecessarily hard-wrapped short body as an invalid result that must be repaired before success is reported"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Do a git bot commit, yolo, but the global git bot alias is missing on this machine.",
+      "expected_output": "A blocked bot-commit flow that stops with a clear alias-missing error instead of silently falling back to human identity.",
+      "expectations": [
+        "Checks whether the git bot alias is available before committing in bot mode",
+        "Stops with a clear blocker when alias.bot is unavailable",
+        "Does not fall back to git commit when git bot commit was explicitly requested"
+      ]
+    }
+  ]
+}

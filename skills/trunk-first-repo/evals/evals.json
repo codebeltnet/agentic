@@ -1,0 +1,35 @@
+{
+  "skill_name": "trunk-first-repo",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Initialize this folder as a new git repository using the trunk-first workflow. Use the default maturity level and branch context init.",
+      "expected_output": "The workflow collects the required parameters, creates an orphan main branch with a seed commit, and switches to a versioned feature branch.",
+      "expectations": [
+        "Collects parameters using FORMS.md before running commands",
+        "Uses an orphan main branch and an empty seed commit",
+        "Creates and switches to a versioned feature branch such as v0.1.0/init"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Set up a new repository with trunk-based development and configure origin https://github.com/example/demo.git.",
+      "expected_output": "The workflow initializes trunk-first git history and adds the provided remote origin.",
+      "expectations": [
+        "Adds the provided remote URL after initialization",
+        "Pushes or documents pushing main when a remote is provided",
+        "Summarizes next steps after setup"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I want a production-grade repo from day one with branch context release-prep.",
+      "expected_output": "The workflow chooses the production version prefix and creates the correct branch name without bypassing the PR-first model.",
+      "expectations": [
+        "Uses v1.0.0 for the production-grade choice",
+        "Creates branch name v1.0.0/release-prep",
+        "Reinforces never committing directly to main after the seed commit"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "skill_name": "dotnet-strong-name-signing",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Generate a strong name key for this repository using the defaults.",
+      "expected_output": "A summary-first confirmation flow that generates a .snk file with the default 1024-bit key size in the repo root.",
+      "expectations": [
+        "Computes defaults silently before asking for confirmation",
+        "Defaults to a 1024-bit RSA key",
+        "Uses the RSACryptoServiceProvider ExportCspBlob flow"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Create a 4096-bit strong name key called signing-key in C:\\temp\\keys.",
+      "expected_output": "The workflow overrides the defaults for key size, file name, and output directory, then reports the generated file details.",
+      "expectations": [
+        "Allows overriding individual values after the summary",
+        "Uses the requested 4096-bit key size",
+        "Reports output path, size, and key size after generation"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I need a strong name key for an open source NuGet package. Show me how to generate it and remind me how to handle the file afterward.",
+      "expected_output": "The workflow generates the key and includes the open-source guidance about checking the .snk file into source control.",
+      "expectations": [
+        "Includes the .csproj usage snippet",
+        "Mentions Microsoft guidance that strong names are about identity, not security",
+        "Provides the open source versus proprietary handling guidance"
+      ]
+    }
+  ]
+}

@@ -14,19 +14,26 @@ description: >
 
 Scaffold new .NET NuGet library solutions following the codebeltnet engineering conventions — the same pattern used across [codebeltnet](https://github.com/codebeltnet). Produces a fully wired solution with multi-target framework support, strong-name signing, NuGet packaging, DocFX documentation, CI pipeline, centralized build config, semantic versioning, and code quality tooling.
 
+Generate the scaffold **in the user's current working directory**. Do not create an extra top-level `{REPO_SLUG}` or `{SOLUTION_NAME}` folder unless the user explicitly asks for a nested output folder.
+
 ## Step 1: Collect Parameters
 
-Read `FORMS.md` and collect all parameters by presenting each field to the user one at a time using the agent's native input mechanism. Follow the presentation rules defined in the form. Do not proceed to Step 2 until all required fields are collected and the user confirms the summary.
+Read `FORMS.md` and collect all parameters by presenting each field to the user one at a time using the agent's native input mechanism when the host supports it. If the host does not render native form controls, follow the deterministic plain-text fallback defined in `FORMS.md` instead of improvising your own questioning style. Do not proceed to Step 2 until all required fields are collected and the user confirms the summary.
+
+For fields that already present a recommended `default` or `computed_default`, treat a blank response as accepting that shown value. Do not get stuck in a clarification loop for `root_namespace`, `repository_url`, `package_project_url`, or other defaultable fields just because the user did not type over the recommended choice.
+
+Consistency matters more than creativity during parameter collection. Do not paraphrase field prompts, merge questions, or switch interaction styles mid-flow.
 
 Assume the default shape is a single packable library project whose project name matches `solution_name`. Do not ask for separate library project names unless the user explicitly asks for a multi-project solution or names additional packages/modules.
 
 Collect `repository_url` before `package_project_url` so the package website field can present the repository URL as the recommended default and let the user either accept it or replace it with a dedicated site/docs URL.
 
-Default `target_frameworks` to the newest generally supported .NET LTS for new libraries by reading `https://raw.githubusercontent.com/dotnet/core/refs/heads/main/release-notes/releases-index.json`. Filter to `.NET` entries whose `support-phase` is `active` or `maintenance`, then choose the highest LTS channel and format it as `net{major}.0`. Exclude preview channels. Only suggest multiple TFMs when the user explicitly asks for compatibility across older runtimes or there is a clear support requirement.
+Default `target_frameworks` to the newest generally supported .NET LTS for new libraries by reading `https://raw.githubusercontent.com/dotnet/core/refs/heads/main/release-notes/releases-index.json`. Filter to `.NET` entries whose `support-phase` is `active` or `maintenance`, then choose the highest LTS channel and format it as `net{major}.0`. Exclude preview channels. Also surface every other generally supported non-preview LTS and STS channel so the user can deliberately choose any actively supported track. Only suggest multiple TFMs when the user explicitly asks for compatibility across older runtimes or there is a clear support requirement.
 
-When presenting `target_frameworks`, compute two presets from that same releases index before free text:
+When presenting `target_frameworks`, compute these quick-picks from that same releases index before free text:
 
 - Recommended: newest generally supported LTS only
+- Additional single-target choices: every other supported LTS or STS channel, sorted newest to oldest and labeled with its support track
 - Expanded scope: all generally supported `.NET` channels, newest to oldest, excluding preview channels
 
 Default `benchmark_runner_project_name` to `benchmark-runner`. Treat it as a solution-level tooling project name, not a per-library package name.
@@ -59,18 +66,20 @@ When copying template files, replace these placeholders in file contents:
 |-------------|-------|
 | `{SOLUTION_NAME}` | Solution name (e.g. `MyLibrary`) |
 | `{ROOT_NAMESPACE}` | Root namespace prefix (e.g. `Acme`) |
+| `{PROJECT_NAME}` | Packable project/package name. Default to `{SOLUTION_NAME}` for the single-project case |
 | `{AUTHOR}` | Author name |
 | `{AUTHOR_EMAIL}` | Author email |
-| `{COMPANY_OR_PERSON}` | Company name or individual publisher name for copyright/NuGet metadata |
+| `{COMPANY_OR_PERSON}` | Company name or individual publisher name for copyright, NuGet metadata, and DocFX branding |
 | `{COPYRIGHT_YEAR}` | Copyright year (e.g. `2026`) |
 | `{PACKAGE_PROJECT_URL}` | Public package website or docs URL shown as `Project website` on NuGet |
 | `{REPOSITORY_URL}` | Source repository URL shown as `Source repository` on NuGet |
 | `{REPO_OWNER}` | GitHub org/user (from URL) |
 | `{REPO_SLUG}` | Repo name (last URL segment, lowercased) |
-| `{TARGET_FRAMEWORKS}` | Computed from the official .NET releases index; default to newest generally supported LTS, or use all generally supported non-preview channels for broader scope |
+| `{TARGET_FRAMEWORKS}` | Computed from the official .NET releases index; offer the newest generally supported LTS, every other supported LTS or STS single-target choice, or all generally supported non-preview channels for broader scope |
+| `{DOCFX_TARGET_FRAMEWORK}` | Highest selected generally supported non-preview TFM used for DocFX metadata generation |
 | `{BENCHMARK_RUNNER_PROJECT_NAME}` | Tooling project name for the benchmark host (default `benchmark-runner`) |
 | `{BENCHMARK_RUNNER_NAMESPACE}` | Benchmark runner namespace derived from the tooling project name, replacing invalid identifier characters such as `-` with `_` |
-| `{BENCHMARK_RUNNER_TARGET_FRAMEWORK}` | Highest selected LTS TFM from `target_frameworks`; if the selected TFMs do not include an LTS runtime, require a manual runner TFM decision instead of guessing |
+| `{BENCHMARK_RUNNER_TARGET_FRAMEWORK}` | Highest selected generally supported non-preview executable TFM from `target_frameworks` |
 | `{BENCHMARK_RUNTIME_JOBS}` | One `.AddJob(...)` line per selected executable benchmark runtime, derived from `target_frameworks` |
 | `{SNK_FILE}` | e.g. `{repo-slug}.snk` |
 | `{SONARCLOUD_ORG}` | SonarCloud org slug (or omit job if skipped) |
@@ -83,7 +92,7 @@ When copying template files, replace these placeholders in file contents:
 Generate files in this order:
 
 ### 1. Copy shared templates
-Copy every file from `assets/shared/` to the project root, preserving directory structure. Apply placeholder substitution (Step 4) to all file contents during the copy.
+Copy every file from `assets/shared/` to the project root, preserving directory structure. Treat the **current working directory** as that project root. Apply placeholder substitution (Step 4) to all file contents during the copy.
 
 Do this as a recursive, dotfile-aware copy. Hidden folders and files under `assets/shared/` are part of the scaffold and must not be skipped. In particular, copy `assets/shared/.bot/README.md` as a real file in the generated repo; do not replace it with a synthetic `.gitkeep` or placeholder note.
 
@@ -123,6 +132,8 @@ Copy `assets/library/Directory.Build.props` to the project root, applying placeh
 ### 3. Copy DocFX templates
 Copy `assets/library/.docfx/` to the project root, applying placeholder substitution. DocFX generates API reference documentation for NuGet packages.
 
+Use `{PROJECT_NAME}` for the DocFX source project glob and `{DOCFX_TARGET_FRAMEWORK}` for metadata generation so the generated docs track the actual scaffolded project name and runtime instead of a hardcoded example.
+
 ### 4. Generate library-specific files
 Follow the variant guide (Step 2) for the remaining files: project structure, `.csproj` files, tuning benchmark projects under `tuning/`, the solution-level benchmark runner under `tooling/`, `.nuget/{ProjectName}/` metadata folders (per packable project), and the `.slnx` solution file.
 
@@ -145,7 +156,7 @@ The tuning benchmark project holds the actual benchmark types and references the
 
 Skip non-executable TFMs such as `netstandard*` when building the benchmark job list. If no executable runtime remains, note that the benchmark runner needs a manual runtime decision before it can be used.
 
-Set the benchmark runner project `TargetFramework` to the highest selected LTS TFM from `target_frameworks`. If the selected TFMs do not include an LTS runtime, do not guess; require a manual runner TFM decision instead.
+Set the benchmark runner project `TargetFramework` to the highest selected generally supported non-preview executable TFM from `target_frameworks`. This keeps the runner aligned with the newest runtime the user chose, whether that supported track is LTS or STS.
 
 ## Step 6: Post-Generation Checklist
 

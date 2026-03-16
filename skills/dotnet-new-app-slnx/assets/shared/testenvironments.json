@@ -9,7 +9,7 @@
         {
             "name": "Docker-Ubuntu",
             "type": "docker",
-            "dockerImage": "codebeltnet/ubuntu-testrunner:net8.0.418-9.0.311-10.0.103"
+            "dockerImage": "{UBUNTU_TESTRUNNER_TAG}"
         }
     ]
 }
