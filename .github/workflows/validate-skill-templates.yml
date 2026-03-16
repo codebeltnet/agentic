@@ -2,7 +2,6 @@ name: Validate Skill Templates
 
 on:
   pull_request:
-  push:
 
 jobs:
   validate-skill-templates:

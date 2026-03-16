@@ -16,8 +16,8 @@ One more consistency rule matters for form-driven skills: native input fields ar
 
 Validation follows the same philosophy: run
 `scripts/validate-skill-templates.ps1` locally for the fast feedback
-loop, and let GitHub Actions rerun that same script on pushes and pull
-requests as the safety net.
+loop, and let GitHub Actions rerun that same script on pull requests as
+the safety net.
 
 ## Install a skill
 
