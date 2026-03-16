@@ -106,6 +106,10 @@ Use the repo validation harness before submitting scaffold or template changes:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-skill-templates.ps1
 ```
 
+Run the validator locally first for the fastest feedback loop. GitHub
+Actions also runs the same script on pushes and pull requests, but CI is
+the backstop, not the primary authoring loop.
+
 To compare a change against the initial imported version, run the same harness against a git ref:
 
 ```powershell
@@ -120,6 +124,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-skill-tem
 - [ ] At least one eval in `evals/evals.json`
 - [ ] The skill's `evals/evals.json` exists and its `skill_name` matches the folder/frontmatter name
 - [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior
+- [ ] If CI is enabled for the branch, the GitHub Actions validation job passes too
 - [ ] Skill evals are intended to run from `$env:TEMP/<skill-name>-workspace/`, not from inside the repo
 - [ ] Changed skill files are synced across `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/`
 - [ ] Skill added to the table in `README.md`

@@ -14,6 +14,11 @@ There is also an interim Codex compatibility workaround in [AGENTS.md](AGENTS.md
 
 One more consistency rule matters for form-driven skills: native input fields are treated as a host feature, not something a model can rely on. Skills in this repo must stay usable with or without UI widgets, and must fall back to the same deterministic one-field-at-a-time flow when the host only supports plain chat.
 
+Validation follows the same philosophy: run
+`scripts/validate-skill-templates.ps1` locally for the fast feedback
+loop, and let GitHub Actions rerun that same script on pushes and pull
+requests as the safety net.
+
 ## Install a skill
 
 Install any skill directly from this repository with a single command:
@@ -125,6 +130,8 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Commit body by default** — every commit explains *why*, not just *what* — opt out with "tmi" or "no-body"
 - **Commit bodies are verified after write** — the workflow now checks the stored commit body so literal escape sequences like `\n` do not leak into history
 - **Short bodies stay readable** — the workflow no longer hard-wraps short commit bodies at 72 characters and instead prefers normal prose with sentence-level judgment
+- **Repo capability additions stay explicit** — adding a brand-new skill is grouped separately from refactoring an existing skill to support it
+- **Shared wording rules stay in lockstep** — the duplicated `commit-language.md` reference is kept byte-for-byte identical across both git-visual skills and checked locally plus in CI
 - **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
 - **Umbrella commits are rejected** — mixed diffs spanning skill instructions, templates, validators, and repo docs must be split into separate commits instead of bundled into one blob
 - **Stack-agnostic** — works with any language, framework, or project type
