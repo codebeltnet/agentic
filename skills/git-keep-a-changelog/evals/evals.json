@@ -40,10 +40,11 @@
       "prompt": "Please update CHANGELOG.md in Keep a Changelog style, but do not hard-wrap the prose. I want natural line breaks that read well for humans.",
       "expected_output": "The changelog is updated with natural prose line breaks instead of artificial narrow wrapping.",
       "expectations": [
-        "Preserves natural prose wrapping instead of forcing 72-character lines",
+        "Preserves natural prose wrapping instead of forcing any fixed column width",
         "Uses the standard Keep a Changelog section order",
         "Omits empty sections instead of inserting placeholders",
-        "Avoids dumping raw commit subjects verbatim"
+        "Avoids dumping raw commit subjects verbatim",
+        "Ends bullets with commas and ends the final bullet in each section with a period"
       ]
     },
     {

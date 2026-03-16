@@ -26,7 +26,7 @@ release-note noise.
 
 ## Non-Negotiable Rules
 
-- Update `CHANGELOG.md` directly, then stop for user review.
+- Create or update `CHANGELOG.md` directly, then stop for user review.
 - If `CHANGELOG.md` does not exist, create a compliant one before
   populating it.
 - Read full commit subjects and bodies before writing the changelog.
@@ -40,8 +40,11 @@ release-note noise.
 - Use the standard Keep a Changelog section order:
   `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
 - Omit empty sections instead of emitting placeholders.
-- Preserve natural line breaks and readable prose. Do not hard-wrap
-  paragraphs to 72 characters.
+- Preserve natural line breaks and readable prose. Do not apply any fixed
+  column limit or artificial hard wrapping to changelog paragraphs or
+  bullets.
+- End each bullet with `,` and end the last bullet in each section with
+  `.`.
 - Do not dump commit subjects verbatim into the changelog.
 - Do not invent unsupported changes, risks, or migration guidance.
 
@@ -162,7 +165,9 @@ Write the release highlight first, then the populated sections.
 - Drop low-signal churn such as typo-only commits, trivial fixups, or
   mechanical follow-ups unless they materially change the release story.
 - Use natural prose line breaks. Keep paragraphs and bullets readable, but
-  do not column-wrap them artificially.
+  do not column-wrap them artificially or target a fixed line width.
+- End each bullet with `,` except the final bullet in a populated section,
+  which must end with `.`.
 
 ### Step 6: Update CHANGELOG.md carefully
 
@@ -194,8 +199,9 @@ Do not commit, tag, push, or create a release unless the user asks.
 - Includes a required SemVer-aware release highlight.
 - Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
 - Reflects the meaning of full commit bodies and the net diff.
-- Preserves natural prose wrapping instead of forcing narrow columns.
-- Keeps bullets specific, concrete, and non-repetitive.
+- Preserves natural prose wrapping with no fixed column-width target.
+- Keeps bullets specific, concrete, non-repetitive, and consistently
+  punctuated.
 - Preserves existing compare-link structure when updating versions.
 
 ## Bad Output Characteristics
@@ -204,6 +210,8 @@ Do not commit, tag, push, or create a release unless the user asks.
 - Omitting the release highlight.
 - Failing to classify the release as major, minor, or patch.
 - Refusing to proceed just because `CHANGELOG.md` does not exist yet.
-- Using artificial 72-character wrapping for changelog prose.
+- Using any artificial fixed-width wrapping for changelog prose.
+- Mixing bullet punctuation or leaving section bullets without the
+  required trailing `,` / final `.` pattern.
 - Emitting empty `Added` / `Changed` / `Fixed` headings.
 - Claiming breaking changes, fixes, or security work not supported by git.
