@@ -15,7 +15,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - `git-visual-squash-summary` skill that turns a noisy commit stack into grouped summary lines — preserving distinct high-signal efforts, merging overlapping commits, and dropping low-signal noise — without mutating git state,
 - `git-keep-a-changelog` skill that creates or updates `CHANGELOG.md` directly from the current branch, reads full commit message bodies for context, infers release headings from branch version hints, and writes a required SemVer-aware release highlight with natural prose,
-- GitHub Actions workflow that runs `validate-skill-templates.ps1` on every push and pull request as the merge safety net,
+- GitHub Actions workflow that runs `validate-skill-templates.ps1` on pull requests as the merge safety net,
 - Per-skill `evals/evals.json` coverage for `git-visual-squash-summary` and `git-keep-a-changelog`.
 
 ### Changed

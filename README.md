@@ -17,7 +17,8 @@ One more consistency rule matters for form-driven skills: native input fields ar
 Validation follows the same philosophy: run
 `scripts/validate-skill-templates.ps1` locally for the fast feedback
 loop, and let GitHub Actions rerun that same script on pull requests as
-the safety net.
+the safety net. That validator also checks skill frontmatter metadata
+such as the 1024-character YAML description limit.
 
 ## Install a skill
 
