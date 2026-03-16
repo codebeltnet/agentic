@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <PackageReference Include="Codebelt.Bootstrapper.Web" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
   </ItemGroup>
 
 </Project>

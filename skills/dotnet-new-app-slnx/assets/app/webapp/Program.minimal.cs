@@ -5,10 +5,13 @@ public class Program : MinimalWebProgram
     static Task Main(string[] args)
     {
         var builder = CreateHostBuilder(args);
+        builder.Services.AddRazorPages();
         var app = builder.Build();
         app.UseHttpsRedirection();
+        app.UseStaticFiles();
         app.UseRouting();
-        app.MapGet("/", () => "Hello from {ROOT_NAMESPACE}.{AppType}.");
+        app.UseAuthorization();
+        app.MapRazorPages();
         return app.RunAsync();
     }
 }
