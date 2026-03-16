@@ -697,7 +697,7 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/SKILL.md' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/evals/evals.json' -GitRef $Ref
 
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Update `CHANGELOG.md` directly, then stop for user review.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Create or update `CHANGELOG.md` directly, then stop for user review.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` does not exist, create a compliant one before'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Read full commit subjects and bodies before writing the changelog.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If the current branch starts with a version hint such as `v0.3.0/`,'
@@ -705,7 +705,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Always write a release highlight immediately below the target heading.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'The release highlight must explicitly classify the release as `major`,'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Use the standard Keep a Changelog section order:'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Preserve natural line breaks and readable prose. Do not hard-wrap'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Preserve natural line breaks and readable prose. Do not apply any fixed'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'End each bullet with `,` and end the last bullet in each section with'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not dump commit subjects verbatim into the changelog.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` is missing, create it with the standard title,'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Update compare links at the bottom when adding a concrete version:'
@@ -715,7 +716,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Reads full commit subjects and bodies before writing the release entry'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats a leading branch version such as v0.3.0/ as a release hint'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Uses full commit bodies rather than relying on subject lines alone'
-    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Preserves natural prose wrapping instead of forcing 72-character lines'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Preserves natural prose wrapping instead of forcing any fixed column width'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Ends bullets with commas and ends the final bullet in each section with a period'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Creates CHANGELOG.md when it does not already exist'
 }
 
