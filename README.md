@@ -175,7 +175,8 @@ Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too
 - **Version-aware by branch** — uses a branch prefix like `v0.3.0/...` as the release heading hint when present
 - **SemVer-aware highlight** — always writes a short release TL;DR that explicitly says `major`, `minor`, or `patch`
 - **Creates the file when needed** — seeds a compliant `CHANGELOG.md` if the repo does not have one yet
-- **Natural prose** — preserves human-readable line breaks instead of hard-wrapping changelog text to narrow columns
+- **Natural prose** — preserves human-readable line breaks without any fixed-width wrapping target
+- **Predictable bullet punctuation** — bullets end with `,` and the last bullet in each section ends with `.`
 - **Direct file edit** — creates or updates `CHANGELOG.md` directly, then stops for human review
 - **Compare-link aware** — can update bottom-of-file compare links when a concrete release heading is added
 - **Not a commit dump** — curates the release story instead of copying git log output into Markdown
