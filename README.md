@@ -12,16 +12,16 @@ Another repo rule is intentionally strict: every repo-managed skill ships with i
 
 ## Install a skill
 
-Skills are published to [skills.sh](https://skills.sh) — the open agent skills ecosystem. Install any skill with a single command:
+Install any skill directly from this repository with a single command:
 
 ```bash
-npx skillsadd codebeltnet/agentic/<skill-name>
+npx skills add https://github.com/codebeltnet/agentic --skill <skill-name>
 ```
 
 For example:
 
 ```bash
-npx skillsadd codebeltnet/agentic/git-visual-commits
+npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
 ```
 
 Then activate it in your agent. For example, in GitHub Copilot CLI:
@@ -32,15 +32,15 @@ Use the skill tool to invoke the "<skill-name>" skill.
 
 ## Always-on skills
 
-Depending on the agent runtime, skills installed via `npx skillsadd` may live in `~/.claude/skills/` and/or `~/.agents/skills/`. Treat both as personal global skill folders: if you use both toolchains, keep repo-authored skills mirrored between them so each agent sees the same version. Either way, installed skills are **automatically loaded in every session** — no manual invocation needed. The agent reads the skill's description and activates it when relevant (e.g. you say "commit this" and the `git-visual-commits` skill kicks in).
+Depending on the agent runtime, skills installed via `npx skills add` may live in `~/.claude/skills/` and/or `~/.agents/skills/`. Treat both as personal global skill folders: if you use both toolchains, keep repo-authored skills mirrored between them so each agent sees the same version. Either way, installed skills are **automatically loaded in every session** — no manual invocation needed. The agent reads the skill's description and activates it when relevant (e.g. you say "commit this" and the `git-visual-commits` skill kicks in).
 
 If you want a bundle of skills always available, just install them all:
 
 ```bash
-npx skillsadd codebeltnet/agentic/git-visual-commits
-npx skillsadd codebeltnet/agentic/trunk-first-repo
-npx skillsadd codebeltnet/agentic/dotnet-strong-name-signing
-# npx skillsadd codebeltnet/agentic/another-skill
+npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
+npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
+# npx skills add https://github.com/codebeltnet/agentic --skill another-skill
 ```
 
 ### Scoping options
@@ -63,6 +63,40 @@ npx skillsadd codebeltnet/agentic/dotnet-strong-name-signing
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
 | [dotnet-strong-name-signing](skills/dotnet-strong-name-signing/SKILL.md) | Generate a strong name key (`.snk`) file for signing .NET assemblies using pure .NET cryptography — no Visual Studio Developer PowerShell or `sn.exe` required. Works in any terminal. Defaults to 1024-bit RSA (matching `sn.exe`), with 2048 and 4096 available as options. |
+
+### Copyable Install Commands
+
+If your Markdown viewer supports code-block copy buttons, each command below should be directly copyable.
+
+`git-visual-commits`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
+```
+
+`dotnet-new-lib-slnx`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-lib-slnx
+```
+
+`dotnet-new-app-slnx`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-app-slnx
+```
+
+`trunk-first-repo`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
+```
+
+`dotnet-strong-name-signing`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
+```
 
 ### Why git-visual-commits?
 
