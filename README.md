@@ -42,6 +42,7 @@ If you want a bundle of skills always available, just install them all:
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
+npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
 # npx skills add https://github.com/codebeltnet/agentic --skill another-skill
@@ -63,6 +64,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 | Skill | Description |
 |-------|-------------|
 | [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
+| [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating squash-subject companion to `git-visual-commits`. Turns noisy commit stacks into one polished squash-ready subject line for the GitHub squash merge field, detecting the dominant theme, preserving technical identifiers, favoring readable GitHub/terminal output, and avoiding changelog-style wording or unsupported claims. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
@@ -76,6 +78,12 @@ If your Markdown viewer supports code-block copy buttons, each command below sho
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
+```
+
+`git-visual-squash-summary`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 ```
 
 `dotnet-new-lib-slnx`
@@ -121,6 +129,26 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Umbrella commits are rejected** — mixed diffs spanning skill instructions, templates, validators, and repo docs must be split into separate commits instead of bundled into one blob
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
+
+### Why git-visual-squash-summary?
+
+Sometimes the history is already written and the only thing you need is
+the final squash subject. A long branch with fixups, rename follow-ups,
+review nits, and repeated attempts often has a clean net effect but a
+messy chronological story. That is where **git-visual-squash-summary**
+fits: it reads the real history and diff, then compresses them into one
+truthful squash-ready subject line.
+
+- **Same visual language** — reuses the same prefix and emoji rules as `git-visual-commits`
+- **Subject-only by design** — returns the subject line only, never a body
+- **Non-mutating by design** — drafts the wording only and does not touch git state
+- **Dominant-theme first** — picks the main story instead of listing every sub-change
+- **Intent over chronology** — collapses noisy commit stacks into the net effect
+- **Identifier-safe wording** — preserves technical names, paths, flags, and types where possible
+- **Readable in GitHub and terminals** — optimized for the squash merge field and compact commit views
+- **Strict 72-char subject** — ready for teams that want compact squash summaries
+- **Not a changelog** — avoids release-note phrasing and commit-subject dumps
+- **No unsupported claims** — summarizes only what the inspected diff can justify
 
 ### Why dotnet-new-lib-slnx and dotnet-new-app-slnx?
 
