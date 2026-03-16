@@ -158,6 +158,9 @@ Read `references/commit-language.md` before choosing a prefix or emoji.
 It contains the allowed prefixes, the gitmoji-first table, and the
 extended emoji fallback guidance shared with
 `git-visual-squash-summary`.
+Keep that duplicated reference byte-for-byte aligned with the
+`git-visual-squash-summary` copy; the validator and CI both enforce that
+sync contract.
 
 ---
 
@@ -222,6 +225,8 @@ Before composing any commit message, bucket every changed file by its **semantic
 
 Derive categories from the actual diff — don't assume a fixed set. Common categories include:
 
+- **New repo capabilities** — introducing a new repo-managed skill, workflow, or top-level capability
+- **Existing skill refactors** — restructuring or extracting shared rules from an already existing skill
 - **Project/solution files** — build system metadata that defines project structure
 - **Preprocessor/build-only changes** — conditional compilation, build-target switches
 - **Build/tooling** — CI workflows, container definitions, build scripts
@@ -233,6 +238,8 @@ Derive categories from the actual diff — don't assume a fixed set. Common cate
 - **Test logic** — changed assertions, updated expectations, new test cases, modified test behavior
 
 **Critical distinction:** "Environment/configuration" and "Test logic" are separate categories even when both live under a test project. A test environment config file (`testenvironments.json`, `appsettings.test.json`) describes *how tests run*. A test assertion file describes *what tests verify*. These are different intents.
+
+**Repo-skill distinction:** Adding a brand-new skill folder is a **new repo capability**. Extracting shared wording, tightening an existing skill, or adding validator coverage for that skill is a different intent. Even when all of that work is related, do not collapse "new skill introduced" and "existing skill refactored" into one commit.
 
 This classification drives grouping in Step 3. Files with different semantic intents almost never belong in the same commit.
 
@@ -261,6 +268,8 @@ Unless **no-body mode** is active, every commit includes a body explaining the *
 - **Bug fixes** → explain what was broken and how this fixes it
 
 Common groupings:
+- New repo-managed skill or workflow introduction together
+- Existing skill refactor or extraction together
 - Config/setup files together (app host, bootstrapping)
 - Environment and infrastructure config together (test runners, CI matrix, container settings)
 - New feature or module code together
@@ -285,12 +294,16 @@ Documentation files (`CHANGELOG.md`, `AGENTS.md`, `README.md`, `CONTRIBUTING.md`
 
 When a repo like this one mixes skill changes, scaffold assets, validators, and repo docs, split them by intent:
 
+- **New repo-managed skill** — a newly introduced `skills/<name>/` folder and its local `evals/` or `references/`
+- **Existing skill refactor** — extracting shared rules, renaming sections, or reorganizing an existing skill
 - **Skill contract files** — `SKILL.md`, `FORMS.md`, `references/`, `evals/`
 - **Template/runtime files** — `assets/`, scaffold helper scripts
 - **Validation/tooling** — validator scripts, repo checks
 - **Repo docs/rules** — `README.md`, `AGENTS.md`, `CONTRIBUTING.md`
 
 Do not merge these into one commit unless the diff is truly single-purpose and the explanation still fits one sentence without using "and".
+
+If a commit both introduces a brand-new skill and refactors an existing skill to support it, prefer separate commits. "Related" is not enough — the repo history should make it obvious which commit added the capability and which commit reorganized existing behavior around it.
 
 #### Rename vs removal distinction
 

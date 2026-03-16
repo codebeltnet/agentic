@@ -68,6 +68,17 @@
         "Stops with a clear blocker when alias.bot is unavailable",
         "Does not fall back to git commit when git bot commit was explicitly requested"
       ]
+    },
+    {
+      "id": 7,
+      "prompt": "Do a git bot commit, yolo. The diff introduces a brand-new skill folder, extracts shared wording out of an existing skill, updates the validator, and refreshes README docs.",
+      "expected_output": "An auto-approved bot commit plan that separates the new repo capability from the existing-skill refactor, validator coverage, and repo docs.",
+      "expectations": [
+        "Treats a newly introduced skill folder as a separate repo capability intent",
+        "Separates new skill introduction from existing skill refactor work",
+        "Separates validator changes from skill contract changes when the rationale differs",
+        "Keeps README or changelog updates in their own documentation-focused commit"
+      ]
     }
   ]
 }

@@ -30,6 +30,9 @@ subjects and the GitHub squash merge commit field.
 
 - Never stage, commit, amend, rebase, or otherwise mutate git state.
 - Read `references/commit-language.md` before choosing any emoji or prefix.
+- Keep `references/commit-language.md` byte-for-byte aligned with the
+  `git-visual-commits` copy; the validator and CI both enforce that sync
+  contract.
 - Detect and center the dominant theme of the commit stack.
 - Preserve technical identifiers exactly where possible.
 - Group by intent, not chronology.
