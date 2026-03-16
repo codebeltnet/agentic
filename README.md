@@ -47,6 +47,7 @@ If you want a bundle of skills always available, just install them all:
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
+npx skills add https://github.com/codebeltnet/agentic --skill git-keep-a-changelog
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
@@ -69,6 +70,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 | Skill | Description |
 |-------|-------------|
 | [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
+| [git-keep-a-changelog](skills/git-keep-a-changelog/SKILL.md) | Git-aware Keep a Changelog companion that creates or updates `CHANGELOG.md` from the current branch by default. Reads full commit subjects and bodies plus the net diff, infers a release heading from a branch version hint like `v0.3.0/...` when available, creates a compliant changelog if the file does not exist yet, writes a required SemVer-aware release highlight, preserves natural prose wrapping, and curates `Added` / `Changed` / `Fixed` style sections instead of dumping raw commit logs. |
 | [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns noisy commit stacks into a curated set of compact summary lines for PR or squash contexts, preserving technical identifiers, merging overlap, dropping low-signal noise, highlighting distinct meaningful efforts, and avoiding changelog-style wording or unsupported claims. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
@@ -83,6 +85,12 @@ If your Markdown viewer supports code-block copy buttons, each command below sho
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
+```
+
+`git-keep-a-changelog`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill git-keep-a-changelog
 ```
 
 `git-visual-squash-summary`
@@ -157,6 +165,20 @@ then compresses them into a small set of truthful grouped lines.
 - **Strict 72-char lines** — every summary line stays compact and scannable
 - **Not a changelog** — avoids release-note phrasing and commit-subject dumps
 - **No unsupported claims** — summarizes only what the inspected diff can justify
+
+### Why git-keep-a-changelog?
+
+Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too noisy, PR titles often miss migration context, and release notes get much better when the writer actually reads the commit bodies and understands the net diff. That is where **git-keep-a-changelog** fits: it turns the current branch into a curated Keep a Changelog entry and creates or updates the file directly for review.
+
+- **Keep a Changelog first** — writes `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security` sections in the expected style
+- **Full-commit context** — reads complete commit messages and the net diff before writing
+- **Version-aware by branch** — uses a branch prefix like `v0.3.0/...` as the release heading hint when present
+- **SemVer-aware highlight** — always writes a short release TL;DR that explicitly says `major`, `minor`, or `patch`
+- **Creates the file when needed** — seeds a compliant `CHANGELOG.md` if the repo does not have one yet
+- **Natural prose** — preserves human-readable line breaks instead of hard-wrapping changelog text to narrow columns
+- **Direct file edit** — creates or updates `CHANGELOG.md` directly, then stops for human review
+- **Compare-link aware** — can update bottom-of-file compare links when a concrete release heading is added
+- **Not a commit dump** — curates the release story instead of copying git log output into Markdown
 
 ### Why dotnet-new-lib-slnx and dotnet-new-app-slnx?
 
