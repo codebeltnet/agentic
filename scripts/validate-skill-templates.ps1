@@ -604,6 +604,7 @@ Add-ValidationResult -Results $results -Name 'Strong-name skill matches FORMS su
 Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces identity lock and umbrella commit rejection' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/SKILL.md' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/evals/evals.json' -GitRef $Ref
+    $commitLanguage = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/references/commit-language.md' -GitRef $Ref
 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Identity Lock'
@@ -617,16 +618,60 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Do **not** hard-wrap commit bodies at 72 characters; keep short bodies as normal prose'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Umbrella Commit Rejection'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'skill instructions (`SKILL.md`, `FORMS.md`, `references/`, `evals/`)'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Read `references/commit-language.md` before choosing a prefix or emoji.'
+    Assert-NotContains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Allowed Prefixes'
+    Assert-NotContains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Emoji Selection — Gitmoji First, Fallback Second'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Even in auto-approval mode, surface the commit buckets explicitly before committing.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Do not pass literal `\n` escape sequences and assume the shell will rewrite them.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Prefer grammatical sentence and paragraph breaks over column-based hard wrapping.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success.'
+    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Allowed Prefixes'
+    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection — Gitmoji First, Fallback Second'
+    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '#### Fallback: Extended Emoji Reference'
 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not let yolo collapse multiple semantic intents into one umbrella commit'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Verifies the commit author after commit and confirms it matches bot identity'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Verifies the stored commit body does not contain literal \\n escape sequences'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not hard-wrap a short commit body mid-sentence just to satisfy a column limit'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'stops with a clear alias-missing error instead of silently falling back to human identity'
+}
+
+Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-squash-summary/SKILL.md' -GitRef $Ref
+    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-squash-summary/evals/evals.json' -GitRef $Ref
+    $commitLanguage = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-squash-summary/references/commit-language.md' -GitRef $Ref
+    $commitLanguageCommits = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/references/commit-language.md' -GitRef $Ref
+
+    if ($commitLanguage -cne $commitLanguageCommits) {
+        throw 'git-visual commit-language references must stay byte-for-byte identical'
+    }
+
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'This skill turns a stack of commits into one squash-ready subject line'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'This skill is non-mutating:'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'detects the dominant theme'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Read `references/commit-language.md` before choosing any emoji or prefix.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Favor readable GitHub and terminal output over cleverness.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Do not treat the result as a changelog entry or bullet-list summary.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Return a subject line only, never a body.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Keep the subject at or below 72 characters.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Do not invent unsupported changes.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Fits naturally in the squash merge commit field on GitHub.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Changelog-like wording or release-note phrasing.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Output the finished squash-ready subject line and stop.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle '`git bot commit`, `git add`, or any other mutating command.'
+    Assert-NotContains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle '<wrapped body lines>'
+    Assert-NotContains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'The body is usually 1-4 wrapped lines'
+    Assert-Contains -Name 'git-visual-squash-summary/references/commit-language.md' -Content $commitLanguage -Needle '### Allowed Prefixes'
+    Assert-Contains -Name 'git-visual-squash-summary/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection — Gitmoji First, Fallback Second'
+
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Does not run mutating git commands'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Detects and centers the dominant theme of the commit stack'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Reads like a curated human-written condensed history rather than a dump of commit subjects'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Favors readable GitHub and terminal output'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Returns a subject only and never adds a body'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Keeps the subject at or below 72 characters'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Does not treat the result as a changelog entry'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Does not invent unsupported changes'
 }
 
 Add-ValidationResult -Results $results -Name 'Rendered app worker template leaves no unexpected placeholders' -Action {
