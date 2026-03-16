@@ -9,18 +9,69 @@ description: >
   write a commit message, or review what should be committed. Also use it
   when the user says things like "commit this", "make a commit", "commit
   your changes", "commit what you just did", "what should my commit
-  message be", "stage and commit", or any time git commit workflows come
-  up. Supports auto-approval mode — when the user says "yolo" or "auto"
-  in their request, or enables it for the session, the agent shows the
-  commit plan but proceeds without waiting for confirmation. Enforces
-  conventions with emoji plus lowercase prefix (init, content, style, fix,
-  refactor, docs), max 70 chars, one logical change per commit, grouped
-  by technology type.
+  message be", "stage and commit", "git bot commit", "git our commit", or
+  combines a commit request with "yolo" or "auto". Treat commit wording as
+  an automatic trigger for this skill, not as a casual hint. Supports
+  auto-approval mode — when the user says "yolo" or "auto" in their
+  request, or enables it for the session, the agent shows the commit plan
+  but proceeds without waiting for confirmation. Enforces conventions with
+  emoji plus lowercase prefix (init, content, style, fix, refactor, docs),
+  max 70 chars, one logical change per commit, grouped by technology type
+  with mandatory identity verification after commit.
 ---
 
 # Git Visual Commits
 
 This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji and prefix, and running the commit. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
+
+## Critical Rules
+
+### Identity Lock
+
+- If the user asked for `git bot commit`, you must use `git bot commit`.
+- If the user asked for `git commit`, you must use `git commit`.
+- If the user asked for `git our commit`, follow the attribution workflow and then use the matching command per group.
+- Never silently downgrade a requested `git bot commit` to `git commit`.
+- If the required `git bot` alias is unavailable, halt and report that exact blocker instead of falling back to human identity.
+
+### Auto-Approval Guard
+
+`yolo` / `auto` skips user confirmation only. It never skips:
+
+- skill activation
+- identity selection
+- semantic grouping
+- mixed-scope validation
+- post-commit author verification
+
+### Post-Commit Verification
+
+After every commit, run:
+
+```bash
+git log -1 --format="%an <%ae>"
+```
+
+Confirm that the author matches the requested identity mode. If the author is wrong, treat the commit as invalid and repair it before reporting success.
+
+Then verify the stored commit message body too:
+
+```bash
+git log -1 --format=%B
+```
+
+If the body contains literal escape sequences such as `\n` instead of real line breaks, treat the commit message as invalid and repair it before reporting success.
+
+### Umbrella Commit Rejection
+
+Reject a single umbrella commit when the diff spans multiple intents such as:
+
+- skill instructions (`SKILL.md`, `FORMS.md`, `references/`, `evals/`)
+- scaffold/template/runtime files (`assets/`, scaffold helper scripts)
+- validation/tooling (`scripts/`, repo validators)
+- repo docs or repo policy (`README.md`, `AGENTS.md`, `CONTRIBUTING.md`)
+
+`yolo`, small file count, or "the changes are related" are not valid reasons to collapse these into one commit.
 
 ## Prerequisites
 
@@ -39,6 +90,8 @@ git bot commit --allow-empty -m "test bot identity"
 git log -1 --format="%an <%ae>"   # should show bot name and email
 git reset HEAD~1                   # undo the test commit
 ```
+
+If `git config --global --get alias.bot` returns nothing when the user asked for `git bot commit`, stop and report that the bot alias is missing. Do not proceed with `git commit` as a fallback.
 
 ---
 
@@ -96,7 +149,7 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 - **Emoji** comes first — picked from the technology/type tables below
 - **Prefix** is lowercase (see allowed prefixes below) — **never use `feat:`**
 - **Description** is lowercase, imperative, max 70 characters total (including emoji and prefix)
-- **Body** is included by default — a short paragraph (2–4 lines) explaining *why* the change was made, not just *what* changed. Separate from the subject with a blank line. Wrap at 72 characters. Can be suppressed with `no-body` (see below).
+- **Body** is included by default — a short paragraph explaining *why* the change was made, not just *what* changed. Separate from the subject with a blank line. Do **not** hard-wrap commit bodies at 72 characters; keep short bodies as normal prose and add line breaks only when they improve readability. Can be suppressed with `no-body` (see below).
 - One logical change per commit — don't bundle unrelated things
 
 ### Allowed Prefixes
@@ -367,6 +420,17 @@ This guard runs unconditionally — including in auto-approval mode.
 
 Documentation files (`CHANGELOG.md`, `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, release notes) are **separate-by-default**. They only belong in the same commit as non-doc files when the commit is explicitly documentation-focused (e.g. `📝 docs: add api usage guide` where the docs are the point, not a side effect).
 
+#### Repo-aligned grouping example
+
+When a repo like this one mixes skill changes, scaffold assets, validators, and repo docs, split them by intent:
+
+- **Skill contract files** — `SKILL.md`, `FORMS.md`, `references/`, `evals/`
+- **Template/runtime files** — `assets/`, scaffold helper scripts
+- **Validation/tooling** — validator scripts, repo checks
+- **Repo docs/rules** — `README.md`, `AGENTS.md`, `CONTRIBUTING.md`
+
+Do not merge these into one commit unless the diff is truly single-purpose and the explanation still fits one sentence without using "and".
+
 #### Rename vs removal distinction
 
 Treat **renamed/moved source files** and **removed type-forwarding or compatibility metadata** as different signals — never group them together:
@@ -394,6 +458,8 @@ Before staging or committing anything, present the full commit plan to the user.
 Auto-committing: 🔧 build config → 🚚 rename auth to identity → ✅ identity tests → 📝 update changelog
 ```
 
+Even in auto-approval mode, surface the commit buckets explicitly before committing. Auto-approval removes the wait, not the planning step.
+
 **Otherwise**, wait for the user to confirm or adjust. They may say things like:
 - "Looks good" → proceed to stage and commit
 - "Change #1 to ♻️" → swap the emoji and re-present
@@ -420,9 +486,11 @@ For each group:
    - For `git our commit` — use whichever command matches the attribution the human chose
    - **With body:** use `-m "<subject>" -m "<body>"` to add the optional description paragraph
 
+When a commit body spans multiple lines, use real multiline input such as multiple `-m` arguments or a shell construct that preserves actual line breaks. Do not pass literal `\n` escape sequences and assume the shell will rewrite them. Prefer grammatical sentence and paragraph breaks over column-based hard wrapping.
+
 ### Step 6: Verify
 
-After committing, run `git log --oneline -5` to confirm the commit looks right. Check the author with `git log -1 --format="%an <%ae>"` if needed.
+After committing, run `git log --oneline -5` to confirm the commit looks right. Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success. Also run `git log -1 --format=%B` and verify the stored body contains readable prose with real line breaks, not literal escape sequences such as `\n`, and is not hard-wrapped mid-sentence just to satisfy a column limit.
 
 ---
 
