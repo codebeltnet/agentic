@@ -3,18 +3,21 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="Codebelt.Extensions.Xunit.App" Version="{LATEST}" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="{LATEST}" />
-    <PackageVersion Include="MinVer" Version="{LATEST}" />
-    <PackageVersion Include="coverlet.collector" Version="{LATEST}" />
-    <PackageVersion Include="coverlet.msbuild" Version="{LATEST}" />
-    <PackageVersion Include="xunit.v3" Version="{LATEST}" />
-    <PackageVersion Include="xunit.v3.runner.console" Version="{LATEST}" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="{LATEST}" />
-    <PackageVersion Include="BenchmarkDotNet" Version="{LATEST}" />
-    <PackageVersion Include="Codebelt.Bootstrapper.Console" Version="{LATEST}" />
-    <PackageVersion Include="Codebelt.Bootstrapper.Web" Version="{LATEST}" />
-    <PackageVersion Include="Codebelt.Bootstrapper.Worker" Version="{LATEST}" />
-    <PackageVersion Include="Codebelt.SharedKernel" Version="{LATEST}" />
+    <PackageVersion Include="Codebelt.Extensions.Xunit.App" Version="{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="{MICROSOFT_NET_TEST_SDK_VERSION}" />
+    <PackageVersion Include="MinVer" Version="{MINVER_VERSION}" />
+    <PackageVersion Include="coverlet.collector" Version="{COVERLET_COLLECTOR_VERSION}" />
+    <PackageVersion Include="coverlet.msbuild" Version="{COVERLET_MSBUILD_VERSION}" />
+    <PackageVersion Include="xunit.v3" Version="{XUNIT_V3_VERSION}" />
+    <PackageVersion Include="xunit.v3.runner.console" Version="{XUNIT_V3_RUNNER_CONSOLE_VERSION}" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="{XUNIT_RUNNER_VISUALSTUDIO_VERSION}" />
+    <PackageVersion Include="BenchmarkDotNet" Version="{BENCHMARKDOTNET_VERSION}" />
+    <PackageVersion Include="Codebelt.Bootstrapper.Console" Version="{CODEBELT_BOOTSTRAPPER_CONSOLE_VERSION}" />
+    <PackageVersion Include="Codebelt.Bootstrapper.Web" Version="{CODEBELT_BOOTSTRAPPER_WEB_VERSION}" />
+    <PackageVersion Include="Codebelt.Bootstrapper.Worker" Version="{CODEBELT_BOOTSTRAPPER_WORKER_VERSION}" />
+    <PackageVersion Include="Codebelt.SharedKernel" Version="{CODEBELT_SHAREDKERNEL_VERSION}" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="{MICROSOFT_ASPNETCORE_OPENAPI_VERSION}" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation" Version="{MICROSOFT_ASPNETCORE_MVC_RAZOR_RUNTIMECOMPILATION_VERSION}" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="{MICROSOFT_EXTENSIONS_HOSTING_VERSION}" />
   </ItemGroup>
 </Project>

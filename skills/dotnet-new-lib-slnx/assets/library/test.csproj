@@ -5,7 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\{ROOT_NAMESPACE}\{ROOT_NAMESPACE}.csproj" />
+    <ProjectReference Include="..\..\src\{PROJECT_NAME}\{PROJECT_NAME}.csproj" />
   </ItemGroup>
 
 </Project>

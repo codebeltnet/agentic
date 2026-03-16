@@ -59,15 +59,17 @@ When copying template files, replace these placeholders in file contents:
 |-------------|-------|
 | `{SOLUTION_NAME}` | Solution name (e.g. `MyLibrary`) |
 | `{ROOT_NAMESPACE}` | Root namespace prefix (e.g. `Acme`) |
+| `{PROJECT_NAME}` | Packable project/package name. Default to `{SOLUTION_NAME}` for the single-project case |
 | `{AUTHOR}` | Author name |
 | `{AUTHOR_EMAIL}` | Author email |
-| `{COMPANY_OR_PERSON}` | Company name or individual publisher name for copyright/NuGet metadata |
+| `{COMPANY_OR_PERSON}` | Company name or individual publisher name for copyright, NuGet metadata, and DocFX branding |
 | `{COPYRIGHT_YEAR}` | Copyright year (e.g. `2026`) |
 | `{PACKAGE_PROJECT_URL}` | Public package website or docs URL shown as `Project website` on NuGet |
 | `{REPOSITORY_URL}` | Source repository URL shown as `Source repository` on NuGet |
 | `{REPO_OWNER}` | GitHub org/user (from URL) |
 | `{REPO_SLUG}` | Repo name (last URL segment, lowercased) |
 | `{TARGET_FRAMEWORKS}` | Computed from the official .NET releases index; default to newest generally supported LTS, or use all generally supported non-preview channels for broader scope |
+| `{DOCFX_TARGET_FRAMEWORK}` | Highest selected non-preview LTS TFM used for DocFX metadata generation |
 | `{BENCHMARK_RUNNER_PROJECT_NAME}` | Tooling project name for the benchmark host (default `benchmark-runner`) |
 | `{BENCHMARK_RUNNER_NAMESPACE}` | Benchmark runner namespace derived from the tooling project name, replacing invalid identifier characters such as `-` with `_` |
 | `{BENCHMARK_RUNNER_TARGET_FRAMEWORK}` | Highest selected LTS TFM from `target_frameworks`; if the selected TFMs do not include an LTS runtime, require a manual runner TFM decision instead of guessing |
@@ -122,6 +124,8 @@ Copy `assets/library/Directory.Build.props` to the project root, applying placeh
 
 ### 3. Copy DocFX templates
 Copy `assets/library/.docfx/` to the project root, applying placeholder substitution. DocFX generates API reference documentation for NuGet packages.
+
+Use `{PROJECT_NAME}` for the DocFX source project glob and `{DOCFX_TARGET_FRAMEWORK}` for metadata generation so the generated docs track the actual scaffolded project name and runtime instead of a hardcoded example.
 
 ### 4. Generate library-specific files
 Follow the variant guide (Step 2) for the remaining files: project structure, `.csproj` files, tuning benchmark projects under `tuning/`, the solution-level benchmark runner under `tooling/`, `.nuget/{ProjectName}/` metadata folders (per packable project), and the `.slnx` solution file.

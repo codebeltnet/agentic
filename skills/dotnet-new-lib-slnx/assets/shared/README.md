@@ -16,7 +16,7 @@
 ### Installation
 
 ```bash
-dotnet add package {ROOT_NAMESPACE}
+dotnet add package {PROJECT_NAME}
 ```
 
 ### Usage

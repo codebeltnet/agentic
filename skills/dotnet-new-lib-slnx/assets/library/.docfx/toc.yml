@@ -1,2 +1,2 @@
 - name: {SOLUTION_NAME} API
-  href: api/{ROOT_NAMESPACE}.html
+  href: api/{PROJECT_NAME}.html

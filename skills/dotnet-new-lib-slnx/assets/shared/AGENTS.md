@@ -30,7 +30,7 @@ This document provides guidance for AI agents working in this repository.
 
 ## Test Conventions
 
-- Test project names must end with `Tests` (e.g. `{ROOT_NAMESPACE}.Tests`)
+- Test project names must end with `Tests` (e.g. `{PROJECT_NAME}.Tests`)
 - Test classes should inherit from the appropriate base class in `Codebelt.Extensions.Xunit`
 - Use `Microsoft.Testing.Platform` as the test runner (`UseMicrosoftTestingPlatformRunner=true`)
 - All tests are executable (`OutputType=Exe`)
