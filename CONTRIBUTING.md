@@ -10,7 +10,11 @@ Each skill lives in its own folder:
 skills/
   <skill-name>/
     SKILL.md          # Required — the skill content
-    evals/            # Optional — test prompts for validation
+    FORMS.md          # Optional — structured input collection for agents
+    assets/           # Optional — literal templates and static files
+    scripts/          # Optional — executable helpers
+    references/       # Optional — deeper docs loaded on demand
+    evals/            # Required for repo-managed skills — test prompts for validation
       evals.json
 ```
 
@@ -60,9 +64,9 @@ The `description` is the most important field — it's how the AI decides to loa
 - Specific trigger phrases (e.g. "Use when user says 'commit this' or 'stage changes'")
 - What it enforces or prevents
 
-## Adding evals (recommended)
+## Adding evals (required for repo-managed skills)
 
-Evals let you verify the skill works and measure improvement over a baseline. Add a `evals/evals.json` file:
+Evals let you verify the skill works and measure improvement over a baseline. Every repo-managed skill in this repository must include `evals/evals.json`:
 
 ```json
 {
@@ -79,6 +83,14 @@ Evals let you verify the skill works and measure improvement over a baseline. Ad
 
 Aim for 3–5 evals that cover distinct scenarios: happy path, edge cases, and cases where the skill should *not* do something.
 
+Run evals from a temp workspace, not from this repository:
+
+```powershell
+$workspace = Join-Path $env:TEMP '<skill-name>-workspace'
+```
+
+For scaffold/template skills, keep deterministic validators alongside evals. In this repo, `evals/evals.json` is mandatory, and validators like `scripts/validate-skill-templates.ps1` are additional protection.
+
 ## Prefer dynamic defaults
 
 When a skill needs defaults for versions, paths, repository names, or support windows, prefer deriving them from a reliable source instead of baking in values that will drift.
@@ -86,11 +98,28 @@ When a skill needs defaults for versions, paths, repository names, or support wi
 - Good sources: git metadata, repo folder names, environment values, official JSON feeds, vendor docs APIs
 - Use hardcoded examples as examples only — not as the real defaulting mechanism — when the value can be computed
 
+## Template validation
+
+Use the repo validation harness before submitting scaffold or template changes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-skill-templates.ps1
+```
+
+To compare a change against the initial imported version, run the same harness against a git ref:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-skill-templates.ps1 -Ref HEAD
+```
+
 ## Checklist before submitting
 
 - [ ] `SKILL.md` has valid front matter with `name` and `description`
 - [ ] Skill is stack-agnostic (or clearly scoped to a specific tech in the name/description)
 - [ ] Examples are generic — no personal emails, usernames, or project-specific identifiers
 - [ ] At least one eval in `evals/evals.json`
+- [ ] The skill's `evals/evals.json` exists and its `skill_name` matches the folder/frontmatter name
+- [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior
+- [ ] Skill evals are intended to run from `$env:TEMP/<skill-name>-workspace/`, not from inside the repo
 - [ ] Changed skill files are synced across `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/`
 - [ ] Skill added to the table in `README.md`

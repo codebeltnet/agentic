@@ -1,0 +1,66 @@
+{
+  "skill_name": "dotnet-new-app-slnx",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Scaffold a new .NET Worker application solution named DemoApp with root namespace Acme, target framework net10.0, and the Minimal hosting pattern.",
+      "expected_output": "A worker-based scaffold with package versions resolved from NuGet, a generated Worker.cs file, and target-framework-aware test environment settings.",
+      "expectations": [
+        "Collects target_framework in addition to solution name, namespace, host type, and hosting pattern",
+        "Maps Worker host type to {AppType} = Worker",
+        "Includes Worker.cs in the generated worker project"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Create a Web API solution named PaymentService under the root namespace Contoso using Startup hosting.",
+      "expected_output": "A web-family scaffold that selects the Web host type with the Web API variant, emits Api as the project suffix, uses the Startup pattern templates, and resolves package version placeholders before writing Directory.Packages.props.",
+      "expectations": [
+        "Maps Web host type plus Web API variant to {AppType} = Api",
+        "Uses Program.startup.cs plus Startup.cs for the Startup pattern",
+        "Does not leave {LATEST} or unresolved *_VERSION placeholders in Directory.Packages.props",
+        "Does not ask for a second clarification if the prompt already says Web API"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Create a new MVC app named PortalSuite under the root namespace Fabrikam with the Minimal hosting pattern.",
+      "expected_output": "A web-family scaffold that selects the MVC variant, emits Mvc as the project suffix, and includes starter controller and view assets.",
+      "expectations": [
+        "Maps Web host type plus MVC variant to {AppType} = Mvc",
+        "Generates MVC starter files including HomeController and Views/Home/Index.cshtml",
+        "Uses the Minimal hosting template for the MVC variant"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Scaffold a new Razor web app named TeamHub with root namespace Northwind and Startup hosting.",
+      "expected_output": "A web-family scaffold that selects the Web App / Razor variant, emits WebApp as the project suffix, and includes starter Razor Pages assets.",
+      "expectations": [
+        "Maps Razor or web app wording to the Web App / Razor variant without unnecessary follow-up",
+        "Maps Web host type plus Web App / Razor variant to {AppType} = WebApp",
+        "Generates Razor starter files including Pages/Index.cshtml and Pages/Index.cshtml.cs"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Create a new .NET web solution named EdgePortal in the Acme namespace.",
+      "expected_output": "A web-family scaffold that asks for web_variant because the user requested a generic Web app, defaulting that follow-up to Web API.",
+      "expectations": [
+        "Treats Web as the host family instead of a final variant label",
+        "Asks for web_variant when the prompt only says web",
+        "Defaults the web_variant choice to Web API"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Scaffold a solution with both Web and Worker host types for Acme Tools on net10.0, using the MVC variant for Web.",
+      "expected_output": "A multi-host scaffold with one MVC web-family project and one worker project, one functional test project per selected host type, and a README that lists concrete run commands instead of a single ambiguous placeholder.",
+      "expectations": [
+        "Generates one web-family src project using the selected MVC variant and one worker src project",
+        "Generates one functional test project per selected host type",
+        "Rewrites the root README running section for multiple host types"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "skill_name": "git-visual-commits",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review the current git changes and propose the commit plan only. The diff mixes source changes, README updates, and CI config. Do not commit yet.",
+      "expected_output": "A commit plan grouped by semantic intent, with no commit executed before approval.",
+      "expectations": [
+        "Inspects git state before proposing commit groups",
+        "Splits documentation changes away from unrelated code or config changes",
+        "Does not run a commit command before user approval"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Please do a git bot commit for my changes, yolo. The changes include one logical code fix and one README update.",
+      "expected_output": "A concise auto-approval summary followed by grouped bot-attributed commits using the repo's emoji and prefix rules.",
+      "expectations": [
+        "Uses git bot commit identity flow",
+        "Applies auto-approval behavior for yolo mode",
+        "Keeps documentation changes separate by default when intent differs"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "We worked on this together. Please create a git our commit and show me which groups should be mine versus bot-authored.",
+      "expected_output": "An authorship-aware commit plan that distinguishes human, bot, and mixed groups before committing.",
+      "expectations": [
+        "Explains git our commit attribution workflow",
+        "Presents commit groups with attributed identity",
+        "Requests clarification only for mixed or unclear groups"
+      ]
+    }
+  ]
+}

@@ -17,6 +17,17 @@ When running evals or testing skills, create all workspaces in a temp location:
 
 **Why:** Eval artifacts — branches, commits, local git config — leak into the real repo history and are painful to clean up. The skill source lives in a git repo; eval output does not belong here.
 
+## Per-Skill Evals
+
+Every repo-managed skill must include its own `evals/evals.json` file at `skills/<name>/evals/evals.json`.
+
+- Treat this as a required artifact for every first-party skill in this repo
+- Run evals **per skill**, not as one shared repo-level eval file
+- Run evals from a temp workspace such as `$env:TEMP/<skill-name>-workspace/`, never from inside this repository
+- Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
+
+If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` before considering the work complete.
+
 ## Git Identity
 
 Never set or override `git user.name`, `git user.email`, or `alias.bot` in the **local** git config of this repository. Always use the global config. Local overrides silently shadow global settings and produce commits with the wrong author.
@@ -72,12 +83,14 @@ skills/<name>/
 ├── assets/               # Optional — file templates, fonts, icons used in output
 │   └── <variant>/        # Group by variant when a skill supports multiple (e.g. library/, app/)
 ├── scripts/              # Optional — executable code (Python, Bash, etc.)
-└── references/           # Optional — detailed reference docs the agent consults during generation
+├── references/           # Optional — detailed reference docs the agent consults during generation
+└── evals/                # Required for repo-managed skills — per-skill eval prompts and expectations
 ```
 
 - `SKILL.md` is the entry point — it contains the workflow, conventions, and step-by-step instructions
 - `assets/` holds file templates, fonts, icons, and other static content used in output (the agent reads and substitutes placeholders)
 - `references/` holds detailed specs that `SKILL.md` references but are too long to inline
+- `evals/` holds the per-skill `evals.json` definitions used to verify that the skill still works after changes
 
 ## Template Files Are Literal
 
