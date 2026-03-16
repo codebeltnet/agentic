@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-03-17
 
-This is a minor release that introduces two complementary git workflow skills, extracts a shared commit-language reference, and backs the whole skill suite with CI-enforced template validation.
+This is a minor release that introduces two complementary git workflow skills, extracts a shared commit-language reference, and backs the whole skill suite with pull-request validation plus stricter skill metadata checks.
 
 ### Added
 
@@ -21,8 +21,9 @@ This is a minor release that introduces two complementary git workflow skills, e
 ### Changed
 
 - Extracted the shared commit-language guidance into `references/commit-language.md`, used by both `git-visual-commits` and `git-visual-squash-summary`, so prefix, emoji, and wording rules have one maintained source,
+- Tightened git skill metadata so frontmatter descriptions stay within the repo limit and `git-visual-commits` points directly at `references/commit-language.md` instead of stale in-file “below” references,
 - Tightened `git-visual-commits` grouping rules to classify new repo capabilities, existing-skill refactors, and shared-reference sync as separate intents, with eval coverage for mixed-diff cases,
-- Hardened `validate-skill-templates.ps1` with UTF-8 and BOM handling, grouped squash summary rule checks, changelog formatting enforcement, and consistent behavior across Windows PowerShell and CI,
+- Hardened `validate-skill-templates.ps1` with UTF-8 and BOM handling, grouped squash summary rule checks, changelog formatting enforcement, repo-wide frontmatter description-length enforcement, and consistent behavior across Windows PowerShell and CI,
 - Updated `CONTRIBUTING.md` to explain the local-first validation workflow: run the script locally for fast feedback while GitHub Actions reruns the same checks as the safety net.
 
 ## [0.2.0] - 2026-03-16
