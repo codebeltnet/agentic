@@ -32,6 +32,35 @@ If you add a new skill or modify an existing repo-managed skill, update that ski
 
 Never set or override `git user.name`, `git user.email`, or `alias.bot` in the **local** git config of this repository. Always use the global config. Local overrides silently shadow global settings and produce commits with the wrong author.
 
+## Codex Override Mirror
+
+Interim workaround: if Codex does not reliably load `~/.codex/AGENTS.override.md`, treat the following rules as mirrored here and enforce them anyway.
+References (as outlined by ChatGPT itself):
+- [Codex silently fails loading global AGENTS.md file when encountering encoding issues.](https://github.com/openai/codex/issues/14687)
+- [CLI fails to read AGENTS.md from the global location by default](https://github.com/openai/codex/issues/8759)
+- [Agent does not read AGENTS.override.md ](https://github.com/openai/codex/issues/11838)
+
+### Decision Policy
+
+- Do not infer requirements when ambiguity would materially affect the solution
+- For ambiguous tasks, ask concise clarifying questions before editing
+- For complex tasks, produce a short implementation plan first
+- Before major edits, list the assumptions that the solution depends on
+- If repo conventions are unclear, inspect the codebase and summarize the observed pattern before coding
+
+### Code-Change Policy
+
+- Prefer minimal, reversible changes
+- Preserve existing architecture unless the task explicitly asks for refactoring
+- Match established naming, project structure, and test style
+- Validate changes with the relevant build, test, or lint commands when available
+
+### Response Style
+
+- Be direct and precise
+- State uncertainty explicitly
+- Briefly explain tradeoffs for non-obvious choices
+
 ## Skill Creation
 
 Always use the `skill-creator` skill (by Anthropic) when creating new skills, modifying existing skills, or running evals. It enforces best practices for structure, description quality, testing, and progressive disclosure. Do not create or edit skills manually without invoking it first.
@@ -105,6 +134,15 @@ When a skill needs time-sensitive or environment-sensitive values, prefer comput
 - When a dynamic default exists, describe both the source and the fallback behavior in `FORMS.md` / `SKILL.md`
 - If a value changes over time (supported frameworks, current versions, generated paths, repo-derived names), assume hardcoding will drift and design for refreshable computation
 
+## Scaffold Invariants
+
+For repo-managed .NET scaffolding skills, preserve semantic versioning infrastructure unless you are replacing it end-to-end in the same change.
+
+- App and library scaffolds rely on `MinVer` for versioning from git tags
+- Do not remove `MinVer`, its package version, or its MSBuild hooks from scaffold templates unless a complete replacement workflow is implemented and validated in the same change
+- Preserve the user-facing solution/product name in `PascalCase` for generated solution filenames such as `.slnx`; do not silently lowercase the solution filename
+- Only derive lowercase values for fields that explicitly require them, such as repo slugs, package feeds, or Docker/image-style identifiers
+
 ## Commit Discipline
 
 When committing changes to this repo, group by technology and logical purpose — don't mix unrelated changes. For example:
@@ -120,6 +158,14 @@ After modifying any skill (`SKILL.md`, `FORMS.md`) or repo-level config (`AGENTS
 ## User Input UX
 
 When a skill collects parameters from the user, define the form in a dedicated `FORMS.md` file (Level 3 resource) rather than inlining field definitions in `SKILL.md`. This separates form structure from workflow logic and gives agents a parseable format to present fields correctly.
+
+Native input widgets are a **host/runtime feature**, not a guaranteed model capability. Treat them as an enhancement, not a dependency.
+
+- Skills must remain fully usable whether the host renders native fields or not
+- When native fields are unavailable, the agent must follow a deterministic plain-text fallback defined in `FORMS.md` instead of improvising the interaction
+- The fallback path must preserve the same field order, defaults, recommended choices, and final confirmation flow as the native-field path
+- Do not switch interaction styles mid-collection unless the host explicitly upgrades from plain text to native controls
+- Favor consistency and low-friction UX over conversational variety during parameter collection
 
 `FORMS.md` defines each field with:
 - **type** — `text`, `single-choice`, or `multi-choice`
