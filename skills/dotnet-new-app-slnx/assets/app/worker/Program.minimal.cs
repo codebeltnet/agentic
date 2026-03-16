@@ -1,3 +1,7 @@
+using Codebelt.Bootstrapper.Worker;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
 namespace {ROOT_NAMESPACE}.{AppType};
 
 public class Program : MinimalWorkerProgram

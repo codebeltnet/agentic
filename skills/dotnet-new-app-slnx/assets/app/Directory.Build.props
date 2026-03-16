@@ -13,6 +13,10 @@
     <AnalysisMode>Recommended</AnalysisMode>
   </PropertyGroup>
 
+  <ItemGroup Condition="'$(IsSourceProject)' == 'true'">
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+  </ItemGroup>
+
   <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
     <TargetFramework>{TARGET_FRAMEWORK}</TargetFramework>
     <OutputType>Exe</OutputType>

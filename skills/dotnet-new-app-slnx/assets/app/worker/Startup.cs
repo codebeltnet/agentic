@@ -1,3 +1,8 @@
+using Codebelt.Bootstrapper.Worker;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
 namespace {ROOT_NAMESPACE}.{AppType};
 
 public class Startup : WorkerStartup

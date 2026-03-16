@@ -1,3 +1,5 @@
+using Codebelt.Bootstrapper.Web;
+
 namespace {ROOT_NAMESPACE}.{AppType};
 
 public class Program : MinimalWebProgram

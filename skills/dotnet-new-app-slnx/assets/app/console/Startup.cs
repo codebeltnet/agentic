@@ -1,3 +1,8 @@
+using Codebelt.Bootstrapper.Console;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+
 namespace {ROOT_NAMESPACE}.{AppType};
 
 public class Startup : ConsoleStartup

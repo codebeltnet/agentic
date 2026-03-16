@@ -1,3 +1,6 @@
+using Codebelt.Bootstrapper.Web;
+using Microsoft.Extensions.Hosting;
+
 namespace {ROOT_NAMESPACE}.{AppType};
 
 public class Program : WebProgram<Startup>
