@@ -1,23 +1,18 @@
 ---
 name: git-visual-commits
 description: >
-  Rules and workflow for creating well-structured git commits using emoji
-  prefixes (gitmoji and beyond), with support for git bot commit
-  (AI-authored), regular git commit (human-authored), and git our commit
-  (collaborative — agent analyzes authorship and human picks attribution).
+  Structured git commit workflow with emoji prefixes and identity-aware
+  modes: `git bot commit`, regular `git commit`, and `git our commit`.
   Use this skill whenever the user asks to commit changes, stage files,
   write a commit message, or review what should be committed. Also use it
-  when the user says things like "commit this", "make a commit", "commit
-  your changes", "commit what you just did", "what should my commit
-  message be", "stage and commit", "git bot commit", "git our commit", or
-  combines a commit request with "yolo" or "auto". Treat commit wording as
-  an automatic trigger for this skill, not as a casual hint. Supports
-  auto-approval mode — when the user says "yolo" or "auto" in their
-  request, or enables it for the session, the agent shows the commit plan
-  but proceeds without waiting for confirmation. Enforces conventions with
-  emoji plus lowercase prefix (init, content, style, fix, refactor, docs),
-  max 70 chars, one logical change per commit, grouped by technology type
-  with mandatory identity verification after commit.
+  when the user says "commit this", "make a commit", "commit your
+  changes", "commit what you just did", "what should my commit message
+  be", "stage and commit", "git bot commit", "git our commit", or
+  combines a commit request with "yolo" or "auto". Treat commit wording
+  as an automatic trigger for this skill, not as a casual hint. Supports
+  auto-approval mode and enforces emoji plus lowercase prefixes, max 70
+  chars, one logical change per commit, technology-aware grouping, and
+  post-commit identity verification.
 ---
 
 # Git Visual Commits
@@ -146,8 +141,8 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 <body>
 ```
 
-- **Emoji** comes first — picked from the technology/type tables below
-- **Prefix** is lowercase (see allowed prefixes below) — **never use `feat:`**
+- **Emoji** comes first — picked from `references/commit-language.md`
+- **Prefix** is lowercase (see `references/commit-language.md`) — **never use `feat:`**
 - **Description** is lowercase, imperative, max 70 characters total (including emoji and prefix)
 - **Body** is included by default — a short paragraph explaining *why* the change was made, not just *what* changed. Separate from the subject with a blank line. Do **not** hard-wrap commit bodies at 72 characters; keep short bodies as normal prose and add line breaks only when they improve readability. Can be suppressed with `no-body` (see below).
 - One logical change per commit — don't bundle unrelated things

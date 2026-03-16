@@ -1,12 +1,12 @@
 ---
 name: git-visual-squash-summary
 description: >
-  Turn many commits into a curated grouped squash summary that
-  stays compatible with the opinionated wording style of
+  Turn many commits into a curated grouped squash summary
+  compatible with the opinionated wording style of
   git-visual-commits. Use this skill whenever the user asks to squash a
   branch into a concise summary, write a squash-and-merge summary,
   summarize a commit range or PR as grouped lines, clean up noisy commit
-  history, or asks for a curated summary without actually committing.
+  history, or asks for a curated summary without committing.
   Treat phrases
   like "squash summary", "squash commit message", "summarize this branch",
   "turn these commits into one summary", "rewrite these 10+ commits", or
