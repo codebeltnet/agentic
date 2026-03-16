@@ -6,9 +6,19 @@
       "prompt": "Scaffold a new .NET Worker application solution named DemoApp with root namespace Acme, target framework net10.0, and the Minimal hosting pattern.",
       "expected_output": "A worker-based scaffold with package versions resolved from NuGet, a generated Worker.cs file, and target-framework-aware test environment settings.",
       "expectations": [
+        "Recognizes the explicit Worker request and does not redundantly ask the user to restate app_host_types",
         "Collects target_framework in addition to solution name, namespace, host type, and hosting pattern",
+        "Offers all active non-preview LTS and STS target framework quick picks before free text",
         "Maps Worker host type to {AppType} = Worker",
-        "Includes Worker.cs in the generated worker project"
+        "Includes Worker.cs in the generated worker project",
+        "Uses the current working directory as the scaffold root instead of creating a nested solution folder",
+        "Uses native structured inputs when available and a deterministic one-field-at-a-time plain-text fallback when they are not",
+        "Keeps package versions centralized in Directory.Packages.props instead of inlining Version attributes into generated project files",
+        "Keeps target-framework selection centralized in the generated root Directory.Build.props instead of adding TargetFramework directly to generated project files",
+        "Generates testenvironments.json instead of silently omitting the shared test environment asset",
+        "Names the generated solution file DemoApp.slnx instead of lowercasing it to demoapp.slnx",
+        "Still generates the solution file and functional test project even for a single-host Worker scaffold",
+        "Resolves worker package versions from NuGet instead of reusing stale remembered version numbers from prior runs"
       ]
     },
     {
@@ -19,7 +29,14 @@
         "Maps Web host type plus Web API variant to {AppType} = Api",
         "Uses Program.startup.cs plus Startup.cs for the Startup pattern",
         "Does not leave {LATEST} or unresolved *_VERSION placeholders in Directory.Packages.props",
-        "Does not ask for a second clarification if the prompt already says Web API"
+        "Keeps Microsoft.AspNetCore.OpenApi aligned with the selected target framework major instead of always choosing the latest overall ASP.NET version",
+        "Does not ask for a second clarification if the prompt already says Web API",
+        "Writes the scaffold into the current folder rather than adding a PaymentService subfolder",
+        "Still generates PaymentService.slnx even though the scaffold only has one selected host type",
+        "Resolves package versions from NuGet instead of carrying hardcoded examples from a previous scaffold",
+        "Copies the complete shared asset inventory from assets/shared instead of cherry-picking only a subset of governance or dotfiles",
+        "Keeps TargetFramework centralized in the generated root Directory.Build.props instead of adding TargetFramework directly to generated app or test csproj files",
+        "Produces valid XML in generated root build props files before the first build rather than relying on mid-run repair"
       ]
     },
     {
@@ -60,6 +77,48 @@
         "Generates one web-family src project using the selected MVC variant and one worker src project",
         "Generates one functional test project per selected host type",
         "Rewrites the root README running section for multiple host types"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Create a new .NET web app named ForwardTrack and let me choose between the active LTS and STS target frameworks before scaffolding.",
+      "expected_output": "A web-family scaffold flow that presents every active non-preview LTS and STS target framework quick pick from the official releases index instead of reducing the choices to only the newest pair.",
+      "expectations": [
+        "Offers the newest active LTS channel as the recommended target framework choice",
+        "Offers every other active LTS and STS channel as additional first-class quick-picks when they are supported",
+        "Still allows a custom target framework if the user does not want either quick-pick",
+        "Keeps framework-aligned ASP.NET package versions compatible with the selected target framework major"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Create an MVC site named MyMvc and keep the recommended root namespace if I do not type a custom value.",
+      "expected_output": "A scaffold flow that presents the solution name as the recommended root namespace and accepts that default without a second clarification loop when the user leaves the root namespace response blank.",
+      "expectations": [
+        "Presents solution_name as the recommended root_namespace choice",
+        "Treats a blank response on root_namespace as accepting the shown default",
+        "Continues to the summary instead of asking a second root_namespace clarification question",
+        "Uses native structured inputs when available and a one-field-at-a-time plain-text fallback when they are not"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Create a new worker service named QueuePump using the dotnet-new-app-slnx skill.",
+      "expected_output": "A worker scaffold flow that preselects the Worker host type from the prompt and, when native input widgets are unavailable, falls back to a deterministic field-by-field plain-text sequence without extra conversational lead-ins before each field.",
+      "expectations": [
+        "Preselects Worker from the prompt instead of asking the user to choose the host type again",
+        "Starts each plain-text fallback step with Field: <field-name> rather than a free-form chat preamble",
+        "Continues to collect only the remaining unresolved fields in FORMS order"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Scaffold a new worker service named TaglessWorker in a fresh folder before git init or adding any version tags.",
+      "expected_output": "A worker scaffold that keeps MinVer intact, warns that a bootstrap pre-release version such as 0.0.0-alpha.0 is expected until git is initialized and tagged, and does not replace MinVer with hardcoded version numbers.",
+      "expectations": [
+        "Explains that MinVer bootstrap output in a non-git or untagged folder is expected initial state",
+        "Keeps MinVer wired into the scaffold instead of removing or bypassing it",
+        "Does not treat the expected MinVer bootstrap warning as a reason to inline package or app versions"
       ]
     }
   ]

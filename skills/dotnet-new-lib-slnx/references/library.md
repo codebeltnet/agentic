@@ -7,7 +7,7 @@ Slim guide for scaffolding a NuGet library solution. All file templates live in 
 ## Folder Structure
 
 ```
-{REPO_SLUG}/
+.
 ├── .nuget/
 │   └── {PROJECT_NAME}/
 │       ├── PackageReleaseNotes.txt
@@ -33,6 +33,8 @@ Slim guide for scaffolding a NuGet library solution. All file templates live in 
 ├── {REPO_SLUG}.slnx
 └── (shared skeleton files — see shared-files.md)
 ```
+
+The tree is shown **relative to the current working directory**. Generate these files directly in the folder the user is already in; do not create an extra solution-named wrapper folder unless they explicitly ask for one.
 
 ---
 
@@ -156,7 +158,7 @@ The generated `.github/dependabot.yml` should watch the repo root (`directory: "
 
 ## Target Framework Default
 
-Default new libraries to a single target framework using the newest generally supported .NET LTS.
+Default new libraries to a single target framework using the newest generally supported .NET LTS, but also offer every other generally supported non-preview .NET LTS and STS channel so the user can deliberately choose any actively supported track.
 
 Resolve this from the official releases index:
 
@@ -164,9 +166,10 @@ Resolve this from the official releases index:
 - Include entries where `product` is `.NET`
 - Keep entries where `support-phase` is `active` or `maintenance`
 - Ignore preview and `eol` entries
-- Pick the highest `release-type: lts` channel and format it as `net{major}.0`
+- Pick the highest `release-type: lts` channel and format it as `net{major}.0` for the recommended default
+- Also surface every other supported `release-type: lts` or `release-type: sts` channel as additional single-target choices, sorted newest to oldest
 
-As of March 15, 2026, that yields `net10.0`. This will naturally change as support windows roll forward. Only expand to multiple TFMs when the user explicitly needs compatibility with older supported runtimes or package consumers require it.
+As of March 16, 2026, that yields `net10.0` as the recommended LTS choice, with additional supported choices `net9.0` (STS) and `net8.0` (LTS). This will naturally change as support windows roll forward. Only expand to multiple TFMs when the user explicitly needs compatibility with older supported runtimes or package consumers require it.
 
 Offer this broader opt-in preset when the user wants expanded support without custom TFM planning:
 
@@ -306,8 +309,8 @@ The benchmark runner project should:
 - live under `tooling/`
 - reference the default tuning benchmark project by default
 - rely on central package management for `BenchmarkDotNet` and `Codebelt.Extensions.BenchmarkDotNet.Console`
-- target the highest selected LTS TFM from `target_frameworks` so the runner itself stays on an LTS runtime by default
-- if the selected TFMs do not include an LTS runtime, require a manual runner TFM decision instead of guessing
+- target the highest selected generally supported non-preview executable TFM from `target_frameworks`
+- if the selected TFMs include both LTS and STS, the runner simply follows the highest selected supported runtime
 
 The tuning benchmark project should:
 
