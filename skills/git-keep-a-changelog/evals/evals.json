@@ -1,0 +1,62 @@
+{
+  "skill_name": "git-keep-a-changelog",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Update CHANGELOG.md for the current branch using Keep a Changelog. Use the current branch by default, read the full commit messages, and update the file directly for my review.",
+      "expected_output": "CHANGELOG.md is updated in place using the current branch comparison, with a curated release highlight and standard Keep a Changelog sections.",
+      "expectations": [
+        "Updates CHANGELOG.md directly instead of only drafting notes in chat",
+        "Reads full commit subjects and bodies before writing the release entry",
+        "Uses the current branch versus merge-base as the default source when no explicit range is given",
+        "Writes a required release highlight before the section headings",
+        "Stops after editing the changelog for user review"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "My branch is named v0.3.0/new-complementary-skills. Update CHANGELOG.md from git history and use that branch hint if applicable.",
+      "expected_output": "A concrete release heading is created or updated from the branch version hint, with compare links adjusted consistently.",
+      "expectations": [
+        "Treats a leading branch version such as v0.3.0/ as a release hint",
+        "Uses a visible changelog heading without the leading v",
+        "Updates compare links when adding a concrete release section",
+        "Falls back to Unreleased only when no branch version hint exists"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Update the changelog, but use the full commit messages for context. Some commit bodies explain migration risk that is not obvious from the subject line.",
+      "expected_output": "The changelog reflects details from commit bodies, including release classification and any justified upgrade warning or important note.",
+      "expectations": [
+        "Uses full commit bodies rather than relying on subject lines alone",
+        "Infers the SemVer class from the actual change set",
+        "Adds an advisory block only when the commits or diff justify it",
+        "Does not invent unsupported migration guidance"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Please update CHANGELOG.md in Keep a Changelog style, but do not hard-wrap the prose. I want natural line breaks that read well for humans.",
+      "expected_output": "The changelog is updated with natural prose line breaks instead of artificial narrow wrapping.",
+      "expectations": [
+        "Preserves natural prose wrapping instead of forcing any fixed column width",
+        "Uses the standard Keep a Changelog section order",
+        "Omits empty sections instead of inserting placeholders",
+        "Avoids dumping raw commit subjects verbatim",
+        "Ends bullets with commas and ends the final bullet in each section with a period"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "There is no CHANGELOG.md yet. Create one in Keep a Changelog style from the current branch commits, including the release highlight and the standard scaffold.",
+      "expected_output": "A new compliant CHANGELOG.md is created and populated from git history instead of failing due to the missing file.",
+      "expectations": [
+        "Creates CHANGELOG.md when it does not already exist",
+        "Seeds the file with the standard title, intro, and Unreleased heading",
+        "Populates the new file from git history instead of leaving it as a blank scaffold",
+        "Keeps the same SemVer-aware release highlight rules for newly created files"
+      ]
+    }
+  ]
+}

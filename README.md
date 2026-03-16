@@ -14,6 +14,12 @@ There is also an interim Codex compatibility workaround in [AGENTS.md](AGENTS.md
 
 One more consistency rule matters for form-driven skills: native input fields are treated as a host feature, not something a model can rely on. Skills in this repo must stay usable with or without UI widgets, and must fall back to the same deterministic one-field-at-a-time flow when the host only supports plain chat.
 
+Validation follows the same philosophy: run
+`scripts/validate-skill-templates.ps1` locally for the fast feedback
+loop, and let GitHub Actions rerun that same script on pull requests as
+the safety net. That validator also checks skill frontmatter metadata
+such as the 1024-character YAML description limit.
+
 ## Install a skill
 
 Install any skill directly from this repository with a single command:
@@ -42,6 +48,8 @@ If you want a bundle of skills always available, just install them all:
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
+npx skills add https://github.com/codebeltnet/agentic --skill git-keep-a-changelog
+npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
 # npx skills add https://github.com/codebeltnet/agentic --skill another-skill
@@ -63,6 +71,8 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 | Skill | Description |
 |-------|-------------|
 | [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
+| [git-keep-a-changelog](skills/git-keep-a-changelog/SKILL.md) | Git-aware Keep a Changelog companion that creates or updates `CHANGELOG.md` from the current branch by default. Reads full commit subjects and bodies plus the net diff, infers a release heading from a branch version hint like `v0.3.0/...` when available, creates a compliant changelog if the file does not exist yet, writes a required SemVer-aware release highlight, preserves natural prose wrapping, and curates `Added` / `Changed` / `Fixed` style sections instead of dumping raw commit logs. |
+| [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns noisy commit stacks into a curated set of compact summary lines for PR or squash contexts, preserving technical identifiers, merging overlap, dropping low-signal noise, highlighting distinct meaningful efforts, and avoiding changelog-style wording or unsupported claims. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
@@ -76,6 +86,18 @@ If your Markdown viewer supports code-block copy buttons, each command below sho
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-commits
+```
+
+`git-keep-a-changelog`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill git-keep-a-changelog
+```
+
+`git-visual-squash-summary`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 ```
 
 `dotnet-new-lib-slnx`
@@ -117,10 +139,48 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Commit body by default** — every commit explains *why*, not just *what* — opt out with "tmi" or "no-body"
 - **Commit bodies are verified after write** — the workflow now checks the stored commit body so literal escape sequences like `\n` do not leak into history
 - **Short bodies stay readable** — the workflow no longer hard-wraps short commit bodies at 72 characters and instead prefers normal prose with sentence-level judgment
+- **Repo capability additions stay explicit** — adding a brand-new skill is grouped separately from refactoring an existing skill to support it
+- **Shared wording rules stay in lockstep** — the duplicated `commit-language.md` reference is kept byte-for-byte identical across both git-visual skills and checked locally plus in CI
 - **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
 - **Umbrella commits are rejected** — mixed diffs spanning skill instructions, templates, validators, and repo docs must be split into separate commits instead of bundled into one blob
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
+
+### Why git-visual-squash-summary?
+
+Sometimes the history is already written and the only thing you need is
+the final grouped summary. A long branch with fixups, rename follow-ups,
+review nits, and repeated attempts often contains a few real change
+themes buried inside a messy chronological story. That is where
+**git-visual-squash-summary** fits: it reads the real history and diff,
+then compresses them into a small set of truthful grouped lines.
+
+- **Same visual language** — reuses the same prefix and emoji rules as `git-visual-commits`
+- **Grouped-lines only** — returns compact grouped lines only, not a title or body
+- **Non-mutating by design** — drafts the wording only and does not touch git state
+- **Distinct efforts stay distinct** — preserves meaningful change groups instead of forcing one umbrella line
+- **Intent over chronology** — collapses noisy commit stacks into the retained grouped effort
+- **Low-signal noise gets dropped** — typo-only and trivial fixup churn do not deserve their own lines
+- **Identifier-safe wording** — preserves technical names, paths, flags, and types where possible
+- **Readable in GitHub and terminals** — optimized for compact PR and squash-summary views
+- **Strict 72-char lines** — every summary line stays compact and scannable
+- **Not a changelog** — avoids release-note phrasing and commit-subject dumps
+- **No unsupported claims** — summarizes only what the inspected diff can justify
+
+### Why git-keep-a-changelog?
+
+Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too noisy, PR titles often miss migration context, and release notes get much better when the writer actually reads the commit bodies and understands the net diff. That is where **git-keep-a-changelog** fits: it turns the current branch into a curated Keep a Changelog entry and creates or updates the file directly for review.
+
+- **Keep a Changelog first** — writes `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security` sections in the expected style
+- **Full-commit context** — reads complete commit messages and the net diff before writing
+- **Version-aware by branch** — uses a branch prefix like `v0.3.0/...` as the release heading hint when present
+- **SemVer-aware highlight** — always writes a short release TL;DR that explicitly says `major`, `minor`, or `patch`
+- **Creates the file when needed** — seeds a compliant `CHANGELOG.md` if the repo does not have one yet
+- **Natural prose** — preserves human-readable line breaks without any fixed-width wrapping target
+- **Predictable bullet punctuation** — bullets end with `,` and the last bullet in each section ends with `.`
+- **Direct file edit** — creates or updates `CHANGELOG.md` directly, then stops for human review
+- **Compare-link aware** — can update bottom-of-file compare links when a concrete release heading is added
+- **Not a commit dump** — curates the release story instead of copying git log output into Markdown
 
 ### Why dotnet-new-lib-slnx and dotnet-new-app-slnx?
 
