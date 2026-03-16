@@ -111,9 +111,14 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Gitmoji-first** — visual commit categories that are scannable at a glance
 - **Conventional prefixes** — `init`, `content`, `style`, `fix`, `refactor`, and `docs` as fallback when gitmoji isn't available
 - **Three identity modes** — bot, human, or collaborative — the agent does the work either way, you choose who gets credit
+- **Identity lock stays honest** — `git bot commit` means bot attribution, not just "AI did the work", and the flow now verifies the resulting author after commit
 - **Auto-approval** — say "yolo" or "auto" to skip the review gate when you trust the agent's judgment
+- **Yolo skips confirmation, not discipline** — auto-approval still requires semantic grouping, mixed-scope checks, and a visible commit plan summary before committing
 - **Commit body by default** — every commit explains *why*, not just *what* — opt out with "tmi" or "no-body"
+- **Commit bodies are verified after write** — the workflow now checks the stored commit body so literal escape sequences like `\n` do not leak into history
+- **Short bodies stay readable** — the workflow no longer hard-wraps short commit bodies at 72 characters and instead prefers normal prose with sentence-level judgment
 - **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
+- **Umbrella commits are rejected** — mixed diffs spanning skill instructions, templates, validators, and repo docs must be split into separate commits instead of bundled into one blob
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
 
