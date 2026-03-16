@@ -6,6 +6,11 @@ $ErrorActionPreference = 'Stop'
 
 Set-StrictMode -Version Latest
 
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+
 function Get-RepoRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 }
@@ -66,7 +71,7 @@ function Get-FileText {
         if (-not (Test-Path $fullPath)) {
             throw "Missing file: $RelativePath"
         }
-        return [System.IO.File]::ReadAllText($fullPath)
+        return [System.IO.File]::ReadAllText($fullPath, $utf8NoBom)
     }
 
     $showTarget = '{0}:{1}' -f $GitRef, ($RelativePath -replace '\\', '/')
@@ -620,13 +625,22 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'skill instructions (`SKILL.md`, `FORMS.md`, `references/`, `evals/`)'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Read `references/commit-language.md` before choosing a prefix or emoji.'
     Assert-NotContains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Allowed Prefixes'
-    Assert-NotContains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Emoji Selection — Gitmoji First, Fallback Second'
+    Assert-NotContains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Emoji Selection'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Even in auto-approval mode, surface the commit buckets explicitly before committing.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Do not pass literal `\n` escape sequences and assume the shell will rewrite them.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Prefer grammatical sentence and paragraph breaks over column-based hard wrapping.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**New repo capabilities**'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'introducing a new repo-managed skill, workflow, or top-level capability'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Existing skill refactors**'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'restructuring or extracting shared rules from an already existing skill'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'do not collapse "new skill introduced" and "existing skill refactored" into one commit'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**New repo-managed skill**'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'a newly introduced `skills/<name>/` folder and its local `evals/` or `references/`'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If a commit both introduces a brand-new skill and refactors an existing skill to support it, prefer separate commits.'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Allowed Prefixes'
-    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection — Gitmoji First, Fallback Second'
+    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection'
+    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'Gitmoji First, Fallback Second'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '#### Fallback: Extended Emoji Reference'
 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not let yolo collapse multiple semantic intents into one umbrella commit'
@@ -634,6 +648,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Verifies the stored commit body does not contain literal \\n escape sequences'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not hard-wrap a short commit body mid-sentence just to satisfy a column limit'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'stops with a clear alias-missing error instead of silently falling back to human identity'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats a newly introduced skill folder as a separate repo capability intent'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Separates new skill introduction from existing skill refactor work'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
@@ -662,7 +678,8 @@ Add-ValidationResult -Results $results -Name 'Git visual squash summary skill st
     Assert-NotContains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle '<wrapped body lines>'
     Assert-NotContains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'The body is usually 1-4 wrapped lines'
     Assert-Contains -Name 'git-visual-squash-summary/references/commit-language.md' -Content $commitLanguage -Needle '### Allowed Prefixes'
-    Assert-Contains -Name 'git-visual-squash-summary/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection — Gitmoji First, Fallback Second'
+    Assert-Contains -Name 'git-visual-squash-summary/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection'
+    Assert-Contains -Name 'git-visual-squash-summary/references/commit-language.md' -Content $commitLanguage -Needle 'Gitmoji First, Fallback Second'
 
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Does not run mutating git commands'
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Detects and centers the dominant theme of the commit stack'

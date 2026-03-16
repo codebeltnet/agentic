@@ -1,0 +1,17 @@
+name: Validate Skill Templates
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  validate-skill-templates:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run validator
+        shell: pwsh
+        run: pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1
