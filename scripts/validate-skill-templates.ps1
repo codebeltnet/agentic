@@ -453,7 +453,7 @@ Add-ValidationResult -Results $results -Name 'App web and worker scaffold files 
     Assert-Contains -Name 'worker/Worker.cs' -Content $worker -Needle 'BackgroundService'
     Assert-Contains -Name 'worker/Worker.cs' -Content $worker -Needle 'logger.LogInformation("Worker running at: {Time}"'
     Assert-Contains -Name 'web/Program.minimal.cs' -Content $web -Needle 'Hello from {ROOT_NAMESPACE}.{AppType}.'
-    Assert-Contains -Name 'web-api/Program.minimal.cs' -Content $webApi -Needle 'builder.Services.AddControllers();'
+    Assert-Contains -Name 'web-api/Program.minimal.cs' -Content $webApi -Needle 'builder.Services.AddEndpointsApiExplorer();'
     Assert-Contains -Name 'web-mvc/HomeController.cs' -Content $mvcController -Needle 'IActionResult Index()'
     Assert-Contains -Name 'web-mvc/Views/Home/Index.cshtml' -Content $mvcView -Needle 'starter MVC page'
     Assert-Contains -Name 'webapp/Pages/Index.cshtml' -Content $webAppPage -Needle 'starter Razor page'
@@ -599,6 +599,34 @@ Add-ValidationResult -Results $results -Name 'Strong-name skill matches FORMS su
     Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'compute the defaults silently, and present a single summary for confirmation'
     Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 1024'
     Assert-NotContains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 4096'
+}
+
+Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces identity lock and umbrella commit rejection' -Action {
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/SKILL.md' -GitRef $Ref
+    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/evals/evals.json' -GitRef $Ref
+
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Identity Lock'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Never silently downgrade a requested `git bot commit` to `git commit`.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If the required `git bot` alias is unavailable, halt and report that exact blocker instead of falling back to human identity.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` / `auto` skips user confirmation only.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'After every commit, run:'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'git log -1 --format="%an <%ae>"'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'git log -1 --format=%B'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If the body contains literal escape sequences such as `\n` instead of real line breaks'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Do **not** hard-wrap commit bodies at 72 characters; keep short bodies as normal prose'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Umbrella Commit Rejection'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'skill instructions (`SKILL.md`, `FORMS.md`, `references/`, `evals/`)'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Even in auto-approval mode, surface the commit buckets explicitly before committing.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Do not pass literal `\n` escape sequences and assume the shell will rewrite them.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Prefer grammatical sentence and paragraph breaks over column-based hard wrapping.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success.'
+
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not let yolo collapse multiple semantic intents into one umbrella commit'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Verifies the commit author after commit and confirms it matches bot identity'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Verifies the stored commit body does not contain literal \\n escape sequences'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not hard-wrap a short commit body mid-sentence just to satisfy a column limit'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'stops with a clear alias-missing error instead of silently falling back to human identity'
 }
 
 Add-ValidationResult -Results $results -Name 'Rendered app worker template leaves no unexpected placeholders' -Action {
