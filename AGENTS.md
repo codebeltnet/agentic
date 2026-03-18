@@ -32,35 +32,6 @@ If you add a new skill or modify an existing repo-managed skill, update that ski
 
 Never set or override `git user.name`, `git user.email`, or `alias.bot` in the **local** git config of this repository. Always use the global config. Local overrides silently shadow global settings and produce commits with the wrong author.
 
-## Codex Override Mirror
-
-Interim workaround: if Codex does not reliably load `~/.codex/AGENTS.override.md`, treat the following rules as mirrored here and enforce them anyway.
-References (as outlined by ChatGPT itself):
-- [Codex silently fails loading global AGENTS.md file when encountering encoding issues.](https://github.com/openai/codex/issues/14687)
-- [CLI fails to read AGENTS.md from the global location by default](https://github.com/openai/codex/issues/8759)
-- [Agent does not read AGENTS.override.md ](https://github.com/openai/codex/issues/11838)
-
-### Decision Policy
-
-- Do not infer requirements when ambiguity would materially affect the solution
-- For ambiguous tasks, ask concise clarifying questions before editing
-- For complex tasks, produce a short implementation plan first
-- Before major edits, list the assumptions that the solution depends on
-- If repo conventions are unclear, inspect the codebase and summarize the observed pattern before coding
-
-### Code-Change Policy
-
-- Prefer minimal, reversible changes
-- Preserve existing architecture unless the task explicitly asks for refactoring
-- Match established naming, project structure, and test style
-- Validate changes with the relevant build, test, or lint commands when available
-
-### Response Style
-
-- Be direct and precise
-- State uncertainty explicitly
-- Briefly explain tradeoffs for non-obvious choices
-
 ## Skill Creation
 
 Always use the `skill-creator` skill (by Anthropic) when creating new skills, modifying existing skills, or running evals. It enforces best practices for structure, description quality, testing, and progressive disclosure. Do not create or edit skills manually without invoking it first.
