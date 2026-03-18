@@ -57,6 +57,8 @@ git log -1 --format=%B
 
 If the body contains literal escape sequences such as `\n` instead of real line breaks, treat the commit message as invalid and repair it before reporting success.
 
+Also reject a stored short prose body when it was split across lines only to chase a 72-column habit. If a non-empty body line ends mid-sentence and the next non-empty line simply continues that same sentence, treat the commit message as invalid and repair it before reporting success. A single short paragraph should usually stay as one natural prose line; add manual line breaks only for real paragraphing, lists, quotes, or readability-driven separation.
+
 ### Umbrella Commit Rejection
 
 Reject a single umbrella commit when the diff spans multiple intents such as:
@@ -145,6 +147,7 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 - **Prefix** is lowercase (see `references/commit-language.md`) — **never use `feat:`**
 - **Description** is lowercase, imperative, max 70 characters total (including emoji and prefix)
 - **Body** is included by default — a short paragraph explaining *why* the change was made, not just *what* changed. Separate from the subject with a blank line. Do **not** hard-wrap commit bodies at 72 characters; keep short bodies as normal prose and add line breaks only when they improve readability. Can be suppressed with `no-body` (see below).
+- **Body repair rule** — if verification shows the stored body was split mid-sentence just to fit an arbitrary width, amend the commit before reporting success.
 - One logical change per commit — don't bundle unrelated things
 
 ### Prefix and Emoji Reference
@@ -357,9 +360,11 @@ For each group:
 
 When a commit body spans multiple lines, use real multiline input such as multiple `-m` arguments or a shell construct that preserves actual line breaks. Do not pass literal `\n` escape sequences and assume the shell will rewrite them. Prefer grammatical sentence and paragraph breaks over column-based hard wrapping.
 
+When the body is just one short explanatory paragraph, prefer a single natural prose line in the stored commit message. Do not press Enter mid-sentence to satisfy an arbitrary width target.
+
 ### Step 6: Verify
 
-After committing, run `git log --oneline -5` to confirm the commit looks right. Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success. Also run `git log -1 --format=%B` and verify the stored body contains readable prose with real line breaks, not literal escape sequences such as `\n`, and is not hard-wrapped mid-sentence just to satisfy a column limit.
+After committing, run `git log --oneline -5` to confirm the commit looks right. Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success. Also run `git log -1 --format=%B` and verify the stored body contains readable prose with real line breaks, not literal escape sequences such as `\n`, and is not hard-wrapped mid-sentence just to satisfy a column limit. If that verification fails, amend the commit immediately instead of merely warning about it.
 
 ---
 
@@ -377,9 +382,7 @@ With body (when context adds value):
 ```
 🚚 rename templates/ to assets/ per Anthropic skill conventions
 
-Align with the official skill directory structure: SKILL.md, scripts/,
-references/, and assets/. Updates all path references in SKILL.md,
-reference docs, and AGENTS.md for both app and library skills.
+Align with the official skill directory structure: SKILL.md, scripts/, references/, and assets/. Updates all path references in SKILL.md, reference docs, and AGENTS.md for both app and library skills.
 ```
 
 ```
@@ -389,6 +392,13 @@ Replace inline parameter table with structured FORMS.md form definition.
 Step 1 now references FORMS.md instead of listing 12 fields inline.
 ```
 
+With body repair after a bad first attempt:
+```
+📝 docs: add git release-note guidance
+
+Clarify when the repo should keep release-note docs separate from code changes so commit history stays easier to scan and review.
+```
+
 ## Bad Examples (and why)
 
 ```
@@ -396,6 +406,14 @@ feat: add submission endpoint            ← "feat:" is not an allowed prefix
 ✨ Feat: Add Submission Module            ← uppercase, "Feat:" not allowed
 🎉 initial commit with all files         ← vague, bundles everything
 ⚙️ config: setup api                     ← "config:" is not an allowed prefix
+```
+
+```
+📝 docs: add git release-note guidance
+
+Clarify when the repo should keep release-note docs separate
+from code changes so commit history stays easier to scan and review.
+                                         ← bad wrap: short prose split mid-sentence for width only
 ```
 
 ---

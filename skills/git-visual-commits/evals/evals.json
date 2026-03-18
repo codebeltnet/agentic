@@ -79,6 +79,17 @@
         "Separates validator changes from skill contract changes when the rationale differs",
         "Keeps README or changelog updates in their own documentation-focused commit"
       ]
+    },
+    {
+      "id": 8,
+      "prompt": "You already created a git bot commit, but `git log -1 --format=%B` shows the body split across short lines mid-sentence even though it is just a short prose paragraph. Repair the commit before reporting success.",
+      "expected_output": "A repaired bot-attributed commit whose stored body is rewritten as normal prose instead of arbitrary 72-column wrapping.",
+      "expectations": [
+        "Treats a short body that is hard-wrapped mid-sentence as an invalid commit result",
+        "Amends or otherwise repairs the commit instead of merely warning about the bad wrapping",
+        "Preserves bot identity while repairing the stored commit message",
+        "Verifies the repaired stored body again with git log -1 --format=%B before success is reported"
+      ]
     }
   ]
 }
