@@ -90,6 +90,17 @@
         "Preserves bot identity while repairing the stored commit message",
         "Verifies the repaired stored body again with git log -1 --format=%B before success is reported"
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "git bot commit yolo",
+      "expected_output": "An auto-approved bot commit flow that treats the full current worktree as the default scope and groups it into multiple commits when the changes span multiple intents.",
+      "expectations": [
+        "Treats an unqualified git bot commit request as applying to the full current worktree",
+        "Does not silently narrow scope to only the most recently touched files or task slice",
+        "Groups the full worktree into multiple commits when semantic intent differs",
+        "Reserves scope narrowing for explicit user language such as just, only, for this, or named paths/modules"
+      ]
     }
   ]
 }

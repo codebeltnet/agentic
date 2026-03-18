@@ -39,6 +39,31 @@ This skill drives the entire git commit workflow — reviewing changes, grouping
 - mixed-scope validation
 - post-commit author verification
 
+### Default Scope Rule
+
+If the user says `git bot commit`, `git commit`, or `git our commit`
+without narrowing language, treat the request as covering the full
+current worktree.
+
+- The default scope is **all current changes visible in git status**.
+- Your job is to group that full worktree into the right number of
+  commits by semantic intent.
+- Never silently narrow the scope to "just the files from the last
+  thing I worked on", "just the files I touched", or "just the newest
+  skill" unless the user explicitly said to do that.
+- `yolo` keeps this same full-worktree default. It removes the approval
+  wait; it does not narrow scope.
+
+Narrow scope only when the user explicitly does one of these:
+
+- names a specific path, file, module, project, or technology slice
+- says `just`, `only`, `for this`, `for X`, `commit the README changes`,
+  or equivalent limiting language
+- asks for a review/plan for a subset before committing
+
+If the user did not narrow scope, do not invent a narrower scope on
+their behalf.
+
 ### Post-Commit Verification
 
 After every commit, run:
@@ -215,7 +240,15 @@ Say **"enable no-body mode"** or **"enable tmi mode"** to suppress commit bodies
 
 ### Step 1: Review changes
 
-Run `git status` and `git diff` (and `git diff --staged` if there are staged changes) to understand what has changed. Don't commit blindly — understand what each file is doing before grouping.
+Run `git status` and `git diff` (and `git diff --staged` if there are
+staged changes) to understand what has changed.
+
+Unless the user explicitly narrowed scope, inspect the **entire current
+worktree** and build the commit plan from that full set of changes. Do
+not default to the last task only.
+
+Don't commit blindly — understand what each file is doing before
+grouping.
 
 ### Step 2: Classify changes
 
@@ -331,6 +364,9 @@ Auto-committing: 🔧 build config → 🚚 rename auth to identity → ✅ iden
 ```
 
 Even in auto-approval mode, surface the commit buckets explicitly before committing. Auto-approval removes the wait, not the planning step.
+
+If the user did not narrow scope, the plan you surface must account for
+the full worktree rather than an arbitrarily chosen subset.
 
 **Otherwise**, wait for the user to confirm or adjust. They may say things like:
 - "Looks good" → proceed to stage and commit
