@@ -24,9 +24,13 @@ Every repo-managed skill must include its own `evals/evals.json` file at `skills
 - Treat this as a required artifact for every first-party skill in this repo
 - Run evals **per skill**, not as one shared repo-level eval file
 - Run evals from a temp workspace such as `$env:TEMP/<skill-name>-workspace/`, never from inside this repository
+- When creating or modifying a repo-managed skill, run both `with_skill` and `without_skill` comparison executions from that temp workspace before the work is considered complete
+- For a brand-new skill, the baseline is `without_skill`; for an existing skill, use either `without_skill` or the previous/original skill version as the baseline, matching the `skill-creator` benchmark flow
+- Generate the human-review artifacts too: aggregate the comparison into `benchmark.json` and launch `eval-viewer/generate_review.py` so the user can inspect `Outputs` and `Benchmark` before sign-off
 - Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
 
 If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` before considering the work complete.
+Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
 
 ## Git Identity
 
