@@ -1,0 +1,69 @@
+{
+  "skill_name": "git-nuget-readme",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Update the README.md for the current branch from git history and actual project metadata. Refresh the package-facing copy directly in the file and stop for my review.",
+      "expected_output": "README.md is updated in place with package-facing copy grounded in git history and project metadata rather than only drafted in chat.",
+      "expectations": [
+        "Updates README.md directly instead of only proposing README text in chat",
+        "Reads full commit subjects and bodies before refreshing README copy",
+        "Uses the current branch versus merge-base as the default source when no explicit range is given",
+        "Stops after editing the README for user review"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "This repo has multiple packable projects under src. Refresh the README for the advertised package, but do not guess which package it should sell if the repo does not make that obvious.",
+      "expected_output": "The skill either resolves the advertised package from repo/project cues or stops to ask instead of guessing when the target is ambiguous.",
+      "expectations": [
+        "Discovers packable src projects instead of treating test or tooling projects as publishable packages",
+        "Uses explicit package/repo cues to resolve the advertised project when possible",
+        "Stops and asks instead of guessing when multiple packable projects are plausible README targets"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Rewrite the package README so it has a better developer experience: make the value proposition clearer, surface installation and supported target frameworks, and keep the claims honest.",
+      "expected_output": "The README leads with a concrete package value proposition and makes install/framework support easy to find without drifting into generic marketing copy.",
+      "expectations": [
+        "Uses the exact package or project name the README is advertising",
+        "Makes installation guidance easy to find near the top of the README",
+        "Derives supported frameworks from actual project metadata instead of guessing",
+        "Keeps the tone developer-first and avoids generic hype language",
+        "Grounds capability claims in actual source, project metadata, docs, or the current diff",
+        "Derives branding and title style from the current repo instead of hardcoding another ecosystem's naming pattern"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Our existing README already has badges, docs links, contributing guidance, and license info. Refresh the adoption-focused sections without throwing away those stable parts.",
+      "expected_output": "The README keeps accurate stable sections while improving the package-facing pitch and section order.",
+      "expectations": [
+        "Preserves useful existing badge, docs, contributing, or license sections when they are still accurate",
+        "Improves and reorganizes the README instead of blindly replacing stable sections",
+        "Keeps documentation links only when they are supported by the repo"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "If the codebase supports it, add a small quick-start example with real namespaces or types so a NuGet user can understand the package in 30 seconds.",
+      "expected_output": "A truthful, concise quick-start example is included when the codebase clearly supports one, and it uses real APIs rather than invented ones.",
+      "expectations": [
+        "Adds a small quick-start example only when the codebase justifies it",
+        "Uses real namespaces, package IDs, or types from the repo instead of invented APIs",
+        "Keeps the example concise and developer-oriented"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "When feasible, pick up hints from unit or functional tests associated with the advertised package so the README examples and scenarios sound like real usage instead of invented marketing copy.",
+      "expected_output": "The README refresh uses associated tests as supporting hints when they exist, especially for scenario wording or quick-start examples, without inventing APIs or claims.",
+      "expectations": [
+        "Inspects associated unit or functional tests when the repo makes them available and relevant",
+        "Uses test-backed scenarios or terminology as supporting hints for README copy when feasible",
+        "Does not invent unsupported APIs, workflows, or examples when no suitable tests exist"
+      ]
+    }
+  ]
+}
