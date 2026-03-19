@@ -144,12 +144,23 @@ generated model runs.
 Typical flow:
 
 ```powershell
-python "$HOME/.agents/skills/skill-creator/scripts/aggregate_benchmark.py" `
+$skillCreatorRoot = @(
+  (Join-Path $HOME ".agents/skills/skill-creator"),
+  (Join-Path $HOME ".claude/skills/skill-creator")
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if (-not $skillCreatorRoot) {
+  throw "Install Anthropic's skill-creator before generating benchmark artifacts."
+}
+```
+
+```powershell
+python (Join-Path $skillCreatorRoot "scripts/aggregate_benchmark.py") `
   "$workspace/iteration-1" --skill-name "<skill-name>"
 ```
 
 ```powershell
-python "$HOME/.agents/skills/skill-creator/eval-viewer/generate_review.py" `
+python (Join-Path $skillCreatorRoot "eval-viewer/generate_review.py") `
   "$workspace/iteration-1" --skill-name "<skill-name>" `
   --benchmark "$workspace/iteration-1/benchmark.json" `
   --static "$workspace/review.html"

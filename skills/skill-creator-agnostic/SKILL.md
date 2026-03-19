@@ -4,13 +4,14 @@ description: >
   Adds runner-agnostic guardrails on top of Anthropic's skill-creator
   for creating, modifying, and benchmarking skills across Codex, GitHub
   Copilot, Opus, and similar agents. Use whenever skill work must
-  follow temp-workspace isolation, valid `eval-N/<config>/run-N/`
-  benchmark layout, honest measured-vs-simulated labeling, UTF-8-safe
-  artifact generation, and repo-managed skill sync/README update rules.
-  Treat requests like "turn this workflow into a skill", "benchmark this
-  skill", "compare with_skill and without_skill", "why is
-  aggregate_benchmark.py showing zeros", or "make this skill robust
-  across agents" as automatic triggers.
+  follow temp-workspace isolation, valid
+  `iteration-N/eval-name/{config}/run-N/` benchmark layout, honest
+  measured-vs-simulated labeling, UTF-8-safe artifact generation, and
+  repo-managed skill sync/README update rules. Treat requests like
+  "turn this workflow into a skill", "benchmark this skill", "compare
+  with_skill and without_skill", "why is aggregate_benchmark.py showing
+  zeros", or "make this skill robust across agents" as automatic
+  triggers.
 ---
 
 # Skill Creator Agnostic
@@ -25,7 +26,7 @@ Before benchmarking, read `references/benchmark-contract.md`.
 On Windows or when running from PowerShell, also read
 `references/windows-powershell-benchmarking.md`.
 
-## Non-Negotiable Rules
+## Critical
 
 - Start from Anthropic's `skill-creator` workflow. Use this skill to add
   environment and repo guardrails, not to fork or replace the upstream
@@ -41,8 +42,8 @@ On Windows or when running from PowerShell, also read
   and `~/.agents/skills/<name>/` in sync before calling the work done.
 - Every repo-managed skill must keep a per-skill `evals/evals.json`.
 - Benchmark directories must follow
-  `eval-N/<config>/run-N/` exactly; do not flatten files directly under
-  `with_skill/` or `without_skill/`.
+  `iteration-N/eval-name/{config}/run-N/` exactly; do not flatten files
+  directly under `with_skill/` or `without_skill/`.
 - `grading.json` must include both `expectations` and a populated
   `summary` object with `passed`, `failed`, `total`, and `pass_rate`.
 - Generate `benchmark.json` through
@@ -150,7 +151,7 @@ Each `grading.json` must minimally look like this:
 {
   "expectations": [
     {
-      "text": "Uses eval-N/<config>/run-N layout",
+      "text": "Uses iteration-N/eval-name/{config}/run-N/ layout",
       "passed": true,
       "evidence": "Found run-1/grading.json and run-1/timing.json"
     }
@@ -171,12 +172,15 @@ trustworthy.
 
 After the paired runs are graded:
 
-1. Run `scripts/aggregate_benchmark.py` from Anthropic's
-   `skill-creator`.
-2. Verify that the generated `benchmark.json` contains discovered runs
+1. Resolve the installed Anthropic `skill-creator` root first, usually
+   under `~/.agents/skills/skill-creator/` or
+   `~/.claude/skills/skill-creator/`.
+2. Run `scripts/aggregate_benchmark.py` from that resolved
+   `skill-creator` root.
+3. Verify that the generated `benchmark.json` contains discovered runs
    and a non-empty `run_summary`.
-3. Run `eval-viewer/generate_review.py` to create the human review
-   artifact.
+4. Run `eval-viewer/generate_review.py` from that same resolved
+   `skill-creator` root to create the human review artifact.
 
 If the viewer shows outputs but the benchmark metrics are zero, suspect
 run layout or `grading.json.summary` before blaming the viewer.
@@ -213,6 +217,8 @@ For repo-managed skills:
   as the overlay.
 - Talks about available runner capability instead of assuming one
   product-specific CLI.
+- Resolves the installed `skill-creator` path before calling benchmark
+  scripts or the review viewer.
 - Produces valid benchmark artifacts that `aggregate_benchmark.py` and
   `generate_review.py` consume without repair work.
 - Labels synthetic benchmarks as `SIMULATED` and live executions as
