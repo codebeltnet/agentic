@@ -10,7 +10,7 @@ One repo-wide convention matters especially for scaffolding skills: prefer dynam
 
 Another repo rule is intentionally strict: every repo-managed skill ships with its own `evals/evals.json`, and those evals are run per skill from a temp workspace instead of from inside this repository.
 
-Another part of that workflow is now mandatory too: when a repo-managed skill is created or modified, the author must run both `with_skill` and `without_skill` comparison executions from a temp workspace, aggregate the results into `benchmark.json`, and open `eval-viewer/generate_review.py` so a human can review both the `Outputs` and `Benchmark` views before sign-off. For new skills the baseline is `without_skill`; for existing skills it can be `without_skill` or the previous/original skill version, matching the `skill-creator` benchmark flow.
+Another part of that workflow is now mandatory too: when a repo-managed skill is created or modified, the author must run both `with_skill` and `without_skill` comparison executions from a temp workspace, aggregate the results into `benchmark.json`, and open `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy, typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, so a human can review both the `Outputs` and `Benchmark` views before sign-off. For new skills the baseline is `without_skill`; for existing skills it can be `without_skill` or the previous/original skill version, matching the `skill-creator` benchmark flow.
 
 One more consistency rule matters for form-driven skills: native input fields are treated as a host feature, not something a model can rely on. Skills in this repo must stay usable with or without UI widgets, and must fall back to the same deterministic one-field-at-a-time flow when the host only supports plain chat.
 
@@ -18,7 +18,9 @@ Validation follows the same philosophy: run
 `scripts/validate-skill-templates.ps1` locally for the fast feedback
 loop, and let GitHub Actions rerun that same script on pull requests as
 the safety net. That validator also checks skill frontmatter metadata
-such as the 1024-character YAML description limit and the presence of the repo's benchmark-workflow policy in the expected docs.
+such as per-skill `evals/evals.json` files and the 1024-character YAML
+description limit; it does not replace the paired benchmark review
+workflow.
 
 ## Install a skill
 
@@ -75,10 +77,10 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 |-------|-------------|
 | [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
 | [git-keep-a-changelog](skills/git-keep-a-changelog/SKILL.md) | Git-aware Keep a Changelog companion that creates or updates `CHANGELOG.md` from the current branch by default. Reads full commit subjects and bodies plus the net diff, infers a release heading from a branch version hint like `v0.3.0/...` when available, creates a compliant changelog if the file does not exist yet, writes a required SemVer-aware release highlight, preserves natural prose wrapping, and curates `Added` / `Changed` / `Fixed` style sections instead of dumping raw commit logs. |
-| [git-nuget-release-notes](skills/git-nuget-release-notes/SKILL.md) | Git-aware NuGet release-notes companion for .NET repos that keep cumulative `.nuget/<ProjectName>/PackageReleaseNotes.txt` files. Discovers packable `src/` projects, resolves concrete package version and availability, creates missing files when needed, and writes per-package `ALM` / `Breaking Changes` / `New Features` / `Improvements` / `Bug Fixes` style notes from full commit context plus the net diff instead of dumping commit subjects. |
+| [git-nuget-release-notes](skills/git-nuget-release-notes/SKILL.md) | Git-aware NuGet release-notes companion for .NET repos that keep cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Discovers packable `src/` projects, resolves concrete package version and availability, creates missing files when needed, and writes per-package `ALM` / `Breaking Changes` / `New Features` / `Improvements` / `Bug Fixes` style notes from full commit context plus the net diff instead of dumping commit subjects. |
 | [git-nuget-readme](skills/git-nuget-readme/SKILL.md) | Git-aware NuGet README companion for .NET repos that advertise a package from `src/`. Resolves the real packable project the README should sell, combines git history with actual package metadata, source capabilities, and relevant tests when feasible, preserves honest badge/docs/contributing sections, and writes a forthcoming, adoption-friendly `README.md` with repo-derived branding, clear value, install, framework-support, and quick-start guidance. |
 | [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns noisy commit stacks into a curated set of compact summary lines for PR or squash contexts, preserving technical identifiers, merging overlap, dropping low-signal noise, highlighting distinct meaningful efforts, and avoiding changelog-style wording or unsupported claims. |
-| [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | Runner-agnostic overlay for Anthropic `skill-creator`. Adds repo and environment guardrails for skill authoring and benchmarking: temp-workspace isolation, `eval-N/<config>/run-N/` benchmark layout, valid `grading.json` summaries, generated `benchmark.json`, honest `MEASURED` vs `SIMULATED` labeling, and sync/README discipline for repo-managed skills. |
+| [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | Runner-agnostic overlay for Anthropic `skill-creator`. Adds repo and environment guardrails for skill authoring and benchmarking: temp-workspace isolation, `iteration-N/eval-name/{config}/run-N/` benchmark layout, valid `grading.json` summaries, generated `benchmark.json`, honest `MEASURED` vs `SIMULATED` labeling, and sync/README discipline for repo-managed skills. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
@@ -212,7 +214,7 @@ Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too
 Repo-wide changelogs are useful, but NuGet packages often need
 package-scoped release notes that match the package actually being
 published. In codebelt-style repos, that means cumulative
-`.nuget/<ProjectName>/PackageReleaseNotes.txt` files with a very specific
+`.nuget/{ProjectName}/PackageReleaseNotes.txt` files with a very specific
 shape: concrete version and availability lines, `# ALM` first, and only
 the sections that the package really earned.
 
@@ -224,7 +226,7 @@ review.
 - **Per-package, not repo-wide** — writes one truthful release block per publishable assembly/package
 - **Concrete package metadata** — resolves `Version:` and `Availability:` from the branch/project instead of inventing placeholders
 - **Current codebelt format** — follows the established `ALM`, `Breaking Changes`, `New Features`, `Improvements`, `Bug Fixes`, and optional `References` blueprint
-- **Missing-file aware** — can create `.nuget/<ProjectName>/PackageReleaseNotes.txt` when a packable project should be represented
+- **Missing-file aware** — can create `.nuget/{ProjectName}/PackageReleaseNotes.txt` when a packable project should be represented
 - **History-aware** — preserves cumulative newest-first package history instead of overwriting older entries
 - **Not a commit dump** — uses full commit bodies plus the net diff and avoids line-by-line subject replay
 
@@ -256,7 +258,8 @@ Anthropic's `skill-creator` is an excellent base workflow, but the day-to-day fr
 
 - **Overlay, not fork** — treats Anthropic `skill-creator` as the base and layers repo/runtime guardrails on top
 - **Runner-agnostic by design** — chooses from available execution capability instead of assuming one vendor CLI
-- **Benchmark-contract aware** — enforces `eval-N/<config>/run-N/`, valid `grading.json.summary`, and generated `benchmark.json`
+- **Benchmark-contract aware** — enforces `iteration-N/eval-name/{config}/run-N/`, valid `grading.json.summary`, and generated `benchmark.json`
+- **Tool-path explicit** — points authors to the installed Anthropic `skill-creator` copy that provides `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`
 - **Honest benchmark modes** — keeps `MEASURED` and `SIMULATED` runs clearly separated so pipeline validation never masquerades as model quality
 - **PowerShell-safe** — calls out UTF-8 no BOM, stable counting, provider-path normalization, and other Windows-specific pitfalls
 - **Repo-managed discipline** — keeps per-skill evals, local-install sync, and README updates in scope for first-party skills
