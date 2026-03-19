@@ -14,13 +14,7 @@ Another part of that workflow is now mandatory too: when a repo-managed skill is
 
 One more consistency rule matters for form-driven skills: native input fields are treated as a host feature, not something a model can rely on. Skills in this repo must stay usable with or without UI widgets, and must fall back to the same deterministic one-field-at-a-time flow when the host only supports plain chat.
 
-Validation follows the same philosophy: run
-`scripts/validate-skill-templates.ps1` locally for the fast feedback
-loop, and let GitHub Actions rerun that same script on pull requests as
-the safety net. That validator also checks skill frontmatter metadata
-such as per-skill `evals/evals.json` files and the 1024-character YAML
-description limit; it does not replace the paired benchmark review
-workflow.
+Validation follows the same philosophy: run `scripts/validate-skill-templates.ps1` locally for the fast feedback loop, and let GitHub Actions rerun that same script on pull requests as the safety net. That validator also checks skill frontmatter metadata such as per-skill `evals/evals.json` files and the 1024-character YAML description limit; it does not replace the paired benchmark review workflow.
 
 ## Install a skill
 
@@ -175,12 +169,7 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 
 ### Why git-visual-squash-summary?
 
-Sometimes the history is already written and the only thing you need is
-the final grouped summary. A long branch with fixups, rename follow-ups,
-review nits, and repeated attempts often contains a few real change
-themes buried inside a messy chronological story. That is where
-**git-visual-squash-summary** fits: it reads the real history and diff,
-then compresses them into a small set of truthful grouped lines.
+Sometimes the history is already written and the only thing you need is the final grouped summary. A long branch with fixups, rename follow-ups, review nits, and repeated attempts often contains a few real change themes buried inside a messy chronological story. That is where **git-visual-squash-summary** fits: it reads the real history and diff, then compresses them into a small set of truthful grouped lines.
 
 - **Same visual language** — reuses the same prefix and emoji rules as `git-visual-commits`
 - **Grouped-lines only** — returns compact grouped lines only, not a title or body
@@ -211,17 +200,9 @@ Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too
 
 ### Why git-nuget-release-notes?
 
-Repo-wide changelogs are useful, but NuGet packages often need
-package-scoped release notes that match the package actually being
-published. In codebelt-style repos, that means cumulative
-`.nuget/{ProjectName}/PackageReleaseNotes.txt` files with a very specific
-shape: concrete version and availability lines, `# ALM` first, and only
-the sections that the package really earned.
+Repo-wide changelogs are useful, but NuGet packages often need package-scoped release notes that match the package actually being published. In codebelt-style repos, that means cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files with a very specific shape: concrete version and availability lines, `# ALM` first, and only the sections that the package really earned.
 
-**git-nuget-release-notes** reads the actual git history and net
-diff per packable `src/` project, resolves the package version and target
-framework availability, then updates the package-note files directly for
-review.
+**git-nuget-release-notes** reads the actual git history and net diff per packable `src/` project, resolves the package version and target framework availability, then updates the package-note files directly for review.
 
 - **Per-package, not repo-wide** — writes one truthful release block per publishable assembly/package
 - **Concrete package metadata** — resolves `Version:` and `Availability:` from the branch/project instead of inventing placeholders
@@ -232,15 +213,9 @@ review.
 
 ### Why git-nuget-readme?
 
-Choosing a NuGet package often happens fast: a developer lands on the
-README, scans the first screen, checks whether the package fits the
-problem, and looks for install guidance, supported frameworks, docs, and
-a quick example. If those signals are vague or buried, the package loses
-the moment even when the code is good.
+Choosing a NuGet package often happens fast: a developer lands on the README, scans the first screen, checks whether the package fits the problem, and looks for install guidance, supported frameworks, docs, and a quick example. If those signals are vague or buried, the package loses the moment even when the code is good.
 
-**git-nuget-readme** uses the actual git history, project metadata, and
-source-level capabilities of the advertised package to refresh the
-README into something that is both truthful and easier to adopt.
+**git-nuget-readme** uses the actual git history, project metadata, and source-level capabilities of the advertised package to refresh the README into something that is both truthful and easier to adopt.
 
 - **Package-first README focus** — centers the README on the real packable project the repo is advertising
 - **Devex-led structure** — pulls value proposition, installation, framework support, docs, and quick-start guidance closer to the top
