@@ -1,49 +1,25 @@
 ---
 name: git-visual-squash-summary
 description: >
-  Turn many commits into a curated grouped squash summary
-  compatible with the opinionated wording style of
-  git-visual-commits. Use this skill whenever the user asks to squash a
-  branch into a concise summary, write a squash-and-merge summary,
-  summarize a commit range or PR as grouped lines, clean up noisy commit
-  history, or asks for a curated summary without committing.
-  Treat phrases
-  like "squash summary", "squash commit message", "summarize this branch",
-  "turn these commits into one summary", "rewrite these 10+ commits", or
-  "draft the squash summary" as automatic triggers. This skill is
-  non-mutating: it inspects git history and diffs, then returns grouped
-  summary lines only. It preserves technical identifiers where possible,
-  groups by intent rather than chronology, merges overlapping commits,
-  drops low-signal noise, uses strong concrete verbs, favors readable
-  GitHub and terminal output, keeps every output line at or below 72
-  characters, and does not invent unsupported changes or drift into
-  changelog wording.
+  Turn many commits into a curated grouped squash summary compatible with the opinionated wording style of git-visual-commits. Use this skill whenever the user asks to squash a branch into a concise summary, write a squash-and-merge summary, summarize a commit range or PR as grouped lines, clean up noisy commit history, or asks for a curated summary without committing. Treat phrases like "squash summary", "squash commit message", "summarize this branch", "turn these commits into one summary", "rewrite these 10+ commits", or "draft the squash summary" as automatic triggers. This skill is non-mutating: it inspects git history and diffs, then returns grouped summary lines only. It preserves technical identifiers where possible, groups by intent rather than chronology, merges overlapping commits, drops low-signal noise, uses strong concrete verbs, favors readable GitHub and terminal output, keeps every output line at or below 72 characters, and does not invent unsupported changes or drift into changelog wording.
 ---
 
 # Git Visual Squash Summary
 
-This skill turns a stack of commits into a curated grouped summary
-without touching the index, the worktree, or git history. It is the
-wording companion to `git-visual-commits`: same opinionated emoji and
-prefix language, but non-mutating and optimized for the grouped summary
-shown beneath a PR title or in a squash-and-merge description field.
+This skill turns a stack of commits into a curated grouped summary without touching the index, the worktree, or git history. It is the wording companion to `git-visual-commits`: same opinionated emoji and prefix language, but non-mutating and optimized for the grouped summary shown beneath a PR title or in a squash-and-merge description field.
 
-This skill is non-mutating: it inspects history and diffs, then returns
-grouped summary lines only.
+This skill is non-mutating: it inspects history and diffs, then returns grouped summary lines only.
 
 ## Non-Negotiable Rules
 
 - Never stage, commit, amend, rebase, or otherwise mutate git state.
 - Read `references/commit-language.md` before choosing any emoji or prefix.
-- Keep `references/commit-language.md` byte-for-byte aligned with the
-  `git-visual-commits` copy; the validator and CI both enforce that sync
-  contract.
+- Keep `references/commit-language.md` byte-for-byte aligned with the `git-visual-commits` copy; the validator and CI both enforce that sync contract.
 - Preserve technical identifiers exactly where possible.
 - Group by intent, not chronology.
 - Retain only distinct high-signal change groups.
 - Merge repetition and overlapping commits into their parent group.
-- Drop low-signal noise such as typo-only, fixup-only, and trivial follow-up
-  commits unless they materially change a retained group.
+- Drop low-signal noise such as typo-only, fixup-only, and trivial follow-up commits unless they materially change a retained group.
 - Prefer strong concrete verbs and concise phrasing.
 - Favor readable GitHub and terminal output over cleverness.
 - Avoid vague filler such as "various improvements".
@@ -58,12 +34,10 @@ grouped summary lines only.
 
 Use the most explicit source the user gave you:
 
-- If the user provided a commit range, branch comparison, PR branch, or
-  base branch, use that.
+- If the user provided a commit range, branch comparison, PR branch, or base branch, use that.
 - Otherwise, try the current branch against its upstream merge-base.
 - If no upstream is configured, try `main`, then `master`.
-- If you still cannot determine a safe comparison point, stop and ask for
-  the range or base branch instead of guessing.
+- If you still cannot determine a safe comparison point, stop and ask for the range or base branch instead of guessing.
 
 Helpful read-only commands:
 
@@ -78,9 +52,7 @@ git merge-base HEAD master
 
 ### Step 2: Inspect the actual changes
 
-Do not summarize from commit subjects alone when the range is noisy or
-long. Inspect both history and net effect so the final message reflects
-what actually changed.
+Do not summarize from commit subjects alone when the range is noisy or long. Inspect both history and net effect so the final message reflects what actually changed.
 
 Helpful read-only commands:
 
@@ -93,21 +65,16 @@ git diff <base>..HEAD
 
 ### Step 3: Collapse to semantic intent
 
-Before drafting the summary, reduce the range into the smallest truthful
-set of retained groups:
+Before drafting the summary, reduce the range into the smallest truthful set of retained groups:
 
 - Collapse repeated fixups into the group they support.
 - Merge overlapping commits into the clearest final intent.
 - Prefer the net effect over the path taken to get there.
-- Drop typo-only, whitespace-only, and other low-signal cleanup unless it
-  materially changes a retained group.
-- Keep documentation-only work separate in your reasoning, but include it
-  only when it represents a meaningful unique change.
-- Highlight distinct meaningful efforts instead of forcing one dominant
-  umbrella theme.
+- Drop typo-only, whitespace-only, and other low-signal cleanup unless it materially changes a retained group.
+- Keep documentation-only work separate in your reasoning, but include it only when it represents a meaningful unique change.
+- Highlight distinct meaningful efforts instead of forcing one dominant umbrella theme.
 
-Ask yourself: "If I had to explain the real work in 2-5 compact lines,
-what are the distinct changes that mattered?"
+Ask yourself: "If I had to explain the real work in 2-5 compact lines, what are the distinct changes that mattered?"
 
 ### Step 4: Draft the grouped summary
 
@@ -124,20 +91,15 @@ Formatting rules:
 - Return grouped lines only. Do not prepend a title.
 - Use one line per retained high-signal group.
 - Keep every line at or below 72 characters.
-- Use the shared prefix and emoji guidance in
-  `references/commit-language.md`.
-- Do not add bullets, numbering, a body, rationale paragraph, or chronology
-  recap.
-- Do not append weak glue like "with", "plus", or "and" just to force
-  several top-level intents into one line.
+- Use the shared prefix and emoji guidance in `references/commit-language.md`.
+- Do not add bullets, numbering, a body, rationale paragraph, or chronology recap.
+- Do not append weak glue like "with", "plus", or "and" just to force several top-level intents into one line.
 - Favor clean lines that scan well in GitHub and terminal views.
-- Condense to the real grouped effort without dropping important
-  identifiers.
+- Condense to the real grouped effort without dropping important identifiers.
 
 ### Step 5: Return the grouped lines only
 
-Output the finished grouped summary lines and stop. Do not run
-`git commit`, `git bot commit`, `git add`, or any other mutating command.
+Output the finished grouped summary lines and stop. Do not run `git commit`, `git bot commit`, `git add`, or any other mutating command.
 
 ## Good Output Characteristics
 

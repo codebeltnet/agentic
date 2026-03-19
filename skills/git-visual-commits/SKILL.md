@@ -1,18 +1,7 @@
 ---
 name: git-visual-commits
 description: >
-  Structured git commit workflow with emoji prefixes and identity-aware
-  modes: `git bot commit`, regular `git commit`, and `git our commit`.
-  Use this skill whenever the user asks to commit changes, stage files,
-  write a commit message, or review what should be committed. Also use it
-  when the user says "commit this", "make a commit", "commit your
-  changes", "commit what you just did", "what should my commit message
-  be", "stage and commit", "git bot commit", "git our commit", or
-  combines a commit request with "yolo" or "auto". Treat commit wording
-  as an automatic trigger for this skill, not as a casual hint. Supports
-  auto-approval mode and enforces emoji plus lowercase prefixes, max 70
-  chars, one logical change per commit, technology-aware grouping, and
-  post-commit identity verification.
+  Structured git commit workflow with emoji prefixes and identity-aware modes: `git bot commit`, regular `git commit`, and `git our commit`. Use this skill whenever the user asks to commit changes, stage files, write a commit message, or review what should be committed. Also use it when the user says "commit this", "make a commit", "commit your changes", "commit what you just did", "what should my commit message be", "stage and commit", "git bot commit", "git our commit", or combines a commit request with "yolo" or "auto". Treat commit wording as an automatic trigger for this skill, not as a casual hint. Supports auto-approval mode and enforces emoji plus lowercase prefixes, max 70 chars, one logical change per commit, technology-aware grouping, and post-commit identity verification.
 ---
 
 # Git Visual Commits
@@ -41,28 +30,20 @@ This skill drives the entire git commit workflow — reviewing changes, grouping
 
 ### Default Scope Rule
 
-If the user says `git bot commit`, `git commit`, or `git our commit`
-without narrowing language, treat the request as covering the full
-current worktree.
+If the user says `git bot commit`, `git commit`, or `git our commit` without narrowing language, treat the request as covering the full current worktree.
 
 - The default scope is **all current changes visible in git status**.
-- Your job is to group that full worktree into the right number of
-  commits by semantic intent.
-- Never silently narrow the scope to "just the files from the last
-  thing I worked on", "just the files I touched", or "just the newest
-  skill" unless the user explicitly said to do that.
-- `yolo` keeps this same full-worktree default. It removes the approval
-  wait; it does not narrow scope.
+- Your job is to group that full worktree into the right number of commits by semantic intent.
+- Never silently narrow the scope to "just the files from the last thing I worked on", "just the files I touched", or "just the newest skill" unless the user explicitly said to do that.
+- `yolo` keeps this same full-worktree default. It removes the approval wait; it does not narrow scope.
 
 Narrow scope only when the user explicitly does one of these:
 
 - names a specific path, file, module, project, or technology slice
-- says `just`, `only`, `for this`, `for X`, `commit the README changes`,
-  or equivalent limiting language
+- says `just`, `only`, `for this`, `for X`, `commit the README changes`, or equivalent limiting language
 - asks for a review/plan for a subset before committing
 
-If the user did not narrow scope, do not invent a narrower scope on
-their behalf.
+If the user did not narrow scope, do not invent a narrower scope on their behalf.
 
 ### Post-Commit Verification
 
@@ -177,13 +158,7 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 
 ### Prefix and Emoji Reference
 
-Read `references/commit-language.md` before choosing a prefix or emoji.
-It contains the allowed prefixes, the gitmoji-first table, and the
-extended emoji fallback guidance shared with
-`git-visual-squash-summary`.
-Keep that duplicated reference byte-for-byte aligned with the
-`git-visual-squash-summary` copy; the validator and CI both enforce that
-sync contract.
+Read `references/commit-language.md` before choosing a prefix or emoji. It contains the allowed prefixes, the gitmoji-first table, and the extended emoji fallback guidance shared with `git-visual-squash-summary`. Keep that duplicated reference byte-for-byte aligned with the `git-visual-squash-summary` copy; the validator and CI both enforce that sync contract.
 
 ---
 
@@ -191,8 +166,7 @@ sync contract.
 
 By default, the agent presents a commit plan and waits for user confirmation before staging and committing (Step 4). Auto-approval mode skips this wait — the plan is still displayed for transparency, but the agent proceeds immediately.
 
-**What auto-approval skips:** user confirmation only.
-**What auto-approval never skips:** classification (Step 2), grouping validation (Step 3), and the mixed-scope guard. These self-checks run unconditionally — they exist to catch bad groupings before they become commits, regardless of whether a human is reviewing the plan.
+**What auto-approval skips:** user confirmation only. **What auto-approval never skips:** classification (Step 2), grouping validation (Step 3), and the mixed-scope guard. These self-checks run unconditionally — they exist to catch bad groupings before they become commits, regardless of whether a human is reviewing the plan.
 
 ### Per-request activation
 
@@ -240,15 +214,11 @@ Say **"enable no-body mode"** or **"enable tmi mode"** to suppress commit bodies
 
 ### Step 1: Review changes
 
-Run `git status` and `git diff` (and `git diff --staged` if there are
-staged changes) to understand what has changed.
+Run `git status` and `git diff` (and `git diff --staged` if there are staged changes) to understand what has changed.
 
-Unless the user explicitly narrowed scope, inspect the **entire current
-worktree** and build the commit plan from that full set of changes. Do
-not default to the last task only.
+Unless the user explicitly narrowed scope, inspect the **entire current worktree** and build the commit plan from that full set of changes. Do not default to the last task only.
 
-Don't commit blindly — understand what each file is doing before
-grouping.
+Don't commit blindly — understand what each file is doing before grouping.
 
 ### Step 2: Classify changes
 
@@ -365,8 +335,7 @@ Auto-committing: 🔧 build config → 🚚 rename auth to identity → ✅ iden
 
 Even in auto-approval mode, surface the commit buckets explicitly before committing. Auto-approval removes the wait, not the planning step.
 
-If the user did not narrow scope, the plan you surface must account for
-the full worktree rather than an arbitrarily chosen subset.
+If the user did not narrow scope, the plan you surface must account for the full worktree rather than an arbitrarily chosen subset.
 
 **Otherwise**, wait for the user to confirm or adjust. They may say things like:
 - "Looks good" → proceed to stage and commit
@@ -461,6 +430,6 @@ Branch format: `[version]/[description]`
 Examples:
 - `v1.0.0/mvp` — initial MVP
 - `v1.1.0/validation` — adding validation
-- `v1.2.0/admin-dashboard` — new feature area
+- `v1.2.0/admin-dashboard` — adding a new feature area
 
 Don't create, rename, or delete branches unless the user explicitly asks.

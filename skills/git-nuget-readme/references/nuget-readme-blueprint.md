@@ -1,14 +1,10 @@
 # NuGet README Blueprint
 
-This reference distills a recurring package-README shape observed in the
-inspiration set and folds in a few improvements aimed at package
-adoption and first-run developer experience. Treat the inspiration as a
-pattern library, not as branding that should be copied into every repo.
+This reference distills a recurring package-README shape observed in the inspiration set and folds in a few improvements aimed at package adoption and first-run developer experience. Treat the inspiration as a pattern library, not as branding that should be copied into every repo.
 
 ## Observed Common Denominators
 
-Across the inspected `.NET` repos, the README pattern repeatedly
-includes:
+Across the inspected `.NET` repos, the README pattern repeatedly includes:
 
 1. A product-style title tied to the repo's own identity
 2. A badge strip near the top
@@ -34,15 +30,12 @@ Examples of recurring ideas from the inspiration set:
 
 ## Recommended Improvements
 
-The current pattern is already solid, but a NuGet adoption-focused README
-can improve on it by:
+The current pattern is already solid, but a NuGet adoption-focused README can improve on it by:
 
 1. Moving the package value proposition even closer to the top
 2. Making install guidance immediately visible
-3. Adding a "why pick this package" section with concrete capability
-   bullets
-4. Including a 30-second quick-start example when the API surface makes
-   that safe and truthful
+3. Adding a "why pick this package" section with concrete capability bullets
+4. Including a 30-second quick-start example when the API surface makes that safe and truthful
 5. Turning vague positioning into scenario-backed copy
 
 ## Recommended Section Order
@@ -64,8 +57,7 @@ Use this order unless the existing README has a strong reason to differ:
 
 ### Title
 
-Prefer the exact advertised project or package name and derive any
-branding suffix from the current repo itself.
+Prefer the exact advertised project or package name and derive any branding suffix from the current repo itself.
 
 Examples:
 
@@ -73,9 +65,7 @@ Examples:
 - `# Shared Kernel API`
 - `# Extensions for AWS Signature Version 4 API`
 
-If the current repo already uses a title shape such as `by <owner>` or a
-branded suffix, preserve it. If not, do not inject one from another
-ecosystem's README style.
+If the current repo already uses a title shape such as `by <owner>` or a branded suffix, preserve it. If not, do not inject one from another ecosystem's README style.
 
 ### About
 
@@ -99,8 +89,7 @@ Avoid:
 
 ### Supported Frameworks
 
-State framework support explicitly and read it from actual project
-metadata.
+State framework support explicitly and read it from actual project metadata.
 
 Examples:
 
@@ -136,8 +125,7 @@ Recommended elements:
 - NuGet page link when known
 - package matrix only when the repo ships multiple relevant packages
 
-If the repo already uses a `Standalone Packages` section, preserve that
-concept and tighten the copy around it.
+If the repo already uses a `Standalone Packages` section, preserve that concept and tighten the copy around it.
 
 ### Quick Start
 
@@ -147,16 +135,14 @@ Good sample characteristics:
 
 - small and readable
 - real namespaces or types from the package
-- aligned with realistic usage patterns visible in source or associated
-  unit/functional tests when those tests exist
+- aligned with realistic usage patterns visible in source or associated unit/functional tests when those tests exist
 - enough to give the reader a first success path
 
 Avoid speculative or pseudo-code APIs.
 
 ### Documentation
 
-If a real docs site exists, link it clearly and early enough that the
-reader can find it without scanning the entire file.
+If a real docs site exists, link it clearly and early enough that the reader can find it without scanning the entire file.
 
 Examples:
 
@@ -193,8 +179,7 @@ It should not feel:
 - package IDs and framework support are exact
 - the quick start helps the reader imagine using the package
 - usage language can be traced back to real source or associated tests
-- branding and title style are derived from the current repo rather than
-  copied from the inspiration set
+- branding and title style are derived from the current repo rather than copied from the inspiration set
 - contributing/license sections remain intact
 
 ## Bad Example Characteristics
@@ -202,8 +187,6 @@ It should not feel:
 - opening with badges and no explanation of the package
 - hiding install steps below long prose
 - using phrases like "revolutionary toolkit" or "seamless synergy"
-- copying a `by <brand>` title pattern when the current repo does not
-  actually use that branding
-- claiming package relationships, docs, or supported TFMs that are not
-  backed by the repo
+- copying a `by <brand>` title pattern when the current repo does not actually use that branding
+- claiming package relationships, docs, or supported TFMs that are not backed by the repo
 - showing fake namespaces or made-up APIs

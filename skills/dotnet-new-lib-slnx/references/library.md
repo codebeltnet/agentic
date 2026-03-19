@@ -198,10 +198,8 @@ Validation source:
 
 Examples:
 
-- `net10.0`
-  Produces one Docker entry with `dockerImage: "codebeltnet/ubuntu-testrunner:10"`
-- `net9.0;net10.0`
-  Produces two Docker entries with tags `9` and `10`
+- `net10.0` Produces one Docker entry with `dockerImage: "codebeltnet/ubuntu-testrunner:10"`
+- `net9.0;net10.0` Produces two Docker entries with tags `9` and `10`
 
 Example structure:
 

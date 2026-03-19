@@ -1,12 +1,10 @@
 # Package Release Notes Blueprint
 
-This reference captures the normalized `PackageReleaseNotes.txt` shape
-used across the linked codebelt repositories.
+This reference captures the normalized `PackageReleaseNotes.txt` shape used across the linked codebelt repositories.
 
 ## Core Shape
 
-Each file is a cumulative history ordered newest first. Each release
-block uses this normalized structure:
+Each file is a cumulative history ordered newest first. Each release block uses this normalized structure:
 
 ```text
 Version: 0.3.1
@@ -45,43 +43,24 @@ Use sections in this order and omit empty ones:
 
 ## Section Intent
 
-`# ALM`
-- Release-engineering and package-maintenance facts.
-- Typical bullets cover dependency upgrades, supported TFM additions, or
-  TFM removals.
-- ALM-only releases are normal and should not be padded with weaker
-  sections.
+`# ALM` - Release-engineering and package-maintenance facts. - Typical bullets cover dependency upgrades, supported TFM additions, or TFM removals. - ALM-only releases are normal and should not be padded with weaker sections.
 
-`# Breaking Changes`
-- Consumer-visible incompatibilities.
-- Typical verbs: `REMOVED`, `RENAMED`, `MOVED`, `CHANGED`.
+`# Breaking Changes` - Consumer-visible incompatibilities. - Typical verbs: `REMOVED`, `RENAMED`, `MOVED`, `CHANGED`.
 
-`# New Features`
-- Additive API or capability work.
-- Typical verb: `ADDED`.
+`# New Features` - Additive API or capability work. - Typical verb: `ADDED`.
 
-`# Improvements`
-- Non-breaking enhancements and refinements.
-- Typical verbs: `CHANGED`, `EXTENDED`, `OPTIMIZED`, `DEPRECATED`,
-  `REFACTORED`.
+`# Improvements` - Non-breaking enhancements and refinements. - Typical verbs: `CHANGED`, `EXTENDED`, `OPTIMIZED`, `DEPRECATED`, `REFACTORED`.
 
-`# Bug Fixes`
-- Corrections to incorrect prior behavior.
-- Typical verb: `FIXED`.
+`# Bug Fixes` - Corrections to incorrect prior behavior. - Typical verb: `FIXED`.
 
-`# References`
-- Plain package IDs only.
-- Use this only for umbrella/meta packages or when the repo already uses
-  a references section for that package.
+`# References` - Plain package IDs only. - Use this only for umbrella/meta packages or when the repo already uses a references section for that package.
 
 ## Wording Pattern
 
 - Start every bullet with an all-caps action verb.
-- Follow the verb with the concrete subject: package, type, member,
-  namespace, or behavior that changed.
+- Follow the verb with the concrete subject: package, type, member, namespace, or behavior that changed.
 - Prefer exact technical identifiers over vague prose.
-- Avoid punctuation-heavy embellishment and avoid copying commit subjects
-  verbatim.
+- Avoid punctuation-heavy embellishment and avoid copying commit subjects verbatim.
 
 Examples:
 
@@ -107,10 +86,8 @@ Combine them with commas and `and`:
 
 ## Historical Whitespace
 
-Some historical files contain odd spaces or inconsistent `Version`
-headers. Treat those as legacy formatting noise.
+Some historical files contain odd spaces or inconsistent `Version` headers. Treat those as legacy formatting noise.
 
 - Normalize the block you are writing to `Version:` and `Availability:`
-- Do not rewrite older blocks solely to clean up whitespace unless the
-  user asked for a formatting pass
+- Do not rewrite older blocks solely to clean up whitespace unless the user asked for a formatting pass
 - Preserve older history below the new block to avoid unnecessary churn

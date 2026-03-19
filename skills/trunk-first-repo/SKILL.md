@@ -1,13 +1,7 @@
 ---
 name: trunk-first-repo
 description: >
-  Initialize a folder as a git repository following scaled trunk-based development.
-  Sets up an empty main branch (seed commit only), creates a versioned feature branch,
-  and enforces a PR-first workflow where content only reaches main through pull requests.
-  Use this skill when the user wants to initialize a git repo, set up a new repository,
-  start a project with proper git workflow, or mentions "trunk-based", "PR workflow",
-  "branch protection", "git init", or wants to follow GitHub PR best practices.
-  ALWAYS use this skill when asked to initialize or set up a git repository.
+  Initialize a folder as a git repository following scaled trunk-based development. Sets up an empty main branch (seed commit only), creates a versioned feature branch, and enforces a PR-first workflow where content only reaches main through pull requests. Use this skill when the user wants to initialize a git repo, set up a new repository, start a project with proper git workflow, or mentions "trunk-based", "PR workflow", "branch protection", "git init", or wants to follow GitHub PR best practices. ALWAYS use this skill when asked to initialize or set up a git repository.
 ---
 
 # Trunk-First Repo
@@ -55,6 +49,7 @@ git push -u origin main
 ```
 
 If skipped, remind the user they can add it later:
+
 > When you're ready, run: `git remote add origin <url>` followed by `git push -u origin main`
 
 ### Step 4: Summary

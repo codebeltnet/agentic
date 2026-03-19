@@ -1,7 +1,6 @@
 # Benchmark Contract
 
-Use this reference whenever a skill benchmark must be reproducible across
-different agents or runtimes.
+Use this reference whenever a skill benchmark must be reproducible across different agents or runtimes.
 
 ## Required Workspace Layout
 
@@ -23,13 +22,9 @@ iteration-N/
 
 Key rules:
 
-- `aggregate_benchmark.py` walks `run-*` directories. If files live
-  directly under `with_skill/` or `without_skill/`, the benchmark will
-  discover zero runs.
-- `eval_metadata.json` belongs at the `eval-*` directory level, not
-  inside each run directory.
-- `outputs/` may contain files, diffs, transcripts, or other evidence
-  the reviewer should inspect.
+- `aggregate_benchmark.py` walks `run-*` directories. If files live directly under `with_skill/` or `without_skill/`, the benchmark will discover zero runs.
+- `eval_metadata.json` belongs at the `eval-*` directory level, not inside each run directory.
+- `outputs/` may contain files, diffs, transcripts, or other evidence the reviewer should inspect.
 
 ## Required Files
 
@@ -73,11 +68,8 @@ Minimum contract:
 
 Important:
 
-- `expectations[].text`, `expectations[].passed`, and
-  `expectations[].evidence` should be present for every assertion.
-- `summary` is required for meaningful aggregation. Without it,
-  `aggregate_benchmark.py` falls back to zeros even if qualitative output
-  exists.
+- `expectations[].text`, `expectations[].passed`, and `expectations[].evidence` should be present for every assertion.
+- `summary` is required for meaningful aggregation. Without it, `aggregate_benchmark.py` falls back to zeros even if qualitative output exists.
 
 ### timing.json
 
@@ -91,9 +83,7 @@ Minimum contract:
 }
 ```
 
-Use real numbers for `MEASURED` runs. For `SIMULATED` runs, either omit
-  unsupported fields or provide clearly synthetic values and document
-  that they are synthetic.
+Use real numbers for `MEASURED` runs. For `SIMULATED` runs, either omit unsupported fields or provide clearly synthetic values and document that they are synthetic.
 
 ## Generated Files
 
@@ -101,18 +91,15 @@ These must be produced by the Anthropic tooling, not authored manually:
 
 - `benchmark.json` from `scripts/aggregate_benchmark.py`
 - `benchmark.md` from `scripts/aggregate_benchmark.py`
-- review HTML or served viewer output from
-  `eval-viewer/generate_review.py`
+- review HTML or served viewer output from `eval-viewer/generate_review.py`
 
-If `benchmark.json` was hand-written, the benchmark is not trustworthy
-as an aggregation result.
+If `benchmark.json` was hand-written, the benchmark is not trustworthy as an aggregation result.
 
 ## Benchmark Modes
 
 ### MEASURED
 
-Use `MEASURED` when a callable runner can actually execute paired
-`with_skill` and `without_skill` runs.
+Use `MEASURED` when a callable runner can actually execute paired `with_skill` and `without_skill` runs.
 
 Expected properties:
 
@@ -125,19 +112,15 @@ This is the preferred benchmark mode when the environment supports it.
 
 ### SIMULATED
 
-Use `SIMULATED` only when the environment cannot perform real paired
-agent executions or when you are validating the benchmark pipeline
-itself.
+Use `SIMULATED` only when the environment cannot perform real paired agent executions or when you are validating the benchmark pipeline itself.
 
 Expected properties:
 
 - hand-authored or scripted expected outputs
 - explicit `SIMULATED` labeling in logs and summary
-- clear statement that the result validates pipeline correctness, not
-  model superiority
+- clear statement that the result validates pipeline correctness, not model superiority
 
-Never present `SIMULATED` outputs as if they were independently
-generated model runs.
+Never present `SIMULATED` outputs as if they were independently generated model runs.
 
 ## Aggregation and Review Commands
 
@@ -166,6 +149,4 @@ python (Join-Path $skillCreatorRoot "eval-viewer/generate_review.py") `
   --static "$workspace/review.html"
 ```
 
-If the viewer renders outputs but the benchmark delta is zero or the run
-list is empty, inspect the workspace layout and `grading.json.summary`
-before anything else.
+If the viewer renders outputs but the benchmark delta is zero or the run list is empty, inspect the workspace layout and `grading.json.summary` before anything else.
