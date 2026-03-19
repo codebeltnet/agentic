@@ -3,7 +3,7 @@ name: git-nuget-release-notes
 description: >
   Create or update per-package NuGet release notes from git history for
   .NET repositories that store cumulative
-  `.nuget/<ProjectName>/PackageReleaseNotes.txt` files. Use this skill
+  `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Use this skill
   whenever the user asks for NuGet release notes, `PackageReleaseNotes.txt`,
   per-assembly or per-package release notes, or wants git commits turned
   into package release notes instead of a repo-wide changelog. Treat
@@ -19,7 +19,7 @@ description: >
 # Git NuGet Release Notes
 
 This skill creates or updates cumulative
-`.nuget/<ProjectName>/PackageReleaseNotes.txt` files for packable .NET
+`.nuget/{ProjectName}/PackageReleaseNotes.txt` files for packable .NET
 projects by reading git history and the actual project/package metadata.
 It is intentionally closer to the package-note style used in codebelt
 repositories than to a repo-wide `CHANGELOG.md`.
@@ -27,13 +27,13 @@ repositories than to a repo-wide `CHANGELOG.md`.
 Read `references/package-release-notes-format.md` before writing any
 release-note block.
 
-## Non-Negotiable Rules
+## Critical
 
-- Create or update `.nuget/<ProjectName>/PackageReleaseNotes.txt`
+- Create or update `.nuget/{ProjectName}/PackageReleaseNotes.txt`
   directly, then stop for user review.
 - Discover packable projects under `src/`; ignore `test/`, `tuning/`,
   `tooling/`, and projects that are explicitly non-packable.
-- Prefer an existing `.nuget/<ProjectName>/` folder when one already
+- Prefer an existing `.nuget/{ProjectName}/` folder when one already
   exists for the packable project. If none exists, create
   `.nuget/<MSBuildProjectName>/PackageReleaseNotes.txt`.
 - For repo-wide requests, every packable `src/` project should end up
@@ -95,7 +95,7 @@ Discover the packable `src/` projects that belong in `.nuget/`.
   benchmark, sample, or tooling projects.
 - Exclude projects with `IsPackable` explicitly set to `false`.
 - Keep project identity anchored to the packable project name or the
-  existing `.nuget/<ProjectName>/` folder already used by the repo.
+  existing `.nuget/{ProjectName}/` folder already used by the repo.
 - When the user asked for repo-wide release notes coverage, ensure every
   packable project is represented. Otherwise, focus on the projects
   affected by the requested range.
@@ -156,7 +156,7 @@ real release story for that package.
   packaging/build files that materially affect that package.
 - Include shared files such as `Directory.Packages.props`,
   `Directory.Build.props`, `Directory.Build.targets`, and
-  `.nuget/<ProjectName>/` when they affect the package.
+  `.nuget/{ProjectName}/` when they affect the package.
 - Prefer the net effect over the implementation path when there are
   fixups or reversals.
 
