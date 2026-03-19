@@ -1,0 +1,63 @@
+{
+  "skill_name": "git-nuget-release-notes",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Update the NuGet package release notes for the current branch from git history. Use the default branch comparison, update the relevant .nuget/*/PackageReleaseNotes.txt files directly, and stop for my review.",
+      "expected_output": "The relevant PackageReleaseNotes.txt files are updated in place from git history rather than being drafted only in chat.",
+      "expectations": [
+        "Updates .nuget/<ProjectName>/PackageReleaseNotes.txt files directly instead of only drafting release notes in chat",
+        "Reads full commit subjects and bodies before writing the package release notes",
+        "Uses the current branch versus merge-base as the default source when no explicit range is given",
+        "Discovers packable src projects instead of treating test or tooling projects as publishable packages",
+        "Stops after editing the release-note files for user review"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "My branch is named v0.3.1/nuget-skills. Generate per-package PackageReleaseNotes.txt entries from git history and use that branch hint if it is safe.",
+      "expected_output": "The release-note block uses the concrete version from the branch hint and avoids an Unreleased-style placeholder.",
+      "expectations": [
+        "Treats a leading branch version such as v0.3.1/ as a concrete release hint",
+        "Uses a concrete Version line instead of an Unreleased placeholder",
+        "Rewrites the top block in place when the resolved version already exists there",
+        "Prepends a new block when the file exists but targets an older version",
+        "Stops and asks instead of guessing when no safe concrete version can be determined"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Some of our packable projects under src do not have .nuget/<ProjectName>/PackageReleaseNotes.txt yet. Create the missing files as part of this release-note pass and derive Availability from the actual target frameworks.",
+      "expected_output": "Missing PackageReleaseNotes.txt files are created for the relevant packable projects and each new block includes a human-readable availability line derived from project target frameworks.",
+      "expectations": [
+        "Creates missing .nuget/<ProjectName>/PackageReleaseNotes.txt files when the package should be represented",
+        "Derives Availability from TargetFramework or TargetFrameworks instead of guessing from memory",
+        "Renders framework lists in the normalized human-readable style used by existing package release-note files",
+        "Normalizes the block it writes to Version: and Availability:"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Write the package release notes in the codebelt-style PackageReleaseNotes.txt format. Keep ALM first, use only the established section vocabulary, and do not dump commit subjects verbatim.",
+      "expected_output": "The package notes follow the normalized codebelt-style section order with ALM first and concise verb-led bullets rather than raw commit log output.",
+      "expectations": [
+        "Always includes ALM in the written release block",
+        "Uses only the established section order ALM, Breaking Changes, New Features, Improvements, Bug Fixes, References",
+        "Omits empty sections instead of inserting placeholders",
+        "Starts bullets with an all-caps action verb such as ADDED, CHANGED, REMOVED, FIXED, EXTENDED, or OPTIMIZED",
+        "Does not dump commit subjects verbatim into the release-note file"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "We have an umbrella package that mostly bundles sibling packages. Preserve or add a References section only if the package shape justifies it, and do not invent package references that are not actually there.",
+      "expected_output": "The package release notes use References only when the package is a real umbrella/meta package or the file already carries that section, and the listed package IDs remain truthful.",
+      "expectations": [
+        "Uses References only when the package is an umbrella/meta package or the existing file already carries that section",
+        "Keeps reference bullets as plain package IDs",
+        "Does not invent unsupported package references",
+        "Keeps the output grounded in git history plus actual project/package metadata"
+      ]
+    }
+  ]
+}

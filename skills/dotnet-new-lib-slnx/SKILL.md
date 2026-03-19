@@ -1,13 +1,7 @@
 ---
 name: dotnet-new-lib-slnx
 description: >
-  Scaffold a new .NET NuGet library solution following codebelt engineering conventions.
-  Use this skill when the user wants to create a new NuGet library, class library, or
-  reusable .NET package. Also use when the user mentions "new library", "new NuGet package",
-  "scaffold library", "class library solution", "dotnet new classlib", or wants a .NET
-  library project with multi-target frameworks, strong-name signing, NuGet packaging,
-  DocFX documentation, CI/CD pipeline, and code quality tooling.
-  ALWAYS use this skill when asked to scaffold or create a new .NET library solution.
+  Scaffold a new .NET NuGet library solution following codebelt engineering conventions. Use this skill when the user wants to create a new NuGet library, class library, or reusable .NET package. Also use when the user mentions "new library", "new NuGet package", "scaffold library", "class library solution", "dotnet new classlib", or wants a .NET library project with multi-target frameworks, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. ALWAYS use this skill when asked to scaffold or create a new .NET library solution.
 ---
 
 # .NET Library Solution Setup (Codebelt Conventions)

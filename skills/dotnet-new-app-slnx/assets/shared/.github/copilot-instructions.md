@@ -8,8 +8,7 @@ This document provides instructions for writing unit tests for a project/solutio
 
 ## 1. Base Class
 
-**Always inherit from the `Test` base class** for all unit test classes.
-This ensures consistent setup, teardown, and output handling across all tests.
+**Always inherit from the `Test` base class** for all unit test classes. This ensures consistent setup, teardown, and output handling across all tests.
 
 > Important: Do NOT add `using Xunit.Abstractions`. xUnit v3 no longer exposes that namespace; including it is incorrect and will cause compilation errors. Use the `Codebelt.Extensions.Xunit` Test base class and `using Xunit;` as shown in the examples below. If you need access to test output, rely on the Test base class (which accepts the appropriate output helper) rather than importing `Xunit.Abstractions`.
 
@@ -56,7 +55,7 @@ namespace Your.Namespace
                 public class Zoo { /* ... */ }
         }
         ```
-        then the corresponding unit test class must use the exact same namespace:
+then the corresponding unit test class must use the exact same namespace:
         ```csharp
         namespace YourProject.Foo.Bar
         {
@@ -148,8 +147,7 @@ namespace YourProject
 
 **Pattern name:** Public Facade Testing (also referred to as *Public API Proxy Testing*)
 
-**Description:**
-Internal classes and methods must be validated by exercising the public API that consumes them. Tests should assert observable behavior exposed by the public surface rather than targeting internal implementation details directly.
+**Description:** Internal classes and methods must be validated by exercising the public API that consumes them. Tests should assert observable behavior exposed by the public surface rather than targeting internal implementation details directly.
 
 ### Example Mapping
 
@@ -190,10 +188,7 @@ Namespace rule: DO NOT append `.Benchmarks` to the namespace. Benchmarks must li
       public class Sha512256Benchmark { /* ... */ }
   }
   ```
-The class name must end with `Benchmark`, but the namespace must match the assembly (no `.Benchmarks` suffix).
-- The benchmarks for the YourProject.Bar assembly live in the YourProject.Bar.Benchmarks assembly.
-- Benchmark class names end with Benchmark and live in the same namespace as the class being measured, e.g., the benchmarks for the Zoo class that resides in the YourProject.Bar assembly would be named ZooBenchmark and placed in the YourProject.Bar namespace in the YourProject.Bar.Benchmarks assembly.
-- Modify the associated .csproj file to override the root namespace, e.g., <RootNamespace>YourProject.Bar</RootNamespace>.
+The class name must end with `Benchmark`, but the namespace must match the assembly (no `.Benchmarks` suffix). - The benchmarks for the YourProject.Bar assembly live in the YourProject.Bar.Benchmarks assembly. - Benchmark class names end with Benchmark and live in the same namespace as the class being measured, e.g., the benchmarks for the Zoo class that resides in the YourProject.Bar assembly would be named ZooBenchmark and placed in the YourProject.Bar namespace in the YourProject.Bar.Benchmarks assembly. - Modify the associated .csproj file to override the root namespace, e.g., <RootNamespace>YourProject.Bar</RootNamespace>.
 
 ## 2. Attributes and Configuration
 

@@ -2,10 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.3.1] - 2026-03-19
+
+This is a patch release introducing three new NuGet-focused skills and runner-agnostic benchmark tooling, with enhanced release automation, comprehensive documentation standardization, and skill refinements.
+
+### Added
+
+- `git-nuget-release-notes` skill that creates or updates per-package `.nuget/{ProjectName}/PackageReleaseNotes.txt` files from git history for .NET repositories, with per-skill evals and extracted package release-notes format reference,
+- `git-nuget-readme` skill that writes package-facing NuGet READMEs from actual project metadata, git history, and source-backed capability cues, with per-skill evals and README blueprint reference,
+- `skill-creator-agnostic` skill that adds runner-agnostic guardrails on top of Anthropic's skill-creator for creating, modifying, and benchmarking skills across Codex, GitHub Copilot, Opus, and similar agents, with enforced temp-workspace isolation and valid benchmark layout.
+
+### Changed
+
+- Enhanced `git-keep-a-changelog` with explicit release-intent trigger words ("finalize", "ready to release", "rtr", "release") that automatically extract and use versions from branch names, streamlining release finalization without manual version input,
+- Tightened `git-visual-commits` commit body repair checks to treat short prose bodies wrapped mid-sentence as verification failures that must be repaired before success is reported, with targeted eval coverage,
+- Clarified that unscoped `git bot commit` requests apply to the entire worktree unless the user explicitly narrows scope, with eval coverage ensuring yolo mode still groups the full diff,
+- Standardized documentation across AGENTS.md, CONTRIBUTING.md, and README.md to explicitly instruct users to resolve the installed Anthropic skill-creator path (typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`) before running benchmark and review tools,
+- Updated benchmark layout specification from `eval-N` pattern to `iteration-N/eval-name/{config}/run-N/` for clarity and consistency, with PowerShell resolver logic that probes both skill-creator install locations,
+- Normalized line wrapping and formatting across all SKILL.md, FORMS.md, and references/ files for improved readability and consistent presentation, removing extra blank lines and compacting multi-line YAML descriptions,
+- Normalized line wrapping in shared asset templates including .github/copilot-instructions.md, asset CHANGELOG.md bootstrap files, and package documentation templates,
+- Refreshed README catalog to reflect the current skill set and commit-behavior guidance, with updated benchmark and eval workflow documentation.
 
 ## [0.3.0] - 2026-03-17
 
@@ -62,7 +82,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/codebeltnet/agentic/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/codebeltnet/agentic/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/codebeltnet/agentic/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/codebeltnet/agentic/compare/7eaf364...v0.1.0

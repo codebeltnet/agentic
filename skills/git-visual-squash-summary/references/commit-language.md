@@ -1,9 +1,6 @@
 ### Allowed Prefixes
 
-Prefixes are **optional** — only include one when it adds clarity beyond
-what the emoji already conveys. Many commits need no prefix at all (e.g.
-`🚚 rename auth module to identity`, `➕ add validation library`). When you
-do use a prefix, pick from this list:
+Prefixes are **optional** — only include one when it adds clarity beyond what the emoji already conveys. Many commits need no prefix at all (e.g. `🚚 rename auth module to identity`, `➕ add validation library`). When you do use a prefix, pick from this list:
 
 | Prefix | Use When |
 |--------|----------|
@@ -16,9 +13,7 @@ do use a prefix, pick from this list:
 
 ### Emoji Selection — Gitmoji First, Fallback Second
 
-**Always prefer an official [gitmoji](https://gitmoji.dev) emoji** when
-the semantic meaning is a good fit. Only use a non-gitmoji emoji when no
-official entry matches well enough.
+**Always prefer an official [gitmoji](https://gitmoji.dev) emoji** when the semantic meaning is a good fit. Only use a non-gitmoji emoji when no official entry matches well enough.
 
 #### Primary: Gitmoji
 
@@ -90,10 +85,7 @@ official entry matches well enough.
 
 #### Fallback: Extended Emoji Reference
 
-When no gitmoji entry fits, consult **[this curated extended
-reference](https://gist.github.com/marcellodesales/aba1152a91d69f9b39745a08fd73a6f9)**
-— a multi-source collection covering languages, platforms, cloud infra,
-and programming strategies that gitmoji doesn't address.
+When no gitmoji entry fits, consult **[this curated extended reference](https://gist.github.com/marcellodesales/aba1152a91d69f9b39745a08fd73a6f9)** — a multi-source collection covering languages, platforms, cloud infra, and programming strategies that gitmoji doesn't address.
 
 Key entries from that reference, by category:
 

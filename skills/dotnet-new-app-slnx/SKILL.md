@@ -1,14 +1,7 @@
 ---
 name: dotnet-new-app-slnx
 description: >
-  Scaffold a new .NET standalone application solution following codebelt engineering conventions.
-  Use this skill when the user wants to create a new .NET application — Console, Web,
-  or Worker service. Also use when the user mentions "new app", "new console app",
-  "new web api", "new mvc app", "new razor app", "new web app", "new worker service",
-  "scaffold app", "dotnet new web", "dotnet new webapi", "dotnet new mvc",
-  "dotnet new webapp", "dotnet new worker", "dotnet new console", or wants a .NET
-  application project with CI/CD pipeline, functional tests, and code quality tooling.
-  ALWAYS use this skill when asked to scaffold or create a new .NET application solution.
+  Scaffold a new .NET standalone application solution following codebelt engineering conventions. Use this skill when the user wants to create a new .NET application — Console, Web, or Worker service. Also use when the user mentions "new app", "new console app", "new web api", "new mvc app", "new razor app", "new web app", "new worker service", "scaffold app", "dotnet new web", "dotnet new webapi", "dotnet new mvc", "dotnet new webapp", "dotnet new worker", "dotnet new console", or wants a .NET application project with CI/CD pipeline, functional tests, and code quality tooling. ALWAYS use this skill when asked to scaffold or create a new .NET application solution.
 ---
 
 # .NET Application Solution Setup (Codebelt Conventions)

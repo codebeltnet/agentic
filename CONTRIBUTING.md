@@ -89,6 +89,17 @@ Run evals from a temp workspace, not from this repository:
 $workspace = Join-Path $env:TEMP '<skill-name>-workspace'
 ```
 
+When creating or modifying a repo-managed skill, the eval workflow must include a paired comparison:
+
+- Resolve the installed Anthropic `skill-creator` path first, usually under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, then run its benchmark scripts from there
+- Run each eval as `with_skill`
+- Run the baseline as `without_skill` for new skills
+- For an existing skill, use either `without_skill` or the previous/original skill version as the baseline, following the `skill-creator` benchmark model
+- Aggregate the results into `benchmark.json`
+- Launch `eval-viewer/generate_review.py` from that installed `skill-creator` copy so a human can review both `Outputs` and `Benchmark`
+
+This repo treats that paired `with_skill` / `without_skill` comparison as part of the required devex for skill work. The benchmark artifacts live in the temp workspace; do not commit them to this repository unless the change explicitly calls for checked-in examples.
+
 For scaffold/template skills, keep deterministic validators alongside evals. In this repo, `evals/evals.json` is mandatory, and validators like `scripts/validate-skill-templates.ps1` are additional protection.
 
 ## Prefer dynamic defaults
@@ -106,9 +117,7 @@ Use the repo validation harness before submitting scaffold or template changes:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-skill-templates.ps1
 ```
 
-Run the validator locally first for the fastest feedback loop. GitHub
-Actions also runs the same script on pull requests, but CI is
-the backstop, not the primary authoring loop.
+Run the validator locally first for the fastest feedback loop. GitHub Actions also runs the same script on pull requests, but CI is the backstop, not the primary authoring loop.
 
 To compare a change against the initial imported version, run the same harness against a git ref:
 
@@ -123,6 +132,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-skill-tem
 - [ ] Examples are generic — no personal emails, usernames, or project-specific identifiers
 - [ ] At least one eval in `evals/evals.json`
 - [ ] The skill's `evals/evals.json` exists and its `skill_name` matches the folder/frontmatter name
+- [ ] Skill changes were benchmarked from a temp workspace with both `with_skill` and `without_skill` runs
+- [ ] `benchmark.json` and `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy were used so a human could compare `Outputs` and `Benchmark`
 - [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior
 - [ ] If CI is enabled for the branch, the GitHub Actions validation job passes too
 - [ ] Skill evals are intended to run from `$env:TEMP/<skill-name>-workspace/`, not from inside the repo
