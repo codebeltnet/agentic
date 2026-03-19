@@ -1,7 +1,7 @@
 ---
 name: git-keep-a-changelog
 description: >
-  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use this skill whenever the user asks to create or update the changelog, draft release notes from the current branch, summarize commits into Added/Changed/Fixed style sections, or mentions Keep a Changelog, CHANGELOG.md, release highlights, or SemVer-aware release summaries. Treat requests like "create the changelog", "update the changelog", "write release notes from git", "draft the changelog for this branch", "summarize these commits into CHANGELOG.md", "finalize", "release", "publish", or "ship" (especially when used with version branches like v0.3.1/...) as automatic triggers. This skill reads full commit subjects and bodies plus the net diff, infers a version heading from the branch when possible, creates a compliant changelog when missing, writes a required SemVer-aware release highlight, edits CHANGELOG.md directly for review, preserves natural prose wrapping, and avoids raw commit-log dumps or unsupported claims.
+  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...). Reads full commit bodies and diffs, creates compliant structure with required SemVer highlights, infers versions from branches, edits directly for review, preserves prose wrapping, avoids commit-log dumps.
 ---
 
 # Git Keep A Changelog
@@ -83,7 +83,7 @@ git merge-base HEAD master
 
 Determine whether to write a concrete release section or update `[Unreleased]`.
 
-When the user asks to "finalize", "release", "publish", or "ship" (or similar release-intent words):
+When the user asks to "finalize", "ready to release", "rtr", "release", "publish", or "ship" (or similar release-intent words):
 - Extract the version from the current branch name if it starts with a version prefix such as `v0.3.0/feature-name`.
 - Target `## [X.Y.Z] - YYYY-MM-DD` (today's date) for that extracted version.
 - This is a strong signal that the user wants to finalize that specific release in the changelog.
