@@ -49,6 +49,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill git-nuget-release-
 npx skills add https://github.com/codebeltnet/agentic --skill git-nuget-readme
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agnostic
+npx skills add https://github.com/codebeltnet/agentic --skill markdown-illustrator
 npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
 # npx skills add https://github.com/codebeltnet/agentic --skill another-skill
@@ -75,6 +76,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 | [git-nuget-readme](skills/git-nuget-readme/SKILL.md) | Git-aware NuGet README companion for .NET repos that advertise a package from `src/`. Resolves the real packable project the README should sell, combines git history with actual package metadata, source capabilities, and relevant tests when feasible, preserves honest badge/docs/contributing sections, and writes a forthcoming, adoption-friendly `README.md` with repo-derived branding, clear value, install, framework-support, and quick-start guidance. |
 | [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns noisy commit stacks into a curated set of compact summary lines for PR or squash contexts, preserving technical identifiers, merging overlap, dropping low-signal noise, highlighting distinct meaningful efforts, and avoiding changelog-style wording or unsupported claims. |
 | [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | Runner-agnostic overlay for Anthropic `skill-creator`. Adds repo and environment guardrails for skill authoring and benchmarking: temp-workspace isolation, `iteration-N/eval-name/{config}/run-N/` benchmark layout, valid `grading.json` summaries, generated `benchmark.json`, honest `MEASURED` vs `SIMULATED` labeling, and sync/README discipline for repo-managed skills. |
+| [markdown-illustrator](skills/markdown-illustrator/SKILL.md) | Reads a markdown file and answers directly in chat with one document-wide Visual Brief plus one compiled prompt. Infers a compact visual strategy by default, keeps follow-up questions near zero, and only branches when the user explicitly asks for added specificity. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
@@ -118,6 +120,12 @@ npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agnostic
+```
+
+`markdown-illustrator`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill markdown-illustrator
 ```
 
 `dotnet-new-lib-slnx`
@@ -238,6 +246,90 @@ Anthropic's `skill-creator` is an excellent base workflow, but the day-to-day fr
 - **Honest benchmark modes** — keeps `MEASURED` and `SIMULATED` runs clearly separated so pipeline validation never masquerades as model quality
 - **PowerShell-safe** — calls out UTF-8 no BOM, stable counting, provider-path normalization, and other Windows-specific pitfalls
 - **Repo-managed discipline** — keeps per-skill evals, local-install sync, and README updates in scope for first-party skills
+
+### Why markdown-illustrator?
+
+Markdown-heavy documents often need one image that sells the whole idea fast: a conference opener, article cover, pitch-slide hero, or visual hook that makes the audience want to keep reading. The problem with many prompt workflows is that they branch immediately into model menus, theme toggles, and style comparisons before the document has even been understood.
+
+**markdown-illustrator** keeps the job focused. It reads the markdown, distills the whole document into a visualization-first Visual Brief, silently infers a compact visual strategy from the request, and turns that shared brief into one compiled prompt returned directly in chat. If you explicitly ask for a named model or a narrower aesthetic, it honors that request without dragging you through a selection workflow.
+
+- **Visual-Brief first** — distills the document into subject, narrative, visual opportunity, mood, and must-show elements before prompting
+- **One shared Visual Brief, one committed result** — optimized for covers, keynote slides, and "capture the essence" illustration requests where decisiveness matters more than variants
+- **Prompt-compiler behavior** — translates abstract meaning into concrete visual structure, readable composition, physical medium cues, and explicit failure-mode control
+- **Infer, don't interrogate** — defaults to a strong non-interactive strategy instead of turning intent, treatment, abstraction, and label density into follow-up questions
+- **Hero-first defaults** — when the request is underspecified, the skill defaults toward `hero + cinematic editorial + concept-led + minimal labels + 16:9 (or 3:2 when it composes better)` rather than a dry explainer graphic
+- **Cross-diffuser by design** — prefers strong natural-language prompting over vendor-specific branching unless the user asks
+- **Text-safe prompting** — steers away from dense embedded copy, fake words, and fragile readable text unless very short labels are truly necessary
+- **Anti-repetition by default** — avoids repeated labels, bullets, steps, callouts, mirrored panels, and echoed document fragments so the image reads like one authoritative artifact rather than many near-duplicates
+- **No selection detours** — skips file creation, model-family, style, theme, and scope menus so the workflow stays fast and focused
+- **User steerable when needed** — the skill stays minimal, but users can still explicitly steer toward directions like `whiteboard`, `blackboard`, `isometric`, or `blueprint`
+
+#### Inferred Defaults For markdown-illustrator
+
+The skill should not ask the user to configure these unless the request is genuinely ambiguous in a way that affects correctness. It infers a compact strategy and proceeds.
+
+- **Intent** — infer `hero`, `digest`, `diagram`, or `cover` from the user's phrasing; if there is no stronger signal, default to `hero`
+- **Visual treatment** — preserve explicit styles such as `whiteboard`, `blackboard`, `scientific`, `hand-drawn`, `isometric`, or `minimal`; otherwise default to `cinematic editorial`
+- **Abstraction level** — use `concept-led` for spectacle and interest-raising requests, `balanced` for explanatory or onboarding requests, and `literal` only when the user explicitly asks for strict fidelity
+- **Label density** — default to `minimal`, move toward `none` for hero or infographic-first requests, and use `academic` only for scientific or textbook-style requests
+- **Aspect ratio** — honor explicit ratios, otherwise default to a wide frame: prefer `16:9`, use `3:2` when the composition is more editorial or object-centered, and avoid square by default
+
+#### Good Trigger Examples For markdown-illustrator
+
+These phrasings reliably signal the skill's intent: a markdown file goes in, and one document-wide visual direction comes back.
+
+- `Use markdown-illustrator on SKILL.md and return the Visual Brief plus one final prompt.`
+- `Read roadmap.md and create one strong visual direction that captures the whole document.`
+- `Create a visual digest for onboarding-notes.md.`
+- `Turn launch-plan.md into a keynote opener image prompt.`
+- `Use markdown-illustrator on systems.md and keep it blackboard style.`
+- `Turn product-brief.md into a single Flux-ready hero-image prompt.`
+
+#### Common Visual Directions For markdown-illustrator
+
+These are reference directions for users, not built-in branches in the skill. If you want one of them, ask for it explicitly in the prompt.
+
+`whiteboard`
+
+- Pros: approachable, collaborative, strong for brainstorming, product planning, workshops, and messy human energy
+- Cons: can feel too casual or cluttered for polished keynote or editorial uses
+- Guidance: ask for this when the document is about ideation, strategy sessions, or product thinking
+
+`blackboard`
+
+- Pros: dramatic, intellectual, layered, great for systems thinking and technical storytelling
+- Cons: can become visually noisy if the source material is already dense
+- Guidance: ask for this when the document is about architecture, strategy, layered concepts, or technical explanation
+
+`isometric`
+
+- Pros: excellent for platforms, ecosystems, infrastructure, and layered technical worlds
+- Cons: weaker for abstract or emotional narratives that need symbolism more than structure
+- Guidance: ask for this when the document describes systems, services, stacks, networks, or architectural relationships
+
+`blueprint`
+
+- Pros: precise, engineered, authoritative, strong for protocols, design intent, and technical rigor
+- Cons: can feel cold or overly schematic for marketing or human-centered subjects
+- Guidance: ask for this when the document should feel exact, technical, and intentionally designed
+
+`editorial illustration`
+
+- Pros: expressive, conceptual, and strong for article covers, essays, and symbolic storytelling
+- Cons: less literal, so it may underperform when the image must explain concrete architecture
+- Guidance: ask for this when the document needs metaphor, mood, or a polished publication-style visual
+
+`cinematic`
+
+- Pros: emotional, aspirational, high-impact, strong for keynote heroes and launch moments
+- Cons: can become too grand if the source material really needs clarity over spectacle
+- Guidance: ask for this when the image should feel premium, dramatic, and audience-grabbing
+
+`minimal poster`
+
+- Pros: high signal-to-noise, memorable, clean, and strong for one dominant idea
+- Cons: can oversimplify documents with important operational or technical nuance
+- Guidance: ask for this when the document has one central idea that can be reduced to a powerful symbol
 
 ### Why dotnet-new-lib-slnx and dotnet-new-app-slnx?
 
