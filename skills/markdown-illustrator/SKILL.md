@@ -4,9 +4,9 @@ description: >
   Turn a markdown document into a visualization-first chat response consisting of one Visual Brief and one high-quality diffuser prompt generated with best-effort reasoning. Use when the user references a .md file and wants a hero image, cover image, visual digest, keynote opener, illustration, or diffuser prompt. Default to zero follow-up questions, no file creation, and no style/theme/model menus; infer a compact visual strategy from the request and document, and only honor extra specificity when the user explicitly asks for a named model, aesthetic, or visual treatment such as whiteboard or blackboard.
 ---
 
-![Markdown Illustrator](assets/hero.png)
-
 # Markdown Illustrator
+
+![Markdown Illustrator](assets/hero.png)
 
 This skill reads a markdown file and answers directly in chat with one visualization-focused Visual Brief plus one final prompt compiled to be concrete, readable, and diffusion-ready.
 

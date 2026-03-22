@@ -1,5 +1,7 @@
 # Agentic Skills
 
+![Skills Applied](/assets/hero.jpg)
+
 A curated collection of [skills](https://skills.sh) — reusable instruction sets that teach AI agents how to follow specific workflows, conventions, and standards. Designed to work with any agent that supports the skills ecosystem: GitHub Copilot, Claude Code, Cursor, Codex, OpenCode, and [many more](https://skills.sh).
 
 ## What are skills?
