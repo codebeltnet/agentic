@@ -66,6 +66,13 @@ If the user did not narrow scope, do not invent a narrower scope on their behalf
 - Do not use broad restore or hard reset commands as a first recovery move just because a commit attempt went wrong.
 - If recovery is needed because the execution path itself was wrong, stabilize the worktree first, then switch tools; do not continue digging with the same failing approach.
 
+### Approval and Clarification Lock
+
+- User feedback that something is "wrong" is not, by itself, permission to edit files, revert changes, amend commits, or regroup the plan.
+- If the feedback could refer to multiple things such as the emoji, prefix, subject, body, grouping, or the underlying code change, ask one concise clarification question before changing anything.
+- Preserve the current approved worktree and staged state until the user explicitly asks for a fix, revert, amend, or regrouping.
+- Do not treat frustration, urgency, or strong wording as implicit authorization to undo work on the user's behalf.
+
 ### Post-Commit Verification
 
 After every commit, run:
@@ -180,6 +187,12 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 ### Prefix and Emoji Reference
 
 Read `references/commit-language.md` before choosing a prefix or emoji. It contains the allowed prefixes, the gitmoji-first table, and the extended emoji fallback guidance shared with `git-visual-squash-summary`. Keep that duplicated reference byte-for-byte aligned with the `git-visual-squash-summary` copy; the validator and CI both enforce that sync contract.
+
+### Source Discipline for Explanations
+
+- When you explain why an emoji, prefix, or grouping choice is correct, anchor the explanation to a source you actually inspected in the current session.
+- Distinguish verified sources from inference. Say "the reference file says..." only after reading that file; otherwise say "based on your feedback/example..." or similar.
+- Do not claim that a document, attachment, screenshot, or image contained guidance unless you verified that it actually did.
 
 ---
 
@@ -391,6 +404,8 @@ If the user did not narrow scope, the plan you surface must account for the full
 - "Use refactor: prefix on #1" → adjust and re-present
 
 Only proceed to Step 5 after the user approves the plan.
+
+If the user's response is ambiguous, such as "4 is wrong now" or "that was fine before", do not guess whether the issue is the emoji, prefix, message body, grouping, or the underlying code change. Ask a short clarification question first and keep the worktree unchanged until they answer.
 
 #### Commit-message validation
 

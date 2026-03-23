@@ -125,6 +125,38 @@
         "Prefers non-destructive recovery such as inspecting git state or using stash before broad restore or reset commands",
         "Verifies the repaired commit author and stored body before reporting success"
       ]
+    },
+    {
+      "id": 12,
+      "prompt": "You showed me a multi-commit plan and I replied, '4 is wrong now. It was fine before.' Handle that correctly before touching anything.",
+      "expected_output": "A clarification-first response that asks what is wrong about commit 4 and preserves the current worktree instead of guessing and changing files.",
+      "expectations": [
+        "Treats ambiguous feedback as requiring clarification before acting",
+        "Does not treat 'wrong' as permission to revert files, amend commits, or regroup the plan immediately",
+        "Asks a concise question that distinguishes between emoji, prefix, message, grouping, and underlying code change",
+        "Keeps the current approved or staged state unchanged until the user clarifies"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Do a git bot commit, yolo. The diff contains only package dependency upgrades and a GitHub Actions workflow update.",
+      "expected_output": "An auto-approved bot flow that splits the dependency and CI intents and chooses gitmoji-backed emojis based on the inspected commit-language reference.",
+      "expectations": [
+        "Separates dependency upgrades from CI workflow changes when their intents differ",
+        "Chooses ⬆️ for dependency upgrade commits based on commit-language.md",
+        "Chooses 👷 for CI workflow commits based on commit-language.md",
+        "Reads the emoji reference before selecting the commit emoji instead of guessing"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Explain why those commit emojis are correct. The repo has commit-language.md, and earlier in the session I showed example images too.",
+      "expected_output": "An explanation that distinguishes inspected reference-file guidance from user-provided examples and avoids claiming a source said something it did not.",
+      "expectations": [
+        "Anchors emoji explanations to sources actually inspected in the session",
+        "Distinguishes repository reference files from user-provided examples or screenshots",
+        "Does not claim a document contained emoji guidance unless that document was actually verified"
+      ]
     }
   ]
 }
