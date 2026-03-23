@@ -69,6 +69,7 @@
         "Does not ask a clarifying question about which branch commits to include",
         "Treats a later changelog or release-finalization commit as branch-in-scope by default",
         "Lets semantic collapsing decide whether low-signal late commits deserve their own line",
+        "If a retained line is mainly changelog or release-status communication, prefers 💬 from the shared reference",
         "Returns grouped summary lines only"
       ]
     },
@@ -102,6 +103,16 @@
         "Defaults to emoji plus description lines without adding conventional prefixes",
         "Uses the shared commit-language reference as the source of truth for that prefixless default",
         "Keeps the output in grouped summary line form rather than explaining the rule at length"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "/git-visual-squash-summary",
+      "expected_output": "A direct grouped summary of the current branch versus upstream, main, or master without asking what to summarize first.",
+      "expectations": [
+        "Treats a bare skill invocation as a complete request to summarize the current branch",
+        "Does not ask a follow-up scope question such as what would you like me to summarize",
+        "Resolves current-branch scope automatically and returns grouped summary lines only"
       ]
     }
   ]
