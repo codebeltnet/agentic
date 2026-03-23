@@ -42,6 +42,8 @@ This skill drives the entire git commit workflow — reviewing changes, grouping
 - mixed-scope validation
 - post-commit author verification
 
+If the user did **not** say `yolo` or `auto`, and session-level auto mode is not already enabled, do **not** run any commit command yet. You must stop after Step 4, present the plan, and wait for approval.
+
 ### Default Scope Rule
 
 If the user says `git bot commit`, `git commit`, or `git our commit` without narrowing language, treat the request as covering the full current worktree.
@@ -79,6 +81,7 @@ If the user did not narrow scope, do not invent a narrower scope on their behalf
 - If that reference is unavailable or unreadable, stop and report the blocker instead of guessing.
 - Default to `<emoji> <short description>`. Do not add a prefix after the emoji unless the user explicitly asked for a combo with conventional commits or conventional prefixes.
 - Treat the inspected reference as the source of truth for emoji and prefix meaning. Correct mismatches before presenting the plan instead of waiting for the user to catch them.
+- Treat community health, changelog, and release-status communication as `💬` intent by default. Do not collapse that category back into generic `📝` or `📚` docs wording when the main audience is humans reading repo health or release status.
 
 ### Post-Commit Verification
 
@@ -205,7 +208,7 @@ Only when the user explicitly asks for an emoji plus conventional-commit combo:
 
 Read `references/commit-language.md` before choosing a prefix or emoji. It contains the allowed prefixes, the gitmoji-first table, and the extended emoji fallback guidance shared with `git-visual-squash-summary`. Keep that duplicated reference byte-for-byte aligned with the `git-visual-squash-summary` copy; the validator and CI both enforce that sync contract.
 
-That reference now defines prefixes as opt-in. Unless the user explicitly asked for an emoji plus conventional-commit combo, keep subjects in the default `<emoji> <short description>` form.
+That reference now defines prefixes as opt-in. Unless the user explicitly asked for an emoji plus conventional-commit combo, keep subjects in the default `<emoji> <short description>` form. For community health, changelog, and release-status communication, prefer `💬` from that same reference rather than generic docs emoji.
 
 ### Source Discipline for Explanations
 
@@ -232,7 +235,7 @@ Include the word **"yolo"** or **"auto"** anywhere in your request:
 The agent will show a one-line commit plan summary and proceed without waiting. Example:
 
 ```
-Auto-committing: 🔧 build/toolchain → 🚚 moved types → 💥 breaking shim removal → 📝 release notes
+Auto-committing: 🔧 build/toolchain → 🚚 moved types → 💥 breaking shim removal → 💬 release notes
 ```
 
 ### Session-level activation
@@ -292,11 +295,11 @@ Derive categories from the actual diff — don't assume a fixed set. Common cate
 - **Preprocessor/build-only changes** — conditional compilation, build-target switches
 - **Build/tooling** — CI workflows, container definitions, build scripts
 - **Documentation publishing** — doc-site navigation, generated-doc assets, site branding, or files whose main job is to make published docs render correctly
-- **Community health/release communication** — changelogs, support/contribution/community defaults, and other files whose main audience is humans reading repo health or release status
+- **Community health/release communication** — changelogs, support/contribution/community defaults, and other files whose main audience is humans reading repo health or release status; this bucket normally maps to `💬`
 - **Environment/configuration** — test environment config, connection strings, runner settings, infra setup
 - **Source moves/renames** — renamed files, moved namespaces, updated imports
 - **Breaking removals** — removed public types, deleted forwarding attributes, dropped compatibility shims
-- **Documentation** — readmes, changelogs, contributing guides, release notes, inline doc comments
+- **Documentation** — readmes, usage guides, inline doc comments, API docs, and similar documentation that is not primarily repo-health or release-status communication
 - **Application code** — new features, bug fixes, refactors, business logic
 - **Test logic** — changed assertions, updated expectations, new test cases, modified test behavior
 
@@ -367,11 +370,19 @@ Do not treat "all of this supports the release" as one commit. Release-adjacent 
 
 - **Dependency/version baselines** — version alignment or runner baseline changes
 - **Community health/release communication** — changelogs and human-facing repo health docs
-- **Package/publish metadata** — package release-note definitions and publish targets
+- **Package/publish metadata** — package release-note definitions, `.nuget/*/PackageReleaseNotes.txt`, and publish targets; this bucket normally maps to `📦`
 - **Documentation publishing** — DocFX navigation, branding, or publishing assets
 - **CI/automation** — workflows and helper scripts used only by automation
 
 These buckets are examples, not a fixed file map. The rule is the abstraction: split by purpose and audience, not by the fact that the changes landed together.
+
+Concrete example: if one diff updates `Directory.Build.targets`, `Directory.Packages.props`, or `testenvironments.json`, another diff updates CI scripts or workflow files such as `bump-nuget.py` or `.github/workflows/*.yml`, and another diff updates `CHANGELOG.md` plus `.nuget/*/PackageReleaseNotes.txt`, that is at least three intents:
+
+- **Build system / dependency baseline**
+- **CI or automation**
+- **Release communication plus package metadata**
+
+Do not collapse those into one commit, even if they were edited in the same round and all support the same release. Keep `.nuget/*/PackageReleaseNotes.txt` with the `📦` package/publish commit, not with the `💬` community-health commit.
 
 #### Repo-aligned grouping example
 
@@ -411,10 +422,12 @@ Before staging or committing anything, present the full commit plan to the user.
 
 Before you render that plan, validate every proposed emoji and every proposed prefix against the inspected `references/commit-language.md`. Fix mismatches before the user sees them. If the user did not explicitly ask for a conventional-commit combo, strip prefixes from the proposed subjects before presenting the plan.
 
+If auto-approval is **not** active, Step 4 is a hard stop. Do not stage, do not commit, and do not treat silence or momentum as approval.
+
 **If auto-approval is active** (via "yolo"/"auto" keyword or session-level setting), display a one-line summary and proceed immediately to Step 5:
 
 ```
-Auto-committing: 🔧 build config → 🚚 rename auth to identity → ✅ identity tests → 📝 update changelog
+Auto-committing: 🔧 build config → 🚚 rename auth to identity → ✅ identity tests → 💬 update changelog
 ```
 
 Even in auto-approval mode, surface the commit buckets explicitly before committing. Auto-approval removes the wait, not the planning step.
@@ -495,7 +508,7 @@ When the user explicitly asked for the emoji plus conventional-commit combo:
 
 With body repair after a bad first attempt:
 ```
-📝 add git release-note guidance
+💬 add git release-note guidance
 
 Clarify when the repo should keep release-note docs separate from code changes so commit history stays easier to scan and review.
 ```
@@ -511,7 +524,7 @@ feat: add submission endpoint            ← "feat:" is not an allowed prefix
 ```
 
 ```
-📝 add git release-note guidance
+💬 add git release-note guidance
 
 Clarify when the repo should keep release-note docs separate
 from code changes so commit history stays easier to scan and review.
