@@ -57,6 +57,40 @@
         "Populates the new file from git history instead of leaving it as a blank scaffold",
         "Keeps the same SemVer-aware release highlight rules for newly created files"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "My branch is named v1.2.3/release-prep and there are staged, unstaged, and untracked changes in the worktree. Update CHANGELOG.md for this release, but ask me before you include anything not yet committed.",
+      "expected_output": "Before drafting the changelog entry, the response surfaces a short heads-up for release 1.2.3 and asks whether to include the pending worktree changes.",
+      "expectations": [
+        "Detects pending staged, unstaged, and untracked worktree changes before drafting a concrete release entry",
+        "Uses a concise `Yes / No / Custom` confirmation prompt",
+        "Keeps the question focused on whether to include pending changes rather than explaining git range mechanics",
+        "Defers scope detail unless the user chooses `Custom` or asks for detail",
+        "Does not silently include or ignore pending worktree changes for a concrete release draft"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "There are pending worktree changes for release 1.2.3, and I only want the staged changes included in the changelog draft.",
+      "expected_output": "The response honors a custom pending-change scope instead of forcing all-or-nothing worktree inclusion.",
+      "expectations": [
+        "Treats `Custom` as a valid path for pending worktree inclusion",
+        "Can narrow pending change coverage to a subset such as staged only",
+        "Keeps the changelog source grounded in committed history plus the explicitly approved pending subset",
+        "Avoids silently broadening a custom scope to include unstaged or untracked changes"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "The host supports native choice widgets. There are pending worktree changes for release 1.2.3, so ask me whether to include them using the skill's structured input flow and keep the plain-text fallback equivalent if widgets are unavailable.",
+      "expected_output": "The response uses the skill's FORMS-backed Yes/No/Custom decision model for pending worktree changes, with the same semantics in both native-input and plain-text modes.",
+      "expectations": [
+        "Uses a FORMS-backed `Yes / No / Custom` confirmation flow for pending worktree changes when native structured input is available",
+        "Keeps the plain-text fallback semantically identical to the widget-backed path",
+        "Asks the follow-up scope question only when `Custom` is chosen",
+        "Preserves the same pending-change counts and release label across both interaction modes"
+      ]
     }
   ]
 }
