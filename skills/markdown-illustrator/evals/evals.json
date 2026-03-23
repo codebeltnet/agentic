@@ -1,0 +1,68 @@
+{
+  "skill_name": "markdown-illustrator",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I have this markdown file about microservices architecture. It's super text-heavy and I want one strong hero-image prompt that captures the whole document visually. Just answer in chat.",
+      "expected_output": "A direct chat response containing one Visual Brief and one compiled final prompt that captures the document as a whole without file creation or follow-up selection questions.",
+      "files": ["evals/files/microservices-architecture.md"],
+      "expectations": [
+        "Responds directly in chat instead of creating a companion file",
+        "Contains a Visual Brief section with visualization-oriented fields",
+        "Contains a Final Prompt section",
+        "Contains exactly one final prompt",
+        "The final prompt reflects the same document-wide microservices architecture story as the Visual Brief",
+        "The final prompt uses concrete visible elements rather than abstract wording alone",
+        "The final prompt shows strong composition or reading direction when useful",
+        "The final prompt includes complexity-control language such as clean composition or no clutter when appropriate",
+        "The final prompt avoids relying on dense embedded text and steers away from gibberish text, fake words, or excessive readable copy unless minimal labels are essential",
+        "The final prompt avoids repeated labels, repeated steps, duplicated sections, echoed callouts, and mirrored layout fragments unless the user explicitly asked for repetition",
+        "Does not introduce theme, style, scope, or model-family selection menus",
+        "Infers a strong visual strategy instead of asking the user to choose one",
+        "When the user does not specify an aspect ratio, the prompt favors a wide composition such as 16:9 or 3:2 instead of defaulting to square",
+        "Uses compiled best-effort reasoning instead of producing multiple prompt variants"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Generate one hero-image prompt for product-launch.md. Keep it cinematic where appropriate and optimize it for Flux, but answer directly in chat.",
+      "expected_output": "A direct chat response with one Visual Brief and one compiled final prompt that honors the user's explicit cinematic and Flux constraints without file creation or branching into menus.",
+      "files": ["evals/files/product-launch.md"],
+      "expectations": [
+        "Responds directly in chat instead of creating a companion file",
+        "Contains a Visual Brief section with visualization-oriented fields",
+        "Contains exactly one final prompt",
+        "The final prompt honors the explicit cinematic and Flux-specific request",
+        "The final prompt uses precise visual language and concrete scene structure",
+        "The final prompt includes explicit transformation or convergence cues where relevant",
+        "The final prompt avoids relying on dense embedded text and steers away from gibberish text, fake words, or excessive readable copy unless minimal labels are essential",
+        "The final prompt avoids repeated labels, repeated steps, duplicated sections, echoed callouts, and mirrored layout fragments unless the user explicitly asked for repetition",
+        "The final prompt preserves the user's explicit cinematic and Flux constraints while remaining compatible with a wide default frame",
+        "Does not ask the user to choose anything before generating the result",
+        "Does not generate extra family, theme, or style variants",
+        "Keeps the final prompt anchored to the same summary rather than section-by-section prompting"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "I've got this transformers-explained.md doc for onboarding new ML engineers. Default behavior is fine. I want one strong visual direction, but keep it anchored in one shared summary and answer in chat.",
+      "expected_output": "A direct chat response with a visualization-focused Visual Brief and one compiled final prompt that turns the full-document meaning into a single useful visual direction, inferring the visual strategy instead of asking the user to configure it.",
+      "files": ["evals/files/transformers-explained.md"],
+      "expectations": [
+        "Responds directly in chat instead of creating a companion file",
+        "Contains a Visual Brief section with visualization-oriented fields",
+        "Contains exactly one final prompt",
+        "The final prompt captures the transformer architecture and onboarding context at the whole-document level",
+        "The final prompt translates conceptual ML ideas into observable visual structures",
+        "The final prompt preserves readability through controlled complexity and obvious hierarchy",
+        "The response infers a digest- or diagram-leaning strategy from the onboarding context instead of defaulting blindly to a spectacle-first hero treatment",
+        "The final prompt avoids relying on dense embedded text and steers away from gibberish text, fake words, or excessive readable copy unless minimal labels are essential",
+        "The final prompt avoids repeated labels, repeated steps, duplicated sections, echoed callouts, and mirrored layout fragments unless the user explicitly asked for repetition",
+        "When the user does not specify an aspect ratio, the prompt still favors a natural wide format such as 16:9 or 3:2 instead of square",
+        "Avoids section-by-section prompts, style catalogs, and theme variants",
+        "Uses the Visual Brief as the shared anchor for the final prompt",
+        "Chooses one best-effort direction rather than offering multiple options"
+      ]
+    }
+  ]
+}

@@ -20,6 +20,7 @@ On Windows or when running from PowerShell, also read `references/windows-powers
 - Keep all eval workspaces under a temp root such as `$env:TEMP/<skill-name>-workspace/`, never inside the source repo.
 - For repo-managed skills, keep `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/` in sync before calling the work done.
 - Every repo-managed skill must keep a per-skill `evals/evals.json`.
+- If an eval entry declares `files`, treat those paths as skill-relative fixtures and stage them into the temp workspace for both benchmark configurations.
 - Benchmark directories must follow `iteration-N/eval-name/{config}/run-N/` exactly; do not flatten files directly under `with_skill/` or `without_skill/`.
 - `grading.json` must include both `expectations` and a populated `summary` object with `passed`, `failed`, `total`, and `pass_rate`.
 - Generate `benchmark.json` through `skill-creator/scripts/aggregate_benchmark.py`; never hand-author it.
@@ -67,6 +68,7 @@ Read or create the per-skill `evals/evals.json`, then ensure each eval has a cor
 iteration-N/
   eval-1-name/
     eval_metadata.json
+    fixtures/
     with_skill/
       run-1/
         grading.json
@@ -80,6 +82,7 @@ iteration-N/
 ```
 
 Keep `eval_metadata.json` at the eval-directory level. Put run artifacts under `run-N/` so `aggregate_benchmark.py` can discover them.
+If `evals/evals.json` declares `files`, copy those skill-relative fixtures into `fixtures/` at the eval-directory level and make them available to both runs.
 
 ### Step 5: Run paired benchmarks
 
@@ -93,6 +96,7 @@ For `MEASURED` runs:
 - save the real outputs
 - save transcripts or command logs when available
 - keep timings and token counts tied to the actual run
+- use the same staged fixture files for both `with_skill` and `without_skill` runs when the eval declares `files`
 
 For `SIMULATED` runs:
 

@@ -8,6 +8,7 @@ Use this reference whenever a skill benchmark must be reproducible across differ
 iteration-N/
   eval-1-name/
     eval_metadata.json
+    fixtures/
     with_skill/
       run-1/
         grading.json
@@ -24,7 +25,28 @@ Key rules:
 
 - `aggregate_benchmark.py` walks `run-*` directories. If files live directly under `with_skill/` or `without_skill/`, the benchmark will discover zero runs.
 - `eval_metadata.json` belongs at the `eval-*` directory level, not inside each run directory.
+- `fixtures/` is optional and should contain copied input files referenced by `evals/evals.json` `files[]` entries when the eval depends on attached source material.
 - `outputs/` may contain files, diffs, transcripts, or other evidence the reviewer should inspect.
+
+## Optional Eval Fixture Files
+
+Repo-managed skills may declare optional attached input files in `evals/evals.json`:
+
+```json
+{
+  "id": 1,
+  "prompt": "Use the attached markdown file to generate a Visual Brief and final prompt.",
+  "expected_output": "A direct chat response grounded in the attached source material.",
+  "files": ["evals/files/example.md"]
+}
+```
+
+Rules:
+
+- `files` paths are relative to `skills/<name>/`, not to the temp workspace.
+- Keep fixture inputs under the skill folder, usually `evals/files/`.
+- Copy declared fixtures into the eval-level `fixtures/` directory before running either configuration.
+- Use the same staged fixtures for both `with_skill` and `without_skill` runs so the comparison stays fair.
 
 ## Required Files
 

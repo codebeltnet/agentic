@@ -22,6 +22,8 @@ When running evals or testing skills, create all workspaces in a temp location:
 Every repo-managed skill must include its own `evals/evals.json` file at `skills/<name>/evals/evals.json`.
 
 - Treat this as a required artifact for every first-party skill in this repo
+- Eval entries may include an optional `files` array of skill-relative fixture paths such as `evals/files/example.md`
+- When `files` is present, keep the paths relative to `skills/<name>/` and stage those fixtures into the temp eval workspace for both `with_skill` and `without_skill` runs
 - Run evals **per skill**, not as one shared repo-level eval file
 - Run evals from a temp workspace such as `$env:TEMP/<skill-name>-workspace/`, never from inside this repository
 - When creating or modifying a repo-managed skill, run both `with_skill` and `without_skill` comparison executions from that temp workspace before the work is considered complete
@@ -88,12 +90,14 @@ skills/<name>/
 ├── scripts/              # Optional — executable code (Python, Bash, etc.)
 ├── references/           # Optional — detailed reference docs the agent consults during generation
 └── evals/                # Required for repo-managed skills — per-skill eval prompts and expectations
+    └── files/            # Optional — input fixtures referenced by evals/evals.json files[]
 ```
 
 - `SKILL.md` is the entry point — it contains the workflow, conventions, and step-by-step instructions
 - `assets/` holds file templates, fonts, icons, and other static content used in output (the agent reads and substitutes placeholders)
 - `references/` holds detailed specs that `SKILL.md` references but are too long to inline
 - `evals/` holds the per-skill `evals.json` definitions used to verify that the skill still works after changes
+- `evals/files/` holds optional skill-local fixture inputs referenced by `evals/evals.json` when a benchmark needs attached source material
 
 ## Template Files Are Literal
 

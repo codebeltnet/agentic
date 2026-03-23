@@ -6,6 +6,8 @@ description: >
 
 # Trunk-First Repo
 
+![Trunk-First Repo](assets/hero.jpg)
+
 Initialize a folder as a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). The core principle: **main is sacred** — it starts empty and content only enters through peer-reviewed pull requests from short-lived feature branches.
 
 This matters because it prevents accidental pushes to main, establishes a clean PR-based workflow from day one, and makes the git history meaningful by design rather than as an afterthought.

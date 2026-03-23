@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-03-23
+
+This is a minor release introducing the markdown-illustrator skill for visualization-first document analysis, with expanded repository branding, comprehensive skill documentation, and foundational eval fixture file infrastructure across the skill suite.
+
+### Added
+
+- `markdown-illustrator` skill that reads markdown files and generates a document-wide Visual Brief plus one compiled diffusion-ready prompt, with zero follow-up questions and inferred visual strategy defaults (hero-focused cinematic editorial by default, steerable toward whiteboard, blackboard, isometric, or blueprint styles),
+- Hero image assets for repository branding at `/assets/hero.jpg` and for individual skills (`trunk-first-repo/assets/hero.jpg`),
+- Optional `files` array support in eval infrastructure (`evals/evals.json`) to stage skill-relative fixture paths into temporary eval workspaces for both `with_skill` and `without_skill` runs,
+- Eval fixtures for `markdown-illustrator` with real-world examples (microservices architecture, product launch, transformers explanation),
+- Benchmark contract reference documentation in `skill-creator-agnostic` with fixture guidance patterns.
+
+### Changed
+
+- Enhanced README with markdown-illustrator installation snippet and comprehensive "Why markdown-illustrator?" section explaining visual-brief anchoring, inferred defaults, good trigger examples, and reference visual directions for users,
+- Extended AGENTS.md with detailed eval fixture file documentation, explaining the optional `files` property and fixture staging workflow for skill evaluation,
+- Updated CONTRIBUTING.md with eval fixture guidance and temp-workspace isolation setup instructions,
+- Improved validation script (`validate-skill-templates.ps1`) to enforce fixture file path checks and consistency across skills,
+- Applied fixture guidance pattern to `skill-creator-agnostic` with benchmark contract examples and reference documentation.
+
 ## [0.3.1] - 2026-03-19
 
 This is a patch release introducing three new NuGet-focused skills and runner-agnostic benchmark tooling, with enhanced release automation, comprehensive documentation standardization, and skill refinements.
@@ -82,7 +102,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/codebeltnet/agentic/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/codebeltnet/agentic/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/codebeltnet/agentic/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/codebeltnet/agentic/compare/v0.1.0...v0.2.0
