@@ -12,7 +12,7 @@ One repo-wide convention matters especially for scaffolding skills: prefer dynam
 
 Another repo rule is intentionally strict: every repo-managed skill ships with its own `evals/evals.json`, and those evals are run per skill from a temp workspace instead of from inside this repository.
 
-Another part of that workflow is now mandatory too: when a repo-managed skill is created or modified, the author must run both `with_skill` and `without_skill` comparison executions from a temp workspace, aggregate the results into `benchmark.json`, and open `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy, typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, so a human can review both the `Outputs` and `Benchmark` views before sign-off. For new skills the baseline is `without_skill`; for existing skills it can be `without_skill` or the previous/original skill version, matching the `skill-creator` benchmark flow.
+Another part of that workflow is now mandatory too: when a repo-managed skill is created or modified, the author must run both `with_skill` and `without_skill` comparison executions from a temp workspace, aggregate the results into `benchmark.json`, and open `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy, typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, so a human can review both the `Outputs` and `Benchmark` views before sign-off. For new skills the baseline is `without_skill`; for existing skills it can be `without_skill` or the previous/original skill version, matching the `skill-creator` benchmark flow. When the available runner supports sub-agents or equivalent background tasks, the measured benchmark should fan out paired executor runs in parallel and parallelize independent grading work too, rather than running evals serially by habit.
 
 One more consistency rule matters for form-driven skills: native input fields are treated as a host feature, not something a model can rely on. Skills in this repo must stay usable with or without UI widgets, and must fall back to the same deterministic one-field-at-a-time flow when the host only supports plain chat.
 
@@ -266,7 +266,7 @@ Anthropic's `skill-creator` is an excellent base workflow, but the day-to-day fr
 - **Tool-path explicit** — points authors to the installed Anthropic `skill-creator` copy that provides `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`
 - **Honest benchmark modes** — keeps `MEASURED` and `SIMULATED` runs clearly separated so pipeline validation never masquerades as model quality
 - **PowerShell-safe** — calls out UTF-8 no BOM, `PYTHONUTF8`, stable counting, provider-path normalization, prompt-passing pitfalls, and other Windows-specific benchmark traps
-- **Codex-friendly benchmarking** — treats Codex CLI as a valid real runner when present, preserves `MEASURED` parity honestly, and uses raw event output as fallback evidence when convenience files are missing
+- **Codex-friendly benchmarking** — treats Codex CLI as a valid real runner when present, preserves `MEASURED` parity honestly, uses raw event output as fallback evidence when convenience files are missing, and prefers parallel paired runs when the runner supports sub-agents
 - **Repo-managed discipline** — keeps per-skill evals, local-install sync, and README updates in scope for first-party skills
 
 ### Why markdown-illustrator?
@@ -285,6 +285,7 @@ Markdown-heavy documents often need one image that sells the whole idea fast: a 
 - **Anti-repetition by default** — avoids repeated labels, bullets, steps, callouts, mirrored panels, and echoed document fragments so the image reads like one authoritative artifact rather than many near-duplicates
 - **No selection detours** — skips file creation, model-family, style, theme, and scope menus so the workflow stays fast and focused
 - **User steerable when needed** — the skill stays minimal, but users can still explicitly steer toward directions like `whiteboard`, `blackboard`, `isometric`, or `blueprint`
+- **Board styles use color intentionally** — `whiteboard` and `blackboard` keep their authentic marker/chalk base, but the skill now biases toward selective colored accents for arrows, icons, checks, and highlights instead of leaving every emphasis mark monochrome
 
 #### Inferred Defaults For markdown-illustrator
 
@@ -315,13 +316,13 @@ These are reference directions for users, not built-in branches in the skill. If
 
 - Pros: approachable, collaborative, strong for brainstorming, product planning, workshops, and messy human energy
 - Cons: can feel too casual or cluttered for polished keynote or editorial uses
-- Guidance: ask for this when the document is about ideation, strategy sessions, or product thinking
+- Guidance: ask for this when the document is about ideation, strategy sessions, or product thinking; expect a mostly marker-based board with selective colored accents for emphasis marks instead of pure black-only linework
 
 `blackboard`
 
 - Pros: dramatic, intellectual, layered, great for systems thinking and technical storytelling
 - Cons: can become visually noisy if the source material is already dense
-- Guidance: ask for this when the document is about architecture, strategy, layered concepts, or technical explanation
+- Guidance: ask for this when the document is about architecture, strategy, layered concepts, or technical explanation; expect a chalkboard base with restrained colored chalk accents for arrows, highlights, and key icons instead of all-white chalk marks
 
 `isometric`
 
