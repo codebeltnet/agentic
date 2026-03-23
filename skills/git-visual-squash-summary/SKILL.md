@@ -6,7 +6,7 @@ description: >
 
 # Git Visual Squash Summary
 
-This skill turns a stack of commits into a curated grouped summary without touching the index, the worktree, or git history. It is the wording companion to `git-visual-commits`: same opinionated emoji and prefix language, but non-mutating and optimized for the grouped summary shown beneath a PR title or in a squash-and-merge description field.
+This skill turns a stack of commits into a curated grouped summary without touching the index, the worktree, or git history. It is the wording companion to `git-visual-commits`: same emoji-first language, with conventional prefixes only when the user explicitly asks for that combo, but non-mutating and optimized for the grouped summary shown beneath a PR title or in a squash-and-merge description field.
 
 This skill is non-mutating: it inspects history and diffs, then returns grouped summary lines only.
 
@@ -15,7 +15,7 @@ This skill has one job: produce a ready-to-paste squash-and-merge summary for th
 ## Non-Negotiable Rules
 
 - Never stage, commit, amend, rebase, or otherwise mutate git state.
-- Read `references/commit-language.md` before choosing any emoji or prefix.
+- Read `references/commit-language.md` before choosing any emoji or optional prefix.
 - Keep `references/commit-language.md` byte-for-byte aligned with the `git-visual-commits` copy; the validator and CI both enforce that sync contract.
 - Preserve technical identifiers exactly where possible.
 - Group by intent, not chronology.
@@ -90,9 +90,9 @@ Ask yourself: "If I had to explain the real work in 2-5 compact lines, what are 
 Use this exact output shape:
 
 ```text
-<emoji> <optional-prefix> <short summary line>
-<emoji> <optional-prefix> <short summary line>
-<emoji> <optional-prefix> <short summary line>
+<emoji> <short summary line>
+<emoji> <short summary line>
+<emoji> <short summary line>
 ```
 
 Formatting rules:
@@ -100,6 +100,7 @@ Formatting rules:
 - Return grouped lines only. Do not prepend a title.
 - Use one line per retained high-signal group.
 - Keep every line at or below 72 characters.
+- Default to emoji plus description only. Use `<emoji> <prefix>: ...` only when the user explicitly asked to mirror conventional-commit prefixes.
 - Use the shared prefix and emoji guidance in `references/commit-language.md`.
 - Do not add bullets, numbering, a body, rationale paragraph, or chronology recap.
 - Do not append weak glue like "with", "plus", or "and" just to force several top-level intents into one line.
@@ -114,7 +115,7 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 
 - Reads like a curated grouped summary, not a stitched list of commits.
 - Reads like a curated, human-written condensed history.
-- Uses the same emoji and prefix language as `git-visual-commits`.
+- Uses the same emoji-first language as `git-visual-commits`, with prefixes only on explicit request.
 - Keeps distinct meaningful efforts on separate lines.
 - Drops noisy fixups and typo-only churn instead of preserving them.
 - Fits naturally beneath a PR title or in compact GitHub and terminal views.

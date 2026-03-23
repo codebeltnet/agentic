@@ -19,7 +19,7 @@
       "expected_output": "A polished grouped summary that keeps important technical identifiers intact and uses the shared git-visual wording style.",
       "expectations": [
         "Preserves technical identifiers exactly where possible",
-        "Uses the same emoji and prefix language as git-visual-commits",
+        "Uses the same emoji-first language as git-visual-commits and defaults to no prefix unless explicitly requested",
         "Reads like a curated human-written condensed history rather than a dump of commit subjects",
         "Keeps distinct meaningful efforts on separate lines",
         "Avoids inventing unsupported changes"
@@ -92,6 +92,16 @@
         "Does not present commit-selection options or a commit-set questionnaire",
         "Resolves upstream, main, and master fallbacks automatically without user choice when possible",
         "Returns GitHub-ready grouped summary lines only"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Give me the normal git-visual squash summary for this branch. Keep the repo emoji style, but do not use conventional commit prefixes unless I explicitly ask for them.",
+      "expected_output": "A grouped squash summary that uses emoji-first, prefixless lines by default and only switches to prefixed lines when the user explicitly requests that combo.",
+      "expectations": [
+        "Defaults to emoji plus description lines without adding conventional prefixes",
+        "Uses the shared commit-language reference as the source of truth for that prefixless default",
+        "Keeps the output in grouped summary line form rather than explaining the rule at length"
       ]
     }
   ]
