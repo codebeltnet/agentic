@@ -114,6 +114,18 @@
         "Does not ask a follow-up scope question such as what would you like me to summarize",
         "Resolves current-branch scope automatically and returns grouped summary lines only"
       ]
+    },
+    {
+      "id": 11,
+      "prompt": "Summarize this branch for squash merge. One branch commit collapses dependency updates and build-system changes into a single subject, while the diff touches Directory.Packages.props plus Directory.Build.targets.",
+      "expected_output": "A grouped squash summary that keeps dependency upgrades as their own retained line, separate from build-system or refactor work, even when those changes landed in the same commit.",
+      "expectations": [
+        "Treats dependency or version baseline changes as a separate semantic intent from build-system metadata or refactoring",
+        "Does not collapse dependency upgrades into a generic build-system or configuration line",
+        "Uses a dependency-oriented emoji such as ⬆️ when a retained line is primarily dependency upgrade work",
+        "Keeps the build-system or refactor effort on its own retained line when the diff shows a separate intent",
+        "Returns grouped summary lines only"
+      ]
     }
   ]
 }
