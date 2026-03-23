@@ -201,6 +201,7 @@ Sometimes the history is already written and the only thing you need is the fina
 - **Bare invocation means summarize now** — calling `git-visual-squash-summary` directly should resolve the current branch scope automatically and return the grouped lines, not a "what do you want me to summarize?" question
 - **No commit-picker UX** — ordinary branch-level squash requests do not become commit-selection questions or widgets; the skill resolves the branch scope and writes the summary
 - **Distinct efforts stay distinct** — preserves meaningful change groups instead of forcing one umbrella line
+- **Dependency updates stay explicit** — package/version baseline changes keep their own dependency-focused line instead of getting absorbed into generic build-system or refactor wording
 - **Intent over chronology** — collapses noisy commit stacks into the retained grouped effort
 - **Low-signal noise gets dropped** — typo-only and trivial fixup churn do not deserve their own lines
 - **Late release-prep commits stay in scope** — changelog, version-bump, and release-finalization follow-ups are treated as part of the branch by default and then merged or dropped during semantic collapsing
@@ -264,7 +265,8 @@ Anthropic's `skill-creator` is an excellent base workflow, but the day-to-day fr
 - **Benchmark-contract aware** — enforces `iteration-N/eval-name/{config}/run-N/`, valid `grading.json.summary`, and generated `benchmark.json`
 - **Tool-path explicit** — points authors to the installed Anthropic `skill-creator` copy that provides `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`
 - **Honest benchmark modes** — keeps `MEASURED` and `SIMULATED` runs clearly separated so pipeline validation never masquerades as model quality
-- **PowerShell-safe** — calls out UTF-8 no BOM, stable counting, provider-path normalization, and other Windows-specific pitfalls
+- **PowerShell-safe** — calls out UTF-8 no BOM, `PYTHONUTF8`, stable counting, provider-path normalization, prompt-passing pitfalls, and other Windows-specific benchmark traps
+- **Codex-friendly benchmarking** — treats Codex CLI as a valid real runner when present, preserves `MEASURED` parity honestly, and uses raw event output as fallback evidence when convenience files are missing
 - **Repo-managed discipline** — keeps per-skill evals, local-install sync, and README updates in scope for first-party skills
 
 ### Why markdown-illustrator?
