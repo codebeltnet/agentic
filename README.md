@@ -173,6 +173,8 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Repo capability additions stay explicit** — adding a brand-new skill is grouped separately from refactoring an existing skill to support it
 - **Shared wording rules stay in lockstep** — the duplicated `commit-language.md` reference is kept byte-for-byte identical across both git-visual skills and checked locally plus in CI
 - **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
+- **Same-round edits are not one commit by default** — temporal proximity never outranks semantic intent when grouping changes
+- **Release-adjacent work still splits cleanly** — dependency baselines, package metadata, community health docs, doc publishing fixes, and CI automation can belong in separate commits even when they land together
 - **Umbrella commits are rejected** — mixed diffs spanning skill instructions, templates, validators, and repo docs must be split into separate commits instead of bundled into one blob
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
