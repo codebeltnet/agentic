@@ -59,6 +59,40 @@
         "Does not collapse several unique top-level efforts into one stitched sentence",
         "Outputs grouped lines only"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "Draft the squash-and-merge summary for this current feature branch so I can paste it into GitHub. The branch has six real service-update commits and one later changelog finalization commit. Do not ask me which commits to include.",
+      "expected_output": "The response summarizes the full current branch from merge-base to HEAD without asking the user to choose between earlier feature commits and the later changelog commit.",
+      "expectations": [
+        "Defaults to the full current feature branch for squash-and-merge requests",
+        "Does not ask a clarifying question about which branch commits to include",
+        "Treats a later changelog or release-finalization commit as branch-in-scope by default",
+        "Lets semantic collapsing decide whether low-signal late commits deserve their own line",
+        "Returns grouped summary lines only"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Summarize this branch for squash merge. Everything on the feature branch belongs in the GitHub squash description, even if the last commit is just release prep.",
+      "expected_output": "The response treats the entire branch as the summary scope and does not second-guess the user's intent with extra range-selection prompts.",
+      "expectations": [
+        "Interprets a branch-level squash request as the whole feature branch by default",
+        "Does not behave like a generic range-selection assistant when the branch scope is already implied",
+        "Includes all branch commits in the inspected scope before collapsing to retained groups",
+        "Avoids asking needless follow-up questions when the branch-level intent is already clear"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Use git-visual-squash-summary for this branch so I can paste the result straight into GitHub squash and merge. Do not ask me what commits I want to summarize.",
+      "expected_output": "The response directly produces grouped summary lines for the full current feature branch instead of presenting a commit-selection question or widget.",
+      "expectations": [
+        "Treats the skill as a single-purpose squash-and-merge summary generator",
+        "Does not present commit-selection options or a commit-set questionnaire",
+        "Resolves upstream, main, and master fallbacks automatically without user choice when possible",
+        "Returns GitHub-ready grouped summary lines only"
+      ]
     }
   ]
 }
