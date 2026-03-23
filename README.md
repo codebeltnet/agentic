@@ -16,7 +16,7 @@ Another part of that workflow is now mandatory too: when a repo-managed skill is
 
 One more consistency rule matters for form-driven skills: native input fields are treated as a host feature, not something a model can rely on. Skills in this repo must stay usable with or without UI widgets, and must fall back to the same deterministic one-field-at-a-time flow when the host only supports plain chat.
 
-Validation follows the same philosophy: run `scripts/validate-skill-templates.ps1` locally for the fast feedback loop, and let GitHub Actions rerun that same script on pull requests as the safety net. That validator also checks skill frontmatter metadata such as per-skill `evals/evals.json` files and the 1024-character YAML description limit; it does not replace the paired benchmark review workflow.
+Validation follows the same philosophy: run `scripts/validate-skill-templates.ps1` locally for the fast feedback loop, and let GitHub Actions rerun that same script on pull requests as the safety net. That validator also checks skill frontmatter metadata such as per-skill `evals/evals.json` files, optional eval fixture paths declared through `files`, and the 1024-character YAML description limit; it does not replace the paired benchmark review workflow.
 
 ## Install a skill
 
@@ -410,6 +410,7 @@ skills/
     scripts/          # Optional — executable code (Python, Bash, etc.)
     references/       # Optional — detailed reference docs
     evals/            # Required for repo-managed skills — per-skill evals/evals.json
+      files/          # Optional — eval fixture inputs referenced by evals/evals.json files[]
 ```
 
 ## Contributing

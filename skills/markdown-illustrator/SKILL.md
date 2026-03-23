@@ -1,7 +1,7 @@
 ---
 name: markdown-illustrator
 description: >
-  Turn a markdown document into a visualization-first chat response consisting of one Visual Brief and one high-quality diffuser prompt generated with best-effort reasoning. Use when the user references a .md file and wants a hero image, cover image, visual digest, keynote opener, illustration, or diffuser prompt. Default to zero follow-up questions, no file creation, and no style/theme/model menus; infer a compact visual strategy from the request and document, and only honor extra specificity when the user explicitly asks for a named model, aesthetic, or visual treatment such as whiteboard or blackboard.
+  Turn a markdown document into a visualization-first chat response consisting of one Visual Brief and one high-quality diffuser prompt generated with best-effort reasoning. Use when the user references a .md file and wants a hero image, cover image, visual digest, keynote opener, illustration, or diffuser prompt, especially for requests like "turn roadmap.md into a keynote opener image" or "create a visual digest for onboarding-notes.md". Default to zero follow-up questions, no file creation, and no style/theme/model menus; infer a compact visual strategy from the request and document, and only honor extra specificity when the user explicitly asks for a named model, aesthetic, or visual treatment such as whiteboard or blackboard.
 ---
 
 # Markdown Illustrator
@@ -43,7 +43,9 @@ The Visual Brief is the anchor. The final prompt is the best single visual inter
 
 ## Workflow
 
-1. Read the markdown file for meaning, not for headings.
+Follow the documented procedure in this file in order: `Reading the Markdown` -> `Writing the Visual Brief` -> `Inferring Visual Strategy` -> `Compiling the Final Prompt`.
+
+1. Read the referenced markdown file for meaning, not for headings.
 2. Distill the whole document into a Visual Brief optimized for visualization.
 3. Infer a compact visual strategy from the request and document without asking follow-up questions.
 4. Generate one best-effort final prompt from that summary and strategy.

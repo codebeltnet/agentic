@@ -75,11 +75,14 @@ Evals let you verify the skill works and measure improvement over a baseline. Ev
     {
       "id": 0,
       "prompt": "The user message to test against",
-      "expected_output": "What a correct response looks like — used for manual or automated grading"
+      "expected_output": "What a correct response looks like — used for manual or automated grading",
+      "files": ["evals/files/example.md"]
     }
   ]
 }
 ```
+
+`files` is optional. When present, list one or more fixture files relative to `skills/<name>/`. A common pattern is to store those fixtures under `evals/files/` so benchmark runners can copy or attach the same source inputs for both `with_skill` and `without_skill` runs.
 
 Aim for 3–5 evals that cover distinct scenarios: happy path, edge cases, and cases where the skill should *not* do something.
 
@@ -132,6 +135,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate-skill-tem
 - [ ] Examples are generic — no personal emails, usernames, or project-specific identifiers
 - [ ] At least one eval in `evals/evals.json`
 - [ ] The skill's `evals/evals.json` exists and its `skill_name` matches the folder/frontmatter name
+- [ ] Any optional `files` entries in `evals/evals.json` point to real fixture files under the same skill folder
 - [ ] Skill changes were benchmarked from a temp workspace with both `with_skill` and `without_skill` runs
 - [ ] `benchmark.json` and `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy were used so a human could compare `Outputs` and `Benchmark`
 - [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior

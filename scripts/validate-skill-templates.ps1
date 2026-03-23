@@ -284,6 +284,29 @@ Add-ValidationResult -Results $results -Name 'All repo-managed skills include va
             if ([string]::IsNullOrWhiteSpace([string]$eval.expected_output)) {
                 throw "$relativeEvalPath contains an eval without expected_output"
             }
+            if ($eval.PSObject.Properties.Name -contains 'files' -and $null -ne $eval.files) {
+                $fixturePaths = @($eval.files)
+
+                foreach ($fixturePath in $fixturePaths) {
+                    if ([string]::IsNullOrWhiteSpace([string]$fixturePath)) {
+                        throw "$relativeEvalPath contains a blank files entry"
+                    }
+
+                    $normalizedFixturePath = ([string]$fixturePath).Trim() -replace '\\', '/'
+                    if ($normalizedFixturePath.StartsWith('/')) {
+                        throw "$relativeEvalPath contains an absolute files entry '$fixturePath'"
+                    }
+                    if ($normalizedFixturePath -match '^[A-Za-z]:/') {
+                        throw "$relativeEvalPath contains a drive-qualified files entry '$fixturePath'"
+                    }
+                    if (($normalizedFixturePath -split '/') -contains '..') {
+                        throw "$relativeEvalPath contains a parent-directory files entry '$fixturePath'"
+                    }
+
+                    $skillRelativeFixturePath = 'skills/{0}/{1}' -f $skillDir.Name, $normalizedFixturePath
+                    [void](Get-FileText -RepoRoot $repoRoot -RelativePath $skillRelativeFixturePath -GitRef $Ref)
+                }
+            }
         }
     }
 }
