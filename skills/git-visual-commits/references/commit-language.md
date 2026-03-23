@@ -34,9 +34,9 @@ Examples in the emoji tables below use the default no-prefix form. Only switch t
 | 🔥 | `:fire:` | Remove code or files | `🔥 remove deprecated submission handler` |
 | ⚰️ | `:coffin:` | Remove dead code | `⚰️ remove unused dto properties` |
 | 🗑️ | `:wastebasket:` | Deprecate code that needs cleanup | `🗑️ deprecate v1 submission endpoint` |
-| 📝 | `:memo:` | Documentation, inline comments, API annotations | `📝 add inline docs to submission handler` |
+| 📝 | `:memo:` | Documentation, inline comments, API annotations, and docs prose that is not primarily repo-health or release-status communication | `📝 add inline docs to submission handler` |
 | 💡 | `:bulb:` | Add or update inline comments | `💡 add comments to submission processing logic` |
-| 💬 | `:speech_balloon:` | Add or update text and literals | `💬 update validation error messages` |
+| 💬 | `:speech_balloon:` | Community health, changelog, release-status communication, and other human-facing repo messaging; also user-facing text literals | `💬 update changelog and community guidance` |
 | 🔧 | `:wrench:` | Configuration files (app config, environment settings) | `🔧 configure swagger and versioning` |
 | 🔨 | `:hammer:` | Add or update development scripts | `🔨 add build script for release packaging` |
 | ➕ | `:heavy_plus_sign:` | Add a package dependency | `➕ add validation library` |
@@ -61,7 +61,7 @@ Examples in the emoji tables below use the default no-prefix form. Only switch t
 | 🚀 | `:rocket:` | Deploy stuff | `🚀 deploy request api to staging` |
 | 🏗️ | `:building_construction:` | Make architectural changes | `🏗️ restructure to clean architecture` |
 | 🧱 | `:bricks:` | Infrastructure related changes | `🧱 add terraform modules for staging` |
-| 📦️ | `:package:` | Add or update compiled files or packages | `📦️ update nuget package output config` |
+| 📦 | `:package:` | Add or update compiled files, packages, or package release-note metadata | `📦 update nuget package output config` |
 | 💄 | `:lipstick:` | Add or update the UI and style files | `💄 update button styles` |
 | ♿️ | `:wheelchair:` | Improve accessibility | `♿️ add aria labels to navigation` |
 | 📱 | `:iphone:` | Work on responsive design | `📱 add mobile breakpoints` |
@@ -118,7 +118,7 @@ Key entries from that reference, by category:
 
 | Emoji | Use when | Example |
 |-------|----------|---------|
-| 📚 | High-level docs, README, wiki (gitmoji's 📝 covers inline/XML docs) | `📚 add api usage documentation` |
+| 📚 | High-level docs, README, wiki (use 💬 instead when the change is mainly changelog or community-health communication) | `📚 add api usage documentation` |
 
 **Observability & runtime**
 
