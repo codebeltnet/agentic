@@ -81,6 +81,8 @@ Before drafting the summary, reduce the range into the smallest truthful set of 
 - Merge overlapping commits into the clearest final intent.
 - Prefer the net effect over the path taken to get there.
 - Drop typo-only, whitespace-only, and other low-signal cleanup unless it materially changes a retained group.
+- Treat dependency or version baseline changes as their own semantic intent. Do not absorb package version updates into a generic build-system, configuration, or refactor line just because they landed in the same commit.
+- When the diff mixes shared dependency manifests or version pins with build-system metadata or project-structure refactors, keep those as separate retained groups unless the net effect truly collapses to one intent.
 - Keep documentation-only work separate in your reasoning, but include it only when it represents a meaningful unique change.
 - Treat late changelog, version-bump, or release-finalization commits as part of the branch by default, then decide here whether they deserve a retained summary line or should be merged into a stronger parent group.
 - Highlight distinct meaningful efforts instead of forcing one dominant umbrella theme.
@@ -104,6 +106,7 @@ Formatting rules:
 - Keep every line at or below 72 characters.
 - Default to emoji plus description only. Use `<emoji> <prefix>: ...` only when the user explicitly asked to mirror conventional-commit prefixes.
 - Use the shared prefix and emoji guidance in `references/commit-language.md`.
+- If a retained line is primarily dependency or version-alignment work, prefer the dependency emoji from the shared reference such as `⬆️`, `⬇️`, `➕`, `➖`, or `📌` rather than a generic config or refactor emoji.
 - If a retained line is mainly changelog, community-health, or release-status communication, prefer `💬` from the shared reference rather than a generic docs emoji.
 - Do not add bullets, numbering, a body, rationale paragraph, or chronology recap.
 - Do not append weak glue like "with", "plus", or "and" just to force several top-level intents into one line.
@@ -136,6 +139,7 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Asking the user to choose among commits that are all on the current feature branch when they asked for a squash summary of that branch.
 - Presenting commit-selection widgets or multiple-choice prompts for ordinary branch-level squash requests.
 - Collapsing several unique top-level efforts into one stitched sentence.
+- Collapsing dependency updates into the same line as build-system configuration or refactor work when the diff shows separate intents.
 - Filler such as "misc cleanup", "various improvements", or "updates".
 - Losing or renaming important technical identifiers unnecessarily.
 - Inventing refactors, fixes, or docs changes not supported by the diff.
