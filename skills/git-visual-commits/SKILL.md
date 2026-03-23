@@ -18,6 +18,20 @@ This skill drives the entire git commit workflow — reviewing changes, grouping
 - Never silently downgrade a requested `git bot commit` to `git commit`.
 - If the required `git bot` alias is unavailable, halt and report that exact blocker instead of falling back to human identity.
 
+### Direct Git Execution Rule
+
+- For identity-sensitive commit work, prefer direct shell or terminal execution of git commands over wrapper tools that might bypass aliases, rewrite commit behavior, or hide the exact command being run.
+- Before the first commit, verify that your chosen tool path can truly execute the required command form, especially `git bot commit`.
+- If a wrapper tool cannot execute git aliases faithfully or cannot prove which command it will run, do not use it for this skill's commit step.
+- Do not mix execution paths casually mid-stream. Pick one direct git execution path for the commit flow unless a verified blocker forces a pivot.
+
+### Fail-Fast Tool Validation
+
+- Validate the commit path before creating the first commit: confirm alias availability, confirm the tool can execute the requested identity mode, and confirm you can run the post-commit verification commands.
+- If the first attempt produces the wrong author, wrong body format, or another identity-path mismatch, treat that as a tool-path failure rather than a one-off typo.
+- Pivot immediately to a direct shell or terminal git path instead of retrying with the same broken wrapper.
+- Do not spend multiple amend attempts trying to compensate for a tool that cannot faithfully execute the requested command.
+
 ### Auto-Approval Guard
 
 `yolo` / `auto` skips user confirmation only. It never skips:
@@ -44,6 +58,13 @@ Narrow scope only when the user explicitly does one of these:
 - asks for a review/plan for a subset before committing
 
 If the user did not narrow scope, do not invent a narrower scope on their behalf.
+
+### Recovery Safety Rule
+
+- Before any destructive recovery command, inspect the current git state again with commands such as `git status`, `git diff`, `git diff --staged`, and when relevant `git reflog`.
+- Prefer non-destructive recovery first: targeted unstaging, precise re-staging, or `git stash` when you need to preserve work before changing tactics.
+- Do not use broad restore or hard reset commands as a first recovery move just because a commit attempt went wrong.
+- If recovery is needed because the execution path itself was wrong, stabilize the worktree first, then switch tools; do not continue digging with the same failing approach.
 
 ### Post-Commit Verification
 
@@ -220,6 +241,8 @@ Unless the user explicitly narrowed scope, inspect the **entire current worktree
 
 Don't commit blindly — understand what each file is doing before grouping.
 
+Before planning commits for `git bot commit` or other identity-sensitive flows, also verify the execution path itself: confirm the alias exists, confirm the chosen tool can execute it faithfully, and prefer a direct shell or terminal path when there is any doubt.
+
 ### Step 2: Classify changes
 
 Before composing any commit message, bucket every changed file by its **semantic intent** — not just its file type. Read the actual diff for each file and ask: *"What is this change trying to accomplish?"* Two files of the same type (e.g. two test files) may have completely different intents and belong in separate commits.
@@ -387,6 +410,8 @@ For each group:
    - For `git our commit` — use whichever command matches the attribution the human chose
    - **With body:** use `-m "<subject>" -m "<body>"` to add the optional description paragraph
 
+For `git bot commit`, use an execution path that can run the alias directly and transparently. If a wrapper tool cannot prove it will actually execute `git bot commit`, switch to direct shell or terminal execution before committing.
+
 When a commit body spans multiple lines, use real multiline input such as multiple `-m` arguments or a shell construct that preserves actual line breaks. Do not pass literal `\n` escape sequences and assume the shell will rewrite them. Prefer grammatical sentence and paragraph breaks over column-based hard wrapping.
 
 When the body is just one short explanatory paragraph, prefer a single natural prose line in the stored commit message. Do not press Enter mid-sentence to satisfy an arbitrary width target.
@@ -394,6 +419,8 @@ When the body is just one short explanatory paragraph, prefer a single natural p
 ### Step 6: Verify
 
 After committing, run `git log --oneline -5` to confirm the commit looks right. Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success. Also run `git log -1 --format=%B` and verify the stored body contains readable prose with real line breaks, not literal escape sequences such as `\n`, and is not hard-wrapped mid-sentence just to satisfy a column limit. If that verification fails, amend the commit immediately instead of merely warning about it.
+
+If verification fails because the commit path used the wrong author or ignored the requested alias, stop treating it as a message-tweaking problem. Correct the tool path first, preserve the worktree safely, and only then repair the commit.
 
 ---
 

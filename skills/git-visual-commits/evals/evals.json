@@ -113,6 +113,18 @@
         "Separates CI or automation changes from dependency, package-definition, or documentation-focused commits",
         "Presents the grouping as high-level semantic intents rather than a brittle filename-only rule"
       ]
+    },
+    {
+      "id": 11,
+      "prompt": "Do a git bot commit for these grouped changes, but the wrapper git tool cannot faithfully execute aliases and the first commit came out under my human identity instead of the bot.",
+      "expected_output": "A bot-commit workflow that treats the wrong author as a tool-path failure, pivots to direct git execution, and avoids destructive recovery thrash.",
+      "expectations": [
+        "Prefers direct shell or terminal git execution for identity-sensitive bot commits when wrapper tools cannot honor aliases",
+        "Treats a wrong-author first attempt as a tool-path failure instead of retrying multiple times with the same wrapper",
+        "Pivots immediately to a direct execution path before continuing commit repair",
+        "Prefers non-destructive recovery such as inspecting git state or using stash before broad restore or reset commands",
+        "Verifies the repaired commit author and stored body before reporting success"
+      ]
     }
   ]
 }
