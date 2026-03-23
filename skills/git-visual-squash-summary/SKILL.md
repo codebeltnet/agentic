@@ -30,6 +30,7 @@ This skill has one job: produce a ready-to-paste squash-and-merge summary for th
 - Return grouped lines only, never a title or body.
 - Keep every output line at or below 72 characters.
 - For squash-and-merge requests that target the current branch, default to the full feature branch range from merge-base to `HEAD`.
+- A bare invocation such as `git-visual-squash-summary` or `/git-visual-squash-summary` is itself a complete request: resolve the current branch against upstream, `main`, or `master`, then return the grouped summary directly.
 - Do not collect commit-set parameters through follow-up questions, widgets, or choice UIs for ordinary squash-and-merge requests.
 - Do not ask the user to choose between earlier branch commits and later branch commits such as changelog, version-bump, or release-finalization follow-ups. They are part of the branch unless the user explicitly narrows scope.
 
@@ -40,12 +41,13 @@ This skill has one job: produce a ready-to-paste squash-and-merge summary for th
 Resolve the commit set in this order:
 
 1. If the user explicitly provided a commit range, branch comparison, PR branch, or base branch, use that.
-2. Otherwise, for normal squash-and-merge or "summarize this branch" requests, use the full current branch against its upstream merge-base.
+2. Otherwise, for normal squash-and-merge, "summarize this branch", or bare skill-invocation requests, use the full current branch against its upstream merge-base.
 3. If no upstream is configured, try `main`, then `master` automatically.
 4. If you still cannot determine a safe comparison point after those silent fallbacks, stop and ask for the range or base branch instead of guessing.
 
 Never turn steps 2 or 3 into a user-facing choice. Resolve them automatically and continue.
 Do not stop to ask whether the latest branch commit "should count". If it is on the branch, it is in scope by default.
+Do not open with "What would you like me to summarize?" when the user invoked this skill directly or otherwise already asked for a squash summary.
 
 Helpful read-only commands:
 
@@ -102,6 +104,7 @@ Formatting rules:
 - Keep every line at or below 72 characters.
 - Default to emoji plus description only. Use `<emoji> <prefix>: ...` only when the user explicitly asked to mirror conventional-commit prefixes.
 - Use the shared prefix and emoji guidance in `references/commit-language.md`.
+- If a retained line is mainly changelog, community-health, or release-status communication, prefer `💬` from the shared reference rather than a generic docs emoji.
 - Do not add bullets, numbering, a body, rationale paragraph, or chronology recap.
 - Do not append weak glue like "with", "plus", or "and" just to force several top-level intents into one line.
 - Favor clean lines that scan well in GitHub and terminal views.
