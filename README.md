@@ -164,6 +164,7 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Conventional prefixes** — `init`, `content`, `style`, `fix`, `refactor`, and `docs` as fallback when gitmoji isn't available
 - **Three identity modes** — bot, human, or collaborative — the agent does the work either way, you choose who gets credit
 - **Identity lock stays honest** — `git bot commit` means bot attribution, not just "AI did the work", and the flow now verifies the resulting author after commit
+- **Direct git execution for bot identity** — identity-sensitive commit paths should use direct shell/terminal git commands, not wrappers that may bypass aliases
 - **Auto-approval** — say "yolo" or "auto" to skip the review gate when you trust the agent's judgment
 - **Yolo skips confirmation, not discipline** — auto-approval still requires semantic grouping, mixed-scope checks, and a visible commit plan summary before committing
 - **Full worktree by default** — plain `git bot commit yolo` means "commit everything currently in git status and group it correctly", not "guess a narrower slice"
@@ -175,6 +176,8 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
 - **Same-round edits are not one commit by default** — temporal proximity never outranks semantic intent when grouping changes
 - **Release-adjacent work still splits cleanly** — dependency baselines, package metadata, community health docs, doc publishing fixes, and CI automation can belong in separate commits even when they land together
+- **Tool-path failures fail fast** — a wrong-author first attempt means switch execution path immediately instead of retrying the same broken wrapper
+- **Recovery stays conservative** — prefer inspecting git state and stashing before broad restore/reset commands when commit repair goes sideways
 - **Umbrella commits are rejected** — mixed diffs spanning skill instructions, templates, validators, and repo docs must be split into separate commits instead of bundled into one blob
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
