@@ -687,6 +687,13 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'introducing a new repo-managed skill, workflow, or top-level capability'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Existing skill refactors**'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'restructuring or extracting shared rules from an already existing skill'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Dependency/version baselines**'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Package/publish metadata**'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Documentation publishing**'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Community health/release communication**'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Temporal proximity is not a grouping signal.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Release-adjacent splitting rule'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'The rule is the abstraction: split by purpose and audience, not by the fact that the changes landed together.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'do not collapse "new skill introduced" and "existing skill refactored" into one commit'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**New repo-managed skill**'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'a newly introduced `skills/<name>/` folder and its local `evals/` or `references/`'
@@ -703,6 +710,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'stops with a clear alias-missing error instead of silently falling back to human identity'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats a newly introduced skill folder as a separate repo capability intent'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Separates new skill introduction from existing skill refactor work'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not use same-round timing as a reason to merge everything into one commit'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Presents the grouping as high-level semantic intents rather than a brittle filename-only rule'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
