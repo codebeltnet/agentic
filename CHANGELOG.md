@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-03-23
+
+This is a patch release focused on strengthening `git-visual-commits` so it splits release-adjacent work more cleanly, uses safer bot-identity commit paths, and keeps validator plus README guidance aligned with those safeguards.
+
+### Changed
+
+- Tightened `git-visual-commits` classification and grouping guidance so same-round edits do not collapse into one umbrella commit and release-adjacent work is split by purpose and audience,
+- Hardened `git-visual-commits` bot-commit execution guidance to prefer direct git paths, fail fast when wrapper tools cannot honor aliases, and recover conservatively after wrong-author attempts.
+
+### Fixed
+
+- Extended `validate-skill-templates.ps1` so the stronger release-adjacent grouping rules, direct git execution guidance, fail-fast tool-path checks, and non-destructive recovery rules stay enforced alongside the skill eval contract,
+- Updated the README skill summary so the published repo guidance now reflects the stronger semantic grouping, direct bot-path execution, and conservative commit-repair workflow.
+
 ## [0.3.2] - 2026-03-23
 
 This is a minor release introducing the markdown-illustrator skill for visualization-first document analysis, with expanded repository branding, comprehensive skill documentation, and foundational eval fixture file infrastructure across the skill suite.
@@ -102,7 +116,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/codebeltnet/agentic/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/codebeltnet/agentic/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/codebeltnet/agentic/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/codebeltnet/agentic/compare/v0.2.0...v0.3.0
