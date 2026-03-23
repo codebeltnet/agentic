@@ -668,6 +668,12 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Identity Lock'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Never silently downgrade a requested `git bot commit` to `git commit`.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If the required `git bot` alias is unavailable, halt and report that exact blocker instead of falling back to human identity.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Direct Git Execution Rule'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'prefer direct shell or terminal execution of git commands over wrapper tools'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Fail-Fast Tool Validation'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Pivot immediately to a direct shell or terminal git path instead of retrying with the same broken wrapper.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Recovery Safety Rule'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Prefer non-destructive recovery first: targeted unstaging, precise re-staging, or `git stash`'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` / `auto` skips user confirmation only.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'After every commit, run:'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'git log -1 --format="%an <%ae>"'
@@ -712,6 +718,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Separates new skill introduction from existing skill refactor work'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not use same-round timing as a reason to merge everything into one commit'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Presents the grouping as high-level semantic intents rather than a brittle filename-only rule'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats a wrong-author first attempt as a tool-path failure instead of retrying multiple times with the same wrapper'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Prefers non-destructive recovery such as inspecting git state or using stash before broad restore or reset commands'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
