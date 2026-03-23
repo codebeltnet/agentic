@@ -675,6 +675,7 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Recovery Safety Rule'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Prefer non-destructive recovery first: targeted unstaging, precise re-staging, or `git stash`'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` / `auto` skips user confirmation only.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If the user did **not** say `yolo` or `auto`, and session-level auto mode is not already enabled, do **not** run any commit command yet.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Commit Language Lock'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Default to `<emoji> <short description>`.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Do not add a prefix after the emoji unless the user explicitly asked for a combo with conventional commits or conventional prefixes.'
@@ -687,6 +688,7 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'skill instructions (`SKILL.md`, `FORMS.md`, `references/`, `evals/`)'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Read `references/commit-language.md` before choosing a prefix or emoji.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'That reference now defines prefixes as opt-in.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Treat community health, changelog, and release-status communication as'
     Assert-NotContains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Allowed Prefixes'
     Assert-NotContains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Emoji Selection'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Even in auto-approval mode, surface the commit buckets explicitly before committing.'
@@ -703,6 +705,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Community health/release communication**'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Temporal proximity is not a grouping signal.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Release-adjacent splitting rule'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Concrete example: if one diff updates `Directory.Build.targets`, `Directory.Packages.props`, or `testenvironments.json`,'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Keep `.nuget/*/PackageReleaseNotes.txt` with the'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'The rule is the abstraction: split by purpose and audience, not by the fact that the changes landed together.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'do not collapse "new skill introduced" and "existing skill refactored" into one commit'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**New repo-managed skill**'
@@ -712,6 +716,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'Gitmoji First, Fallback Second'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '#### Fallback: Extended Emoji Reference'
+    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'Community health, changelog, release-status communication'
+    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'package release-note metadata'
 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not let yolo collapse multiple semantic intents into one umbrella commit'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Verifies the commit author after commit and confirms it matches bot identity'
@@ -721,12 +727,16 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats a newly introduced skill folder as a separate repo capability intent'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Separates new skill introduction from existing skill refactor work'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not use same-round timing as a reason to merge everything into one commit'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'community health or changelog commit based on commit-language.md instead of a generic docs emoji'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Presents the grouping as high-level semantic intents rather than a brittle filename-only rule'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats a wrong-author first attempt as a tool-path failure instead of retrying multiple times with the same wrapper'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Prefers non-destructive recovery such as inspecting git state or using stash before broad restore or reset commands'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not add conventional prefixes after the emoji when the user did not explicitly ask for that combo'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Classifies an existing skill wording or contract reorganization as refactor intent instead of guessing new-feature or configuration intent'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats emoji plus conventional-prefix formatting as opt-in rather than default'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats the absence of yolo or auto as a requirement to stop for approval before any commit command runs'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Separates .nuget package release notes into the package or publish metadata commit'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'package release notes or package metadata work instead of the community-health emoji'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
@@ -749,6 +759,9 @@ Add-ValidationResult -Results $results -Name 'Git visual squash summary skill st
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Return grouped lines only, never a title or body.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Keep every output line at or below 72 characters.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Do not invent unsupported changes.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'A bare invocation such as `git-visual-squash-summary` or `/git-visual-squash-summary` is itself a complete request'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Do not open with "What would you like me to summarize?"'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'If a retained line is mainly changelog, community-health, or release-status communication, prefer'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Do not append weak glue like "with", "plus", or "and" just to force'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Fits naturally beneath a PR title or in compact GitHub and terminal views.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Changelog-like wording or release-note phrasing.'
@@ -770,6 +783,8 @@ Add-ValidationResult -Results $results -Name 'Git visual squash summary skill st
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Highlights distinct meaningful efforts instead of forcing one dominant umbrella theme'
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Does not invent unsupported changes'
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Defaults to emoji plus description lines without adding conventional prefixes'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'If a retained line is mainly changelog or release-status communication, prefers'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Treats a bare skill invocation as a complete request to summarize the current branch'
 }
 
 Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates CHANGELOG.md from git history' -Action {
