@@ -72,7 +72,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 
 | Skill | Description |
 |-------|-------------|
-| [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, clarification-before-correction safety, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
+| [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji-first subjects (gitmoji-first), optional conventional prefixes only on explicit request, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, commit-language validation against the inspected reference, clarification-before-correction safety, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
 | [git-keep-a-changelog](skills/git-keep-a-changelog/SKILL.md) | Git-aware Keep a Changelog companion that creates or updates `CHANGELOG.md` from the current branch by default. Reads full commit subjects and bodies plus the net diff, infers a release heading from a branch version hint like `v0.3.0/...` when available, can ask a concise `Yes / No / Custom` question before including pending staged, unstaged, or untracked worktree changes in a release draft, now backed by `FORMS.md` so compatible hosts can render a native choice UI while preserving the same text fallback, creates a compliant changelog if the file does not exist yet, writes a required SemVer-aware release highlight, preserves natural prose wrapping, and curates `Added` / `Changed` / `Fixed` style sections instead of dumping raw commit logs. |
 | [git-nuget-release-notes](skills/git-nuget-release-notes/SKILL.md) | Git-aware NuGet release-notes companion for .NET repos that keep cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Discovers packable `src/` projects, resolves concrete package version and availability, creates missing files when needed, and writes per-package `ALM` / `Breaking Changes` / `New Features` / `Improvements` / `Bug Fixes` style notes from full commit context plus the net diff instead of dumping commit subjects. |
 | [git-nuget-readme](skills/git-nuget-readme/SKILL.md) | Git-aware NuGet README companion for .NET repos that advertise a package from `src/`. Resolves the real packable project the README should sell, combines git history with actual package metadata, source capabilities, and relevant tests when feasible, preserves honest badge/docs/contributing sections, and writes a forthcoming, adoption-friendly `README.md` with repo-derived branding, clear value, install, framework-support, and quick-start guidance. |
@@ -161,12 +161,15 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 **git-visual-commits** handles the entire commit workflow— staging, diffing, crafting the message, choosing the right emoji — so every commit is consistent and meaningful without breaking your flow. Whether the agent authors the commit (`git bot commit`), you do (`git commit`), or you worked on it together (`git our commit`), the quality is the same.
 
 - **Gitmoji-first** — visual commit categories that are scannable at a glance
-- **Conventional prefixes** — `init`, `content`, `style`, `fix`, `refactor`, and `docs` as fallback when gitmoji isn't available
+- **Emoji-first by default** — the normal subject shape is `<emoji> <description>`, not `<emoji> <prefix>: ...`
+- **Conventional-prefix combo is opt-in** — `init`, `content`, `style`, `fix`, `refactor`, and `docs` are available only when you explicitly ask to combine emoji with conventional-commit prefixes
 - **Three identity modes** — bot, human, or collaborative — the agent does the work either way, you choose who gets credit
 - **Identity lock stays honest** — `git bot commit` means bot attribution, not just "AI did the work", and the flow now verifies the resulting author after commit
 - **Direct git execution for bot identity** — identity-sensitive commit paths should use direct shell/terminal git commands, not wrappers that may bypass aliases
 - **Clarifies before correcting** — vague feedback like "4 is wrong" triggers a short question, not a guessed revert or regrouping
 - **Evidence-backed explanations** — emoji and grouping justifications stay tied to references actually inspected in the session
+- **Reference-validated emoji choices** — the workflow reads `commit-language.md` before proposing commit subjects and corrects mismatches before showing the plan
+- **Skill refactors map to refactor intent** — reorganizing an existing skill's wording or eval contract should land on `♻️`, not a guessed new-feature or config emoji
 - **Auto-approval** — say "yolo" or "auto" to skip the review gate when you trust the agent's judgment
 - **Yolo skips confirmation, not discipline** — auto-approval still requires semantic grouping, mixed-scope checks, and a visible commit plan summary before committing
 - **Full worktree by default** — plain `git bot commit yolo` means "commit everything currently in git status and group it correctly", not "guess a narrower slice"
@@ -188,7 +191,7 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 
 Sometimes the history is already written and the only thing you need is the final grouped summary. A long branch with fixups, rename follow-ups, review nits, and repeated attempts often contains a few real change themes buried inside a messy chronological story. That is where **git-visual-squash-summary** fits: it reads the real history and diff, then compresses them into a small set of truthful grouped lines.
 
-- **Same visual language** — reuses the same prefix and emoji rules as `git-visual-commits`
+- **Same visual language** — reuses the same emoji-first wording rules as `git-visual-commits`
 - **Grouped-lines only** — returns compact grouped lines only, not a title or body
 - **Non-mutating by design** — drafts the wording only and does not touch git state
 - **Whole-branch by default** — for squash-and-merge requests, uses the full current feature branch from merge-base to `HEAD` instead of asking which branch commits to include
