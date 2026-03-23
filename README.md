@@ -169,8 +169,10 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Clarifies before correcting** — vague feedback like "4 is wrong" triggers a short question, not a guessed revert or regrouping
 - **Evidence-backed explanations** — emoji and grouping justifications stay tied to references actually inspected in the session
 - **Reference-validated emoji choices** — the workflow reads `commit-language.md` before proposing commit subjects and corrects mismatches before showing the plan
+- **Community health uses `💬`** — changelogs and repo-health / release-status communication are treated as human-facing messaging, not generic `📝` or `📚` docs by default
 - **Skill refactors map to refactor intent** — reorganizing an existing skill's wording or eval contract should land on `♻️`, not a guessed new-feature or config emoji
 - **Auto-approval** — say "yolo" or "auto" to skip the review gate when you trust the agent's judgment
+- **No `yolo`, no commit** — without `yolo` / `auto` or an already-enabled auto mode, the workflow must stop at the plan and wait for approval before it commits anything
 - **Yolo skips confirmation, not discipline** — auto-approval still requires semantic grouping, mixed-scope checks, and a visible commit plan summary before committing
 - **Full worktree by default** — plain `git bot commit yolo` means "commit everything currently in git status and group it correctly", not "guess a narrower slice"
 - **Commit body by default** — every commit explains *why*, not just *what* — opt out with "tmi" or "no-body"
@@ -181,6 +183,7 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
 - **Same-round edits are not one commit by default** — temporal proximity never outranks semantic intent when grouping changes
 - **Release-adjacent work still splits cleanly** — dependency baselines, package metadata, community health docs, doc publishing fixes, and CI automation can belong in separate commits even when they land together
+- **Package release notes are `📦` work** — `.nuget/*/PackageReleaseNotes.txt` belongs with package/publish metadata, not with `💬` community-health communication
 - **Tool-path failures fail fast** — a wrong-author first attempt means switch execution path immediately instead of retrying the same broken wrapper
 - **Recovery stays conservative** — prefer inspecting git state and stashing before broad restore/reset commands when commit repair goes sideways
 - **Umbrella commits are rejected** — mixed diffs spanning skill instructions, templates, validators, and repo docs must be split into separate commits instead of bundled into one blob
@@ -195,6 +198,7 @@ Sometimes the history is already written and the only thing you need is the fina
 - **Grouped-lines only** — returns compact grouped lines only, not a title or body
 - **Non-mutating by design** — drafts the wording only and does not touch git state
 - **Whole-branch by default** — for squash-and-merge requests, uses the full current feature branch from merge-base to `HEAD` instead of asking which branch commits to include
+- **Bare invocation means summarize now** — calling `git-visual-squash-summary` directly should resolve the current branch scope automatically and return the grouped lines, not a "what do you want me to summarize?" question
 - **No commit-picker UX** — ordinary branch-level squash requests do not become commit-selection questions or widgets; the skill resolves the branch scope and writes the summary
 - **Distinct efforts stay distinct** — preserves meaningful change groups instead of forcing one umbrella line
 - **Intent over chronology** — collapses noisy commit stacks into the retained grouped effort
