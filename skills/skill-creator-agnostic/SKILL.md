@@ -17,6 +17,7 @@ On Windows or when running from PowerShell, also read `references/windows-powers
 - Start from Anthropic's `skill-creator` workflow. Use this skill to add environment and repo guardrails, not to fork or replace the upstream skill.
 - Do not edit third-party skills such as Anthropic's `skill-creator` to encode repo-specific behavior. Keep those rules in repo-managed files and companion skills instead.
 - Do not assume any specific runner CLI exists. Choose the benchmark runner from what is actually available in the current environment.
+- When the chosen runner supports sub-agents, background agents, or equivalent parallel executions, use that capability for `MEASURED` benchmarks by default instead of running evals serially.
 - Keep all eval workspaces under a temp root such as `$env:TEMP/<skill-name>-workspace/`, never inside the source repo.
 - For repo-managed skills, keep `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/` in sync before calling the work done.
 - Every repo-managed skill must keep a per-skill `evals/evals.json`.
@@ -48,6 +49,7 @@ Choose the benchmark execution path from actual available capabilities, not from
 
 - Check whether a callable agent runner is available.
 - If one exists, prefer a real `MEASURED` benchmark.
+- If that runner can execute sub-agents or equivalent background tasks, prefer parallel paired runs over serial execution.
 - If no callable runner exists, you may still validate the pipeline with a `SIMULATED` benchmark, but label it clearly as such.
 - Explain the chosen mode up front whenever the distinction matters to the user.
 - If the callable runner is Codex CLI on Windows, verify the exact invocation shape with a tiny smoke run before spawning the full benchmark harness.
@@ -96,12 +98,14 @@ Run each eval in paired configurations:
 
 For `MEASURED` runs:
 
+- if the runner supports sub-agents, spawn the paired executor runs for all evals in parallel in the same turn when practical
 - save the real outputs
 - save transcripts or command logs when available
 - keep timings and token counts tied to the actual run
 - use the same staged fixture files for both `with_skill` and `without_skill` runs when the eval declares `files`
 - if the runner accepts prompts positionally, pass the prompt as a single argument or via stdin instead of relying on shell-quoted fragments that can be reparsed as CLI flags or extra arguments
 - if the runner offers JSONL or event-stream output, keep that raw event file in `outputs/`; it is the fallback source of truth when a convenience output file such as `last-message.txt` is missing
+- once executor runs finish, grade them in parallel too when the runner supports that pattern and the grading work is independent
 
 For `SIMULATED` runs:
 
@@ -175,6 +179,7 @@ For repo-managed skills:
 
 - Treats Anthropic's `skill-creator` as the base workflow and this skill as the overlay.
 - Talks about available runner capability instead of assuming one product-specific CLI.
+- Uses parallel paired executor and grader runs by default when the available runner supports sub-agents or equivalent background tasks.
 - Resolves the installed `skill-creator` path before calling benchmark scripts or the review viewer.
 - Produces valid benchmark artifacts that `aggregate_benchmark.py` and `generate_review.py` consume without repair work.
 - Labels synthetic benchmarks as `SIMULATED` and live executions as `MEASURED`.
@@ -188,5 +193,6 @@ For repo-managed skills:
 - Flattening files directly under `with_skill/` or `without_skill/`.
 - Naming eval directories without the `eval-*` prefix and then blaming the aggregator for finding zero runs.
 - Saying "use the Claude CLI" or any other vendor tool when the environment has not shown that capability.
+- Running a `MEASURED` benchmark serially by habit even though the available runner supports safe parallel paired runs.
 - Relabeling a real but parity-only run as `SIMULATED` just because the delta is zero.
 - Treating a viewer with qualitative outputs as proof that the numeric benchmark is valid.
