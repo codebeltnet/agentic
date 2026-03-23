@@ -63,6 +63,36 @@
         "Uses the Visual Brief as the shared anchor for the final prompt",
         "Chooses one best-effort direction rather than offering multiple options"
       ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use systems.md and keep it blackboard style. I want the final prompt to feel like a real chalkboard drawing, but use colored accents for emphasis instead of making every arrow and icon white chalk. Answer directly in chat.",
+      "expected_output": "A direct chat response with one Visual Brief and one final prompt that preserves the blackboard medium while using a restrained accent color palette for emphasis marks.",
+      "files": ["evals/files/microservices-architecture.md"],
+      "expectations": [
+        "Responds directly in chat instead of creating a companion file",
+        "Contains a Visual Brief section with visualization-oriented fields",
+        "Contains exactly one final prompt",
+        "The final prompt preserves blackboard or chalkboard medium cues such as chalk texture, chalk dust, or chalk strokes",
+        "The final prompt explicitly uses colored accents for emphasis marks such as arrows, checkmarks, callouts, or icons instead of keeping every mark white chalk",
+        "The final prompt keeps the accent palette selective or restrained rather than turning the entire composition into a rainbow treatment",
+        "Does not ask follow-up questions before producing the result"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Read onboarding-notes.md and make it whiteboard style. Keep the whiteboard / marker medium, but use colored accents for emphasis instead of drawing every mark in black marker only. Just answer in chat.",
+      "expected_output": "A direct chat response with one Visual Brief and one final prompt that preserves the whiteboard medium while using selective accent colors for emphasis.",
+      "files": ["evals/files/transformers-explained.md"],
+      "expectations": [
+        "Responds directly in chat instead of creating a companion file",
+        "Contains a Visual Brief section with visualization-oriented fields",
+        "Contains exactly one final prompt",
+        "The final prompt preserves whiteboard or marker medium cues such as dry-erase marker strokes, glossy board surface, or marker smudges",
+        "The final prompt explicitly uses colored accents for emphasis marks such as arrows, checkmarks, circles, traces, or icons instead of keeping every mark black",
+        "The final prompt keeps the accent palette selective or restrained rather than flooding the whole board with color",
+        "Does not ask follow-up questions before producing the result"
+      ]
     }
   ]
 }

@@ -48,6 +48,17 @@
       ]
     },
     {
+      "id": 8,
+      "prompt": "The benchmark runner supports sub-agents and background jobs. Should the measured skill benchmark still run evals one-by-one, or should it fan out? Tell me the expected execution pattern.",
+      "expected_output": "The response prefers parallel paired executor runs and parallel grading when the runner supports sub-agents, while keeping the existing benchmark artifact contract intact.",
+      "expectations": [
+        "Prefers parallel paired executor runs over serial execution when the runner supports sub-agents or equivalent background jobs",
+        "Keeps the benchmark grounded in with_skill and without_skill paired runs rather than a single-sided benchmark",
+        "Prefers parallel grading for independent runs when the runner supports that pattern",
+        "Preserves the existing eval- and run-N benchmark artifact contract instead of replacing it with a custom layout"
+      ]
+    },
+    {
       "id": 5,
       "prompt": "We already have Anthropic skill-creator. Should we replace it, edit it, or layer our own repo rules on top?",
       "expected_output": "The response recommends layering repo-managed guardrails on top of Anthropic skill-creator rather than forking or editing the third-party skill.",
