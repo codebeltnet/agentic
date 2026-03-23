@@ -228,15 +228,21 @@ Derive categories from the actual diff — don't assume a fixed set. Common cate
 
 - **New repo capabilities** — introducing a new repo-managed skill, workflow, or top-level capability
 - **Existing skill refactors** — restructuring or extracting shared rules from an already existing skill
+- **Dependency/version baselines** — shared dependency manifests, package version props, runner-image version pins, or environment baselines that primarily align versions
+- **Package/publish metadata** — release-note definitions, pack/publish targets, nuspec-like metadata, or files that define what a package publishes
 - **Project/solution files** — build system metadata that defines project structure
 - **Preprocessor/build-only changes** — conditional compilation, build-target switches
 - **Build/tooling** — CI workflows, container definitions, build scripts
+- **Documentation publishing** — doc-site navigation, generated-doc assets, site branding, or files whose main job is to make published docs render correctly
+- **Community health/release communication** — changelogs, support/contribution/community defaults, and other files whose main audience is humans reading repo health or release status
 - **Environment/configuration** — test environment config, connection strings, runner settings, infra setup
 - **Source moves/renames** — renamed files, moved namespaces, updated imports
 - **Breaking removals** — removed public types, deleted forwarding attributes, dropped compatibility shims
 - **Documentation** — readmes, changelogs, contributing guides, release notes, inline doc comments
 - **Application code** — new features, bug fixes, refactors, business logic
 - **Test logic** — changed assertions, updated expectations, new test cases, modified test behavior
+
+These categories are examples, not a fixed taxonomy. Reuse the *rationale* behind them even when another repo uses different filenames or technologies.
 
 **Critical distinction:** "Environment/configuration" and "Test logic" are separate categories even when both live under a test project. A test environment config file (`testenvironments.json`, `appsettings.test.json`) describes *how tests run*. A test assertion file describes *what tests verify*. These are different intents.
 
@@ -247,6 +253,8 @@ This classification drives grouping in Step 3. Files with different semantic int
 ### Step 3: Group into logical commits
 
 Group changes by **semantic intent**, not just by file type or directory. Ask yourself: *"Could I explain each commit in one sentence without using the word 'and'?"* If you need "and" to describe what a commit does, it's likely two commits.
+
+Temporal proximity is not a grouping signal. Changes made in the same round, same editor session, or same PR are still separate commits when their rationale, audience, or lifecycle role differs.
 
 #### Semantic intent splitting
 
@@ -271,8 +279,12 @@ Unless **no-body mode** is active, every commit includes a body explaining the *
 Common groupings:
 - New repo-managed skill or workflow introduction together
 - Existing skill refactor or extraction together
+- Dependency/version baseline updates together
+- Package/publish metadata together
 - Config/setup files together (app host, bootstrapping)
 - Environment and infrastructure config together (test runners, CI matrix, container settings)
+- Documentation publishing fixes together
+- Community health or release communication docs together
 - New feature or module code together
 - Data contracts, types, and interfaces together
 - Database models, migrations, and schema changes together
@@ -290,6 +302,18 @@ This guard runs unconditionally — including in auto-approval mode.
 #### Documentation separation rule
 
 Documentation files (`CHANGELOG.md`, `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, release notes) are **separate-by-default**. They only belong in the same commit as non-doc files when the commit is explicitly documentation-focused (e.g. `📝 docs: add api usage guide` where the docs are the point, not a side effect).
+
+#### Release-adjacent splitting rule
+
+Do not treat "all of this supports the release" as one commit. Release-adjacent work often spans different audiences and lifecycle roles that deserve separate history:
+
+- **Dependency/version baselines** — version alignment or runner baseline changes
+- **Community health/release communication** — changelogs and human-facing repo health docs
+- **Package/publish metadata** — package release-note definitions and publish targets
+- **Documentation publishing** — DocFX navigation, branding, or publishing assets
+- **CI/automation** — workflows and helper scripts used only by automation
+
+These buckets are examples, not a fixed file map. The rule is the abstraction: split by purpose and audience, not by the fact that the changes landed together.
 
 #### Repo-aligned grouping example
 

@@ -101,6 +101,18 @@
         "Groups the full worktree into multiple commits when semantic intent differs",
         "Reserves scope narrowing for explicit user language such as just, only, for this, or named paths/modules"
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "Do a git bot commit, yolo. The diff was all done in one round and mixes dependency baseline updates, community health docs, NuGet package definition changes, DocFX publishing fixes, and CI automation updates.",
+      "expected_output": "An auto-approved bot commit flow that splits the release-adjacent diff into separate higher-level intent buckets instead of one same-round umbrella commit.",
+      "expectations": [
+        "Does not use same-round timing as a reason to merge everything into one commit",
+        "Separates dependency or version baseline changes from package or publish metadata",
+        "Separates community health or release communication docs from DocFX or documentation publishing fixes",
+        "Separates CI or automation changes from dependency, package-definition, or documentation-focused commits",
+        "Presents the grouping as high-level semantic intents rather than a brittle filename-only rule"
+      ]
     }
   ]
 }
