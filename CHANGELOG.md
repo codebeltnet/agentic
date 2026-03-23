@@ -8,17 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.3.3] - 2026-03-23
 
-This is a patch release focused on strengthening `git-visual-commits` so it splits release-adjacent work more cleanly, uses safer bot-identity commit paths, and keeps validator plus README guidance aligned with those safeguards.
+This is a patch release focused on strengthening `git-visual-commits` and `git-visual-squash-summary` with clarified prefix behavior, safer bot-identity paths, concrete eval contracts, and aligned validator enforcement. Prefix handling now defaults to emoji-first subjects, with conventional-commit prefixes allowed only when explicitly requested.
 
 ### Changed
 
 - Tightened `git-visual-commits` classification and grouping guidance so same-round edits do not collapse into one umbrella commit and release-adjacent work is split by purpose and audience,
-- Hardened `git-visual-commits` bot-commit execution guidance to prefer direct git paths, fail fast when wrapper tools cannot honor aliases, and recover conservatively after wrong-author attempts.
+- Clarified `git-visual-commits` prefix behavior to default to emoji-first subjects with no prefix, and only allow emoji plus conventional-commit prefix combos when the user explicitly requests that form,
+- Hardened `git-visual-commits` bot-commit execution guidance to prefer direct git paths, fail fast when wrapper tools cannot honor aliases, and recover conservatively after wrong-author attempts,
+- Refined `git-visual-commits` and `git-visual-squash-summary` skill descriptions and critical rules for consistency and clarity around semantic intent, identity modes, and reference documentation.
 
 ### Fixed
 
-- Extended `validate-skill-templates.ps1` so the stronger release-adjacent grouping rules, direct git execution guidance, fail-fast tool-path checks, and non-destructive recovery rules stay enforced alongside the skill eval contract,
-- Updated the README skill summary so the published repo guidance now reflects the stronger semantic grouping, direct bot-path execution, and conservative commit-repair workflow.
+- Extended `validate-skill-templates.ps1` so the stronger release-adjacent grouping rules, direct git execution guidance, fail-fast tool-path checks, non-destructive recovery rules, and refined prefix behavior stay enforced alongside the skill eval contract,
+- Updated the README skill summary so the published repo guidance now reflects the stronger semantic grouping, direct bot-path execution, conservative commit-repair workflow, and clarified prefix defaults,
+- Added concrete eval contracts for `git-visual-commits` and `git-visual-squash-summary` with six and five test cases respectively, covering plan review, identity handling, emoji/prefix preservation, and consistency validation.
 
 ## [0.3.2] - 2026-03-23
 
