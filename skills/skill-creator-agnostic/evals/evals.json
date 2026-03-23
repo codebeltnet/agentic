@@ -68,6 +68,18 @@
         "Uses the same staged fixtures for with_skill and without_skill runs",
         "Keeps the guidance grounded in the existing iteration-N/eval-name/{config}/run-N/ benchmark contract"
       ]
+    },
+    {
+      "id": 7,
+      "prompt": "We have Codex CLI on Windows PowerShell, and my measured benchmark keeps derailing: one run says unexpected argument, another run misses last-message.txt, and aggregate_benchmark.py ignores my custom folder name. What should the runner-agnostic workflow tell me to do?",
+      "expected_output": "The response keeps the run measured when a real runner exists, calls out safe prompt passing for Codex CLI, requires eval-* directory names, and uses raw event output as the fallback source when convenience files are missing.",
+      "expectations": [
+        "Keeps Codex CLI framed as a valid callable runner rather than forcing a different vendor CLI",
+        "Advises passing prompts safely as one explicit argument or via stdin instead of brittle shell quoting",
+        "Requires eval directories to keep the eval-* prefix so Anthropic aggregation tooling can discover them",
+        "Uses JSONL or event output as the fallback source when last-message or similar convenience files are missing",
+        "Explains that a real parity run remains MEASURED even when the pass-rate delta is zero"
+      ]
     }
   ]
 }
