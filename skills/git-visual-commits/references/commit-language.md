@@ -1,6 +1,6 @@
 ### Allowed Prefixes
 
-Prefixes are **optional** — only include one when it adds clarity beyond what the emoji already conveys. Many commits need no prefix at all (e.g. `🚚 rename auth module to identity`, `➕ add validation library`). When you do use a prefix, pick from this list:
+Prefixes are **off by default**. Do not add one after the emoji unless the user explicitly asked for a combo with conventional commits or conventional prefixes. When combo mode is explicitly requested, pick from this list:
 
 | Prefix | Use When |
 |--------|----------|
@@ -11,6 +11,8 @@ Prefixes are **optional** — only include one when it adds clarity beyond what 
 | `refactor:` | Restructuring without behavior change |
 | `docs:` | Documentation, XML comments, OpenAPI annotations |
 
+Examples in the emoji tables below use the default no-prefix form. Only switch to `<emoji> <prefix>: ...` when the user explicitly asked for that combo.
+
 ### Emoji Selection — Gitmoji First, Fallback Second
 
 **Always prefer an official [gitmoji](https://gitmoji.dev) emoji** when the semantic meaning is a good fit. Only use a non-gitmoji emoji when no official entry matches well enough.
@@ -19,23 +21,23 @@ Prefixes are **optional** — only include one when it adds clarity beyond what 
 
 | Emoji | Gitmoji code | Use when | Example |
 |-------|-------------|----------|---------|
-| 🎉 | `:tada:` | Begin a brand-new project | `🎉 init: begin api project` |
+| 🎉 | `:tada:` | Begin a brand-new project | `🎉 begin api project` |
 | ✨ | `:sparkles:` | Introduce new application code, modules, endpoints, features | `✨ add user submission endpoint` |
-| 🎨 | `:art:` | Code style, formatting, structure cleanup | `🎨 style: format endpoint modules` |
+| 🎨 | `:art:` | Code style, formatting, structure cleanup | `🎨 format endpoint modules` |
 | ⚡️ | `:zap:` | Improve performance | `⚡️ optimize query execution in repository` |
-| 🐛 | `:bug:` | Fix a bug | `🐛 fix: handle null optional fields in dto` |
-| 🩹 | `:adhesive_bandage:` | Simple fix for a non-critical issue | `🩹 fix: correct default value in config` |
-| 🚑️ | `:ambulance:` | Critical hotfix | `🚑️ fix: patch auth bypass vulnerability` |
-| ✏️ | `:pencil2:` | Fix typos | `✏️ fix: correct typo in error message` |
-| ♻️ | `:recycle:` | Refactor code | `♻️ refactor: extract mapper to separate class` |
+| 🐛 | `:bug:` | Fix a bug | `🐛 handle null optional fields in dto` |
+| 🩹 | `:adhesive_bandage:` | Simple fix for a non-critical issue | `🩹 correct default value in config` |
+| 🚑️ | `:ambulance:` | Critical hotfix | `🚑️ patch auth bypass vulnerability` |
+| ✏️ | `:pencil2:` | Fix typos | `✏️ correct typo in error message` |
+| ♻️ | `:recycle:` | Refactor code | `♻️ extract mapper to separate class` |
 | 🚚 | `:truck:` | Move or rename files, folders, or resources | `🚚 rename auth module to identity` |
 | 🔥 | `:fire:` | Remove code or files | `🔥 remove deprecated submission handler` |
 | ⚰️ | `:coffin:` | Remove dead code | `⚰️ remove unused dto properties` |
 | 🗑️ | `:wastebasket:` | Deprecate code that needs cleanup | `🗑️ deprecate v1 submission endpoint` |
-| 📝 | `:memo:` | Documentation, inline comments, API annotations | `📝 docs: add inline docs to submission handler` |
+| 📝 | `:memo:` | Documentation, inline comments, API annotations | `📝 add inline docs to submission handler` |
 | 💡 | `:bulb:` | Add or update inline comments | `💡 add comments to submission processing logic` |
 | 💬 | `:speech_balloon:` | Add or update text and literals | `💬 update validation error messages` |
-| 🔧 | `:wrench:` | Configuration files (app config, environment settings) | `🔧 init: configure swagger and versioning` |
+| 🔧 | `:wrench:` | Configuration files (app config, environment settings) | `🔧 configure swagger and versioning` |
 | 🔨 | `:hammer:` | Add or update development scripts | `🔨 add build script for release packaging` |
 | ➕ | `:heavy_plus_sign:` | Add a package dependency | `➕ add validation library` |
 | ➖ | `:heavy_minus_sign:` | Remove a package dependency | `➖ remove unused logging package` |
@@ -49,20 +51,20 @@ Prefixes are **optional** — only include one when it adds clarity beyond what 
 | 🦺 | `:safety_vest:` | Validation code | `🦺 add submission dto validation rules` |
 | 🥅 | `:goal_net:` | Catch errors | `🥅 add global exception handler middleware` |
 | 👔 | `:necktie:` | Business logic, service layer, domain code | `👔 add submission processing service` |
-| 🏷️ | `:label:` | Add or update types, interfaces, contracts (type-only) | `🏷️ content: add submission dto contracts` |
-| 🔒️ | `:lock:` | Security or privacy fixes | `🔒️ fix: prevent open redirect in login` |
+| 🏷️ | `:label:` | Add or update types, interfaces, contracts (type-only) | `🏷️ add submission dto contracts` |
+| 🔒️ | `:lock:` | Security or privacy fixes | `🔒️ prevent open redirect in login` |
 | 🔐 | `:closed_lock_with_key:` | Add or update secrets | `🔐 add key vault secret references` |
 | 🛂 | `:passport_control:` | Authorization, roles, and permissions | `🛂 add role-based access policy` |
-| 🚨 | `:rotating_light:` | Fix compiler or linter warnings | `🚨 fix: resolve nullable warnings in handler` |
-| 💚 | `:green_heart:` | Fix CI build | `💚 fix: correct test runner config in pipeline` |
+| 🚨 | `:rotating_light:` | Fix compiler or linter warnings | `🚨 resolve nullable warnings in handler` |
+| 💚 | `:green_heart:` | Fix CI build | `💚 correct test runner config in pipeline` |
 | 👷 | `:construction_worker:` | Add or update CI build system | `👷 add github actions workflow` |
 | 🚀 | `:rocket:` | Deploy stuff | `🚀 deploy request api to staging` |
-| 🏗️ | `:building_construction:` | Make architectural changes | `🏗️ refactor: restructure to clean architecture` |
+| 🏗️ | `:building_construction:` | Make architectural changes | `🏗️ restructure to clean architecture` |
 | 🧱 | `:bricks:` | Infrastructure related changes | `🧱 add terraform modules for staging` |
 | 📦️ | `:package:` | Add or update compiled files or packages | `📦️ update nuget package output config` |
-| 💄 | `:lipstick:` | Add or update the UI and style files | `💄 style: update button styles` |
+| 💄 | `:lipstick:` | Add or update the UI and style files | `💄 update button styles` |
 | ♿️ | `:wheelchair:` | Improve accessibility | `♿️ add aria labels to navigation` |
-| 📱 | `:iphone:` | Work on responsive design | `📱 style: add mobile breakpoints` |
+| 📱 | `:iphone:` | Work on responsive design | `📱 add mobile breakpoints` |
 | 🌐 | `:globe_with_meridians:` | Internationalization and localization | `🌐 add resource files for localization` |
 | 🔖 | `:bookmark:` | Release / version tags | `🔖 tag v1.2.0 release` |
 | 💥 | `:boom:` | Introduce breaking changes | `💥 remove deprecated v1 api endpoints` |
@@ -74,7 +76,7 @@ Prefixes are **optional** — only include one when it adds clarity beyond what 
 | 🔇 | `:mute:` | Remove logs | `🔇 remove verbose debug logging` |
 | 🩺 | `:stethoscope:` | Add or update healthcheck | `🩺 add health endpoint for readiness probe` |
 | 🚩 | `:triangular_flag_on_post:` | Add, update, or remove feature flags | `🚩 add feature flag for new search` |
-| 👽️ | `:alien:` | Update code due to external API changes | `👽️ fix: adapt to new payment api contract` |
+| 👽️ | `:alien:` | Update code due to external API changes | `👽️ adapt to new payment api contract` |
 | 🧵 | `:thread:` | Multithreading or concurrency code | `🧵 add async processing pipeline` |
 | 🍱 | `:bento:` | Add or update assets | `🍱 add logo and icon assets` |
 | 🦖 | `:t-rex:` | Code that adds backwards compatibility | `🦖 add v1 compatibility shim` |
@@ -93,7 +95,7 @@ Key entries from that reference, by category:
 
 | Emoji | Use when | Example |
 |-------|----------|---------|
-| ⚙️ | App bootstrapping / host setup (distinct from 🔧 config files) | `⚙️ init: setup app host and middleware` |
+| ⚙️ | App bootstrapping / host setup (distinct from 🔧 config files) | `⚙️ setup app host and middleware` |
 | ☁️ | Cloud provider setup or changes | `☁️ add cloud secrets integration` |
 | ☸️ | Kubernetes | `☸️ add k8s deployment manifests` |
 | 🎡 | Helm charts | `🎡 add helm chart for api service` |
@@ -116,7 +118,7 @@ Key entries from that reference, by category:
 
 | Emoji | Use when | Example |
 |-------|----------|---------|
-| 📚 | High-level docs, README, wiki (gitmoji's 📝 covers inline/XML docs) | `📚 docs: add api usage documentation` |
+| 📚 | High-level docs, README, wiki (gitmoji's 📝 covers inline/XML docs) | `📚 add api usage documentation` |
 
 **Observability & runtime**
 

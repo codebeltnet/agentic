@@ -1,12 +1,12 @@
 ---
 name: git-visual-commits
 description: >
-  Structured git commit workflow with emoji prefixes and identity-aware modes: `git bot commit`, regular `git commit`, and `git our commit`. Use this skill whenever the user asks to commit changes, stage files, write a commit message, or review what should be committed. Also use it when the user says "commit this", "make a commit", "commit your changes", "commit what you just did", "what should my commit message be", "stage and commit", "git bot commit", "git our commit", or combines a commit request with "yolo" or "auto". Treat commit wording as an automatic trigger for this skill, not as a casual hint. Supports auto-approval mode and enforces emoji plus lowercase prefixes, max 70 chars, one logical change per commit, technology-aware grouping, and post-commit identity verification.
+  Structured git commit workflow with emoji-first subjects and identity-aware modes: `git bot commit`, regular `git commit`, and `git our commit`. Use this skill whenever the user asks to commit changes, stage files, write a commit message, or review what should be committed. Also use it when the user says "commit this", "make a commit", "commit your changes", "commit what you just did", "what should my commit message be", "stage and commit", "git bot commit", "git our commit", or combines a commit request with "yolo" or "auto". Treat commit wording as an automatic trigger for this skill, not as a casual hint. Supports auto-approval mode, defaults to no prefix after the emoji, allows an emoji plus conventional-commit prefix combo only when the user explicitly asks for it, keeps subjects under 70 chars, validates commit-language choices against the inspected reference, and verifies author/body after commit.
 ---
 
 # Git Visual Commits
 
-This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji and prefix, and running the commit. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
+This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji, and only adding a conventional prefix when the user explicitly asks for that combo. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
 
 ## Critical Rules
 
@@ -72,6 +72,13 @@ If the user did not narrow scope, do not invent a narrower scope on their behalf
 - If the feedback could refer to multiple things such as the emoji, prefix, subject, body, grouping, or the underlying code change, ask one concise clarification question before changing anything.
 - Preserve the current approved worktree and staged state until the user explicitly asks for a fix, revert, amend, or regrouping.
 - Do not treat frustration, urgency, or strong wording as implicit authorization to undo work on the user's behalf.
+
+### Commit Language Lock
+
+- Read `references/commit-language.md` in the current session before choosing any emoji or prefix.
+- If that reference is unavailable or unreadable, stop and report the blocker instead of guessing.
+- Default to `<emoji> <short description>`. Do not add a prefix after the emoji unless the user explicitly asked for a combo with conventional commits or conventional prefixes.
+- Treat the inspected reference as the source of truth for emoji and prefix meaning. Correct mismatches before presenting the plan instead of waiting for the user to catch them.
 
 ### Post-Commit Verification
 
@@ -155,7 +162,7 @@ When the user says "our commit" (or similar), the agent attributes each commit t
    ```
    1. 🙈 add gitignore                          (👤 you)
       Files: .gitignore
-   2. 🦾 init: add agent agreements              (🤖 bot)
+   2. 🦾 add agent agreements                    (🤖 bot)
       Files: AGENTS.md
    3. 🍱 add photo and hero image assets         (👤 you)
       Files: assets/dj-photo.jpg, assets/hero.png
@@ -171,6 +178,16 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 
 ## Commit Message Format
 
+Default format:
+
+```
+<emoji> <short description>
+
+<body>
+```
+
+Only when the user explicitly asks for an emoji plus conventional-commit combo:
+
 ```
 <emoji> <prefix>: <short description>
 
@@ -178,8 +195,8 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 ```
 
 - **Emoji** comes first — picked from `references/commit-language.md`
-- **Prefix** is lowercase (see `references/commit-language.md`) — **never use `feat:`**
-- **Description** is lowercase, imperative, max 70 characters total (including emoji and prefix)
+- **Prefix** is omitted by default. Only add one when the user explicitly asked for an emoji plus conventional-commit combo. When combo mode is active, the prefix is lowercase (see `references/commit-language.md`) — **never use `feat:`**
+- **Description** is lowercase, imperative, max 70 characters total (including emoji and any explicit-request prefix)
 - **Body** is included by default — a short paragraph explaining *why* the change was made, not just *what* changed. Separate from the subject with a blank line. Do **not** hard-wrap commit bodies at 72 characters; keep short bodies as normal prose and add line breaks only when they improve readability. Can be suppressed with `no-body` (see below).
 - **Body repair rule** — if verification shows the stored body was split mid-sentence just to fit an arbitrary width, amend the commit before reporting success.
 - One logical change per commit — don't bundle unrelated things
@@ -187,6 +204,8 @@ Never add or modify git remotes. Never set `git user.name` or `git user.email` l
 ### Prefix and Emoji Reference
 
 Read `references/commit-language.md` before choosing a prefix or emoji. It contains the allowed prefixes, the gitmoji-first table, and the extended emoji fallback guidance shared with `git-visual-squash-summary`. Keep that duplicated reference byte-for-byte aligned with the `git-visual-squash-summary` copy; the validator and CI both enforce that sync contract.
+
+That reference now defines prefixes as opt-in. Unless the user explicitly asked for an emoji plus conventional-commit combo, keep subjects in the default `<emoji> <short description>` form.
 
 ### Source Discipline for Explanations
 
@@ -255,10 +274,13 @@ Unless the user explicitly narrowed scope, inspect the **entire current worktree
 Don't commit blindly — understand what each file is doing before grouping.
 
 Before planning commits for `git bot commit` or other identity-sensitive flows, also verify the execution path itself: confirm the alias exists, confirm the chosen tool can execute it faithfully, and prefer a direct shell or terminal path when there is any doubt.
+Read `references/commit-language.md` before drafting subject lines. If you cannot inspect that file in the current session, stop and report the blocker instead of guessing.
 
 ### Step 2: Classify changes
 
 Before composing any commit message, bucket every changed file by its **semantic intent** — not just its file type. Read the actual diff for each file and ask: *"What is this change trying to accomplish?"* Two files of the same type (e.g. two test files) may have completely different intents and belong in separate commits.
+
+Use the inspected commit-language reference as the meaning source, not your gut. For example, restructuring an existing skill's `SKILL.md`, `FORMS.md`, `references/`, or `evals/` is normally refactor intent and should map to `♻️`; configuration-file changes map to `🔧`; truly new repo or application capabilities map to `✨`.
 
 Derive categories from the actual diff — don't assume a fixed set. Common categories include:
 
@@ -337,7 +359,7 @@ This guard runs unconditionally — including in auto-approval mode.
 
 #### Documentation separation rule
 
-Documentation files (`CHANGELOG.md`, `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, release notes) are **separate-by-default**. They only belong in the same commit as non-doc files when the commit is explicitly documentation-focused (e.g. `📝 docs: add api usage guide` where the docs are the point, not a side effect).
+Documentation files (`CHANGELOG.md`, `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, release notes) are **separate-by-default**. They only belong in the same commit as non-doc files when the commit is explicitly documentation-focused (e.g. `📝 add api usage guide` where the docs are the point, not a side effect).
 
 #### Release-adjacent splitting rule
 
@@ -386,6 +408,8 @@ Before staging or committing anything, present the full commit plan to the user.
 2. ✅ add integration tests for identity module
    Files: tests/Identity.Tests/
 ```
+
+Before you render that plan, validate every proposed emoji and every proposed prefix against the inspected `references/commit-language.md`. Fix mismatches before the user sees them. If the user did not explicitly ask for a conventional-commit combo, strip prefixes from the proposed subjects before presenting the plan.
 
 **If auto-approval is active** (via "yolo"/"auto" keyword or session-level setting), display a one-line summary and proceed immediately to Step 5:
 
@@ -443,9 +467,9 @@ If verification fails because the commit path used the wrong author or ignored t
 
 Subject-only (when the change is self-explanatory):
 ```
-🎉 init: begin api project
+🎉 begin api project
 ✨ add submission endpoint module
-🐛 fix: handle null optional fields in dto
+🐛 handle null optional fields in dto
 ➕ add validation library
 ```
 
@@ -457,15 +481,21 @@ Align with the official skill directory structure: SKILL.md, scripts/, reference
 ```
 
 ```
-♻️ refactor: streamline app skill with FORMS.md wizard
+♻️ streamline app skill with FORMS.md wizard
 
 Replace inline parameter table with structured FORMS.md form definition.
 Step 1 now references FORMS.md instead of listing 12 fields inline.
 ```
 
+When the user explicitly asked for the emoji plus conventional-commit combo:
+```
+🐛 fix: handle null optional fields in dto
+♻️ refactor: streamline app skill with FORMS.md wizard
+```
+
 With body repair after a bad first attempt:
 ```
-📝 docs: add git release-note guidance
+📝 add git release-note guidance
 
 Clarify when the repo should keep release-note docs separate from code changes so commit history stays easier to scan and review.
 ```
@@ -477,10 +507,11 @@ feat: add submission endpoint            ← "feat:" is not an allowed prefix
 ✨ Feat: Add Submission Module            ← uppercase, "Feat:" not allowed
 🎉 initial commit with all files         ← vague, bundles everything
 ⚙️ config: setup api                     ← "config:" is not an allowed prefix
+♻️ refactor: reorganize skill wording    ← bad default if the user did not ask for the combo
 ```
 
 ```
-📝 docs: add git release-note guidance
+📝 add git release-note guidance
 
 Clarify when the repo should keep release-note docs separate
 from code changes so commit history stays easier to scan and review.

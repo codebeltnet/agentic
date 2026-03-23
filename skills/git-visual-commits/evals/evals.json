@@ -140,12 +140,13 @@
     {
       "id": 13,
       "prompt": "Do a git bot commit, yolo. The diff contains only package dependency upgrades and a GitHub Actions workflow update.",
-      "expected_output": "An auto-approved bot flow that splits the dependency and CI intents and chooses gitmoji-backed emojis based on the inspected commit-language reference.",
+      "expected_output": "An auto-approved bot flow that splits the dependency and CI intents, chooses gitmoji-backed emojis based on the inspected commit-language reference, and keeps the default subjects prefixless.",
       "expectations": [
         "Separates dependency upgrades from CI workflow changes when their intents differ",
         "Chooses ⬆️ for dependency upgrade commits based on commit-language.md",
         "Chooses 👷 for CI workflow commits based on commit-language.md",
-        "Reads the emoji reference before selecting the commit emoji instead of guessing"
+        "Reads the emoji reference before selecting the commit emoji instead of guessing",
+        "Does not add conventional prefixes after the emoji when the user did not explicitly ask for that combo"
       ]
     },
     {
@@ -156,6 +157,28 @@
         "Anchors emoji explanations to sources actually inspected in the session",
         "Distinguishes repository reference files from user-provided examples or screenshots",
         "Does not claim a document contained emoji guidance unless that document was actually verified"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Do a git bot commit, yolo. The diff reorganizes an existing skill's SKILL.md, adds FORMS.md for the same skill, and updates that skill's eval contract. Use the repo's normal commit style, not conventional commits.",
+      "expected_output": "An auto-approved bot flow that classifies the change as a refactor-oriented skill update, chooses the emoji from the inspected commit-language reference, and keeps the subject prefixless.",
+      "expectations": [
+        "Reads commit-language.md before choosing the commit emoji",
+        "Classifies an existing skill wording or contract reorganization as refactor intent instead of guessing new-feature or configuration intent",
+        "Chooses ♻️ for the skill refactor commit based on the inspected reference",
+        "Does not choose ✨ or 🔧 for that refactor-oriented skill change",
+        "Does not add a conventional prefix after the emoji when the user explicitly said not to use conventional commits"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Do a git bot commit, yolo, and keep the repo emoji style but combine it with conventional commit prefixes for the subjects.",
+      "expected_output": "An auto-approved bot flow that still validates the emoji against the inspected reference, but includes an allowed lowercase prefix only because the user explicitly requested the combo.",
+      "expectations": [
+        "Treats emoji plus conventional-prefix formatting as opt-in rather than default",
+        "Uses only allowed lowercase prefixes from commit-language.md when the combo was explicitly requested",
+        "Validates both the emoji and the chosen prefix against the inspected reference before presenting or committing the plan"
       ]
     }
   ]
