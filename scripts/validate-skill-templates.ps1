@@ -677,6 +677,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` / `auto` skips user confirmation only.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If the user did **not** say `yolo` or `auto`, and session-level auto mode is not already enabled, do **not** run any commit command yet.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Commit Language Lock'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Resolve that path from this skill''s own bundled `references/` directory or installed skill folder first.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If the current repository has no `references/commit-language.md` file but the bundled skill reference is available, that is **not** a blocker.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Default to `<emoji> <short description>`.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Do not add a prefix after the emoji unless the user explicitly asked for a combo with conventional commits or conventional prefixes.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'After every commit, run:'
@@ -687,6 +689,7 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Umbrella Commit Rejection'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'skill instructions (`SKILL.md`, `FORMS.md`, `references/`, `evals/`)'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Read `references/commit-language.md` before choosing a prefix or emoji.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Treat `references/commit-language.md` as a bundled skill resource path, not as a repository-relative path.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'That reference now defines prefixes as opt-in.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Treat community health, changelog, and release-status communication as'
     Assert-NotContains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Allowed Prefixes'
@@ -737,6 +740,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats the absence of yolo or auto as a requirement to stop for approval before any commit command runs'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Separates .nuget package release notes into the package or publish metadata commit'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'package release notes or package metadata work instead of the community-health emoji'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats references/commit-language.md as a bundled skill resource rather than a repo-root path by default'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not report a blocker solely because the current repository lacks a top-level references directory'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
