@@ -6,9 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.3.3] - 2026-03-23
+## [0.3.3] - 2026-03-24
 
-This is a patch release focused on strengthening all git workflow skills with concrete eval contracts, enhanced validator enforcement, and comprehensive documentation alignment across the skill suite. Evaluations now cover semantic intent classification, emoji/prefix consistency, bot identity handling, and cross-runner compatibility.
+This is a patch release focused on strengthening all git workflow skills with concrete eval contracts, enhanced validator enforcement, and comprehensive documentation alignment across the skill suite. Evaluations now cover semantic intent classification, emoji/prefix consistency, bot identity handling, and cross-runner compatibility. The pending-worktree confirmation checkpoint in `git-keep-a-changelog` is now explicitly mandatory for concrete releases, with documentation and validator enforcement to prevent bypass.
 
 ### Changed
 
@@ -17,14 +17,16 @@ This is a patch release focused on strengthening all git workflow skills with co
 - Hardened `git-visual-commits` bot-commit execution guidance to prefer direct git paths, fail fast when wrapper tools cannot honor aliases, and recover conservatively after wrong-author attempts,
 - Refined `git-visual-commits` and `git-visual-squash-summary` skill descriptions and critical rules for consistency and clarity around semantic intent, identity modes, and reference documentation,
 - Reorganized `git-visual-commits`, `git-visual-squash-summary`, and `git-keep-a-changelog` skills with explicit workflow steps, clarified parameter forms, and synchronized emoji/prefix reference contract,
-- Enhanced `skill-creator-agnostic` for eval directory structure, Codex CLI Windows benchmarking, and runner-agnostic parity validation.
+- Enhanced `skill-creator-agnostic` for eval directory structure, Codex CLI Windows benchmarking, and runner-agnostic parity validation,
+- Clarified `git-keep-a-changelog` pending-worktree confirmation gate as mandatory for concrete releases with new "Mandatory Checkpoints" and "User Intent vs. Mandatory Gates" sections that distinguish between optional scope refinements and required safety checkpoints.
 
 ### Fixed
 
 - Extended `validate-skill-templates.ps1` to enforce release-adjacent grouping rules, direct git execution guidance, fail-fast tool-path checks, non-destructive recovery rules, refined prefix behavior, and commit-language consistency across all git skills,
 - Updated the README skill summary so the published repo guidance reflects stronger semantic grouping, direct bot-path execution, conservative commit-repair workflow, clarified prefix defaults, and updated skill entry documentation,
-- Added concrete eval contracts with test cases for all git workflow skills: `git-visual-commits` (six tests), `git-visual-squash-summary` (five tests), and `git-keep-a-changelog` (five tests), covering plan review, identity handling, emoji/prefix preservation, SemVer classification, prose wrapping, and consistency validation,
-- Added per-skill eval coverage for `markdown-illustrator` and strengthened `skill-creator-agnostic` with benchmark contract reference and Windows PowerShell benchmarking guidance.
+- Added concrete eval contracts with test cases for all git workflow skills: `git-visual-commits` (six tests), `git-visual-squash-summary` (five tests), and `git-keep-a-changelog` (six tests, including pending-worktree gate bypass validation), covering plan review, identity handling, emoji/prefix preservation, SemVer classification, prose wrapping, and consistency validation,
+- Added per-skill eval coverage for `markdown-illustrator` and strengthened `skill-creator-agnostic` with benchmark contract reference and Windows PowerShell benchmarking guidance,
+- Hardened skill-template validators to enforce the mandatory pending-worktree gate documentation in `git-keep-a-changelog`, requiring SKILL.md sections on mandatory checkpoints, FORMS.md gate emphasis, and evals.json test expectations for gate enforcement.
 
 ## [0.3.2] - 2026-03-23
 
