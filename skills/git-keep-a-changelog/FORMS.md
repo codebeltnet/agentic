@@ -1,12 +1,12 @@
 # Parameter Form
 
-Use this form only when pending worktree changes are detected and the skill must ask whether they belong in the changelog draft. Present each field **one at a time** using the host's native structured input controls when available. If native controls are unavailable, use the deterministic plain-text fallback below. Do not use this form when there are no pending changes to confirm.
+Use this form only when pending worktree changes are detected and the skill must ask whether they belong in the changelog draft. This is the mandatory Step 3 confirmation gate for concrete releases. Present each field **one at a time** using the host's native structured input controls when available. If native controls are unavailable, use the deterministic plain-text fallback below. Do not use this form when there are no pending changes to confirm.
 
 ## Fields
 
 ### include_pending_changes
 - **type:** single-choice
-- **prompt:** "I found pending uncommitted changes for release `{release_label}`: `{staged_count}` staged, `{unstaged_count}` unstaged, `{untracked_count}` untracked. Include them in the changelog draft?"
+- **prompt:** "I found pending changes not yet committed for release `{release_label}`: `{staged_count}` staged, `{unstaged_count}` unstaged, `{untracked_count}` untracked. Include them in the changelog draft? Yes / No / Custom"
 - **choices:**
   - Yes
   - No
@@ -33,7 +33,7 @@ Use this form only when pending worktree changes are detected and the skill must
 4. If native structured input controls are unavailable, use this exact plain-text fallback for the first field:
    ```text
    Field: include_pending_changes
-   I found pending uncommitted changes for release {release_label}: {staged_count} staged, {unstaged_count} unstaged, {untracked_count} untracked. Include them in the changelog draft?
+   I found pending changes not yet committed for release {release_label}: {staged_count} staged, {unstaged_count} unstaged, {untracked_count} untracked. Include them in the changelog draft? Yes / No / Custom
    1. Yes
    2. No
    3. Custom
@@ -55,3 +55,4 @@ Use this form only when pending worktree changes are detected and the skill must
 
    Proceed with this changelog scope?
    ```
+9. Do not skip this gate when the target is a concrete release, even if the user's request says `include everything`, `all changes`, `commit manually`, or `don't ask`.

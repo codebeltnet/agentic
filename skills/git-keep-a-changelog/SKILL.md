@@ -1,7 +1,7 @@
 ---
 name: git-keep-a-changelog
 description: >
-  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...). Reads full commit bodies and diffs, creates compliant structure with required SemVer highlights, infers versions from branches, can ask a concise Yes / No / Custom question before including pending staged, unstaged, or untracked worktree changes in a release draft, edits directly for review, preserves prose wrapping, avoids commit-log dumps.
+  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...). Reads full commit bodies and diffs, creates compliant structure with required SemVer highlights, infers versions from branches, must ask a mandatory Yes / No / Custom confirmation question before including pending staged, unstaged, or untracked worktree changes in a concrete release draft, edits directly for review, preserves prose wrapping, avoids commit-log dumps.
 ---
 
 # Git Keep A Changelog
@@ -27,6 +27,14 @@ Read `FORMS.md` when pending worktree changes require user confirmation and the 
 - If pending worktree changes exist for a concrete release draft, do not silently include or exclude them. Ask the user first with a short `Yes / No / Custom` prompt.
 - Do not dump commit subjects verbatim into the changelog.
 - Do not invent unsupported changes, risks, or migration guidance.
+
+## Mandatory Checkpoints
+
+These checkpoints cannot be skipped or bypassed, even when the user's opening request sounds like a shortcut.
+
+1. Step 3 confirmation gate: if pending worktree changes exist for a concrete release such as `## [1.2.3]`, present the confirmation question before drafting or writing the changelog entry.
+2. Release highlight contract: every concrete release entry must include a release highlight paragraph that explicitly classifies the release as `major`, `minor`, or `patch`.
+3. Bullet punctuation: all bullets must end with `,` except the final bullet in each populated section, which must end with `.` Do not finish the edit until this is consistent.
 
 ## Release Highlight Contract
 
@@ -59,6 +67,24 @@ When the history clearly carries migration risk or upgrade caveats, add an advis
 ```
 
 Only add callouts when the commits or diff justify them.
+
+## User Intent vs. Mandatory Gates
+
+### User intent can refine scope after the gate
+
+Explicit instructions such as `staged only`, `include unstaged changes`, or `exclude untracked` can refine the changelog scope after the Step 3 confirmation gate has been presented and answered.
+
+### User intent cannot bypass the gate
+
+- Do not skip Step 3 just because the user says `include everything`, `all changes`, `commit manually`, or `don't ask`.
+- Do not omit the release highlight paragraph for a concrete release.
+- Do not omit the explicit `major`, `minor`, or `patch` classification.
+
+The Step 3 confirmation gate exists to prevent silent inclusion of worktree changes in a permanent release entry. It is a required safety checkpoint, not optional friction.
+
+### Why this matters
+
+Silent inclusion of pending changes in a changelog is a production risk. The gate ensures the release scope is intentional, visible, and explicitly confirmed before the draft becomes part of the project's recorded release history.
 
 ## Workflow
 
@@ -97,25 +123,30 @@ Otherwise:
 - If no version hint exists, target `## [Unreleased]`.
 - If the target heading already exists, update it in place instead of duplicating it.
 
-### Step 3: Inspect pending worktree changes
+### Step 3: Confirm Pending Worktree Changes (MANDATORY GATE)
+
+This is a required checkpoint. Do not proceed to Step 4 until this step is complete.
 
 After resolving the target heading, check whether the worktree contains changes that are not part of the committed history yet.
 
 - Count staged, unstaged, and untracked changes separately.
 - If there are no pending changes, continue normally.
-- If there are pending changes and the target is a concrete release heading such as `## [1.2.3]`, ask a direct confirmation question before drafting the changelog entry.
-- When the host supports native structured input controls, use `FORMS.md` for this confirmation flow.
-- Use this shape:
+- If there are pending changes and the target is a concrete release heading such as `## [1.2.3]`, You must ask a direct confirmation question before drafting the changelog entry.
+- User intent hints such as `all changes`, `include everything`, `commit manually`, or `don't ask` do not bypass this gate.
+- When the host supports native structured input controls, use `FORMS.md` for this confirmation flow, but keep the prompt text and `Yes / No / Custom` meaning identical to the plain-text path.
+- Present this question:
 
 ```text
 I found pending changes not yet committed for release 1.2.3: 4 staged, 2 unstaged, 1 untracked. Include them in the changelog draft? Yes / No / Custom
 ```
 
+- Do not skip this question.
 - Keep the prompt short and concrete. Do not drift into commit-range jargon or enumerate scope rules unless the user chooses `Custom` or asks for detail.
 - `Yes` means include the pending changes in addition to the committed range.
 - `No` means use committed history only.
 - `Custom` means let the user narrow the scope, for example `staged only` or `exclude untracked`.
 - Keep the widget-backed path and the plain-text fallback semantically identical: same `Yes / No / Custom` order, same meaning, and the same follow-up scope question only when `Custom` is chosen.
+- Wait for the user's explicit response before proceeding to Step 4.
 - For `## [Unreleased]`, use the same short prompt when pending worktree changes are relevant to the user's request. Do not silently fold them into the draft unless the user explicitly asked for current worktree coverage.
 
 Helpful commands:
@@ -191,7 +222,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Includes a required SemVer-aware release highlight.
 - Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
 - Reflects the meaning of full commit bodies and the net diff.
-- Asks a concise `Yes / No / Custom` question before including pending worktree changes in a concrete release draft.
+- Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes.
 - Preserves natural prose wrapping with no fixed column-width target.
 - Keeps bullets specific, concrete, non-repetitive, and consistently punctuated.
 - Preserves existing compare-link structure when updating versions.
@@ -202,7 +233,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Omitting the release highlight.
 - Failing to classify the release as major, minor, or patch.
 - Refusing to proceed just because `CHANGELOG.md` does not exist yet.
-- Silently including or ignoring pending worktree changes for a concrete release draft.
+- Silently including, silently ignoring, or otherwise bypassing the pending-worktree confirmation gate for a concrete release draft.
 - Using any artificial fixed-width wrapping for changelog prose.
 - Mixing bullet punctuation or leaving section bullets without the required trailing `,` / final `.` pattern.
 - Emitting empty `Added` / `Changed` / `Fixed` headings.

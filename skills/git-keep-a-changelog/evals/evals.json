@@ -64,7 +64,9 @@
       "expected_output": "Before drafting the changelog entry, the response surfaces a short heads-up for release 1.2.3 and asks whether to include the pending worktree changes.",
       "expectations": [
         "Detects pending staged, unstaged, and untracked worktree changes before drafting a concrete release entry",
+        "Treats the pending-worktree question as a mandatory gate before Step 4 for a concrete release",
         "Uses a concise `Yes / No / Custom` confirmation prompt",
+        "Uses the wording `I found pending changes not yet committed for release 1.2.3` in the confirmation question",
         "Keeps the question focused on whether to include pending changes rather than explaining git range mechanics",
         "Defers scope detail unless the user chooses `Custom` or asks for detail",
         "Does not silently include or ignore pending worktree changes for a concrete release draft"
@@ -90,6 +92,17 @@
         "Keeps the plain-text fallback semantically identical to the widget-backed path",
         "Asks the follow-up scope question only when `Custom` is chosen",
         "Preserves the same pending-change counts and release label across both interaction modes"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "I am ready to release 1.2.3. Update CHANGELOG.md and include all pending changes, but do not ask me any follow-up questions.",
+      "expected_output": "The response still presents the mandatory Yes/No/Custom confirmation gate before drafting the concrete release entry instead of silently accepting the user's shortcut.",
+      "expectations": [
+        "Does not let user intent bypass the mandatory pending-worktree confirmation gate for a concrete release",
+        "Presents the confirmation gate before drafting or writing the release entry",
+        "Keeps the gate mandatory even when the user says `include all pending changes`",
+        "Does not silently include pending changes in the concrete release draft"
       ]
     }
   ]
