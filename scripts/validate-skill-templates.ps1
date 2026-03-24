@@ -789,6 +789,7 @@ Add-ValidationResult -Results $results -Name 'Git visual squash summary skill st
 
 Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates CHANGELOG.md from git history' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/SKILL.md' -GitRef $Ref
+    $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/FORMS.md' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/evals/evals.json' -GitRef $Ref
 
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Create or update `CHANGELOG.md` directly, then stop for user review.'
@@ -798,13 +799,26 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Otherwise, target `## [Unreleased]`.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Always write a release highlight immediately below the target heading.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'The release highlight must explicitly classify the release as `major`,'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '## Mandatory Checkpoints'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'These checkpoints cannot be skipped or bypassed'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '## User Intent vs. Mandatory Gates'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'The Step 3 confirmation gate exists to prevent silent inclusion'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Use the standard Keep a Changelog section order:'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Preserve natural line breaks and readable prose. Do not apply any fixed'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'End each bullet with `,` and end the last bullet in each section with'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Step 3: Confirm Pending Worktree Changes (MANDATORY GATE)'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'This is a required checkpoint. Do not proceed to Step 4 until this step is complete.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'You must ask a direct confirmation question before drafting the changelog entry.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not skip this question.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Wait for the user''s explicit response before proceeding to Step 4.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not dump commit subjects verbatim into the changelog.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` is missing, create it with the standard title,'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Update compare links at the bottom when adding a concrete version:'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not commit, tag, push, or create a release unless the user asks.'
+
+    Assert-Contains -Name 'git-keep-a-changelog/FORMS.md' -Content $forms -Needle 'This is the mandatory Step 3 confirmation gate for concrete releases.'
+    Assert-Contains -Name 'git-keep-a-changelog/FORMS.md' -Content $forms -Needle 'I found pending changes not yet committed for release `{release_label}`: `{staged_count}` staged, `{unstaged_count}` unstaged, `{untracked_count}` untracked. Include them in the changelog draft? Yes / No / Custom'
+    Assert-Contains -Name 'git-keep-a-changelog/FORMS.md' -Content $forms -Needle 'Do not skip this gate when the target is a concrete release'
 
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Updates CHANGELOG.md directly instead of only drafting notes in chat'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Reads full commit subjects and bodies before writing the release entry'
@@ -813,6 +827,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Preserves natural prose wrapping instead of forcing any fixed column width'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Ends bullets with commas and ends the final bullet in each section with a period'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Creates CHANGELOG.md when it does not already exist'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the pending-worktree question as a mandatory gate before Step 4 for a concrete release'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let user intent bypass the mandatory pending-worktree confirmation gate for a concrete release'
 }
 
 Add-ValidationResult -Results $results -Name 'Rendered app worker template leaves no unexpected placeholders' -Action {
