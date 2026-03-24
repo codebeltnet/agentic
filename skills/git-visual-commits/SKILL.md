@@ -78,6 +78,8 @@ If the user did not narrow scope, do not invent a narrower scope on their behalf
 ### Commit Language Lock
 
 - Read `references/commit-language.md` in the current session before choosing any emoji or prefix.
+- Resolve that path from this skill's own bundled `references/` directory or installed skill folder first. Do **not** reinterpret it as a repo-root `references/commit-language.md` path unless the user explicitly points you there.
+- If the current repository has no `references/commit-language.md` file but the bundled skill reference is available, that is **not** a blocker. Read the bundled skill resource and continue.
 - If that reference is unavailable or unreadable, stop and report the blocker instead of guessing.
 - Default to `<emoji> <short description>`. Do not add a prefix after the emoji unless the user explicitly asked for a combo with conventional commits or conventional prefixes.
 - Treat the inspected reference as the source of truth for emoji and prefix meaning. Correct mismatches before presenting the plan instead of waiting for the user to catch them.
@@ -208,6 +210,8 @@ Only when the user explicitly asks for an emoji plus conventional-commit combo:
 
 Read `references/commit-language.md` before choosing a prefix or emoji. It contains the allowed prefixes, the gitmoji-first table, and the extended emoji fallback guidance shared with `git-visual-squash-summary`. Keep that duplicated reference byte-for-byte aligned with the `git-visual-squash-summary` copy; the validator and CI both enforce that sync contract.
 
+Treat `references/commit-language.md` as a bundled skill resource path, not as a repository-relative path. If a tool reports that the current repo lacks a top-level `references/` folder, re-check the skill resource location before declaring a blocker.
+
 That reference now defines prefixes as opt-in. Unless the user explicitly asked for an emoji plus conventional-commit combo, keep subjects in the default `<emoji> <short description>` form. For community health, changelog, and release-status communication, prefer `💬` from that same reference rather than generic docs emoji.
 
 ### Source Discipline for Explanations
@@ -278,6 +282,7 @@ Don't commit blindly — understand what each file is doing before grouping.
 
 Before planning commits for `git bot commit` or other identity-sensitive flows, also verify the execution path itself: confirm the alias exists, confirm the chosen tool can execute it faithfully, and prefer a direct shell or terminal path when there is any doubt.
 Read `references/commit-language.md` before drafting subject lines. If you cannot inspect that file in the current session, stop and report the blocker instead of guessing.
+When resolving that reference, prefer the bundled skill path first instead of treating repo-root `references/` absence as a failure.
 
 ### Step 2: Classify changes
 

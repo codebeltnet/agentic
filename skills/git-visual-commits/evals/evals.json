@@ -203,6 +203,16 @@
         "Keeps CHANGELOG.md in the release-communication commit rather than merging it with package metadata",
         "Does not use same-release purpose or same-round timing as a reason to merge all intents"
       ]
+    },
+    {
+      "id": 19,
+      "prompt": "Please do a git bot commit. A previous run claimed `references/commit-language.md` is missing because this repository has no top-level `references/` folder. Handle that correctly before you block on it.",
+      "expected_output": "The response resolves commit-language.md from the bundled skill reference path instead of treating repo-root `references/` absence as a blocker.",
+      "expectations": [
+        "Treats references/commit-language.md as a bundled skill resource rather than a repo-root path by default",
+        "Does not report a blocker solely because the current repository lacks a top-level references directory",
+        "Re-checks the skill resource location before declaring the commit-language reference unavailable"
+      ]
     }
   ]
 }
