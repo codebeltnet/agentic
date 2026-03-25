@@ -818,7 +818,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Wait for the user''s explicit response before proceeding to Step 4.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not dump commit subjects verbatim into the changelog.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` is missing, create it with the standard title,'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Update compare links at the bottom when adding a concrete version:'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Always maintain the Keep a Changelog compare-link footer at the bottom of the file.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'On every edit, verify that the compare-link footer exists at the bottom of the file.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not commit, tag, push, or create a release unless the user asks.'
 
     Assert-Contains -Name 'git-keep-a-changelog/FORMS.md' -Content $forms -Needle 'This is the mandatory Step 3 confirmation gate for concrete releases.'
@@ -834,6 +835,7 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Creates CHANGELOG.md when it does not already exist'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the pending-worktree question as a mandatory gate before Step 4 for a concrete release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let user intent bypass the mandatory pending-worktree confirmation gate for a concrete release'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Inserts the compare-link footer at the bottom when it is missing from an existing changelog'
 }
 
 Add-ValidationResult -Results $results -Name 'Rendered app worker template leaves no unexpected placeholders' -Action {
