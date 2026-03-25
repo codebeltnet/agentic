@@ -6,6 +6,8 @@ description: >
 
 # Strong Name Signing for .NET
 
+![Strong Name Signing](assets/hero.jpg)
+
 Generate a strong name key pair (`.snk` file) for signing .NET assemblies. Uses the .NET runtime's built-in `RSACryptoServiceProvider` instead of `sn.exe`, so it works in **any PowerShell or terminal** — no Visual Studio Developer Command Prompt needed.
 
 ## Why this matters
