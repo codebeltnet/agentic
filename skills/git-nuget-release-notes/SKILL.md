@@ -6,6 +6,8 @@ description: >
 
 # Git NuGet Release Notes
 
+![Git NuGet Release Notes](assets/hero.jpg)
+
 This skill creates or updates cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files for packable .NET projects by reading git history and the actual project/package metadata. It is intentionally closer to the package-note style used in codebelt repositories than to a repo-wide `CHANGELOG.md`.
 
 Read `references/package-release-notes-format.md` before writing any release-note block.
