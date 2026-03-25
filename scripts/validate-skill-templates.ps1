@@ -813,7 +813,7 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'End each bullet with `,` and end the last bullet in each section with'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Step 3: Confirm Pending Worktree Changes (MANDATORY GATE)'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'This is a required checkpoint. Do not proceed to Step 4 until this step is complete.'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'You must ask a direct confirmation question before drafting the changelog entry.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'you must ask a direct confirmation question before drafting the changelog entry.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not skip this question.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Wait for the user''s explicit response before proceeding to Step 4.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not dump commit subjects verbatim into the changelog.'
