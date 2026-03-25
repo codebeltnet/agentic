@@ -11,12 +11,15 @@ Use this form only when pending worktree changes are detected and the skill must
   - Yes
   - No
   - Custom
+- **default:** No
 - **required:** true
 - **description:** `Yes` includes the pending staged, unstaged, and untracked changes in addition to the committed range. `No` uses committed history only. `Custom` lets the user narrow the pending scope.
 
 ### custom_pending_scope
 - **type:** text
 - **prompt:** "Which pending changes should I include?"
+- **choices:** none
+- **default:** none
 - **placeholder:** "e.g. staged only, exclude untracked"
 - **required:** true
 - **description:** Ask this field only when `include_pending_changes` is `Custom`.

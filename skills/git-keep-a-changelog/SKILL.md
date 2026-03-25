@@ -134,7 +134,7 @@ After resolving the target heading, check whether the worktree contains changes 
 
 - Count staged, unstaged, and untracked changes separately.
 - If there are no pending changes, continue normally.
-- If there are pending changes and the target is a concrete release heading such as `## [1.2.3]`, You must ask a direct confirmation question before drafting the changelog entry.
+- If there are pending changes and the target is a concrete release heading such as `## [1.2.3]`, you must ask a direct confirmation question before drafting the changelog entry.
 - User intent hints such as `all changes`, `include everything`, `commit manually`, or `don't ask` do not bypass this gate.
 - When the host supports native structured input controls, use `FORMS.md` for this confirmation flow, but keep the prompt text and `Yes / No / Custom` meaning identical to the plain-text path.
 - Present this question:
