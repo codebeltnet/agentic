@@ -104,6 +104,18 @@
         "Keeps the gate mandatory even when the user says `include all pending changes`",
         "Does not silently include pending changes in the concrete release draft"
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "CHANGELOG.md already exists and has release entries, but the compare-link footer at the bottom is missing. Update the changelog in Keep a Changelog style and repair the missing diff-range footer while keeping the existing release history intact.",
+      "expected_output": "The existing changelog is updated in place and ends with a repaired compare-link footer that includes the expected diff ranges instead of leaving the footer absent on an update path.",
+      "expectations": [
+        "Verifies the compare-link footer on update paths, not only when creating a new CHANGELOG.md",
+        "Inserts the compare-link footer at the bottom when it is missing from an existing changelog",
+        "Repairs incomplete or stale compare links instead of preserving a missing footer",
+        "Keeps existing release history intact while restoring the missing diff-range footer",
+        "Uses Keep a Changelog compare-link style rather than omitting diff ranges from the updated file"
+      ]
     }
   ]
 }

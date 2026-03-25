@@ -22,6 +22,7 @@ Read `FORMS.md` when pending worktree changes require user confirmation and the 
 - The release highlight must explicitly classify the release as `major`, `minor`, or `patch`.
 - Use the standard Keep a Changelog section order: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
 - Omit empty sections instead of emitting placeholders.
+- Always maintain the Keep a Changelog compare-link footer at the bottom of the file.
 - Preserve natural line breaks and readable prose. Do not apply any fixed column limit or artificial hard wrapping to changelog paragraphs or bullets.
 - End each bullet with `,` and end the last bullet in each section with `.`.
 - If pending worktree changes exist for a concrete release draft, do not silently include or exclude them. Ask the user first with a short `Yes / No / Custom` prompt.
@@ -208,7 +209,9 @@ Preserve the file's existing structure while editing.
 - Keep the introduction and existing release history intact.
 - If writing a concrete release section, insert it below `## [Unreleased]` and above older releases.
 - If writing to `## [Unreleased]`, keep the heading and update only its content.
-- Update compare links at the bottom when adding a concrete version: `[Unreleased]` should compare from the new version to `HEAD`, and the new version should compare from the previous version tag to the new tag.
+- On every edit, verify that the compare-link footer exists at the bottom of the file. If it is missing or incomplete, insert or repair it instead of leaving the changelog without diff ranges.
+- When adding or updating a concrete version, `[Unreleased]` should compare from the newest released version to `HEAD`, and that released version should compare from the previous version tag to the new tag.
+- Preserve valid historical compare links for older releases. Repair only the links that are missing, incomplete, or wrong.
 - Do not remove existing links or historical entries unless they are demonstrably wrong.
 
 ### Step 8: Stop after the edit
@@ -223,6 +226,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
 - Reflects the meaning of full commit bodies and the net diff.
 - Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes.
+- Maintains or inserts the compare-link footer at the bottom of the file on both create and update paths.
 - Preserves natural prose wrapping with no fixed column-width target.
 - Keeps bullets specific, concrete, non-repetitive, and consistently punctuated.
 - Preserves existing compare-link structure when updating versions.
@@ -237,4 +241,5 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Using any artificial fixed-width wrapping for changelog prose.
 - Mixing bullet punctuation or leaving section bullets without the required trailing `,` / final `.` pattern.
 - Emitting empty `Added` / `Changed` / `Fixed` headings.
+- Updating an existing changelog entry but leaving the compare-link footer missing or stale.
 - Claiming breaking changes, fixes, or security work not supported by git.
