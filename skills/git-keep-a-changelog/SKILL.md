@@ -6,6 +6,8 @@ description: >
 
 # Git Keep A Changelog
 
+![Git Keep A Changelog](assets/hero.jpg)
+
 This skill creates or updates `CHANGELOG.md` directly using the Keep a Changelog 1.1.0 structure. It is git-aware, changelog-focused, and optimized for a human-readable release summary rather than generated release-note noise.
 
 Read `FORMS.md` when pending worktree changes require user confirmation and the host supports native structured input controls. If native structured input is unavailable, use the deterministic plain-text fallback defined there.
