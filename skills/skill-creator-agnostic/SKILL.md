@@ -17,16 +17,18 @@ On Windows or when running from PowerShell, also read `references/windows-powers
 - Start from Anthropic's `skill-creator` workflow. Use this skill to add environment and repo guardrails, not to fork or replace the upstream skill.
 - Do not edit third-party skills such as Anthropic's `skill-creator` to encode repo-specific behavior. Keep those rules in repo-managed files and companion skills instead.
 - Do not assume any specific runner CLI exists. Choose the benchmark runner from what is actually available in the current environment.
+- When the chosen runner supports sub-agents, background agents, or equivalent parallel executions, use that capability for `MEASURED` benchmarks by default instead of running evals serially.
 - Keep all eval workspaces under a temp root such as `$env:TEMP/<skill-name>-workspace/`, never inside the source repo.
 - For repo-managed skills, keep `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/` in sync before calling the work done.
 - Every repo-managed skill must keep a per-skill `evals/evals.json`.
 - If an eval entry declares `files`, treat those paths as skill-relative fixtures and stage them into the temp workspace for both benchmark configurations.
-- Benchmark directories must follow `iteration-N/eval-name/{config}/run-N/` exactly; do not flatten files directly under `with_skill/` or `without_skill/`.
+- Benchmark directories must follow `iteration-N/eval-name/{config}/run-N/` exactly, and the eval directory itself must start with `eval-`; do not flatten files directly under `with_skill/` or `without_skill/`.
 - `grading.json` must include both `expectations` and a populated `summary` object with `passed`, `failed`, `total`, and `pass_rate`.
 - Generate `benchmark.json` through `skill-creator/scripts/aggregate_benchmark.py`; never hand-author it.
 - Generate the human review artifact through `skill-creator/eval-viewer/generate_review.py`; do not build custom HTML when the upstream viewer already fits.
 - Write JSON as UTF-8 without BOM so Python tooling can load it reliably.
 - Distinguish benchmark modes explicitly: `MEASURED` for real model executions, `SIMULATED` for hand-authored or scripted expected outputs. Never present simulated outputs as measured.
+- A `MEASURED` benchmark may still show zero delta or parity between configurations. That is a valid measured result, not a reason to relabel the run as simulated.
 
 ## Workflow
 
@@ -47,8 +49,10 @@ Choose the benchmark execution path from actual available capabilities, not from
 
 - Check whether a callable agent runner is available.
 - If one exists, prefer a real `MEASURED` benchmark.
+- If that runner can execute sub-agents or equivalent background tasks, prefer parallel paired runs over serial execution.
 - If no callable runner exists, you may still validate the pipeline with a `SIMULATED` benchmark, but label it clearly as such.
 - Explain the chosen mode up front whenever the distinction matters to the user.
+- If the callable runner is Codex CLI on Windows, verify the exact invocation shape with a tiny smoke run before spawning the full benchmark harness.
 
 Do not frame the workflow around one vendor-specific CLI unless that CLI is actually present.
 
@@ -83,6 +87,7 @@ iteration-N/
 
 Keep `eval_metadata.json` at the eval-directory level. Put run artifacts under `run-N/` so `aggregate_benchmark.py` can discover them.
 If `evals/evals.json` declares `files`, copy those skill-relative fixtures into `fixtures/` at the eval-directory level and make them available to both runs.
+Do not invent custom eval directory names such as `dependency-upgrades-vs-build-refactor/` without the `eval-` prefix. Anthropic's aggregation tooling discovers `eval-*` directories, not arbitrary names.
 
 ### Step 5: Run paired benchmarks
 
@@ -93,10 +98,14 @@ Run each eval in paired configurations:
 
 For `MEASURED` runs:
 
+- if the runner supports sub-agents, spawn the paired executor runs for all evals in parallel in the same turn when practical
 - save the real outputs
 - save transcripts or command logs when available
 - keep timings and token counts tied to the actual run
 - use the same staged fixture files for both `with_skill` and `without_skill` runs when the eval declares `files`
+- if the runner accepts prompts positionally, pass the prompt as a single argument or via stdin instead of relying on shell-quoted fragments that can be reparsed as CLI flags or extra arguments
+- if the runner offers JSONL or event-stream output, keep that raw event file in `outputs/`; it is the fallback source of truth when a convenience output file such as `last-message.txt` is missing
+- once executor runs finish, grade them in parallel too when the runner supports that pattern and the grading work is independent
 
 For `SIMULATED` runs:
 
@@ -155,6 +164,7 @@ Call out benchmark limitations directly. For example:
 - fixture gaps that leave an assertion only partially tested
 - synthetic outputs used for pipeline validation
 - missing transcripts or token counts in a measured run
+- parity results where both configurations pass, meaning the eval validates the artifact pipeline but does not yet discriminate skill value
 
 ### Step 9: Finish repo-managed skill work cleanly
 
@@ -169,9 +179,11 @@ For repo-managed skills:
 
 - Treats Anthropic's `skill-creator` as the base workflow and this skill as the overlay.
 - Talks about available runner capability instead of assuming one product-specific CLI.
+- Uses parallel paired executor and grader runs by default when the available runner supports sub-agents or equivalent background tasks.
 - Resolves the installed `skill-creator` path before calling benchmark scripts or the review viewer.
 - Produces valid benchmark artifacts that `aggregate_benchmark.py` and `generate_review.py` consume without repair work.
 - Labels synthetic benchmarks as `SIMULATED` and live executions as `MEASURED`.
+- Treats measured parity as an honest outcome instead of overclaiming improvement.
 - Explains why a benchmark failed in terms of layout, grading schema, encoding, or environment reality instead of hand-waving.
 
 ## Bad Output Characteristics
@@ -179,5 +191,8 @@ For repo-managed skills:
 - Presenting hand-authored outputs as if they were independent model runs.
 - Hand-writing `benchmark.json` instead of generating it.
 - Flattening files directly under `with_skill/` or `without_skill/`.
+- Naming eval directories without the `eval-*` prefix and then blaming the aggregator for finding zero runs.
 - Saying "use the Claude CLI" or any other vendor tool when the environment has not shown that capability.
+- Running a `MEASURED` benchmark serially by habit even though the available runner supports safe parallel paired runs.
+- Relabeling a real but parity-only run as `SIMULATED` just because the delta is zero.
 - Treating a viewer with qualitative outputs as proof that the numeric benchmark is valid.

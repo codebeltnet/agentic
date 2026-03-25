@@ -88,6 +88,7 @@ Infer these dimensions silently. Do not present them as a menu.
   - Use `diagram` for requests such as `diagram`, `systems`, `process`, `architecture`, `workflow`, or `pipeline`.
   - Use `cover` for requests such as `cover image`, `keynote opener`, `poster`, or `editorial cover`.
 - **Visual treatment**: preserve explicit user styles such as `whiteboard`, `blackboard`, `scientific`, `hand-drawn`, `isometric`, or `minimal line art`. If the user gives no style signal, default to `cinematic editorial`.
+  - For `whiteboard` and `blackboard`, preserve the physical medium but do not keep every mark monochrome. Bias toward a mostly black-marker or white-chalk base with a small accent palette for emphasis marks such as arrows, checkmarks, key icons, circles, highlights, or flow traces.
 - **Abstraction level**: choose `literal`, `balanced`, or `concept-led`.
   - Use `concept-led` for `wow`, `hero`, `cinematic`, `breathtaking`, `desirable`, or `raise interest`.
   - Use `balanced` for `digest`, `overview`, `onboarding`, `educational`, or `systems`.
@@ -132,6 +133,7 @@ Compiler rules:
 - Add cognitive structure when relevant, but use embedded text sparingly. Prefer arrows, icons, blocks, and symbolic grouping over text-heavy diagrams because image models often render words poorly.
 - If labels or annotations are truly necessary, keep them very short, secondary, and non-critical to success. Prefer one-to-three-word phrases over readable sentences or dense copy.
 - Ground the image in a physical medium when appropriate. If the chosen treatment benefits from a medium such as whiteboard, chalkboard, blueprint, or another concrete surface, describe material details like marker strokes, chalk dust, lighting, texture, and small imperfections.
+- For `whiteboard` and `blackboard` treatments, describe selective accent colors explicitly. Keep the medium legible and authentic, but use a restrained accent set such as red, blue, yellow, or green for emphasis marks instead of rendering every icon, arrow, checkmark, or callout in plain black marker or white chalk.
 - Steer the composition toward a wide frame by default. Prefer `16:9` unless `3:2` clearly better supports the scene; avoid implying `1:1` unless the user explicitly asked for square output.
 - Control complexity aggressively. Keep one dominant idea, one obvious focal path, and one readable hierarchy.
 - Add negative constraints directly into the prompt to prevent failure modes, using phrases like `no clutter`, `no chaos`, `no unnecessary elements`, `clean composition`, and `intentional layout` where appropriate.

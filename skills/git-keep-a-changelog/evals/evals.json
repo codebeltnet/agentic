@@ -57,6 +57,65 @@
         "Populates the new file from git history instead of leaving it as a blank scaffold",
         "Keeps the same SemVer-aware release highlight rules for newly created files"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "My branch is named v1.2.3/release-prep and there are staged, unstaged, and untracked changes in the worktree. Update CHANGELOG.md for this release, but ask me before you include anything not yet committed.",
+      "expected_output": "Before drafting the changelog entry, the response surfaces a short heads-up for release 1.2.3 and asks whether to include the pending worktree changes.",
+      "expectations": [
+        "Detects pending staged, unstaged, and untracked worktree changes before drafting a concrete release entry",
+        "Treats the pending-worktree question as a mandatory gate before Step 4 for a concrete release",
+        "Uses a concise `Yes / No / Custom` confirmation prompt",
+        "Uses the wording `I found pending changes not yet committed for release 1.2.3` in the confirmation question",
+        "Keeps the question focused on whether to include pending changes rather than explaining git range mechanics",
+        "Defers scope detail unless the user chooses `Custom` or asks for detail",
+        "Does not silently include or ignore pending worktree changes for a concrete release draft"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "There are pending worktree changes for release 1.2.3, and I only want the staged changes included in the changelog draft.",
+      "expected_output": "The response honors a custom pending-change scope instead of forcing all-or-nothing worktree inclusion.",
+      "expectations": [
+        "Treats `Custom` as a valid path for pending worktree inclusion",
+        "Can narrow pending change coverage to a subset such as staged only",
+        "Keeps the changelog source grounded in committed history plus the explicitly approved pending subset",
+        "Avoids silently broadening a custom scope to include unstaged or untracked changes"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "The host supports native choice widgets. There are pending worktree changes for release 1.2.3, so ask me whether to include them using the skill's structured input flow and keep the plain-text fallback equivalent if widgets are unavailable.",
+      "expected_output": "The response uses the skill's FORMS-backed Yes/No/Custom decision model for pending worktree changes, with the same semantics in both native-input and plain-text modes.",
+      "expectations": [
+        "Uses a FORMS-backed `Yes / No / Custom` confirmation flow for pending worktree changes when native structured input is available",
+        "Keeps the plain-text fallback semantically identical to the widget-backed path",
+        "Asks the follow-up scope question only when `Custom` is chosen",
+        "Preserves the same pending-change counts and release label across both interaction modes"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "I am ready to release 1.2.3. Update CHANGELOG.md and include all pending changes, but do not ask me any follow-up questions.",
+      "expected_output": "The response still presents the mandatory Yes/No/Custom confirmation gate before drafting the concrete release entry instead of silently accepting the user's shortcut.",
+      "expectations": [
+        "Does not let user intent bypass the mandatory pending-worktree confirmation gate for a concrete release",
+        "Presents the confirmation gate before drafting or writing the release entry",
+        "Keeps the gate mandatory even when the user says `include all pending changes`",
+        "Does not silently include pending changes in the concrete release draft"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "CHANGELOG.md already exists and has release entries, but the compare-link footer at the bottom is missing. Update the changelog in Keep a Changelog style and repair the missing diff-range footer while keeping the existing release history intact.",
+      "expected_output": "The existing changelog is updated in place and ends with a repaired compare-link footer that includes the expected diff ranges instead of leaving the footer absent on an update path.",
+      "expectations": [
+        "Verifies the compare-link footer on update paths, not only when creating a new CHANGELOG.md",
+        "Inserts the compare-link footer at the bottom when it is missing from an existing changelog",
+        "Repairs incomplete or stale compare links instead of preserving a missing footer",
+        "Keeps existing release history intact while restoring the missing diff-range footer",
+        "Uses Keep a Changelog compare-link style rather than omitting diff ranges from the updated file"
+      ]
     }
   ]
 }

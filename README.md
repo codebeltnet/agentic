@@ -12,7 +12,7 @@ One repo-wide convention matters especially for scaffolding skills: prefer dynam
 
 Another repo rule is intentionally strict: every repo-managed skill ships with its own `evals/evals.json`, and those evals are run per skill from a temp workspace instead of from inside this repository.
 
-Another part of that workflow is now mandatory too: when a repo-managed skill is created or modified, the author must run both `with_skill` and `without_skill` comparison executions from a temp workspace, aggregate the results into `benchmark.json`, and open `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy, typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, so a human can review both the `Outputs` and `Benchmark` views before sign-off. For new skills the baseline is `without_skill`; for existing skills it can be `without_skill` or the previous/original skill version, matching the `skill-creator` benchmark flow.
+Another part of that workflow is now mandatory too: when a repo-managed skill is created or modified, the author must run both `with_skill` and `without_skill` comparison executions from a temp workspace, aggregate the results into `benchmark.json`, and open `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy, typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, so a human can review both the `Outputs` and `Benchmark` views before sign-off. For new skills the baseline is `without_skill`; for existing skills it can be `without_skill` or the previous/original skill version, matching the `skill-creator` benchmark flow. When the available runner supports sub-agents or equivalent background tasks, the measured benchmark should fan out paired executor runs in parallel and parallelize independent grading work too, rather than running evals serially by habit.
 
 One more consistency rule matters for form-driven skills: native input fields are treated as a host feature, not something a model can rely on. Skills in this repo must stay usable with or without UI widgets, and must fall back to the same deterministic one-field-at-a-time flow when the host only supports plain chat.
 
@@ -72,11 +72,11 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 
 | Skill | Description |
 |-------|-------------|
-| [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji (gitmoji-first), conventional prefixes, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
-| [git-keep-a-changelog](skills/git-keep-a-changelog/SKILL.md) | Git-aware Keep a Changelog companion that creates or updates `CHANGELOG.md` from the current branch by default. Reads full commit subjects and bodies plus the net diff, infers a release heading from a branch version hint like `v0.3.0/...` when available, creates a compliant changelog if the file does not exist yet, writes a required SemVer-aware release highlight, preserves natural prose wrapping, and curates `Added` / `Changed` / `Fixed` style sections instead of dumping raw commit logs. |
+| [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with emoji-first subjects (gitmoji-first), optional conventional prefixes only on explicit request, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Includes commit body by default (opt out with `no-body`), semantic intent splitting, bundled `commit-language.md` validation from the skill resource path rather than repo-root guesses, clarification-before-correction safety, and auto-approval mode (`yolo` / `auto`). The agent does all the work either way. Stack-agnostic. |
+| [git-keep-a-changelog](skills/git-keep-a-changelog/SKILL.md) | Git-aware Keep a Changelog companion that creates or updates `CHANGELOG.md` from the current branch by default. Reads full commit subjects and bodies plus the net diff, infers a release heading from a branch version hint like `v0.3.0/...` when available, must ask a mandatory `Yes / No / Custom` confirmation question before including pending staged, unstaged, or untracked worktree changes in a concrete release draft, now backed by `FORMS.md` so compatible hosts can render a native choice UI while preserving the same text fallback, creates a compliant changelog if the file does not exist yet, writes a required SemVer-aware release highlight, maintains or inserts the Keep a Changelog compare-link footer on both create and update paths, preserves natural prose wrapping, and curates `Added` / `Changed` / `Fixed` style sections instead of dumping raw commit logs. |
 | [git-nuget-release-notes](skills/git-nuget-release-notes/SKILL.md) | Git-aware NuGet release-notes companion for .NET repos that keep cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Discovers packable `src/` projects, resolves concrete package version and availability, creates missing files when needed, and writes per-package `ALM` / `Breaking Changes` / `New Features` / `Improvements` / `Bug Fixes` style notes from full commit context plus the net diff instead of dumping commit subjects. |
 | [git-nuget-readme](skills/git-nuget-readme/SKILL.md) | Git-aware NuGet README companion for .NET repos that advertise a package from `src/`. Resolves the real packable project the README should sell, combines git history with actual package metadata, source capabilities, and relevant tests when feasible, preserves honest badge/docs/contributing sections, and writes a forthcoming, adoption-friendly `README.md` with repo-derived branding, clear value, install, framework-support, and quick-start guidance. |
-| [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns noisy commit stacks into a curated set of compact summary lines for PR or squash contexts, preserving technical identifiers, merging overlap, dropping low-signal noise, highlighting distinct meaningful efforts, and avoiding changelog-style wording or unsupported claims. |
+| [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns the full current feature branch into a curated set of compact summary lines for PR or squash-and-merge contexts by default, preserving technical identifiers, merging overlap, dropping low-signal noise, highlighting distinct meaningful efforts, and avoiding changelog-style wording, unsupported claims, needless commit-range questions, or commit-selection UI for ordinary branch-level squash requests. |
 | [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | Runner-agnostic overlay for Anthropic `skill-creator`. Adds repo and environment guardrails for skill authoring and benchmarking: temp-workspace isolation, `iteration-N/eval-name/{config}/run-N/` benchmark layout, valid `grading.json` summaries, generated `benchmark.json`, honest `MEASURED` vs `SIMULATED` labeling, and sync/README discipline for repo-managed skills. |
 | [markdown-illustrator](skills/markdown-illustrator/SKILL.md) | Reads a markdown file and answers directly in chat with one document-wide Visual Brief plus one compiled prompt. Infers a compact visual strategy by default, keeps follow-up questions near zero, and only branches when the user explicitly asks for added specificity. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
@@ -161,10 +161,18 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 **git-visual-commits** handles the entire commit workflow— staging, diffing, crafting the message, choosing the right emoji — so every commit is consistent and meaningful without breaking your flow. Whether the agent authors the commit (`git bot commit`), you do (`git commit`), or you worked on it together (`git our commit`), the quality is the same.
 
 - **Gitmoji-first** — visual commit categories that are scannable at a glance
-- **Conventional prefixes** — `init`, `content`, `style`, `fix`, `refactor`, and `docs` as fallback when gitmoji isn't available
+- **Emoji-first by default** — the normal subject shape is `<emoji> <description>`, not `<emoji> <prefix>: ...`
+- **Conventional-prefix combo is opt-in** — `init`, `content`, `style`, `fix`, `refactor`, and `docs` are available only when you explicitly ask to combine emoji with conventional-commit prefixes
 - **Three identity modes** — bot, human, or collaborative — the agent does the work either way, you choose who gets credit
 - **Identity lock stays honest** — `git bot commit` means bot attribution, not just "AI did the work", and the flow now verifies the resulting author after commit
+- **Direct git execution for bot identity** — identity-sensitive commit paths should use direct shell/terminal git commands, not wrappers that may bypass aliases
+- **Clarifies before correcting** — vague feedback like "4 is wrong" triggers a short question, not a guessed revert or regrouping
+- **Evidence-backed explanations** — emoji and grouping justifications stay tied to references actually inspected in the session
+- **Reference-validated emoji choices** — the workflow reads the bundled `commit-language.md` skill resource before proposing commit subjects and does not treat a missing repo-root `references/` folder as the same thing as a missing skill reference
+- **Community health uses `💬`** — changelogs and repo-health / release-status communication are treated as human-facing messaging, not generic `📝` or `📚` docs by default
+- **Skill refactors map to refactor intent** — reorganizing an existing skill's wording or eval contract should land on `♻️`, not a guessed new-feature or config emoji
 - **Auto-approval** — say "yolo" or "auto" to skip the review gate when you trust the agent's judgment
+- **No `yolo`, no commit** — without `yolo` / `auto` or an already-enabled auto mode, the workflow must stop at the plan and wait for approval before it commits anything
 - **Yolo skips confirmation, not discipline** — auto-approval still requires semantic grouping, mixed-scope checks, and a visible commit plan summary before committing
 - **Full worktree by default** — plain `git bot commit yolo` means "commit everything currently in git status and group it correctly", not "guess a narrower slice"
 - **Commit body by default** — every commit explains *why*, not just *what* — opt out with "tmi" or "no-body"
@@ -173,6 +181,11 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **Repo capability additions stay explicit** — adding a brand-new skill is grouped separately from refactoring an existing skill to support it
 - **Shared wording rules stay in lockstep** — the duplicated `commit-language.md` reference is kept byte-for-byte identical across both git-visual skills and checked locally plus in CI
 - **Semantic intent splitting** — groups commits by rationale, not just file type — config and test logic are always separate
+- **Same-round edits are not one commit by default** — temporal proximity never outranks semantic intent when grouping changes
+- **Release-adjacent work still splits cleanly** — dependency baselines, package metadata, community health docs, doc publishing fixes, and CI automation can belong in separate commits even when they land together
+- **Package release notes are `📦` work** — `.nuget/*/PackageReleaseNotes.txt` belongs with package/publish metadata, not with `💬` community-health communication
+- **Tool-path failures fail fast** — a wrong-author first attempt means switch execution path immediately instead of retrying the same broken wrapper
+- **Recovery stays conservative** — prefer inspecting git state and stashing before broad restore/reset commands when commit repair goes sideways
 - **Umbrella commits are rejected** — mixed diffs spanning skill instructions, templates, validators, and repo docs must be split into separate commits instead of bundled into one blob
 - **Stack-agnostic** — works with any language, framework, or project type
 - **Squash-and-merge friendly** — structured commits make PR squash summaries read like a changelog
@@ -181,12 +194,17 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 
 Sometimes the history is already written and the only thing you need is the final grouped summary. A long branch with fixups, rename follow-ups, review nits, and repeated attempts often contains a few real change themes buried inside a messy chronological story. That is where **git-visual-squash-summary** fits: it reads the real history and diff, then compresses them into a small set of truthful grouped lines.
 
-- **Same visual language** — reuses the same prefix and emoji rules as `git-visual-commits`
+- **Same visual language** — reuses the same emoji-first wording rules as `git-visual-commits`
 - **Grouped-lines only** — returns compact grouped lines only, not a title or body
 - **Non-mutating by design** — drafts the wording only and does not touch git state
+- **Whole-branch by default** — for squash-and-merge requests, uses the full current feature branch from merge-base to `HEAD` instead of asking which branch commits to include
+- **Bare invocation means summarize now** — calling `git-visual-squash-summary` directly should resolve the current branch scope automatically and return the grouped lines, not a "what do you want me to summarize?" question
+- **No commit-picker UX** — ordinary branch-level squash requests do not become commit-selection questions or widgets; the skill resolves the branch scope and writes the summary
 - **Distinct efforts stay distinct** — preserves meaningful change groups instead of forcing one umbrella line
+- **Dependency updates stay explicit** — package/version baseline changes keep their own dependency-focused line instead of getting absorbed into generic build-system or refactor wording
 - **Intent over chronology** — collapses noisy commit stacks into the retained grouped effort
 - **Low-signal noise gets dropped** — typo-only and trivial fixup churn do not deserve their own lines
+- **Late release-prep commits stay in scope** — changelog, version-bump, and release-finalization follow-ups are treated as part of the branch by default and then merged or dropped during semantic collapsing
 - **Identifier-safe wording** — preserves technical names, paths, flags, and types where possible
 - **Readable in GitHub and terminals** — optimized for compact PR and squash-summary views
 - **Strict 72-char lines** — every summary line stays compact and scannable
@@ -200,6 +218,7 @@ Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too
 - **Keep a Changelog first** — writes `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security` sections in the expected style
 - **Full-commit context** — reads complete commit messages and the net diff before writing
 - **Version-aware by branch** — uses a branch prefix like `v0.3.0/...` as the release heading hint when present
+- **Mandatory pending-worktree gate** — when a concrete release has uncommitted changes, the skill must ask a short `Yes / No / Custom` confirmation question before folding them into the changelog draft, with a `FORMS.md` definition that compatible hosts can render as native choices
 - **SemVer-aware highlight** — always writes a short release TL;DR that explicitly says `major`, `minor`, or `patch`
 - **Creates the file when needed** — seeds a compliant `CHANGELOG.md` if the repo does not have one yet
 - **Natural prose** — preserves human-readable line breaks without any fixed-width wrapping target
@@ -246,7 +265,8 @@ Anthropic's `skill-creator` is an excellent base workflow, but the day-to-day fr
 - **Benchmark-contract aware** — enforces `iteration-N/eval-name/{config}/run-N/`, valid `grading.json.summary`, and generated `benchmark.json`
 - **Tool-path explicit** — points authors to the installed Anthropic `skill-creator` copy that provides `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`
 - **Honest benchmark modes** — keeps `MEASURED` and `SIMULATED` runs clearly separated so pipeline validation never masquerades as model quality
-- **PowerShell-safe** — calls out UTF-8 no BOM, stable counting, provider-path normalization, and other Windows-specific pitfalls
+- **PowerShell-safe** — calls out UTF-8 no BOM, `PYTHONUTF8`, stable counting, provider-path normalization, prompt-passing pitfalls, and other Windows-specific benchmark traps
+- **Codex-friendly benchmarking** — treats Codex CLI as a valid real runner when present, preserves `MEASURED` parity honestly, uses raw event output as fallback evidence when convenience files are missing, and prefers parallel paired runs when the runner supports sub-agents
 - **Repo-managed discipline** — keeps per-skill evals, local-install sync, and README updates in scope for first-party skills
 
 ### Why markdown-illustrator?
@@ -265,6 +285,7 @@ Markdown-heavy documents often need one image that sells the whole idea fast: a 
 - **Anti-repetition by default** — avoids repeated labels, bullets, steps, callouts, mirrored panels, and echoed document fragments so the image reads like one authoritative artifact rather than many near-duplicates
 - **No selection detours** — skips file creation, model-family, style, theme, and scope menus so the workflow stays fast and focused
 - **User steerable when needed** — the skill stays minimal, but users can still explicitly steer toward directions like `whiteboard`, `blackboard`, `isometric`, or `blueprint`
+- **Board styles use color intentionally** — `whiteboard` and `blackboard` keep their authentic marker/chalk base, but the skill now biases toward selective colored accents for arrows, icons, checks, and highlights instead of leaving every emphasis mark monochrome
 
 #### Inferred Defaults For markdown-illustrator
 
@@ -295,13 +316,13 @@ These are reference directions for users, not built-in branches in the skill. If
 
 - Pros: approachable, collaborative, strong for brainstorming, product planning, workshops, and messy human energy
 - Cons: can feel too casual or cluttered for polished keynote or editorial uses
-- Guidance: ask for this when the document is about ideation, strategy sessions, or product thinking
+- Guidance: ask for this when the document is about ideation, strategy sessions, or product thinking; expect a mostly marker-based board with selective colored accents for emphasis marks instead of pure black-only linework
 
 `blackboard`
 
 - Pros: dramatic, intellectual, layered, great for systems thinking and technical storytelling
 - Cons: can become visually noisy if the source material is already dense
-- Guidance: ask for this when the document is about architecture, strategy, layered concepts, or technical explanation
+- Guidance: ask for this when the document is about architecture, strategy, layered concepts, or technical explanation; expect a chalkboard base with restrained colored chalk accents for arrows, highlights, and key icons instead of all-white chalk marks
 
 `isometric`
 

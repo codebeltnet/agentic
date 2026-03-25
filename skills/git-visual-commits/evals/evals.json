@@ -101,6 +101,118 @@
         "Groups the full worktree into multiple commits when semantic intent differs",
         "Reserves scope narrowing for explicit user language such as just, only, for this, or named paths/modules"
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "Do a git bot commit, yolo. The diff was all done in one round and mixes dependency baseline updates, community health docs, NuGet package definition changes, DocFX publishing fixes, and CI automation updates.",
+      "expected_output": "An auto-approved bot commit flow that splits the release-adjacent diff into separate higher-level intent buckets instead of one same-round umbrella commit.",
+      "expectations": [
+        "Does not use same-round timing as a reason to merge everything into one commit",
+        "Separates dependency or version baseline changes from package or publish metadata",
+        "Separates community health or release communication docs from DocFX or documentation publishing fixes",
+        "Chooses 💬 for the community health or changelog commit based on commit-language.md instead of a generic docs emoji",
+        "Separates CI or automation changes from dependency, package-definition, or documentation-focused commits",
+        "Presents the grouping as high-level semantic intents rather than a brittle filename-only rule"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Do a git bot commit for these grouped changes, but the wrapper git tool cannot faithfully execute aliases and the first commit came out under my human identity instead of the bot.",
+      "expected_output": "A bot-commit workflow that treats the wrong author as a tool-path failure, pivots to direct git execution, and avoids destructive recovery thrash.",
+      "expectations": [
+        "Prefers direct shell or terminal git execution for identity-sensitive bot commits when wrapper tools cannot honor aliases",
+        "Treats a wrong-author first attempt as a tool-path failure instead of retrying multiple times with the same wrapper",
+        "Pivots immediately to a direct execution path before continuing commit repair",
+        "Prefers non-destructive recovery such as inspecting git state or using stash before broad restore or reset commands",
+        "Verifies the repaired commit author and stored body before reporting success"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "You showed me a multi-commit plan and I replied, '4 is wrong now. It was fine before.' Handle that correctly before touching anything.",
+      "expected_output": "A clarification-first response that asks what is wrong about commit 4 and preserves the current worktree instead of guessing and changing files.",
+      "expectations": [
+        "Treats ambiguous feedback as requiring clarification before acting",
+        "Does not treat 'wrong' as permission to revert files, amend commits, or regroup the plan immediately",
+        "Asks a concise question that distinguishes between emoji, prefix, message, grouping, and underlying code change",
+        "Keeps the current approved or staged state unchanged until the user clarifies"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Do a git bot commit, yolo. The diff contains only package dependency upgrades and a GitHub Actions workflow update.",
+      "expected_output": "An auto-approved bot flow that splits the dependency and CI intents, chooses gitmoji-backed emojis based on the inspected commit-language reference, and keeps the default subjects prefixless.",
+      "expectations": [
+        "Separates dependency upgrades from CI workflow changes when their intents differ",
+        "Chooses ⬆️ for dependency upgrade commits based on commit-language.md",
+        "Chooses 👷 for CI workflow commits based on commit-language.md",
+        "Reads the emoji reference before selecting the commit emoji instead of guessing",
+        "Does not add conventional prefixes after the emoji when the user did not explicitly ask for that combo"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Explain why those commit emojis are correct. The repo has commit-language.md, and earlier in the session I showed example images too.",
+      "expected_output": "An explanation that distinguishes inspected reference-file guidance from user-provided examples and avoids claiming a source said something it did not.",
+      "expectations": [
+        "Anchors emoji explanations to sources actually inspected in the session",
+        "Distinguishes repository reference files from user-provided examples or screenshots",
+        "Does not claim a document contained emoji guidance unless that document was actually verified"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Do a git bot commit, yolo. The diff reorganizes an existing skill's SKILL.md, adds FORMS.md for the same skill, and updates that skill's eval contract. Use the repo's normal commit style, not conventional commits.",
+      "expected_output": "An auto-approved bot flow that classifies the change as a refactor-oriented skill update, chooses the emoji from the inspected commit-language reference, and keeps the subject prefixless.",
+      "expectations": [
+        "Reads commit-language.md before choosing the commit emoji",
+        "Classifies an existing skill wording or contract reorganization as refactor intent instead of guessing new-feature or configuration intent",
+        "Chooses ♻️ for the skill refactor commit based on the inspected reference",
+        "Does not choose ✨ or 🔧 for that refactor-oriented skill change",
+        "Does not add a conventional prefix after the emoji when the user explicitly said not to use conventional commits"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Do a git bot commit, yolo, and keep the repo emoji style but combine it with conventional commit prefixes for the subjects.",
+      "expected_output": "An auto-approved bot flow that still validates the emoji against the inspected reference, but includes an allowed lowercase prefix only because the user explicitly requested the combo.",
+      "expectations": [
+        "Treats emoji plus conventional-prefix formatting as opt-in rather than default",
+        "Uses only allowed lowercase prefixes from commit-language.md when the combo was explicitly requested",
+        "Validates both the emoji and the chosen prefix against the inspected reference before presenting or committing the plan"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Please do a git bot commit for these changes. The diff spans multiple logical commits, but I did not say yolo or auto.",
+      "expected_output": "A review-gated bot commit flow that presents the full commit plan and then waits for approval instead of committing immediately.",
+      "expectations": [
+        "Treats the absence of yolo or auto as a requirement to stop for approval before any commit command runs",
+        "Presents the grouped commit plan before staging or committing",
+        "Does not treat forward progress, urgency, or momentum as implicit approval"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Do a git bot commit, yolo. The diff updates Directory.Build.targets, Directory.Packages.props, and testenvironments.json, also changes bump-nuget.py and .github/workflows/service-update.yml, and refreshes CHANGELOG.md plus .nuget package release notes.",
+      "expected_output": "An auto-approved bot flow that still splits the work into separate build-system, CI-automation, package-metadata, and release-communication commits instead of one umbrella release commit.",
+      "expectations": [
+        "Separates build-system or dependency-baseline files from CI or automation files",
+        "Separates .nuget package release notes into the package or publish metadata commit",
+        "Uses 📦 for package release notes or package metadata work instead of the community-health emoji",
+        "Keeps CHANGELOG.md in the release-communication commit rather than merging it with package metadata",
+        "Does not use same-release purpose or same-round timing as a reason to merge all intents"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Please do a git bot commit. A previous run claimed `references/commit-language.md` is missing because this repository has no top-level `references/` folder. Handle that correctly before you block on it.",
+      "expected_output": "The response resolves commit-language.md from the bundled skill reference path instead of treating repo-root `references/` absence as a blocker.",
+      "expectations": [
+        "Treats references/commit-language.md as a bundled skill resource rather than a repo-root path by default",
+        "Does not report a blocker solely because the current repository lacks a top-level references directory",
+        "Re-checks the skill resource location before declaring the commit-language reference unavailable"
+      ]
     }
   ]
 }

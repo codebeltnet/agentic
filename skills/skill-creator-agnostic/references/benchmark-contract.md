@@ -23,10 +23,12 @@ iteration-N/
 
 Key rules:
 
+- Eval directories must begin with `eval-` because Anthropic's aggregation tooling discovers `eval-*` folders, not arbitrary names.
 - `aggregate_benchmark.py` walks `run-*` directories. If files live directly under `with_skill/` or `without_skill/`, the benchmark will discover zero runs.
 - `eval_metadata.json` belongs at the `eval-*` directory level, not inside each run directory.
 - `fixtures/` is optional and should contain copied input files referenced by `evals/evals.json` `files[]` entries when the eval depends on attached source material.
 - `outputs/` may contain files, diffs, transcripts, or other evidence the reviewer should inspect.
+- When the runner supports sub-agents or equivalent background tasks, prefer launching paired `with_skill` and `without_skill` executor runs in parallel, then parallelize independent grading work too. The layout contract stays the same either way.
 
 ## Optional Eval Fixture Files
 
@@ -129,6 +131,12 @@ Expected properties:
 - real timings
 - real token counts when available
 - real transcripts or command logs when available
+
+Important:
+
+- If the runner supports parallel sub-agents or equivalent background tasks, use them by default for executor and grader fan-out unless there is a concrete environment reason not to.
+- A measured run can still end in parity or zero delta. That does not make it simulated; it means the eval did not discriminate between configurations.
+- If a convenience output file is missing but the runner wrote a real event stream or transcript, recover the final message from that real artifact instead of downgrading the run to simulated.
 
 This is the preferred benchmark mode when the environment supports it.
 

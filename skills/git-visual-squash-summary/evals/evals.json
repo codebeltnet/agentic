@@ -19,7 +19,7 @@
       "expected_output": "A polished grouped summary that keeps important technical identifiers intact and uses the shared git-visual wording style.",
       "expectations": [
         "Preserves technical identifiers exactly where possible",
-        "Uses the same emoji and prefix language as git-visual-commits",
+        "Uses the same emoji-first language as git-visual-commits and defaults to no prefix unless explicitly requested",
         "Reads like a curated human-written condensed history rather than a dump of commit subjects",
         "Keeps distinct meaningful efforts on separate lines",
         "Avoids inventing unsupported changes"
@@ -58,6 +58,73 @@
         "Retains only distinct high-signal change groups",
         "Does not collapse several unique top-level efforts into one stitched sentence",
         "Outputs grouped lines only"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Draft the squash-and-merge summary for this current feature branch so I can paste it into GitHub. The branch has six real service-update commits and one later changelog finalization commit. Do not ask me which commits to include.",
+      "expected_output": "The response summarizes the full current branch from merge-base to HEAD without asking the user to choose between earlier feature commits and the later changelog commit.",
+      "expectations": [
+        "Defaults to the full current feature branch for squash-and-merge requests",
+        "Does not ask a clarifying question about which branch commits to include",
+        "Treats a later changelog or release-finalization commit as branch-in-scope by default",
+        "Lets semantic collapsing decide whether low-signal late commits deserve their own line",
+        "If a retained line is mainly changelog or release-status communication, prefers 💬 from the shared reference",
+        "Returns grouped summary lines only"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Summarize this branch for squash merge. Everything on the feature branch belongs in the GitHub squash description, even if the last commit is just release prep.",
+      "expected_output": "The response treats the entire branch as the summary scope and does not second-guess the user's intent with extra range-selection prompts.",
+      "expectations": [
+        "Interprets a branch-level squash request as the whole feature branch by default",
+        "Does not behave like a generic range-selection assistant when the branch scope is already implied",
+        "Includes all branch commits in the inspected scope before collapsing to retained groups",
+        "Avoids asking needless follow-up questions when the branch-level intent is already clear"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Use git-visual-squash-summary for this branch so I can paste the result straight into GitHub squash and merge. Do not ask me what commits I want to summarize.",
+      "expected_output": "The response directly produces grouped summary lines for the full current feature branch instead of presenting a commit-selection question or widget.",
+      "expectations": [
+        "Treats the skill as a single-purpose squash-and-merge summary generator",
+        "Does not present commit-selection options or a commit-set questionnaire",
+        "Resolves upstream, main, and master fallbacks automatically without user choice when possible",
+        "Returns GitHub-ready grouped summary lines only"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Give me the normal git-visual squash summary for this branch. Keep the repo emoji style, but do not use conventional commit prefixes unless I explicitly ask for them.",
+      "expected_output": "A grouped squash summary that uses emoji-first, prefixless lines by default and only switches to prefixed lines when the user explicitly requests that combo.",
+      "expectations": [
+        "Defaults to emoji plus description lines without adding conventional prefixes",
+        "Uses the shared commit-language reference as the source of truth for that prefixless default",
+        "Keeps the output in grouped summary line form rather than explaining the rule at length"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "/git-visual-squash-summary",
+      "expected_output": "A direct grouped summary of the current branch versus upstream, main, or master without asking what to summarize first.",
+      "expectations": [
+        "Treats a bare skill invocation as a complete request to summarize the current branch",
+        "Does not ask a follow-up scope question such as what would you like me to summarize",
+        "Resolves current-branch scope automatically and returns grouped summary lines only"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Summarize this branch for squash merge. One branch commit collapses dependency updates and build-system changes into a single subject, while the diff touches Directory.Packages.props plus Directory.Build.targets.",
+      "expected_output": "A grouped squash summary that keeps dependency upgrades as their own retained line, separate from build-system or refactor work, even when those changes landed in the same commit.",
+      "expectations": [
+        "Treats dependency or version baseline changes as a separate semantic intent from build-system metadata or refactoring",
+        "Does not collapse dependency upgrades into a generic build-system or configuration line",
+        "Uses a dependency-oriented emoji such as ⬆️ when a retained line is primarily dependency upgrade work",
+        "Keeps the build-system or refactor effort on its own retained line when the diff shows a separate intent",
+        "Returns grouped summary lines only"
       ]
     }
   ]

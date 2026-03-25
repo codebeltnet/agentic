@@ -49,6 +49,17 @@
     },
     {
       "id": 5,
+      "prompt": "The benchmark runner supports sub-agents and background jobs. Should the measured skill benchmark still run evals one-by-one, or should it fan out? Tell me the expected execution pattern.",
+      "expected_output": "The response prefers parallel paired executor runs and parallel grading when the runner supports sub-agents, while keeping the existing benchmark artifact contract intact.",
+      "expectations": [
+        "Prefers parallel paired executor runs over serial execution when the runner supports sub-agents or equivalent background jobs",
+        "Keeps the benchmark grounded in with_skill and without_skill paired runs rather than a single-sided benchmark",
+        "Prefers parallel grading for independent runs when the runner supports that pattern",
+        "Preserves the existing eval- and run-N benchmark artifact contract instead of replacing it with a custom layout"
+      ]
+    },
+    {
+      "id": 6,
       "prompt": "We already have Anthropic skill-creator. Should we replace it, edit it, or layer our own repo rules on top?",
       "expected_output": "The response recommends layering repo-managed guardrails on top of Anthropic skill-creator rather than forking or editing the third-party skill.",
       "expectations": [
@@ -59,7 +70,7 @@
       ]
     },
     {
-      "id": 6,
+      "id": 7,
       "prompt": "This skill's evals.json includes files like evals/files/input.md. How should the benchmark runner handle them so with_skill and without_skill stay comparable?",
       "expected_output": "The response treats files as skill-relative fixtures, stages them into the temp workspace, and uses the same inputs for both configurations.",
       "expectations": [
@@ -67,6 +78,18 @@
         "Stages declared fixture files into the temp eval workspace before running either configuration",
         "Uses the same staged fixtures for with_skill and without_skill runs",
         "Keeps the guidance grounded in the existing iteration-N/eval-name/{config}/run-N/ benchmark contract"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "We have Codex CLI on Windows PowerShell, and my measured benchmark keeps derailing: one run says unexpected argument, another run misses last-message.txt, and aggregate_benchmark.py ignores my custom folder name. What should the runner-agnostic workflow tell me to do?",
+      "expected_output": "The response keeps the run measured when a real runner exists, calls out safe prompt passing for Codex CLI, requires eval-* directory names, and uses raw event output as the fallback source when convenience files are missing.",
+      "expectations": [
+        "Keeps Codex CLI framed as a valid callable runner rather than forcing a different vendor CLI",
+        "Advises passing prompts safely as one explicit argument or via stdin instead of brittle shell quoting",
+        "Requires eval directories to keep the eval-* prefix so Anthropic aggregation tooling can discover them",
+        "Uses JSONL or event output as the fallback source when last-message or similar convenience files are missing",
+        "Explains that a real parity run remains MEASURED even when the pass-rate delta is zero"
       ]
     }
   ]
