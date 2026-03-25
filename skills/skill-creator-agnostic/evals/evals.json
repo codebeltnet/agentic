@@ -48,7 +48,7 @@
       ]
     },
     {
-      "id": 8,
+      "id": 5,
       "prompt": "The benchmark runner supports sub-agents and background jobs. Should the measured skill benchmark still run evals one-by-one, or should it fan out? Tell me the expected execution pattern.",
       "expected_output": "The response prefers parallel paired executor runs and parallel grading when the runner supports sub-agents, while keeping the existing benchmark artifact contract intact.",
       "expectations": [
@@ -59,7 +59,7 @@
       ]
     },
     {
-      "id": 5,
+      "id": 6,
       "prompt": "We already have Anthropic skill-creator. Should we replace it, edit it, or layer our own repo rules on top?",
       "expected_output": "The response recommends layering repo-managed guardrails on top of Anthropic skill-creator rather than forking or editing the third-party skill.",
       "expectations": [
@@ -70,7 +70,7 @@
       ]
     },
     {
-      "id": 6,
+      "id": 7,
       "prompt": "This skill's evals.json includes files like evals/files/input.md. How should the benchmark runner handle them so with_skill and without_skill stay comparable?",
       "expected_output": "The response treats files as skill-relative fixtures, stages them into the temp workspace, and uses the same inputs for both configurations.",
       "expectations": [
@@ -81,7 +81,7 @@
       ]
     },
     {
-      "id": 7,
+      "id": 8,
       "prompt": "We have Codex CLI on Windows PowerShell, and my measured benchmark keeps derailing: one run says unexpected argument, another run misses last-message.txt, and aggregate_benchmark.py ignores my custom folder name. What should the runner-agnostic workflow tell me to do?",
       "expected_output": "The response keeps the run measured when a real runner exists, calls out safe prompt passing for Codex CLI, requires eval-* directory names, and uses raw event output as the fallback source when convenience files are missing.",
       "expectations": [
