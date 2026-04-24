@@ -1,8 +1,53 @@
 # Strong-Name Key
 *.snk
 
-# Resharper
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+# Rider / JetBrains
+.idea/
+
+# ReSharper
 *.DotSettings
+*.DotSettings.user
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+
+# Test results
+[Tt]est[Rr]esult*/
+coverage*/
+*.coveragexml
+*.coverage
+
+# Publish output
+publish/
+
+# BenchmarkDotNet
+BenchmarkDotNet.Artifacts/
+
+# DocFX
+_site/
+
+# OS files
+.DS_Store
+Thumbs.db
 
 # Bot workspace (local-only AI agent ideation, PRDs, and agentic loop state)
 .bot/*
