@@ -6,6 +6,18 @@ description: >
 
 # .NET Application Solution Setup (Codebelt Conventions)
 
+## Upstream Source
+
+| Field | Value |
+|-------|-------|
+| **Repo** | `https://github.com/codebeltnet/agentic` |
+| **Branch** | `main` |
+| **Shared assets root** | `skills/dotnet-new-app-slnx/assets/shared` |
+| **Raw base URL** | `https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-new-app-slnx/assets/shared` |
+| **Asset manifest** | `assets/shared.manifest.json` |
+
+This metadata is the single source of truth for restoring any file the installer may have dropped. Use it immediately — do not spend cycles confirming absence multiple ways first.
+
 Scaffold new .NET standalone application solutions following the codebeltnet engineering conventions — the same pattern used across [codebeltnet](https://github.com/codebeltnet). Produces a fully wired solution with CI pipeline, centralized build config, semantic versioning, code quality tooling, and proper folder structure.
 
 > **CRITICAL:** All application projects **must** use the `Codebelt.Bootstrapper.*` framework — never vanilla `WebApplication.CreateBuilder()` or raw `Host.CreateDefaultBuilder()`. The bootstrapper provides a uniform, convention-driven `Program.cs` (and `Startup.cs` for classic hosting). The asset templates in `assets/app/` already wire this up correctly — **always copy from templates, never write Program.cs from scratch**.
@@ -137,11 +149,11 @@ After writing `Directory.Packages.props`, re-check the generated versions agains
 Generate files in this order:
 
 ### 1. Copy shared templates
-Copy every file from `assets/shared/` to the project root, preserving directory structure. Treat the **current working directory** as that project root. Apply placeholder substitution (Step 4) to all file contents during the copy.
+Copy every file from `assets/shared/` to the project root, preserving directory structure. Do **not** copy `assets/shared.manifest.json` — it is a skill-internal file used only for asset validation and restoration, and must never appear in a generated solution. Treat the **current working directory** as that project root. Apply placeholder substitution (Step 4) to all file contents during the copy.
 
 Do this as a recursive, dotfile-aware copy. Hidden folders and files under `assets/shared/` are part of the scaffold and must not be skipped. In particular, copy `assets/shared/.bot/README.md` as a real file in the generated repo; do not replace it with a synthetic `.gitkeep` or placeholder note.
 
-If the installed skill copy omits any required file or dot-prefixed path during a `npx skills add` copy, do not treat that as success or as a template defect. Verify the generated tree against the upstream repository contents, then manually restore the missing files directly from the repository source tree, preserving the same relative paths, before continuing. That includes hidden assets such as `.bot/`, `.github/`, and any other `.`-prefixed directories under `assets/shared/`.
+**Asset mismatch policy — pivot immediately to upstream.** The `npx skills add` installer silently strips dot-prefixed entries (`.bot/`, `.github/`, `.editorconfig`, `.gitattributes`, `.gitignore`). Do not spend time re-proving what is absent. The moment any entry from `assets/shared.manifest.json` is missing from the installed skill copy, run `scripts/restore-missing-shared-assets.ps1` to fetch every missing file directly from the upstream repository in one step, then continue. If PowerShell is unavailable, use the raw base URL in the **Upstream Source** table above to download each missing file manually. If upstream fetch fails, halt and report — do not substitute placeholders.
 
 Do not selectively copy only "key" shared files. The intended output includes the complete shared asset inventory, including `.gitignore`, `.gitattributes`, `AGENTS.md`, `CHANGELOG.md`, `.github/`, and `.bot/`, in addition to the build and package-management files.
 
@@ -180,8 +192,8 @@ After generating, verify:
 
 - [ ] `.slnx` references all generated src/ and test/ projects
 - [ ] The generated solution filename is `{SOLUTION_NAME}.slnx` with the original user-facing casing preserved
-- [ ] Every file from `assets/shared/` exists in the generated repo with the same relative path, including dotfiles and dotfolders such as `.gitignore`, `.gitattributes`, `.bot/README.md`, and `.github/*`
-- [ ] If a `npx skills add` install omitted any dot-prefixed files, manually restore them from the same repository commit before generation continues
+- [ ] Every file listed in `assets/shared.manifest.json` exists in the generated repo at its declared relative path (this covers all dotfiles and dotfolders)
+- [ ] If any manifest entry was absent from the installed skill copy, `scripts/restore-missing-shared-assets.ps1` was run (or files fetched manually from the upstream raw URL) — not diagnosed iteratively
 - [ ] `Directory.Packages.props` lists all `<PackageReference>` packages used in the solution (including host-type-specific packages)
 - [ ] `Directory.Packages.props` contains concrete version numbers with no unresolved `*_VERSION` placeholders
 - [ ] No generated `.csproj` file or `Directory.Build.props` contains ad-hoc inline `Version=` attributes for packages that are supposed to be centrally managed by `Directory.Packages.props`
@@ -194,7 +206,7 @@ After generating, verify:
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
 - [ ] `.bot/README.md` exists in the generated repo and came from the shared asset template
 - [ ] `testenvironments.json` uses the major-tag `codebeltnet/ubuntu-testrunner:{major}` convention for the selected target framework
-- [ ] If a `npx skills add` install omitted any required files, verify the upstream repository contents and manually restore the missing files directly from the repository source tree before generation continues
+- [ ] No manifest entries were silently skipped; if the restore script reported failures, generation was halted rather than continuing with incomplete shared assets
 - [ ] Correct hosting pattern files generated (`Program.cs` only for Minimal, `Program.cs` + `Startup.cs` for Startup)
 - [ ] `Web API` is the default `web_variant` when the user asked for a generic `Web` app
 - [ ] `Empty Web` uses the `Web` suffix, `Web API` uses `Api`, `MVC` uses `Mvc`, and `Web App / Razor` uses `WebApp`
