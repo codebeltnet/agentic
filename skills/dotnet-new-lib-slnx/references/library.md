@@ -82,6 +82,8 @@ Benchmark reports are written under `reports/`, not under the `tuning/` project 
 
 Write generated text files as UTF-8 and preserve UTF-8 when copying from `assets/`.
 
+If an installer path omits dot-prefixed files from the source tree, treat that as an incomplete copy and restore the missing files manually from the upstream repository contents directly into the matching relative paths before finalizing the scaffold.
+
 - Do not transcode Markdown, JSON, YAML, XML, or source files to ANSI, OEM, Windows-1252, or another locale-dependent encoding
 - Respect the shared `.editorconfig`, which already sets `charset = utf-8`
 - If a tool cannot reliably preserve UTF-8 when rewriting a file, prefer keeping the original bytes intact over re-saving through a lossy default encoding

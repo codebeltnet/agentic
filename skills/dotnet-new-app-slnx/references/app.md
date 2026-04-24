@@ -31,6 +31,8 @@ No `.nuget/` folder or `.snk` file (uncommon for apps).
 
 Copy the complete contents of `assets/shared/` into the generated repo root, preserving relative paths.
 
+If the installation path drops dot-prefixed entries, treat that as an incomplete copy. Verify the upstream repository contents, then manually restore the missing files directly from the repository source tree into the matching relative paths before finalizing the scaffold.
+
 Do not cherry-pick only the files that feel essential. The shared scaffold contract includes:
 
 - `.editorconfig`

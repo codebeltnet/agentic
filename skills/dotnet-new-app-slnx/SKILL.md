@@ -141,6 +141,8 @@ Copy every file from `assets/shared/` to the project root, preserving directory 
 
 Do this as a recursive, dotfile-aware copy. Hidden folders and files under `assets/shared/` are part of the scaffold and must not be skipped. In particular, copy `assets/shared/.bot/README.md` as a real file in the generated repo; do not replace it with a synthetic `.gitkeep` or placeholder note.
 
+If the installed skill copy omits any required file or dot-prefixed path during a `npx skills add` copy, do not treat that as success or as a template defect. Verify the generated tree against the upstream repository contents, then manually restore the missing files directly from the repository source tree, preserving the same relative paths, before continuing. That includes hidden assets such as `.bot/`, `.github/`, and any other `.`-prefixed directories under `assets/shared/`.
+
 Do not selectively copy only "key" shared files. The intended output includes the complete shared asset inventory, including `.gitignore`, `.gitattributes`, `AGENTS.md`, `CHANGELOG.md`, `.github/`, and `.bot/`, in addition to the build and package-management files.
 
 Exception: update `testenvironments.json` with the derived `{UBUNTU_TESTRUNNER_TAG}` instead of leaving a hardcoded runner image tag in place. Keep the `WSL-Ubuntu` entry and use the Docker major-tag convention documented for the shared Ubuntu test runner images.
@@ -179,6 +181,7 @@ After generating, verify:
 - [ ] `.slnx` references all generated src/ and test/ projects
 - [ ] The generated solution filename is `{SOLUTION_NAME}.slnx` with the original user-facing casing preserved
 - [ ] Every file from `assets/shared/` exists in the generated repo with the same relative path, including dotfiles and dotfolders such as `.gitignore`, `.gitattributes`, `.bot/README.md`, and `.github/*`
+- [ ] If a `npx skills add` install omitted any dot-prefixed files, manually restore them from the same repository commit before generation continues
 - [ ] `Directory.Packages.props` lists all `<PackageReference>` packages used in the solution (including host-type-specific packages)
 - [ ] `Directory.Packages.props` contains concrete version numbers with no unresolved `*_VERSION` placeholders
 - [ ] No generated `.csproj` file or `Directory.Build.props` contains ad-hoc inline `Version=` attributes for packages that are supposed to be centrally managed by `Directory.Packages.props`
@@ -191,6 +194,7 @@ After generating, verify:
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
 - [ ] `.bot/README.md` exists in the generated repo and came from the shared asset template
 - [ ] `testenvironments.json` uses the major-tag `codebeltnet/ubuntu-testrunner:{major}` convention for the selected target framework
+- [ ] If a `npx skills add` install omitted any required files, verify the upstream repository contents and manually restore the missing files directly from the repository source tree before generation continues
 - [ ] Correct hosting pattern files generated (`Program.cs` only for Minimal, `Program.cs` + `Startup.cs` for Startup)
 - [ ] `Web API` is the default `web_variant` when the user asked for a generic `Web` app
 - [ ] `Empty Web` uses the `Web` suffix, `Web API` uses `Api`, `MVC` uses `Mvc`, and `Web App / Razor` uses `WebApp`
