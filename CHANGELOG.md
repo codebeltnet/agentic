@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-04-24
+
+This is a patch release that tightens the generated .gitignore templates for the .NET app and library scaffolds, adding standard Visual Studio, Rider, build-output, test, publish, and workspace exclusions so generated solutions start with cleaner defaults.
+
+### Changed
+
+- Expanded the shared `.gitignore` templates used by `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` to ignore standard .NET build outputs, IDE state, test artifacts, publish output, and local bot workspace files.
+
 ## [0.3.3] - 2026-03-25
 
 This is a patch release focused on strengthening all git workflow skills with concrete eval contracts, enhanced validator enforcement, and comprehensive documentation alignment across the skill suite. Evaluations now cover semantic intent classification, emoji/prefix consistency, bot identity handling, and cross-runner compatibility. The pending-worktree confirmation checkpoint in `git-keep-a-changelog` is now explicitly mandatory for concrete releases, with documentation and validator enforcement to prevent bypass. Compare-link footer maintenance is now explicitly required for both changelog create and update paths, with validator assertions and eval coverage.
@@ -126,7 +134,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/codebeltnet/agentic/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/codebeltnet/agentic/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/codebeltnet/agentic/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/codebeltnet/agentic/compare/v0.3.0...v0.3.1
