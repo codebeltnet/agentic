@@ -585,6 +585,8 @@ Add-ValidationResult -Results $results -Name 'Shared .bot assets are tracked and
     Assert-Contains -Name 'lib shared .gitignore' -Content $libIgnore -Needle '!.bot/README.md'
     Assert-Contains -Name 'app .bot README' -Content $appBot -Needle '# .bot Workspace'
     Assert-Contains -Name 'lib .bot README' -Content $libBot -Needle '# .bot Workspace'
+    Assert-Contains -Name 'app shared copy guidance' -Content (Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/references/app.md' -GitRef $Ref) -Needle 'manually restore the missing files directly from the repository source tree'
+    Assert-Contains -Name 'lib shared copy guidance' -Content (Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-lib-slnx/references/library.md' -GitRef $Ref) -Needle 'manually restore the missing files directly from the repository source tree'
 }
 
 Add-ValidationResult -Results $results -Name 'Library skill documents PROJECT_NAME and DOCFX target framework' -Action {

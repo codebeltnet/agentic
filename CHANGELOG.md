@@ -8,11 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.3.4] - 2026-04-24
 
-This is a patch release that tightens the generated .gitignore templates for the .NET app and library scaffolds, adding standard Visual Studio, Rider, build-output, test, publish, and workspace exclusions so generated solutions start with cleaner defaults.
+This is a patch release that hardens the .NET scaffold guidance around hidden asset recovery, making incomplete `npx skills add` installs easier to diagnose and repair before generation continues. The validator and repo docs now reinforce the same upstream-verification and manual-restore rule so local cache or packaging mismatches do not get mistaken for template defects.
 
 ### Changed
 
-- Expanded the shared `.gitignore` templates used by `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` to ignore standard .NET build outputs, IDE state, test artifacts, publish output, and local bot workspace files.
+- Clarified `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` so missing required or dot-prefixed files in an installed skill copy are treated as a local install mismatch first, with explicit upstream verification and manual restoration before continuing,
+- Aligned the app and library variant references, `AGENTS.md`, and `README.md` with the same hidden-asset recovery rule so incomplete `npx skills add` copies get repaired consistently across the repo.
+
+### Fixed
+
+- Tightened `scripts/validate-skill-templates.ps1` so it now asserts the hidden-asset recovery wording in both scaffold references, keeping the validator synchronized with the documented install-fallback behavior.
 
 ## [0.3.3] - 2026-03-25
 

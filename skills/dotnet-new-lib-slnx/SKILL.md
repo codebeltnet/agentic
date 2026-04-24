@@ -90,6 +90,8 @@ Copy every file from `assets/shared/` to the project root, preserving directory 
 
 Do this as a recursive, dotfile-aware copy. Hidden folders and files under `assets/shared/` are part of the scaffold and must not be skipped. In particular, copy `assets/shared/.bot/README.md` as a real file in the generated repo; do not replace it with a synthetic `.gitkeep` or placeholder note.
 
+If the installed skill copy omits any required file or dot-prefixed path during a `npx skills add` copy, do not treat that as success or as a template defect. Verify the generated tree against the upstream repository contents, then manually restore the missing files directly from the repository source tree, preserving the same relative paths, before continuing. That includes hidden assets such as `.bot/`, `.github/`, `.docfx/`, and any other `.`-prefixed directories under `assets/library/` or `assets/shared/`.
+
 Preserve UTF-8 when reading, copying, and writing text files. Do not transcode templates to ANSI, OEM, Windows-1252, or any system-default code page during generation. The shared `.editorconfig` in the scaffold declares `charset = utf-8`, and generated text files should match it from the start.
 
 When a text file does not need substitutions, prefer a byte-preserving file copy instead of read/transform/write.
@@ -174,6 +176,7 @@ After generating, verify:
 - [ ] `.github/copilot-instructions.md` has project-specific patterns
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
 - [ ] `.bot/README.md` exists in the generated repo and came from the shared asset template, not from a synthetic `.gitkeep` fallback
+- [ ] If a `npx skills add` install omitted any required files, verify the upstream repository contents and manually restore the missing files directly from the repository source tree before generation continues
 - [ ] `.github/dependabot.yml` watches the repo root so central NuGet package management stays current after scaffolding
 
 Summarize what was generated and note any manual steps (e.g. registering with SonarCloud, populating `.docfx/images/` with logo/favicon).

@@ -12,7 +12,7 @@ One repo-wide convention matters especially for scaffolding skills: prefer dynam
 
 Another repo rule is intentionally strict: every repo-managed skill ships with its own `evals/evals.json`, and those evals are run per skill from a temp workspace instead of from inside this repository.
 
-Another part of that workflow is now mandatory too: when a repo-managed skill is created or modified, the author must run both `with_skill` and `without_skill` comparison executions from a temp workspace, aggregate the results into `benchmark.json`, and open `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy, typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, so a human can review both the `Outputs` and `Benchmark` views before sign-off. For new skills the baseline is `without_skill`; for existing skills it can be `without_skill` or the previous/original skill version, matching the `skill-creator` benchmark flow. When the available runner supports sub-agents or equivalent background tasks, the measured benchmark should fan out paired executor runs in parallel and parallelize independent grading work too, rather than running evals serially by habit.
+Another part of that workflow is now mandatory too: when a repo-managed skill is created or modified, the author must run the full per-skill test from a temp workspace. Full test means both `with_skill` and `without_skill` comparison executions, grading both runs, aggregating the results into `benchmark.json`, and opening `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy, typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, so a human can review both the `Outputs` and `Benchmark` views before sign-off. For new skills the baseline is `without_skill`; for existing skills it can be `without_skill` or the previous/original skill version, matching the `skill-creator` benchmark flow. A reasoning-only smoke test does not count. When the available runner supports sub-agents or equivalent background tasks, the measured benchmark should fan out paired executor runs in parallel and parallelize independent grading work too, rather than running evals serially by habit.
 
 One more consistency rule matters for form-driven skills: native input fields are treated as a host feature, not something a model can rely on. Skills in this repo must stay usable with or without UI widgets, and must fall back to the same deterministic one-field-at-a-time flow when the host only supports plain chat.
 
@@ -25,6 +25,8 @@ Install any skill directly from this repository with a single command:
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill <skill-name>
 ```
+
+If an install path ever drops required files or dot-prefixed paths from a skill tree, treat that as an incomplete copy, verify the upstream repository contents, and manually restore the missing entries directly from the repository source tree before using the skill.
 
 For example:
 
