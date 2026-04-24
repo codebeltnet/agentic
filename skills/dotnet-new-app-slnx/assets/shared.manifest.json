@@ -1,0 +1,25 @@
+{
+  "description": "Authoritative inventory of all required shared scaffold assets, including dot-prefixed files and folders. Used to detect installer truncation and drive restoration from upstream.",
+  "upstream": {
+    "repo": "https://github.com/codebeltnet/agentic",
+    "branch": "main",
+    "root": "skills/dotnet-new-app-slnx/assets/shared"
+  },
+  "files": [
+    ".bot/README.md",
+    ".editorconfig",
+    ".gitattributes",
+    ".github/CODE_OF_CONDUCT.md",
+    ".github/CONTRIBUTING.md",
+    ".github/copilot-instructions.md",
+    ".github/dependabot.yml",
+    ".github/workflows/ci-pipeline.yml",
+    ".gitignore",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "Directory.Build.targets",
+    "Directory.Packages.props",
+    "README.md",
+    "testenvironments.json"
+  ]
+}

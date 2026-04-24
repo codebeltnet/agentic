@@ -56,6 +56,8 @@ npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agno
 npx skills add https://github.com/codebeltnet/agentic --skill markdown-illustrator
 npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-app-slnx
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-lib-slnx
 # npx skills add https://github.com/codebeltnet/agentic --skill another-skill
 ```
 

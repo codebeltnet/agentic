@@ -389,7 +389,7 @@ Add-ValidationResult -Results $results -Name 'App skill documents web-family App
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'expect MinVer to report a placeholder pre-release version such as `0.0.0-alpha.0` until the user initializes git and adds a version tag'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'The solution file must be named `{SOLUTION_NAME}.slnx`, not `{REPO_SLUG}.slnx` and not any lowercased variant.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'The `.slnx` file is required even for single-host scaffolds.'
-    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Every file from `assets/shared/` exists in the generated repo with the same relative path'
+    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Every file listed in `assets/shared.manifest.json` exists in the generated repo at its declared relative path'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'No generated app or test `.csproj` file introduces `<TargetFramework>`'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle '{AppType} = Web'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle '{AppType} = Api'
