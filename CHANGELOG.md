@@ -8,16 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.3.4] - 2026-04-24
 
-This is a patch release that hardens the .NET scaffold guidance around hidden asset recovery, making incomplete `npx skills add` installs easier to diagnose and repair before generation continues. The validator and repo docs now reinforce the same upstream-verification and manual-restore rule so local cache or packaging mismatches do not get mistaken for template defects.
+This is a patch release that hardens the .NET scaffold guidance around hidden asset recovery and makes `git-keep-a-changelog` safer in yolo/auto mode. Incomplete `npx skills add` installs now pivot immediately to an upstream restore path driven by the shared asset manifest, while the changelog skill treats yolo/auto as an explicit full-autonomy mode instead of asking for scope confirmation.
 
 ### Changed
 
-- Clarified `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` so missing required or dot-prefixed files in an installed skill copy are treated as a local install mismatch first, with explicit upstream verification and manual restoration before continuing,
-- Aligned the app and library variant references, `AGENTS.md`, and `README.md` with the same hidden-asset recovery rule so incomplete `npx skills add` copies get repaired consistently across the repo.
+- Clarified `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` so missing required or dot-prefixed files in an installed skill copy immediately trigger the manifest-driven restore path from upstream before generation continues,
+- Aligned the app and library variant references, `AGENTS.md`, and `README.md` with the same hidden-asset recovery rule so incomplete `npx skills add` copies get repaired consistently across the repo,
+- Expanded `git-keep-a-changelog` with an explicit yolo/auto mode that skips the pending-change confirmation gate and folds staged, unstaged, and untracked worktree changes into the draft automatically.
 
 ### Fixed
 
-- Tightened `scripts/validate-skill-templates.ps1` so it now asserts the hidden-asset recovery wording in both scaffold references, keeping the validator synchronized with the documented install-fallback behavior.
+- Tightened `scripts/validate-skill-templates.ps1` so it now asserts the shared hidden-asset recovery wording in both scaffold references, keeping the validator synchronized with the documented install-fallback behavior,
+- Added validator coverage for the new manifest-driven restore guidance and the yolo/auto changelog bypass contract.
 
 ## [0.3.3] - 2026-03-25
 

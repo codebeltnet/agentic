@@ -1,7 +1,7 @@
 ---
 name: git-keep-a-changelog
 description: >
-  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...). Reads full commit bodies and diffs, creates compliant structure with required SemVer highlights, infers versions from branches, must ask a mandatory Yes / No / Custom confirmation question before including pending staged, unstaged, or untracked worktree changes in a concrete release draft, edits directly for review, preserves prose wrapping, avoids commit-log dumps.
+  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...), "yolo", "auto". Reads full commit bodies and diffs, creates compliant structure with required SemVer highlights, infers versions from branches, must ask a mandatory Yes / No / Custom confirmation question before including pending staged, unstaged, or untracked worktree changes in a concrete release draft (bypassed in yolo/auto mode — all changes included automatically), edits directly for review, preserves prose wrapping, avoids commit-log dumps.
 ---
 
 # Git Keep A Changelog
@@ -10,7 +10,17 @@ description: >
 
 This skill creates or updates `CHANGELOG.md` directly using the Keep a Changelog 1.1.0 structure. It is git-aware, changelog-focused, and optimized for a human-readable release summary rather than generated release-note noise.
 
-Read `FORMS.md` when pending worktree changes require user confirmation and the host supports native structured input controls. If native structured input is unavailable, use the deterministic plain-text fallback defined there.
+Read `FORMS.md` when pending worktree changes require user confirmation and the host supports native structured input controls. If native structured input is unavailable, use the deterministic plain-text fallback defined there. `FORMS.md` is not used in yolo/auto mode — see **Yolo / Auto Mode** below.
+
+## Yolo / Auto Mode
+
+When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in the message), the skill operates in full-autonomy mode:
+
+- **Skip Step 3 entirely.** Do not ask the confirmation question. Do not present the `Yes / No / Custom` gate.
+- **Include all pending changes automatically.** Staged, unstaged, and untracked files are all treated as part of the release scope without asking.
+- **Make all scope decisions independently.** The user has explicitly delegated judgment. Do not pause for input at any point in the workflow.
+- All other quality rules remain in force: the release highlight is still required, the SemVer classification is still required, bullet punctuation still applies, and the compare-link footer must still be maintained.
+- Yolo/auto is a user signal of full autonomy — not a shortcut past quality. Treat it as deliberate and act on it immediately.
 
 ## Non-Negotiable Rules
 
@@ -27,7 +37,7 @@ Read `FORMS.md` when pending worktree changes require user confirmation and the 
 - Always maintain the Keep a Changelog compare-link footer at the bottom of the file.
 - Preserve natural line breaks and readable prose. Do not apply any fixed column limit or artificial hard wrapping to changelog paragraphs or bullets.
 - End each bullet with `,` and end the last bullet in each section with `.`.
-- If pending worktree changes exist for a concrete release draft, do not silently include or exclude them. Ask the user first with a short `Yes / No / Custom` prompt.
+- If pending worktree changes exist for a concrete release draft, do not silently include or exclude them. Ask the user first with a short `Yes / No / Custom` prompt. **Exception: in yolo/auto mode, include all pending changes automatically without asking.**
 - Do not dump commit subjects verbatim into the changelog.
 - Do not invent unsupported changes, risks, or migration guidance.
 
@@ -35,7 +45,7 @@ Read `FORMS.md` when pending worktree changes require user confirmation and the 
 
 These checkpoints cannot be skipped or bypassed, even when the user's opening request sounds like a shortcut.
 
-1. Step 3 confirmation gate: if pending worktree changes exist for a concrete release such as `## [1.2.3]`, present the confirmation question before drafting or writing the changelog entry.
+1. Step 3 confirmation gate: if pending worktree changes exist for a concrete release such as `## [1.2.3]`, present the confirmation question before drafting or writing the changelog entry. **Bypassed in yolo/auto mode — all pending changes are included automatically.**
 2. Release highlight contract: every concrete release entry must include a release highlight paragraph that explicitly classifies the release as `major`, `minor`, or `patch`.
 3. Bullet punctuation: all bullets must end with `,` except the final bullet in each populated section, which must end with `.` Do not finish the edit until this is consistent.
 
@@ -85,6 +95,8 @@ Explicit instructions such as `staged only`, `include unstaged changes`, or `exc
 
 The Step 3 confirmation gate exists to prevent silent inclusion of worktree changes in a permanent release entry. It is a required safety checkpoint, not optional friction.
 
+**Exception — yolo/auto bypasses the gate by design.** When the user explicitly passes `yolo` or `auto`, they are granting full autonomy. That is not a vague hint like `include everything` — it is a deliberate, recognized mode. Skip Step 3, include all pending changes, and proceed.
+
 ### Why this matters
 
 Silent inclusion of pending changes in a changelog is a production risk. The gate ensures the release scope is intentional, visible, and explicitly confirmed before the draft becomes part of the project's recorded release history.
@@ -131,6 +143,8 @@ Otherwise:
 This is a required checkpoint. Do not proceed to Step 4 until this step is complete.
 
 After resolving the target heading, check whether the worktree contains changes that are not part of the committed history yet.
+
+**If yolo/auto mode is active: skip this entire step.** Include all pending changes (staged, unstaged, untracked) automatically and proceed to Step 4.
 
 - Count staged, unstaged, and untracked changes separately.
 - If there are no pending changes, continue normally.
@@ -227,7 +241,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Includes a required SemVer-aware release highlight.
 - Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
 - Reflects the meaning of full commit bodies and the net diff.
-- Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes.
+- Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes (or skips Step 3 entirely and includes all changes when yolo/auto mode is active).
 - Maintains or inserts the compare-link footer at the bottom of the file on both create and update paths.
 - Preserves natural prose wrapping with no fixed column-width target.
 - Keeps bullets specific, concrete, non-repetitive, and consistently punctuated.
@@ -239,7 +253,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Omitting the release highlight.
 - Failing to classify the release as major, minor, or patch.
 - Refusing to proceed just because `CHANGELOG.md` does not exist yet.
-- Silently including, silently ignoring, or otherwise bypassing the pending-worktree confirmation gate for a concrete release draft.
+- Silently including, silently ignoring, or otherwise bypassing the pending-worktree confirmation gate for a concrete release draft (bypassing via explicit `yolo` or `auto` is intentional, not silent).
 - Using any artificial fixed-width wrapping for changelog prose.
 - Mixing bullet punctuation or leaving section bullets without the required trailing `,` / final `.` pattern.
 - Emitting empty `Added` / `Changed` / `Fixed` headings.

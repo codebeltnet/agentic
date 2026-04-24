@@ -1,6 +1,6 @@
 # Parameter Form
 
-Use this form only when pending worktree changes are detected and the skill must ask whether they belong in the changelog draft. This is the mandatory Step 3 confirmation gate for concrete releases. Present each field **one at a time** using the host's native structured input controls when available. If native controls are unavailable, use the deterministic plain-text fallback below. Do not use this form when there are no pending changes to confirm.
+Use this form only when pending worktree changes are detected and the skill must ask whether they belong in the changelog draft. This is the mandatory Step 3 confirmation gate for concrete releases. Present each field **one at a time** using the host's native structured input controls when available. If native controls are unavailable, use the deterministic plain-text fallback below. Do not use this form when there are no pending changes to confirm. **Do not use this form when yolo/auto mode is active — Step 3 is skipped entirely and all pending changes are included automatically.**
 
 ## Fields
 
@@ -58,4 +58,4 @@ Use this form only when pending worktree changes are detected and the skill must
 
    Proceed with this changelog scope?
    ```
-9. Do not skip this gate when the target is a concrete release, even if the user's request says `include everything`, `all changes`, `commit manually`, or `don't ask`.
+9. Do not skip this gate when the target is a concrete release, even if the user's request says `include everything`, `all changes`, `commit manually`, or `don't ask`. **Do not use this form at all when the user's request contains `yolo` or `auto` — the gate is bypassed and all pending changes are included automatically.**
