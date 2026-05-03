@@ -54,17 +54,18 @@ Repo-managed skills live in four places that must stay in sync:
 - `~/.agents/skills/<name>/` — local global agent install
 - `~/.gemini/antigravity/skills/<name>/` — local Gemini Antigravity install
 
-Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo and the global install:
+Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo and the other local installs:
 
 - **Claude local → repo** (persist changes to source control):
   ```powershell
   Copy-Item "$HOME/.claude/skills/<name>/<file>" "skills/<name>/<file>" -Force
   ```
-- **Claude local → global agent install** (keep `~/.agents` current):
+- **Claude local → agent installs** (keep `~/.agents` and Gemini current):
   ```powershell
   Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
+  Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.gemini/antigravity/skills/<name>/<file>" -Force
   ```
-- **Repo → both local installs** (after pulling changes or cloning fresh):
+- **Repo → local installs** (after pulling changes or cloning fresh):
   ```powershell
   Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
   Copy-Item "skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
