@@ -572,7 +572,7 @@ internal static class StoryScript
     private static string BuildOverviewStoryPrompt(string repoId, IReadOnlyList<TargetInfo> targets)
     {
         var targetList = targets.Count == 0
-            ? "- No package targets discovered."
+            ? "- No packages discovered."
             : string.Join(Environment.NewLine, targets.Select(t => "- " + t.Name));
 
         return $$"""
@@ -586,7 +586,7 @@ internal static class StoryScript
         {{targetList}}
 
         Audience:
-        Experienced .NET developers who need a mental model before choosing an individual package or target from this repository.
+        Experienced .NET developers who need a mental model before choosing an individual package from this repository.
         Assume they understand .NET, NuGet, dependency injection, testing, hosting, ASP.NET Core, and common framework terminology.
         Do not explain basic .NET concepts.
 
@@ -596,11 +596,11 @@ internal static class StoryScript
         Do not invent package purposes, dependencies, recommended installation paths, scenarios, APIs, or architectural claims.
         Do not amplify unsupported claims from a target story.
         Prefer concrete responsibilities and decision guidance over marketing language.
-        Keep the overview focused on how developers should understand and choose between the targets.
+        Keep the overview focused on how developers should understand and choose between the packages.
 
         Before writing the final page, internally identify:
         - the unifying purpose of the repository
-        - the foundation package or primary target, if one exists
+        - the foundation or primary package, if one exists
         - optional add-on packages, if any exist
         - convenience or meta packages, if any exist
         - the recommended starting point
@@ -615,7 +615,7 @@ internal static class StoryScript
         Make clear what kind of developer problem this repository solves.
         Do not use broad marketing language.
 
-        After the opening sentences, include a compact packages selection table.
+        After the opening sentences, include a compact package selection table.
 
         Columns:
 
@@ -632,11 +632,11 @@ internal static class StoryScript
 
         After the table, add one short paragraph with the primary selection rule.
 
-        ## Target selection
+        ## Package selection
 
-        Start with one short introductory paragraph before the target subheadings.
+        Start with one short introductory paragraph before the package subheadings.
         The paragraph must be specific to this repository.
-        It should explain the selection principle, conceptual layering, or main trade-off across the targets.
+        It should explain the selection principle, conceptual layering, or main trade-off across the packages.
         Do not repeat the Overview table row by row.
         Do not use generic phrases such as "the following packages are available".
 
