@@ -27,6 +27,7 @@ Use this skill to turn a deterministic story workspace into website-ready or doc
 - Write target result files before the overview result file.
 - For the overview, explicitly read every completed target result file listed by the manifest or `overview.context.md`. Reading only `overview.context.md` is an incomplete overview workflow because the package stories are the primary editorial source.
 - Do not invent APIs, target relationships, examples, dependencies, support statements, performance claims, or architectural claims not supported by the target context.
+- Do not turn a source-backed structural risk into an unmeasured behavior claim. Phrases such as "most common mistake", "developers often", "users frequently", "popular choice", "widely used", or "typical failure" require explicit evidence such as package analytics, issue history, docs that say so, telemetry, survey data, or examples in the generated context. Without that evidence, describe the risk conditionally: "If you install X in a project that only needs Y, it adds Z."
 - If required deterministic files are missing, stale, contradictory, or too large to use safely, stop and report the blocking issue instead of guessing.
 - Do not copy results into a website or documentation tree unless the user explicitly asks for publication or sync.
 
@@ -175,6 +176,13 @@ If target stories were produced by subagents, collect their reported caveats and
 
 The overview should help readers choose between packages or understand the repository's shape. It should not repeat every target page or amplify unsupported claims.
 
+For usage guidance, separate evidence from inference:
+
+- It is grounded to say a meta-package brings in referenced packages or framework references when the project files show that relationship.
+- It is grounded to recommend the smaller package first when the generated instructions ask for "use less" guidance and the package boundaries support that recommendation.
+- It is not grounded to call that situation "the most common mistake" or describe actual developer behavior unless the context includes frequency evidence.
+- Prefer neutral phrasing such as "Avoid installing the aggregate package when..." or "Choose the aggregate package only when..." over popularity or frequency claims.
+
 If any target story is missing, decide from the manifest:
 
 - If the overview depends on all target stories, stop and report the missing files.
@@ -191,12 +199,14 @@ Before finishing, verify:
 - No result file contains analysis notes, citations, XML, JSON, confidence scores, or chat commentary unless the generated prompt explicitly asks for them.
 - Code examples mention only APIs visible in the relevant context.
 - Target stories do not make broad claims such as robust, seamless, powerful, or comprehensive unless immediately grounded in concrete evidence.
+- Results do not contain unmeasured frequency, popularity, adoption, or mistake-rate claims. Search for wording such as most common, often, frequently, usually, typical, popular, and widely, then keep it only when the context provides evidence for that exact kind of claim.
 
 Use targeted searches instead of rereading everything:
 
 ```powershell
 rg -n "TODO|TBD|confidence|citation|analysis notes|I cannot|as an AI" <workspace>/result
 rg -n "robust|seamless|powerful|comprehensive" <workspace>/result
+rg -n "most common|often|frequently|usually|typical|popular|widely|many developers|most developers" <workspace>/result
 ```
 
 Explain any remaining risk, especially missing tests, ambiguous APIs, oversized context, or targets whose purpose is unclear from source.
@@ -230,6 +240,7 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Target pages are written only after the full target context has been read, including any portions hidden by capped or truncated tool output.
 - The overview includes a `## Package selection` section that explains package selection, repository boundaries, and relationships.
 - The overview synthesis clearly uses the completed target result files as source material, not just `overview.context.md`.
+- Tradeoff guidance distinguishes structural evidence from behavioral frequency; it avoids "most common" style claims unless the context includes measurement or explicit source support.
 - The writing is restrained and developer-facing, not marketing-heavy.
 - The agent follows the generated manifest instead of improvising the run order.
 - The final response names the result files written and any validation gaps.
@@ -245,6 +256,7 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Treating a subagent's summary as a substitute for a completed target result file during overview synthesis.
 - Treating capped, truncated, summarized, or partial context output as enough to write from.
 - Using context limits, token limits, or "strategic reading" as a reason to skip part of a required target context or overview source file.
+- Claiming a mistake is common, most common, frequent, typical, popular, or widely observed based only on package structure or an inferred best practice.
 - Writing `Index.md` before target stories exist.
 - Writing `Index.md` after reading only `overview.context.md` and not the completed target result files.
 - Inventing usage examples from plausible framework patterns rather than supplied source and tests.

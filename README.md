@@ -299,7 +299,7 @@ Repository story generation works best when deterministic context gathering is s
 - **Story-sourced overview** - requires the overview phase to open the completed target story files as the primary source instead of relying on `overview.context.md` alone
 - **Package-facing overview** - requires `result/Index.md` to use `## Package selection` for the reader-facing selection section
 - **Phase-scoped reading** - processes target contexts separately and uses completed target stories for the overview without letting token limits justify skipped evidence
-- **Grounded prose** - forbids invented APIs, relationships, examples, and broad marketing claims unless the generated context supports them
+- **Grounded prose** - forbids invented APIs, relationships, examples, broad marketing claims, and unmeasured frequency claims such as "most common mistake" unless the generated context supports them with concrete evidence
 - **Publication stays explicit** - leaves staged files in `{output-root}/{repo-id}/result` unless the user asks to sync them into a consuming site
 ### Why markdown-illustrator?
 
