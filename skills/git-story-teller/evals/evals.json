@@ -137,6 +137,8 @@
       "prompt": "Use git-story-teller to generate a story workspace for a repository where Codebelt.Extensions.Xunit is a shared base package, Directory.Build.props adds it to test projects, and downstream test projects such as Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests exist but there is no dedicated Codebelt.Extensions.Xunit.Tests project.",
       "expected_output": "The generated Codebelt.Extensions.Xunit target context does not assign a downstream hosting test directory as its Test path. It either uses a dedicated exact-name test project when present or leaves Test path undiscovered when only downstream package test projects match the base package prefix.",
       "expectations": [
+        "Recognizes Codebelt.Extensions.Xunit.Tests as the dedicated test project for Codebelt.Extensions.Xunit",
+        "Does not confuse the Xunit.Tests suffix with a UnitTests suffix and strip too much of the target name",
         "Prefers a dedicated test project named after the target package plus a test suffix over downstream package test projects",
         "Does not treat Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests as the owned test project for Codebelt.Extensions.Xunit",
         "Leaves Test path as not discovered when no dedicated test project or single unambiguous direct project reference exists",

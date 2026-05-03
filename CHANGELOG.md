@@ -30,7 +30,9 @@ This is a minor release focused on strengthening `git-story-teller` with complet
 
 ### Fixed
 
-- Clarified validator and documentation alignment to enforce complete-read requirements, evidence-based language rules, and target-story sourcing for overview workflows.
+- Clarified validator and documentation alignment to enforce complete-read requirements, evidence-based language rules, and target-story sourcing for overview workflows,
+- Refined conservative test project matching to use exact suffix matching instead of stripping, preventing false positives when project names contain partial test-suffix overlap,
+- Updated eval 11 expectations to clarify handling of dedicated test projects with explicit "Tests" suffix patterns.
 
 ## [0.4.0] - 2026-05-03
 
