@@ -1,0 +1,79 @@
+{
+  "skill_name": "git-story-teller",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use git-story-teller to write target stories and the overview for an existing story workspace at .bot/stories/example-project. The workspace has manifest.json, instructions.md, two target context files, overview.context.md, and an empty result folder.",
+      "expected_output": "Reads manifest.json and instructions.md first, writes result/{TargetName}.md files before result/Index.md, processes one target context at a time, treats generated output as source of truth, writes the overview with a Package selection section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
+      "expectations": [
+        "Reads manifest.json and instructions.md before writing any result file",
+        "Writes result/{TargetName}.md files before result/Index.md",
+        "Processes one target context file at a time instead of loading all contexts together",
+        "Treats the generated manifest as authoritative for target names, context paths, result paths, and phase order",
+        "Does not invent APIs, namespaces, or capabilities not present in the target context",
+        "Writes result/Index.md with a ## Package selection section and does not use the previous target-oriented heading",
+        "Stops after reporting validation gaps rather than copying result files to a website content tree"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use git-story-teller to generate a story workspace for https://github.com/example/myproject and then write the resulting stories. The active workspace contains a .bot folder.",
+      "expected_output": "Recommends .bot/stories as the output root, runs dotnet run --file with --repo-url and the full URL and --output-root, does not ask for repo-id or result directory, avoids LLM options, then follows the generated manifest to write target stories before result/Index.md.",
+      "expectations": [
+        "Recommends .bot/stories as the output root because a .bot folder exists in the workspace",
+        "Runs dotnet run --file <skill-root>/scripts/story.cs with --repo-url and --output-root",
+        "Passes the full repository URL, not a slug or partial reference",
+        "Does not ask the user for repo-id or result directory",
+        "Does not pass provider, model, or LLM flags to the runner",
+        "Follows the generated manifest after the runner completes to write target stories before Index.md"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Use git-story-teller to write result/Index.md from an existing story workspace. The context files and manifest are present but the result folder is empty.",
+      "expected_output": "Writes all required target result files before writing result/Index.md, using completed target stories as editorial input for the overview and using Package selection as the visible overview section heading.",
+      "expectations": [
+        "Writes all required target result files before writing result/Index.md",
+        "Does not skip target stories even when the user asks only for the overview",
+        "Uses the completed target result files as editorial input when writing Index.md",
+        "Writes result/Index.md with a ## Package selection section and does not use the previous target-oriented heading",
+        "Names any missing target stories in the response if any cannot be completed before proceeding"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use git-story-teller to write a target story for a library package. The context file includes source files but contains no performance benchmarks, third-party integration examples, or architecture diagrams.",
+      "expected_output": "The result file contains only claims grounded in the context; no invented benchmarks, integration examples, broad marketing adjectives, or API shapes that do not appear in the source.",
+      "expectations": [
+        "Grounds every capability claim in source, tests, project metadata, or README content from the context",
+        "Does not invent API shapes, method signatures, or namespaces not visible in the context",
+        "Omits benchmark or performance claims when no benchmark data is present in the context",
+        "Avoids broad adjectives such as robust, seamless, powerful, or comprehensive unless immediately backed by concrete evidence from the context",
+        "Uses the rg validation commands from the skill to check result files before reporting completion"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use git-story-teller to generate a story workspace but the runner exits with an error stating that the .NET 10 SDK is not installed.",
+      "expected_output": "Stops and reports the missing .NET dependency clearly instead of continuing with partial output or guessing story content.",
+      "expectations": [
+        "Identifies .NET 10 SDK and git as required runner dependencies",
+        "Stops and reports the blocking dependency issue instead of proceeding with partial output",
+        "Does not attempt to generate story content by guessing when the runner cannot complete",
+        "Tells the user what to install to unblock the workflow"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use git-story-teller to generate a story workspace for https://github.com/example/myproject, but local npx/Repomix cannot start while .NET 10 and git are available.",
+      "expected_output": "Allows the runner to use the Repomix web API fallback for the public GitHub URL, or the built-in .NET packer if the web API is unavailable, then follows the generated manifest instead of treating missing npx as a hard blocker.",
+      "expectations": [
+        "Does not stop solely because local npx or local Repomix is unavailable",
+        "Recognizes that the runner prefers local Repomix, then can try the public Repomix web API for GitHub HTTPS URLs",
+        "Mentions that the web API fallback sends the repository URL and include patterns to the public Repomix service",
+        "Recognizes the built-in .NET text packer as the last-resort lower-fidelity fallback",
+        "Still treats .NET 10 SDK and git failures as blocking dependencies"
+      ]
+    }
+  ]
+}
