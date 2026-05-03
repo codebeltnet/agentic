@@ -54,6 +54,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill git-nuget-readme
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agnostic
 npx skills add https://github.com/codebeltnet/agentic --skill markdown-illustrator
+npx skills add https://github.com/codebeltnet/agentic --skill git-story-teller
 npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-app-slnx
@@ -83,6 +84,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-lib-sln
 | [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns the full current feature branch into a curated set of compact summary lines for PR or squash-and-merge contexts by default, preserving technical identifiers, merging overlap, dropping low-signal noise, highlighting distinct meaningful efforts, and avoiding changelog-style wording, unsupported claims, needless commit-range questions, or commit-selection UI for ordinary branch-level squash requests. |
 | [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | Runner-agnostic overlay for Anthropic `skill-creator`. Adds repo and environment guardrails for skill authoring and benchmarking: temp-workspace isolation, `iteration-N/eval-name/{config}/run-N/` benchmark layout, valid `grading.json` summaries, generated `benchmark.json`, honest `MEASURED` vs `SIMULATED` labeling, and sync/README discipline for repo-managed skills. |
 | [markdown-illustrator](skills/markdown-illustrator/SKILL.md) | Reads a markdown file and answers directly in chat with one document-wide Visual Brief plus one compiled prompt. Infers a compact visual strategy by default, keeps follow-up questions near zero, and only branches when the user explicitly asks for added specificity. |
+| [git-story-teller](skills/git-story-teller/SKILL.md) | Turns any full repository URL into a deterministic story workspace using the bundled .NET file-based runner `scripts/story.cs`. Requires explicit `--repo-url` and `--output-root`, derives `{repo-id}`, fixes `result/`, writes target contexts plus manifest instructions, then guides the agent to write target stories before `result/Index.md`. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
@@ -132,6 +134,12 @@ npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agno
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill markdown-illustrator
+```
+
+`git-story-teller`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill git-story-teller
 ```
 
 `dotnet-new-lib-slnx`
@@ -273,6 +281,19 @@ Anthropic's `skill-creator` is an excellent base workflow, but the day-to-day fr
 - **Codex-friendly benchmarking** — treats Codex CLI as a valid real runner when present, preserves `MEASURED` parity honestly, uses raw event output as fallback evidence when convenience files are missing, and prefers parallel paired runs when the runner supports sub-agents
 - **Repo-managed discipline** — keeps per-skill evals, local-install sync, and README updates in scope for first-party skills
 
+### Why git-story-teller?
+
+Repository story generation works best when deterministic context gathering is separated from AI-authored prose. **git-story-teller** owns that split: its bundled .NET file-based runner creates the manifest, instructions, and one context file per target; the agent writes the target stories and overview.
+
+- **Bundled C# runner** - ships `scripts/story.cs`, run with `dotnet run --file`, so the skill is self-contained without a full project file
+- **Repository-generic input** - starts from a full repository URL and an explicit output root instead of assuming an owner/slug convention
+- **KISS contract** - only `--repo-url` and `--output-root` are inputs; `{repo-id}` is derived and `result/` is fixed
+- **Codebelt-flavored default** - recommends `.bot/stories` when the active workspace already contains a `.bot` folder
+- **Tool output is authoritative** - reads `manifest.json`, `instructions.md`, and one target context at a time instead of reconstructing scope from memory
+- **Target-first workflow** - writes `result/{TargetName}.md` files before synthesizing `result/Index.md`
+- **Context-budget aware** - processes target contexts separately and uses completed target stories for the overview
+- **Grounded prose** - forbids invented APIs, relationships, examples, and broad marketing claims unless the generated context supports them
+- **Publication stays explicit** - leaves staged files in `{output-root}/{repo-id}/result` unless the user asks to sync them into a consuming site
 ### Why markdown-illustrator?
 
 Markdown-heavy documents often need one image that sells the whole idea fast: a conference opener, article cover, pitch-slide hero, or visual hook that makes the audience want to keep reading. The problem with many prompt workflows is that they branch immediately into model menus, theme toggles, and style comparisons before the document has even been understood.
