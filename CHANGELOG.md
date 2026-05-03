@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-04
+
+This is a minor release focused on strengthening `git-story-teller` with complete-read grounding rules, optional subagent delegation, evidence-based language validation, and enhanced deterministic output artifacts. The skill now enforces that agents read full context and target stories as primary sources, supports delegation of independent target contexts to subagents, and provides tooling to detect and prevent unmeasured frequency or behavior claims without source evidence.
+
+### Added
+
+- Complete-read grounding rules in `git-story-teller` requiring agents to fully inspect target contexts and overview sources, with explicit guidance on using chunk indices and range reads to handle truncated output,
+- Optional subagent strategy in `git-story-teller` for delegating independent target contexts to isolated subagents, reducing prompt budget contention while maintaining strict grounding requirements,
+- Evidence-based language validation patterns and regex detection in `git-story-teller` to distinguish structural facts from unmeasured behavior claims, with explicit guidance on conditional language like "if you only need X, aggregate adds Y" instead of "most common" or "developers often" without evidence,
+- Public API summary generation in `story.cs` to help agents orient around consumer-facing types, inheritance chains, and key members before reading raw source,
+- Engineering signal map in `story.cs` highlighting source-backed validation guards, lifecycle callbacks, factories, hosting styles, and test evidence for narrative-driven explanations instead of mechanical API lists,
+- Chunked context navigation in `story.cs` with `*.context.index.md` and ordered `*.context.chunks/*.md` files alongside full contexts for robust reading even when tools cap single-file output.
+
+### Changed
+
+- Refined `git-story-teller` SKILL.md with explicit complete-read contract, mandatory target-story sourcing for overview phase, and subagent orchestration patterns for large independent contexts,
+- Enhanced `story.cs` to emit complete context files, public API summaries, engineering signal maps, context indexes, and ordered chunk files for improved agent navigation and grounding,
+- Updated README description and "Why git-story-teller?" section to document full output artifacts, public-API-first orientation, engineering signals, chunked navigation, and complete-read grounding,
+- Expanded AGENTS.md with four-way skill sync guidance including Gemini Antigravity install location and folder-name requirements,
+- Refined eval contracts for complete-read patterns, subagent coordination, evidence-based prose, and target-story-sourced overview synthesis.
+
+### Fixed
+
+- Clarified validator and documentation alignment to enforce complete-read requirements, evidence-based language rules, and target-story sourcing for overview workflows.
+
 ## [0.4.0] - 2026-05-03
 
 This is a minor release focused on deterministic repository story generation and foundational agent guidelines. It introduces a new `git-story-teller` skill with a bundled .NET context extractor, enhanced bot workspace management, and Karpathy programming principles for LLM agents.
@@ -157,7 +182,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/codebeltnet/agentic/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/codebeltnet/agentic/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/codebeltnet/agentic/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/codebeltnet/agentic/compare/v0.3.2...v0.3.3
