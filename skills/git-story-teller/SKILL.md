@@ -1,7 +1,7 @@
 ---
 name: git-story-teller
 description: >
-  Generate source-grounded repository story markdown from deterministic ContentSync context bundles. Use when the user asks to create, refresh, or complete repo/package stories, family or project overview pages, .bot/stories output, ContentSync story workflows, or result/Index.md plus result/{TargetName}.md files for any repository URL. The skill runs its bundled .NET file-based context generator, writes target stories first, then writes the overview from completed target stories, and enforces grounding, context-budget, and no-invention rules.
+  Generate source-grounded repository story markdown from deterministic ContentSync context bundles. Use when the user asks to create, refresh, or complete repo/package stories, family or project overview pages, .bot/stories output, ContentSync story workflows, or result/Index.md plus result/{TargetName}.md files for any repository URL. The skill runs its bundled .NET file-based context generator, writes target stories first, then writes the overview from completed target stories, and enforces complete-read grounding and no-invention rules.
 ---
 
 # Git Story Teller
@@ -21,7 +21,11 @@ Use this skill to turn a deterministic story workspace into website-ready or doc
 - Do not assume GitHub owner, repository host, organization, package prefix, website path, or docs domain from memory.
 - Do not call an LLM provider from the runner. The calling agent is the brain that writes prose.
 - Process one target context at a time. Do not load all target contexts into the same prompt unless the generated manifest explicitly requires it.
+- When the runtime supports subagents and the manifest has multiple independent target contexts, prefer one subagent per target context. Give each subagent only its assigned target context, `instructions.md`, the relevant manifest entry, and the complete-read contract. Subagents reduce context pressure; they do not reduce grounding requirements.
+- Complete reads are mandatory for the files used in the current phase. For a target story, read that target's entire context file before writing. For the overview, read the entire `overview.context.md` and every completed target result file required by the manifest or generated instructions before writing. Chunking is only a way to finish reading a large file; it is not permission to skip sections.
+- If a tool caps, truncates, summarizes, or partially displays a required file, continue reading the remaining ranges or use a different file-reading method until the full required file has been inspected. If the full required file cannot be read, stop and report that blocker instead of writing from a subset.
 - Write target result files before the overview result file.
+- For the overview, explicitly read every completed target result file listed by the manifest or `overview.context.md`. Reading only `overview.context.md` is an incomplete overview workflow because the package stories are the primary editorial source.
 - Do not invent APIs, target relationships, examples, dependencies, support statements, performance claims, or architectural claims not supported by the target context.
 - If required deterministic files are missing, stale, contradictory, or too large to use safely, stop and report the blocking issue instead of guessing.
 - Do not copy results into a website or documentation tree unless the user explicitly asks for publication or sync.
@@ -139,19 +143,37 @@ If there is no manifest, infer the target list only from `*.context.md` files an
 For each target in the first phase:
 
 1. Open only that target's context file plus `instructions.md` if needed.
-2. Confirm the target result path is `result/{TargetName}.md` or the manifest's declared equivalent.
-3. Write the exact required sections from the generated context.
-4. Ground API lists and examples in source, tests, project files, README files, or metadata found in the context.
-5. Keep examples compact and use real namespaces, type names, method names, and constructor signatures from the context.
-6. If the context proves the target is a convenience, aggregate, or metadata-only package with no source of its own, write that honestly instead of inventing APIs.
+2. Read the target context file completely before drafting. If the read output is capped or truncated, keep reading the remaining portions until the whole file has been inspected.
+3. Confirm the target result path is `result/{TargetName}.md` or the manifest's declared equivalent.
+4. Write the exact required sections from the generated context.
+5. Ground API lists and examples in source, tests, project files, README files, or metadata found in the context.
+6. Keep examples compact and use real namespaces, type names, method names, and constructor signatures from the context.
+7. If the context proves the target is a convenience, aggregate, or metadata-only package with no source of its own, write that honestly instead of inventing APIs.
 
 Do not use another target's context to fill gaps unless the current context explicitly includes it or the manifest marks that relationship as required.
+
+### Optional Subagent Strategy
+
+If the agent runtime can delegate work, use subagents to keep each target context isolated and roomy:
+
+- Spawn at most one subagent per target context from the current target phase.
+- Give each subagent a narrow task: completely read its assigned context, follow `instructions.md`, write or draft only its assigned `result/{TargetName}.md`, and report any unreadable or contradictory evidence.
+- Do not give one subagent multiple target contexts unless the manifest says those targets are dependent.
+- Do not ask a subagent to write `result/Index.md` until all required target result files exist.
+- The main agent is the orchestrator and final editor. It gathers each subagent's completed target result file, reported caveats, and validation notes, then authors `result/Index.md` itself from those completed stories plus `overview.context.md`.
+- The coordinating agent remains responsible for manifest order, final file placement, overview synthesis, validation, and final reporting.
+
+Subagent summaries and caveats are useful handoff material for the orchestrator, but they are not a replacement for the completed target result files required by the overview phase.
 
 ### Step 5: Write the Overview
 
 Write `result/Index.md` only after target stories exist.
 
-Use the overview context and the completed target result files as the main editorial input. The overview should help readers choose between packages or understand the repository's shape. It should not repeat every target page or amplify unsupported claims.
+Open and completely read `overview.context.md` and every completed target result file listed by the manifest or by the generated required target-story source section. Treat the completed target result files as the required package-story source for `result/Index.md`; treat `overview.context.md` as supplementary repository context for relationships, project metadata, README framing, and package inventory. Reading only `overview.context.md` is not sufficient.
+
+If target stories were produced by subagents, collect their reported caveats and validation notes before drafting the overview. Use those notes to avoid overclaiming, but ground the overview in the completed target result files and `overview.context.md`.
+
+The overview should help readers choose between packages or understand the repository's shape. It should not repeat every target page or amplify unsupported claims.
 
 If any target story is missing, decide from the manifest:
 
@@ -179,12 +201,16 @@ rg -n "robust|seamless|powerful|comprehensive" <workspace>/result
 
 Explain any remaining risk, especially missing tests, ambiguous APIs, oversized context, or targets whose purpose is unclear from source.
 
-## Context Budget Rules
+## Complete-Read Rules
 
 - Open target contexts one at a time.
+- Use subagents for independent target contexts when available so each context can be read completely without competing for the same prompt budget.
 - Prefer manifest summaries, target result files, and overview context for the overview instead of reopening every target context.
-- If a single target context is too large for the active model, split the work by evidence type: project metadata first, public source second, tests third, README last.
-- Never silently omit evidence because it is large. State the limitation and use the generated instructions to choose the smallest safe subset.
+- For the overview, target result files are compact source material. Read those files directly before writing `Index.md` instead of relying on their path list inside `overview.context.md`.
+- Do not treat context limits as permission to sample. The required file set for the current phase must be read completely.
+- If a single target context is too large for one tool response, split the read into ranges or sections and continue until the entire file has been inspected. Track where you left off so no section is skipped.
+- Use targeted searches only after the complete read, as a validation aid or to revisit specific evidence. Searches do not replace reading the required context.
+- If the active model or available tools cannot read the full required file set for the current phase, stop and report the limitation. Do not write a story from a partial context.
 
 ## Publication
 
@@ -200,7 +226,10 @@ Do not copy staged results there unless the user asks for website sync, publicat
 ## Good Output Characteristics
 
 - Target pages are concrete, source-backed, and useful to experienced developers.
+- Independent target contexts may be handled by separate subagents, with each subagent fully reading one assigned context before drafting.
+- Target pages are written only after the full target context has been read, including any portions hidden by capped or truncated tool output.
 - The overview includes a `## Package selection` section that explains package selection, repository boundaries, and relationships.
+- The overview synthesis clearly uses the completed target result files as source material, not just `overview.context.md`.
 - The writing is restrained and developer-facing, not marketing-heavy.
 - The agent follows the generated manifest instead of improvising the run order.
 - The final response names the result files written and any validation gaps.
@@ -212,6 +241,11 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Passing only a repository slug when the runner requires a full URL.
 - Assuming a fixed organization such as `codebeltnet` or a fixed repository host such as GitHub.
 - Loading the entire repository context for every target story.
+- Sending multiple unrelated target contexts to the same subagent when they can be processed independently.
+- Treating a subagent's summary as a substitute for a completed target result file during overview synthesis.
+- Treating capped, truncated, summarized, or partial context output as enough to write from.
+- Using context limits, token limits, or "strategic reading" as a reason to skip part of a required target context or overview source file.
 - Writing `Index.md` before target stories exist.
+- Writing `Index.md` after reading only `overview.context.md` and not the completed target result files.
 - Inventing usage examples from plausible framework patterns rather than supplied source and tests.
 - Copying staged files into website content without an explicit user request.
