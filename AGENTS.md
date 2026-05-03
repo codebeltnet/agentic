@@ -47,11 +47,12 @@ Never modify skills maintained by others (e.g. `skill-creator` by Anthropic). If
 
 ## Local Install Sync
 
-Repo-managed skills live in three places that must stay in sync:
+Repo-managed skills live in four places that must stay in sync:
 
-- `skills/<name>/` — source control
+- `skills/<name>/` — source control (and source of truth for edits)
 - `~/.claude/skills/<name>/` — local Claude install
 - `~/.agents/skills/<name>/` — local global agent install
+- `~/.gemini/antigravity/skills/<name>/` — local Gemini Antigravity install
 
 Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo and the global install:
 
@@ -67,15 +68,16 @@ Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo
   ```powershell
   Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
   Copy-Item "skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
+  Copy-Item "skills/<name>/<file>" "$HOME/.gemini/antigravity/skills/<name>/<file>" -Force
   ```
 
-If you edit the `~/.agents/skills/<name>/` copy first, mirror it back to the repo and to `~/.claude/skills/<name>/` using the same pattern.
+If you edit the `~/.agents/skills/<name>/` copy first, mirror it back to the repo and to `~/.claude/skills/<name>/` and `~/.gemini/antigravity/skills/<name>/` using the same pattern.
 
-When renaming a skill, update **all three** locations — the repo folder, the local Claude install folder, and the local global agent install folder. The folder name and the `name:` field in the SKILL.md frontmatter must match. A mismatch causes the skill to disappear from tooling or show stale instructions.
+When renaming a skill, update **all four** locations — the repo folder, the local Claude install folder, the local global agent install folder, and the local Gemini Antigravity install folder. The folder name and the `name:` field in the SKILL.md frontmatter must match. A mismatch causes the skill to disappear from tooling or show stale instructions.
 
 A sync mismatch means one side runs a stale version, which leads to confusing eval results and wasted iterations.
 
-After changing any repo-managed skill, sync the touched files across the repo copy, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/` before considering the task done.
+After changing any repo-managed skill, sync the touched files across the repo copy, `~/.claude/skills/<name>/`, `~/.agents/skills/<name>/`, and `~/.gemini/antigravity/skills/<name>/` before considering the task done.
 
 ## Skill Directory Structure
 
