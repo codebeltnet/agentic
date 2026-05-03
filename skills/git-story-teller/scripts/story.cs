@@ -251,6 +251,8 @@ internal static class StoryScript
             .Where(Directory.Exists)
             .ToList();
 
+        var normalizedTarget = NormalizeForMatch(targetName);
+        var candidates = new List<TestProjectMatch>();
         foreach (var root in testRoots)
         {
             var testProjects = Directory.EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
@@ -259,21 +261,45 @@ internal static class StoryScript
 
             foreach (var testProject in testProjects)
             {
-                if (ReferencesProject(testProject, sourceProjectFile))
-                {
-                    return Path.GetDirectoryName(testProject);
-                }
-            }
-
-            var normalizedTarget = NormalizeForMatch(targetName);
-            var byName = testProjects.FirstOrDefault(p => NormalizeForMatch(Path.GetFileNameWithoutExtension(p)).Contains(normalizedTarget, StringComparison.OrdinalIgnoreCase));
-            if (byName is not null)
-            {
-                return Path.GetDirectoryName(byName);
+                candidates.Add(new TestProjectMatch(
+                    testProject,
+                    IsOwnTestProjectName(testProject, normalizedTarget),
+                    ReferencesProject(testProject, sourceProjectFile)));
             }
         }
 
-        return null;
+        var ownMatch = candidates
+            .Where(c => c.IsOwnTestProjectName)
+            .OrderByDescending(c => c.ReferencesProject)
+            .ThenBy(c => c.ProjectFile, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (ownMatch is not null)
+        {
+            return Path.GetDirectoryName(ownMatch.ProjectFile);
+        }
+
+        var directMatches = candidates
+            .Where(c => c.ReferencesProject)
+            .OrderBy(c => c.ProjectFile, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return directMatches.Count == 1 ? Path.GetDirectoryName(directMatches[0].ProjectFile) : null;
+    }
+
+    private static bool IsOwnTestProjectName(string testProjectFile, string normalizedTarget) =>
+        StripKnownTestSuffix(NormalizeForMatch(Path.GetFileNameWithoutExtension(testProjectFile))) == normalizedTarget;
+
+    private static string StripKnownTestSuffix(string normalizedProjectName)
+    {
+        var suffixes = new[] { "integrationtests", "functionaltests", "unittests", "tests", "test" };
+        foreach (var suffix in suffixes)
+        {
+            if (normalizedProjectName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return normalizedProjectName[..^suffix.Length];
+            }
+        }
+
+        return normalizedProjectName;
     }
 
     private static bool ReferencesProject(string testProjectFile, string sourceProjectFile)
@@ -1687,6 +1713,11 @@ internal sealed record TargetInfo(
     string? TestPath,
     bool IsConveniencePackage,
     IReadOnlyList<string> BundledPackages);
+
+internal sealed record TestProjectMatch(
+    string ProjectFile,
+    bool IsOwnTestProjectName,
+    bool ReferencesProject);
 
 internal sealed record ContextArtifacts(
     string ContextPath,
