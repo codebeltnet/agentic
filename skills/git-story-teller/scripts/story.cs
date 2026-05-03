@@ -371,13 +371,17 @@ internal static class StoryScript
         sb.AppendLine("Result path: result/Index.md");
         sb.AppendLine();
 
-        AppendHeader(sb, "TARGET STORIES TO READ FIRST");
+        AppendHeader(sb, "REQUIRED COMPLETED TARGET STORY SOURCES");
         if (targets.Count == 0)
         {
             sb.AppendLine("No package targets were discovered under src/. Write an overview only if the repository context is sufficient.");
         }
         else
         {
+            sb.AppendLine("Before writing result/Index.md, open and read every completed target story listed below.");
+            sb.AppendLine("These completed package stories are the primary source for the overview; this overview context file is only supplementary.");
+            sb.AppendLine("If your execution log would show only overview.context.md being read for the overview phase, stop and read the target stories first.");
+            sb.AppendLine();
             foreach (var target in targets)
             {
                 sb.AppendLine($"- {target.Name}: result/{target.Name}.md");
@@ -409,6 +413,8 @@ internal static class StoryScript
         - Treat `manifest.json` as authoritative for context and result paths.
         - Process target contexts one at a time.
         - Write every target result before writing the overview.
+        - For the overview, read `overview.context.md` and every completed target result file listed by the manifest.
+        - Treat completed target result files as the primary overview source; `overview.context.md` is supplementary.
         - Write target stories to `result/{TargetName}.md`.
         - Write the overview to `result/Index.md`.
         - Use the generated prompt sections in each `.context.md` file as the task contract.
@@ -424,7 +430,7 @@ internal static class StoryScript
         1. Read `manifest.json`.
         2. Read this file.
         3. For each target in the `packages` phase, read its context and write its result file.
-        4. Read `overview.context.md` and the completed target result files.
+        4. Read `overview.context.md` and every completed target result file listed by the manifest.
         5. Write `result/Index.md`.
         6. Validate that all manifest result paths exist.
         """;
@@ -582,8 +588,11 @@ internal static class StoryScript
         `result/Index.md`
 
         Primary editorial context:
-        Read the completed target stories before writing this page:
+        Read every completed target story below before writing this page:
         {{targetList}}
+
+        If package targets exist, do not write `result/Index.md` from `overview.context.md` alone.
+        The overview is invalid unless the completed target story files have been opened and used as source material.
 
         Audience:
         Experienced .NET developers who need a mental model before choosing an individual package from this repository.
@@ -592,6 +601,7 @@ internal static class StoryScript
 
         Grounding rules:
         The completed target stories are the primary editorial context.
+        Use the overview context only as supplementary repository evidence.
         Supplementary README, package README, project, dependency, and metadata information may be used to clarify relationships.
         Do not invent package purposes, dependencies, recommended installation paths, scenarios, APIs, or architectural claims.
         Do not amplify unsupported claims from a target story.
@@ -957,6 +967,7 @@ internal static class StoryScript
                 kind = "overview",
                 name = "Index",
                 context = overviewContextName,
+                sourceResults = targets.Select(t => t.result).ToList(),
                 result = "result/Index.md"
             }
         };
