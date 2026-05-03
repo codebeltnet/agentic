@@ -285,21 +285,11 @@ internal static class StoryScript
         return directMatches.Count == 1 ? Path.GetDirectoryName(directMatches[0].ProjectFile) : null;
     }
 
-    private static bool IsOwnTestProjectName(string testProjectFile, string normalizedTarget) =>
-        StripKnownTestSuffix(NormalizeForMatch(Path.GetFileNameWithoutExtension(testProjectFile))) == normalizedTarget;
-
-    private static string StripKnownTestSuffix(string normalizedProjectName)
+    private static bool IsOwnTestProjectName(string testProjectFile, string normalizedTarget)
     {
-        var suffixes = new[] { "integrationtests", "functionaltests", "unittests", "tests", "test" };
-        foreach (var suffix in suffixes)
-        {
-            if (normalizedProjectName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            {
-                return normalizedProjectName[..^suffix.Length];
-            }
-        }
-
-        return normalizedProjectName;
+        var normalizedProjectName = NormalizeForMatch(Path.GetFileNameWithoutExtension(testProjectFile));
+        var suffixes = new[] { "tests", "test", "unittests", "unittest", "integrationtests", "integrationtest", "functionaltests", "functionaltest" };
+        return suffixes.Any(suffix => string.Equals(normalizedProjectName, normalizedTarget + suffix, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool ReferencesProject(string testProjectFile, string sourceProjectFile)
