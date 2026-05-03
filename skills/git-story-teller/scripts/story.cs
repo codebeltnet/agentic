@@ -855,8 +855,12 @@ internal static class StoryScript
         if (normalizedPattern.Contains("/**/", StringComparison.Ordinal))
         {
             var parts = normalizedPattern.Split("/**/", 2, StringSplitOptions.None);
-            return relativePath.StartsWith(parts[0].TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase)
-                && relativePath.EndsWith("/" + parts[1].TrimStart('/'), StringComparison.OrdinalIgnoreCase);
+            var prefix = parts[0].TrimEnd('/') + "/";
+            var suffix = "/" + parts[1].TrimStart('/');
+            var direct = parts[0].TrimEnd('/') + "/" + parts[1].TrimStart('/');
+            return (relativePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    && relativePath.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                || string.Equals(relativePath, direct, StringComparison.OrdinalIgnoreCase);
         }
 
         if (normalizedPattern.Contains('*'))
@@ -981,8 +985,10 @@ internal static class StoryScript
         await WriteUtf8Async(manifestPath, json + Environment.NewLine);
     }
 
-    private static async Task RunProcessAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory)
+    private static async Task RunProcessAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory, TimeSpan timeout = default)
     {
+        if (timeout == default) timeout = TimeSpan.FromMinutes(5);
+
         var startInfo = new ProcessStartInfo(executable)
         {
             WorkingDirectory = workingDirectory,
@@ -1003,7 +1009,17 @@ internal static class StoryScript
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
 
-        await process.WaitForExitAsync();
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            await process.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException($"'{executable}' did not complete within {timeout}.");
+        }
+
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
 
