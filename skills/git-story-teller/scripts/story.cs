@@ -611,23 +611,23 @@ internal static class StoryScript
 
         ## Overview
 
-        Start with 2-3 sentences that explain the unifying purpose across the targets.
+        Start with 2-3 sentences that explain the unifying purpose across the packages.
         Make clear what kind of developer problem this repository solves.
         Do not use broad marketing language.
 
-        After the opening sentences, include a compact target selection table.
+        After the opening sentences, include a compact packages selection table.
 
         Columns:
 
-        | Scenario | Target |
+        | Scenario | Package |
         |---|---|
 
         Rules:
-        - Each row must map a concrete developer scenario to one or more target names.
+        - Each row must map a concrete developer scenario to one or more package names.
         - Keep the scenarios practical and non-overlapping.
         - Prefer fewer, sharper rows over exhaustive rows.
         - Do not create separate rows for scenarios that are effectively the same decision.
-        - Include convenience or aggregate targets only if they exist and their role is clear.
+        - Include convenience or aggregate packages only if they exist and their role is clear.
         - Avoid internal phrasing unless the repository content clearly explains it in user-facing terms.
 
         After the table, add one short paragraph with the primary selection rule.
@@ -640,25 +640,25 @@ internal static class StoryScript
         Do not repeat the Overview table row by row.
         Do not use generic phrases such as "the following packages are available".
 
-        Then use one third-level heading per target.
+        Then use one third-level heading per package.
 
         Format:
 
-        ### Target.Name
+        ### Package.Name
 
         1 short paragraph.
-        Explain what this target is for, what it adds, and when a developer should choose it.
-        If it extends another target in the same repository, say so.
+        Explain what this package is for, what it adds, and when a developer should choose it.
+        If it extends another package in the same repository, say so.
         If it is a convenience or meta package, say that clearly.
-        Do not create bullets unless the target has genuinely enumerable capabilities.
-        Use target names exactly as supplied.
+        Do not create bullets unless the package has genuinely enumerable capabilities.
+        Use package names exactly as supplied.
 
         ## Usage guidance
 
         One or two paragraphs.
         Explain the non-obvious guidance that helps developers choose and use the repository correctly.
         Focus on boundaries, trade-offs, and common mistakes.
-        It must be grounded in the actual target responsibilities and APIs.
+        It must be grounded in the actual package responsibilities and APIs.
         Do not use generic advice.
         """;
     }
