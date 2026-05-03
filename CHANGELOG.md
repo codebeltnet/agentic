@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.4.1] - 2026-05-04
 
-This is a minor release focused on strengthening `git-story-teller` with complete-read grounding rules, optional subagent delegation, evidence-based language validation, and enhanced deterministic output artifacts. The skill now enforces that agents read full context and target stories as primary sources, supports delegation of independent target contexts to subagents, and provides tooling to detect and prevent unmeasured frequency or behavior claims without source evidence.
+This is a minor release focused on strengthening `git-story-teller` with complete-read grounding rules, optional subagent delegation, evidence-based language validation, and enhanced deterministic output artifacts, plus clarifying `git-visual-squash-summary` emoji-first output conventions with explicit lowercase-start guidance. The `git-story-teller` skill now enforces that agents read full context and target stories as primary sources, supports delegation of independent target contexts to subagents, and provides tooling to detect and prevent unmeasured frequency or behavior claims without source evidence. The `git-visual-squash-summary` skill clarifies its emoji-first output rule to start descriptions lowercase after the emoji unless a leading technical identifier requires original casing.
 
 ### Added
 
@@ -18,21 +18,26 @@ This is a minor release focused on strengthening `git-story-teller` with complet
 - Public API summary generation in `story.cs` to help agents orient around consumer-facing types, inheritance chains, and key members before reading raw source,
 - Engineering signal map in `story.cs` highlighting source-backed validation guards, lifecycle callbacks, factories, hosting styles, and test evidence for narrative-driven explanations instead of mechanical API lists,
 - Conservative test ownership mapping in `story.cs` preferring dedicated test projects with matching names over downstream package tests, only using direct references as fallback, and leaving Test path undiscovered when no unambiguous match exists,
-- Chunked context navigation in `story.cs` with `*.context.index.md` and ordered `*.context.chunks/*.md` files alongside full contexts for robust reading even when tools cap single-file output.
+- Chunked context navigation in `story.cs` with `*.context.index.md` and ordered `*.context.chunks/*.md` files alongside full contexts for robust reading even when tools cap single-file output,
+- Explicit lowercase-start guidance in `git-visual-squash-summary` for emoji-first output, clarifying that descriptions should start lowercase unless a leading technical identifier requires original casing,
+- Eval test coverage for `git-visual-squash-summary` lowercase-start rule including preservation of case-sensitive identifiers and distinction from conventional-commit prefixes.
 
 ### Changed
 
 - Refined `git-story-teller` SKILL.md with explicit complete-read contract, mandatory target-story sourcing for overview phase, subagent orchestration patterns, and conservative test mapping rules,
 - Enhanced `story.cs` to emit complete context files, public API summaries, engineering signal maps, conservative test ownership logic, context indexes, and ordered chunk files for improved agent navigation and grounding,
 - Updated README description and "Why git-story-teller?" section to document full output artifacts, public-API-first orientation, engineering signals, conservative test mapping, chunked navigation, and complete-read grounding,
+- Updated README description and "Why git-visual-squash-summary?" section to clarify lowercase-start rule and technical identifier preservation in emoji-first output,
+- Expanded `git-visual-squash-summary` SKILL.md formatting rules and good/bad characteristics sections with explicit lowercase-start guidance and case-sensitive identifier handling,
 - Expanded AGENTS.md with four-way skill sync guidance including Gemini Antigravity install location and folder-name requirements,
-- Refined eval contracts for complete-read patterns, subagent coordination, evidence-based prose, target-story-sourced overview synthesis, and conservative test ownership mapping.
+- Refined eval contracts for complete-read patterns, subagent coordination, evidence-based prose, target-story-sourced overview synthesis, conservative test ownership mapping, and emoji-first lowercase output conventions.
 
 ### Fixed
 
 - Clarified validator and documentation alignment to enforce complete-read requirements, evidence-based language rules, and target-story sourcing for overview workflows,
 - Refined conservative test project matching to use exact suffix matching instead of stripping, preventing false positives when project names contain partial test-suffix overlap,
-- Updated eval 11 expectations to clarify handling of dedicated test projects with explicit "Tests" suffix patterns.
+- Updated eval 11 expectations to clarify handling of dedicated test projects with explicit "Tests" suffix patterns,
+- Standardized `git-visual-squash-summary` output guidance across SKILL.md, references/commit-language.md, and eval contracts to enforce consistent lowercase-start and technical-identifier preservation rules.
 
 ## [0.4.0] - 2026-05-03
 

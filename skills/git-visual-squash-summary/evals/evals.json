@@ -19,6 +19,7 @@
       "expected_output": "A polished grouped summary that keeps important technical identifiers intact and uses the shared git-visual wording style.",
       "expectations": [
         "Preserves technical identifiers exactly where possible",
+        "Starts descriptions lowercase after the emoji unless a leading technical identifier requires original casing",
         "Uses the same emoji-first language as git-visual-commits and defaults to no prefix unless explicitly requested",
         "Reads like a curated human-written condensed history rather than a dump of commit subjects",
         "Keeps distinct meaningful efforts on separate lines",
@@ -101,6 +102,7 @@
       "expected_output": "A grouped squash summary that uses emoji-first, prefixless lines by default and only switches to prefixed lines when the user explicitly requests that combo.",
       "expectations": [
         "Defaults to emoji plus description lines without adding conventional prefixes",
+        "Starts each prefixless description lowercase after the emoji",
         "Uses the shared commit-language reference as the source of truth for that prefixless default",
         "Keeps the output in grouped summary line form rather than explaining the rule at length"
       ]
@@ -125,6 +127,17 @@
         "Uses a dependency-oriented emoji such as ⬆️ when a retained line is primarily dependency upgrade work",
         "Keeps the build-system or refactor effort on its own retained line when the diff shows a separate intent",
         "Returns grouped summary lines only"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Draft the normal git-visual squash summary for this branch. Make it paste-ready for GitHub, keep identifiers like ValidateSkillTemplates intact, and keep the repo's emoji-first style.",
+      "expected_output": "A paste-ready grouped squash summary whose normal descriptions start lowercase after the emoji while still preserving case-sensitive technical identifiers when they appear.",
+      "expectations": [
+        "Starts normal description text lowercase after each emoji",
+        "Preserves case-sensitive technical identifiers such as ValidateSkillTemplates exactly",
+        "Does not add conventional prefixes unless explicitly requested",
+        "Returns grouped summary lines only without explaining the casing rule"
       ]
     }
   ]

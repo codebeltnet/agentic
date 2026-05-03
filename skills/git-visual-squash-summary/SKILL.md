@@ -26,6 +26,7 @@ This skill has one job: produce a ready-to-paste squash-and-merge summary for th
 - Drop low-signal noise such as typo-only, fixup-only, and trivial follow-up commits unless they materially change a retained group.
 - Prefer strong concrete verbs and concise phrasing.
 - Favor readable GitHub and terminal output over cleverness.
+- Start the description after the emoji with a lowercase word unless the first word is a case-sensitive technical identifier.
 - Avoid vague filler such as "various improvements".
 - Do not treat the result as a changelog entry or a dump of commit subjects.
 - Do not invent unsupported changes.
@@ -96,9 +97,9 @@ Ask yourself: "If I had to explain the real work in 2-5 compact lines, what are 
 Use this exact output shape:
 
 ```text
-<emoji> <short summary line>
-<emoji> <short summary line>
-<emoji> <short summary line>
+<emoji> <lowercase short summary line>
+<emoji> <lowercase short summary line>
+<emoji> <lowercase short summary line>
 ```
 
 Formatting rules:
@@ -107,6 +108,9 @@ Formatting rules:
 - Use one line per retained high-signal group.
 - Keep every line at or below 72 characters.
 - Default to emoji plus description only. Use `<emoji> <prefix>: ...` only when the user explicitly asked to mirror conventional-commit prefixes.
+- Start each description lowercase after the emoji, usually with a lowercase imperative verb such as `add`, `update`, `refresh`, `preserve`, `split`, or `remove`.
+- Preserve case-sensitive identifiers such as `ValidateSkillTemplates`, `Directory.Packages.props`, API names, type names, command names, and paths when they must appear first.
+- Do not convert normal verbs to sentence case. Prefer `🧪 add ValidateSkillTemplates coverage`, not `🧪 Add ValidateSkillTemplates coverage`.
 - Use the shared prefix and emoji guidance in `references/commit-language.md`.
 - If a retained line is primarily dependency or version-alignment work, prefer the dependency emoji from the shared reference such as `⬆️`, `⬇️`, `➕`, `➖`, or `📌` rather than a generic config or refactor emoji.
 - If a retained line is mainly changelog, community-health, or release-status communication, prefer `💬` from the shared reference rather than a generic docs emoji.
@@ -124,6 +128,7 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Reads like a curated grouped summary, not a stitched list of commits.
 - Reads like a curated, human-written condensed history.
 - Uses the same emoji-first language as `git-visual-commits`, with prefixes only on explicit request.
+- Starts descriptions lowercase after the emoji unless preserving a leading technical identifier requires original casing.
 - Keeps distinct meaningful efforts on separate lines.
 - Drops noisy fixups and typo-only churn instead of preserving them.
 - Fits naturally beneath a PR title or in compact GitHub and terminal views.
@@ -142,6 +147,7 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Presenting commit-selection widgets or multiple-choice prompts for ordinary branch-level squash requests.
 - Collapsing several unique top-level efforts into one stitched sentence.
 - Collapsing dependency updates into the same line as build-system configuration or refactor work when the diff shows separate intents.
+- Starting normal descriptions with uppercase verbs such as `Add`, `Update`, `Refresh`, or `Preserve`.
 - Filler such as "misc cleanup", "various improvements", or "updates".
 - Losing or renaming important technical identifiers unnecessarily.
 - Inventing refactors, fixes, or docs changes not supported by the diff.
