@@ -1,7 +1,7 @@
 ---
 name: git-story-teller
 description: >
-  Generate source-grounded repository story markdown from deterministic ContentSync context bundles. Use when the user asks to create, refresh, or complete repo/package stories, family or project overview pages, .bot/stories output, ContentSync story workflows, or result/Index.md plus result/{TargetName}.md files for any repository URL. The skill runs its bundled .NET file-based context generator, writes target stories first, then writes the overview from completed target stories, and enforces complete-read grounding and no-invention rules.
+  Generate source-grounded repository story markdown from deterministic ContentSync context bundles. Use when the user asks to create, refresh, or complete repo/package stories, family or project overview pages, .bot/stories output, ContentSync story workflows, or result/Index.md plus result/{TargetName}.md files for any repository URL. The skill runs its bundled .NET file-based context generator, emits public API and engineering signal summaries plus chunked context indexes, writes target stories first, then writes the overview from completed target stories, and enforces complete-read grounding and no-invention rules even when file output is capped.
 ---
 
 # Git Story Teller
@@ -12,7 +12,7 @@ Use this skill to turn a deterministic story workspace into website-ready or doc
 
 ## Critical
 
-- Treat generated output as the source of truth. If `manifest.json`, `instructions.md`, or `*.context.md` files disagree with this skill, follow the generated files unless they are internally inconsistent.
+- Treat generated output as the source of truth. If `manifest.json`, `instructions.md`, `*.context.md`, `*.context.index.md`, or `*.context.chunks/*.md` files disagree with this skill, follow the generated files unless they are internally inconsistent.
 - Keep the workflow generic. The runner input is a full repository URL, not an implied owner/slug convention.
 - Require both `--repo-url` and `--output-root`. Do not invent defaults silently.
 - If a `.bot` folder exists in the workspace the agent is working from, recommend `<workspace>/.bot/stories` as the output root.
@@ -22,8 +22,11 @@ Use this skill to turn a deterministic story workspace into website-ready or doc
 - Do not call an LLM provider from the runner. The calling agent is the brain that writes prose.
 - Process one target context at a time. Do not load all target contexts into the same prompt unless the generated manifest explicitly requires it.
 - When the runtime supports subagents and the manifest has multiple independent target contexts, prefer one subagent per target context. Give each subagent only its assigned target context, `instructions.md`, the relevant manifest entry, and the complete-read contract. Subagents reduce context pressure; they do not reduce grounding requirements.
-- Complete reads are mandatory for the files used in the current phase. For a target story, read that target's entire context file before writing. For the overview, read the entire `overview.context.md` and every completed target result file required by the manifest or generated instructions before writing. Chunking is only a way to finish reading a large file; it is not permission to skip sections.
-- If a tool caps, truncates, summarizes, or partially displays a required file, continue reading the remaining ranges or use a different file-reading method until the full required file has been inspected. If the full required file cannot be read, stop and report that blocker instead of writing from a subset.
+- Complete reads are mandatory for the files used in the current phase. For a target story, read that target's entire context before writing. For the overview, read the entire overview context and every completed target result file required by the manifest or generated instructions before writing. The generated index and chunks are a safer way to finish reading a large context; they are not permission to skip sections.
+- Each generated context has three forms: the full `*.context.md` file, a deterministic `*.context.index.md` navigation file, and ordered raw-evidence chunks under `*.context.chunks/*.md`.
+- If a tool caps, truncates, summarizes, or partially displays a required full context file, read its `*.context.index.md` file and then read every chunk listed in numeric order. If the chunk reads are also capped or incomplete, continue by ranges or stop and report the blocker instead of writing from a subset.
+- Do not use a context index as evidence for story claims. It is a navigation aid; the full context file or all ordered chunks are the source evidence.
+- Target contexts may include generated `PUBLIC API SUMMARY` and `ENGINEERING SIGNALS` sections. Use them to focus attention on likely public types, lifecycle contracts, validation guards, factories, callbacks, and package-boundary clues, but verify every claim against the raw source and tests.
 - Write target result files before the overview result file.
 - For the overview, explicitly read every completed target result file listed by the manifest or `overview.context.md`. Reading only `overview.context.md` is an incomplete overview workflow because the package stories are the primary editorial source.
 - Do not invent APIs, target relationships, examples, dependencies, support statements, performance claims, or architectural claims not supported by the target context.
@@ -66,6 +69,7 @@ Fallback notes:
 - The Repomix web API fallback posts the repository URL, output format, and include patterns to `https://api.repomix.com/api/pack`; use it only for public GitHub repositories or repositories the user is comfortable sending to that service.
 - The built-in .NET fallback is local-only and packs only files matching the runner's include patterns.
 - The built-in .NET fallback does not provide Repomix token counts, Secretlint checks, compression, or exact gitignore semantics.
+- The runner filters known low-signal files such as `GlobalSuppressions.cs` from packed context. Do not recreate or infer story claims from those files.
 - If `.NET 10` or `git` is unavailable, stop and report the missing dependency.
 - If Repomix runs and rejects content, do not bypass that result manually with a fallback unless the user explicitly accepts the lower-fidelity path.
 
@@ -86,13 +90,21 @@ Generated shape:
   manifest.json
   instructions.md
   overview.context.md
+  overview.context.index.md
+  overview.context.chunks/
+    0001.md
+    0002.md
   {TargetName}.context.md
+  {TargetName}.context.index.md
+  {TargetName}.context.chunks/
+    0001.md
+    0002.md
   result/
     Index.md
     {TargetName}.md
 ```
 
-The manifest is authoritative after generation. Always follow the manifest for concrete target names, context paths, result paths, and phase order.
+The manifest is authoritative after generation. Always follow the manifest for concrete target names, full context paths, context index paths, context chunk paths, result paths, and phase order.
 
 ## Workflow
 
@@ -134,6 +146,8 @@ From `manifest.json`, identify:
 - target phase entries
 - overview phase entry
 - each context file path
+- each context index path
+- each ordered context chunk path
 - each result file path
 - dependency order
 
@@ -143,13 +157,15 @@ If there is no manifest, infer the target list only from `*.context.md` files an
 
 For each target in the first phase:
 
-1. Open only that target's context file plus `instructions.md` if needed.
-2. Read the target context file completely before drafting. If the read output is capped or truncated, keep reading the remaining portions until the whole file has been inspected.
+1. Open only that target's context artifacts plus `instructions.md` if needed.
+2. Try to read the target context file completely. If the read output is capped or truncated, open the manifest-declared context index and then read every manifest-declared chunk in numeric order until the whole context has been inspected.
 3. Confirm the target result path is `result/{TargetName}.md` or the manifest's declared equivalent.
 4. Write the exact required sections from the generated context.
 5. Ground API lists and examples in source, tests, project files, README files, or metadata found in the context.
-6. Keep examples compact and use real namespaces, type names, method names, and constructor signatures from the context.
-7. If the context proves the target is a convenience, aggregate, or metadata-only package with no source of its own, write that honestly instead of inventing APIs.
+6. Use generated summaries and engineering signals to revisit likely design invariants, lifecycle contracts, callback wiring, factory boundaries, generic type constraints, exception guards, and package-boundary decisions in the raw source.
+7. Do not document non-public members as APIs, but do inspect internal implementation when it explains public lifecycle behavior, validation, callback flow, or package boundaries.
+8. Keep examples compact and use real namespaces, type names, method names, and constructor signatures from the context.
+9. If the context proves the target is a convenience, aggregate, or metadata-only package with no source of its own, write that honestly instead of inventing APIs.
 
 Do not use another target's context to fill gaps unless the current context explicitly includes it or the manifest marks that relationship as required.
 
@@ -158,7 +174,7 @@ Do not use another target's context to fill gaps unless the current context expl
 If the agent runtime can delegate work, use subagents to keep each target context isolated and roomy:
 
 - Spawn at most one subagent per target context from the current target phase.
-- Give each subagent a narrow task: completely read its assigned context, follow `instructions.md`, write or draft only its assigned `result/{TargetName}.md`, and report any unreadable or contradictory evidence.
+- Give each subagent a narrow task: completely read its assigned context, using the context index and ordered chunks if the full file is capped, follow `instructions.md`, write or draft only its assigned `result/{TargetName}.md`, and report any unreadable or contradictory evidence.
 - Do not give one subagent multiple target contexts unless the manifest says those targets are dependent.
 - Do not ask a subagent to write `result/Index.md` until all required target result files exist.
 - The main agent is the orchestrator and final editor. It gathers each subagent's completed target result file, reported caveats, and validation notes, then authors `result/Index.md` itself from those completed stories plus `overview.context.md`.
@@ -170,7 +186,7 @@ Subagent summaries and caveats are useful handoff material for the orchestrator,
 
 Write `result/Index.md` only after target stories exist.
 
-Open and completely read `overview.context.md` and every completed target result file listed by the manifest or by the generated required target-story source section. Treat the completed target result files as the required package-story source for `result/Index.md`; treat `overview.context.md` as supplementary repository context for relationships, project metadata, README framing, and package inventory. Reading only `overview.context.md` is not sufficient.
+Open and completely read `overview.context.md`, or the overview context index plus every ordered overview chunk if the full file is capped, and every completed target result file listed by the manifest or by the generated required target-story source section. Treat the completed target result files as the required package-story source for `result/Index.md`; treat `overview.context.md` or its chunks as supplementary repository context for relationships, project metadata, README framing, and package inventory. Reading only `overview.context.md` is not sufficient when target result files exist.
 
 If target stories were produced by subagents, collect their reported caveats and validation notes before drafting the overview. Use those notes to avoid overclaiming, but ground the overview in the completed target result files and `overview.context.md`.
 
@@ -195,9 +211,11 @@ Before finishing, verify:
 - Every manifest target has a corresponding result file.
 - `result/Index.md` exists when the manifest includes an overview target.
 - Result filenames match manifest paths.
+- Context index and chunk paths in the manifest exist for every generated context.
 - Required headings from the generated context are present verbatim.
 - No result file contains analysis notes, citations, XML, JSON, confidence scores, or chat commentary unless the generated prompt explicitly asks for them.
 - Code examples mention only APIs visible in the relevant context.
+- Public API and engineering-depth claims are verified against source or tests, not copied from generated summaries alone.
 - Target stories do not make broad claims such as robust, seamless, powerful, or comprehensive unless immediately grounded in concrete evidence.
 - Results do not contain unmeasured frequency, popularity, adoption, or mistake-rate claims. Search for wording such as most common, often, frequently, usually, typical, popular, and widely, then keep it only when the context provides evidence for that exact kind of claim.
 
@@ -218,7 +236,9 @@ Explain any remaining risk, especially missing tests, ambiguous APIs, oversized 
 - Prefer manifest summaries, target result files, and overview context for the overview instead of reopening every target context.
 - For the overview, target result files are compact source material. Read those files directly before writing `Index.md` instead of relying on their path list inside `overview.context.md`.
 - Do not treat context limits as permission to sample. The required file set for the current phase must be read completely.
-- If a single target context is too large for one tool response, split the read into ranges or sections and continue until the entire file has been inspected. Track where you left off so no section is skipped.
+- If a single target context is too large for one tool response, prefer the manifest-declared `*.context.index.md` file plus every ordered file under `*.context.chunks/`. If chunks are unavailable in an older workspace, split the full context read into ranges or sections and continue until the entire file has been inspected. Track where you left off so no section is skipped.
+- Treat `*.context.index.md` as a table of contents, not as source evidence. It can tell you which chunks and packed files exist, but story claims must come from the full context file or the complete ordered chunk set.
+- Treat generated public API summaries and engineering signals the same way: they identify where to look, but they do not replace source, tests, project files, README files, or metadata as grounding.
 - Use targeted searches only after the complete read, as a validation aid or to revisit specific evidence. Searches do not replace reading the required context.
 - If the active model or available tools cannot read the full required file set for the current phase, stop and report the limitation. Do not write a story from a partial context.
 
@@ -237,7 +257,10 @@ Do not copy staged results there unless the user asks for website sync, publicat
 
 - Target pages are concrete, source-backed, and useful to experienced developers.
 - Independent target contexts may be handled by separate subagents, with each subagent fully reading one assigned context before drafting.
-- Target pages are written only after the full target context has been read, including any portions hidden by capped or truncated tool output.
+- Target pages are written only after the full target context has been read, either directly or through the complete ordered chunk set, including any portions hidden by capped or truncated tool output.
+- Context indexes are used to plan reading and verify chunk coverage, not as a replacement for source evidence.
+- Public API summaries and engineering signals help the agent notice fine-grained library design, but every final claim is still backed by raw context.
+- Non-public implementation details are used only to explain public behavior, not listed as consumer APIs.
 - The overview includes a `## Package selection` section that explains package selection, repository boundaries, and relationships.
 - The overview synthesis clearly uses the completed target result files as source material, not just `overview.context.md`.
 - Tradeoff guidance distinguishes structural evidence from behavioral frequency; it avoids "most common" style claims unless the context includes measurement or explicit source support.
@@ -255,6 +278,9 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Sending multiple unrelated target contexts to the same subagent when they can be processed independently.
 - Treating a subagent's summary as a substitute for a completed target result file during overview synthesis.
 - Treating capped, truncated, summarized, or partial context output as enough to write from.
+- Treating `*.context.index.md` as a summary that can replace reading the full context or every chunk.
+- Treating generated public API summaries or engineering signals as final evidence instead of prompts for source-backed inspection.
+- Reading only the first few chunks because the index looked sufficient.
 - Using context limits, token limits, or "strategic reading" as a reason to skip part of a required target context or overview source file.
 - Claiming a mistake is common, most common, frequent, typical, popular, or widely observed based only on package structure or an inferred best practice.
 - Writing `Index.md` before target stories exist.
