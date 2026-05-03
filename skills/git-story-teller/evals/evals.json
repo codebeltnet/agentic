@@ -103,6 +103,18 @@
         "Requires the main agent to gather completed target stories, subagent caveats, and validation notes before drafting the overview",
         "Keeps the coordinating agent responsible for manifest order, overview authorship, validation, and final reporting"
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use git-story-teller to write result/Index.md for an existing package workspace. The context proves that an aggregate package transitively references hosting and ASP.NET Core packages, and the overview prompt asks for common mistakes and use-less guidance. The context contains no NuGet analytics, GitHub issue frequency, telemetry, survey data, or docs saying which mistake is most common.",
+      "expected_output": "Writes grounded use-less guidance without claiming measured developer behavior. It may explain that installing the aggregate package in a project that only needs the base package adds unnecessary references, but it must not call that the most common mistake or say developers often/frequently do it unless the context includes frequency evidence.",
+      "expectations": [
+        "Separates source-backed package dependency evidence from inferred usage guidance",
+        "Does not use phrases such as most common mistake, developers often, users frequently, typical failure, popular choice, or widely used without explicit frequency evidence",
+        "Explains the dependency tradeoff conditionally, for example by saying that if a project only needs the base package, the aggregate package adds unnecessary references",
+        "Does not invent NuGet, GitHub, telemetry, issue, or survey insights",
+        "Uses neutral recommendation language such as start with the focused package and add layers only when needed"
+      ]
     }
   ]
 }
