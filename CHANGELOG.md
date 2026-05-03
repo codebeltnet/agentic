@@ -17,15 +17,16 @@ This is a minor release focused on strengthening `git-story-teller` with complet
 - Evidence-based language validation patterns and regex detection in `git-story-teller` to distinguish structural facts from unmeasured behavior claims, with explicit guidance on conditional language like "if you only need X, aggregate adds Y" instead of "most common" or "developers often" without evidence,
 - Public API summary generation in `story.cs` to help agents orient around consumer-facing types, inheritance chains, and key members before reading raw source,
 - Engineering signal map in `story.cs` highlighting source-backed validation guards, lifecycle callbacks, factories, hosting styles, and test evidence for narrative-driven explanations instead of mechanical API lists,
+- Conservative test ownership mapping in `story.cs` preferring dedicated test projects with matching names over downstream package tests, only using direct references as fallback, and leaving Test path undiscovered when no unambiguous match exists,
 - Chunked context navigation in `story.cs` with `*.context.index.md` and ordered `*.context.chunks/*.md` files alongside full contexts for robust reading even when tools cap single-file output.
 
 ### Changed
 
-- Refined `git-story-teller` SKILL.md with explicit complete-read contract, mandatory target-story sourcing for overview phase, and subagent orchestration patterns for large independent contexts,
-- Enhanced `story.cs` to emit complete context files, public API summaries, engineering signal maps, context indexes, and ordered chunk files for improved agent navigation and grounding,
-- Updated README description and "Why git-story-teller?" section to document full output artifacts, public-API-first orientation, engineering signals, chunked navigation, and complete-read grounding,
+- Refined `git-story-teller` SKILL.md with explicit complete-read contract, mandatory target-story sourcing for overview phase, subagent orchestration patterns, and conservative test mapping rules,
+- Enhanced `story.cs` to emit complete context files, public API summaries, engineering signal maps, conservative test ownership logic, context indexes, and ordered chunk files for improved agent navigation and grounding,
+- Updated README description and "Why git-story-teller?" section to document full output artifacts, public-API-first orientation, engineering signals, conservative test mapping, chunked navigation, and complete-read grounding,
 - Expanded AGENTS.md with four-way skill sync guidance including Gemini Antigravity install location and folder-name requirements,
-- Refined eval contracts for complete-read patterns, subagent coordination, evidence-based prose, and target-story-sourced overview synthesis.
+- Refined eval contracts for complete-read patterns, subagent coordination, evidence-based prose, target-story-sourced overview synthesis, and conservative test ownership mapping.
 
 ### Fixed
 
