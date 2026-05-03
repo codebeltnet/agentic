@@ -52,7 +52,17 @@ repo-id      Derived from the final repository URL path segment, with .git remov
 result dir   result
 ```
 
-The runner requires the .NET 10 SDK or newer, `git`, and `npx`/repomix access. If these are unavailable, stop and report the missing dependency.
+The runner requires the .NET 10 SDK or newer and `git`. It prefers Repomix through `npx repomix` for high-fidelity packing, because Repomix provides the canonical XML shape, ignore handling, token-aware metadata, and security checks. If `npx`/Repomix cannot start or npm registry access is unavailable, the runner tries the same public Repomix web API used by `https://repomix.com/` for GitHub HTTPS repository URLs. If both Repomix paths are unavailable, it falls back to its built-in .NET text packer so the workspace can still be generated.
+
+Fallback notes:
+
+- The Repomix web API fallback posts the repository URL, output format, and include patterns to `https://api.repomix.com/api/pack`; use it only for public GitHub repositories or repositories the user is comfortable sending to that service.
+- The built-in .NET fallback is local-only and packs only files matching the runner's include patterns.
+- The built-in .NET fallback does not provide Repomix token counts, Secretlint checks, compression, or exact gitignore semantics.
+- If `.NET 10` or `git` is unavailable, stop and report the missing dependency.
+- If Repomix runs and rejects content, do not bypass that result manually with a fallback unless the user explicitly accepts the lower-fidelity path.
+
+Do not scrape or drive the browser UI. If a web fallback is needed, call the Repomix API endpoint directly and keep the lower-fidelity .NET fallback available in case the public service changes or is unreachable.
 
 ## Expected Workspace
 
