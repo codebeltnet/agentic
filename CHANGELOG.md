@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-03
+
+This is a minor release focused on deterministic repository story generation and foundational agent guidelines. It introduces a new `git-story-teller` skill with a bundled .NET context extractor, enhanced bot workspace management, and Karpathy programming principles for LLM agents.
+
+### Added
+
+- `git-story-teller` skill that reads a repository URL and generates a deterministic story overview and per-package target stories from grounded evidence,
+- Bundled C# context packer (`scripts/story.cs`) that clones repositories, discovers package targets, extracts grounded evidence via Repomix, and stages deterministic fixtures for story generation,
+- Karpathy rules in `AGENTS.md` for LLM-driven coding: think before implementing, favor simplicity, make surgical changes, and execute goal-driven with clear verification criteria,
+- `.bot/` workspace pattern to `.gitignore` for local agentic workspaces and ephemeral state.
+
+### Changed
+
+- Updated README to document `git-story-teller` installation, usage, and bundled C# runner approach,
+- Implemented Repomix web API and .NET packer fallbacks in `git-story-teller` for robust context extraction when network or CLI tools are unavailable.
+
 ## [0.3.4] - 2026-04-24
 
 This is a patch release that hardens the .NET scaffold guidance around hidden asset recovery and makes `git-keep-a-changelog` safer in yolo/auto mode. Incomplete `npx skills add` installs now pivot immediately to an upstream restore path driven by the shared asset manifest, while the changelog skill treats yolo/auto as an explicit full-autonomy mode instead of asking for scope confirmation.
@@ -141,7 +157,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/codebeltnet/agentic/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/codebeltnet/agentic/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/codebeltnet/agentic/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/codebeltnet/agentic/compare/v0.3.1...v0.3.2
