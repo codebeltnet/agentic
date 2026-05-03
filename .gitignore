@@ -15,3 +15,6 @@ skills/*-workspace/
 **/outputs/
 **/timing.json
 **/grades.json
+
+# Bot workspace (local-only AI agent ideation, PRDs, and agentic loop state)
+.bot/*
