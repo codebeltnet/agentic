@@ -16,6 +16,13 @@ internal static class StoryScript
 {
     private const string ResultDirectoryName = "result";
     private const int MaxContextChunkBodyBytes = 36 * 1024;
+    private static readonly Regex PublicTypeExpression = new(
+        @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected\s+internal|internal\s+protected)\s+(?:(?:static|abstract|sealed|partial|readonly|unsafe)\s+)*(?<kind>record\s+class|record\s+struct|class|interface|struct|record|enum)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*(?:<[^>{};]+>)?)\s*(?::\s*(?<base>[^{]+))?",
+        RegexOptions.Compiled);
+
+    private static readonly Regex PublicMemberExpression = new(
+        @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected(?:\s+internal)?|internal\s+protected)\s+(?<decl>[^\r\n{;]+(?:\([^\r\n;{}]*\))?)",
+        RegexOptions.Compiled);
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -1182,15 +1189,9 @@ internal static class StoryScript
     private static string EscapeMarkdownTableCell(string value) =>
         value.Replace("|", "\\|", StringComparison.Ordinal);
 
-    private static Regex PublicTypeRegex() =>
-        new(
-            @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected\s+internal|internal\s+protected)\s+(?:(?:static|abstract|sealed|partial|readonly|unsafe)\s+)*(?<kind>record\s+class|record\s+struct|class|interface|struct|record|enum)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*(?:<[^>{};]+>)?)\s*(?::\s*(?<base>[^{]+))?",
-            RegexOptions.Compiled);
+    private static Regex PublicTypeRegex() => PublicTypeExpression;
 
-    private static Regex PublicMemberRegex() =>
-        new(
-            @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected(?:\s+internal)?|internal\s+protected)\s+(?<decl>[^\r\n{;]+(?:\([^\r\n;{}]*\))?)",
-            RegexOptions.Compiled);
+    private static Regex PublicMemberRegex() => PublicMemberExpression;
 
     private static async Task<string> PackRepositoryContentAsync(string repoUrl, string cloneDir, string includes)
     {
