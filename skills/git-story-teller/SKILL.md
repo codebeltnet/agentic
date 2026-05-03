@@ -6,6 +6,8 @@ description: >
 
 # Git Story Teller
 
+![Git Story Teller](assets/hero.jpg)
+
 Use this skill to turn a deterministic story workspace into website-ready or docs-ready Markdown. The bundled `scripts/story.cs` runner owns repository access, evidence gathering, target discovery, context packing, and generated instructions. The agent owns reading that evidence, writing the story files, and validating that every claim is grounded.
 
 ## Critical
