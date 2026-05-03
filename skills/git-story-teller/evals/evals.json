@@ -1,0 +1,15 @@
+{
+  "skill_name": "git-story-teller",
+  "evals": [
+    {
+      "id": "eval-target-first-story-workspace",
+      "prompt": "Use git-story-teller to complete stories for an existing generated workspace at .bot/stories/example-project. The workspace has manifest.json, instructions.md, target context files, overview.context.md, and an empty result folder.",
+      "expected_output": "Inspects manifest.json and instructions.md first, writes target result files under result/{TargetName}.md before result/Index.md, processes one target context at a time, treats generated output as source of truth, follows PACKAGE STORY PROMPT and OVERVIEW STORY PROMPT sections, and reports validation gaps without copying files into a website content tree unless explicitly asked."
+    },
+    {
+      "id": "eval-generate-deterministic-context-full-url",
+      "prompt": "Use git-story-teller to generate story context for https://github.com/example/project and then write the target stories and overview. The current workspace contains a .bot folder.",
+      "expected_output": "Recommends .bot/stories as the required output root, runs or proposes dotnet run --file <skill-root>/scripts/story.cs with --repo-url and --output-root, avoids provider/model/reasoning LLM options, refuses slug-only hardcoded organization assumptions, does not ask for repo-id or result-dir, then follows the generated manifest and prompt sections to write result/Index.md and result/{TargetName}.md files."
+    }
+  ]
+}

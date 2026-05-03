@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git Story Teller"
+  short_description: "Write grounded repo stories from ContentSync bundles."
+  default_prompt: "Use git-story-teller to generate source-grounded target stories and an overview from a generic ContentSync story workspace."
