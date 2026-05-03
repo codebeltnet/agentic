@@ -3,13 +3,14 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Use git-story-teller to write target stories and the overview for an existing story workspace at .bot/stories/example-project. The workspace has manifest.json, instructions.md, two target context files, overview.context.md, and an empty result folder.",
-      "expected_output": "Reads manifest.json and instructions.md first, writes result/{TargetName}.md files before result/Index.md, processes one target context at a time, treats generated output as source of truth, reads the completed target result files as primary source material for the overview, writes the overview with a Package selection section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
+      "prompt": "Use git-story-teller to write target stories and the overview for an existing story workspace at .bot/stories/example-project. The workspace has manifest.json, instructions.md, two target context files with context indexes and chunk directories, overview.context.md, and an empty result folder.",
+      "expected_output": "Reads manifest.json and instructions.md first, writes result/{TargetName}.md files before result/Index.md, processes one target context at a time, treats generated output as source of truth, uses manifest-declared context indexes and chunks when a full context read is capped, reads the completed target result files as primary source material for the overview, writes the overview with a Package selection section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
       "expectations": [
         "Reads manifest.json and instructions.md before writing any result file",
         "Writes result/{TargetName}.md files before result/Index.md",
         "Processes one target context file at a time instead of loading all contexts together",
         "Reads each required target context completely before writing its result file",
+        "Uses the manifest-declared context index and ordered context chunks when a full context file cannot be read completely",
         "Treats the generated manifest as authoritative for target names, context paths, result paths, and phase order",
         "Reads the completed result/{TargetName}.md files before writing result/Index.md instead of relying only on overview.context.md",
         "Does not invent APIs, namespaces, or capabilities not present in the target context",
@@ -20,13 +21,14 @@
     {
       "id": 2,
       "prompt": "Use git-story-teller to generate a story workspace for https://github.com/example/myproject and then write the resulting stories. The active workspace contains a .bot folder.",
-      "expected_output": "Recommends .bot/stories as the output root, runs dotnet run --file with --repo-url and the full URL and --output-root, does not ask for repo-id or result directory, avoids LLM options, then follows the generated manifest to write target stories before result/Index.md.",
+      "expected_output": "Recommends .bot/stories as the output root, runs dotnet run --file with --repo-url and the full URL and --output-root, does not ask for repo-id or result directory, avoids LLM options, then follows the generated manifest, including contextIndex and contextChunks entries, to write target stories before result/Index.md.",
       "expectations": [
         "Recommends .bot/stories as the output root because a .bot folder exists in the workspace",
         "Runs dotnet run --file <skill-root>/scripts/story.cs with --repo-url and --output-root",
         "Passes the full repository URL, not a slug or partial reference",
         "Does not ask the user for repo-id or result directory",
         "Does not pass provider, model, or LLM flags to the runner",
+        "Recognizes that the generated manifest can include contextIndex and contextChunks entries for capped context reads",
         "Follows the generated manifest after the runner completes to write target stories before Index.md"
       ]
     },
@@ -81,13 +83,15 @@
     {
       "id": 7,
       "prompt": "Use git-story-teller to write a target story from an existing workspace. The first file-read response for WidgetPack.context.md says the file was capped at 50 KB and only shows the beginning of the context.",
-      "expected_output": "Continues reading the remaining portions of WidgetPack.context.md until the entire target context has been inspected before writing result/WidgetPack.md. It does not use token limits, context budget, or strategic reading as a reason to skip source sections; if the full file cannot be read, it stops and reports the blocker.",
+      "expected_output": "Uses the manifest-declared WidgetPack.context.index.md and every ordered file under WidgetPack.context.chunks/ to inspect the full target context before writing result/WidgetPack.md. It does not treat the index as source evidence, and it does not use token limits, context budget, or strategic reading as a reason to skip source sections; if the chunks cannot be read completely, it stops and reports the blocker.",
       "expectations": [
         "Treats capped or truncated file output as an incomplete read",
-        "Continues reading remaining ranges or sections until the whole required target context is inspected",
+        "Reads the manifest-declared context index to find the ordered chunk list",
+        "Reads every context chunk in numeric order until the whole required target context is inspected",
+        "Does not treat the context index as a substitute for raw source evidence",
         "Does not write the target story from only the first capped portion of the context file",
         "Does not describe strategic source selection as acceptable before the full target context has been read",
-        "Stops and reports a blocker if the full required target context cannot be read with available tools"
+        "Stops and reports a blocker if the full required target context cannot be read from the full file or complete chunk set"
       ]
     },
     {
@@ -114,6 +118,18 @@
         "Explains the dependency tradeoff conditionally, for example by saying that if a project only needs the base package, the aggregate package adds unnecessary references",
         "Does not invent NuGet, GitHub, telemetry, issue, or survey insights",
         "Uses neutral recommendation language such as start with the focused package and add layers only when needed"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Use git-story-teller to generate and write stories for a library workspace whose source contains public classes, internal helper classes, callback-based lifecycle wiring, tests for exception guards, and a GlobalSuppressions.cs file.",
+      "expected_output": "Uses generated public API summaries and engineering signals to focus source inspection, filters GlobalSuppressions.cs from packed context, does not list internal helpers as consumer APIs, but uses internal implementation details only when they explain public lifecycle behavior, validation guards, callback flow, or package boundaries.",
+      "expectations": [
+        "Recognizes PUBLIC API SUMMARY and ENGINEERING SIGNALS sections as navigation aids rather than final evidence",
+        "Verifies public API and engineering-depth claims against raw source or tests before writing",
+        "Does not document internal helper classes as public consumer APIs",
+        "Uses internal implementation details only to explain public behavior such as lifecycle, validation, callback flow, or package boundaries",
+        "Excludes GlobalSuppressions.cs from packed context instead of spending story budget on suppression metadata"
       ]
     }
   ]
