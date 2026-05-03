@@ -15,6 +15,7 @@ return await StoryScript.RunAsync(args);
 internal static class StoryScript
 {
     private const string ResultDirectoryName = "result";
+    private const int MaxContextChunkBodyBytes = 36 * 1024;
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -56,18 +57,20 @@ internal static class StoryScript
                     var contextFileName = target.Name + ".context.md";
                     var resultPath = Path.Combine(ResultDirectoryName, target.Name + ".md").Replace('\\', '/');
                     var context = await BuildTargetContextAsync(options.RepoUrl, cloneDir, target);
-                    await WriteUtf8Async(Path.Combine(workspace, contextFileName), context);
+                    var contextArtifacts = await WriteContextArtifactsAsync(workspace, contextFileName, context);
 
                     targetEntries.Add(new TargetManifestEntry(
                         "package",
                         target.Name,
-                        contextFileName,
+                        contextArtifacts.ContextPath,
+                        contextArtifacts.IndexPath,
+                        contextArtifacts.ChunkPaths,
                         resultPath));
                 }
 
                 var overviewContextName = "overview.context.md";
                 var overviewContext = await BuildOverviewContextAsync(options.RepoUrl, cloneDir, repoId, targets);
-                await WriteUtf8Async(Path.Combine(workspace, overviewContextName), overviewContext);
+                var overviewArtifacts = await WriteContextArtifactsAsync(workspace, overviewContextName, overviewContext);
 
                 await WriteUtf8Async(Path.Combine(workspace, "instructions.md"), BuildInstructions(options.RepoUrl, repoId));
                 await WriteManifestAsync(
@@ -76,7 +79,7 @@ internal static class StoryScript
                     repoId,
                     workspace,
                     targetEntries,
-                    overviewContextName);
+                    overviewArtifacts);
 
                 Console.WriteLine();
                 Console.WriteLine("[story] deterministic workspace written:");
@@ -348,6 +351,12 @@ internal static class StoryScript
             sb.AppendLine();
         }
 
+        AppendHeader(sb, "PUBLIC API SUMMARY (GENERATED)");
+        AppendMultiline(sb, BuildPublicApiSummary(cloneDir, target));
+
+        AppendHeader(sb, "ENGINEERING SIGNALS (GENERATED)");
+        AppendMultiline(sb, BuildEngineeringSignals(cloneDir, target));
+
         AppendHeader(sb, "PACKAGE STORY PROMPT");
         AppendMultiline(sb, BuildPackageStoryPrompt(target.Name));
 
@@ -399,6 +408,257 @@ internal static class StoryScript
         return sb.ToString();
     }
 
+    private static string BuildPublicApiSummary(string cloneDir, TargetInfo target)
+    {
+        var discoveredApiTypes = DiscoverPublicApiTypes(cloneDir, target);
+        var apiTypes = discoveredApiTypes.Take(20).ToList();
+        if (apiTypes.Count == 0)
+        {
+            return "No public or protected API candidates were discovered by the lightweight source scanner. Treat the packed source context as authoritative.";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("This section is a deterministic navigation aid extracted from source text. Use it to focus the complete read, but treat the packed source context below as authoritative.");
+        sb.AppendLine();
+        sb.AppendLine("| Type | Kind | Inherits / implements | Public or protected member candidates | Source |");
+        sb.AppendLine("|---|---|---|---|---|");
+        foreach (var apiType in apiTypes)
+        {
+            var members = apiType.Members.Count == 0
+                ? "(none discovered)"
+                : string.Join("<br>", apiType.Members.Take(6).Select(EscapeMarkdownTableCell));
+
+            sb.AppendLine($"| `{EscapeMarkdownTableCell(apiType.Name)}` | {EscapeMarkdownTableCell(apiType.Kind)} | {EscapeMarkdownTableCell(apiType.BaseTypes)} | {members} | `{EscapeMarkdownTableCell(apiType.SourcePath)}` |");
+        }
+
+        if (discoveredApiTypes.Count > apiTypes.Count)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Only the first {apiTypes.Count} of {discoveredApiTypes.Count} API candidates are shown. Read the packed source context for the full surface.");
+        }
+
+        return sb.ToString();
+    }
+
+    private static IReadOnlyList<ApiTypeSummary> DiscoverPublicApiTypes(string cloneDir, TargetInfo target)
+    {
+        var sourceDir = Path.Combine(cloneDir, target.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!Directory.Exists(sourceDir))
+        {
+            return [];
+        }
+
+        var sourceFiles = Directory.EnumerateFiles(sourceDir, "*.cs", SearchOption.AllDirectories)
+            .Where(p => !IsUnderDirectoryName(p, "bin") && !IsUnderDirectoryName(p, "obj"))
+            .Where(p => !ShouldSkipLowSignalFile(Path.GetRelativePath(cloneDir, p).Replace('\\', '/')))
+            .OrderBy(p => Path.GetRelativePath(cloneDir, p), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var summaries = new List<ApiTypeSummary>();
+        foreach (var sourceFile in sourceFiles)
+        {
+            var text = File.ReadAllText(sourceFile, Encoding.UTF8);
+            var relativePath = Path.GetRelativePath(cloneDir, sourceFile).Replace('\\', '/');
+            foreach (Match match in PublicTypeRegex().Matches(text))
+            {
+                var name = NormalizeDeclaration(match.Groups["name"].Value);
+                var kind = NormalizeDeclaration(match.Groups["kind"].Value);
+                var baseTypes = NormalizeDeclaration(match.Groups["base"].Success ? match.Groups["base"].Value : string.Empty);
+                if (string.IsNullOrWhiteSpace(baseTypes))
+                {
+                    baseTypes = "(none declared)";
+                }
+
+                var body = TryExtractTypeBody(text, match.Index);
+                var members = body is null
+                    ? Array.Empty<string>()
+                    : ExtractPublicMemberCandidates(body, GetSimpleTypeName(name)).Take(8).ToArray();
+
+                summaries.Add(new ApiTypeSummary(name, kind, baseTypes, members, relativePath));
+            }
+        }
+
+        return summaries
+            .OrderBy(s => s.SourcePath, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string BuildEngineeringSignals(string cloneDir, TargetInfo target)
+    {
+        var files = EnumerateSignalFiles(cloneDir, target).ToList();
+        var exceptionSignals = FindSignals(files, @"(?:throw\s+new|Assert\.Throws(?:Async)?)\s*<?([A-Za-z0-9_.]+Exception)", "exception guard").Take(12).ToList();
+        var lifecycleSignals = FindSignals(files, @"\b([A-Za-z0-9_]*(?:Configure|Callback|Fixture|Factory|Initialize|Dispose|Lifetime|Host|Application)[A-Za-z0-9_]*)\b", "lifecycle or composition name").Take(16).ToList();
+        var hostingSignals = FindSignals(files, @"\b(IHostBuilder|HostApplicationBuilder|Host\.CreateApplicationBuilder|WebApplicationBuilder|IApplicationBuilder|WebApplicationFactory|TestServer)\b", "hosting model").Take(12).ToList();
+        var testSignals = files
+            .Where(f => IsProbablyTestFile(f.RelativePath))
+            .Select(f => f.RelativePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .Take(12)
+            .ToList();
+
+        var sb = new StringBuilder();
+        sb.AppendLine("This section is a deterministic signal map. It highlights places where the code may reveal design invariants, lifecycle contracts, package boundaries, or test-backed behavior. Validate every claim against the raw source context before writing.");
+        sb.AppendLine();
+
+        AppendSignalGroup(sb, "Exception guards and validation evidence", exceptionSignals);
+        AppendSignalGroup(sb, "Lifecycle, callback, factory, and composition names", lifecycleSignals);
+        AppendSignalGroup(sb, "Hosting model markers", hostingSignals);
+
+        sb.AppendLine("### Test evidence files");
+        if (testSignals.Count == 0)
+        {
+            sb.AppendLine("- No test files were discovered for this target.");
+        }
+        else
+        {
+            foreach (var path in testSignals)
+            {
+                sb.AppendLine("- `" + path + "`");
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static IEnumerable<SignalFile> EnumerateSignalFiles(string cloneDir, TargetInfo target)
+    {
+        var roots = new[] { target.SourcePath, target.TestPath }
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => Path.Combine(cloneDir, p!.Replace('/', Path.DirectorySeparatorChar)))
+            .Where(Directory.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var root in roots)
+        {
+            foreach (var file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+                         .Where(p => !IsUnderDirectoryName(p, "bin") && !IsUnderDirectoryName(p, "obj"))
+                         .Where(p => !ShouldSkipLowSignalFile(Path.GetRelativePath(cloneDir, p).Replace('\\', '/')))
+                         .OrderBy(p => Path.GetRelativePath(cloneDir, p), StringComparer.OrdinalIgnoreCase))
+            {
+                yield return new SignalFile(
+                    Path.GetRelativePath(cloneDir, file).Replace('\\', '/'),
+                    File.ReadAllText(file, Encoding.UTF8));
+            }
+        }
+    }
+
+    private static IEnumerable<EngineeringSignal> FindSignals(IEnumerable<SignalFile> files, string pattern, string kind)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in files)
+        {
+            foreach (Match match in Regex.Matches(file.Content, pattern, RegexOptions.Multiline))
+            {
+                var value = match.Groups.Count > 1 && match.Groups[1].Success
+                    ? match.Groups[1].Value
+                    : match.Value;
+                value = NormalizeDeclaration(value);
+                if (string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+
+                var key = file.RelativePath + "|" + value;
+                if (!seen.Add(key))
+                {
+                    continue;
+                }
+
+                yield return new EngineeringSignal(kind, value, file.RelativePath);
+            }
+        }
+    }
+
+    private static void AppendSignalGroup(StringBuilder sb, string heading, IReadOnlyList<EngineeringSignal> signals)
+    {
+        sb.AppendLine("### " + heading);
+        if (signals.Count == 0)
+        {
+            sb.AppendLine("- None discovered by the lightweight scanner.");
+            sb.AppendLine();
+            return;
+        }
+
+        foreach (var signal in signals)
+        {
+            sb.AppendLine($"- `{signal.Value}` in `{signal.SourcePath}`");
+        }
+        sb.AppendLine();
+    }
+
+    private static string? TryExtractTypeBody(string text, int typeStartIndex)
+    {
+        var openBrace = text.IndexOf('{', typeStartIndex);
+        if (openBrace < 0)
+        {
+            return null;
+        }
+
+        var depth = 0;
+        for (var i = openBrace; i < text.Length; i++)
+        {
+            if (text[i] == '{')
+            {
+                depth++;
+            }
+            else if (text[i] == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return text[(openBrace + 1)..i];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> ExtractPublicMemberCandidates(string body, string simpleTypeName)
+    {
+        var members = new List<string>();
+        foreach (Match match in PublicMemberRegex().Matches(body))
+        {
+            var declaration = NormalizeDeclaration(match.Groups["decl"].Value);
+            if (string.IsNullOrWhiteSpace(declaration))
+            {
+                continue;
+            }
+
+            if (declaration.Contains(" class ", StringComparison.Ordinal)
+                || declaration.Contains(" interface ", StringComparison.Ordinal)
+                || declaration.Contains(" struct ", StringComparison.Ordinal)
+                || declaration.Contains(" record ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            members.Add(declaration);
+        }
+
+        return members
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(m => m.Contains(simpleTypeName + "(", StringComparison.Ordinal))
+            .ThenBy(m => m, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeDeclaration(string value) =>
+        Regex.Replace(value.ReplaceLineEndings(" "), @"\s+", " ").Trim().TrimEnd('{', ';').Trim();
+
+    private static string GetSimpleTypeName(string name)
+    {
+        var index = name.IndexOf('<', StringComparison.Ordinal);
+        return index >= 0 ? name[..index] : name;
+    }
+
+    private static bool IsProbablyTestFile(string relativePath) =>
+        relativePath.Contains(".Tests/", StringComparison.OrdinalIgnoreCase)
+        || relativePath.Contains("/Tests/", StringComparison.OrdinalIgnoreCase)
+        || relativePath.EndsWith("Test.cs", StringComparison.OrdinalIgnoreCase)
+        || relativePath.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase);
+
     private static string BuildInstructions(string repoUrl, string repoId) =>
         $$"""
         # Story Writing Instructions
@@ -413,11 +673,15 @@ internal static class StoryScript
         - Treat `manifest.json` as authoritative for context and result paths.
         - Process target contexts one at a time.
         - Write every target result before writing the overview.
-        - For the overview, read `overview.context.md` and every completed target result file listed by the manifest.
+        - Each context has a full `*.context.md` file, a `*.context.index.md` navigation file, and ordered `*.context.chunks/*.md` raw-evidence chunks.
+        - If the full context file is capped, truncated, summarized, or too large to read safely, read the index and then every listed chunk in numeric order.
+        - Do not treat an index file as source evidence. It helps navigation only.
+        - Do not treat generated public API summaries or engineering signals as standalone evidence. They help you decide what to inspect in the raw context.
+        - For the overview, read `overview.context.md` or every overview chunk, then read every completed target result file listed by the manifest.
         - Treat completed target result files as the primary overview source; `overview.context.md` is supplementary.
         - Write target stories to `result/{TargetName}.md`.
         - Write the overview to `result/Index.md`.
-        - Use the generated prompt sections in each `.context.md` file as the task contract.
+        - Use the generated prompt sections in each `.context.md` file or its ordered chunks as the task contract.
         - Do not invent APIs, package relationships, examples, dependencies, support statements, performance claims, or architectural claims.
         - If context is missing, stale, contradictory, or too large to use safely, stop and report the blocker.
 
@@ -429,10 +693,11 @@ internal static class StoryScript
 
         1. Read `manifest.json`.
         2. Read this file.
-        3. For each target in the `packages` phase, read its context and write its result file.
-        4. Read `overview.context.md` and every completed target result file listed by the manifest.
-        5. Write `result/Index.md`.
-        6. Validate that all manifest result paths exist.
+        3. For each target in the `packages` phase, read its context directly if possible; otherwise read its context index and then all chunks in order.
+        4. Write each target result file only after its full raw context has been inspected.
+        5. Read `overview.context.md` or every overview chunk, then read every completed target result file listed by the manifest.
+        6. Write `result/Index.md`.
+        7. Validate that all manifest result paths exist.
         """;
 
     private static string BuildSharedEditorialRules() =>
@@ -502,12 +767,21 @@ internal static class StoryScript
         Prefer public types, extension methods, options/configuration types, factories, abstractions, and test-visible usage patterns.
         If the package has obsolete or deprecated APIs, do not present them as the recommended path.
         If the package is metadata-only, aggregate, or convenience-only, say that clearly and do not invent public APIs.
+        The generated public API summary and engineering signals are reading aids, not final evidence. Validate them against the packed source and tests before turning them into claims.
+
+        Engineering depth requirements:
+        Look for design invariants, lifecycle contracts, callback wiring, factory boundaries, generic type constraints, exception guards, and test-backed edge cases.
+        Explain a non-obvious design choice only when the source or tests make it visible.
+        For each important API, prefer the useful engineering detail over a generic description: inheritance chain, why a generic parameter exists, what lifecycle it participates in, or what contract a consumer must respect.
+        Name what the package deliberately does not solve when package boundaries, dependencies, or sibling packages make that clear.
+        If generated context appears to pair the target with surprising or weak test evidence, report that as a confidence risk instead of smoothing it over.
 
         Before writing the final page, internally identify:
         - the package's specific responsibility inside the repository
         - the primary developer scenario
         - the 3-5 public types that matter most to consumers
         - the most representative usage pattern found in tests
+        - the design invariants, lifecycle contracts, or guardrails that matter to consumers
         - what this package deliberately does not solve
         - any confidence risks caused by missing tests or unclear source
 
@@ -615,6 +889,7 @@ internal static class StoryScript
         - convenience or meta packages, if any exist
         - the recommended starting point
         - scenarios where installing or using less is better
+        - recurring engineering patterns across packages, such as classic versus minimal hosting styles, shared fixture lifecycles, or layered package boundaries, when visible in the evidence
         - the one non-obvious insight developers should understand
 
         Write exactly these three sections.
@@ -679,11 +954,233 @@ internal static class StoryScript
         sb.AppendLine();
     }
 
+    private static async Task<ContextArtifacts> WriteContextArtifactsAsync(string workspace, string contextFileName, string context)
+    {
+        await WriteUtf8Async(Path.Combine(workspace, contextFileName), context);
+
+        var chunkDirectoryName = Path.GetFileNameWithoutExtension(contextFileName) + ".chunks";
+        var chunkDirectory = Path.Combine(workspace, chunkDirectoryName);
+        if (Directory.Exists(chunkDirectory))
+        {
+            Directory.Delete(chunkDirectory, recursive: true);
+        }
+
+        Directory.CreateDirectory(chunkDirectory);
+
+        var chunks = SplitContextIntoChunks(context).ToList();
+        var chunkPaths = new List<string>(chunks.Count);
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var chunkNumber = i + 1;
+            var chunkFileName = chunkNumber.ToString("D4") + ".md";
+            var chunkPath = (chunkDirectoryName + "/" + chunkFileName).Replace('\\', '/');
+            chunkPaths.Add(chunkPath);
+
+            var chunkContent = BuildChunkFile(contextFileName, chunkNumber, chunks.Count, chunks[i]);
+            await WriteUtf8Async(Path.Combine(workspace, chunkPath), chunkContent);
+        }
+
+        var indexPath = Path.GetFileNameWithoutExtension(contextFileName) + ".index.md";
+        var index = BuildContextIndex(contextFileName, indexPath, chunkPaths, chunks, context);
+        await WriteUtf8Async(Path.Combine(workspace, indexPath), index);
+
+        return new ContextArtifacts(contextFileName, indexPath, chunkPaths);
+    }
+
+    private static IEnumerable<string> SplitContextIntoChunks(string context)
+    {
+        var normalized = context.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n');
+        var sb = new StringBuilder();
+        var currentBytes = 0;
+
+        foreach (var line in lines)
+        {
+            var lineWithNewline = line + Environment.NewLine;
+            var lineBytes = Encoding.UTF8.GetByteCount(lineWithNewline);
+            if (lineBytes > MaxContextChunkBodyBytes)
+            {
+                if (sb.Length > 0)
+                {
+                    yield return sb.ToString();
+                    sb.Clear();
+                    currentBytes = 0;
+                }
+
+                foreach (var part in SplitOversizedLine(lineWithNewline))
+                {
+                    yield return part;
+                }
+
+                continue;
+            }
+
+            if (sb.Length > 0 && currentBytes + lineBytes > MaxContextChunkBodyBytes)
+            {
+                yield return sb.ToString();
+                sb.Clear();
+                currentBytes = 0;
+            }
+
+            sb.Append(lineWithNewline);
+            currentBytes += lineBytes;
+        }
+
+        if (sb.Length > 0)
+        {
+            yield return sb.ToString();
+        }
+    }
+
+    private static IEnumerable<string> SplitOversizedLine(string line)
+    {
+        var sb = new StringBuilder();
+        var currentBytes = 0;
+        foreach (var rune in line.EnumerateRunes())
+        {
+            var next = rune.ToString();
+            var nextBytes = Encoding.UTF8.GetByteCount(next);
+            if (sb.Length > 0 && currentBytes + nextBytes > MaxContextChunkBodyBytes)
+            {
+                yield return sb.ToString();
+                sb.Clear();
+                currentBytes = 0;
+            }
+
+            sb.Append(next);
+            currentBytes += nextBytes;
+        }
+
+        if (sb.Length > 0)
+        {
+            yield return sb.ToString();
+        }
+    }
+
+    private static string BuildChunkFile(string contextFileName, int chunkNumber, int chunkCount, string chunkBody)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# Context Chunk " + chunkNumber.ToString("D4"));
+        sb.AppendLine();
+        sb.AppendLine("Source context: `" + contextFileName + "`");
+        sb.AppendLine("Chunk: " + chunkNumber + " of " + chunkCount);
+        sb.AppendLine();
+        sb.AppendLine("Read this chunk as raw evidence. The index file is only a navigation aid.");
+        sb.AppendLine();
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.Append(chunkBody);
+        return sb.ToString();
+    }
+
+    private static string BuildContextIndex(
+        string contextFileName,
+        string indexPath,
+        IReadOnlyList<string> chunkPaths,
+        IReadOnlyList<string> chunks,
+        string context)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# Context Index");
+        sb.AppendLine();
+        sb.AppendLine("Source context: `" + contextFileName + "`");
+        sb.AppendLine("Index path: `" + indexPath + "`");
+        sb.AppendLine("Chunk count: " + chunkPaths.Count);
+        sb.AppendLine("Full context bytes: " + Encoding.UTF8.GetByteCount(context));
+        sb.AppendLine();
+        sb.AppendLine("This file is a deterministic navigation aid. Do not use it as a substitute for reading the raw context or every chunk listed below.");
+        sb.AppendLine();
+
+        sb.AppendLine("## Read Order");
+        sb.AppendLine();
+        sb.AppendLine("1. Read this index to understand the context layout.");
+        sb.AppendLine("2. Read each chunk in numeric order before writing from this context.");
+        sb.AppendLine("3. Use the full source context only when your tools can read it completely without truncation.");
+        sb.AppendLine();
+
+        sb.AppendLine("## Chunks");
+        sb.AppendLine();
+        sb.AppendLine("| Chunk | Path | Body bytes | Headings |");
+        sb.AppendLine("|---|---|---:|---|");
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var headings = ExtractHeadings(chunks[i]).ToList();
+            var headingText = headings.Count == 0
+                ? "(none)"
+                : string.Join("; ", headings.Take(4));
+            if (headings.Count > 4)
+            {
+                headingText += "; ...";
+            }
+
+            sb.AppendLine($"| {i + 1} | `{chunkPaths[i]}` | {Encoding.UTF8.GetByteCount(chunks[i])} | {EscapeMarkdownTableCell(headingText)} |");
+        }
+        sb.AppendLine();
+
+        var contextHeadings = ExtractHeadings(context).ToList();
+        if (contextHeadings.Count > 0)
+        {
+            sb.AppendLine("## Context Sections");
+            sb.AppendLine();
+            foreach (var heading in contextHeadings)
+            {
+                sb.AppendLine("- " + heading);
+            }
+            sb.AppendLine();
+        }
+
+        var packedPaths = ExtractPackedFilePaths(context).Take(200).ToList();
+        if (packedPaths.Count > 0)
+        {
+            sb.AppendLine("## Packed File Inventory");
+            sb.AppendLine();
+            foreach (var path in packedPaths)
+            {
+                sb.AppendLine("- `" + path + "`");
+            }
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static IEnumerable<string> ExtractHeadings(string markdown)
+    {
+        foreach (Match match in Regex.Matches(markdown, @"^##\s+(.+)$", RegexOptions.Multiline))
+        {
+            yield return match.Groups[1].Value.Trim();
+        }
+    }
+
+    private static IEnumerable<string> ExtractPackedFilePaths(string context)
+    {
+        var paths = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Regex.Matches(context, @"<file\s+path=""([^""]+)"""))
+        {
+            paths.Add(match.Groups[1].Value);
+        }
+
+        return paths;
+    }
+
+    private static string EscapeMarkdownTableCell(string value) =>
+        value.Replace("|", "\\|", StringComparison.Ordinal);
+
+    private static Regex PublicTypeRegex() =>
+        new(
+            @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected\s+internal|internal\s+protected)\s+(?:(?:static|abstract|sealed|partial|readonly|unsafe)\s+)*(?<kind>record\s+class|record\s+struct|class|interface|struct|record|enum)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*(?:<[^>{};]+>)?)\s*(?::\s*(?<base>[^{]+))?",
+            RegexOptions.Compiled);
+
+    private static Regex PublicMemberRegex() =>
+        new(
+            @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected(?:\s+internal)?|internal\s+protected)\s+(?<decl>[^\r\n{;]+(?:\([^\r\n;{}]*\))?)",
+            RegexOptions.Compiled);
+
     private static async Task<string> PackRepositoryContentAsync(string repoUrl, string cloneDir, string includes)
     {
         try
         {
-            return await PackWithRepomixAsync(cloneDir, includes);
+            return FilterLowSignalPackedContent(await PackWithRepomixAsync(cloneDir, includes));
         }
         catch (Exception ex) when (CanUseDotNetPackerFallback(ex))
         {
@@ -694,7 +1191,7 @@ internal static class StoryScript
                 try
                 {
                     Console.WriteLine("[story] trying Repomix web API fallback.");
-                    return await PackWithRepomixWebApiAsync(repoUrl, includes);
+                    return FilterLowSignalPackedContent(await PackWithRepomixWebApiAsync(repoUrl, includes));
                 }
                 catch (Exception webEx)
                 {
@@ -703,7 +1200,7 @@ internal static class StoryScript
             }
 
             Console.WriteLine("[story] using built-in .NET context packer fallback.");
-            return await PackWithDotNetPackerAsync(cloneDir, includes);
+            return FilterLowSignalPackedContent(await PackWithDotNetPackerAsync(cloneDir, includes));
         }
     }
 
@@ -825,6 +1322,7 @@ internal static class StoryScript
             .Select(path => new PackedFile(path, Path.GetRelativePath(cloneDir, path).Replace('\\', '/')))
             .Where(file => ShouldIncludeFile(file.RelativePath, includePatterns))
             .Where(file => !IsUnderSkippedDirectory(file.RelativePath))
+            .Where(file => !ShouldSkipLowSignalFile(file.RelativePath))
             .Where(file => IsTextFile(file.FullPath))
             .OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -850,6 +1348,62 @@ internal static class StoryScript
 
     private static bool ShouldIncludeFile(string relativePath, IReadOnlyList<string> includePatterns) =>
         includePatterns.Any(pattern => MatchesIncludePattern(relativePath, pattern));
+
+    private static string FilterLowSignalPackedContent(string content)
+    {
+        try
+        {
+            var doc = XDocument.Parse(content, LoadOptions.PreserveWhitespace);
+            var removedAny = false;
+            foreach (var file in doc.Descendants().Where(e => e.Name.LocalName == "file").ToList())
+            {
+                var path = file.Attribute("path")?.Value;
+                if (path is not null && ShouldSkipLowSignalFile(path))
+                {
+                    file.Remove();
+                    removedAny = true;
+                }
+            }
+
+            foreach (var directoryStructure in doc.Descendants().Where(e => e.Name.LocalName == "directoryStructure").ToList())
+            {
+                var filtered = string.Join(
+                    Environment.NewLine,
+                    directoryStructure.Value.Split('\n', StringSplitOptions.None)
+                        .Select(line => line.TrimEnd('\r'))
+                        .Where(line => !ShouldSkipLowSignalFile(line.Trim())));
+
+                if (!string.Equals(filtered, directoryStructure.Value, StringComparison.Ordinal))
+                {
+                    directoryStructure.Value = filtered;
+                    removedAny = true;
+                }
+            }
+
+            if (removedAny)
+            {
+                return doc.ToString(SaveOptions.DisableFormatting);
+            }
+        }
+        catch
+        {
+            // Repomix output is expected to be XML, but keep a text fallback for service changes.
+        }
+
+        var withoutFileBlocks = Regex.Replace(
+            content,
+            @"(?s)<file\s+path=""[^""]*GlobalSuppressions\.cs""[^>]*>.*?</file>\s*",
+            string.Empty,
+            RegexOptions.IgnoreCase);
+
+        return Regex.Replace(
+            withoutFileBlocks,
+            @"(?im)^[^\r\n]*GlobalSuppressions\.cs[^\r\n]*(?:\r?\n)?",
+            string.Empty);
+    }
+
+    private static bool ShouldSkipLowSignalFile(string relativePath) =>
+        string.Equals(Path.GetFileName(relativePath), "GlobalSuppressions.cs", StringComparison.OrdinalIgnoreCase);
 
     private static bool MatchesIncludePattern(string relativePath, string pattern)
     {
@@ -950,12 +1504,12 @@ internal static class StoryScript
         string repoId,
         string workspace,
         IReadOnlyList<TargetManifestEntry> targets,
-        string overviewContextName)
+        ContextArtifacts overviewArtifacts)
     {
         var packagesPhase = new
         {
             name = "packages",
-            targets = targets.Select(t => new { t.kind, t.name, t.context, t.result }).ToList()
+            targets = targets.Select(t => new { t.kind, t.name, t.context, t.contextIndex, t.contextChunks, t.result }).ToList()
         };
 
         var overviewPhase = new
@@ -966,7 +1520,9 @@ internal static class StoryScript
             {
                 kind = "overview",
                 name = "Index",
-                context = overviewContextName,
+                context = overviewArtifacts.ContextPath,
+                contextIndex = overviewArtifacts.IndexPath,
+                contextChunks = overviewArtifacts.ChunkPaths,
                 sourceResults = targets.Select(t => t.result).ToList(),
                 result = "result/Index.md"
             }
@@ -1104,6 +1660,8 @@ internal static class StoryScript
               {output-root}/{repo-id}/manifest.json
               {output-root}/{repo-id}/instructions.md
               {output-root}/{repo-id}/*.context.md
+              {output-root}/{repo-id}/*.context.index.md
+              {output-root}/{repo-id}/*.context.chunks/*.md
               {output-root}/{repo-id}/result/
 
             Notes:
@@ -1130,10 +1688,33 @@ internal sealed record TargetInfo(
     bool IsConveniencePackage,
     IReadOnlyList<string> BundledPackages);
 
+internal sealed record ContextArtifacts(
+    string ContextPath,
+    string IndexPath,
+    IReadOnlyList<string> ChunkPaths);
+
+internal sealed record ApiTypeSummary(
+    string Name,
+    string Kind,
+    string BaseTypes,
+    IReadOnlyList<string> Members,
+    string SourcePath);
+
+internal sealed record SignalFile(
+    string RelativePath,
+    string Content);
+
+internal sealed record EngineeringSignal(
+    string Kind,
+    string Value,
+    string SourcePath);
+
 internal sealed record TargetManifestEntry(
     string kind,
     string name,
     string context,
+    string contextIndex,
+    IReadOnlyList<string> contextChunks,
     string result);
 
 internal sealed record PackedFile(string FullPath, string RelativePath);
