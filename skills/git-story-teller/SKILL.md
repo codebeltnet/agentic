@@ -151,7 +151,7 @@ Do not use another target's context to fill gaps unless the current context expl
 
 Write `result/Index.md` only after target stories exist.
 
-Use the overview context and the completed target result files as the main editorial input. The overview should help readers choose between targets or understand the repository's shape. It should not repeat every target page or amplify unsupported claims.
+Use the overview context and the completed target result files as the main editorial input. The overview should help readers choose between packages or understand the repository's shape. It should not repeat every target page or amplify unsupported claims.
 
 If any target story is missing, decide from the manifest:
 
@@ -200,7 +200,7 @@ Do not copy staged results there unless the user asks for website sync, publicat
 ## Good Output Characteristics
 
 - Target pages are concrete, source-backed, and useful to experienced developers.
-- The overview explains target selection, repository boundaries, and relationships.
+- The overview includes a `## Package selection` section that explains package selection, repository boundaries, and relationships.
 - The writing is restrained and developer-facing, not marketing-heavy.
 - The agent follows the generated manifest instead of improvising the run order.
 - The final response names the result files written and any validation gaps.
