@@ -4,6 +4,7 @@
 #:property PublishAot=false
 
 using System.Diagnostics;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -324,7 +325,7 @@ internal static class StoryScript
         }
 
         includeParts.Add(".nuget/**/README.md");
-        var repomix = await PackWithRepomixAsync(cloneDir, string.Join(',', includeParts));
+        var repomix = await PackRepositoryContentAsync(repoUrl, cloneDir, string.Join(',', includeParts));
 
         var sb = new StringBuilder();
         AppendHeader(sb, "TARGET IDENTITY");
@@ -360,7 +361,7 @@ internal static class StoryScript
     private static async Task<string> BuildOverviewContextAsync(string repoUrl, string cloneDir, string repoId, IReadOnlyList<TargetInfo> targets)
     {
         Console.WriteLine("[story] packing overview context...");
-        var repomix = await PackWithRepomixAsync(cloneDir, "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj");
+        var repomix = await PackRepositoryContentAsync(repoUrl, cloneDir, "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj");
 
         var sb = new StringBuilder();
         AppendHeader(sb, "REPOSITORY IDENTITY");
@@ -668,6 +669,34 @@ internal static class StoryScript
         sb.AppendLine();
     }
 
+    private static async Task<string> PackRepositoryContentAsync(string repoUrl, string cloneDir, string includes)
+    {
+        try
+        {
+            return await PackWithRepomixAsync(cloneDir, includes);
+        }
+        catch (Exception ex) when (CanUseDotNetPackerFallback(ex))
+        {
+            Console.WriteLine("[story] local repomix unavailable: " + ex.Message.Split(Environment.NewLine)[0]);
+
+            if (CanUseRepomixWebApi(repoUrl))
+            {
+                try
+                {
+                    Console.WriteLine("[story] trying Repomix web API fallback.");
+                    return await PackWithRepomixWebApiAsync(repoUrl, includes);
+                }
+                catch (Exception webEx)
+                {
+                    Console.WriteLine("[story] Repomix web API fallback unavailable: " + webEx.Message.Split(Environment.NewLine)[0]);
+                }
+            }
+
+            Console.WriteLine("[story] using built-in .NET context packer fallback.");
+            return await PackWithDotNetPackerAsync(cloneDir, includes);
+        }
+    }
+
     private static async Task<string> PackWithRepomixAsync(string cloneDir, string includes)
     {
         var outputFile = Path.Combine(Path.GetTempPath(), "repomix-story-" + Guid.NewGuid().ToString("N") + ".xml");
@@ -689,6 +718,186 @@ internal static class StoryScript
         {
             TryDeleteFile(outputFile);
         }
+    }
+
+    private static bool CanUseDotNetPackerFallback(Exception ex)
+    {
+        var message = ex.ToString();
+        var fallbackSignals = new[]
+        {
+            "Could not start",
+            "error occurred trying to start process",
+            "The system cannot find the file specified",
+            "No such file or directory",
+            "could not determine executable to run",
+            "ENOTFOUND",
+            "EAI_AGAIN",
+            "ETIMEDOUT",
+            "ECONNRESET",
+            "ECONNREFUSED",
+            "registry.npmjs.org",
+            "npm ERR! code"
+        };
+
+        return fallbackSignals.Any(signal => message.Contains(signal, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool CanUseRepomixWebApi(string repoUrl)
+    {
+        return Uri.TryCreate(repoUrl, UriKind.Absolute, out var uri)
+            && uri.Scheme is "http" or "https"
+            && string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<string> PackWithRepomixWebApiAsync(string repoUrl, string includes)
+    {
+        using var http = new HttpClient();
+        using var content = new MultipartFormDataContent
+        {
+            { new StringContent(repoUrl, Encoding.UTF8), "url" },
+            { new StringContent("xml", Encoding.UTF8), "format" },
+            { new StringContent(BuildRepomixWebOptions(includes), Encoding.UTF8), "options" }
+        };
+
+        using var response = await http.PostAsync("https://api.repomix.com/api/pack", content);
+        var body = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException($"Repomix web API returned HTTP {(int)response.StatusCode}.");
+        }
+
+        foreach (var line in body.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            using var json = JsonDocument.Parse(line);
+            var root = json.RootElement;
+            if (root.TryGetProperty("type", out var type) && string.Equals(type.GetString(), "result", StringComparison.OrdinalIgnoreCase))
+            {
+                return root.GetProperty("data").GetProperty("content").GetString()
+                    ?? throw new InvalidOperationException("Repomix web API returned an empty result.");
+            }
+
+            if (root.TryGetProperty("type", out var errorType) && string.Equals(errorType.GetString(), "error", StringComparison.OrdinalIgnoreCase))
+            {
+                var message = root.TryGetProperty("message", out var messageElement)
+                    ? messageElement.GetString()
+                    : "Repomix web API returned an error.";
+                throw new InvalidOperationException(message);
+            }
+        }
+
+        throw new InvalidOperationException("Repomix web API did not return a result event.");
+    }
+
+    private static string BuildRepomixWebOptions(string includes)
+    {
+        var options = new
+        {
+            removeComments = false,
+            removeEmptyLines = false,
+            showLineNumbers = false,
+            fileSummary = false,
+            directoryStructure = true,
+            includePatterns = includes,
+            outputParsable = false,
+            compress = false
+        };
+
+        return JsonSerializer.Serialize(options);
+    }
+
+    private static async Task<string> PackWithDotNetPackerAsync(string cloneDir, string includes)
+    {
+        var includePatterns = includes
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        var files = Directory.EnumerateFiles(cloneDir, "*", SearchOption.AllDirectories)
+            .Select(path => new PackedFile(path, Path.GetRelativePath(cloneDir, path).Replace('\\', '/')))
+            .Where(file => ShouldIncludeFile(file.RelativePath, includePatterns))
+            .Where(file => !IsUnderSkippedDirectory(file.RelativePath))
+            .Where(file => IsTextFile(file.FullPath))
+            .OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var filesElement = new XElement("files");
+        foreach (var file in files)
+        {
+            var content = await File.ReadAllTextAsync(file.FullPath, Encoding.UTF8);
+            filesElement.Add(new XElement("file", new XAttribute("path", file.RelativePath), content));
+        }
+
+        var doc = new XDocument(
+            new XElement(
+                "repository-context",
+                new XAttribute("generatedBy", "git-story-teller-dotnet-fallback"),
+                new XElement("note", "Repomix was unavailable, so this fallback packed selected text files with a simple .NET reader. It does not provide Repomix token counts, Secretlint checks, or exact gitignore semantics."),
+                new XElement("includePatterns", includePatterns.Select(pattern => new XElement("pattern", pattern))),
+                new XElement("directoryStructure", BuildDirectoryStructure(files.Select(file => file.RelativePath))),
+                filesElement));
+
+        return doc.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static bool ShouldIncludeFile(string relativePath, IReadOnlyList<string> includePatterns) =>
+        includePatterns.Any(pattern => MatchesIncludePattern(relativePath, pattern));
+
+    private static bool MatchesIncludePattern(string relativePath, string pattern)
+    {
+        var normalizedPattern = pattern.Replace('\\', '/').TrimStart('/');
+
+        if (normalizedPattern.EndsWith("/**", StringComparison.Ordinal))
+        {
+            var prefix = normalizedPattern[..^3].TrimEnd('/');
+            return string.Equals(relativePath, prefix, StringComparison.OrdinalIgnoreCase)
+                || relativePath.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (normalizedPattern.Contains("/**/", StringComparison.Ordinal))
+        {
+            var parts = normalizedPattern.Split("/**/", 2, StringSplitOptions.None);
+            return relativePath.StartsWith(parts[0].TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase)
+                && relativePath.EndsWith("/" + parts[1].TrimStart('/'), StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (normalizedPattern.Contains('*'))
+        {
+            var regex = "^" + Regex.Escape(normalizedPattern)
+                .Replace("\\*\\*", ".*", StringComparison.Ordinal)
+                .Replace("\\*", "[^/]*", StringComparison.Ordinal) + "$";
+            return Regex.IsMatch(relativePath, regex, RegexOptions.IgnoreCase);
+        }
+
+        return string.Equals(relativePath, normalizedPattern, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsUnderSkippedDirectory(string relativePath)
+    {
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return segments.Any(segment => segment is ".git" or ".svn" or ".hg" or "bin" or "obj" or "node_modules");
+    }
+
+    private static bool IsTextFile(string path)
+    {
+        using var stream = File.OpenRead(path);
+        var buffer = new byte[Math.Min(4096, (int)Math.Min(stream.Length, int.MaxValue))];
+        var read = stream.Read(buffer, 0, buffer.Length);
+        return !buffer.Take(read).Contains((byte)0);
+    }
+
+    private static string BuildDirectoryStructure(IEnumerable<string> relativePaths)
+    {
+        var entries = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in relativePaths)
+        {
+            var parts = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < parts.Length; i++)
+            {
+                var prefix = string.Join('/', parts.Take(i + 1));
+                entries.Add(prefix + (i == parts.Length - 1 ? string.Empty : "/"));
+            }
+        }
+
+        return string.Join(Environment.NewLine, entries);
     }
 
     private static string ResolveNpxExecutable()
@@ -874,6 +1083,7 @@ internal static class StoryScript
               - This script writes deterministic context only.
               - This script does not call an LLM.
               - Existing result/*.md files are not overwritten.
+              - Context packing prefers local Repomix, then the Repomix web API for GitHub HTTPS URLs, then the built-in .NET fallback.
             """);
     }
 }
@@ -898,3 +1108,5 @@ internal sealed record TargetManifestEntry(
     string name,
     string context,
     string result);
+
+internal sealed record PackedFile(string FullPath, string RelativePath);
