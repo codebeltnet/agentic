@@ -70,6 +70,7 @@ Fallback notes:
 - The built-in .NET fallback is local-only and packs only files matching the runner's include patterns.
 - The built-in .NET fallback does not provide Repomix token counts, Secretlint checks, compression, or exact gitignore semantics.
 - The runner filters known low-signal files such as `GlobalSuppressions.cs` from packed context. Do not recreate or infer story claims from those files.
+- The runner maps test projects conservatively. It prefers a dedicated test project whose name matches the package plus a test suffix, then a single unambiguous direct project reference. If only downstream package tests match a shared base package prefix, the runner leaves `Test path` undiscovered instead of assigning another package's tests.
 - If `.NET 10` or `git` is unavailable, stop and report the missing dependency.
 - If Repomix runs and rejects content, do not bypass that result manually with a fallback unless the user explicitly accepts the lower-fidelity path.
 
