@@ -8,6 +8,7 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+.vs
 
 # Skill workspaces and eval artifacts (local only, not for sharing)
 skills/*-workspace/
