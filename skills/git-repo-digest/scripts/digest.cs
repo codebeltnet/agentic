@@ -14,7 +14,10 @@ return await DigestScript.RunAsync(args);
 internal static class DigestScript
 {
     private const string ResultDirectoryName = "result";
+    private const string SourceDirectoryName = "src";
+    private const string TestDirectoryName = "test";
     private const int MaxContextChunkBodyBytes = 36 * 1024;
+    private static readonly string[] OwnedTestProjectSuffixes = ["Tests", "FunctionalTests"];
     private static readonly Regex PublicTypeExpression = new(
         @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected\s+internal|internal\s+protected)\s+(?:(?:static|abstract|sealed|partial|readonly|unsafe)\s+)*(?<kind>record\s+class|record\s+struct|class|interface|struct|record|enum)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*(?:<[^>{};]+>)?)\s*(?::\s*(?<base>[^{]+))?",
         RegexOptions.Compiled);
@@ -177,7 +180,7 @@ internal static class DigestScript
 
     private static IReadOnlyList<PackageInfo> DiscoverPackages(string cloneDir)
     {
-        var srcDir = Path.Combine(cloneDir, "src");
+        var srcDir = Path.Combine(cloneDir, SourceDirectoryName);
         if (!Directory.Exists(srcDir))
         {
             return [];
@@ -252,26 +255,24 @@ internal static class DigestScript
 
     private static string? FindTestDirectory(string cloneDir, string sourceProjectFile, string packageName)
     {
-        var testRoots = new[] { "test", "tests" }
-            .Select(r => Path.Combine(cloneDir, r))
-            .Where(Directory.Exists)
-            .ToList();
+        var testRoot = Path.Combine(cloneDir, TestDirectoryName);
+        if (!Directory.Exists(testRoot))
+        {
+            return null;
+        }
 
         var normalizedPackage = NormalizeForMatch(packageName);
         var candidates = new List<TestProjectMatch>();
-        foreach (var root in testRoots)
-        {
-            var testProjects = Directory.EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
-                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+        var testProjects = Directory.EnumerateFiles(testRoot, "*.csproj", SearchOption.AllDirectories)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-            foreach (var testProject in testProjects)
-            {
-                candidates.Add(new TestProjectMatch(
-                    testProject,
-                    IsOwnTestProjectName(testProject, normalizedPackage),
-                    ReferencesProject(testProject, sourceProjectFile)));
-            }
+        foreach (var testProject in testProjects)
+        {
+            candidates.Add(new TestProjectMatch(
+                testProject,
+                IsOwnTestProjectName(testProject, normalizedPackage),
+                ReferencesProject(testProject, sourceProjectFile)));
         }
 
         var ownMatch = candidates
@@ -294,8 +295,9 @@ internal static class DigestScript
     private static bool IsOwnTestProjectName(string testProjectFile, string normalizedPackage)
     {
         var normalizedProjectName = NormalizeForMatch(Path.GetFileNameWithoutExtension(testProjectFile));
-        var suffixes = new[] { "tests", "test", "unittests", "unittest", "integrationtests", "integrationtest", "functionaltests", "functionaltest" };
-        return suffixes.Any(suffix => string.Equals(normalizedProjectName, normalizedPackage + suffix, StringComparison.OrdinalIgnoreCase));
+        return OwnedTestProjectSuffixes
+            .Select(NormalizeForMatch)
+            .Any(suffix => string.Equals(normalizedProjectName, normalizedPackage + suffix, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool ReferencesProject(string testProjectFile, string sourceProjectFile)
@@ -392,7 +394,9 @@ internal static class DigestScript
     private static async Task<string> BuildOverviewContextAsync(string repoUrl, string cloneDir, string repoId, IReadOnlyList<PackageInfo> packages)
     {
         Console.WriteLine("[digest] packing overview context...");
-        var packedContent = await PackRepositoryContentAsync(cloneDir, "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj");
+        var packedContent = await PackRepositoryContentAsync(
+            cloneDir,
+            "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj,test/**/*.csproj");
 
         var sb = new StringBuilder();
         AppendHeader(sb, "REPOSITORY IDENTITY");
@@ -675,11 +679,15 @@ internal static class DigestScript
         return index >= 0 ? name[..index] : name;
     }
 
-    private static bool IsProbablyTestFile(string relativePath) =>
-        relativePath.Contains(".Tests/", StringComparison.OrdinalIgnoreCase)
-        || relativePath.Contains("/Tests/", StringComparison.OrdinalIgnoreCase)
-        || relativePath.EndsWith("Test.cs", StringComparison.OrdinalIgnoreCase)
-        || relativePath.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase);
+    private static bool IsProbablyTestFile(string relativePath)
+    {
+        var normalizedPath = relativePath.Replace('\\', '/');
+        return normalizedPath.StartsWith(TestDirectoryName + "/", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.Contains(".Tests/", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.Contains(".FunctionalTests/", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.EndsWith("Test.cs", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.EndsWith("FunctionalTest.cs", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string BuildInstructions(string repoUrl, string repoId) =>
         $$"""
