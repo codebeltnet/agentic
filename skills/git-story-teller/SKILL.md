@@ -1,7 +1,7 @@
 ---
 name: git-story-teller
 description: >
-  Generate source-grounded repository story markdown from deterministic ContentSync context bundles. Use when the user asks to create, refresh, or complete repo/package stories, family or project overview pages, .bot/stories output, ContentSync story workflows, or result/Index.md plus result/{TargetName}.md files for any repository URL. The skill runs its bundled .NET file-based context generator, emits public API and engineering signal summaries plus chunked context indexes, writes target stories first, then writes the overview from completed target stories, and enforces complete-read grounding and no-invention rules even when file output is capped.
+  Generate source-grounded repository story markdown from deterministic local context bundles. Use when the user asks to create, refresh, or complete repo/package stories, family or project overview pages, .bot/stories output, story workspace workflows, or result/Index.md plus result/{TargetName}.md files for any repository URL. The skill runs its bundled .NET file-based context generator over a git clone, emits public API and engineering signal summaries plus chunked context indexes, writes target stories first, then writes the overview from completed target stories, and enforces complete-read grounding and no-invention rules even when file output is capped.
 ---
 
 # Git Story Teller
@@ -62,19 +62,15 @@ repo-id      Derived from the final repository URL path segment, with .git remov
 result dir   result
 ```
 
-The runner requires the .NET 10 SDK or newer and `git`. It prefers Repomix through `npx repomix` for high-fidelity packing, because Repomix provides the canonical XML shape, ignore handling, token-aware metadata, and security checks. If `npx`/Repomix cannot start or npm registry access is unavailable, the runner tries the same public Repomix web API used by `https://repomix.com/` for GitHub HTTPS repository URLs. If both Repomix paths are unavailable, it falls back to its built-in .NET text packer so the workspace can still be generated.
+The runner requires the .NET 10 SDK or newer and `git`. It performs one shallow git clone, discovers packable targets from that local clone, and packs context with its bundled C# packer. The packer uses `git ls-files` for deterministic tracked-file membership, applies the runner's include patterns, skips generated or low-signal paths, keeps text files only, and writes a stable XML repository-context block into each generated `*.context.md` file.
 
-Fallback notes:
+Packing notes:
 
-- The Repomix web API fallback posts the repository URL, output format, and include patterns to `https://api.repomix.com/api/pack`; use it only for public GitHub repositories or repositories the user is comfortable sending to that service.
-- The built-in .NET fallback is local-only and packs only files matching the runner's include patterns.
-- The built-in .NET fallback does not provide Repomix token counts, Secretlint checks, compression, or exact gitignore semantics.
+- The context packer is local-only. It does not call Node/npm, Repomix, browser automation, or a public packing service.
+- The context packer does not emit third-party token counts, compression summaries, or external Secretlint results. Treat source, tests, project files, README files, and generated public API / engineering signal sections as the grounding surface.
 - The runner filters known low-signal files such as `GlobalSuppressions.cs` from packed context. Do not recreate or infer story claims from those files.
 - The runner maps test projects conservatively. It prefers a dedicated test project whose name matches the package plus a test suffix, then a single unambiguous direct project reference. If only downstream package tests match a shared base package prefix, the runner leaves `Test path` undiscovered instead of assigning another package's tests.
 - If `.NET 10` or `git` is unavailable, stop and report the missing dependency.
-- If Repomix runs and rejects content, do not bypass that result manually with a fallback unless the user explicitly accepts the lower-fidelity path.
-
-Do not scrape or drive the browser UI. If a web fallback is needed, call the Repomix API endpoint directly and keep the lower-fidelity .NET fallback available in case the public service changes or is unreachable.
 
 ## Expected Workspace
 

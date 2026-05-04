@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-04
+
+This is a minor release focused on simplifying `git-story-teller` architecture by removing external dependencies and consolidating on a single deterministic local context packing strategy. The skill no longer depends on Node/npm, Repomix, or public packing services; instead, it performs a shallow git clone and uses the bundled C# packer to extract tracked files via `git ls-files`, making the skill fully self-contained and deterministic.
+
+### Changed
+
+- Refactored `git-story-teller` to remove Repomix-first architecture with web API and .NET fallback paths in favor of a single local C# packer,
+- Updated `story.cs` to perform deterministic tracked-file discovery using `git ls-files -z` instead of filesystem enumeration, eliminating gitignore parsing and directory scanning variance,
+- Removed HTTP client dependency and all Repomix integration code (`PackWithRepomixAsync`, `PackWithRepomixWebApiAsync`, `CanUseRepomixWebApi`, `BuildRepomixWebOptions`) from `story.cs`,
+- Updated XML repository-context metadata to reflect the new "git-story-teller-local-packer" source and emit deterministic generation notes instead of fallback disclaimers,
+- Updated SKILL.md description and runtime notes to document the shift from Repomix-first with fallbacks to single local packing path,
+- Updated eval contract (eval 6) to verify that the runner no longer requires Node/npm, Repomix, or public packing services and recognizes the C# packer as the primary deterministic strategy,
+- Added `.vs` to `.gitignore` to exclude Visual Studio settings folder,
+- Updated README.md to reflect deterministic local file packing with `git ls-files` instead of external packing dependencies.
+
+### Removed
+
+- Repomix integration and all fallback-detection logic from `story.cs`,
+- HTTP-based communication with the public Repomix web API,
+- Node/npm executable resolution and `npx` invocation for `repomix` command execution,
+- Optional Repomix token counts, Secretlint checks, and compression features from the packer output.
+
 ## [0.4.1] - 2026-05-04
 
 This is a minor release focused on strengthening `git-story-teller` with complete-read grounding rules, optional subagent delegation, evidence-based language validation, and enhanced deterministic output artifacts, plus clarifying `git-visual-squash-summary` emoji-first output conventions with explicit lowercase-start guidance. The `git-story-teller` skill now enforces that agents read full context and target stories as primary sources, supports delegation of independent target contexts to subagents, and provides tooling to detect and prevent unmeasured frequency or behavior claims without source evidence. The `git-visual-squash-summary` skill clarifies its emoji-first output rule to start descriptions lowercase after the emoji unless a leading technical identifier requires original casing.
@@ -190,7 +212,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/codebeltnet/agentic/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/codebeltnet/agentic/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/codebeltnet/agentic/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/codebeltnet/agentic/compare/v0.3.3...v0.3.4
