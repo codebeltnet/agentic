@@ -70,13 +70,13 @@
     },
     {
       "id": 6,
-      "prompt": "Use git-story-teller to generate a story workspace for https://github.com/example/myproject, but local npx/Repomix cannot start while .NET 10 and git are available.",
-      "expected_output": "Allows the runner to use the Repomix web API fallback for the public GitHub URL, or the built-in .NET packer if the web API is unavailable, then follows the generated manifest instead of treating missing npx as a hard blocker.",
+      "prompt": "Use git-story-teller to generate a story workspace for https://github.com/example/myproject while .NET 10 and git are available, but Node/npm, Repomix, and public packing services are unavailable.",
+      "expected_output": "Runs the bundled story.cs runner with the full repository URL and output root, recognizes that context packing is handled locally by the C# packer over the cloned repository's tracked files, and follows the generated manifest instead of treating missing Node/npm or Repomix as relevant dependencies.",
       "expectations": [
-        "Does not stop solely because local npx or local Repomix is unavailable",
-        "Recognizes that the runner prefers local Repomix, then can try the public Repomix web API for GitHub HTTPS URLs",
-        "Mentions that the web API fallback sends the repository URL and include patterns to the public Repomix service",
-        "Recognizes the built-in .NET text packer as the last-resort lower-fidelity fallback",
+        "Does not stop or request Node/npm solely because local npx or local Repomix is unavailable",
+        "Recognizes that the runner performs one shallow git clone and packs local tracked files with the bundled C# packer",
+        "Does not suggest sending the repository URL or include patterns to a public packing service",
+        "Treats the C# packer as the primary deterministic context packer rather than a lower-fidelity fallback",
         "Still treats .NET 10 SDK and git failures as blocking dependencies"
       ]
     },
