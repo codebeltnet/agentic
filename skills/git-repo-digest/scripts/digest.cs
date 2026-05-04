@@ -1130,20 +1130,12 @@ internal static class DigestScript
 
         sb.AppendLine("## Chunks");
         sb.AppendLine();
-        sb.AppendLine("| Chunk | Path | Body bytes | Headings |");
+        sb.AppendLine("| Chunk | Path | Body bytes | Contents |");
         sb.AppendLine("|---|---|---:|---|");
         for (var i = 0; i < chunks.Count; i++)
         {
-            var headings = ExtractHeadings(chunks[i]).ToList();
-            var headingText = headings.Count == 0
-                ? BuildInferredChunkHeading(chunks[i])
-                : string.Join("; ", headings.Take(4));
-            if (headings.Count > 4)
-            {
-                headingText += "; ...";
-            }
-
-            sb.AppendLine($"| {i + 1} | `{chunkPaths[i]}` | {Encoding.UTF8.GetByteCount(chunks[i])} | {EscapeMarkdownTableCell(headingText)} |");
+            var contents = BuildChunkContents(chunks[i]);
+            sb.AppendLine($"| {i + 1} | `{chunkPaths[i]}` | {Encoding.UTF8.GetByteCount(chunks[i])} | {EscapeMarkdownTableCell(contents)} |");
         }
         sb.AppendLine();
 
@@ -1182,28 +1174,37 @@ internal static class DigestScript
         }
     }
 
-    private static string BuildInferredChunkHeading(string chunk)
+    private static string BuildChunkContents(string chunk)
+    {
+        var entries = ExtractHeadings(chunk)
+            .Concat(ExtractInferredChunkLabels(chunk))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (entries.Count == 0)
+        {
+            entries.Add("Packed Content");
+        }
+
+        return string.Join("; ", entries);
+    }
+
+    private static IEnumerable<string> ExtractInferredChunkLabels(string chunk)
     {
         var packedPaths = ExtractPackedFilePaths(chunk).ToList();
         if (packedPaths.Count == 0)
         {
-            return "Packed Content";
+            yield break;
         }
 
-        var groups = packedPaths
+        foreach (var group in packedPaths
             .GroupBy(ClassifyPackedFilePath, StringComparer.OrdinalIgnoreCase)
             .Select(group => new { Heading = group.Key, Count = group.Count() })
             .OrderByDescending(group => group.Count)
-            .ThenBy(group => group.Heading, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var majority = groups.FirstOrDefault(group => group.Count > packedPaths.Count / 2);
-        if (majority is not null)
+            .ThenBy(group => group.Heading, StringComparer.OrdinalIgnoreCase))
         {
-            return majority.Heading;
+            yield return group.Heading;
         }
-
-        return string.Join("; ", groups.Take(3).Select(group => group.Heading));
     }
 
     private static string ClassifyPackedFilePath(string path)
