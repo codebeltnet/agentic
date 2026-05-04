@@ -54,7 +54,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill git-nuget-readme
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agnostic
 npx skills add https://github.com/codebeltnet/agentic --skill markdown-illustrator
-npx skills add https://github.com/codebeltnet/agentic --skill git-story-teller
+npx skills add https://github.com/codebeltnet/agentic --skill git-repo-digest
 npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-app-slnx
@@ -85,7 +85,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-lib-sln
 | [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns the full current feature branch into a curated set of compact lowercase-start summary lines for PR or squash-and-merge contexts by default, preserving technical identifiers, merging overlap, dropping low-signal noise, highlighting distinct meaningful efforts, and avoiding changelog-style wording, unsupported claims, needless commit-range questions, or commit-selection UI for ordinary branch-level squash requests. |
 | [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | Runner-agnostic overlay for Anthropic `skill-creator`. Adds repo and environment guardrails for skill authoring and benchmarking: temp-workspace isolation, `iteration-N/eval-name/{config}/run-N/` benchmark layout, valid `grading.json` summaries, generated `benchmark.json`, honest `MEASURED` vs `SIMULATED` labeling, and sync/README discipline for repo-managed skills. |
 | [markdown-illustrator](skills/markdown-illustrator/SKILL.md) | Reads a markdown file and answers directly in chat with one document-wide Visual Brief plus one compiled prompt. Infers a compact visual strategy by default, keeps follow-up questions near zero, and only branches when the user explicitly asks for added specificity. |
-| [git-story-teller](skills/git-story-teller/SKILL.md) | Turns any full repository URL into a deterministic story workspace using the bundled .NET file-based runner `scripts/story.cs`. Requires explicit `--repo-url` and `--output-root`, derives `{repo-id}`, fixes `result/`, performs one shallow git clone, packs local tracked files with the bundled C# packer using `git ls-files` plus runner include patterns, writes full contexts plus public API summaries, engineering signals, conservative package-owned test paths, context indexes, and ordered chunk files, then guides the agent to fully read the current phase's required context before writing target stories and `result/Index.md`, optionally using one subagent per independent target context and using completed package stories as the primary source for the package-facing `## Package selection` overview. |
+| [git-repo-digest](skills/git-repo-digest/SKILL.md) | Turns any full repository URL into a deterministic digest workspace using the bundled .NET file-based runner `scripts/digest.cs`. Requires explicit `--repo-url` and `--output-root`, derives `{repo-id}`, fixes `result/`, performs one shallow git clone, packs local tracked files with the bundled C# packer using `git ls-files` plus runner include patterns, writes full contexts plus public API summaries, engineering signals, conservative package-owned test paths, context indexes, and ordered chunk files, then guides the agent to fully read the current phase's required context before writing package digests and `result/Index.md`, optionally using one subagent per independent package context and using completed package digests as the primary source for the package-facing `## Package selection` overview. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
@@ -137,10 +137,10 @@ npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agno
 npx skills add https://github.com/codebeltnet/agentic --skill markdown-illustrator
 ```
 
-`git-story-teller`
+`git-repo-digest`
 
 ```bash
-npx skills add https://github.com/codebeltnet/agentic --skill git-story-teller
+npx skills add https://github.com/codebeltnet/agentic --skill git-repo-digest
 ```
 
 `dotnet-new-lib-slnx`
@@ -282,28 +282,28 @@ Anthropic's `skill-creator` is an excellent base workflow, but the day-to-day fr
 - **Codex-friendly benchmarking** — treats Codex CLI as a valid real runner when present, preserves `MEASURED` parity honestly, uses raw event output as fallback evidence when convenience files are missing, and prefers parallel paired runs when the runner supports sub-agents
 - **Repo-managed discipline** — keeps per-skill evals, local-install sync, and README updates in scope for first-party skills
 
-### Why git-story-teller?
+### Why git-repo-digest?
 
-Repository story generation works best when deterministic context gathering is separated from AI-authored prose. **git-story-teller** owns that split: its bundled .NET file-based runner creates the manifest, instructions, full context files, public API summaries, engineering signal maps, context indexes, and ordered chunk files; the agent writes the target stories and overview.
+Repository digest generation works best when deterministic context gathering is separated from AI-authored prose. **git-repo-digest** owns that split: its bundled .NET file-based runner creates the manifest, instructions, full context files, public API summaries, engineering signal maps, context indexes, and ordered chunk files; the agent writes the package digests and overview.
 
-- **Bundled C# runner** - ships `scripts/story.cs`, run with `dotnet run --file`, so the skill is self-contained without a full project file
+- **Bundled C# runner** - ships `scripts/digest.cs`, run with `dotnet run --file`, so the skill is self-contained without a full project file
 - **Single local packing path** - performs one shallow `git clone`, then packs tracked files from that clone with the bundled C# packer instead of calling Node/npm, Repomix, browser automation, or a public packing service
 - **Deterministic file membership** - uses `git ls-files`, runner include patterns, text-file detection, generated-directory skips, and low-signal filtering so the context source is transparent and repeatable
 - **Repository-generic input** - starts from a full repository URL and an explicit output root instead of assuming an owner/slug convention
 - **KISS contract** - only `--repo-url` and `--output-root` are inputs; `{repo-id}` is derived and `result/` is fixed
-- **Codebelt-flavored default** - recommends `.bot/stories` when the active workspace already contains a `.bot` folder
-- **Tool output is authoritative** - reads `manifest.json`, `instructions.md`, and one target context at a time instead of reconstructing scope from memory
+- **Codebelt-flavored default** - recommends `.bot/digests` when the active workspace already contains a `.bot` folder
+- **Tool output is authoritative** - reads `manifest.json`, `instructions.md`, and one package context at a time instead of reconstructing scope from memory
 - **Public API first** - adds a generated public API summary so agents can orient around consumer-facing types, inheritance chains, and likely key members before reading the raw source
-- **Engineering signal map** - highlights source-backed places to inspect for validation guards, lifecycle callbacks, factories, hosting styles, and test evidence so stories can explain the engineering decisions instead of listing APIs mechanically
+- **Engineering signal map** - highlights source-backed places to inspect for validation guards, lifecycle callbacks, factories, hosting styles, and test evidence so package digests can explain the engineering decisions instead of listing APIs mechanically
 - **Conservative test ownership** - maps a package to a dedicated test project with the same package name plus a test suffix, or to a single unambiguous direct reference, instead of assigning downstream package tests that merely share a base package prefix
 - **Low-signal filtering** - removes `GlobalSuppressions.cs` from packed context while keeping internals available when they explain public behavior
 - **Chunked context navigation** - emits `*.context.index.md` and ordered `*.context.chunks/*.md` files beside each full context so agents can read large evidence sets even when a tool caps single-file output
-- **Complete-read grounding** - treats capped or truncated context output as an unfinished read, requiring the agent to use the index and every ordered chunk, or range reads for older workspaces, until the current target context, overview context, and required target stories have been fully inspected
-- **Subagent-friendly targets** - when the runtime supports delegation, assigns at most one independent target context to each subagent so large contexts do not compete for the same prompt budget, while the main agent orchestrates, gathers caveats, and authors the final overview
-- **Target-first workflow** - writes `result/{TargetName}.md` files before synthesizing `result/Index.md`
-- **Story-sourced overview** - requires the overview phase to open the completed target story files as the primary source instead of relying on `overview.context.md` alone
+- **Complete-read grounding** - treats capped or truncated context output as an unfinished read, requiring the agent to use the index and every ordered chunk, or range reads for older workspaces, until the current package context, overview context, and required package digests have been fully inspected
+- **Subagent-friendly packages** - when the runtime supports delegation, assigns at most one independent package context to each subagent so large contexts do not compete for the same prompt budget, while the main agent orchestrates, gathers caveats, and authors the final overview
+- **Package-first workflow** - writes `result/{PackageName}.md` files before synthesizing `result/Index.md`
+- **Digest-sourced overview** - requires the overview phase to open the completed package digest files as the primary source instead of relying on `overview.context.md` alone
 - **Package-facing overview** - requires `result/Index.md` to use `## Package selection` for the reader-facing selection section
-- **Phase-scoped reading** - processes target contexts separately and uses completed target stories for the overview without letting token limits justify skipped evidence
+- **Phase-scoped reading** - processes package contexts separately and uses completed package digests for the overview without letting token limits justify skipped evidence
 - **Grounded prose** - forbids invented APIs, relationships, examples, broad marketing claims, and unmeasured frequency claims such as "most common mistake" unless the generated context supports them with concrete evidence
 - **Publication stays explicit** - leaves staged files in `{output-root}/{repo-id}/result` unless the user asks to sync them into a consuming site
 ### Why markdown-illustrator?
