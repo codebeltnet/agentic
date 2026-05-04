@@ -24,7 +24,10 @@ This is a minor release focused on simplifying `git-story-teller` architecture, 
 - Renamed runner script from `scripts/story.cs` to `scripts/digest.cs` to align with the new skill name,
 - Updated all SKILL.md terminology from "story"/"storyteller"/"target stories" to "digest"/"repo-digest"/"package digests",
 - Updated eval contracts to reference "digest" generation and package digest workflows instead of story generation,
-- Updated README.md table, install examples, and "Why git-repo-digest?" section to reflect the renamed skill and digest-focused narrative.
+- Updated README.md table, install examples, and "Why git-repo-digest?" section to reflect the renamed skill and digest-focused narrative,
+- Clarified `git-repo-digest` test project discovery to use Codebelt conventions: source projects from `src/`, owned tests from `test/`, matching `.Tests` or `.FunctionalTests` suffixes, avoiding generic `tests/` roots or broader suffix variants,
+- Updated `git-repo-digest` README description and "Why" section to document Codebelt-shaped include patterns and Codebelt test ownership strategy,
+- Corrected `git-repo-digest` bad output characteristics to reference a separate `.NET project` instead of legacy `ContentSync` terminology.
 
 ### Removed
 
