@@ -4,7 +4,6 @@
 #:property PublishAot=false
 
 using System.Diagnostics;
-using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -351,7 +350,7 @@ internal static class StoryScript
         }
 
         includeParts.Add(".nuget/**/README.md");
-        var repomix = await PackRepositoryContentAsync(repoUrl, cloneDir, string.Join(',', includeParts));
+        var packedContent = await PackRepositoryContentAsync(cloneDir, string.Join(',', includeParts));
 
         var sb = new StringBuilder();
         AppendHeader(sb, "TARGET IDENTITY");
@@ -384,7 +383,7 @@ internal static class StoryScript
         AppendMultiline(sb, BuildPackageStoryPrompt(target.Name));
 
         AppendHeader(sb, "PACKED REPOSITORY CONTENT");
-        sb.AppendLine(repomix.Trim());
+        sb.AppendLine(packedContent.Trim());
         sb.AppendLine();
 
         return sb.ToString();
@@ -393,7 +392,7 @@ internal static class StoryScript
     private static async Task<string> BuildOverviewContextAsync(string repoUrl, string cloneDir, string repoId, IReadOnlyList<TargetInfo> targets)
     {
         Console.WriteLine("[story] packing overview context...");
-        var repomix = await PackRepositoryContentAsync(repoUrl, cloneDir, "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj");
+        var packedContent = await PackRepositoryContentAsync(cloneDir, "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj");
 
         var sb = new StringBuilder();
         AppendHeader(sb, "REPOSITORY IDENTITY");
@@ -425,7 +424,7 @@ internal static class StoryScript
         AppendMultiline(sb, BuildOverviewStoryPrompt(repoId, targets));
 
         AppendHeader(sb, "SUPPLEMENTARY REPOSITORY CONTENT");
-        sb.AppendLine(repomix.Trim());
+        sb.AppendLine(packedContent.Trim());
         sb.AppendLine();
 
         return sb.ToString();
@@ -1193,150 +1192,18 @@ internal static class StoryScript
 
     private static Regex PublicMemberRegex() => PublicMemberExpression;
 
-    private static async Task<string> PackRepositoryContentAsync(string repoUrl, string cloneDir, string includes)
+    private static async Task<string> PackRepositoryContentAsync(string cloneDir, string includes)
     {
-        try
-        {
-            return FilterLowSignalPackedContent(await PackWithRepomixAsync(cloneDir, includes));
-        }
-        catch (Exception ex) when (CanUseDotNetPackerFallback(ex))
-        {
-            Console.WriteLine("[story] local repomix unavailable: " + ex.Message.Split(Environment.NewLine)[0]);
-
-            if (CanUseRepomixWebApi(repoUrl))
-            {
-                try
-                {
-                    Console.WriteLine("[story] trying Repomix web API fallback.");
-                    return FilterLowSignalPackedContent(await PackWithRepomixWebApiAsync(repoUrl, includes));
-                }
-                catch (Exception webEx)
-                {
-                    Console.WriteLine("[story] Repomix web API fallback unavailable: " + webEx.Message.Split(Environment.NewLine)[0]);
-                }
-            }
-
-            Console.WriteLine("[story] using built-in .NET context packer fallback.");
-            return FilterLowSignalPackedContent(await PackWithDotNetPackerAsync(cloneDir, includes));
-        }
+        return FilterLowSignalPackedContent(await PackWithLocalPackerAsync(cloneDir, includes));
     }
 
-    private static async Task<string> PackWithRepomixAsync(string cloneDir, string includes)
-    {
-        var outputFile = Path.Combine(Path.GetTempPath(), "repomix-story-" + Guid.NewGuid().ToString("N") + ".xml");
-        try
-        {
-            var executable = ResolveNpxExecutable();
-            await RunProcessAsync(executable,
-                ["--yes", "repomix", "--include", includes, "--style", "xml", "--output", outputFile, "--no-file-summary", "--quiet"],
-                cloneDir);
-
-            if (!File.Exists(outputFile))
-            {
-                throw new InvalidOperationException("repomix completed without creating the expected output file.");
-            }
-
-            return await File.ReadAllTextAsync(outputFile, Encoding.UTF8);
-        }
-        finally
-        {
-            TryDeleteFile(outputFile);
-        }
-    }
-
-    private static bool CanUseDotNetPackerFallback(Exception ex)
-    {
-        var message = ex.ToString();
-        var fallbackSignals = new[]
-        {
-            "Could not start",
-            "error occurred trying to start process",
-            "The system cannot find the file specified",
-            "No such file or directory",
-            "could not determine executable to run",
-            "ENOTFOUND",
-            "EAI_AGAIN",
-            "ETIMEDOUT",
-            "ECONNRESET",
-            "ECONNREFUSED",
-            "registry.npmjs.org",
-            "npm ERR! code"
-        };
-
-        return fallbackSignals.Any(signal => message.Contains(signal, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool CanUseRepomixWebApi(string repoUrl)
-    {
-        return Uri.TryCreate(repoUrl, UriKind.Absolute, out var uri)
-            && uri.Scheme is "http" or "https"
-            && string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static async Task<string> PackWithRepomixWebApiAsync(string repoUrl, string includes)
-    {
-        using var http = new HttpClient();
-        using var content = new MultipartFormDataContent
-        {
-            { new StringContent(repoUrl, Encoding.UTF8), "url" },
-            { new StringContent("xml", Encoding.UTF8), "format" },
-            { new StringContent(BuildRepomixWebOptions(includes), Encoding.UTF8), "options" }
-        };
-
-        using var response = await http.PostAsync("https://api.repomix.com/api/pack", content);
-        var body = await response.Content.ReadAsStringAsync();
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException($"Repomix web API returned HTTP {(int)response.StatusCode}.");
-        }
-
-        foreach (var line in body.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            using var json = JsonDocument.Parse(line);
-            var root = json.RootElement;
-            if (root.TryGetProperty("type", out var type) && string.Equals(type.GetString(), "result", StringComparison.OrdinalIgnoreCase))
-            {
-                return root.GetProperty("data").GetProperty("content").GetString()
-                    ?? throw new InvalidOperationException("Repomix web API returned an empty result.");
-            }
-
-            if (root.TryGetProperty("type", out var errorType) && string.Equals(errorType.GetString(), "error", StringComparison.OrdinalIgnoreCase))
-            {
-                var message = root.TryGetProperty("message", out var messageElement)
-                    ? messageElement.GetString()
-                    : "Repomix web API returned an error.";
-                throw new InvalidOperationException(message);
-            }
-        }
-
-        throw new InvalidOperationException("Repomix web API did not return a result event.");
-    }
-
-    private static string BuildRepomixWebOptions(string includes)
-    {
-        var options = new
-        {
-            removeComments = false,
-            removeEmptyLines = false,
-            showLineNumbers = false,
-            fileSummary = false,
-            directoryStructure = true,
-            includePatterns = includes,
-            outputParsable = false,
-            compress = false
-        };
-
-        return JsonSerializer.Serialize(options);
-    }
-
-    private static async Task<string> PackWithDotNetPackerAsync(string cloneDir, string includes)
+    private static async Task<string> PackWithLocalPackerAsync(string cloneDir, string includes)
     {
         var includePatterns = includes
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
 
-        var files = Directory.EnumerateFiles(cloneDir, "*", SearchOption.AllDirectories)
-            .Select(path => new PackedFile(path, Path.GetRelativePath(cloneDir, path).Replace('\\', '/')))
+        var files = (await GetTrackedFilesAsync(cloneDir))
             .Where(file => ShouldIncludeFile(file.RelativePath, includePatterns))
             .Where(file => !IsUnderSkippedDirectory(file.RelativePath))
             .Where(file => !ShouldSkipLowSignalFile(file.RelativePath))
@@ -1354,13 +1221,37 @@ internal static class StoryScript
         var doc = new XDocument(
             new XElement(
                 "repository-context",
-                new XAttribute("generatedBy", "git-story-teller-dotnet-fallback"),
-                new XElement("note", "Repomix was unavailable, so this fallback packed selected text files with a simple .NET reader. It does not provide Repomix token counts, Secretlint checks, or exact gitignore semantics."),
+                new XAttribute("generatedBy", "git-story-teller-local-packer"),
+                new XElement("note", "Packed by the bundled git-story-teller C# runner from tracked files in the cloned repository. The packer uses git ls-files for deterministic repository membership, applies the runner include patterns, skips known generated or low-signal paths, and includes text files only."),
                 new XElement("includePatterns", includePatterns.Select(pattern => new XElement("pattern", pattern))),
                 new XElement("directoryStructure", BuildDirectoryStructure(files.Select(file => file.RelativePath))),
                 filesElement));
 
         return doc.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static async Task<IReadOnlyList<PackedFile>> GetTrackedFilesAsync(string cloneDir)
+    {
+        var output = await RunProcessCaptureAsync("git", ["ls-files", "-z"], cloneDir);
+        return output
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(path => path.Replace('\\', '/'))
+            .Select(relativePath => new PackedFile(ResolveRepositoryPath(cloneDir, relativePath), relativePath))
+            .OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string ResolveRepositoryPath(string cloneDir, string relativePath)
+    {
+        var fullPath = Path.GetFullPath(Path.Combine(cloneDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        var root = Path.GetFullPath(cloneDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Git returned a path outside the cloned repository: '{relativePath}'.");
+        }
+
+        return fullPath;
     }
 
     private static bool ShouldIncludeFile(string relativePath, IReadOnlyList<string> includePatterns) =>
@@ -1404,7 +1295,7 @@ internal static class StoryScript
         }
         catch
         {
-            // Repomix output is expected to be XML, but keep a text fallback for service changes.
+            // The packer emits XML; keep a text fallback in case a future shape changes.
         }
 
         var withoutFileBlocks = Regex.Replace(
@@ -1485,36 +1376,6 @@ internal static class StoryScript
         return string.Join(Environment.NewLine, entries);
     }
 
-    private static string ResolveNpxExecutable()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return "npx";
-        }
-
-        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        if (!string.IsNullOrWhiteSpace(programFiles))
-        {
-            var nodeNpx = Path.Combine(programFiles, "nodejs", "npx.cmd");
-            if (File.Exists(nodeNpx))
-            {
-                return nodeNpx;
-            }
-        }
-
-        var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-        if (!string.IsNullOrWhiteSpace(programFilesX86))
-        {
-            var nodeNpx = Path.Combine(programFilesX86, "nodejs", "npx.cmd");
-            if (File.Exists(nodeNpx))
-            {
-                return nodeNpx;
-            }
-        }
-
-        return "npx.cmd";
-    }
-
     private static async Task WriteManifestAsync(
         string manifestPath,
         StoryOptions options,
@@ -1571,6 +1432,11 @@ internal static class StoryScript
 
     private static async Task RunProcessAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory, TimeSpan timeout = default)
     {
+        await RunProcessCaptureAsync(executable, arguments, workingDirectory, timeout);
+    }
+
+    private static async Task<string> RunProcessCaptureAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory, TimeSpan timeout = default)
+    {
         if (timeout == default) timeout = TimeSpan.FromMinutes(5);
 
         var startInfo = new ProcessStartInfo(executable)
@@ -1612,6 +1478,8 @@ internal static class StoryScript
             var details = string.Join(Environment.NewLine, new[] { stdout.Trim(), stderr.Trim() }.Where(s => !string.IsNullOrWhiteSpace(s)));
             throw new InvalidOperationException($"'{executable}' failed with exit code {process.ExitCode}.{Environment.NewLine}{details}".Trim());
         }
+
+        return stdout;
     }
 
     private static void AppendHeader(StringBuilder sb, string value)
@@ -1624,21 +1492,6 @@ internal static class StoryScript
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? Directory.GetCurrentDirectory());
         await File.WriteAllTextAsync(path, content, new UTF8Encoding(false));
-    }
-
-    private static void TryDeleteFile(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch
-        {
-            // Temp cleanup failure should not hide the real result.
-        }
     }
 
     private static void TryDeleteDirectory(string path)
@@ -1685,7 +1538,7 @@ internal static class StoryScript
               - This script writes deterministic context only.
               - This script does not call an LLM.
               - Existing result/*.md files are not overwritten.
-              - Context packing prefers local Repomix, then the Repomix web API for GitHub HTTPS URLs, then the built-in .NET fallback.
+              - Context packing uses the bundled C# packer over the cloned repository's tracked files.
             """);
     }
 }
