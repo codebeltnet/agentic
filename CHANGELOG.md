@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.4.2] - 2026-05-04
+## [0.4.2] - 2026-05-05
 
 This is a minor release focused on simplifying `git-story-teller` architecture, removing external dependencies, consolidating on deterministic local context packing, and renaming the skill to `git-repo-digest` for improved clarity. The skill no longer depends on Node/npm, Repomix, or public packing services; instead, it performs a shallow git clone and uses the bundled C# packer to extract tracked files via `git ls-files`, making the skill fully self-contained and deterministic.
 
