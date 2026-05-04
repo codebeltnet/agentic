@@ -27,7 +27,10 @@ This is a minor release focused on simplifying `git-story-teller` architecture, 
 - Updated README.md table, install examples, and "Why git-repo-digest?" section to reflect the renamed skill and digest-focused narrative,
 - Clarified `git-repo-digest` test project discovery to use Codebelt conventions: source projects from `src/`, owned tests from `test/`, matching `.Tests` or `.FunctionalTests` suffixes, avoiding generic `tests/` roots or broader suffix variants,
 - Updated `git-repo-digest` README description and "Why" section to document Codebelt-shaped include patterns and Codebelt test ownership strategy,
-- Corrected `git-repo-digest` bad output characteristics to reference a separate `.NET project` instead of legacy `ContentSync` terminology.
+- Corrected `git-repo-digest` bad output characteristics to reference a separate `.NET project` instead of legacy `ContentSync` terminology,
+- Added context index chunk label inference to `git-repo-digest` context index generation, replacing `(none)` placeholders with deterministic inferred labels based on packed file paths,
+- Implemented `BuildInferredChunkHeading()` and `ClassifyPackedFilePath()` in `digest.cs` to assign meaningful labels such as Source Code, Test Coverage, NuGet Documentation, Project Metadata, and Documentation based on chunk file composition,
+- Added eval 12 to validate deterministic chunk label assignment for headingless packed-content chunks, ensuring agents can navigate large evidence sets with meaningful descriptions.
 
 ### Removed
 
