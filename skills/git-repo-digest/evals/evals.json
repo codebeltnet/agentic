@@ -137,7 +137,10 @@
       "prompt": "Use git-repo-digest to generate a digest workspace for a repository where Codebelt.Extensions.Xunit is a shared base package, Directory.Build.props adds it to test projects, and downstream test projects such as Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests exist but there is no dedicated Codebelt.Extensions.Xunit.Tests project.",
       "expected_output": "The generated Codebelt.Extensions.Xunit package context does not assign a downstream hosting test directory as its Test path. It either uses a dedicated exact-name test project when present or leaves Test path undiscovered when only downstream package test projects match the base package prefix.",
       "expectations": [
+        "Discovers source projects only from the Codebelt src/ root",
+        "Discovers owned test projects only from the Codebelt test/ root, not a generic tests/ root",
         "Recognizes Codebelt.Extensions.Xunit.Tests as the dedicated test project for Codebelt.Extensions.Xunit",
+        "Recognizes FunctionalTests as the Codebelt app test suffix while avoiding generic UnitTests or IntegrationTests suffix expansion",
         "Does not confuse the Xunit.Tests suffix with a UnitTests suffix and strip too much of the package name",
         "Prefers a dedicated test project named after the package plus a test suffix over downstream package test projects",
         "Does not treat Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests as the owned test project for Codebelt.Extensions.Xunit",

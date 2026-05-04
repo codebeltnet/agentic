@@ -69,7 +69,7 @@ Packing notes:
 - The context packer is local-only. It does not call Node/npm, Repomix, browser automation, or a public packing service.
 - The context packer does not emit third-party token counts, compression summaries, or external Secretlint results. Treat source, tests, project files, README files, and generated public API / engineering signal sections as the grounding surface.
 - The runner filters known low-signal files such as `GlobalSuppressions.cs` from packed context. Do not recreate or infer digest claims from those files.
-- The runner maps test projects conservatively. It prefers a dedicated test project whose name matches the package plus a test suffix, then a single unambiguous direct project reference. If only downstream package tests match a shared base package prefix, the runner leaves `Test path` undiscovered instead of assigning another package's tests.
+- The runner follows Codebelt repository conventions for discovery: source projects live under `src/`, owned tests live under `test/`, and owned test projects are named after the package plus `.Tests` for libraries or `.FunctionalTests` for apps. It does not scan generic `tests/` roots or broader suffix variants such as `.UnitTests` or `.IntegrationTests`. Within the fixed `test/` root, it prefers a dedicated owned test project, then a single unambiguous direct project reference. If only downstream package tests match a shared base package prefix, the runner leaves `Test path` undiscovered instead of assigning another package's tests.
 - If `.NET 10` or `git` is unavailable, stop and report the missing dependency.
 
 ## Expected Workspace
@@ -267,7 +267,7 @@ Do not copy staged results there unless the user asks for website sync, publicat
 
 ## Bad Output Characteristics
 
-- Running a separate ContentSync project instead of the bundled `scripts/digest.cs` runner.
+- Running a separate .NET project instead of the bundled `scripts/digest.cs` runner.
 - Choosing provider/model/reasoning flags from memory.
 - Passing only a repository slug when the runner requires a full URL.
 - Assuming a fixed organization such as `codebeltnet` or a fixed repository host such as GitHub.
