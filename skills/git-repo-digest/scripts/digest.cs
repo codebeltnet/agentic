@@ -1136,7 +1136,7 @@ internal static class DigestScript
         {
             var headings = ExtractHeadings(chunks[i]).ToList();
             var headingText = headings.Count == 0
-                ? "(none)"
+                ? BuildInferredChunkHeading(chunks[i])
                 : string.Join("; ", headings.Take(4));
             if (headings.Count > 4)
             {
@@ -1180,6 +1180,66 @@ internal static class DigestScript
         {
             yield return match.Groups[1].Value.Trim();
         }
+    }
+
+    private static string BuildInferredChunkHeading(string chunk)
+    {
+        var packedPaths = ExtractPackedFilePaths(chunk).ToList();
+        if (packedPaths.Count == 0)
+        {
+            return "Packed Content";
+        }
+
+        var groups = packedPaths
+            .GroupBy(ClassifyPackedFilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { Heading = group.Key, Count = group.Count() })
+            .OrderByDescending(group => group.Count)
+            .ThenBy(group => group.Heading, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var majority = groups.FirstOrDefault(group => group.Count > packedPaths.Count / 2);
+        if (majority is not null)
+        {
+            return majority.Heading;
+        }
+
+        return string.Join("; ", groups.Take(3).Select(group => group.Heading));
+    }
+
+    private static string ClassifyPackedFilePath(string path)
+    {
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        var fileName = Path.GetFileName(normalized);
+
+        if (normalized.StartsWith("test/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Test Coverage";
+        }
+
+        if (normalized.StartsWith("src/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Source Code";
+        }
+
+        if (normalized.StartsWith(".nuget/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NuGet Documentation";
+        }
+
+        if (string.Equals(fileName, "README.md", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Documentation";
+        }
+
+        if (string.Equals(fileName, "Directory.Build.props", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "Directory.Build.targets", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "Directory.Packages.props", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Project Metadata";
+        }
+
+        return "Repository Metadata";
     }
 
     private static IEnumerable<string> ExtractPackedFilePaths(string context)
