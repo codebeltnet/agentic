@@ -151,15 +151,18 @@
     },
     {
       "id": 12,
-      "prompt": "Use git-repo-digest to generate a digest workspace for a repository whose package context has large packed source and test files split across multiple chunks. Some chunks contain no markdown section headings, only packed <file path=\"...\"> entries from src/, test/, .nuget/, and root project metadata files.",
-      "expected_output": "The generated context index keeps real markdown headings when present, but headingless chunk rows use deterministic inferred labels such as Source Code, Test Coverage, NuGet Documentation, Documentation, Project Metadata, or Packed Content instead of (none).",
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository whose package context has large packed source and test files split across multiple chunks. Some chunks contain markdown section headings, XML <file path=\"...\"> entries from src/, test/, .nuget/, and root project metadata files, or a mixture of both.",
+      "expected_output": "The generated context index uses a Contents column, keeps all real markdown headings when present, adds deterministic inferred labels such as Source Code, Test Coverage, NuGet Documentation, Documentation, Project Metadata, or Packed Content from packed file paths, and can show both heading and path-derived labels in the same semicolon-delimited cell without truncating the list with ellipses.",
       "expectations": [
-        "Keeps existing real markdown headings in the chunk index when a chunk contains them",
-        "Infers Source Code for headingless chunks whose packed file paths are primarily under src/",
-        "Infers Test Coverage for headingless chunks whose packed file paths are primarily under test/",
-        "Infers NuGet Documentation, Documentation, or Project Metadata for headingless documentation and project metadata chunks",
+        "Uses Contents rather than Headings as the chunk index table column name",
+        "Keeps all existing real markdown headings in the chunk index when a chunk contains them",
+        "Adds Source Code for chunks with packed file paths under src/",
+        "Adds Test Coverage for chunks with packed file paths under test/",
+        "Adds NuGet Documentation, Documentation, or Project Metadata for documentation and project metadata chunks",
+        "Allows a single semicolon-delimited Contents cell to include both markdown headings and packed-path labels",
+        "Does not truncate the Contents cell with ellipses",
         "Uses a deterministic Packed Content fallback only when no packed file paths are visible",
-        "Does not emit (none) for headingless packed-content chunks in the context index"
+        "Does not emit (none) for packed-content chunks in the context index"
       ]
     }
   ]
