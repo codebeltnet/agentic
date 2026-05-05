@@ -15,7 +15,9 @@ Use this skill to turn a deterministic digest workspace into website-ready or do
 - Treat generated output as the source of truth. If `manifest.json`, `instructions.md`, `*.context.md`, `*.context.index.md`, or `*.context.chunks/*.md` files disagree with this skill, follow the generated files unless they are internally inconsistent.
 - Keep the workflow generic. The runner input is a full repository URL, not an implied owner/slug convention.
 - Require both `--repo-url` and `--output-root`. Do not invent defaults silently.
-- If a `.bot` folder exists in the workspace the agent is working from, recommend `<workspace>/.bot/digests` as the output root.
+- If a `.bot` folder exists in the workspace the agent is working from, recommend `<workspace>/.bot/digests/{llm}-{reasoning}` as the output root, where `{llm}` is the active model identifier and `{reasoning}` is the active reasoning effort.
+- Use only runtime-visible model and reasoning values for the output-root label. Normalize them to lowercase filesystem-safe text by replacing characters outside `A-Za-z0-9._-` with `-`, trimming separators, and joining them as `{llm}-{reasoning}`. Example: `gpt-5.5-high`.
+- If either the active model or reasoning effort is unavailable, ask the user for the output root or the missing label value instead of guessing from memory.
 - Do not make `repo-id` customizable. It is derived from the final repository URL path segment.
 - Do not make the result directory customizable. It is always `result`.
 - Do not assume GitHub owner, repository host, organization, package prefix, website path, or docs domain from memory.
@@ -75,10 +77,10 @@ Packing notes:
 
 ## Expected Workspace
 
-The digest root is chosen by the caller. For repositories that already use `.bot`, recommend:
+The digest root is chosen by the caller. For repositories that already use `.bot`, recommend a model-scoped root so digest runs from different LLMs or reasoning settings do not overwrite each other:
 
 ```text
-.bot/digests
+.bot/digests/{llm}-{reasoning}
 ```
 
 Generated shape:
@@ -111,7 +113,15 @@ The manifest is authoritative after generation. Always follow the manifest for c
 Collect or infer only these two runner inputs:
 
 - `repo-url`: required. Ask for it if the user gives only a slug or a repository nickname.
-- `output-root`: required. If the active workspace has a `.bot` directory, recommend `<workspace>/.bot/digests`; otherwise ask for the path.
+- `output-root`: required. If the active workspace has a `.bot` directory, recommend `<workspace>/.bot/digests/{llm}-{reasoning}` using runtime-visible model and reasoning values; otherwise ask for the path.
+
+For the `{llm}-{reasoning}` label:
+
+- Prefer values exposed by the active runtime or system context.
+- Normalize both values to lowercase filesystem-safe text by replacing unsupported characters with `-` and trimming leading or trailing separators.
+- Example: model `gpt-5.5` with reasoning `high` becomes `<workspace>/.bot/digests/gpt-5.5-high`.
+- Do not choose provider, model, or reasoning values from memory. If the runtime does not expose them, ask the user for the missing value or for a complete `output-root`.
+- Do not pass model or reasoning flags to `scripts/digest.cs`; the label belongs only in the `--output-root` path.
 
 Do not ask for `repo-id` or result directory. If two repositories would collide because they share the same final URL path segment, ask the user for a different `output-root`.
 
@@ -213,16 +223,45 @@ Before finishing, verify:
 - Required headings from the generated context are present verbatim.
 - No result file contains analysis notes, citations, XML, JSON, confidence scores, or chat commentary unless the generated prompt explicitly asks for them.
 - Code examples mention only APIs visible in the relevant context.
+- For normal code packages, `## Basic usage` contains exactly one C# fenced code block unless the generated prompt explicitly allows more.
+- For normal code packages, the Basic usage C# example contains exactly one `[Fact]` or `[Theory]` method unless the generated prompt explicitly allows more.
+- For normal code packages, the two-sentence Basic usage explanation describes only what the example actually demonstrates.
+- For convenience, aggregate, metadata-only, or no-assembly packages that reference code packages, `## Basic usage` contains one C# fenced code block per referenced code package.
+- For convenience packages, each Basic usage example is introduced by a third-level heading naming the referenced package, for example `### Codebelt.Extensions.Xunit`.
+- For convenience packages, each referenced-package example contains exactly one `[Fact]` or `[Theory]` method.
+- For convenience packages, the Basic usage section includes a final paragraph explaining that the convenience package provides the single package reference and that the APIs come from the referenced packages.
+- Convenience-package examples must not reuse individual package Basic usage examples verbatim.
+- Convenience-package examples must not describe referenced APIs as if they are implemented by the convenience package itself.
+- Convenience-package examples should be shorter and use-case-oriented. They should complement, not duplicate, the normal package pages.
+- Every C# Basic usage example includes necessary `using` statements, prefers explicit imports, uses a consumer namespace, and includes at least one assertion or observable result.
+- Every C# Basic usage example is small but complete enough to understand without hidden files, hidden helpers, hidden services, or unexplained setup.
+- Basic usage examples do not contain placeholder comments, ellipses, TODOs, or magic helper calls.
+- Basic usage examples do not introduce fake services, middleware, controllers, repositories, options, validators, domain types, or helper methods unless those types are defined inside the snippet or exist in the package context.
+- Basic usage examples do not override lifecycle or cleanup hooks unless they clean up a real resource used by the example.
+- Basic usage examples do not override lifecycle or cleanup hooks only to call the base implementation.
+- Basic usage examples do not open external files, network resources, databases, environment variables, or machine-specific resources.
+- For ASP.NET Core examples, prefer inline middleware such as `app.Run(...)` or `app.Use(...)` over `UseMiddleware<T>` unless `T` exists in the package context or is defined in the snippet.
+- For hosting examples, avoid plumbing-heavy examples where manual fixture/service-provider wiring is more prominent than the package API unless the context proves that wiring is the intended basic usage.
 - Public API and engineering-depth claims are verified against source or tests, not copied from generated summaries alone.
+- API shape claims are verified against source code, not README text.
+- Inheritance claims are verified against source declarations.
+- Required override claims are verified against abstract/virtual source declarations.
+- Constructor signatures and generic constraints are verified against source declarations.
+- Factory method names, overloads, callback parameters, and return types are verified against source declarations.
+- Target framework claims are verified against project files, not README text.
+- Package dependency and transitive-reference claims are verified against project files, not README text.
+- README, package README, catalog metadata, generated public API summaries, and engineering signals are not treated as authoritative evidence when source or project files are available.
+- If README and source disagree, the result follows source. If the disagreement materially affects the page, mention the validation risk in the final response rather than writing the stale README claim.
 - Package digests do not make broad claims such as robust, seamless, powerful, or comprehensive unless immediately grounded in concrete evidence.
 - Results do not contain unmeasured frequency, popularity, adoption, or mistake-rate claims. Search for wording such as most common, often, frequently, usually, typical, popular, and widely, then keep it only when the context provides evidence for that exact kind of claim.
 
 Use targeted searches instead of rereading everything:
 
 ```powershell
-rg -n "TODO|TBD|confidence|citation|analysis notes|I cannot|as an AI" <workspace>/result
-rg -n "robust|seamless|powerful|comprehensive" <workspace>/result
-rg -n "most common|often|frequently|usually|typical|popular|widely|many developers|most developers" <workspace>/result
+rg -n "TODO|TBD|confidence|citation|analysis notes|I cannot|as an AI|\\.\\.\\.|placeholder" <workspace>/result
+rg -n "GenerateReport|CreateService|BuildHost|FormatInvoice|CreateClient|SampleMiddleware|MyService|IMyService|MyRepository|FakeRepository|MyController|SampleController" <workspace>/result
+rg -n "base\\.OnDispose|dispose managed resources here|test-data\\.bin|File\\.Open|Environment\\.GetEnvironmentVariable|localhost|127\\.0\\.0\\.1" <workspace>/result
+rg -n "UseMiddleware<|file class|file record|file struct" <workspace>/result
 ```
 
 Explain any remaining risk, especially missing tests, ambiguous APIs, oversized context, or packages whose purpose is unclear from source.
@@ -265,11 +304,19 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - The writing is restrained and developer-facing, not marketing-heavy.
 - The agent follows the generated manifest instead of improvising the run order.
 - The final response names the result files written and any validation gaps.
+- Normal package Basic usage sections contain one focused C# example.
+- Convenience package Basic usage sections contain one focused C# example per referenced code package.
+- Convenience package examples are introduced by referenced-package subheadings and make API ownership clear.
+- Convenience package examples complement the individual package pages instead of repeating their Basic usage examples verbatim.
+- Basic usage examples are small but complete: imports, namespace, one focused `[Fact]` or `[Theory]`, and an observable assertion/result.
+- API shape, inheritance, generic constraints, required overrides, factory overloads, and lifecycle claims are verified against source declarations.
+- README content is used for tone and positioning only, unless source code is unavailable.
+- When README examples are stale, the generated page follows the current source and tests instead.
 
 ## Bad Output Characteristics
 
 - Running a separate .NET project instead of the bundled `scripts/digest.cs` runner.
-- Choosing provider/model/reasoning flags from memory.
+- Choosing provider, model, or reasoning values from memory, or passing model/reasoning flags to the runner instead of using them only in the output-root label.
 - Passing only a repository slug when the runner requires a full URL.
 - Assuming a fixed organization such as `codebeltnet` or a fixed repository host such as GitHub.
 - Loading the entire repository context for every package digest.
@@ -285,3 +332,13 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Writing `Index.md` after reading only `overview.context.md` and not the completed package result files.
 - Inventing usage examples from plausible framework patterns rather than supplied source and tests.
 - Copying staged files into website content without an explicit user request.
+- Using only a bash installation command as Basic usage for a convenience package when referenced code packages can be demonstrated.
+- Giving a convenience package fewer Basic usage examples than the number of referenced code packages.
+- Reusing the individual package Basic usage examples verbatim on the convenience package page.
+- Presenting referenced-package APIs as if they are owned by the convenience package.
+- Writing convenience-package examples without referenced-package subheadings.
+- Writing convenience-package examples that lack `[Fact]` or `[Theory]` methods.
+- Treating README or package README as authoritative when source code is available.
+- Repeating stale README examples without verifying method names, required overrides, inheritance, or constructor signatures against source.
+- Claiming that a type requires an override, implements an interface, inherits another type, or exposes a property without checking the source declaration.
+- Claiming package target frameworks or dependencies from README text instead of project files.

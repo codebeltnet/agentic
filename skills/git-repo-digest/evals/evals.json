@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Use git-repo-digest to write package digests and the overview for an existing digest workspace at .bot/digests/example-project. The workspace has manifest.json, instructions.md, two package context files with context indexes and chunk directories, overview.context.md, and an empty result folder.",
+      "prompt": "Use git-repo-digest to write package digests and the overview for an existing digest workspace at .bot/digests/gpt-5.5-high/example-project. The workspace has manifest.json, instructions.md, two package context files with context indexes and chunk directories, overview.context.md, and an empty result folder.",
       "expected_output": "Reads manifest.json and instructions.md first, writes result/{PackageName}.md files before result/Index.md, processes one package context at a time, treats generated output as source of truth, uses manifest-declared context indexes and chunks when a full context read is capped, reads the completed package result files as primary source material for the overview, writes the overview with a Package selection section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
       "expectations": [
         "Reads manifest.json and instructions.md before writing any result file",
@@ -21,13 +21,16 @@
     {
       "id": 2,
       "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject and then write the resulting digests. The active workspace contains a .bot folder.",
-      "expected_output": "Recommends .bot/digests as the output root, runs dotnet run --file with --repo-url and the full URL and --output-root, does not ask for repo-id or result directory, avoids LLM options, then follows the generated manifest, including contextIndex and contextChunks entries, to write package digests before result/Index.md.",
+      "expected_output": "Recommends .bot/digests/{llm}-{reasoning} as the output root when runtime-visible model and reasoning values are available, asks for missing label values instead of guessing, runs dotnet run --file with --repo-url and the full URL and --output-root, does not ask for repo-id or result directory, avoids model or reasoning runner flags, then follows the generated manifest, including contextIndex and contextChunks entries, to write package digests before result/Index.md.",
       "expectations": [
-        "Recommends .bot/digests as the output root because a .bot folder exists in the workspace",
+        "Recommends .bot/digests/{llm}-{reasoning} as the output root because a .bot folder exists in the workspace",
+        "Uses only runtime-visible model and reasoning values for the output-root label",
+        "Asks for the missing model or reasoning label value instead of guessing when either value is unavailable",
+        "Normalizes the output-root label to lowercase filesystem-safe text such as gpt-5.5-high",
         "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root",
         "Passes the full repository URL, not a slug or partial reference",
         "Does not ask the user for repo-id or result directory",
-        "Does not pass provider, model, or LLM flags to the runner",
+        "Does not pass provider, model, reasoning, or LLM flags to the runner",
         "Recognizes that the generated manifest can include contextIndex and contextChunks entries for capped context reads",
         "Follows the generated manifest after the runner completes to write package digests before Index.md"
       ]
