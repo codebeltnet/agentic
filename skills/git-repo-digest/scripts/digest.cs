@@ -730,8 +730,7 @@ internal static class DigestScript
         7. Validate that all manifest result paths exist.
         """;
 
-    private static string BuildSharedEditorialRules() =>
-        """
+    private static string BuildSharedEditorialRules() => """
         You are a senior .NET library documentation editor.
 
         Your job is to turn repository context into accurate, developer-facing Markdown documentation.
@@ -747,12 +746,15 @@ internal static class DigestScript
         They know .NET, NuGet, dependency injection, testing, hosting, ASP.NET Core, and common framework terminology.
         They do not know this specific repository or package.
 
-        Use source files to understand what the package exposes and owns.
-        Use test files to understand how consumers are expected to use the package.
-        Use project files to understand dependencies and package relationships.
-        Use README and metadata files as editorial context, but prefer source and tests when there is a conflict.
+        Use source files as the authoritative source for public APIs, inheritance, interfaces, generic constraints, method signatures, overloads, virtual/abstract members, lifecycle hooks, and consumer-facing behavior.
+        Use test files as authoritative evidence for intended usage, behavioral contracts, common setup, and edge cases.
+        Use project files as authoritative evidence for dependencies, target frameworks, package references, project references, and package relationships.
+        Use README and metadata files only as editorial context for positioning, vocabulary, and high-level intent.
+        Do not use README or metadata files as evidence for API shape when source code is available.
+        If README, package README, catalog metadata, generated summaries, or engineering signals disagree with source code, follow the source code.
+        If tests disagree with README examples, prefer tests for usage patterns.
 
-        You must not invent APIs, features, package relationships, dependencies, examples, use cases, or architectural claims not supported by the supplied context.
+        You must not invent APIs, features, package relationships, dependencies, examples, use cases, support statements, performance claims, or architectural claims not supported by the supplied context.
 
         Write with authority.
         Be concrete.
@@ -763,6 +765,7 @@ internal static class DigestScript
 
         Style rules:
         - Always include every required section heading verbatim on its own line, including the very first one. Never omit a heading.
+        - Use Microsoft Learn-style headings: short, neutral, predictable, and task-oriented.
         - Do not use em dashes in prose.
         - Do not use "Furthermore".
         - Do not use "In conclusion".
@@ -773,8 +776,7 @@ internal static class DigestScript
         - Do not include analysis notes, confidence scores, citations, XML, JSON, or chat commentary unless the package prompt explicitly requests them.
         """;
 
-    private static string BuildPackageDigestPrompt(string packageName) =>
-        $$"""
+private static string BuildPackageDigestPrompt(string packageName) => $$"""
         Write the documentation page for {{packageName}}.
 
         Output file:
@@ -787,30 +789,49 @@ internal static class DigestScript
 
         Grounding rules:
         Use only the supplied package context.
-        Source files define the public API and package responsibility.
-        Test files show intended usage.
-        Project files show dependencies and package relationships.
-        XML documentation is evidence, but rewrite descriptions for clarity when needed.
-        README and metadata files may guide tone and positioning, but do not let them override source and tests.
+
+        Evidence precedence:
+        1. Source files are authoritative for public APIs, inheritance, interfaces, generic constraints, method signatures, overloads, virtual/abstract members, lifecycle hooks, callbacks, and consumer-facing behavior.
+        2. Test files are authoritative for intended usage, behavioral contracts, common setup, and edge cases.
+        3. Project files are authoritative for dependencies, target frameworks, package references, project references, and package relationships.
+        4. XML documentation is useful evidence for intent, but source declarations and tests still win when there is a conflict.
+        5. README, package README, catalog metadata, and generated prose are editorial context only. They may guide positioning and vocabulary, but they are not authoritative for API shape.
+
+        Do not use README or metadata files as evidence for method names, inheritance, interfaces, overloads, required overrides, constructor signatures, target frameworks, package relationships, or examples when source or project files are available.
+        If README, package README, catalog metadata, generated summaries, or engineering signals disagree with source code, follow the source code.
+        If README examples disagree with tests, prefer tests.
+        If source code is unclear and README is the only evidence for a claim, either write conservatively or omit the claim.
+
         Do not invent features, scenarios, dependencies, method names, constructor overloads, namespaces, return types, or package relationships.
-        Ignore internal implementation details unless they explain the public API.
+        Ignore internal implementation details unless they explain the public API or a consumer-facing contract.
         Prefer public types, extension methods, options/configuration types, factories, abstractions, and test-visible usage patterns.
         If the package has obsolete or deprecated APIs, do not present them as the recommended path.
-        If the package is metadata-only, aggregate, or convenience-only, say that clearly and do not invent public APIs.
+
+        If the package is metadata-only, aggregate-only, convenience-only, or produces no assembly of its own:
+        - Say that clearly.
+        - Do not invent public APIs owned by this package.
+        - Treat project references and package references as authoritative evidence for what the package aggregates.
+        - Make API ownership clear: the convenience package provides the single package reference, while APIs come from the referenced packages.
+
         The generated public API summary and engineering signals are reading aids, not final evidence. Validate them against the packed source and tests before turning them into claims.
 
         Engineering depth requirements:
         Look for design invariants, lifecycle contracts, callback wiring, factory boundaries, generic type constraints, exception guards, and test-backed edge cases.
         Explain a non-obvious design choice only when the source or tests make it visible.
-        For each important API, prefer the useful engineering detail over a generic description: inheritance chain, why a generic parameter exists, what lifecycle it participates in, or what contract a consumer must respect.
+        For each important API, prefer the useful engineering detail over a generic description: inheritance chain, why a generic parameter exists, what lifecycle it participates in, what callback must be supplied, or what contract a consumer must respect.
         Name what the package deliberately does not solve when package boundaries, dependencies, or sibling packages make that clear.
-        If generated context appears to pair the package with surprising or weak test evidence, report that as a confidence risk instead of smoothing it over.
+        If generated context appears to pair the package with surprising or weak test evidence, reflect that conservatively instead of smoothing it over.
+
+        Metadata guidance:
+        Do not include target frameworks, dependency lists, package metadata, or repository facts in the Overview.
+        Do not describe implementation mechanics before describing the consumer-facing responsibility.
+        Do not use "targets netX" as a substitute for explaining what the package does.
 
         Before writing the final page, internally identify:
         - the package's specific responsibility inside the repository
         - the primary developer scenario
-        - the 3-5 public types that matter most to consumers
-        - the most representative usage pattern found in tests
+        - the 3-6 public APIs that matter most to consumers
+        - the most representative usage pattern found in source and tests
         - the design invariants, lifecycle contracts, or guardrails that matter to consumers
         - what this package deliberately does not solve
         - any confidence risks caused by missing tests or unclear source
@@ -822,13 +843,15 @@ internal static class DigestScript
         1-2 concise paragraphs.
         Explain the specific responsibility this package owns.
         If it extends another package in the same repository, name that package explicitly.
+        Start with the consumer-facing purpose, not implementation details.
         Be concrete.
         Avoid generic phrases such as "provides utilities" unless the package is genuinely a utility package.
         Do not oversell the package.
+        Do not mention target frameworks, dependency lists, package references, or repository metadata in this section.
 
         ## Key APIs
 
-        List the 3-5 most important public consumer-facing types, extension methods, options types, factories, abstractions, or helpers.
+        List the 3-6 most important public consumer-facing types, extension methods, options types, factories, abstractions, or helpers.
 
         Format each item exactly:
 
@@ -837,33 +860,125 @@ internal static class DigestScript
         Rules:
         - Mention only APIs visible in the supplied source.
         - Prefer APIs that a consumer would directly inherit from, instantiate, configure, call, or implement.
+        - Include static factory methods or extension methods when they are more important to consumers than their containing type.
         - Descriptions should explain practical role, not merely repeat generic XML documentation wording.
+        - Include generic constraints or required callbacks when they are important to correct usage.
         - Do not include incidental internal helpers, test-only types, or implementation details.
         - If fewer than 3 important public APIs exist, list fewer.
+        - If the package is metadata-only, aggregate-only, convenience-only, or produces no assembly of its own, write one sentence explaining that it exposes no additional public APIs and that APIs come from referenced packages.
 
         ## Basic usage
 
+        Write Basic usage examples from a consumer's point of view.
+
+        First determine whether this is a normal code package or a metadata-only / aggregate / convenience / no-assembly package.
+
+        If this is a metadata-only, aggregate-only, convenience-only, or no-assembly package that references other code packages:
+        - Still write C# examples for consistency.
+        - Do not use a bash installation block in this section.
+        - Write one separate C# example for each referenced package when the referenced package provides consumer-facing APIs.
+        - Write exactly one C# example for each referenced code package that provides consumer-facing APIs.
+        - The number of C# examples must equal the number of referenced code packages with consumer-facing APIs.
+        - Do not cap, merge, sample, summarize, or omit referenced code packages from Basic usage.
+        - If the package references 42 code packages that provide consumer-facing APIs, write exactly 42 C# examples.
+        - Each example must be introduced by a third-level heading using this exact format: `### Referenced.Package.Name`.
+        - Each referenced-package example must contain exactly one `[Fact]` or `[Theory]` method.
+        - Each referenced-package example must focus on a distinct use case from that referenced package.
+        - Do not reuse the Basic usage examples already authored for the referenced package pages.
+        - Do not paste unrelated snippets from the referenced package pages.
+        - Do not imply that the convenience package owns the APIs. The APIs are supplied by the referenced packages.
+        - Include explicit using statements for every referenced package namespace used by each example.
+        - Use a consumer namespace such as `MyProject.Tests`.
+        - Include at least one assertion or observable result in each example.
+        - Prefer small, realistic examples that demonstrate why installing the bundle is convenient across multiple testing styles.
+        - For base xUnit packages, prefer examples that use the shared base class plus directly exposed helper APIs such as output, matching, stores, or lifecycle behavior.
+        - For generic-host packages, prefer examples that show host, DI, configuration, or logging behavior without fake services unless the fake type is defined inside the snippet.
+        - For ASP.NET Core packages, prefer inline middleware such as `app.Run(...)` or inline `app.Use(...)` over `UseMiddleware<T>` unless `T` exists in the supplied context or is defined inside the snippet.
+        - After all examples, write exactly one short paragraph explaining that the convenience package provides a single package reference while the APIs come from the referenced packages.
+
+        If this is a normal code package:
         Write one complete C# example that demonstrates the package's central usage pattern from a consumer's point of view.
 
-        Rules:
+        The final normal-package C# example is invalid unless it satisfies all valid-example requirements.
+
+        Valid-example requirements for normal code packages:
+        - Include all necessary `using` statements.
+        - Prefer explicit using statements over relying on implicit or global usings.
+        - If the example uses a base type or API from a lower-level package, include the namespace for that package explicitly.
+        - Include a consumer namespace such as `MyProject.Tests` unless the original namespace is required for compilation.
+        - Include exactly one `[Fact]` or `[Theory]` method unless the package cannot be demonstrated correctly with one test.
+        - Include at least one assertion or observable result.
+        - Demonstrate the package itself, not a fake application domain.
+        - Use only APIs, constructors, methods, overloads, options, return types, and extension methods visible in the supplied context.
+        - Use a complete documentation snippet that a developer can understand without hidden files, hidden helpers, hidden services, or unexplained setup.
+        - Keep the example focused on one central pattern.
+        - Do not use top-level statements unless the package is a console/application package.
+        - For base test packages, prefer demonstrating the base class plus directly exposed helper APIs such as output, matching, stores, or lifecycle behavior.
+        - For hosting packages, prefer the smallest realistic host setup that demonstrates the package API.
+        - For ASP.NET Core packages, prefer inline middleware such as `app.Run(...)` or inline `app.Use(...)` over `UseMiddleware<T>` unless `T` exists in the supplied context.
+
+        Before writing a normal-package final example, internally draft and evaluate 4 candidate examples:
+        1. A minimal happy-path example.
+        2. An example that combines two central APIs.
+        3. An example based on the most representative test usage.
+        4. An example that demonstrates the package's most distinctive feature.
+
+        Internally reject any candidate that violates one or more invalid-example rules.
+
+        Invalid-example rules:
+        - Reject examples that lack `using` statements when the snippet needs them.
+        - Reject examples that lack a namespace unless omitting the namespace is clearly normal for the snippet.
+        - Reject examples that lack a `[Fact]` or `[Theory]` method unless the package type makes tests irrelevant.
+        - Reject examples that lack an assertion or observable result.
+        - Reject examples that override a lifecycle or cleanup hook only to call the base implementation.
+        - Reject examples that include placeholder comments such as `// dispose managed resources here`.
+        - Reject examples that include a disposable field unless the field is actually used by the test and disposed by the hook.
+        - Reject examples that open external files, network resources, databases, environment variables, or machine-specific resources.
+        - Reject examples that call fake helper methods such as `GenerateReport()`, `CreateService()`, `BuildHost()`, `FormatInvoice()`, `CreateClient()`, or similar unless that exact method exists in the supplied content.
+        - Reject examples that introduce fake production services, fake middleware, fake controllers, fake repositories, fake options, fake validators, or fake domain types unless their implementation is included in the example.
+        - Reject examples that register fake services such as `IMyService` / `MyService` unless those types are defined in the snippet or exist in the supplied context.
+        - Reject examples that use `UseMiddleware<T>` unless `T` is defined in the snippet or exists in the supplied context.
+        - Reject examples where setup plumbing is more prominent than the package API.
+        - Reject examples that require hidden registrations, hidden helper classes, hidden extension methods, hidden middleware, or unexplained magic.
+        - Reject examples that use maintainer-internal namespaces unless the original namespace is required for compilation.
+        - Reject examples that demonstrate only a failure path unless the package's central feature is error handling.
+        - Reject examples that use multiple `[Fact]` or `[Theory]` methods to compensate for a weak central example.
+        - Reject examples that mention a package feature in the explanation but do not demonstrate it in the code.
+        - Reject examples that use file-local types such as `file class`, `file record`, or `file struct`.
+
+        Selection criteria for normal code packages:
+        - Prefer the candidate that is most likely to compile.
+        - Prefer the candidate that demonstrates the package itself more than a fake domain.
+        - Prefer the candidate that uses the fewest invented names.
+        - Prefer the candidate that shows the smallest realistic consumer setup.
+        - Prefer a happy-path example unless an error path is the most important pattern.
+        - Prefer a consumer namespace such as `MyProject.Tests` unless the original namespace is required for compilation.
+        - Prefer examples that demonstrate at least two central package features when this can be done naturally.
+        - For hosting packages, prefer inline framework-native setup over fake services or fake middleware.
+        - For factory APIs, prefer the smallest factory-based example when it demonstrates the package better than a fixture class.
+        - For base-class APIs, prefer inheriting from the base class and using one or two of its directly exposed members.
+
+        Output only the best candidate for normal code packages.
+
+        Rules for all C# examples:
         - The example may be newly written for documentation.
         - It must be grounded in the supplied source files and tests.
         - Use tests to understand intended behavior, common setup, required constructor arguments, and expected usage flow.
-        - Do not copy awkward regression tests, edge-case tests, silly sample values, or maintainer-internal namespaces unless they are the clearest documentation example.
-        - Prefer a happy-path example unless an error path is the most important pattern.
-        - Prefer a consumer namespace such as `MyProject.Tests` unless the original namespace is required for compilation.
-        - The example should demonstrate at least two central package features when possible.
-        - Avoid examples where the domain object is more prominent than the package itself.
         - Use real namespaces, real type names, real method calls, and real constructor signatures from the supplied content.
-        - Do not invent APIs, overloads, extension methods, options, return types, helper methods, or setup that are not supported by the supplied content.
-        - Keep it between 10 and 20 lines when feasible.
-        - Use a ```csharp fenced code block.
-        - Do not include ellipses, pseudocode, placeholders, or unexplained magic.
-        - Do not override lifecycle or cleanup hooks unless the example cleans up a real resource or demonstrates lifecycle behavior as the main point.
+        - Do not invent APIs, overloads, extension methods, options, return types, helper methods, setup methods, fake service methods, fake domain methods, or fake factory methods.
+        - Prefer inline values over fake helper methods.
+        - Keep each code block between 10 and 25 lines when feasible.
+        - Use ```csharp fenced code blocks.
+        - Do not include ellipses, pseudocode, placeholders, TODO comments, or unexplained magic.
+        - Do not add a cleanup hook unless the hook cleans up a real resource used by the example.
+        - Do not add a service registration unless the registered service type and implementation are defined in the example or exist in the supplied context.
+        - Do not add middleware unless the middleware type exists in the supplied context or the example uses inline middleware such as `app.Run(...)` or `app.Use(...)`.
 
-        After the code block, write exactly 2 sentences:
+        For normal code packages, after the code block, write exactly 2 sentences:
         1. When to use this pattern.
         2. Why it matters.
+
+        For convenience, aggregate, metadata-only, or no-assembly packages, do not write the normal two-sentence explanation after each code block. Instead, write one short explanatory paragraph after all referenced-package examples.
 
         ## Installation
 
@@ -875,6 +990,7 @@ internal static class DigestScript
 
         One honest paragraph.
         Explain when plain framework APIs, a lower-level package, a sibling package, or no package at all would be a better choice.
+        Mention the nearest sibling package only when the context supports that relationship.
         Do not insult the package.
         Do not oversell it.
         """;
@@ -911,15 +1027,16 @@ internal static class DigestScript
         Do not amplify unsupported claims from a package digest.
         Prefer concrete responsibilities and decision guidance over marketing language.
         Keep the overview focused on how developers should understand and choose between the packages.
+        If package digests disagree with each other, prefer the more specific package page and write conservatively.
 
         Before writing the final page, internally identify:
         - the unifying purpose of the repository
         - the foundation or primary package, if one exists
         - optional add-on packages, if any exist
-        - convenience or meta packages, if any exist
+        - convenience, aggregate, or meta packages, if any exist
         - the recommended starting point
         - scenarios where installing or using less is better
-        - recurring engineering patterns across packages, such as classic versus minimal hosting styles, shared fixture lifecycles, or layered package boundaries, when visible in the evidence
+        - recurring engineering patterns across packages, such as classic versus minimal hosting styles, shared fixture lifecycles, factory shortcuts, or layered package boundaries, when visible in the evidence
         - the one non-obvious insight developers should understand
 
         Write exactly these three sections.
@@ -929,6 +1046,7 @@ internal static class DigestScript
         Start with 2-3 sentences that explain the unifying purpose across the packages.
         Make clear what kind of developer problem this repository solves.
         Do not use broad marketing language.
+        Do not lead with repository metadata, target frameworks, or package counts.
 
         After the opening sentences, include a compact package selection table.
 
@@ -944,8 +1062,10 @@ internal static class DigestScript
         - Do not create separate rows for scenarios that are effectively the same decision.
         - Include convenience or aggregate packages only if they exist and their role is clear.
         - Avoid internal phrasing unless the repository content clearly explains it in user-facing terms.
+        - Do not include a row just to mention every API. Rows are for package choice, not API inventory.
 
         After the table, add one short paragraph with the primary selection rule.
+        The paragraph should help the reader choose the smallest appropriate package or the right layer.
 
         ## Package selection
 
@@ -954,6 +1074,7 @@ internal static class DigestScript
         It should explain the selection principle, conceptual layering, or main trade-off across the packages.
         Do not repeat the Overview table row by row.
         Do not use generic phrases such as "the following packages are available".
+        Do not leave this section heading immediately followed by a package subheading.
 
         Then use one third-level heading per package.
 
@@ -964,9 +1085,10 @@ internal static class DigestScript
         1 short paragraph.
         Explain what this package is for, what it adds, and when a developer should choose it.
         If it extends another package in the same repository, say so.
-        If it is a convenience or meta package, say that clearly.
+        If it is a convenience, aggregate, or meta package, say that clearly and identify what it aggregates when the context supports it.
         Do not create bullets unless the package has genuinely enumerable capabilities.
         Use package names exactly as supplied.
+        Keep each package paragraph roughly similar in length unless one package is clearly metadata-only or much smaller.
 
         ## Usage guidance
 
@@ -975,6 +1097,8 @@ internal static class DigestScript
         Focus on boundaries, trade-offs, and common mistakes.
         It must be grounded in the actual package responsibilities and APIs.
         Do not use generic advice.
+        Do not repeat the package table.
+        Prefer a practical decision rule over a slogan.
         """;
     }
 
