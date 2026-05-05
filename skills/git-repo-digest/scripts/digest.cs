@@ -43,6 +43,7 @@ internal static class DigestScript
 
             Directory.CreateDirectory(workspace);
             Directory.CreateDirectory(resultDir);
+            DeleteLegacyContextArtifacts(workspace);
 
             Console.WriteLine($"[digest] repo-url={options.RepoUrl}");
             Console.WriteLine($"[digest] output-root={options.OutputRoot}");
@@ -63,23 +64,21 @@ internal static class DigestScript
                 var packageEntries = new List<PackageManifestEntry>();
                 foreach (var package in packages)
                 {
-                    var contextFileName = package.Name + ".context.md";
                     var resultPath = Path.Combine(ResultDirectoryName, package.Name + ".md").Replace('\\', '/');
-                    var context = await BuildPackageContextAsync(options.RepoUrl, cloneDir, package);
-                    var contextArtifacts = await WriteContextArtifactsAsync(workspace, contextFileName, context);
+                    var packageArtifacts = await WritePackageWorkspaceAsync(workspace, cloneDir, package);
 
                     packageEntries.Add(new PackageManifestEntry(
                         "package",
                         package.Name,
-                        contextArtifacts.ContextPath,
-                        contextArtifacts.IndexPath,
-                        contextArtifacts.ChunkPaths,
+                        packageArtifacts.PromptPath,
+                        packageArtifacts.Evidence,
                         resultPath));
                 }
 
-                var overviewContextName = "overview.context.md";
-                var overviewContext = await BuildOverviewContextAsync(options.RepoUrl, cloneDir, repoId, packages);
-                var overviewArtifacts = await WriteContextArtifactsAsync(workspace, overviewContextName, overviewContext);
+                var overviewPromptPath = Path.Combine("prompts", "overview.prompt.md").Replace('\\', '/');
+                await WriteUtf8Async(
+                    Path.Combine(workspace, overviewPromptPath),
+                    BuildOverviewDigestPrompt(repoId, packages));
 
                 await WriteUtf8Async(Path.Combine(workspace, "instructions.md"), BuildInstructions(options.RepoUrl, repoId));
                 await WriteManifestAsync(
@@ -88,7 +87,7 @@ internal static class DigestScript
                     repoId,
                     workspace,
                     packageEntries,
-                    overviewArtifacts);
+                    overviewPromptPath);
 
                 Console.WriteLine();
                 Console.WriteLine("[digest] deterministic workspace written:");
@@ -333,105 +332,78 @@ internal static class DigestScript
         return segments.Any(s => string.Equals(s, directoryName, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static async Task<string> BuildPackageContextAsync(string repoUrl, string cloneDir, PackageInfo package)
+    private static async Task<PackageWorkspaceArtifacts> WritePackageWorkspaceAsync(string workspace, string cloneDir, PackageInfo package)
     {
-        Console.WriteLine($"[digest] packing context for {package.Name}...");
+        Console.WriteLine($"[digest] writing evidence for {package.Name}...");
 
-        var includeParts = new List<string>
-        {
-            "README.md",
-            "Directory.Build.props",
-            "Directory.Build.targets",
-            "Directory.Packages.props",
-            package.SourcePath + "/**"
-        };
+        var packageEvidenceRoot = Path.Combine("evidence", package.Name).Replace('\\', '/');
+        var promptPath = Path.Combine("prompts", package.Name + ".prompt.md").Replace('\\', '/');
+        var trackedFiles = await GetPackableTrackedFilesAsync(cloneDir);
 
-        if (!string.IsNullOrWhiteSpace(package.TestPath))
-        {
-            includeParts.Add(package.TestPath + "/**");
-        }
+        var sourceArtifacts = await WriteEvidenceArtifactsAsync(
+            workspace,
+            packageEvidenceRoot,
+            "source",
+            "sourceEvidence",
+            package.Name,
+            "api-shape",
+            trackedFiles.Where(file => IsSourceEvidenceFile(file.RelativePath, package)).ToList());
 
-        includeParts.Add(".nuget/**/README.md");
-        var packedContent = await PackRepositoryContentAsync(cloneDir, string.Join(',', includeParts));
+        var testFiles = string.IsNullOrWhiteSpace(package.TestPath)
+            ? new List<PackedFile>()
+            : trackedFiles.Where(file => IsTestEvidenceFile(file.RelativePath, package)).ToList();
+        var testsNote = string.IsNullOrWhiteSpace(package.TestPath)
+            ? $"No owned test path was discovered for {package.Name}."
+            : testFiles.Count == 0
+                ? $"Owned test path {package.TestPath} contained no tracked test source files."
+            : null;
+        var testArtifacts = await WriteEvidenceArtifactsAsync(
+            workspace,
+            packageEvidenceRoot,
+            "tests",
+            "testEvidence",
+            package.Name,
+            "usage",
+            testFiles,
+            testsNote);
 
-        var sb = new StringBuilder();
-        AppendHeader(sb, "PACKAGE IDENTITY");
-        sb.AppendLine($"Repository: {repoUrl}");
-        sb.AppendLine($"Package: {package.Name}");
-        sb.AppendLine("Kind: package");
-        sb.AppendLine($"Source path: {package.SourcePath}");
-        sb.AppendLine($"Test path: {package.TestPath ?? "(not discovered)"}");
-        sb.AppendLine($"Metadata-only package: {package.IsConveniencePackage}");
-        sb.AppendLine($"Result path: result/{package.Name}.md");
-        sb.AppendLine();
+        var projectArtifacts = await WriteEvidenceArtifactsAsync(
+            workspace,
+            packageEvidenceRoot,
+            "projects",
+            "projectEvidence",
+            package.Name,
+            "project-metadata",
+            trackedFiles.Where(file => IsProjectEvidenceFile(file.RelativePath, package)).ToList());
 
-        if (package.BundledPackages.Count > 0)
-        {
-            AppendHeader(sb, "DECLARED REFERENCES");
-            foreach (var reference in package.BundledPackages)
-            {
-                sb.AppendLine("- " + reference);
-            }
-            sb.AppendLine();
-        }
+        var readmeArtifacts = await WriteEvidenceArtifactsAsync(
+            workspace,
+            packageEvidenceRoot,
+            "readmes",
+            "readmeEvidence",
+            package.Name,
+            "editorial-context",
+            trackedFiles.Where(file => IsReadmeEvidenceFile(file.RelativePath, package)).ToList());
 
-        AppendHeader(sb, "PUBLIC API SUMMARY (GENERATED)");
-        AppendMultiline(sb, BuildPublicApiSummary(cloneDir, package));
+        var apiSummaryPath = Path.Combine(packageEvidenceRoot, "api-summary.md").Replace('\\', '/');
+        await WriteUtf8Async(Path.Combine(workspace, apiSummaryPath), BuildPublicApiSummary(cloneDir, package));
 
-        AppendHeader(sb, "ENGINEERING SIGNALS (GENERATED)");
-        AppendMultiline(sb, BuildEngineeringSignals(cloneDir, package));
+        var engineeringSignalsPath = Path.Combine(packageEvidenceRoot, "engineering-signals.md").Replace('\\', '/');
+        await WriteUtf8Async(Path.Combine(workspace, engineeringSignalsPath), BuildEngineeringSignals(cloneDir, package));
 
-        AppendHeader(sb, "PACKAGE DIGEST PROMPT");
-        AppendMultiline(sb, BuildPackageDigestPrompt(package.Name));
+        var evidence = new PackageEvidenceArtifacts(
+            sourceArtifacts,
+            testArtifacts,
+            projectArtifacts,
+            readmeArtifacts,
+            apiSummaryPath,
+            engineeringSignalsPath);
 
-        AppendHeader(sb, "PACKED REPOSITORY CONTENT");
-        sb.AppendLine(packedContent.Trim());
-        sb.AppendLine();
+        await WriteUtf8Async(
+            Path.Combine(workspace, promptPath),
+            BuildPackageDigestPrompt(package, evidence));
 
-        return sb.ToString();
-    }
-
-    private static async Task<string> BuildOverviewContextAsync(string repoUrl, string cloneDir, string repoId, IReadOnlyList<PackageInfo> packages)
-    {
-        Console.WriteLine("[digest] packing overview context...");
-        var packedContent = await PackRepositoryContentAsync(
-            cloneDir,
-            "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj,test/**/*.csproj");
-
-        var sb = new StringBuilder();
-        AppendHeader(sb, "REPOSITORY IDENTITY");
-        sb.AppendLine($"Repository: {repoUrl}");
-        sb.AppendLine($"Repository id: {repoId}");
-        sb.AppendLine($"Packages: {packages.Count}");
-        sb.AppendLine("Result path: result/Index.md");
-        sb.AppendLine();
-
-        AppendHeader(sb, "REQUIRED COMPLETED PACKAGE DIGEST SOURCES");
-        if (packages.Count == 0)
-        {
-            sb.AppendLine("No packages were discovered under src/. Write an overview only if the repository context is sufficient.");
-        }
-        else
-        {
-            sb.AppendLine("Before writing result/Index.md, open and read every completed package digest listed below.");
-            sb.AppendLine("These completed package digests are the primary source for the overview; this overview context file is only supplementary.");
-            sb.AppendLine("If your execution log would show only overview.context.md being read for the overview phase, stop and read the package digests first.");
-            sb.AppendLine();
-            foreach (var package in packages)
-            {
-                sb.AppendLine($"- {package.Name}: result/{package.Name}.md");
-            }
-        }
-        sb.AppendLine();
-
-        AppendHeader(sb, "OVERVIEW DIGEST PROMPT");
-        AppendMultiline(sb, BuildOverviewDigestPrompt(repoId, packages));
-
-        AppendHeader(sb, "SUPPLEMENTARY REPOSITORY CONTENT");
-        sb.AppendLine(packedContent.Trim());
-        sb.AppendLine();
-
-        return sb.ToString();
+        return new PackageWorkspaceArtifacts(promptPath, evidence);
     }
 
     private static string BuildPublicApiSummary(string cloneDir, PackageInfo package)
@@ -440,11 +412,11 @@ internal static class DigestScript
         var apiTypes = discoveredApiTypes.Take(20).ToList();
         if (apiTypes.Count == 0)
         {
-            return "No public or protected API candidates were discovered by the lightweight source scanner. Treat the packed source context as authoritative.";
+            return "No public or protected API candidates were discovered by the lightweight source scanner. Treat source.xml or the complete ordered source chunks as authoritative.";
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine("This section is a deterministic navigation aid extracted from source text. Use it to focus the complete read, but treat the packed source context below as authoritative.");
+        sb.AppendLine("This section is a deterministic navigation aid extracted from source text. Use it to focus the complete read, but treat source.xml or the complete ordered source chunks as authoritative.");
         sb.AppendLine();
         sb.AppendLine("| Type | Kind | Inherits / implements | Public or protected member candidates | Source |");
         sb.AppendLine("|---|---|---|---|---|");
@@ -460,7 +432,7 @@ internal static class DigestScript
         if (discoveredApiTypes.Count > apiTypes.Count)
         {
             sb.AppendLine();
-            sb.AppendLine($"Only the first {apiTypes.Count} of {discoveredApiTypes.Count} API candidates are shown. Read the packed source context for the full surface.");
+            sb.AppendLine($"Only the first {apiTypes.Count} of {discoveredApiTypes.Count} API candidates are shown. Read source.xml or the complete ordered source chunks for the full surface.");
         }
 
         return sb.ToString();
@@ -517,7 +489,7 @@ internal static class DigestScript
         var lifecycleSignals = FindSignals(files, @"\b([A-Za-z0-9_]*(?:Configure|Callback|Fixture|Factory|Initialize|Dispose|Lifetime|Host|Application)[A-Za-z0-9_]*)\b", "lifecycle or composition name").Take(16).ToList();
         var hostingSignals = FindSignals(files, @"\b(IHostBuilder|HostApplicationBuilder|Host\.CreateApplicationBuilder|WebApplicationBuilder|IApplicationBuilder|WebApplicationFactory|TestServer)\b", "hosting model").Take(12).ToList();
         var testSignals = files
-            .Where(f => IsProbablyTestFile(f.RelativePath))
+            .Where(f => IsTestEvidenceFile(f.RelativePath, package))
             .Select(f => f.RelativePath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
@@ -525,7 +497,7 @@ internal static class DigestScript
             .ToList();
 
         var sb = new StringBuilder();
-        sb.AppendLine("This section is a deterministic signal map. It highlights places where the code may reveal design invariants, lifecycle contracts, package boundaries, or test-backed behavior. Validate every claim against the raw source context before writing.");
+        sb.AppendLine("This section is a deterministic signal map. It highlights places where the code may reveal design invariants, lifecycle contracts, package boundaries, or test-backed behavior. Validate every claim against source.xml, tests.xml, projects.xml, or their complete ordered chunks before writing.");
         sb.AppendLine();
 
         AppendSignalGroup(sb, "Exception guards and validation evidence", exceptionSignals);
@@ -679,16 +651,6 @@ internal static class DigestScript
         return index >= 0 ? name[..index] : name;
     }
 
-    private static bool IsProbablyTestFile(string relativePath)
-    {
-        var normalizedPath = relativePath.Replace('\\', '/');
-        return normalizedPath.StartsWith(TestDirectoryName + "/", StringComparison.OrdinalIgnoreCase)
-            || normalizedPath.Contains(".Tests/", StringComparison.OrdinalIgnoreCase)
-            || normalizedPath.Contains(".FunctionalTests/", StringComparison.OrdinalIgnoreCase)
-            || normalizedPath.EndsWith("Test.cs", StringComparison.OrdinalIgnoreCase)
-            || normalizedPath.EndsWith("FunctionalTest.cs", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static string BuildInstructions(string repoUrl, string repoId) =>
         $$"""
         # Digest Writing Instructions
@@ -700,20 +662,23 @@ internal static class DigestScript
 
         ## Contract
 
-        - Treat `manifest.json` as authoritative for context and result paths.
-        - Process package contexts one at a time.
+        - Treat `manifest.json` as authoritative for prompt paths, evidence paths, phase order, and result paths.
+        - Process package evidence sets one at a time.
         - Write every package result before writing the overview.
-        - Each context has a full `*.context.md` file, a `*.context.index.md` navigation file, and ordered `*.context.chunks/*.md` raw-evidence chunks.
-        - If the full context file is capped, truncated, summarized, or too large to read safely, read the index and then every listed chunk in numeric order.
+        - Each package prompt lives under `prompts/{PackageName}.prompt.md`.
+        - Raw evidence lives under `evidence/{PackageName}/` as `source.xml`, `tests.xml`, `projects.xml`, and `readmes.xml`.
+        - If a full evidence file is capped, truncated, summarized, or too large to read safely, read its index and then every listed chunk in numeric order.
         - Do not treat an index file as source evidence. It helps navigation only.
-        - Do not treat generated public API summaries or engineering signals as standalone evidence. They help you decide what to inspect in the raw context.
-        - For the overview, read `overview.context.md` or every overview chunk, then read every completed package result file listed by the manifest.
-        - Treat completed package result files as the primary overview source; `overview.context.md` is supplementary.
+        - Do not treat generated public API summaries or engineering signals as standalone evidence. They help you decide what to inspect in raw evidence files.
+        - For the overview, read `prompts/overview.prompt.md`, every completed package result file listed by the manifest, and supplementary project/readme evidence as needed.
+        - Treat completed package result files as the primary overview source; project and README evidence is supplementary.
         - Write package digests to `result/{PackageName}.md`.
         - Write the overview to `result/Index.md`.
-        - Use the generated prompt sections in each `.context.md` file or its ordered chunks as the task contract.
+        - README/readme evidence is not authoritative for API shape.
+        - If README and source disagree, source wins.
+        - If README examples and tests disagree, tests win.
         - Do not invent APIs, package relationships, examples, dependencies, support statements, performance claims, or architectural claims.
-        - If context is missing, stale, contradictory, or too large to use safely, stop and report the blocker.
+        - If evidence is missing, stale, contradictory, or too large to use safely, stop and report the blocker.
 
         ## Shared Editorial Rules
 
@@ -723,17 +688,23 @@ internal static class DigestScript
 
         1. Read `manifest.json`.
         2. Read this file.
-        3. For each package in the `packages` phase, read its context directly if possible; otherwise read its context index and then all chunks in order.
-        4. Write each package result file only after its full raw context has been inspected.
-        5. Read `overview.context.md` or every overview chunk, then read every completed package result file listed by the manifest.
-        6. Write `result/Index.md`.
-        7. Validate that all manifest result paths exist.
+        3. For each package in the `packages` phase, read `prompts/{PackageName}.prompt.md`.
+        4. Read source evidence directly if possible, or every source chunk in numeric order.
+        5. Read project evidence directly if possible, or every project chunk in numeric order.
+        6. Read test evidence directly if possible, or every test chunk in numeric order.
+        7. Read README evidence as editorial context only.
+        8. Use `api-summary.md` and `engineering-signals.md` as navigation aids only.
+        9. Write each package result file only after its required raw evidence has been inspected.
+        10. Read `prompts/overview.prompt.md`, then read every completed package result file listed by the manifest.
+        11. Read overview project/readme evidence as needed.
+        12. Write `result/Index.md`.
+        13. Validate that all manifest result paths exist.
         """;
 
     private static string BuildSharedEditorialRules() => """
         You are a senior .NET library documentation editor.
 
-        Your job is to turn repository context into accurate, developer-facing Markdown documentation.
+        Your job is to turn repository evidence into accurate, developer-facing Markdown documentation.
 
         Priorities, in order:
         1. Accuracy.
@@ -754,7 +725,7 @@ internal static class DigestScript
         If README, package README, catalog metadata, generated summaries, or engineering signals disagree with source code, follow the source code.
         If tests disagree with README examples, prefer tests for usage patterns.
 
-        You must not invent APIs, features, package relationships, dependencies, examples, use cases, support statements, performance claims, or architectural claims not supported by the supplied context.
+        You must not invent APIs, features, package relationships, dependencies, examples, use cases, support statements, performance claims, or architectural claims not supported by the supplied evidence.
 
         Write with authority.
         Be concrete.
@@ -776,11 +747,29 @@ internal static class DigestScript
         - Do not include analysis notes, confidence scores, citations, XML, JSON, or chat commentary unless the package prompt explicitly requests them.
         """;
 
-private static string BuildPackageDigestPrompt(string packageName) => $$"""
-        Write the documentation page for {{packageName}}.
+    private static string BuildPackageDigestPrompt(PackageInfo package, PackageEvidenceArtifacts evidence) => $$"""
+        Write the documentation page for {{package.Name}}.
 
         Output file:
-        `result/{{packageName}}.md`
+        `result/{{package.Name}}.md`
+
+        Evidence set:
+        - Source evidence: `{{evidence.Source.Path}}`
+        - Source index: `{{evidence.Source.Index}}`
+        - Test evidence: `{{evidence.Tests.Path}}`
+        - Test index: `{{evidence.Tests.Index}}`
+        - Project evidence: `{{evidence.Projects.Path}}`
+        - Project index: `{{evidence.Projects.Index}}`
+        - README evidence: `{{evidence.Readmes.Path}}`
+        - README index: `{{evidence.Readmes.Index}}`
+        - API summary: `{{evidence.ApiSummary}}`
+        - Engineering signals: `{{evidence.EngineeringSignals}}`
+
+        Package metadata:
+        - Source path: `{{package.SourcePath}}`
+        - Test path: `{{package.TestPath ?? "(not discovered)"}}`
+        - Metadata-only package: `{{package.IsConveniencePackage}}`
+        - Referenced packages: {{(package.BundledPackages.Count == 0 ? "(none declared)" : string.Join(", ", package.BundledPackages))}}
 
         Audience:
         Experienced .NET developers who are evaluating whether this NuGet package belongs in their project.
@@ -788,24 +777,37 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         Do not explain basic .NET concepts.
 
         Grounding rules:
-        Use only the supplied package context.
+        Use only the supplied evidence set.
 
-        Evidence precedence:
-        1. Source files are authoritative for public APIs, inheritance, interfaces, generic constraints, method signatures, overloads, virtual/abstract members, lifecycle hooks, callbacks, and consumer-facing behavior.
-        2. Test files are authoritative for intended usage, behavioral contracts, common setup, and edge cases.
-        3. Project files are authoritative for dependencies, target frameworks, package references, project references, and package relationships.
-        4. XML documentation is useful evidence for intent, but source declarations and tests still win when there is a conflict.
-        5. README, package README, catalog metadata, and generated prose are editorial context only. They may guide positioning and vocabulary, but they are not authoritative for API shape.
+        Evidence authority:
+        - `source.xml` or all source chunks are authoritative for API shape, inheritance, interfaces, generic constraints, method signatures, overloads, virtual/abstract members, lifecycle hooks, callbacks, and consumer-facing behavior.
+        - `tests.xml` or all test chunks are authoritative for intended usage, behavioral contracts, common setup, edge cases, and test-backed usage flow.
+        - For `## Basic usage`, use `tests.xml` as the primary inspiration source. Identify representative test setup, API calls, assertions, and usage flow, then rewrite those patterns into clean consumer-facing documentation examples.
+        - Do not copy awkward regression tests, edge-case-only tests, silly test values, maintainer-internal namespaces, or maintainer-internal names verbatim unless they are the clearest usage evidence.
+        - If test evidence is missing or weak, derive the smallest valid example from `source.xml` and write conservatively.
+        - `projects.xml` or all projects chunks are authoritative for dependencies, target frameworks, package references, project references, packability, package metadata, and package relationships.
+        - `readmes.xml` or all readmes chunks are editorial context only. Do not use README evidence as authority for API shape when source evidence exists.
+        - `api-summary.md` and `engineering-signals.md` are reading aids only. They help focus inspection but are not final evidence.
+        - XML documentation is useful evidence for intent, but source declarations and tests still win when there is a conflict.
 
-        Do not use README or metadata files as evidence for method names, inheritance, interfaces, overloads, required overrides, constructor signatures, target frameworks, package relationships, or examples when source or project files are available.
-        If README, package README, catalog metadata, generated summaries, or engineering signals disagree with source code, follow the source code.
-        If README examples disagree with tests, prefer tests.
-        If source code is unclear and README is the only evidence for a claim, either write conservatively or omit the claim.
+        Do not use README or metadata files as evidence for method names, inheritance, interfaces, overloads, required overrides, constructor signatures, target frameworks, package relationships, or examples when source, test, or project evidence is available.
+        If README, package README, catalog metadata, generated summaries, or engineering signals disagree with source evidence, follow source evidence.
+        If README examples disagree with test evidence, prefer test evidence.
+        If source evidence is unclear and README is the only evidence for a claim, either write conservatively or omit the claim.
 
         Do not invent features, scenarios, dependencies, method names, constructor overloads, namespaces, return types, or package relationships.
         Ignore internal implementation details unless they explain the public API or a consumer-facing contract.
         Prefer public types, extension methods, options/configuration types, factories, abstractions, and test-visible usage patterns.
         If the package has obsolete or deprecated APIs, do not present them as the recommended path.
+
+        Package-local API preference:
+        - For normal code packages, prioritize APIs declared by the current package over APIs inherited from, referenced from, or re-exported from lower-level packages.
+        - In `## Key APIs`, prefer APIs whose declarations are in the current package's source evidence.
+        - In `## Basic usage`, the central demonstrated API should normally be declared by the current package.
+        - If this package extends another package, demonstrate what this package adds, not only what the lower-level package already does.
+        - If the current package provides a more specific abstraction, factory, adapter, provider, options type, middleware, serializer, mapper, host, client, store, validator, converter, extension method, integration type, or configuration model, make that the central API.
+        - Lower-level APIs may appear as setup or supporting code only when they make the current package API easier to understand.
+        - For convenience packages, each referenced-package example must favor APIs declared by that referenced package, not APIs from packages lower in that referenced package's dependency stack.
 
         If the package is metadata-only, aggregate-only, convenience-only, or produces no assembly of its own:
         - Say that clearly.
@@ -813,14 +815,14 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         - Treat project references and package references as authoritative evidence for what the package aggregates.
         - Make API ownership clear: the convenience package provides the single package reference, while APIs come from the referenced packages.
 
-        The generated public API summary and engineering signals are reading aids, not final evidence. Validate them against the packed source and tests before turning them into claims.
+        Validate generated public API summaries and engineering signals against source evidence and test evidence before turning them into claims.
 
         Engineering depth requirements:
         Look for design invariants, lifecycle contracts, callback wiring, factory boundaries, generic type constraints, exception guards, and test-backed edge cases.
         Explain a non-obvious design choice only when the source or tests make it visible.
         For each important API, prefer the useful engineering detail over a generic description: inheritance chain, why a generic parameter exists, what lifecycle it participates in, what callback must be supplied, or what contract a consumer must respect.
         Name what the package deliberately does not solve when package boundaries, dependencies, or sibling packages make that clear.
-        If generated context appears to pair the package with surprising or weak test evidence, reflect that conservatively instead of smoothing it over.
+        If the generated evidence set appears to pair the package with surprising or weak test evidence, reflect that conservatively instead of smoothing it over.
 
         Metadata guidance:
         Do not include target frameworks, dependency lists, package metadata, or repository facts in the Overview.
@@ -830,8 +832,8 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         Before writing the final page, internally identify:
         - the package's specific responsibility inside the repository
         - the primary developer scenario
-        - the 3-6 public APIs that matter most to consumers
-        - the most representative usage pattern found in source and tests
+        - the 3-6 public APIs declared by this package that matter most to consumers
+        - the most representative usage pattern found in source evidence and test evidence
         - the design invariants, lifecycle contracts, or guardrails that matter to consumers
         - what this package deliberately does not solve
         - any confidence risks caused by missing tests or unclear source
@@ -858,7 +860,8 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         `ApiName` - Description.
 
         Rules:
-        - Mention only APIs visible in the supplied source.
+        - Mention only APIs visible in source evidence.
+        - Prefer APIs declared by the current package over lower-level APIs made available through referenced packages.
         - Prefer APIs that a consumer would directly inherit from, instantiate, configure, call, or implement.
         - Include static factory methods or extension methods when they are more important to consumers than their containing type.
         - Descriptions should explain practical role, not merely repeat generic XML documentation wording.
@@ -876,24 +879,30 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         If this is a metadata-only, aggregate-only, convenience-only, or no-assembly package that references other code packages:
         - Still write C# examples for consistency.
         - Do not use a bash installation block in this section.
-        - Write one separate C# example for each referenced package when the referenced package provides consumer-facing APIs.
         - Write exactly one C# example for each referenced code package that provides consumer-facing APIs.
         - The number of C# examples must equal the number of referenced code packages with consumer-facing APIs.
         - Do not cap, merge, sample, summarize, or omit referenced code packages from Basic usage.
-        - If the package references 42 code packages that provide consumer-facing APIs, write exactly 42 C# examples.
         - Each example must be introduced by a third-level heading using this exact format: `### Referenced.Package.Name`.
         - Each referenced-package example must contain exactly one `[Fact]` or `[Theory]` method.
         - Each referenced-package example must focus on a distinct use case from that referenced package.
+        - Each referenced-package example must make an API declared by that referenced package the central API.
+        - If a referenced package extends a lower-level package, demonstrate what the referenced package adds, not only what the lower-level package already does.
+        - Lower-level APIs may appear as setup or supporting code only.
+        - Use each referenced package's test evidence as the primary inspiration source when available.
+        - Derive each example's setup, API calls, assertions, and usage flow from observed tests when available.
+        - Rewrite test-inspired code into documentation-quality examples with clearer names and simpler values.
+        - If a referenced package has missing or weak test evidence, derive the smallest valid example from that referenced package's source evidence and write conservatively.
         - Do not reuse the Basic usage examples already authored for the referenced package pages.
         - Do not paste unrelated snippets from the referenced package pages.
+        - Do not copy awkward regression tests, edge-case-only tests, silly test values, maintainer-internal namespaces, or maintainer-internal names verbatim unless they are the clearest usage evidence.
         - Do not imply that the convenience package owns the APIs. The APIs are supplied by the referenced packages.
         - Include explicit using statements for every referenced package namespace used by each example.
         - Use a consumer namespace such as `MyProject.Tests`.
         - Include at least one assertion or observable result in each example.
         - Prefer small, realistic examples that demonstrate why installing the bundle is convenient across multiple testing styles.
-        - For base xUnit packages, prefer examples that use the shared base class plus directly exposed helper APIs such as output, matching, stores, or lifecycle behavior.
-        - For generic-host packages, prefer examples that show host, DI, configuration, or logging behavior without fake services unless the fake type is defined inside the snippet.
-        - For ASP.NET Core packages, prefer inline middleware such as `app.Run(...)` or inline `app.Use(...)` over `UseMiddleware<T>` unless `T` exists in the supplied context or is defined inside the snippet.
+        - If a referenced package is a framework integration package, prefer a small framework-native setup that demonstrates the referenced package API directly.
+        - If a framework integration package requires setup code, prefer inline framework-native setup over fake application types unless the fake type is defined inside the snippet or exists in the supplied evidence.
+        - Do not use framework-specific helper types, middleware, services, controllers, repositories, validators, adapters, options, or configuration objects unless they exist in the supplied evidence or are defined inside the snippet.
         - After all examples, write exactly one short paragraph explaining that the convenience package provides a single package reference while the APIs come from the referenced packages.
 
         If this is a normal code package:
@@ -908,20 +917,26 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         - Include a consumer namespace such as `MyProject.Tests` unless the original namespace is required for compilation.
         - Include exactly one `[Fact]` or `[Theory]` method unless the package cannot be demonstrated correctly with one test.
         - Include at least one assertion or observable result.
-        - Demonstrate the package itself, not a fake application domain.
-        - Use only APIs, constructors, methods, overloads, options, return types, and extension methods visible in the supplied context.
+        - Demonstrate the current package itself, not a fake application domain and not merely a lower-level referenced package.
+        - The central demonstrated API must normally be declared by the current package.
+        - If this package extends another package, demonstrate what this package adds, not only what the lower-level package already does.
+        - Lower-level APIs may appear as setup or supporting code only.
+        - Use `tests.xml` or all test chunks as the primary inspiration source when test evidence is available.
+        - Derive setup, API calls, assertions, and usage flow from observed tests when available.
+        - Rewrite test-inspired code into a documentation-quality consumer example with clearer names and simpler values.
+        - If test evidence is missing or weak, derive the smallest valid example from source evidence and write conservatively.
+        - Use only APIs, constructors, methods, overloads, options, return types, and extension methods visible in the supplied evidence.
         - Use a complete documentation snippet that a developer can understand without hidden files, hidden helpers, hidden services, or unexplained setup.
         - Keep the example focused on one central pattern.
         - Do not use top-level statements unless the package is a console/application package.
-        - For base test packages, prefer demonstrating the base class plus directly exposed helper APIs such as output, matching, stores, or lifecycle behavior.
-        - For hosting packages, prefer the smallest realistic host setup that demonstrates the package API.
-        - For ASP.NET Core packages, prefer inline middleware such as `app.Run(...)` or inline `app.Use(...)` over `UseMiddleware<T>` unless `T` exists in the supplied context.
+        - If the current package is a framework integration package, prefer a small framework-native setup that demonstrates the package API directly.
+        - Do not introduce fake framework types, services, middleware, controllers, repositories, validators, adapters, options, or configuration objects unless they exist in the supplied evidence or are defined inside the snippet.
 
         Before writing a normal-package final example, internally draft and evaluate 4 candidate examples:
-        1. A minimal happy-path example.
-        2. An example that combines two central APIs.
-        3. An example based on the most representative test usage.
-        4. An example that demonstrates the package's most distinctive feature.
+        1. A minimal happy-path example inspired by representative test evidence.
+        2. An example that combines two central APIs declared by the current package when possible.
+        3. An example based on the most representative test usage of the current package.
+        4. An example that demonstrates the current package's most distinctive feature.
 
         Internally reject any candidate that violates one or more invalid-example rules.
 
@@ -934,27 +949,32 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         - Reject examples that include placeholder comments such as `// dispose managed resources here`.
         - Reject examples that include a disposable field unless the field is actually used by the test and disposed by the hook.
         - Reject examples that open external files, network resources, databases, environment variables, or machine-specific resources.
-        - Reject examples that call fake helper methods such as `GenerateReport()`, `CreateService()`, `BuildHost()`, `FormatInvoice()`, `CreateClient()`, or similar unless that exact method exists in the supplied content.
+        - Reject examples that call fake helper methods such as `GenerateReport()`, `CreateService()`, `BuildHost()`, `FormatInvoice()`, `CreateClient()`, or similar unless that exact method exists in the supplied evidence.
         - Reject examples that introduce fake production services, fake middleware, fake controllers, fake repositories, fake options, fake validators, or fake domain types unless their implementation is included in the example.
-        - Reject examples that register fake services such as `IMyService` / `MyService` unless those types are defined in the snippet or exist in the supplied context.
-        - Reject examples that use `UseMiddleware<T>` unless `T` is defined in the snippet or exists in the supplied context.
+        - Reject examples that register fake services such as `IMyService` / `MyService` unless those types are defined in the snippet or exist in the supplied evidence.
+        - Reject examples that use framework-specific helper types, middleware, services, controllers, repositories, validators, adapters, options, or configuration objects unless they exist in the supplied evidence or are defined inside the snippet.
         - Reject examples where setup plumbing is more prominent than the package API.
         - Reject examples that require hidden registrations, hidden helper classes, hidden extension methods, hidden middleware, or unexplained magic.
         - Reject examples that use maintainer-internal namespaces unless the original namespace is required for compilation.
         - Reject examples that demonstrate only a failure path unless the package's central feature is error handling.
         - Reject examples that use multiple `[Fact]` or `[Theory]` methods to compensate for a weak central example.
         - Reject examples that mention a package feature in the explanation but do not demonstrate it in the code.
-        - Reject examples that use file-local types such as `file class`, `file record`, or `file struct`.
+        - Reject examples that copy awkward regression tests, edge-case-only tests, silly test values, maintainer-internal namespaces, or maintainer-internal names verbatim unless they are the clearest usage evidence.
+        - Reject examples for layered packages where a lower-level API is the central demonstrated API even though the current package declares a more specific API for the same scenario.
+        - Reject examples where the current package's API is only incidental setup rather than the main concept being demonstrated.
+        - Reject examples for framework integration packages where generic lower-level setup dominates and the package-specific integration API is only incidental.
 
         Selection criteria for normal code packages:
         - Prefer the candidate that is most likely to compile.
+        - Prefer the candidate that is most strongly inspired by representative test evidence.
+        - Prefer the candidate that demonstrates APIs declared by the current package.
         - Prefer the candidate that demonstrates the package itself more than a fake domain.
         - Prefer the candidate that uses the fewest invented names.
         - Prefer the candidate that shows the smallest realistic consumer setup.
         - Prefer a happy-path example unless an error path is the most important pattern.
         - Prefer a consumer namespace such as `MyProject.Tests` unless the original namespace is required for compilation.
         - Prefer examples that demonstrate at least two central package features when this can be done naturally.
-        - For hosting packages, prefer inline framework-native setup over fake services or fake middleware.
+        - For framework integration packages, prefer inline framework-native setup over fake application types.
         - For factory APIs, prefer the smallest factory-based example when it demonstrates the package better than a fixture class.
         - For base-class APIs, prefer inheriting from the base class and using one or two of its directly exposed members.
 
@@ -962,17 +982,17 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
 
         Rules for all C# examples:
         - The example may be newly written for documentation.
-        - It must be grounded in the supplied source files and tests.
-        - Use tests to understand intended behavior, common setup, required constructor arguments, and expected usage flow.
-        - Use real namespaces, real type names, real method calls, and real constructor signatures from the supplied content.
+        - It must be grounded in source evidence and test evidence.
+        - Use tests to understand intended behavior, common setup, required constructor arguments, expected usage flow, and meaningful assertions.
+        - Use real namespaces, real type names, real method calls, and real constructor signatures from the supplied evidence.
         - Do not invent APIs, overloads, extension methods, options, return types, helper methods, setup methods, fake service methods, fake domain methods, or fake factory methods.
         - Prefer inline values over fake helper methods.
         - Keep each code block between 10 and 25 lines when feasible.
         - Use ```csharp fenced code blocks.
         - Do not include ellipses, pseudocode, placeholders, TODO comments, or unexplained magic.
         - Do not add a cleanup hook unless the hook cleans up a real resource used by the example.
-        - Do not add a service registration unless the registered service type and implementation are defined in the example or exist in the supplied context.
-        - Do not add middleware unless the middleware type exists in the supplied context or the example uses inline middleware such as `app.Run(...)` or `app.Use(...)`.
+        - Do not add a service registration unless the registered service type and implementation are defined in the example or exist in the supplied evidence.
+        - Do not add framework pipeline or integration setup unless the setup exists in the supplied evidence or the example uses inline framework-native setup.
 
         For normal code packages, after the code block, write exactly 2 sentences:
         1. When to use this pattern.
@@ -983,23 +1003,33 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         ## Installation
 
         ```bash
-        dotnet add package {{packageName}}
+        dotnet add package {{package.Name}}
         ```
 
         ## Usage guidance
 
         One honest paragraph.
         Explain when plain framework APIs, a lower-level package, a sibling package, or no package at all would be a better choice.
-        Mention the nearest sibling package only when the context supports that relationship.
+        Mention the nearest sibling package only when the evidence supports that relationship.
         Do not insult the package.
         Do not oversell it.
-        """;
+    """;
 
     private static string BuildOverviewDigestPrompt(string repoId, IReadOnlyList<PackageInfo> packages)
     {
         var packageList = packages.Count == 0
             ? "- No packages discovered."
-            : string.Join(Environment.NewLine, packages.Select(p => "- " + p.Name));
+            : string.Join(Environment.NewLine, packages.Select(p => $"- `{Path.Combine(ResultDirectoryName, p.Name + ".md").Replace('\\', '/')}`"));
+
+        var supplementaryEvidence = packages.Count == 0
+            ? "- No package evidence discovered."
+            : string.Join(
+                Environment.NewLine,
+                packages.SelectMany(p => new[]
+                {
+                    $"- `{Path.Combine("evidence", p.Name, "projects.xml").Replace('\\', '/')}`",
+                    $"- `{Path.Combine("evidence", p.Name, "readmes.xml").Replace('\\', '/')}`"
+                }));
 
         return $$"""
         Write the overview page for this repository.
@@ -1011,7 +1041,11 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         Read every completed package digest below before writing this page:
         {{packageList}}
 
-        If packages exist, do not write `result/Index.md` from `overview.context.md` alone.
+        Supplementary evidence:
+        Read project/readme evidence only as needed to clarify package relationships, target frameworks, dependency boundaries, and repository positioning:
+        {{supplementaryEvidence}}
+
+        If packages exist, do not write `result/Index.md` from repository README or project evidence alone.
         The overview is invalid unless the completed package digest files have been opened and used as source material.
 
         Audience:
@@ -1021,7 +1055,7 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
 
         Grounding rules:
         The completed package digests are the primary editorial context.
-        Use the overview context only as supplementary repository evidence.
+        Use project and README evidence only as supplementary repository evidence.
         Supplementary README, package README, project, dependency, and metadata information may be used to clarify relationships.
         Do not invent package purposes, dependencies, recommended installation paths, scenarios, APIs, or architectural claims.
         Do not amplify unsupported claims from a package digest.
@@ -1085,7 +1119,7 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         1 short paragraph.
         Explain what this package is for, what it adds, and when a developer should choose it.
         If it extends another package in the same repository, say so.
-        If it is a convenience, aggregate, or meta package, say that clearly and identify what it aggregates when the context supports it.
+        If it is a convenience, aggregate, or meta package, say that clearly and identify what it aggregates when the evidence supports it.
         Do not create bullets unless the package has genuinely enumerable capabilities.
         Use package names exactly as supplied.
         Keep each package paragraph roughly similar in length unless one package is clearly metadata-only or much smaller.
@@ -1108,37 +1142,89 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         sb.AppendLine();
     }
 
-    private static async Task<ContextArtifacts> WriteContextArtifactsAsync(string workspace, string contextFileName, string context)
+    private static async Task<EvidenceArtifacts> WriteEvidenceArtifactsAsync(
+        string workspace,
+        string packageEvidenceRoot,
+        string evidenceName,
+        string rootElementName,
+        string packageName,
+        string authority,
+        IReadOnlyList<PackedFile> files,
+        string? note = null)
     {
-        await WriteUtf8Async(Path.Combine(workspace, contextFileName), context);
+        var evidencePath = Path.Combine(packageEvidenceRoot, evidenceName + ".xml").Replace('\\', '/');
+        var evidenceXml = await BuildEvidenceXmlAsync(rootElementName, packageName, files, note);
+        await WriteUtf8Async(Path.Combine(workspace, evidencePath), evidenceXml);
 
-        var chunkDirectoryName = Path.GetFileNameWithoutExtension(contextFileName) + ".chunks";
-        var chunkDirectory = Path.Combine(workspace, chunkDirectoryName);
+        var chunks = Encoding.UTF8.GetByteCount(evidenceXml) > MaxContextChunkBodyBytes
+            ? SplitContextIntoChunks(evidenceXml).ToList()
+            : new List<string>();
+
+        var chunkPaths = new List<string>(chunks.Count);
+        var chunkDirectoryPath = Path.Combine(packageEvidenceRoot, evidenceName + ".chunks").Replace('\\', '/');
+        var chunkDirectory = Path.Combine(workspace, chunkDirectoryPath);
         if (Directory.Exists(chunkDirectory))
         {
             Directory.Delete(chunkDirectory, recursive: true);
         }
 
-        Directory.CreateDirectory(chunkDirectory);
-
-        var chunks = SplitContextIntoChunks(context).ToList();
-        var chunkPaths = new List<string>(chunks.Count);
-        for (var i = 0; i < chunks.Count; i++)
+        if (chunks.Count > 0)
         {
-            var chunkNumber = i + 1;
-            var chunkFileName = chunkNumber.ToString("D4") + ".md";
-            var chunkPath = (chunkDirectoryName + "/" + chunkFileName).Replace('\\', '/');
-            chunkPaths.Add(chunkPath);
+            Directory.CreateDirectory(chunkDirectory);
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                var chunkNumber = i + 1;
+                var chunkFileName = chunkNumber.ToString("D4") + ".xml";
+                var chunkPath = Path.Combine(chunkDirectoryPath, chunkFileName).Replace('\\', '/');
+                chunkPaths.Add(chunkPath);
 
-            var chunkContent = BuildChunkFile(contextFileName, chunkNumber, chunks.Count, chunks[i]);
-            await WriteUtf8Async(Path.Combine(workspace, chunkPath), chunkContent);
+                var chunkContent = BuildEvidenceChunkFile(evidenceName + ".xml", chunkNumber, chunks.Count, chunks[i]);
+                await WriteUtf8Async(Path.Combine(workspace, chunkPath), chunkContent);
+            }
         }
 
-        var indexPath = Path.GetFileNameWithoutExtension(contextFileName) + ".index.md";
-        var index = BuildContextIndex(contextFileName, indexPath, chunkPaths, chunks, context);
+        var indexPath = Path.Combine(packageEvidenceRoot, evidenceName + ".index.md").Replace('\\', '/');
+        var index = BuildEvidenceIndex(evidenceName, evidencePath, indexPath, chunkPaths, chunks, evidenceXml, authority);
         await WriteUtf8Async(Path.Combine(workspace, indexPath), index);
 
-        return new ContextArtifacts(contextFileName, indexPath, chunkPaths);
+        return new EvidenceArtifacts(evidencePath, indexPath, chunkPaths, authority);
+    }
+
+    private static async Task<string> BuildEvidenceXmlAsync(
+        string rootElementName,
+        string packageName,
+        IReadOnlyList<PackedFile> files,
+        string? note)
+    {
+        var sb = new StringBuilder();
+        sb.Append("<");
+        sb.Append(rootElementName);
+        sb.Append(" package=\"");
+        sb.Append(EscapeXmlAttribute(packageName));
+        sb.AppendLine("\" generatedBy=\"git-repo-digest\">");
+
+        if (!string.IsNullOrWhiteSpace(note))
+        {
+            sb.Append("  <note>");
+            sb.Append(EscapeXmlText(note));
+            sb.AppendLine("</note>");
+        }
+
+        foreach (var file in files.OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase))
+        {
+            var content = await File.ReadAllTextAsync(file.FullPath, Encoding.UTF8);
+            sb.Append("  <file path=\"");
+            sb.Append(EscapeXmlAttribute(file.RelativePath));
+            sb.AppendLine("\">");
+            AppendCData(sb, content);
+            sb.AppendLine();
+            sb.AppendLine("  </file>");
+        }
+
+        sb.Append("</");
+        sb.Append(rootElementName);
+        sb.AppendLine(">");
+        return sb.ToString();
     }
 
     private static IEnumerable<string> SplitContextIntoChunks(string context)
@@ -1211,74 +1297,80 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         }
     }
 
-    private static string BuildChunkFile(string contextFileName, int chunkNumber, int chunkCount, string chunkBody)
+    private static string BuildEvidenceChunkFile(string sourceFileName, int chunkNumber, int chunkCount, string chunkBody)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# Context Chunk " + chunkNumber.ToString("D4"));
+        sb.Append("<contextChunk source=\"");
+        sb.Append(EscapeXmlAttribute(sourceFileName));
+        sb.Append("\" chunk=\"");
+        sb.Append(chunkNumber);
+        sb.Append("\" chunks=\"");
+        sb.Append(chunkCount);
+        sb.AppendLine("\" generatedBy=\"git-repo-digest\">");
+        AppendCData(sb, chunkBody);
         sb.AppendLine();
-        sb.AppendLine("Source context: `" + contextFileName + "`");
-        sb.AppendLine("Chunk: " + chunkNumber + " of " + chunkCount);
-        sb.AppendLine();
-        sb.AppendLine("Read this chunk as raw evidence. The index file is only a navigation aid.");
-        sb.AppendLine();
-        sb.AppendLine("---");
-        sb.AppendLine();
-        sb.Append(chunkBody);
+        sb.AppendLine("</contextChunk>");
         return sb.ToString();
     }
 
-    private static string BuildContextIndex(
-        string contextFileName,
+    private static string BuildEvidenceIndex(
+        string evidenceName,
+        string evidencePath,
         string indexPath,
         IReadOnlyList<string> chunkPaths,
         IReadOnlyList<string> chunks,
-        string context)
+        string evidenceXml,
+        string authority)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# Context Index");
+        sb.AppendLine("# Evidence Index");
         sb.AppendLine();
-        sb.AppendLine("Source context: `" + contextFileName + "`");
+        sb.AppendLine("Evidence file: `" + evidencePath + "`");
         sb.AppendLine("Index path: `" + indexPath + "`");
+        sb.AppendLine("Authority: " + authority);
         sb.AppendLine("Chunk count: " + chunkPaths.Count);
-        sb.AppendLine("Full context bytes: " + Encoding.UTF8.GetByteCount(context));
+        sb.AppendLine("Evidence bytes: " + Encoding.UTF8.GetByteCount(evidenceXml));
         sb.AppendLine();
-        sb.AppendLine("This file is a deterministic navigation aid. Do not use it as a substitute for reading the raw context or every chunk listed below.");
+        sb.AppendLine($"This index is not source evidence. Read {evidenceName}.xml directly when possible, or every {evidenceName}.chunks/*.xml file in numeric order.");
         sb.AppendLine();
 
         sb.AppendLine("## Read Order");
         sb.AppendLine();
-        sb.AppendLine("1. Read this index to understand the context layout.");
-        sb.AppendLine("2. Read each chunk in numeric order before writing from this context.");
-        sb.AppendLine("3. Use the full source context only when your tools can read it completely without truncation.");
+        sb.AppendLine("1. Read this index to understand the evidence layout.");
+        sb.AppendLine("2. Read the full evidence file directly when your tools can read it completely without truncation.");
+        sb.AppendLine("3. If the full evidence file is capped or unavailable, read every listed chunk in numeric order.");
         sb.AppendLine();
 
-        sb.AppendLine("## Chunks");
-        sb.AppendLine();
-        sb.AppendLine("| Chunk | Path | Body bytes | Contents |");
-        sb.AppendLine("|---|---|---:|---|");
-        for (var i = 0; i < chunks.Count; i++)
+        if (chunkPaths.Count > 0)
         {
-            var contents = BuildChunkContents(chunks[i]);
-            sb.AppendLine($"| {i + 1} | `{chunkPaths[i]}` | {Encoding.UTF8.GetByteCount(chunks[i])} | {EscapeMarkdownTableCell(contents)} |");
-        }
-        sb.AppendLine();
-
-        var contextHeadings = ExtractHeadings(context).ToList();
-        if (contextHeadings.Count > 0)
-        {
-            sb.AppendLine("## Context Sections");
+            sb.AppendLine("## Chunks");
             sb.AppendLine();
-            foreach (var heading in contextHeadings)
+            sb.AppendLine("| Chunk | Path | Body bytes | Contents |");
+            sb.AppendLine("|---|---|---:|---|");
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                var contents = BuildChunkContents(chunks[i]);
+                sb.AppendLine($"| {i + 1} | `{chunkPaths[i]}` | {Encoding.UTF8.GetByteCount(chunks[i])} | {EscapeMarkdownTableCell(contents)} |");
+            }
+            sb.AppendLine();
+        }
+
+        var evidenceHeadings = ExtractHeadings(evidenceXml).ToList();
+        if (evidenceHeadings.Count > 0)
+        {
+            sb.AppendLine("## Evidence Sections");
+            sb.AppendLine();
+            foreach (var heading in evidenceHeadings)
             {
                 sb.AppendLine("- " + heading);
             }
             sb.AppendLine();
         }
 
-        var packedPaths = ExtractPackedFilePaths(context).Take(200).ToList();
+        var packedPaths = ExtractPackedFilePaths(evidenceXml).Take(200).ToList();
         if (packedPaths.Count > 0)
         {
-            sb.AppendLine("## Packed File Inventory");
+            sb.AppendLine("## Evidence File Inventory");
             sb.AppendLine();
             foreach (var path in packedPaths)
             {
@@ -1381,9 +1473,114 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
     private static string EscapeMarkdownTableCell(string value) =>
         value.Replace("|", "\\|", StringComparison.Ordinal);
 
+    private static string EscapeXmlAttribute(string value) =>
+        value.Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("\"", "&quot;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal);
+
+    private static string EscapeXmlText(string value) =>
+        value.Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal);
+
+    private static void AppendCData(StringBuilder sb, string value)
+    {
+        sb.Append("<![CDATA[");
+        sb.Append(value.Replace("]]>", "]]]]><![CDATA[>", StringComparison.Ordinal));
+        sb.Append("]]>");
+    }
+
     private static Regex PublicTypeRegex() => PublicTypeExpression;
 
     private static Regex PublicMemberRegex() => PublicMemberExpression;
+
+    private static async Task<IReadOnlyList<PackedFile>> GetPackableTrackedFilesAsync(string cloneDir)
+    {
+        return (await GetTrackedFilesAsync(cloneDir))
+            .Where(file => !IsUnderSkippedDirectory(file.RelativePath))
+            .Where(file => !ShouldSkipLowSignalFile(file.RelativePath))
+            .Where(file => IsTextFile(file.FullPath))
+            .OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool IsSourceEvidenceFile(string relativePath, PackageInfo package)
+    {
+        return IsUnderPath(relativePath, package.SourcePath)
+            && relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            && !IsReadmeFile(relativePath)
+            && !IsProjectMetadataFile(relativePath);
+    }
+
+    private static bool IsTestEvidenceFile(string relativePath, PackageInfo package)
+    {
+        return !string.IsNullOrWhiteSpace(package.TestPath)
+            && IsUnderPath(relativePath, package.TestPath!)
+            && relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            && !IsReadmeFile(relativePath)
+            && !IsProjectMetadataFile(relativePath);
+    }
+
+    private static bool IsProjectEvidenceFile(string relativePath, PackageInfo package)
+    {
+        var fileName = Path.GetFileName(relativePath);
+        if (IsRootProjectMetadataFile(relativePath))
+        {
+            return true;
+        }
+
+        if (!fileName.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return IsUnderPath(relativePath, package.SourcePath)
+            || (!string.IsNullOrWhiteSpace(package.TestPath) && IsUnderPath(relativePath, package.TestPath!));
+    }
+
+    private static bool IsReadmeEvidenceFile(string relativePath, PackageInfo package)
+    {
+        if (!relativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var fileName = Path.GetFileName(relativePath);
+        return string.Equals(relativePath, "README.md", StringComparison.OrdinalIgnoreCase)
+            || (relativePath.StartsWith(".nuget/", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(fileName, "README.md", StringComparison.OrdinalIgnoreCase))
+            || (relativePath.StartsWith("docs/", StringComparison.OrdinalIgnoreCase)
+                && fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase))
+            || (IsUnderPath(relativePath, package.SourcePath)
+                && fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase))
+            || (!string.IsNullOrWhiteSpace(package.TestPath)
+                && IsUnderPath(relativePath, package.TestPath!)
+                && fileName.StartsWith("README", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsUnderPath(string relativePath, string root)
+    {
+        var normalizedRoot = root.Replace('\\', '/').TrimEnd('/');
+        return string.Equals(relativePath, normalizedRoot, StringComparison.OrdinalIgnoreCase)
+            || relativePath.StartsWith(normalizedRoot + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsReadmeFile(string relativePath) =>
+        Path.GetFileName(relativePath).StartsWith("README", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsProjectMetadataFile(string relativePath) =>
+        IsRootProjectMetadataFile(relativePath)
+        || Path.GetFileName(relativePath).EndsWith(".csproj", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsRootProjectMetadataFile(string relativePath)
+    {
+        return string.Equals(relativePath, "Directory.Build.props", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(relativePath, "Directory.Build.targets", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(relativePath, "Directory.Packages.props", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(relativePath, "NuGet.config", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(relativePath, "global.json", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static async Task<string> PackRepositoryContentAsync(string cloneDir, string includes)
     {
@@ -1575,13 +1772,13 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
         string repoId,
         string workspace,
         IReadOnlyList<PackageManifestEntry> packages,
-        ContextArtifacts overviewArtifacts)
+        string overviewPromptPath)
     {
         var packagesPhase = new
         {
             name = "packages",
-            packages = packages.Select(p => new { p.kind, p.name, p.context, p.contextIndex, p.contextChunks, p.result }).ToList(),
-            targets = packages.Select(p => new { p.kind, p.name, p.context, p.contextIndex, p.contextChunks, p.result }).ToList()
+            packages = packages.Select(p => new { p.kind, p.name, p.prompt, p.evidence, p.result }).ToList(),
+            targets = packages.Select(p => new { p.kind, p.name, p.prompt, p.evidence, p.result }).ToList()
         };
 
         var overviewPhase = new
@@ -1592,10 +1789,14 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
             {
                 kind = "overview",
                 name = "Index",
-                context = overviewArtifacts.ContextPath,
-                contextIndex = overviewArtifacts.IndexPath,
-                contextChunks = overviewArtifacts.ChunkPaths,
+                prompt = overviewPromptPath,
                 sourceResults = packages.Select(p => p.result).ToList(),
+                supplementalEvidence = packages.Select(p => new
+                {
+                    package = p.name,
+                    projects = p.evidence.Projects.Path,
+                    readmes = p.evidence.Readmes.Path
+                }).ToList(),
                 result = "result/Index.md"
             }
         };
@@ -1621,8 +1822,40 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
             overview = overviewPhase.package
         };
 
-        var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(
+            manifest,
+            new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = true
+            });
         await WriteUtf8Async(manifestPath, json + Environment.NewLine);
+    }
+
+    private static void DeleteLegacyContextArtifacts(string workspace)
+    {
+        var workspaceRoot = Path.GetFullPath(workspace).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+
+        foreach (var file in Directory.EnumerateFiles(workspace, "*.context.md")
+                     .Concat(Directory.EnumerateFiles(workspace, "*.context.index.md")))
+        {
+            var fullPath = Path.GetFullPath(file);
+            if (fullPath.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(fullPath);
+            }
+        }
+
+        foreach (var directory in Directory.EnumerateDirectories(workspace, "*.context.chunks"))
+        {
+            var fullPath = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            if (fullPath.StartsWith(workspaceRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     private static async Task RunProcessAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory, TimeSpan timeout = default)
@@ -1708,7 +1941,7 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
     {
         Console.WriteLine(
             """
-            git-repo-digest deterministic context generator
+            git-repo-digest deterministic evidence generator
 
             Usage:
               dotnet run --file scripts/digest.cs -- --repo-url <url> --output-root <path>
@@ -1724,16 +1957,21 @@ private static string BuildPackageDigestPrompt(string packageName) => $$"""
             Output:
               {output-root}/{repo-id}/manifest.json
               {output-root}/{repo-id}/instructions.md
-              {output-root}/{repo-id}/*.context.md
-              {output-root}/{repo-id}/*.context.index.md
-              {output-root}/{repo-id}/*.context.chunks/*.md
+              {output-root}/{repo-id}/prompts/{PackageName}.prompt.md
+              {output-root}/{repo-id}/prompts/overview.prompt.md
+              {output-root}/{repo-id}/evidence/{PackageName}/source.xml
+              {output-root}/{repo-id}/evidence/{PackageName}/tests.xml
+              {output-root}/{repo-id}/evidence/{PackageName}/projects.xml
+              {output-root}/{repo-id}/evidence/{PackageName}/readmes.xml
+              {output-root}/{repo-id}/evidence/{PackageName}/*.index.md
+              {output-root}/{repo-id}/evidence/{PackageName}/*.chunks/*.xml
               {output-root}/{repo-id}/result/
 
             Notes:
-              - This script writes deterministic context only.
+              - This script writes deterministic evidence and prompts only.
               - This script does not call an LLM.
               - Existing result/*.md files are not overwritten.
-              - Context packing uses the bundled C# packer over the cloned repository's tracked files.
+              - Evidence packing uses the bundled C# packer over the cloned repository's tracked files.
             """);
     }
 }
@@ -1758,10 +1996,23 @@ internal sealed record TestProjectMatch(
     bool IsOwnTestProjectName,
     bool ReferencesProject);
 
-internal sealed record ContextArtifacts(
-    string ContextPath,
-    string IndexPath,
-    IReadOnlyList<string> ChunkPaths);
+internal sealed record PackageWorkspaceArtifacts(
+    string PromptPath,
+    PackageEvidenceArtifacts Evidence);
+
+internal sealed record PackageEvidenceArtifacts(
+    EvidenceArtifacts Source,
+    EvidenceArtifacts Tests,
+    EvidenceArtifacts Projects,
+    EvidenceArtifacts Readmes,
+    string ApiSummary,
+    string EngineeringSignals);
+
+internal sealed record EvidenceArtifacts(
+    string Path,
+    string Index,
+    IReadOnlyList<string> Chunks,
+    string Authority);
 
 internal sealed record ApiTypeSummary(
     string Name,
@@ -1782,9 +2033,8 @@ internal sealed record EngineeringSignal(
 internal sealed record PackageManifestEntry(
     string kind,
     string name,
-    string context,
-    string contextIndex,
-    IReadOnlyList<string> contextChunks,
+    string prompt,
+    PackageEvidenceArtifacts evidence,
     string result);
 
 internal sealed record PackedFile(string FullPath, string RelativePath);
