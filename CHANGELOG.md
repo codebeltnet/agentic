@@ -6,9 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.4.2] - 2026-05-04
+## [0.4.2] - 2026-05-05
 
-This is a minor release focused on simplifying `git-story-teller` architecture by removing external dependencies and consolidating on a single deterministic local context packing strategy. The skill no longer depends on Node/npm, Repomix, or public packing services; instead, it performs a shallow git clone and uses the bundled C# packer to extract tracked files via `git ls-files`, making the skill fully self-contained and deterministic.
+This is a minor release focused on simplifying `git-story-teller` architecture, removing external dependencies, consolidating on deterministic local context packing, and renaming the skill to `git-repo-digest` for improved clarity. The skill no longer depends on Node/npm, Repomix, or public packing services; instead, it performs a shallow git clone and uses the bundled C# packer to extract tracked files via `git ls-files`, making the skill fully self-contained and deterministic.
 
 ### Changed
 
@@ -19,7 +19,18 @@ This is a minor release focused on simplifying `git-story-teller` architecture b
 - Updated SKILL.md description and runtime notes to document the shift from Repomix-first with fallbacks to single local packing path,
 - Updated eval contract (eval 6) to verify that the runner no longer requires Node/npm, Repomix, or public packing services and recognizes the C# packer as the primary deterministic strategy,
 - Added `.vs` to `.gitignore` to exclude Visual Studio settings folder,
-- Updated README.md to reflect deterministic local file packing with `git ls-files` instead of external packing dependencies.
+- Updated README.md to reflect deterministic local file packing with `git ls-files` instead of external packing dependencies,
+- Renamed `git-story-teller` skill to `git-repo-digest` across all references, README, and installation instructions,
+- Renamed runner script from `scripts/story.cs` to `scripts/digest.cs` to align with the new skill name,
+- Updated all SKILL.md terminology from "story"/"storyteller"/"target stories" to "digest"/"repo-digest"/"package digests",
+- Updated eval contracts to reference "digest" generation and package digest workflows instead of story generation,
+- Updated README.md table, install examples, and "Why git-repo-digest?" section to reflect the renamed skill and digest-focused narrative,
+- Clarified `git-repo-digest` test project discovery to use Codebelt conventions: source projects from `src/`, owned tests from `test/`, matching `.Tests` or `.FunctionalTests` suffixes, avoiding generic `tests/` roots or broader suffix variants,
+- Updated `git-repo-digest` README description and "Why" section to document Codebelt-shaped include patterns and Codebelt test ownership strategy,
+- Corrected `git-repo-digest` bad output characteristics to reference a separate `.NET project` instead of legacy `ContentSync` terminology,
+- Added context index chunk label inference to `git-repo-digest` context index generation, replacing `(none)` placeholders with deterministic inferred labels based on packed file paths,
+- Implemented `BuildInferredChunkHeading()` and `ClassifyPackedFilePath()` in `digest.cs` to assign meaningful labels such as Source Code, Test Coverage, NuGet Documentation, Project Metadata, and Documentation based on chunk file composition,
+- Added eval 12 to validate deterministic chunk label assignment for headingless packed-content chunks, ensuring agents can navigate large evidence sets with meaningful descriptions.
 
 ### Removed
 

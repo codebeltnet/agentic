@@ -9,12 +9,15 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
-return await StoryScript.RunAsync(args);
+return await DigestScript.RunAsync(args);
 
-internal static class StoryScript
+internal static class DigestScript
 {
     private const string ResultDirectoryName = "result";
+    private const string SourceDirectoryName = "src";
+    private const string TestDirectoryName = "test";
     private const int MaxContextChunkBodyBytes = 36 * 1024;
+    private static readonly string[] OwnedTestProjectSuffixes = ["Tests", "FunctionalTests"];
     private static readonly Regex PublicTypeExpression = new(
         @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected\s+internal|internal\s+protected)\s+(?:(?:static|abstract|sealed|partial|readonly|unsafe)\s+)*(?<kind>record\s+class|record\s+struct|class|interface|struct|record|enum)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*(?:<[^>{};]+>)?)\s*(?::\s*(?<base>[^{]+))?",
         RegexOptions.Compiled);
@@ -41,12 +44,12 @@ internal static class StoryScript
             Directory.CreateDirectory(workspace);
             Directory.CreateDirectory(resultDir);
 
-            Console.WriteLine($"[story] repo-url={options.RepoUrl}");
-            Console.WriteLine($"[story] output-root={options.OutputRoot}");
-            Console.WriteLine($"[story] repo-id={repoId}");
+            Console.WriteLine($"[digest] repo-url={options.RepoUrl}");
+            Console.WriteLine($"[digest] output-root={options.OutputRoot}");
+            Console.WriteLine($"[digest] repo-id={repoId}");
             Console.WriteLine();
 
-            var tempRoot = Path.Combine(Path.GetTempPath(), "git-story-teller-" + Guid.NewGuid().ToString("N"));
+            var tempRoot = Path.Combine(Path.GetTempPath(), "git-repo-digest-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempRoot);
 
             try
@@ -54,20 +57,20 @@ internal static class StoryScript
                 var cloneDir = Path.Combine(tempRoot, "repo");
                 await CloneRepositoryAsync(options.RepoUrl, cloneDir);
 
-                var targets = DiscoverTargets(cloneDir);
-                Console.WriteLine($"[story] discovered {targets.Count} target(s)");
+                var packages = DiscoverPackages(cloneDir);
+                Console.WriteLine($"[digest] discovered {packages.Count} package(s)");
 
-                var targetEntries = new List<TargetManifestEntry>();
-                foreach (var target in targets)
+                var packageEntries = new List<PackageManifestEntry>();
+                foreach (var package in packages)
                 {
-                    var contextFileName = target.Name + ".context.md";
-                    var resultPath = Path.Combine(ResultDirectoryName, target.Name + ".md").Replace('\\', '/');
-                    var context = await BuildTargetContextAsync(options.RepoUrl, cloneDir, target);
+                    var contextFileName = package.Name + ".context.md";
+                    var resultPath = Path.Combine(ResultDirectoryName, package.Name + ".md").Replace('\\', '/');
+                    var context = await BuildPackageContextAsync(options.RepoUrl, cloneDir, package);
                     var contextArtifacts = await WriteContextArtifactsAsync(workspace, contextFileName, context);
 
-                    targetEntries.Add(new TargetManifestEntry(
+                    packageEntries.Add(new PackageManifestEntry(
                         "package",
-                        target.Name,
+                        package.Name,
                         contextArtifacts.ContextPath,
                         contextArtifacts.IndexPath,
                         contextArtifacts.ChunkPaths,
@@ -75,7 +78,7 @@ internal static class StoryScript
                 }
 
                 var overviewContextName = "overview.context.md";
-                var overviewContext = await BuildOverviewContextAsync(options.RepoUrl, cloneDir, repoId, targets);
+                var overviewContext = await BuildOverviewContextAsync(options.RepoUrl, cloneDir, repoId, packages);
                 var overviewArtifacts = await WriteContextArtifactsAsync(workspace, overviewContextName, overviewContext);
 
                 await WriteUtf8Async(Path.Combine(workspace, "instructions.md"), BuildInstructions(options.RepoUrl, repoId));
@@ -84,13 +87,13 @@ internal static class StoryScript
                     options,
                     repoId,
                     workspace,
-                    targetEntries,
+                    packageEntries,
                     overviewArtifacts);
 
                 Console.WriteLine();
-                Console.WriteLine("[story] deterministic workspace written:");
+                Console.WriteLine("[digest] deterministic workspace written:");
                 Console.WriteLine("  " + workspace);
-                Console.WriteLine("[story] result files are agent-authored and were not overwritten.");
+                Console.WriteLine("[digest] result files are agent-authored and were not overwritten.");
                 return 0;
             }
             finally
@@ -105,7 +108,7 @@ internal static class StoryScript
         }
     }
 
-    private static StoryOptions ParseOptions(string[] args)
+    private static DigestOptions ParseOptions(string[] args)
     {
         var repoUrl = GetOption(args, "--repo-url");
         var outputRoot = GetOption(args, "--output-root");
@@ -121,7 +124,7 @@ internal static class StoryScript
         }
 
         ValidateRepositoryUrl(repoUrl);
-        return new StoryOptions(repoUrl.Trim(), Path.GetFullPath(outputRoot.Trim()));
+        return new DigestOptions(repoUrl.Trim(), Path.GetFullPath(outputRoot.Trim()));
     }
 
     private static string? GetOption(string[] args, string name)
@@ -171,13 +174,13 @@ internal static class StoryScript
 
     private static async Task CloneRepositoryAsync(string repoUrl, string cloneDir)
     {
-        Console.WriteLine("[story] cloning repository for discovery...");
+        Console.WriteLine("[digest] cloning repository for discovery...");
         await RunProcessAsync("git", ["clone", "--depth", "1", repoUrl, cloneDir], Directory.GetCurrentDirectory());
     }
 
-    private static IReadOnlyList<TargetInfo> DiscoverTargets(string cloneDir)
+    private static IReadOnlyList<PackageInfo> DiscoverPackages(string cloneDir)
     {
-        var srcDir = Path.Combine(cloneDir, "src");
+        var srcDir = Path.Combine(cloneDir, SourceDirectoryName);
         if (!Directory.Exists(srcDir))
         {
             return [];
@@ -187,7 +190,7 @@ internal static class StoryScript
             .OrderBy(p => Path.GetRelativePath(cloneDir, p), StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var targets = new List<TargetInfo>();
+        var packages = new List<PackageInfo>();
         foreach (var projectFile in projectFiles)
         {
             var metadata = ReadProjectMetadata(projectFile);
@@ -209,7 +212,7 @@ internal static class StoryScript
                 .Where(p => !IsUnderDirectoryName(p, "bin") && !IsUnderDirectoryName(p, "obj"))
                 .ToList();
 
-            targets.Add(new TargetInfo(
+            packages.Add(new PackageInfo(
                 name,
                 Path.GetRelativePath(cloneDir, sourceDir).Replace('\\', '/'),
                 testDir is null ? null : Path.GetRelativePath(cloneDir, testDir).Replace('\\', '/'),
@@ -217,7 +220,7 @@ internal static class StoryScript
                 metadata.BundledPackages));
         }
 
-        return targets;
+        return packages;
     }
 
     private static ProjectMetadata ReadProjectMetadata(string projectFile)
@@ -250,28 +253,26 @@ internal static class StoryScript
     private static string FirstNonEmpty(params string[] values) =>
         values.First(v => !string.IsNullOrWhiteSpace(v)).Trim();
 
-    private static string? FindTestDirectory(string cloneDir, string sourceProjectFile, string targetName)
+    private static string? FindTestDirectory(string cloneDir, string sourceProjectFile, string packageName)
     {
-        var testRoots = new[] { "test", "tests" }
-            .Select(r => Path.Combine(cloneDir, r))
-            .Where(Directory.Exists)
+        var testRoot = Path.Combine(cloneDir, TestDirectoryName);
+        if (!Directory.Exists(testRoot))
+        {
+            return null;
+        }
+
+        var normalizedPackage = NormalizeForMatch(packageName);
+        var candidates = new List<TestProjectMatch>();
+        var testProjects = Directory.EnumerateFiles(testRoot, "*.csproj", SearchOption.AllDirectories)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var normalizedTarget = NormalizeForMatch(targetName);
-        var candidates = new List<TestProjectMatch>();
-        foreach (var root in testRoots)
+        foreach (var testProject in testProjects)
         {
-            var testProjects = Directory.EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
-                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            foreach (var testProject in testProjects)
-            {
-                candidates.Add(new TestProjectMatch(
-                    testProject,
-                    IsOwnTestProjectName(testProject, normalizedTarget),
-                    ReferencesProject(testProject, sourceProjectFile)));
-            }
+            candidates.Add(new TestProjectMatch(
+                testProject,
+                IsOwnTestProjectName(testProject, normalizedPackage),
+                ReferencesProject(testProject, sourceProjectFile)));
         }
 
         var ownMatch = candidates
@@ -291,11 +292,12 @@ internal static class StoryScript
         return directMatches.Count == 1 ? Path.GetDirectoryName(directMatches[0].ProjectFile) : null;
     }
 
-    private static bool IsOwnTestProjectName(string testProjectFile, string normalizedTarget)
+    private static bool IsOwnTestProjectName(string testProjectFile, string normalizedPackage)
     {
         var normalizedProjectName = NormalizeForMatch(Path.GetFileNameWithoutExtension(testProjectFile));
-        var suffixes = new[] { "tests", "test", "unittests", "unittest", "integrationtests", "integrationtest", "functionaltests", "functionaltest" };
-        return suffixes.Any(suffix => string.Equals(normalizedProjectName, normalizedTarget + suffix, StringComparison.OrdinalIgnoreCase));
+        return OwnedTestProjectSuffixes
+            .Select(NormalizeForMatch)
+            .Any(suffix => string.Equals(normalizedProjectName, normalizedPackage + suffix, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool ReferencesProject(string testProjectFile, string sourceProjectFile)
@@ -331,9 +333,9 @@ internal static class StoryScript
         return segments.Any(s => string.Equals(s, directoryName, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static async Task<string> BuildTargetContextAsync(string repoUrl, string cloneDir, TargetInfo target)
+    private static async Task<string> BuildPackageContextAsync(string repoUrl, string cloneDir, PackageInfo package)
     {
-        Console.WriteLine($"[story] packing context for {target.Name}...");
+        Console.WriteLine($"[digest] packing context for {package.Name}...");
 
         var includeParts = new List<string>
         {
@@ -341,46 +343,46 @@ internal static class StoryScript
             "Directory.Build.props",
             "Directory.Build.targets",
             "Directory.Packages.props",
-            target.SourcePath + "/**"
+            package.SourcePath + "/**"
         };
 
-        if (!string.IsNullOrWhiteSpace(target.TestPath))
+        if (!string.IsNullOrWhiteSpace(package.TestPath))
         {
-            includeParts.Add(target.TestPath + "/**");
+            includeParts.Add(package.TestPath + "/**");
         }
 
         includeParts.Add(".nuget/**/README.md");
         var packedContent = await PackRepositoryContentAsync(cloneDir, string.Join(',', includeParts));
 
         var sb = new StringBuilder();
-        AppendHeader(sb, "TARGET IDENTITY");
+        AppendHeader(sb, "PACKAGE IDENTITY");
         sb.AppendLine($"Repository: {repoUrl}");
-        sb.AppendLine($"Target: {target.Name}");
+        sb.AppendLine($"Package: {package.Name}");
         sb.AppendLine("Kind: package");
-        sb.AppendLine($"Source path: {target.SourcePath}");
-        sb.AppendLine($"Test path: {target.TestPath ?? "(not discovered)"}");
-        sb.AppendLine($"Metadata-only target: {target.IsConveniencePackage}");
-        sb.AppendLine($"Result path: result/{target.Name}.md");
+        sb.AppendLine($"Source path: {package.SourcePath}");
+        sb.AppendLine($"Test path: {package.TestPath ?? "(not discovered)"}");
+        sb.AppendLine($"Metadata-only package: {package.IsConveniencePackage}");
+        sb.AppendLine($"Result path: result/{package.Name}.md");
         sb.AppendLine();
 
-        if (target.BundledPackages.Count > 0)
+        if (package.BundledPackages.Count > 0)
         {
             AppendHeader(sb, "DECLARED REFERENCES");
-            foreach (var package in target.BundledPackages)
+            foreach (var reference in package.BundledPackages)
             {
-                sb.AppendLine("- " + package);
+                sb.AppendLine("- " + reference);
             }
             sb.AppendLine();
         }
 
         AppendHeader(sb, "PUBLIC API SUMMARY (GENERATED)");
-        AppendMultiline(sb, BuildPublicApiSummary(cloneDir, target));
+        AppendMultiline(sb, BuildPublicApiSummary(cloneDir, package));
 
         AppendHeader(sb, "ENGINEERING SIGNALS (GENERATED)");
-        AppendMultiline(sb, BuildEngineeringSignals(cloneDir, target));
+        AppendMultiline(sb, BuildEngineeringSignals(cloneDir, package));
 
-        AppendHeader(sb, "PACKAGE STORY PROMPT");
-        AppendMultiline(sb, BuildPackageStoryPrompt(target.Name));
+        AppendHeader(sb, "PACKAGE DIGEST PROMPT");
+        AppendMultiline(sb, BuildPackageDigestPrompt(package.Name));
 
         AppendHeader(sb, "PACKED REPOSITORY CONTENT");
         sb.AppendLine(packedContent.Trim());
@@ -389,39 +391,41 @@ internal static class StoryScript
         return sb.ToString();
     }
 
-    private static async Task<string> BuildOverviewContextAsync(string repoUrl, string cloneDir, string repoId, IReadOnlyList<TargetInfo> targets)
+    private static async Task<string> BuildOverviewContextAsync(string repoUrl, string cloneDir, string repoId, IReadOnlyList<PackageInfo> packages)
     {
-        Console.WriteLine("[story] packing overview context...");
-        var packedContent = await PackRepositoryContentAsync(cloneDir, "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj");
+        Console.WriteLine("[digest] packing overview context...");
+        var packedContent = await PackRepositoryContentAsync(
+            cloneDir,
+            "README.md,.nuget/**/README.md,Directory.Build.props,Directory.Build.targets,Directory.Packages.props,src/**/*.csproj,test/**/*.csproj");
 
         var sb = new StringBuilder();
         AppendHeader(sb, "REPOSITORY IDENTITY");
         sb.AppendLine($"Repository: {repoUrl}");
         sb.AppendLine($"Repository id: {repoId}");
-        sb.AppendLine($"Targets: {targets.Count}");
+        sb.AppendLine($"Packages: {packages.Count}");
         sb.AppendLine("Result path: result/Index.md");
         sb.AppendLine();
 
-        AppendHeader(sb, "REQUIRED COMPLETED TARGET STORY SOURCES");
-        if (targets.Count == 0)
+        AppendHeader(sb, "REQUIRED COMPLETED PACKAGE DIGEST SOURCES");
+        if (packages.Count == 0)
         {
-            sb.AppendLine("No package targets were discovered under src/. Write an overview only if the repository context is sufficient.");
+            sb.AppendLine("No packages were discovered under src/. Write an overview only if the repository context is sufficient.");
         }
         else
         {
-            sb.AppendLine("Before writing result/Index.md, open and read every completed target story listed below.");
-            sb.AppendLine("These completed package stories are the primary source for the overview; this overview context file is only supplementary.");
-            sb.AppendLine("If your execution log would show only overview.context.md being read for the overview phase, stop and read the target stories first.");
+            sb.AppendLine("Before writing result/Index.md, open and read every completed package digest listed below.");
+            sb.AppendLine("These completed package digests are the primary source for the overview; this overview context file is only supplementary.");
+            sb.AppendLine("If your execution log would show only overview.context.md being read for the overview phase, stop and read the package digests first.");
             sb.AppendLine();
-            foreach (var target in targets)
+            foreach (var package in packages)
             {
-                sb.AppendLine($"- {target.Name}: result/{target.Name}.md");
+                sb.AppendLine($"- {package.Name}: result/{package.Name}.md");
             }
         }
         sb.AppendLine();
 
-        AppendHeader(sb, "OVERVIEW STORY PROMPT");
-        AppendMultiline(sb, BuildOverviewStoryPrompt(repoId, targets));
+        AppendHeader(sb, "OVERVIEW DIGEST PROMPT");
+        AppendMultiline(sb, BuildOverviewDigestPrompt(repoId, packages));
 
         AppendHeader(sb, "SUPPLEMENTARY REPOSITORY CONTENT");
         sb.AppendLine(packedContent.Trim());
@@ -430,9 +434,9 @@ internal static class StoryScript
         return sb.ToString();
     }
 
-    private static string BuildPublicApiSummary(string cloneDir, TargetInfo target)
+    private static string BuildPublicApiSummary(string cloneDir, PackageInfo package)
     {
-        var discoveredApiTypes = DiscoverPublicApiTypes(cloneDir, target);
+        var discoveredApiTypes = DiscoverPublicApiTypes(cloneDir, package);
         var apiTypes = discoveredApiTypes.Take(20).ToList();
         if (apiTypes.Count == 0)
         {
@@ -462,9 +466,9 @@ internal static class StoryScript
         return sb.ToString();
     }
 
-    private static IReadOnlyList<ApiTypeSummary> DiscoverPublicApiTypes(string cloneDir, TargetInfo target)
+    private static IReadOnlyList<ApiTypeSummary> DiscoverPublicApiTypes(string cloneDir, PackageInfo package)
     {
-        var sourceDir = Path.Combine(cloneDir, target.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        var sourceDir = Path.Combine(cloneDir, package.SourcePath.Replace('/', Path.DirectorySeparatorChar));
         if (!Directory.Exists(sourceDir))
         {
             return [];
@@ -506,9 +510,9 @@ internal static class StoryScript
             .ToList();
     }
 
-    private static string BuildEngineeringSignals(string cloneDir, TargetInfo target)
+    private static string BuildEngineeringSignals(string cloneDir, PackageInfo package)
     {
-        var files = EnumerateSignalFiles(cloneDir, target).ToList();
+        var files = EnumerateSignalFiles(cloneDir, package).ToList();
         var exceptionSignals = FindSignals(files, @"(?:throw\s+new|Assert\.Throws(?:Async)?)\s*<?([A-Za-z0-9_.]+Exception)", "exception guard").Take(12).ToList();
         var lifecycleSignals = FindSignals(files, @"\b([A-Za-z0-9_]*(?:Configure|Callback|Fixture|Factory|Initialize|Dispose|Lifetime|Host|Application)[A-Za-z0-9_]*)\b", "lifecycle or composition name").Take(16).ToList();
         var hostingSignals = FindSignals(files, @"\b(IHostBuilder|HostApplicationBuilder|Host\.CreateApplicationBuilder|WebApplicationBuilder|IApplicationBuilder|WebApplicationFactory|TestServer)\b", "hosting model").Take(12).ToList();
@@ -531,7 +535,7 @@ internal static class StoryScript
         sb.AppendLine("### Test evidence files");
         if (testSignals.Count == 0)
         {
-            sb.AppendLine("- No test files were discovered for this target.");
+            sb.AppendLine("- No test files were discovered for this package.");
         }
         else
         {
@@ -544,9 +548,9 @@ internal static class StoryScript
         return sb.ToString();
     }
 
-    private static IEnumerable<SignalFile> EnumerateSignalFiles(string cloneDir, TargetInfo target)
+    private static IEnumerable<SignalFile> EnumerateSignalFiles(string cloneDir, PackageInfo package)
     {
-        var roots = new[] { target.SourcePath, target.TestPath }
+        var roots = new[] { package.SourcePath, package.TestPath }
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .Select(p => Path.Combine(cloneDir, p!.Replace('/', Path.DirectorySeparatorChar)))
             .Where(Directory.Exists)
@@ -675,33 +679,37 @@ internal static class StoryScript
         return index >= 0 ? name[..index] : name;
     }
 
-    private static bool IsProbablyTestFile(string relativePath) =>
-        relativePath.Contains(".Tests/", StringComparison.OrdinalIgnoreCase)
-        || relativePath.Contains("/Tests/", StringComparison.OrdinalIgnoreCase)
-        || relativePath.EndsWith("Test.cs", StringComparison.OrdinalIgnoreCase)
-        || relativePath.EndsWith("Tests.cs", StringComparison.OrdinalIgnoreCase);
+    private static bool IsProbablyTestFile(string relativePath)
+    {
+        var normalizedPath = relativePath.Replace('\\', '/');
+        return normalizedPath.StartsWith(TestDirectoryName + "/", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.Contains(".Tests/", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.Contains(".FunctionalTests/", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.EndsWith("Test.cs", StringComparison.OrdinalIgnoreCase)
+            || normalizedPath.EndsWith("FunctionalTest.cs", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static string BuildInstructions(string repoUrl, string repoId) =>
         $$"""
-        # Story Writing Instructions
+        # Digest Writing Instructions
 
         Repository: {{repoUrl}}
         Repository id: {{repoId}}
 
-        The deterministic runner generated this workspace. The agent writes Markdown stories; this script does not call an LLM and does not overwrite result files.
+        The deterministic runner generated this workspace. The agent writes Markdown digests; this script does not call an LLM and does not overwrite result files.
 
         ## Contract
 
         - Treat `manifest.json` as authoritative for context and result paths.
-        - Process target contexts one at a time.
-        - Write every target result before writing the overview.
+        - Process package contexts one at a time.
+        - Write every package result before writing the overview.
         - Each context has a full `*.context.md` file, a `*.context.index.md` navigation file, and ordered `*.context.chunks/*.md` raw-evidence chunks.
         - If the full context file is capped, truncated, summarized, or too large to read safely, read the index and then every listed chunk in numeric order.
         - Do not treat an index file as source evidence. It helps navigation only.
         - Do not treat generated public API summaries or engineering signals as standalone evidence. They help you decide what to inspect in the raw context.
-        - For the overview, read `overview.context.md` or every overview chunk, then read every completed target result file listed by the manifest.
-        - Treat completed target result files as the primary overview source; `overview.context.md` is supplementary.
-        - Write target stories to `result/{TargetName}.md`.
+        - For the overview, read `overview.context.md` or every overview chunk, then read every completed package result file listed by the manifest.
+        - Treat completed package result files as the primary overview source; `overview.context.md` is supplementary.
+        - Write package digests to `result/{PackageName}.md`.
         - Write the overview to `result/Index.md`.
         - Use the generated prompt sections in each `.context.md` file or its ordered chunks as the task contract.
         - Do not invent APIs, package relationships, examples, dependencies, support statements, performance claims, or architectural claims.
@@ -715,9 +723,9 @@ internal static class StoryScript
 
         1. Read `manifest.json`.
         2. Read this file.
-        3. For each target in the `packages` phase, read its context directly if possible; otherwise read its context index and then all chunks in order.
-        4. Write each target result file only after its full raw context has been inspected.
-        5. Read `overview.context.md` or every overview chunk, then read every completed target result file listed by the manifest.
+        3. For each package in the `packages` phase, read its context directly if possible; otherwise read its context index and then all chunks in order.
+        4. Write each package result file only after its full raw context has been inspected.
+        5. Read `overview.context.md` or every overview chunk, then read every completed package result file listed by the manifest.
         6. Write `result/Index.md`.
         7. Validate that all manifest result paths exist.
         """;
@@ -739,12 +747,12 @@ internal static class StoryScript
         They know .NET, NuGet, dependency injection, testing, hosting, ASP.NET Core, and common framework terminology.
         They do not know this specific repository or package.
 
-        Use source files to understand what the target exposes and owns.
-        Use test files to understand how consumers are expected to use the target.
+        Use source files to understand what the package exposes and owns.
+        Use test files to understand how consumers are expected to use the package.
         Use project files to understand dependencies and package relationships.
         Use README and metadata files as editorial context, but prefer source and tests when there is a conflict.
 
-        You must not invent APIs, features, target relationships, dependencies, examples, use cases, or architectural claims not supported by the supplied context.
+        You must not invent APIs, features, package relationships, dependencies, examples, use cases, or architectural claims not supported by the supplied context.
 
         Write with authority.
         Be concrete.
@@ -762,15 +770,15 @@ internal static class StoryScript
         - Keep the writing tight.
         - Cut anything that does not add information.
         - Final output must be Markdown only.
-        - Do not include analysis notes, confidence scores, citations, XML, JSON, or chat commentary unless the target prompt explicitly requests them.
+        - Do not include analysis notes, confidence scores, citations, XML, JSON, or chat commentary unless the package prompt explicitly requests them.
         """;
 
-    private static string BuildPackageStoryPrompt(string targetName) =>
+    private static string BuildPackageDigestPrompt(string packageName) =>
         $$"""
-        Write the documentation page for {{targetName}}.
+        Write the documentation page for {{packageName}}.
 
         Output file:
-        `result/{{targetName}}.md`
+        `result/{{packageName}}.md`
 
         Audience:
         Experienced .NET developers who are evaluating whether this NuGet package belongs in their project.
@@ -778,7 +786,7 @@ internal static class StoryScript
         Do not explain basic .NET concepts.
 
         Grounding rules:
-        Use only the supplied target context.
+        Use only the supplied package context.
         Source files define the public API and package responsibility.
         Test files show intended usage.
         Project files show dependencies and package relationships.
@@ -796,7 +804,7 @@ internal static class StoryScript
         Explain a non-obvious design choice only when the source or tests make it visible.
         For each important API, prefer the useful engineering detail over a generic description: inheritance chain, why a generic parameter exists, what lifecycle it participates in, or what contract a consumer must respect.
         Name what the package deliberately does not solve when package boundaries, dependencies, or sibling packages make that clear.
-        If generated context appears to pair the target with surprising or weak test evidence, report that as a confidence risk instead of smoothing it over.
+        If generated context appears to pair the package with surprising or weak test evidence, report that as a confidence risk instead of smoothing it over.
 
         Before writing the final page, internally identify:
         - the package's specific responsibility inside the repository
@@ -860,7 +868,7 @@ internal static class StoryScript
         ## Installation
 
         ```bash
-        dotnet add package {{targetName}}
+        dotnet add package {{packageName}}
         ```
 
         ## Usage guidance
@@ -871,11 +879,11 @@ internal static class StoryScript
         Do not oversell it.
         """;
 
-    private static string BuildOverviewStoryPrompt(string repoId, IReadOnlyList<TargetInfo> targets)
+    private static string BuildOverviewDigestPrompt(string repoId, IReadOnlyList<PackageInfo> packages)
     {
-        var targetList = targets.Count == 0
+        var packageList = packages.Count == 0
             ? "- No packages discovered."
-            : string.Join(Environment.NewLine, targets.Select(t => "- " + t.Name));
+            : string.Join(Environment.NewLine, packages.Select(p => "- " + p.Name));
 
         return $$"""
         Write the overview page for this repository.
@@ -884,11 +892,11 @@ internal static class StoryScript
         `result/Index.md`
 
         Primary editorial context:
-        Read every completed target story below before writing this page:
-        {{targetList}}
+        Read every completed package digest below before writing this page:
+        {{packageList}}
 
-        If package targets exist, do not write `result/Index.md` from `overview.context.md` alone.
-        The overview is invalid unless the completed target story files have been opened and used as source material.
+        If packages exist, do not write `result/Index.md` from `overview.context.md` alone.
+        The overview is invalid unless the completed package digest files have been opened and used as source material.
 
         Audience:
         Experienced .NET developers who need a mental model before choosing an individual package from this repository.
@@ -896,11 +904,11 @@ internal static class StoryScript
         Do not explain basic .NET concepts.
 
         Grounding rules:
-        The completed target stories are the primary editorial context.
+        The completed package digests are the primary editorial context.
         Use the overview context only as supplementary repository evidence.
         Supplementary README, package README, project, dependency, and metadata information may be used to clarify relationships.
         Do not invent package purposes, dependencies, recommended installation paths, scenarios, APIs, or architectural claims.
-        Do not amplify unsupported claims from a target story.
+        Do not amplify unsupported claims from a package digest.
         Prefer concrete responsibilities and decision guidance over marketing language.
         Keep the overview focused on how developers should understand and choose between the packages.
 
@@ -1122,20 +1130,12 @@ internal static class StoryScript
 
         sb.AppendLine("## Chunks");
         sb.AppendLine();
-        sb.AppendLine("| Chunk | Path | Body bytes | Headings |");
+        sb.AppendLine("| Chunk | Path | Body bytes | Contents |");
         sb.AppendLine("|---|---|---:|---|");
         for (var i = 0; i < chunks.Count; i++)
         {
-            var headings = ExtractHeadings(chunks[i]).ToList();
-            var headingText = headings.Count == 0
-                ? "(none)"
-                : string.Join("; ", headings.Take(4));
-            if (headings.Count > 4)
-            {
-                headingText += "; ...";
-            }
-
-            sb.AppendLine($"| {i + 1} | `{chunkPaths[i]}` | {Encoding.UTF8.GetByteCount(chunks[i])} | {EscapeMarkdownTableCell(headingText)} |");
+            var contents = BuildChunkContents(chunks[i]);
+            sb.AppendLine($"| {i + 1} | `{chunkPaths[i]}` | {Encoding.UTF8.GetByteCount(chunks[i])} | {EscapeMarkdownTableCell(contents)} |");
         }
         sb.AppendLine();
 
@@ -1172,6 +1172,75 @@ internal static class StoryScript
         {
             yield return match.Groups[1].Value.Trim();
         }
+    }
+
+    private static string BuildChunkContents(string chunk)
+    {
+        var entries = ExtractHeadings(chunk)
+            .Concat(ExtractInferredChunkLabels(chunk))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (entries.Count == 0)
+        {
+            entries.Add("Packed Content");
+        }
+
+        return string.Join("; ", entries);
+    }
+
+    private static IEnumerable<string> ExtractInferredChunkLabels(string chunk)
+    {
+        var packedPaths = ExtractPackedFilePaths(chunk).ToList();
+        if (packedPaths.Count == 0)
+        {
+            yield break;
+        }
+
+        foreach (var group in packedPaths
+            .GroupBy(ClassifyPackedFilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new { Heading = group.Key, Count = group.Count() })
+            .OrderByDescending(group => group.Count)
+            .ThenBy(group => group.Heading, StringComparer.OrdinalIgnoreCase))
+        {
+            yield return group.Heading;
+        }
+    }
+
+    private static string ClassifyPackedFilePath(string path)
+    {
+        var normalized = path.Replace('\\', '/').TrimStart('/');
+        var fileName = Path.GetFileName(normalized);
+
+        if (normalized.StartsWith("test/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Test Coverage";
+        }
+
+        if (normalized.StartsWith("src/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Source Code";
+        }
+
+        if (normalized.StartsWith(".nuget/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NuGet Documentation";
+        }
+
+        if (string.Equals(fileName, "README.md", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Documentation";
+        }
+
+        if (string.Equals(fileName, "Directory.Build.props", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "Directory.Build.targets", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, "Directory.Packages.props", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Project Metadata";
+        }
+
+        return "Repository Metadata";
     }
 
     private static IEnumerable<string> ExtractPackedFilePaths(string context)
@@ -1221,8 +1290,8 @@ internal static class StoryScript
         var doc = new XDocument(
             new XElement(
                 "repository-context",
-                new XAttribute("generatedBy", "git-story-teller-local-packer"),
-                new XElement("note", "Packed by the bundled git-story-teller C# runner from tracked files in the cloned repository. The packer uses git ls-files for deterministic repository membership, applies the runner include patterns, skips known generated or low-signal paths, and includes text files only."),
+                new XAttribute("generatedBy", "git-repo-digest-local-packer"),
+                new XElement("note", "Packed by the bundled git-repo-digest C# runner from tracked files in the cloned repository. The packer uses git ls-files for deterministic repository membership, applies the runner include patterns, skips known generated or low-signal paths, and includes text files only."),
                 new XElement("includePatterns", includePatterns.Select(pattern => new XElement("pattern", pattern))),
                 new XElement("directoryStructure", BuildDirectoryStructure(files.Select(file => file.RelativePath))),
                 filesElement));
@@ -1378,30 +1447,31 @@ internal static class StoryScript
 
     private static async Task WriteManifestAsync(
         string manifestPath,
-        StoryOptions options,
+        DigestOptions options,
         string repoId,
         string workspace,
-        IReadOnlyList<TargetManifestEntry> targets,
+        IReadOnlyList<PackageManifestEntry> packages,
         ContextArtifacts overviewArtifacts)
     {
         var packagesPhase = new
         {
             name = "packages",
-            targets = targets.Select(t => new { t.kind, t.name, t.context, t.contextIndex, t.contextChunks, t.result }).ToList()
+            packages = packages.Select(p => new { p.kind, p.name, p.context, p.contextIndex, p.contextChunks, p.result }).ToList(),
+            targets = packages.Select(p => new { p.kind, p.name, p.context, p.contextIndex, p.contextChunks, p.result }).ToList()
         };
 
         var overviewPhase = new
         {
             name = "overview",
             dependsOn = "packages",
-            target = new
+            package = new
             {
                 kind = "overview",
                 name = "Index",
                 context = overviewArtifacts.ContextPath,
                 contextIndex = overviewArtifacts.IndexPath,
                 contextChunks = overviewArtifacts.ChunkPaths,
-                sourceResults = targets.Select(t => t.result).ToList(),
+                sourceResults = packages.Select(p => p.result).ToList(),
                 result = "result/Index.md"
             }
         };
@@ -1422,8 +1492,9 @@ internal static class StoryScript
                 resultDirectory = ResultDirectoryName
             },
             phases = new object[] { packagesPhase, overviewPhase },
-            targets,
-            overview = overviewPhase.target
+            packages,
+            targets = packages,
+            overview = overviewPhase.package
         };
 
         var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
@@ -1513,14 +1584,14 @@ internal static class StoryScript
     {
         Console.WriteLine(
             """
-            git-story-teller deterministic context generator
+            git-repo-digest deterministic context generator
 
             Usage:
-              dotnet run --file scripts/story.cs -- --repo-url <url> --output-root <path>
+              dotnet run --file scripts/digest.cs -- --repo-url <url> --output-root <path>
 
             Required:
               --repo-url      Fully qualified git repository URL, for example https://github.com/owner/repo
-              --output-root   Directory where the {repo-id} story workspace will be written
+              --output-root   Directory where the {repo-id} digest workspace will be written
 
             Fixed conventions:
               repo-id      Derived from the final repository URL path segment
@@ -1543,7 +1614,7 @@ internal static class StoryScript
     }
 }
 
-internal sealed record StoryOptions(string RepoUrl, string OutputRoot);
+internal sealed record DigestOptions(string RepoUrl, string OutputRoot);
 
 internal sealed record ProjectMetadata(
     string PackageId,
@@ -1551,7 +1622,7 @@ internal sealed record ProjectMetadata(
     bool? IsPackable,
     IReadOnlyList<string> BundledPackages);
 
-internal sealed record TargetInfo(
+internal sealed record PackageInfo(
     string Name,
     string SourcePath,
     string? TestPath,
@@ -1584,7 +1655,7 @@ internal sealed record EngineeringSignal(
     string Value,
     string SourcePath);
 
-internal sealed record TargetManifestEntry(
+internal sealed record PackageManifestEntry(
     string kind,
     string name,
     string context,

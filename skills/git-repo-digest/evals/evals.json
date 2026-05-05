@@ -1,0 +1,169 @@
+{
+  "skill_name": "git-repo-digest",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use git-repo-digest to write package digests and the overview for an existing digest workspace at .bot/digests/example-project. The workspace has manifest.json, instructions.md, two package context files with context indexes and chunk directories, overview.context.md, and an empty result folder.",
+      "expected_output": "Reads manifest.json and instructions.md first, writes result/{PackageName}.md files before result/Index.md, processes one package context at a time, treats generated output as source of truth, uses manifest-declared context indexes and chunks when a full context read is capped, reads the completed package result files as primary source material for the overview, writes the overview with a Package selection section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
+      "expectations": [
+        "Reads manifest.json and instructions.md before writing any result file",
+        "Writes result/{PackageName}.md files before result/Index.md",
+        "Processes one package context file at a time instead of loading all contexts together",
+        "Reads each required package context completely before writing its result file",
+        "Uses the manifest-declared context index and ordered context chunks when a full context file cannot be read completely",
+        "Treats the generated manifest as authoritative for package names, context paths, result paths, and phase order",
+        "Reads the completed result/{PackageName}.md files before writing result/Index.md instead of relying only on overview.context.md",
+        "Does not invent APIs, namespaces, or capabilities not present in the package context",
+        "Writes result/Index.md with a ## Package selection section and does not use the previous package-oriented heading",
+        "Stops after reporting validation gaps rather than copying result files to a website content tree"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject and then write the resulting digests. The active workspace contains a .bot folder.",
+      "expected_output": "Recommends .bot/digests as the output root, runs dotnet run --file with --repo-url and the full URL and --output-root, does not ask for repo-id or result directory, avoids LLM options, then follows the generated manifest, including contextIndex and contextChunks entries, to write package digests before result/Index.md.",
+      "expectations": [
+        "Recommends .bot/digests as the output root because a .bot folder exists in the workspace",
+        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root",
+        "Passes the full repository URL, not a slug or partial reference",
+        "Does not ask the user for repo-id or result directory",
+        "Does not pass provider, model, or LLM flags to the runner",
+        "Recognizes that the generated manifest can include contextIndex and contextChunks entries for capped context reads",
+        "Follows the generated manifest after the runner completes to write package digests before Index.md"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Use git-repo-digest to write result/Index.md from an existing digest workspace. The context files and manifest are present but the result folder is empty.",
+      "expected_output": "Writes all required package result files before writing result/Index.md, reads those completed package digests as required primary source material for the overview, and uses Package selection as the visible overview section heading.",
+      "expectations": [
+        "Writes all required package result files before writing result/Index.md",
+        "Does not skip package digests even when the user asks only for the overview",
+        "Reads each completed package result file as editorial input when writing Index.md",
+        "Does not treat overview.context.md by itself as sufficient source material for Index.md",
+        "Writes result/Index.md with a ## Package selection section and does not use the previous package-oriented heading",
+        "Names any missing package digests in the response if any cannot be completed before proceeding"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use git-repo-digest to write a package digest for a library package. The context file includes source files but contains no performance benchmarks, third-party integration examples, or architecture diagrams.",
+      "expected_output": "The result file contains only claims grounded in the context; no invented benchmarks, integration examples, broad marketing adjectives, or API shapes that do not appear in the source.",
+      "expectations": [
+        "Grounds every capability claim in source, tests, project metadata, or README content from the context",
+        "Does not invent API shapes, method signatures, or namespaces not visible in the context",
+        "Omits benchmark or performance claims when no benchmark data is present in the context",
+        "Avoids broad adjectives such as robust, seamless, powerful, or comprehensive unless immediately backed by concrete evidence from the context",
+        "Uses the rg validation commands from the skill to check result files before reporting completion"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use git-repo-digest to generate a digest workspace but the runner exits with an error stating that the .NET 10 SDK is not installed.",
+      "expected_output": "Stops and reports the missing .NET dependency clearly instead of continuing with partial output or guessing digest content.",
+      "expectations": [
+        "Identifies .NET 10 SDK and git as required runner dependencies",
+        "Stops and reports the blocking dependency issue instead of proceeding with partial output",
+        "Does not attempt to generate digest content by guessing when the runner cannot complete",
+        "Tells the user what to install to unblock the workflow"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject while .NET 10 and git are available, but Node/npm, Repomix, and public packing services are unavailable.",
+      "expected_output": "Runs the bundled digest.cs runner with the full repository URL and output root, recognizes that context packing is handled locally by the C# packer over the cloned repository's tracked files, and follows the generated manifest instead of treating missing Node/npm or Repomix as relevant dependencies.",
+      "expectations": [
+        "Does not stop or request Node/npm solely because local npx or local Repomix is unavailable",
+        "Recognizes that the runner performs one shallow git clone and packs local tracked files with the bundled C# packer",
+        "Does not suggest sending the repository URL or include patterns to a public packing service",
+        "Treats the C# packer as the primary deterministic context packer rather than a lower-fidelity fallback",
+        "Still treats .NET 10 SDK and git failures as blocking dependencies"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Use git-repo-digest to write a package digest from an existing workspace. The first file-read response for WidgetPack.context.md says the file was capped at 50 KB and only shows the beginning of the context.",
+      "expected_output": "Uses the manifest-declared WidgetPack.context.index.md and every ordered file under WidgetPack.context.chunks/ to inspect the full package context before writing result/WidgetPack.md. It does not treat the index as source evidence, and it does not use token limits, context budget, or strategic reading as a reason to skip source sections; if the chunks cannot be read completely, it stops and reports the blocker.",
+      "expectations": [
+        "Treats capped or truncated file output as an incomplete read",
+        "Reads the manifest-declared context index to find the ordered chunk list",
+        "Reads every context chunk in numeric order until the whole required package context is inspected",
+        "Does not treat the context index as a substitute for raw source evidence",
+        "Does not write the package digest from only the first capped portion of the context file",
+        "Does not describe strategic source selection as acceptable before the full package context has been read",
+        "Stops and reports a blocker if the full required package context cannot be read from the full file or complete chunk set"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Use git-repo-digest to write package digests for an existing workspace with manifest.json, instructions.md, and four independent package context files. The agent runtime supports subagents.",
+      "expected_output": "Uses one subagent per independent package context when practical, gives each subagent only its assigned context plus the relevant instructions and manifest entry, requires each subagent to fully read its assigned context before drafting, writes package result files before result/Index.md, and keeps the main agent responsible as orchestrator and final overview author.",
+      "expectations": [
+        "Prefers one subagent per independent package context when the runtime supports subagents",
+        "Does not give unrelated package contexts to the same subagent",
+        "Requires each subagent to completely read its assigned context before drafting the package digest",
+        "Keeps result/Index.md blocked until all required package result files exist",
+        "Does not treat subagent summaries as a replacement for completed package result files during overview synthesis",
+        "Requires the main agent to gather completed package digests, subagent caveats, and validation notes before drafting the overview",
+        "Keeps the coordinating agent responsible for manifest order, overview authorship, validation, and final reporting"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use git-repo-digest to write result/Index.md for an existing package workspace. The context proves that an aggregate package transitively references hosting and ASP.NET Core packages, and the overview prompt asks for common mistakes and use-less guidance. The context contains no NuGet analytics, GitHub issue frequency, telemetry, survey data, or docs saying which mistake is most common.",
+      "expected_output": "Writes grounded use-less guidance without claiming measured developer behavior. It may explain that installing the aggregate package in a project that only needs the base package adds unnecessary references, but it must not call that the most common mistake or say developers often/frequently do it unless the context includes frequency evidence.",
+      "expectations": [
+        "Separates source-backed package dependency evidence from inferred usage guidance",
+        "Does not use phrases such as most common mistake, developers often, users frequently, typical failure, popular choice, or widely used without explicit frequency evidence",
+        "Explains the dependency tradeoff conditionally, for example by saying that if a project only needs the base package, the aggregate package adds unnecessary references",
+        "Does not invent NuGet, GitHub, telemetry, issue, or survey insights",
+        "Uses neutral recommendation language such as start with the focused package and add layers only when needed"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Use git-repo-digest to generate and write package digests for a library workspace whose source contains public classes, internal helper classes, callback-based lifecycle wiring, tests for exception guards, and a GlobalSuppressions.cs file.",
+      "expected_output": "Uses generated public API summaries and engineering signals to focus source inspection, filters GlobalSuppressions.cs from packed context, does not list internal helpers as consumer APIs, but uses internal implementation details only when they explain public lifecycle behavior, validation guards, callback flow, or package boundaries.",
+      "expectations": [
+        "Recognizes PUBLIC API SUMMARY and ENGINEERING SIGNALS sections as navigation aids rather than final evidence",
+        "Verifies public API and engineering-depth claims against raw source or tests before writing",
+        "Does not document internal helper classes as public consumer APIs",
+        "Uses internal implementation details only to explain public behavior such as lifecycle, validation, callback flow, or package boundaries",
+        "Excludes GlobalSuppressions.cs from packed context instead of spending digest budget on suppression metadata"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository where Codebelt.Extensions.Xunit is a shared base package, Directory.Build.props adds it to test projects, and downstream test projects such as Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests exist but there is no dedicated Codebelt.Extensions.Xunit.Tests project.",
+      "expected_output": "The generated Codebelt.Extensions.Xunit package context does not assign a downstream hosting test directory as its Test path. It either uses a dedicated exact-name test project when present or leaves Test path undiscovered when only downstream package test projects match the base package prefix.",
+      "expectations": [
+        "Discovers source projects only from the Codebelt src/ root",
+        "Discovers owned test projects only from the Codebelt test/ root, not a generic tests/ root",
+        "Recognizes Codebelt.Extensions.Xunit.Tests as the dedicated test project for Codebelt.Extensions.Xunit",
+        "Recognizes FunctionalTests as the Codebelt app test suffix while avoiding generic UnitTests or IntegrationTests suffix expansion",
+        "Does not confuse the Xunit.Tests suffix with a UnitTests suffix and strip too much of the package name",
+        "Prefers a dedicated test project named after the package plus a test suffix over downstream package test projects",
+        "Does not treat Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests as the owned test project for Codebelt.Extensions.Xunit",
+        "Leaves Test path as not discovered when no dedicated test project or single unambiguous direct project reference exists",
+        "Still allows Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests to map to the Codebelt.Extensions.Xunit.Hosting.AspNetCore package",
+        "Reports missing dedicated tests as a confidence risk instead of smoothing it over with another package's tests"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository whose package context has large packed source and test files split across multiple chunks. Some chunks contain markdown section headings, XML <file path=\"...\"> entries from src/, test/, .nuget/, and root project metadata files, or a mixture of both.",
+      "expected_output": "The generated context index uses a Contents column, keeps all real markdown headings when present, adds deterministic inferred labels such as Source Code, Test Coverage, NuGet Documentation, Documentation, Project Metadata, or Packed Content from packed file paths, and can show both heading and path-derived labels in the same semicolon-delimited cell without truncating the list with ellipses.",
+      "expectations": [
+        "Uses Contents rather than Headings as the chunk index table column name",
+        "Keeps all existing real markdown headings in the chunk index when a chunk contains them",
+        "Adds Source Code for chunks with packed file paths under src/",
+        "Adds Test Coverage for chunks with packed file paths under test/",
+        "Adds NuGet Documentation, Documentation, or Project Metadata for documentation and project metadata chunks",
+        "Allows a single semicolon-delimited Contents cell to include both markdown headings and packed-path labels",
+        "Does not truncate the Contents cell with ellipses",
+        "Uses a deterministic Packed Content fallback only when no packed file paths are visible",
+        "Does not emit (none) for packed-content chunks in the context index"
+      ]
+    }
+  ]
+}
