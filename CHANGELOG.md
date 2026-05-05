@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-06
+
+This is a patch release focused on strengthening `git-repo-digest` with enhanced output-root path labeling, comprehensive validation rules, and improved example guidance for Basic usage sections.
+
+### Changed
+
+- Refactored `git-repo-digest` output-root path labeling to use runtime-visible model and reasoning values (e.g., `.bot/digests/gpt-5.5-high`), with explicit guidance for requesting missing label values instead of guessing,
+- Enhanced evidence-precedence hierarchy in `digest.cs`: source files are authoritative for APIs and method signatures, tests are authoritative for usage patterns, and project files are authoritative for dependencies and package relationships,
+- Strengthened validation rules for C# Basic usage examples including explicit rejection of helper methods, fake services, missing namespaces, and unverified inheritance or signature claims,
+- Expanded Basic usage guidance to distinguish normal packages (single focused example) from convenience and aggregate packages (one focused example per referenced code package with subheadings),
+- Strengthened metadata guidance in package digests to reject framework claims, dependency lists, and repository facts from Overview sections,
+- Updated skill description in README to reflect new output-root labeling format and the conditions for when the recommendation applies.
+
 ## [0.4.2] - 2026-05-05
 
 This is a minor release focused on simplifying `git-story-teller` architecture, removing external dependencies, consolidating on deterministic local context packing, and renaming the skill to `git-repo-digest` for improved clarity. The skill no longer depends on Node/npm, Repomix, or public packing services; instead, it performs a shallow git clone and uses the bundled C# packer to extract tracked files via `git ls-files`, making the skill fully self-contained and deterministic.
@@ -223,7 +236,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/codebeltnet/agentic/compare/v0.4.2...v0.4.4
 [0.4.2]: https://github.com/codebeltnet/agentic/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/codebeltnet/agentic/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/codebeltnet/agentic/compare/v0.3.4...v0.4.0
