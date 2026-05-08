@@ -4,6 +4,7 @@
 #:property PublishAot=false
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -17,6 +18,7 @@ internal static class DigestScript
     private const string SourceDirectoryName = "src";
     private const string TestDirectoryName = "test";
     private const int MaxContextChunkBodyBytes = 36 * 1024;
+    private const int MaxExternalUsageFilesPerPackage = 40;
     private static readonly string[] OwnedTestProjectSuffixes = ["Tests", "FunctionalTests"];
     private static readonly Regex PublicTypeExpression = new(
         @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected\s+internal|internal\s+protected)\s+(?:(?:static|abstract|sealed|partial|readonly|unsafe)\s+)*(?<kind>record\s+class|record\s+struct|class|interface|struct|record|enum)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*(?:<[^>{};]+>)?)\s*(?::\s*(?<base>[^{]+))?",
@@ -38,7 +40,8 @@ internal static class DigestScript
         {
             var options = ParseOptions(args);
             var repoId = DeriveRepoId(options.RepoUrl);
-            var workspace = Path.GetFullPath(Path.Combine(options.OutputRoot, repoId));
+            var runId = CreateRunId();
+            var workspace = ResolveWorkspacePath(options.OutputRoot, repoId, runId);
             var resultDir = Path.Combine(workspace, ResultDirectoryName);
 
             Directory.CreateDirectory(workspace);
@@ -48,6 +51,8 @@ internal static class DigestScript
             Console.WriteLine($"[digest] repo-url={options.RepoUrl}");
             Console.WriteLine($"[digest] output-root={options.OutputRoot}");
             Console.WriteLine($"[digest] repo-id={repoId}");
+            Console.WriteLine($"[digest] run-id={runId}");
+            Console.WriteLine($"[digest] external-repo-count={options.ExternalRepoUrls.Count}");
             Console.WriteLine();
 
             var tempRoot = Path.Combine(Path.GetTempPath(), "git-repo-digest-" + Guid.NewGuid().ToString("N"));
@@ -57,6 +62,7 @@ internal static class DigestScript
             {
                 var cloneDir = Path.Combine(tempRoot, "repo");
                 await CloneRepositoryAsync(options.RepoUrl, cloneDir);
+                var externalRepositories = await CloneExternalRepositoriesAsync(options, tempRoot);
 
                 var packages = DiscoverPackages(cloneDir);
                 Console.WriteLine($"[digest] discovered {packages.Count} package(s)");
@@ -65,7 +71,7 @@ internal static class DigestScript
                 foreach (var package in packages)
                 {
                     var resultPath = Path.Combine(ResultDirectoryName, package.Name + ".md").Replace('\\', '/');
-                    var packageArtifacts = await WritePackageWorkspaceAsync(workspace, cloneDir, package);
+                    var packageArtifacts = await WritePackageWorkspaceAsync(workspace, cloneDir, package, packages, externalRepositories);
 
                     packageEntries.Add(new PackageManifestEntry(
                         "package",
@@ -78,13 +84,14 @@ internal static class DigestScript
                 var overviewPromptPath = Path.Combine("prompts", "overview.prompt.md").Replace('\\', '/');
                 await WriteUtf8Async(
                     Path.Combine(workspace, overviewPromptPath),
-                    BuildOverviewDigestPrompt(repoId, packages));
+                    BuildConceptualDigestPrompt(repoId, packages));
 
                 await WriteUtf8Async(Path.Combine(workspace, "instructions.md"), BuildInstructions(options.RepoUrl, repoId));
                 await WriteManifestAsync(
                     Path.Combine(workspace, "manifest.json"),
                     options,
                     repoId,
+                    runId,
                     workspace,
                     packageEntries,
                     overviewPromptPath);
@@ -111,6 +118,10 @@ internal static class DigestScript
     {
         var repoUrl = GetOption(args, "--repo-url");
         var outputRoot = GetOption(args, "--output-root");
+        var externalRepoUrls = GetOptions(args, "--external-repo-url")
+            .Select(url => url.Trim())
+            .Where(url => !string.IsNullOrWhiteSpace(url))
+            .ToList();
 
         if (string.IsNullOrWhiteSpace(repoUrl))
         {
@@ -123,13 +134,47 @@ internal static class DigestScript
         }
 
         ValidateRepositoryUrl(repoUrl);
-        return new DigestOptions(repoUrl.Trim(), Path.GetFullPath(outputRoot.Trim()));
+        foreach (var externalRepoUrl in externalRepoUrls)
+        {
+            ValidateRepositoryUrl(externalRepoUrl);
+        }
+
+        var normalizedRepo = NormalizeRepositoryIdentity(repoUrl);
+        foreach (var externalRepoUrl in externalRepoUrls)
+        {
+            var normalizedExternalRepo = NormalizeRepositoryIdentity(externalRepoUrl);
+            if (normalizedExternalRepo.Equals(normalizedRepo))
+            {
+                throw new InvalidOperationException("--external-repo-url cannot point to the repository currently under digest.");
+            }
+        }
+
+        return new DigestOptions(repoUrl.Trim(), Path.GetFullPath(outputRoot.Trim()), externalRepoUrls);
     }
 
     private static string? GetOption(string[] args, string name)
     {
         var index = Array.IndexOf(args, name);
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+    }
+
+    private static IEnumerable<string> GetOptions(string[] args, string name)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (!string.Equals(args[i], name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Missing value for {name}.");
+            }
+
+            yield return args[i + 1];
+            i++;
+        }
     }
 
     private static bool HasFlag(string[] args, string name) => Array.IndexOf(args, name) >= 0;
@@ -171,10 +216,48 @@ internal static class DigestScript
         return sanitized.ToLowerInvariant();
     }
 
+    private static string CreateRunId() =>
+        DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss'Z'", CultureInfo.InvariantCulture);
+
+    private static string ResolveWorkspacePath(string outputRoot, string repoId, string runId)
+    {
+        var workspace = Path.Combine(outputRoot, repoId, runId);
+        return Path.GetFullPath(workspace);
+    }
+
     private static async Task CloneRepositoryAsync(string repoUrl, string cloneDir)
     {
         Console.WriteLine("[digest] cloning repository for discovery...");
         await RunProcessAsync("git", ["clone", "--depth", "1", repoUrl, cloneDir], Directory.GetCurrentDirectory());
+    }
+
+    private static async Task<IReadOnlyList<ExternalRepository>> CloneExternalRepositoriesAsync(DigestOptions options, string tempRoot)
+    {
+        if (options.ExternalRepoUrls.Count == 0)
+        {
+            return [];
+        }
+
+        Console.WriteLine("[digest] cloning external usage repositories...");
+
+        var repositories = new List<ExternalRepository>();
+        var seen = new HashSet<RepositoryIdentity>();
+        for (var i = 0; i < options.ExternalRepoUrls.Count; i++)
+        {
+            var repoUrl = options.ExternalRepoUrls[i];
+            var identity = NormalizeRepositoryIdentity(repoUrl);
+            if (!seen.Add(identity))
+            {
+                continue;
+            }
+
+            var cloneDir = Path.Combine(tempRoot, "external-" + repositories.Count.ToString("D2"));
+            Console.WriteLine($"[digest] external usage clone {repositories.Count + 1}: {repoUrl}");
+            await RunProcessAsync("git", ["clone", "--depth", "1", repoUrl, cloneDir], Directory.GetCurrentDirectory());
+            repositories.Add(new ExternalRepository(repoUrl, cloneDir, identity));
+        }
+
+        return repositories;
     }
 
     private static IReadOnlyList<PackageInfo> DiscoverPackages(string cloneDir)
@@ -332,7 +415,12 @@ internal static class DigestScript
         return segments.Any(s => string.Equals(s, directoryName, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static async Task<PackageWorkspaceArtifacts> WritePackageWorkspaceAsync(string workspace, string cloneDir, PackageInfo package)
+    private static async Task<PackageWorkspaceArtifacts> WritePackageWorkspaceAsync(
+        string workspace,
+        string cloneDir,
+        PackageInfo package,
+        IReadOnlyList<PackageInfo> packages,
+        IReadOnlyList<ExternalRepository> externalRepositories)
     {
         Console.WriteLine($"[digest] writing evidence for {package.Name}...");
 
@@ -385,6 +473,22 @@ internal static class DigestScript
             "editorial-context",
             trackedFiles.Where(file => IsReadmeEvidenceFile(file.RelativePath, package)).ToList());
 
+        var externalUsageFiles = await FindExternalUsageFilesAsync(cloneDir, package, packages, externalRepositories);
+        var externalUsageNote = externalRepositories.Count == 0
+            ? "No external usage repositories were provided."
+            : externalUsageFiles.Count == 0
+                ? $"External usage repositories were cloned, but no reference-plus-code usage matches were found for {package.Name}."
+                : null;
+        var externalUsageArtifacts = await WriteEvidenceArtifactsAsync(
+            workspace,
+            packageEvidenceRoot,
+            "external-usage",
+            "externalUsageEvidence",
+            package.Name,
+            "curated-external-usage",
+            externalUsageFiles,
+            externalUsageNote);
+
         var apiSummaryPath = Path.Combine(packageEvidenceRoot, "api-summary.md").Replace('\\', '/');
         await WriteUtf8Async(Path.Combine(workspace, apiSummaryPath), BuildPublicApiSummary(cloneDir, package));
 
@@ -396,6 +500,7 @@ internal static class DigestScript
             testArtifacts,
             projectArtifacts,
             readmeArtifacts,
+            externalUsageArtifacts,
             apiSummaryPath,
             engineeringSignalsPath);
 
@@ -651,6 +756,309 @@ internal static class DigestScript
         return index >= 0 ? name[..index] : name;
     }
 
+    private static async Task<IReadOnlyList<PackedFile>> FindExternalUsageFilesAsync(
+        string digestCloneDir,
+        PackageInfo package,
+        IReadOnlyList<PackageInfo> packages,
+        IReadOnlyList<ExternalRepository> externalRepositories)
+    {
+        if (externalRepositories.Count == 0)
+        {
+            return [];
+        }
+
+        var searchTerms = BuildExternalUsageSearchTerms(digestCloneDir, package).ToList();
+        if (searchTerms.Count == 0)
+        {
+            return [];
+        }
+
+        var referencePackageNames = BuildExternalUsageReferencePackageNames(package, packages).ToList();
+        var selected = new List<PackedFile>();
+        var selectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var externalRepository in externalRepositories)
+        {
+            var trackedFiles = await GetPackableTrackedFilesAsync(externalRepository.CloneDir);
+            var trackedFilesByPath = trackedFiles.ToDictionary(file => file.RelativePath, StringComparer.OrdinalIgnoreCase);
+            var projectFiles = trackedFiles
+                .Where(file => file.RelativePath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+                .Select(file => new
+                {
+                    ProjectFile = file,
+                    ReferenceFiles = FindPackageReferenceFilesForProject(file, trackedFilesByPath, referencePackageNames)
+                })
+                .Where(match => match.ReferenceFiles.Count > 0)
+                .OrderBy(match => match.ProjectFile.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var projectMatch in projectFiles)
+            {
+                var projectFile = projectMatch.ProjectFile;
+                var projectDirectory = Path.GetDirectoryName(projectFile.RelativePath)?.Replace('\\', '/') ?? string.Empty;
+                var codeFiles = trackedFiles
+                    .Where(file => file.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    .Where(file => string.IsNullOrWhiteSpace(projectDirectory) || IsUnderPath(file.RelativePath, projectDirectory))
+                    .Select(file => new { File = file, Score = GetExternalUsageScore(file.FullPath, searchTerms) })
+                    .Where(file => file.Score > 0)
+                    .OrderByDescending(file => file.Score)
+                    .ThenBy(file => file.File.RelativePath, StringComparer.OrdinalIgnoreCase)
+                    .Take(8)
+                    .Select(file => file.File)
+                    .ToList();
+
+                if (codeFiles.Count == 0)
+                {
+                    continue;
+                }
+
+                AddExternalUsageFile(selected, selectedPaths, externalRepository, projectFile);
+                foreach (var referenceFile in projectMatch.ReferenceFiles.Where(file => !string.Equals(file.RelativePath, projectFile.RelativePath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    AddExternalUsageFile(selected, selectedPaths, externalRepository, referenceFile);
+                }
+
+                foreach (var codeFile in codeFiles)
+                {
+                    AddExternalUsageFile(selected, selectedPaths, externalRepository, codeFile);
+                }
+
+                if (selected.Count >= MaxExternalUsageFilesPerPackage)
+                {
+                    return selected.Take(MaxExternalUsageFilesPerPackage).ToList();
+                }
+            }
+        }
+
+        return selected;
+    }
+
+    private static IReadOnlyList<PackedFile> FindPackageReferenceFilesForProject(
+        PackedFile projectFile,
+        IReadOnlyDictionary<string, PackedFile> trackedFilesByPath,
+        IReadOnlyList<string> packageNames)
+    {
+        var referenceFiles = new List<PackedFile>();
+        if (FileReferencesAnyPackage(projectFile.FullPath, packageNames))
+        {
+            referenceFiles.Add(projectFile);
+        }
+
+        foreach (var buildFileName in new[] { "Directory.Build.props", "Directory.Build.targets" })
+        {
+            var buildFile = FindNearestAncestorBuildFile(projectFile.RelativePath, buildFileName, trackedFilesByPath);
+            if (buildFile is not null && FileReferencesAnyPackage(buildFile.FullPath, packageNames))
+            {
+                referenceFiles.Add(buildFile);
+            }
+        }
+
+        return referenceFiles
+            .DistinctBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(file => file.RelativePath, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static PackedFile? FindNearestAncestorBuildFile(
+        string projectRelativePath,
+        string buildFileName,
+        IReadOnlyDictionary<string, PackedFile> trackedFilesByPath)
+    {
+        var projectDirectory = Path.GetDirectoryName(projectRelativePath)?.Replace('\\', '/') ?? string.Empty;
+        while (true)
+        {
+            var candidatePath = string.IsNullOrWhiteSpace(projectDirectory)
+                ? buildFileName
+                : projectDirectory.TrimEnd('/') + "/" + buildFileName;
+
+            if (trackedFilesByPath.TryGetValue(candidatePath, out var buildFile))
+            {
+                return buildFile;
+            }
+
+            if (string.IsNullOrWhiteSpace(projectDirectory))
+            {
+                return null;
+            }
+
+            var parent = Path.GetDirectoryName(projectDirectory)?.Replace('\\', '/') ?? string.Empty;
+            projectDirectory = string.Equals(parent, projectDirectory, StringComparison.OrdinalIgnoreCase) ? string.Empty : parent;
+        }
+    }
+
+    private static IEnumerable<string> BuildExternalUsageReferencePackageNames(PackageInfo package, IReadOnlyList<PackageInfo> packages)
+    {
+        yield return package.Name;
+
+        foreach (var candidate in packages.Where(candidate => !string.Equals(candidate.Name, package.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (PackageTransitivelyReferencesPackage(candidate, package, packages, []))
+            {
+                yield return candidate.Name;
+            }
+        }
+    }
+
+    private static bool PackageTransitivelyReferencesPackage(
+        PackageInfo candidate,
+        PackageInfo target,
+        IReadOnlyList<PackageInfo> packages,
+        HashSet<string> visited)
+    {
+        if (!visited.Add(candidate.Name))
+        {
+            return false;
+        }
+
+        foreach (var reference in candidate.BundledPackages)
+        {
+            if (ReferenceMatchesPackage(reference, target))
+            {
+                return true;
+            }
+
+            var referencedPackage = packages.FirstOrDefault(package => ReferenceMatchesPackage(reference, package));
+            if (referencedPackage is not null && PackageTransitivelyReferencesPackage(referencedPackage, target, packages, visited))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ReferenceMatchesPackage(string reference, PackageInfo package)
+    {
+        return string.Equals(reference, package.Name, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(Path.GetFileNameWithoutExtension(reference), package.Name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AddExternalUsageFile(
+        List<PackedFile> selected,
+        HashSet<string> selectedPaths,
+        ExternalRepository externalRepository,
+        PackedFile file)
+    {
+        var externalPath = BuildExternalUsagePath(externalRepository.Identity, file.RelativePath);
+        if (selectedPaths.Add(externalPath))
+        {
+            selected.Add(new PackedFile(file.FullPath, externalPath));
+        }
+    }
+
+    private static string BuildExternalUsagePath(RepositoryIdentity identity, string relativePath)
+    {
+        var prefix = ("external/" + identity.Host + "/" + identity.Path).Replace('\\', '/').TrimEnd('/');
+        return prefix + "/" + relativePath.Replace('\\', '/').TrimStart('/');
+    }
+
+    private static IEnumerable<ExternalUsageSearchTerm> BuildExternalUsageSearchTerms(string cloneDir, PackageInfo package)
+    {
+        var terms = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        AddExternalUsageSearchTerm(terms, package.Name, isStrong: true);
+
+        foreach (var apiType in DiscoverPublicApiTypes(cloneDir, package))
+        {
+            AddExternalUsageSearchTerm(terms, GetSimpleTypeName(apiType.Name), isStrong: false);
+        }
+
+        var sourceDir = Path.Combine(cloneDir, package.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (Directory.Exists(sourceDir))
+        {
+            foreach (var sourceFile in Directory.EnumerateFiles(sourceDir, "*.cs", SearchOption.AllDirectories))
+            {
+                if (ShouldSkipLowSignalFile(Path.GetRelativePath(cloneDir, sourceFile).Replace('\\', '/')))
+                {
+                    continue;
+                }
+
+                var content = File.ReadAllText(sourceFile, Encoding.UTF8);
+                foreach (Match match in Regex.Matches(content, @"\bnamespace\s+([A-Za-z_][A-Za-z0-9_.]*)"))
+                {
+                    AddExternalUsageSearchTerm(terms, match.Groups[1].Value, isStrong: true);
+                }
+            }
+        }
+
+        return terms
+            .Where(term => term.Key.Length > 2)
+            .Select(term => new ExternalUsageSearchTerm(term.Key, term.Value))
+            .OrderByDescending(term => term.IsStrong)
+            .ThenByDescending(term => term.Value.Length)
+            .ThenBy(term => term.Value, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void AddExternalUsageSearchTerm(Dictionary<string, bool> terms, string value, bool isStrong)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        terms[value] = isStrong || (terms.TryGetValue(value, out var existing) && existing);
+    }
+
+    private static int GetExternalUsageScore(string fullPath, IReadOnlyList<ExternalUsageSearchTerm> searchTerms)
+    {
+        var content = File.ReadAllText(fullPath, Encoding.UTF8);
+        var score = 0;
+        var hasStrongMatch = false;
+        foreach (var term in searchTerms)
+        {
+            if (content.Contains(term.Value, StringComparison.Ordinal))
+            {
+                score += term.IsStrong ? 4 : 1;
+                hasStrongMatch |= term.IsStrong;
+            }
+        }
+
+        return hasStrongMatch ? score : 0;
+    }
+
+    private static bool FileReferencesAnyPackage(string projectFile, IReadOnlyList<string> packageNames)
+    {
+        try
+        {
+            var doc = XDocument.Load(projectFile, LoadOptions.PreserveWhitespace);
+            return doc.Descendants()
+                .Where(element => string.Equals(element.Name.LocalName, "PackageReference", StringComparison.OrdinalIgnoreCase))
+                .Any(element => packageNames.Any(packageName =>
+                    string.Equals((string?)element.Attribute("Include"), packageName, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals((string?)element.Attribute("Update"), packageName, StringComparison.OrdinalIgnoreCase)));
+        }
+        catch
+        {
+            var content = File.ReadAllText(projectFile, Encoding.UTF8);
+            return packageNames.Any(packageName =>
+            {
+                var escapedPackageName = Regex.Escape(packageName);
+                return Regex.IsMatch(
+                    content,
+                    @"<PackageReference\s+[^>]*(?:Include|Update)\s*=\s*[""']" + escapedPackageName + @"[""']",
+                    RegexOptions.IgnoreCase);
+            });
+        }
+    }
+
+    private static RepositoryIdentity NormalizeRepositoryIdentity(string repoUrl)
+    {
+        var uri = new Uri(repoUrl);
+        var host = uri.Host.Trim().ToLowerInvariant();
+        var path = uri.AbsolutePath.Trim('/');
+        if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            path = path[..^4];
+        }
+
+        path = Regex.Replace(path, "/+", "/", RegexOptions.None).Trim('/').ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException($"Could not normalize repository URL '{repoUrl}'.");
+        }
+
+        return new RepositoryIdentity(host, path);
+    }
+
     private static string BuildInstructions(string repoUrl, string repoId) =>
         $$"""
         # Digest Writing Instructions
@@ -666,7 +1074,7 @@ internal static class DigestScript
         - Process package evidence sets one at a time.
         - Write every package result before writing the overview.
         - Each package prompt lives under `prompts/{PackageName}.prompt.md`.
-        - Raw evidence lives under `evidence/{PackageName}/` as `source.xml`, `tests.xml`, `projects.xml`, and `readmes.xml`.
+        - Raw evidence lives under `evidence/{PackageName}/` as `source.xml`, `tests.xml`, `projects.xml`, `readmes.xml`, and `external-usage.xml`.
         - If a full evidence file is capped, truncated, summarized, or too large to read safely, read its index and then every listed chunk in numeric order.
         - Do not treat an index file as source evidence. It helps navigation only.
         - Do not treat generated public API summaries or engineering signals as standalone evidence. They help you decide what to inspect in raw evidence files.
@@ -677,6 +1085,7 @@ internal static class DigestScript
         - README/readme evidence is not authoritative for API shape.
         - If README and source disagree, source wins.
         - If README examples and tests disagree, tests win.
+        - If external usage disagrees with current source, source wins.
         - Do not invent APIs, package relationships, examples, dependencies, support statements, performance claims, or architectural claims.
         - If evidence is missing, stale, contradictory, or too large to use safely, stop and report the blocker.
 
@@ -692,13 +1101,14 @@ internal static class DigestScript
         4. Read source evidence directly if possible, or every source chunk in numeric order.
         5. Read project evidence directly if possible, or every project chunk in numeric order.
         6. Read test evidence directly if possible, or every test chunk in numeric order.
-        7. Read README evidence as editorial context only.
-        8. Use `api-summary.md` and `engineering-signals.md` as navigation aids only.
-        9. Write each package result file only after its required raw evidence has been inspected.
-        10. Read `prompts/overview.prompt.md`, then read every completed package result file listed by the manifest.
-        11. Read overview project/readme evidence as needed.
-        12. Write `result/Index.md`.
-        13. Validate that all manifest result paths exist.
+        7. Read external usage evidence directly if possible, or every external-usage chunk in numeric order.
+        8. Read README evidence as editorial context only.
+        9. Use `api-summary.md` and `engineering-signals.md` as navigation aids only.
+        10. Write each package result file only after its required raw evidence has been inspected.
+        11. Read `prompts/overview.prompt.md`, then read every completed package result file listed by the manifest.
+        12. Read overview project/readme evidence as needed.
+        13. Write `result/Index.md`.
+        14. Validate that all manifest result paths exist.
         """;
 
     private static string BuildSharedEditorialRules() => """
@@ -719,10 +1129,12 @@ internal static class DigestScript
 
         Use source files as the authoritative source for public APIs, inheritance, interfaces, generic constraints, method signatures, overloads, virtual/abstract members, lifecycle hooks, and consumer-facing behavior.
         Use test files as authoritative evidence for intended usage, behavioral contracts, common setup, and edge cases.
+        Use external usage files as curated evidence for real consumer scenario shape only. They can influence Basic usage examples when current source evidence validates the APIs.
         Use project files as authoritative evidence for dependencies, target frameworks, package references, project references, and package relationships.
         Use README and metadata files only as editorial context for positioning, vocabulary, and high-level intent.
         Do not use README or metadata files as evidence for API shape when source code is available.
         If README, package README, catalog metadata, generated summaries, or engineering signals disagree with source code, follow the source code.
+        If external usage disagrees with source code, follow the source code.
         If tests disagree with README examples, prefer tests for usage patterns.
 
         You must not invent APIs, features, package relationships, dependencies, examples, use cases, support statements, performance claims, or architectural claims not supported by the supplied evidence.
@@ -762,6 +1174,8 @@ internal static class DigestScript
         - Project index: `{{evidence.Projects.Index}}`
         - README evidence: `{{evidence.Readmes.Path}}`
         - README index: `{{evidence.Readmes.Index}}`
+        - External usage evidence: `{{evidence.ExternalUsage.Path}}`
+        - External usage index: `{{evidence.ExternalUsage.Index}}`
         - API summary: `{{evidence.ApiSummary}}`
         - Engineering signals: `{{evidence.EngineeringSignals}}`
 
@@ -782,7 +1196,11 @@ internal static class DigestScript
         Evidence authority:
         - `source.xml` or all source chunks are authoritative for API shape, inheritance, interfaces, generic constraints, method signatures, overloads, virtual/abstract members, lifecycle hooks, callbacks, and consumer-facing behavior.
         - `tests.xml` or all test chunks are authoritative for intended usage, behavioral contracts, common setup, edge cases, and test-backed usage flow.
-        - For `## Basic usage`, use `tests.xml` as the primary inspiration source. Identify representative test setup, API calls, assertions, and usage flow, then rewrite those patterns into clean consumer-facing documentation examples.
+        - `external-usage.xml` or all external-usage chunks contain curated consumer code selected from user-provided repositories. The runner includes only external projects that reference this package, or a discovered package that transitively references this package, in the project file or nearest ancestor Directory.Build.props / Directory.Build.targets and source or test C# files that contain a strong current-package marker such as this package's namespace or package id.
+        - For `## Basic usage`, prefer representative external usage when it exists, validates against current source evidence, and shows a clearer consumer scenario than owned tests.
+        - External usage is authority only for observed consumer usage shape, naming, setup style, and scenario selection. It is not authority for current API shape.
+        - If external usage is stale, uses APIs missing from current source evidence, or only shows noisy plumbing, prefer `tests.xml`.
+        - When external usage is unavailable or weak, use `tests.xml` as the primary inspiration source. Identify representative test setup, API calls, assertions, and usage flow, then rewrite those patterns into clean consumer-facing documentation examples.
         - Do not copy awkward regression tests, edge-case-only tests, silly test values, maintainer-internal namespaces, or maintainer-internal names verbatim unless they are the clearest usage evidence.
         - If test evidence is missing or weak, derive the smallest valid example from `source.xml` and write conservatively.
         - `projects.xml` or all projects chunks are authoritative for dependencies, target frameworks, package references, project references, packability, package metadata, and package relationships.
@@ -790,20 +1208,25 @@ internal static class DigestScript
         - `api-summary.md` and `engineering-signals.md` are reading aids only. They help focus inspection but are not final evidence.
         - XML documentation is useful evidence for intent, but source declarations and tests still win when there is a conflict.
 
-        Do not use README or metadata files as evidence for method names, inheritance, interfaces, overloads, required overrides, constructor signatures, target frameworks, package relationships, or examples when source, test, or project evidence is available.
+        Do not use external usage, README, or metadata files as evidence for method names, inheritance, interfaces, overloads, required overrides, constructor signatures, target frameworks, package relationships, or examples when source, test, or project evidence is available.
         If README, package README, catalog metadata, generated summaries, or engineering signals disagree with source evidence, follow source evidence.
+        If external usage disagrees with current source evidence, follow source evidence.
         If README examples disagree with test evidence, prefer test evidence.
         If source evidence is unclear and README is the only evidence for a claim, either write conservatively or omit the claim.
 
         Do not invent features, scenarios, dependencies, method names, constructor overloads, namespaces, return types, or package relationships.
         Ignore internal implementation details unless they explain the public API or a consumer-facing contract.
         Prefer public types, extension methods, options/configuration types, factories, abstractions, and test-visible usage patterns.
+        Treat public base classes, abstract classes, virtual members, protected hooks, and template-method style APIs as important consumer-facing APIs when source or tests show that consumers inherit from them.
         If the package has obsolete or deprecated APIs, do not present them as the recommended path.
 
         Package-local API preference:
         - For normal code packages, prioritize APIs declared by the current package over APIs inherited from, referenced from, or re-exported from lower-level packages.
         - In `## Key APIs`, prefer APIs whose declarations are in the current package's source evidence.
         - In `## Basic usage`, the central demonstrated API should normally be declared by the current package.
+        - If the current package declares a public base class that is intended for consumers to inherit from, treat that base class as a central package API, not as incidental inheritance detail.
+        - When several base classes or abstractions are available, prefer the one declared in the current package's primary namespace or the same namespace as the package's main consumer-facing APIs.
+        - If tests or external usage show a derived test fixture, host, provider, adapter, or other subclass, strongly consider a derived-class example that uses the package-owned base class and one or two of its exposed members.
         - If this package extends another package, demonstrate what this package adds, not only what the lower-level package already does.
         - If the current package provides a more specific abstraction, factory, adapter, provider, options type, middleware, serializer, mapper, host, client, store, validator, converter, extension method, integration type, or configuration model, make that the central API.
         - Lower-level APIs may appear as setup or supporting code only when they make the current package API easier to understand.
@@ -833,7 +1256,8 @@ internal static class DigestScript
         - the package's specific responsibility inside the repository
         - the primary developer scenario
         - the 3-6 public APIs declared by this package that matter most to consumers
-        - the most representative usage pattern found in source evidence and test evidence
+        - the most representative usage pattern found in source evidence, test evidence, and external usage evidence
+        - any package-owned base class, abstract class, virtual hook, or protected member that represents the intended extension model
         - the design invariants, lifecycle contracts, or guardrails that matter to consumers
         - what this package deliberately does not solve
         - any confidence risks caused by missing tests or unclear source
@@ -863,6 +1287,8 @@ internal static class DigestScript
         - Mention only APIs visible in source evidence.
         - Prefer APIs declared by the current package over lower-level APIs made available through referenced packages.
         - Prefer APIs that a consumer would directly inherit from, instantiate, configure, call, or implement.
+        - Include package-owned base classes when inheritance is the primary way consumers use the package.
+        - For base classes, mention the required override, protected hook, lifecycle method, or directly exposed member that makes the base class useful.
         - Include static factory methods or extension methods when they are more important to consumers than their containing type.
         - Descriptions should explain practical role, not merely repeat generic XML documentation wording.
         - Include generic constraints or required callbacks when they are important to correct usage.
@@ -889,6 +1315,7 @@ internal static class DigestScript
         - If a referenced package extends a lower-level package, demonstrate what the referenced package adds, not only what the lower-level package already does.
         - Lower-level APIs may appear as setup or supporting code only.
         - Use each referenced package's test evidence as the primary inspiration source when available.
+        - Prefer external usage for a referenced package when the referenced package has external usage evidence that validates against source and shows a clearer consumer scenario than owned tests.
         - Derive each example's setup, API calls, assertions, and usage flow from observed tests when available.
         - Rewrite test-inspired code into documentation-quality examples with clearer names and simpler values.
         - If a referenced package has missing or weak test evidence, derive the smallest valid example from that referenced package's source evidence and write conservatively.
@@ -900,6 +1327,7 @@ internal static class DigestScript
         - Use a consumer namespace such as `MyProject.Tests`.
         - Include at least one assertion or observable result in each example.
         - Prefer small, realistic examples that demonstrate why installing the bundle is convenient across multiple testing styles.
+        - Keep convenience-package examples straight to the point; show one clear use case per referenced package instead of trying to demonstrate that package's full depth.
         - If a referenced package is a framework integration package, prefer a small framework-native setup that demonstrates the referenced package API directly.
         - If a framework integration package requires setup code, prefer inline framework-native setup over fake application types unless the fake type is defined inside the snippet or exists in the supplied evidence.
         - Do not use framework-specific helper types, middleware, services, controllers, repositories, validators, adapters, options, or configuration objects unless they exist in the supplied evidence or are defined inside the snippet.
@@ -907,6 +1335,8 @@ internal static class DigestScript
 
         If this is a normal code package:
         Write one complete C# example that demonstrates the package's central usage pattern from a consumer's point of view.
+        Prefer a real-life, full-strength example over an artificially minimal snippet when source, tests, or external usage show that the richer example better demonstrates what the package is good at.
+        A slightly more complex example is acceptable when it stays grounded, readable, and focused on the current package's API.
 
         The final normal-package C# example is invalid unless it satisfies all valid-example requirements.
 
@@ -919,9 +1349,12 @@ internal static class DigestScript
         - Include at least one assertion or observable result.
         - Demonstrate the current package itself, not a fake application domain and not merely a lower-level referenced package.
         - The central demonstrated API must normally be declared by the current package.
+        - If the package-owned base class is the central API, define a small derived class in the snippet when that is the clearest way to demonstrate the extension model.
+        - If the example defines a derived class, keep it close to the test code and use the package base class from its real namespace.
         - If this package extends another package, demonstrate what this package adds, not only what the lower-level package already does.
         - Lower-level APIs may appear as setup or supporting code only.
-        - Use `tests.xml` or all test chunks as the primary inspiration source when test evidence is available.
+        - Use `external-usage.xml` or all external-usage chunks as the primary inspiration source when it exists, validates against source, and shows a clearer consumer scenario than owned tests.
+        - Use `tests.xml` or all test chunks as the primary inspiration source when external usage is unavailable, stale, or weaker than test evidence.
         - Derive setup, API calls, assertions, and usage flow from observed tests when available.
         - Rewrite test-inspired code into a documentation-quality consumer example with clearer names and simpler values.
         - If test evidence is missing or weak, derive the smallest valid example from source evidence and write conservatively.
@@ -933,10 +1366,10 @@ internal static class DigestScript
         - Do not introduce fake framework types, services, middleware, controllers, repositories, validators, adapters, options, or configuration objects unless they exist in the supplied evidence or are defined inside the snippet.
 
         Before writing a normal-package final example, internally draft and evaluate 4 candidate examples:
-        1. A minimal happy-path example inspired by representative test evidence.
+        1. A minimal happy-path example inspired by representative external usage when available, otherwise representative test evidence.
         2. An example that combines two central APIs declared by the current package when possible.
         3. An example based on the most representative test usage of the current package.
-        4. An example that demonstrates the current package's most distinctive feature.
+        4. A full-strength real-life example that demonstrates the current package's most distinctive feature, including a package-owned base class or lifecycle hook when that is how the package is meant to be used.
 
         Internally reject any candidate that violates one or more invalid-example rules.
 
@@ -966,28 +1399,31 @@ internal static class DigestScript
 
         Selection criteria for normal code packages:
         - Prefer the candidate that is most likely to compile.
+        - Prefer an external-usage-inspired candidate when it validates against current source and is clearer than maintainer-owned test code.
         - Prefer the candidate that is most strongly inspired by representative test evidence.
         - Prefer the candidate that demonstrates APIs declared by the current package.
         - Prefer the candidate that demonstrates the package itself more than a fake domain.
         - Prefer the candidate that uses the fewest invented names.
-        - Prefer the candidate that shows the smallest realistic consumer setup.
+        - Prefer the smallest realistic consumer setup that still shows the package's real strength.
+        - Prefer a richer full-strength candidate over a thin minimal candidate when both are grounded and the richer candidate better explains why the package exists.
         - Prefer a happy-path example unless an error path is the most important pattern.
         - Prefer a consumer namespace such as `MyProject.Tests` unless the original namespace is required for compilation.
         - Prefer examples that demonstrate at least two central package features when this can be done naturally.
         - For framework integration packages, prefer inline framework-native setup over fake application types.
         - For factory APIs, prefer the smallest factory-based example when it demonstrates the package better than a fixture class.
-        - For base-class APIs, prefer inheriting from the base class and using one or two of its directly exposed members.
+        - For base-class APIs, prefer inheriting from the package-owned base class and using one or two of its directly exposed members, required overrides, or lifecycle hooks.
 
         Output only the best candidate for normal code packages.
 
         Rules for all C# examples:
         - The example may be newly written for documentation.
-        - It must be grounded in source evidence and test evidence.
+        - It must be grounded in source evidence, test evidence, and external usage evidence when external usage is available.
+        - Use external usage to understand real consumer scenario shape, naming, setup style, and which APIs appear together.
         - Use tests to understand intended behavior, common setup, required constructor arguments, expected usage flow, and meaningful assertions.
         - Use real namespaces, real type names, real method calls, and real constructor signatures from the supplied evidence.
         - Do not invent APIs, overloads, extension methods, options, return types, helper methods, setup methods, fake service methods, fake domain methods, or fake factory methods.
         - Prefer inline values over fake helper methods.
-        - Keep each code block between 10 and 25 lines when feasible.
+        - Keep each code block between 10 and 35 lines when feasible; use the extra space only when it reveals real package capability.
         - Use ```csharp fenced code blocks.
         - Do not include ellipses, pseudocode, placeholders, TODO comments, or unexplained magic.
         - Do not add a cleanup hook unless the hook cleans up a real resource used by the example.
@@ -1009,13 +1445,15 @@ internal static class DigestScript
         ## Usage guidance
 
         One honest paragraph.
-        Explain when plain framework APIs, a lower-level package, a sibling package, or no package at all would be a better choice.
+        Start by explaining why this package is a good choice when the evidence-backed scenario fits.
+        Name the positive adoption case first: the capability, extension model, integration point, or developer workflow that makes this package worth adding.
+        Then, if useful, add one boundary sentence explaining when plain framework APIs, a lower-level package, a sibling package, or no package at all would be a better choice.
         Mention the nearest sibling package only when the evidence supports that relationship.
         Do not insult the package.
         Do not oversell it.
     """;
 
-    private static string BuildOverviewDigestPrompt(string repoId, IReadOnlyList<PackageInfo> packages)
+    private static string BuildConceptualDigestPrompt(string repoId, IReadOnlyList<PackageInfo> packages)
     {
         var packageList = packages.Count == 0
             ? "- No packages discovered."
@@ -1032,7 +1470,7 @@ internal static class DigestScript
                 }));
 
         return $$"""
-        Write the overview page for this repository.
+        Write the conceptual overview page for this repository.
 
         Output file:
         `result/Index.md`
@@ -1049,7 +1487,7 @@ internal static class DigestScript
         The overview is invalid unless the completed package digest files have been opened and used as source material.
 
         Audience:
-        Experienced .NET developers who need a mental model before choosing an individual package from this repository.
+        Experienced .NET developers who need a mental model before opening an individual package page.
         Assume they understand .NET, NuGet, dependency injection, testing, hosting, ASP.NET Core, and common framework terminology.
         Do not explain basic .NET concepts.
 
@@ -1059,79 +1497,76 @@ internal static class DigestScript
         Supplementary README, package README, project, dependency, and metadata information may be used to clarify relationships.
         Do not invent package purposes, dependencies, recommended installation paths, scenarios, APIs, or architectural claims.
         Do not amplify unsupported claims from a package digest.
-        Prefer concrete responsibilities and decision guidance over marketing language.
-        Keep the overview focused on how developers should understand and choose between the packages.
+        Prefer concrete responsibilities and conceptual guidance over marketing language.
+        Keep the overview focused on how developers should understand the repository's ideas, boundaries, and design vocabulary.
         If package digests disagree with each other, prefer the more specific package page and write conservatively.
+        Link to package pages only as inline signposts, using relative Markdown links such as `[Package.Name](Package.Name.md)`.
+        Do not organize this page around package inventory.
+        Do not create a package-selection table.
+        Do not create package-named subsections.
+        Do not repeat package-page API lists, Basic usage examples, installation commands, or package-specific summaries.
 
         Before writing the final page, internally identify:
         - the unifying purpose of the repository
-        - the foundation or primary package, if one exists
-        - optional add-on packages, if any exist
-        - convenience, aggregate, or meta packages, if any exist
-        - the recommended starting point
-        - scenarios where installing or using less is better
-        - recurring engineering patterns across packages, such as classic versus minimal hosting styles, shared fixture lifecycles, factory shortcuts, or layered package boundaries, when visible in the evidence
+        - the concepts, patterns, or boundaries a developer must understand before package-level details
+        - the important package-page `## Overview` and `## Key APIs` details that reveal each concept
+        - which packages cover or extend each concept, when package relationships are visible in the evidence
+        - how package APIs and responsibilities connect across layers, integrations, aggregate packages, or sibling packages
+        - recurring engineering patterns such as classic versus minimal hosting styles, shared fixture lifecycles, factory shortcuts, or layered package boundaries, when visible in the evidence
+        - scenarios where using a smaller package or fewer abstractions is better
         - the one non-obvious insight developers should understand
 
         Write exactly these three sections.
 
         ## Overview
 
-        Start with 2-3 sentences that explain the unifying purpose across the packages.
+        Start with 2-3 sentences that explain the unifying purpose across the repository.
         Make clear what kind of developer problem this repository solves.
         Do not use broad marketing language.
         Do not lead with repository metadata, target frameworks, or package counts.
+        Do not include a package selection table.
+        Do not summarize every package.
 
-        After the opening sentences, include a compact package selection table.
+        ## Concepts
 
-        Columns:
-
-        | Scenario | Package |
-        |---|---|
-
-        Rules:
-        - Each row must map a concrete developer scenario to one or more package names.
-        - Keep the scenarios practical and non-overlapping.
-        - Prefer fewer, sharper rows over exhaustive rows.
-        - Do not create separate rows for scenarios that are effectively the same decision.
-        - Include convenience or aggregate packages only if they exist and their role is clear.
-        - Avoid internal phrasing unless the repository content clearly explains it in user-facing terms.
-        - Do not include a row just to mention every API. Rows are for package choice, not API inventory.
-
-        After the table, add one short paragraph with the primary selection rule.
-        The paragraph should help the reader choose the smallest appropriate package or the right layer.
-
-        ## Package selection
-
-        Start with one short introductory paragraph before the package subheadings.
-        The paragraph must be specific to this repository.
-        It should explain the selection principle, conceptual layering, or main trade-off across the packages.
-        Do not repeat the Overview table row by row.
-        Do not use generic phrases such as "the following packages are available".
-        Do not leave this section heading immediately followed by a package subheading.
-
-        Then use one third-level heading per package.
+        Explain the concepts a developer should understand before reading package-specific pages.
+        Start this section with one short introductory paragraph before the first concept heading.
+        The introductory paragraph should frame the concept map for the repository and explain how the concepts relate at a high level.
+        Do not place a third-level heading immediately after `## Concepts`.
+        Use one third-level heading per concept.
+        Include as many concept subsections as the completed package digests genuinely support.
+        Do not impose a fixed concept count.
+        Concepts must reflect the full picture from the completed package digests, especially each package's `## Overview` and `## Key APIs`.
 
         Format:
 
-        ### Package.Name
+        Introductory paragraph.
 
-        1 short paragraph.
-        Explain what this package is for, what it adds, and when a developer should choose it.
-        If it extends another package in the same repository, say so.
-        If it is a convenience, aggregate, or meta package, say that clearly and identify what it aggregates when the evidence supports it.
-        Do not create bullets unless the package has genuinely enumerable capabilities.
-        Use package names exactly as supplied.
-        Keep each package paragraph roughly similar in length unless one package is clearly metadata-only or much smaller.
+        ### Concept name
+
+        Rules:
+        - Concept headings must describe ideas, patterns, boundaries, responsibilities, or trade-offs, not package names.
+        - Each concept subsection should explain the idea first, then connect the relevant package responsibilities and key APIs when that helps the reader understand the full picture.
+        - Link package names inline with relative links such as `[Package.Name](Package.Name.md)`.
+        - Use completed package `## Key APIs` sections to identify the real APIs that define the concept, but summarize them in prose instead of copying API inventories.
+        - If one package covers several concepts, link to it naturally in each relevant concept instead of creating a package section.
+        - If several packages share or layer the same concept, mention those package links inline in the same concept prose.
+        - Prefer connecting dots between packages over describing each package in isolation.
+        - Do not end concept subsections with a repeated "Covered by" line.
+        - Do not create concept-to-package tables.
+        - Do not list every API, usage example, or installation command.
+        - Do not copy package page overview paragraphs.
+        - For a single-package repository, still write real concept subsections and skip all package-selection framing.
 
         ## Usage guidance
 
         One or two paragraphs.
-        Explain the non-obvious guidance that helps developers choose and use the repository correctly.
-        Focus on boundaries, trade-offs, and common mistakes.
+        Explain the non-obvious guidance that helps developers apply the concepts correctly.
+        Focus on boundaries, trade-offs, and mistakes implied by package responsibilities or API design.
         It must be grounded in the actual package responsibilities and APIs.
         Do not use generic advice.
-        Do not repeat the package table.
+        Do not repeat the concept section.
+        Do not introduce package-page details that belong in an individual package deep dive.
         Prefer a practical decision rule over a slogan.
         """;
     }
@@ -1441,6 +1876,11 @@ internal static class DigestScript
         if (normalized.StartsWith(".nuget/", StringComparison.OrdinalIgnoreCase))
         {
             return "NuGet Documentation";
+        }
+
+        if (normalized.StartsWith("external/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "External Usage";
         }
 
         if (string.Equals(fileName, "README.md", StringComparison.OrdinalIgnoreCase))
@@ -1770,6 +2210,7 @@ internal static class DigestScript
         string manifestPath,
         DigestOptions options,
         string repoId,
+        string? runId,
         string workspace,
         IReadOnlyList<PackageManifestEntry> packages,
         string overviewPromptPath)
@@ -1808,7 +2249,9 @@ internal static class DigestScript
             repository = new
             {
                 url = options.RepoUrl,
-                id = repoId
+                id = repoId,
+                runId,
+                externalUsageRepositories = options.ExternalRepoUrls
             },
             output = new
             {
@@ -1945,27 +2388,34 @@ internal static class DigestScript
 
             Usage:
               dotnet run --file scripts/digest.cs -- --repo-url <url> --output-root <path>
+              dotnet run --file scripts/digest.cs -- --repo-url <url> --output-root <path> --external-repo-url <url> [--external-repo-url <url>]
 
             Required:
               --repo-url      Fully qualified git repository URL, for example https://github.com/owner/repo
               --output-root   Directory where the {repo-id} digest workspace will be written
 
+            Optional:
+              --external-repo-url  Public repository URL to clone and search locally for curated consumer usage.
+                                   Repeat this option to provide multiple external usage repositories.
+
             Fixed conventions:
               repo-id      Derived from the final repository URL path segment
+              run-id       UTC timestamp folder formatted yyyyMMdd-HHmmssZ
               result dir   result
 
             Output:
-              {output-root}/{repo-id}/manifest.json
-              {output-root}/{repo-id}/instructions.md
-              {output-root}/{repo-id}/prompts/{PackageName}.prompt.md
-              {output-root}/{repo-id}/prompts/overview.prompt.md
-              {output-root}/{repo-id}/evidence/{PackageName}/source.xml
-              {output-root}/{repo-id}/evidence/{PackageName}/tests.xml
-              {output-root}/{repo-id}/evidence/{PackageName}/projects.xml
-              {output-root}/{repo-id}/evidence/{PackageName}/readmes.xml
-              {output-root}/{repo-id}/evidence/{PackageName}/*.index.md
-              {output-root}/{repo-id}/evidence/{PackageName}/*.chunks/*.xml
-              {output-root}/{repo-id}/result/
+              {output-root}/{repo-id}/{run-id}/manifest.json
+              {output-root}/{repo-id}/{run-id}/instructions.md
+              {output-root}/{repo-id}/{run-id}/prompts/{PackageName}.prompt.md
+              {output-root}/{repo-id}/{run-id}/prompts/overview.prompt.md
+              {output-root}/{repo-id}/{run-id}/evidence/{PackageName}/source.xml
+              {output-root}/{repo-id}/{run-id}/evidence/{PackageName}/tests.xml
+              {output-root}/{repo-id}/{run-id}/evidence/{PackageName}/projects.xml
+              {output-root}/{repo-id}/{run-id}/evidence/{PackageName}/readmes.xml
+              {output-root}/{repo-id}/{run-id}/evidence/{PackageName}/external-usage.xml
+              {output-root}/{repo-id}/{run-id}/evidence/{PackageName}/*.index.md
+              {output-root}/{repo-id}/{run-id}/evidence/{PackageName}/*.chunks/*.xml
+              {output-root}/{repo-id}/{run-id}/result/
 
             Notes:
               - This script writes deterministic evidence and prompts only.
@@ -1976,7 +2426,10 @@ internal static class DigestScript
     }
 }
 
-internal sealed record DigestOptions(string RepoUrl, string OutputRoot);
+internal sealed record DigestOptions(
+    string RepoUrl,
+    string OutputRoot,
+    IReadOnlyList<string> ExternalRepoUrls);
 
 internal sealed record ProjectMetadata(
     string PackageId,
@@ -2005,6 +2458,7 @@ internal sealed record PackageEvidenceArtifacts(
     EvidenceArtifacts Tests,
     EvidenceArtifacts Projects,
     EvidenceArtifacts Readmes,
+    EvidenceArtifacts ExternalUsage,
     string ApiSummary,
     string EngineeringSignals);
 
@@ -2029,6 +2483,17 @@ internal sealed record EngineeringSignal(
     string Kind,
     string Value,
     string SourcePath);
+
+internal sealed record RepositoryIdentity(string Host, string Path);
+
+internal sealed record ExternalRepository(
+    string Url,
+    string CloneDir,
+    RepositoryIdentity Identity);
+
+internal sealed record ExternalUsageSearchTerm(
+    string Value,
+    bool IsStrong);
 
 internal sealed record PackageManifestEntry(
     string kind,
