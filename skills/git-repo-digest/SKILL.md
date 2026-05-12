@@ -14,16 +14,20 @@ Use this skill to turn a deterministic digest workspace into website-ready or do
 
 - Treat generated output as the source of truth. If `manifest.json`, `instructions.md`, `prompts/*.prompt.md`, or `evidence/**/*.xml` files disagree with this skill, follow the generated files unless they are internally inconsistent.
 - Keep the workflow generic. The runner input is a full repository URL, not an implied owner/slug convention.
-- Require both `--repo-url` and `--output-root`. Do not invent defaults silently.
-- If a `.bot` folder exists in the workspace the agent is working from, you may recommend `<workspace>/.bot/digests` as the output root, but ask before using it.
+- Require both runner inputs `--repo-url` and `--output-root`. Do not invent defaults silently.
+- Accept curated external usage repositories from the user's natural invocation when present, then pass each one to the runner with a repeated `--external-repo-url` flag.
+- If the user invokes `/git-repo-digest <digest-repo-url> <optional-output-folder> <optional-external-url>...`, treat the first URL as the digest repo, treat the second value as `output-root` only when it is not a URL, and treat later URLs as external usage repositories.
+- If a `.bot` folder exists and the user did not provide an output path, recommend `<workspace>/.bot/digests` as the output root so the workspace becomes `<workspace>/.bot/digests/{repo-id}/{run-id}`.
+- If the user provides an output path, pass that value as `--output-root`; the runner still appends `{repo-id}/{run-id}`.
 - Do not make `repo-id` customizable. It is derived from the final repository URL path segment.
+- Do not make `run-id` customizable. It is always generated in UTC as `yyyyMMdd-HHmmssZ`.
 - Do not make the result directory customizable. It is always `result`.
 - Do not assume GitHub owner, repository host, organization, package prefix, website path, or docs domain from memory.
 - Do not call an LLM provider from the runner. The calling agent is the brain that writes prose.
 - Process one package evidence set at a time. Do not load all package evidence sets into the same prompt unless the generated manifest explicitly requires it.
 - When the runtime supports subagents and the manifest has multiple independent package evidence sets, prefer one subagent per package. Give each subagent only its assigned package prompt, evidence files, `instructions.md`, the relevant manifest entry, and the complete-read contract. Subagents reduce context pressure; they do not reduce grounding requirements.
 - Complete reads are mandatory for the files used in the current phase. For a package digest, read that package's prompt plus its required evidence files before writing. For the overview, read `prompts/overview.prompt.md` and every completed package result file required by the manifest before writing. The generated evidence indexes and chunks are a safer way to finish reading large evidence files; they are not permission to skip sections.
-- Raw authoritative package evidence lives under `evidence/{PackageName}/` as `source.xml`, `tests.xml`, `projects.xml`, and `readmes.xml`. Markdown prompts are task instructions; indexes are navigation aids only.
+- Raw package evidence lives under `evidence/{PackageName}/` as `source.xml`, `tests.xml`, `projects.xml`, `readmes.xml`, and `external-usage.xml`. Markdown prompts are task instructions; indexes are navigation aids only.
 - Evidence indexes summarize chunks in a `Contents` column. They list stable packed-path labels such as `Source Code`, `Test Coverage`, `NuGet Documentation`, or `Project Metadata` when XML `<file path="...">` entries are present.
 - If a tool caps, truncates, summarizes, or partially displays a required full evidence file, read its `*.index.md` file and then read every chunk listed in numeric order. If the chunk reads are also capped or incomplete, continue by ranges or stop and report the blocker instead of writing from a subset.
 - Do not use an evidence index as evidence for digest claims. It is a navigation aid; the full evidence file or all ordered chunks are the source evidence.
@@ -31,6 +35,7 @@ Use this skill to turn a deterministic digest workspace into website-ready or do
 - Write package result files before the overview result file.
 - For the overview, explicitly read every completed package result file listed by the manifest. Reading only project/readme evidence is an incomplete overview workflow because the package digests are the primary editorial source.
 - Do not invent APIs, package relationships, examples, dependencies, support statements, performance claims, or architectural claims not supported by the package evidence.
+- Treat external usage evidence as curated consumer-usage inspiration, not API authority. It can shape `## Basic usage` when current source evidence validates the APIs.
 - Do not turn a source-backed structural risk into an unmeasured behavior claim. Phrases such as "most common mistake", "developers often", "users frequently", "popular choice", "widely used", or "typical failure" require explicit evidence such as package analytics, issue history, docs that say so, telemetry, survey data, or examples in the generated evidence. Without that evidence, describe the risk conditionally: "If you install X in a project that only needs Y, it adds Z."
 - If required deterministic files are missing, stale, contradictory, or too large to use safely, stop and report the blocking issue instead of guessing.
 - Do not copy results into a website or documentation tree unless the user explicitly asks for publication or sync.
@@ -56,19 +61,31 @@ Required inputs:
 --output-root   Directory where the digest workspace will be written
 ```
 
+Optional repeated input:
+
+```text
+--external-repo-url  Public repository URL to clone and search locally for curated consumer usage
+```
+
 Fixed conventions:
 
 ```text
 repo-id      Derived from the final repository URL path segment, with .git removed
+run-id       Derived from current UTC time
 result dir   result
 ```
 
-The runner requires the .NET 10 SDK or newer and `git`. It performs one shallow git clone, discovers packages from that local clone, and packs evidence with its bundled C# packer. The packer uses `git ls-files` for deterministic tracked-file membership, applies the runner's evidence classifiers, skips generated or low-signal paths, keeps text files only, and writes stable XML evidence files under `evidence/{PackageName}/`.
+The runner requires the .NET 10 SDK or newer and `git`. It performs one shallow git clone for the repository under digest, optionally performs one shallow clone per provided external usage repository, discovers packages from the digest clone, and packs evidence with its bundled C# packer. The packer uses `git ls-files` for deterministic tracked-file membership, applies the runner's evidence classifiers, skips generated or low-signal paths, keeps text files only, and writes stable XML evidence files under `evidence/{PackageName}/`.
 
 Packing notes:
 
 - The evidence packer is local-only. It does not call Node/npm, Repomix, browser automation, or a public packing service.
-- The evidence packer does not emit third-party token counts, compression summaries, or external Secretlint results. Treat source, tests, project files, and README files as the grounding surface. Treat generated public API summaries and engineering signals as reading aids only.
+- The evidence packer does not emit third-party token counts, compression summaries, public GitHub search results, or external Secretlint results. Treat source, tests, project files, README files, and curated external usage files as the grounding surface. Treat generated public API summaries and engineering signals as reading aids only.
+- External usage evidence is gathered only from user-provided repository URLs. The runner does not search GitHub.
+- If any provided external usage repository cannot be cloned or inspected, the runner fails fast before digest prose is written.
+- The runner rejects external usage URLs that normalize to the same repository as `--repo-url`.
+- External usage selection uses a reference-plus-code rule: an external project must reference the current package, or a discovered package that transitively references the current package, either in its `.csproj` or nearest ancestor `Directory.Build.props` / `Directory.Build.targets`; selected C# files can come from source or test projects, but must contain a strong current-package marker such as the package id or namespace before public-symbol matches affect ranking.
+- The runner does not try to evaluate MSBuild conditions on external package references. It uses references as a broad candidate signal and relies on strong code matches to decide what external source or test files are worth packing.
 - The runner filters known low-signal files such as `GlobalSuppressions.cs` from packed evidence. Do not recreate or infer digest claims from those files.
 - The runner follows Codebelt repository conventions for discovery: source projects live under `src/`, owned tests live under `test/`, and owned test projects are named after the package plus `.Tests` for libraries or `.FunctionalTests` for apps. It does not scan generic `tests/` roots or broader suffix variants such as `.UnitTests` or `.IntegrationTests`. Within the fixed `test/` root, it prefers a dedicated owned test project, then a single unambiguous direct project reference. If only downstream package tests match a shared base package prefix, the runner leaves `Test path` undiscovered instead of assigning another package's tests.
 - Source files are source evidence even when their type or file names end in `Test`, such as framework abstractions named `WebHostTest`. Test evidence is limited to files under the discovered owned `test/` path.
@@ -76,10 +93,22 @@ Packing notes:
 
 ## Expected Workspace
 
-The digest root is chosen by the caller. For repositories that already use `.bot`, a conventional staging root is:
+The digest root is chosen by the caller. For repositories that already use `.bot` and where the user did not supply an output path, the conventional staging root is:
 
 ```text
 .bot/digests
+```
+
+When that conventional root is used by default, the generated workspace is:
+
+```text
+.bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}
+```
+
+If the user supplies an output path, use that value as the root while keeping the same generated child shape:
+
+```text
+{output-root}/{repo-id}/{yyyyMMdd-HHmmssZ}
 ```
 
 Generated shape:
@@ -97,6 +126,7 @@ Generated shape:
       tests.xml
       projects.xml
       readmes.xml
+      external-usage.xml
       api-summary.md
       engineering-signals.md
       source.index.md
@@ -113,21 +143,35 @@ The manifest is authoritative after generation. Always follow the manifest for c
 
 ### Step 1: Resolve Inputs
 
-Collect or infer only these two runner inputs:
+Collect or infer these runner inputs:
 
 - `repo-url`: required. Ask for it if the user gives only a slug or a repository nickname.
-- `output-root`: required. If the active workspace has a `.bot` directory, you may recommend `<workspace>/.bot/digests`; otherwise ask for the path.
+- `output-root`: required. If the active workspace has a `.bot` directory and the user did not provide an output path, recommend `<workspace>/.bot/digests`; otherwise ask for the path.
+- `external-repo-url`: optional and repeatable. Use only public repository URLs the user supplied as curated usage sources.
 
-Do not ask for `repo-id` or result directory. If two repositories would collide because they share the same final URL path segment, ask the user for a different `output-root`.
+If the user invokes this skill with positional slash-command style arguments:
+
+```text
+/git-repo-digest <digest-repo-url> <optional-output-folder> <optional-external-url> <optional-external-url>
+```
+
+Map them as follows:
+
+- First URL: `repo-url`.
+- Second value: `output-root` only when it is not a URL.
+- Any later URLs: repeated `external-repo-url` values.
+- If the second value is a URL and no output root was supplied, ask for `output-root` or recommend `.bot/digests` when the active workspace has `.bot`.
+
+Do not ask for `repo-id`, `run-id`, or result directory.
 
 ### Step 2: Generate or Locate the Digest Workspace
 
-If the user points to an existing `{output-root}/{repo-id}` folder, inspect it first.
+If the user points to an existing `{output-root}/{repo-id}` or `{output-root}/{repo-id}/{run-id}` folder, inspect it first.
 
 If the workspace does not exist or the user asks to regenerate evidence, run the bundled runner from this skill:
 
 ```powershell
-dotnet run --file <skill-root>/scripts/digest.cs -- --repo-url <repo-url> --output-root <output-root>
+dotnet run --file <skill-root>/scripts/digest.cs -- --repo-url <repo-url> --output-root <output-root> [--external-repo-url <external-url>]...
 ```
 
 The runner writes deterministic evidence files, prompt files, and the `result` folder. It does not call an LLM and does not overwrite existing `result/*.md` files.
@@ -152,6 +196,7 @@ From `manifest.json`, identify:
 - each evidence file path
 - each evidence index path
 - each ordered evidence chunk path
+- each external usage evidence path, index path, and ordered chunk path
 - each result file path
 - dependency order
 
@@ -165,11 +210,12 @@ For each package in the first phase:
 2. Try to read each required evidence file completely. If a read output is capped or truncated, open the manifest-declared evidence index and then read every manifest-declared chunk in numeric order until the whole evidence file has been inspected.
 3. Confirm the package result path is `result/{PackageName}.md` or the manifest's declared equivalent.
 4. Write the exact required sections from the generated package prompt.
-5. Ground API lists and examples in source, tests, project files, README files, or metadata found in the evidence.
-6. Use generated summaries and engineering signals to revisit likely design invariants, lifecycle contracts, callback wiring, factory boundaries, generic type constraints, exception guards, and package-boundary decisions in the raw source.
-7. Do not document non-public members as APIs, but do inspect internal implementation when it explains public lifecycle behavior, validation, callback flow, or package boundaries.
-8. Keep examples compact and use real namespaces, type names, method names, and constructor signatures from the evidence.
-9. If the evidence proves the package is a convenience, aggregate, or metadata-only package with no source of its own, write that honestly instead of inventing APIs.
+5. Ground API lists and examples in source, tests, project files, README files, external usage files, or metadata found in the evidence.
+6. For `## Basic usage`, prefer representative external usage when it exists, validates against current source evidence, and gives a clearer consumer scenario than owned tests.
+7. Use generated summaries and engineering signals to revisit likely design invariants, lifecycle contracts, callback wiring, factory boundaries, generic type constraints, exception guards, and package-boundary decisions in the raw source.
+8. Do not document non-public members as APIs, but do inspect internal implementation when it explains public lifecycle behavior, validation, callback flow, or package boundaries.
+9. Keep examples compact and use real namespaces, type names, method names, and constructor signatures from the evidence.
+10. If the evidence proves the package is a convenience, aggregate, or metadata-only package with no source of its own, write that honestly instead of inventing APIs.
 
 Do not use another package's evidence to fill gaps unless the current prompt explicitly includes it or the manifest marks that relationship as required.
 
@@ -194,7 +240,21 @@ Open and completely read `prompts/overview.prompt.md` and every completed packag
 
 If package digests were produced by subagents, collect their reported caveats and validation notes before drafting the overview. Use those notes to avoid overclaiming, but ground the overview in the completed package result files, `prompts/overview.prompt.md`, and supplementary project/readme evidence as needed.
 
-The overview should help readers choose between packages or understand the repository's shape. It should not repeat every package page or amplify unsupported claims.
+The overview should help readers understand the repository's concepts before they open package-specific pages. It should not behave like a package inventory, repeat package-page summaries, or amplify unsupported claims.
+
+Write `result/Index.md` as a conceptual overview:
+
+- Use the generated overview prompt's exact required headings, currently `## Overview`, `## Concepts`, and `## Usage guidance`.
+- Start `## Concepts` with a short introductory paragraph before the first concept heading.
+- Use concept subsection headings for ideas, patterns, boundaries, responsibilities, or trade-offs, not package names.
+- Derive concept candidates from every completed package digest's `## Overview`, `## Key APIs`, `## Basic usage`, and `## Usage guidance` sections, then connect package responsibilities and APIs across layers where the evidence supports it.
+- Build concepts from coverage first, then merge only true duplicates. A concept should survive when ignoring it would hide a substantial package-owned capability, extension model, boundary, or trade-off.
+- Preserve distinct capability domains represented by package-owned APIs even when they share the same lower-level pattern, dependency, or factory model.
+- Include as many concept subsections as the completed package digests genuinely support; do not force a fixed concept count.
+- Link to package pages only as inline relative Markdown links such as `[Package.Name](Package.Name.md)`.
+- For single-package repositories, skip package-selection framing entirely and still explain the real concepts the package introduces.
+- For multi-package repositories, explain package coverage inside concept prose instead of creating package tables or one subsection per package.
+- Do not repeat Basic usage examples, API inventories, installation commands, or package-specific overview paragraphs from package pages.
 
 For usage guidance, separate evidence from inference:
 
@@ -217,8 +277,19 @@ Before finishing, verify:
 - Result filenames match manifest paths.
 - Evidence index and chunk paths in the manifest exist for every generated evidence file.
 - Required headings from the generated package prompt are present verbatim.
+- Required headings from the generated overview prompt are present verbatim.
+- `result/Index.md` has an introductory paragraph after `## Concepts` and before the first concept subsection.
+- `result/Index.md` uses concept headings instead of package-named subsections.
+- `result/Index.md` concepts synthesize completed package `## Overview`, `## Key APIs`, `## Basic usage`, and `## Usage guidance` sections instead of ignoring package-level APIs or scenarios.
+- Every completed package digest contributes to at least one concept subsection or is intentionally merged with a named related concept because it makes the same point.
+- Distinct package-owned capability domains are not collapsed into a generic umbrella concept when separate subsections would better reveal important work.
+- `result/Index.md` connects related packages in concept prose where package responsibilities, dependencies, or APIs show a relationship.
+- `result/Index.md` does not contain a package-selection table unless a future generated prompt explicitly asks for one.
+- Package links in `result/Index.md` are inline relative Markdown links such as `[Package.Name](Package.Name.md)`.
 - No result file contains analysis notes, citations, XML, JSON, confidence scores, or chat commentary unless the generated prompt explicitly asks for them.
 - Code examples mention only APIs visible in the relevant evidence.
+- Basic usage examples inspired by external usage validate every API call, constructor, namespace, and extension method against current source evidence.
+- External usage evidence may shape the consumer scenario, but stale external code does not override current source or test evidence.
 - For normal code packages, `## Basic usage` contains exactly one C# fenced code block unless the generated prompt explicitly allows more.
 - For normal code packages, the Basic usage C# example contains exactly one `[Fact]` or `[Theory]` method unless the generated prompt explicitly allows more.
 - For normal code packages, the two-sentence Basic usage explanation describes only what the example actually demonstrates.
@@ -249,6 +320,7 @@ Before finishing, verify:
 - README, package README, catalog metadata, generated public API summaries, and engineering signals are not treated as authoritative evidence when source or project files are available.
 - README/readme evidence is not authoritative for API shape.
 - If README and source disagree, source wins.
+- If external usage and source disagree, source wins.
 - If README examples and tests disagree, tests win.
 - If README and source disagree, the result follows source. If the disagreement materially affects the page, mention the validation risk in the final response rather than writing the stale README claim.
 - Package digests do not make broad claims such as robust, seamless, powerful, or comprehensive unless immediately grounded in concrete evidence.
@@ -274,7 +346,8 @@ Explain any remaining risk, especially missing tests, ambiguous APIs, oversized 
 - Do not treat tool or token limits as permission to sample. The required file set for the current phase must be read completely.
 - If a single evidence file is too large for one tool response, prefer the manifest-declared `*.index.md` file plus every ordered file under `*.chunks/`. If chunks are unavailable in an older workspace, split the full evidence read into ranges or sections and continue until the entire file has been inspected. Track where you left off so no section is skipped.
 - Treat `*.index.md` as a table of contents, not as source evidence. It can tell you which chunks and packed files exist, but digest claims must come from the full evidence file or the complete ordered chunk set.
-- Treat generated public API summaries and engineering signals the same way: they identify where to look, but they do not replace source, tests, project files, README files, or metadata as grounding.
+- Treat generated public API summaries and engineering signals the same way: they identify where to look, but they do not replace source, tests, project files, external usage files, README files, or metadata as grounding.
+- Treat external usage as scenario evidence only. It does not replace complete reads of source evidence or validation against current source declarations.
 - Use targeted searches only after the complete read, as a validation aid or to revisit specific evidence. Searches do not replace reading the required evidence.
 - If the active model or available tools cannot read the full required file set for the current phase, stop and report the limitation. Do not write a digest from partial evidence.
 
@@ -297,18 +370,27 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Evidence indexes are used to plan reading and verify chunk coverage, not as a replacement for source evidence.
 - Public API summaries and engineering signals help the agent notice fine-grained library design, but every final claim is still backed by raw evidence.
 - Non-public implementation details are used only to explain public behavior, not listed as consumer APIs.
-- The overview includes a `## Package selection` section that explains package selection, repository boundaries, and relationships.
+- The overview includes a `## Concepts` section that explains repository concepts, boundaries, and relationships without becoming a package inventory.
+- The `## Concepts` section opens with a short paragraph before concept subsections.
 - The overview synthesis clearly uses the completed package result files as source material, not just project/readme evidence.
+- The overview concepts incorporate package-page `## Key APIs`, Basic usage scenarios, and Usage guidance at a conceptual level and connect related packages where the evidence supports a relationship.
+- The overview is granular enough that substantial package-owned domains do not disappear into generic architecture language.
+- Package links in the overview appear as inline relative Markdown links inside concept prose.
+- Single-package overviews skip package-selection framing and avoid redundant package summaries.
+- Multi-package overviews group ideas by concept rather than creating one subsection per package.
+- The overview avoids repeating package-page API lists, Basic usage examples, installation commands, and package-specific overview paragraphs.
 - Tradeoff guidance distinguishes structural evidence from behavioral frequency; it avoids "most common" style claims unless the evidence includes measurement or explicit source support.
 - The writing is restrained and developer-facing, not marketing-heavy.
 - The agent follows the generated manifest instead of improvising the run order.
 - The final response names the result files written and any validation gaps.
 - Normal package Basic usage sections contain one focused C# example.
+- Normal package Basic usage examples prefer representative external usage when available, source-valid, and clearer than owned test code.
 - Convenience package Basic usage sections contain one focused C# example per referenced code package.
 - Convenience package examples are introduced by referenced-package subheadings and make API ownership clear.
 - Convenience package examples complement the individual package pages instead of repeating their Basic usage examples verbatim.
 - Basic usage examples are small but complete: imports, namespace, one focused `[Fact]` or `[Theory]`, and an observable assertion/result.
 - API shape, inheritance, generic constraints, required overrides, factory overloads, and lifecycle claims are verified against source declarations.
+- External usage influences examples without overriding current source declarations.
 - README content is used for tone and positioning only, unless source code is unavailable.
 - When README examples are stale, the generated page follows the current source and tests instead.
 
@@ -316,7 +398,9 @@ Do not copy staged results there unless the user asks for website sync, publicat
 
 - Running a separate .NET project instead of the bundled `scripts/digest.cs` runner.
 - Passing only a repository slug when the runner requires a full URL.
+- Passing user-provided external usage repositories as implicit runner positional arguments instead of repeated `--external-repo-url` flags.
 - Assuming a fixed organization such as `codebeltnet` or a fixed repository host such as GitHub.
+- Searching GitHub for external usage when the runner only supports user-provided external repository URLs.
 - Loading every package evidence set for every package digest.
 - Sending multiple unrelated package evidence sets to the same subagent when they can be processed independently.
 - Treating a subagent's summary as a substitute for a completed package result file during overview synthesis.
@@ -328,7 +412,17 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Claiming a mistake is common, most common, frequent, typical, popular, or widely observed based only on package structure or an inferred best practice.
 - Writing `Index.md` before package digests exist.
 - Writing `Index.md` after reading only project/readme evidence and not the completed package result files.
+- Writing `Index.md` as a package-selection table or package inventory when the generated prompt asks for concepts.
+- Starting `## Concepts` immediately with a third-level heading and no introductory paragraph.
+- Writing concepts that ignore completed package `## Key APIs` details.
+- Collapsing distinct package-owned domains into one polished but lossy umbrella concept.
+- Describing related packages in isolation when their responsibilities or APIs clearly connect.
+- Creating one overview subsection per package instead of concept-led subsections.
+- Repeating package-page API lists, Basic usage examples, installation commands, or overview paragraphs in `Index.md`.
+- Using package names as concept headings.
 - Inventing usage examples from plausible framework patterns rather than supplied source and tests.
+- Copying external usage that no longer validates against the current package source.
+- Treating external usage as proof of API shape, current method signatures, package ownership, popularity, or frequency.
 - Copying staged files into website content without an explicit user request.
 - Using only a bash installation command as Basic usage for a convenience package when referenced code packages can be demonstrated.
 - Giving a convenience package fewer Basic usage examples than the number of referenced code packages.

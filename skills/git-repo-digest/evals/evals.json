@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Use git-repo-digest to write package digests and the overview for an existing digest workspace at .bot/digests/example-project. The workspace has manifest.json, instructions.md, prompts/{PackageName}.prompt.md files, evidence/{PackageName}/source.xml, tests.xml, projects.xml, readmes.xml files with evidence indexes and optional chunk directories, prompts/overview.prompt.md, and an empty result folder.",
-      "expected_output": "Reads manifest.json and instructions.md first, writes result/{PackageName}.md files before result/Index.md, processes one package evidence set at a time, treats generated output as source of truth, uses manifest-declared evidence indexes and chunks when a full evidence read is capped, reads the completed package result files as primary source material for the overview, writes the overview with a Package selection section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
+      "expected_output": "Reads manifest.json and instructions.md first, writes result/{PackageName}.md files before result/Index.md, processes one package evidence set at a time, treats generated output as source of truth, uses manifest-declared evidence indexes and chunks when a full evidence read is capped, reads the completed package result files as primary source material for the overview, writes the overview with a Concepts section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
       "expectations": [
         "Reads manifest.json and instructions.md before writing any result file",
         "Writes result/{PackageName}.md files before result/Index.md",
@@ -14,21 +14,23 @@
         "Treats the generated manifest as authoritative for package names, prompt paths, evidence paths, result paths, and phase order",
         "Reads the completed result/{PackageName}.md files before writing result/Index.md instead of relying only on project/readme evidence",
         "Does not invent APIs, namespaces, or capabilities not present in the package evidence",
-        "Writes result/Index.md with a ## Package selection section and does not use the previous package-oriented heading",
+        "Writes result/Index.md with a ## Concepts section and does not use package-selection headings or tables",
+        "Treats ## Concepts followed immediately by a third-level heading as invalid because the introductory paragraph is required",
         "Stops after reporting validation gaps rather than copying result files to a website content tree"
       ]
     },
     {
       "id": 2,
       "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject and then write the resulting digests. The active workspace contains a .bot folder.",
-      "expected_output": "When a .bot folder exists, may recommend .bot/digests as the output root but asks before using it, runs dotnet run --file with --repo-url and the full URL and --output-root, does not ask for repo-id or result directory, avoids extra runner inputs, then follows the generated manifest, including evidence index and chunk entries, to write package digests before result/Index.md.",
+      "expected_output": "When a .bot folder exists and no output path was supplied, may recommend .bot/digests as the output root but asks before using it, runs dotnet run --file with --repo-url, the full URL, and --output-root so the runner creates .bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}, does not ask for repo-id, run-id, or result directory, avoids unsupported runner inputs, then follows the generated manifest, including evidence index and chunk entries, to write package digests before result/Index.md.",
       "expectations": [
-        "May recommend .bot/digests as the output root because a .bot folder exists in the workspace",
+        "May recommend .bot/digests as the output root because a .bot folder exists in the workspace and the user supplied no output path",
         "Asks before using the recommended output root instead of inventing defaults silently",
-        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root",
+        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root for the .bot/digests default",
         "Passes the full repository URL, not a slug or partial reference",
-        "Does not ask the user for repo-id or result directory",
-        "Does not pass extra runner flags beyond --repo-url and --output-root",
+        "Does not ask the user for repo-id, run-id, or result directory",
+        "Uses a run-id formatted yyyyMMdd-HHmmssZ so default workspaces sort chronologically",
+        "Does not pass unsupported runner flags beyond --repo-url, --output-root, and repeated --external-repo-url when external usage repositories were supplied",
         "Recognizes that the generated manifest can include evidence index and chunk entries for capped evidence reads",
         "Follows the generated manifest after the runner completes to write package digests before Index.md"
       ]
@@ -36,13 +38,13 @@
     {
       "id": 3,
       "prompt": "Use git-repo-digest to write result/Index.md from an existing digest workspace. The prompt files, evidence files, and manifest are present but the result folder is empty.",
-      "expected_output": "Writes all required package result files before writing result/Index.md, reads those completed package digests as required primary source material for the overview, and uses Package selection as the visible overview section heading.",
+      "expected_output": "Writes all required package result files before writing result/Index.md, reads those completed package digests as required primary source material for the overview, and uses Concepts as the visible overview section heading.",
       "expectations": [
         "Writes all required package result files before writing result/Index.md",
         "Does not skip package digests even when the user asks only for the overview",
         "Reads each completed package result file as editorial input when writing Index.md",
         "Does not treat project/readme evidence by itself as sufficient source material for Index.md",
-        "Writes result/Index.md with a ## Package selection section and does not use the previous package-oriented heading",
+        "Writes result/Index.md with a ## Concepts section and does not use package-selection headings or tables",
         "Names any missing package digests in the response if any cannot be completed before proceeding"
       ]
     },
@@ -165,6 +167,146 @@
         "Does not truncate the Contents cell with ellipses",
         "Uses a deterministic Packed Content fallback only when no packed file paths are visible",
         "Does not emit (none) for packed-content chunks in the evidence index"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Use git-repo-digest like this: /git-repo-digest https://github.com/example/library .bot/digests https://github.com/example/consumer-one https://github.com/example/consumer-two",
+      "expected_output": "Interprets the first URL as the repository under digest, the non-URL second value as the output root, and the later URLs as curated external usage repositories. Runs the bundled runner with --repo-url, --output-root, and one repeated --external-repo-url flag per external URL.",
+      "expectations": [
+        "Treats https://github.com/example/library as the digest repo URL",
+        "Treats .bot/digests as the output root because it is not a URL",
+        "Relies on the runner's default {output-root}/{repo-id}/{yyyyMMdd-HHmmssZ} workspace shape",
+        "Treats https://github.com/example/consumer-one and https://github.com/example/consumer-two as external usage repositories",
+        "Passes external usage repositories to the runner with repeated --external-repo-url flags",
+        "Does not pass external usage repositories as implicit positional runner arguments",
+        "Does not ask for repo-id or result directory"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Use git-repo-digest with /git-repo-digest https://github.com/example/library https://github.com/example/consumer-one. The active workspace has a .bot folder.",
+      "expected_output": "Recognizes that the second positional value is a URL, treats it as an external usage repository rather than output-root, recommends .bot/digests or asks for an output root, and then runs the explicit runner flags after output-root is known. The runner creates {output-root}/{repo-id}/{yyyyMMdd-HHmmssZ}.",
+      "expectations": [
+        "Treats the first URL as the digest repo URL",
+        "Does not treat the second URL as output-root",
+        "Treats the second URL as an external usage repository",
+        "Asks for output-root or recommends .bot/digests because the active workspace has a .bot folder",
+        "Uses a run-id formatted yyyyMMdd-HHmmssZ when the .bot/digests default is accepted",
+        "Uses repeated --external-repo-url flags when running the runner"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Use git-repo-digest to generate a workspace for https://github.com/example/library with --external-repo-url https://github.com/example/library.git.",
+      "expected_output": "Rejects the external usage repository because it normalizes to the same repository as the repo under digest, and stops before writing digest prose.",
+      "expectations": [
+        "Normalizes repository URLs before comparing the digest repo and external usage repos",
+        "Rejects an external usage repository that points to the same owner/repo as --repo-url",
+        "Stops before package digest writing begins",
+        "Reports the same-repository external usage input clearly"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Use git-repo-digest to generate a workspace with one curated external usage repository, but that external repository cannot be cloned.",
+      "expected_output": "Fails fast with a clear clone or inspection error instead of continuing without the requested external usage evidence.",
+      "expectations": [
+        "Treats provided external usage repositories as required inputs",
+        "Fails the runner when a provided external usage repository cannot be cloned or inspected",
+        "Does not continue to package digest prose generation after the external usage clone failure",
+        "Reports which external repository caused the failure"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Use git-repo-digest to generate package evidence where a provided external consumer repo has a project that references Codebelt.Example and C# files using Codebelt.Example namespaces and public APIs.",
+      "expected_output": "Generates evidence/{PackageName}/external-usage.xml and matching index/chunk artifacts, includes only reference-plus-code matches, and instructs Basic usage generation to prefer source-valid external usage when it is clearer than owned tests.",
+      "expectations": [
+        "Generates external-usage.xml for each package evidence folder",
+        "Generates external-usage.index.md and ordered external-usage chunks when the external usage evidence is oversized",
+        "Includes external C# usage only when the containing project references the package and the source or test code contains a strong current-package marker such as the package namespace or package id",
+        "Counts package references declared in the project file or nearest ancestor Directory.Build.props / Directory.Build.targets instead of requiring every PackageReference to appear directly in the csproj",
+        "Does not try to evaluate MSBuild conditions on external package references because external usage packing is read-only evidence selection rather than runtime dependency resolution",
+        "Can count usage through a discovered package that transitively references the current package, but only when the selected C# code also matches the current package's own namespace or package id",
+        "Considers both external source projects and external test projects eligible when their code has a strong current-package match",
+        "Records external usage evidence paths in the manifest package evidence entry",
+        "Treats external usage as Basic usage inspiration rather than API authority",
+        "Validates every API used in Basic usage against current source evidence"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Use git-repo-digest to write package digests and result/Index.md for an existing workspace that contains exactly one package digest result, result/WidgetPack.md. The completed package page already has Overview, Key APIs, Basic usage, Installation, and Usage guidance sections.",
+      "expected_output": "Writes result/Index.md as a conceptual overview with ## Overview, ## Concepts, and ## Usage guidance. The Concepts section starts with a short introductory paragraph before the first concept heading. Because there is only one package, it does not create package-selection framing, a package-selection table, or a WidgetPack subsection. It links to [WidgetPack](WidgetPack.md) inline only where that link helps the concept prose, and it uses the package Overview and Key APIs to explain concepts without repeating the package page's API list, Basic usage example, installation command, or package overview paragraph.",
+      "expectations": [
+        "Writes result/Index.md with ## Overview, ## Concepts, and ## Usage guidance",
+        "Starts ## Concepts with an introductory paragraph before the first third-level concept heading",
+        "Treats ## Concepts followed immediately by a third-level heading as invalid because the introductory paragraph is required",
+        "Does not write a ## Package selection section",
+        "Does not create a package-selection table",
+        "Does not create a package-named subsection such as ### WidgetPack",
+        "Uses concept headings that describe ideas, patterns, boundaries, responsibilities, or trade-offs",
+        "Uses inline relative package links such as [WidgetPack](WidgetPack.md) only where useful",
+        "Uses the completed package page's Overview and Key APIs sections to explain the concept at a high level",
+        "Does not repeat the package page's Key APIs list",
+        "Does not repeat the package page's Basic usage example or Installation command",
+        "Does not copy the package page Overview paragraph into Index.md"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Use git-repo-digest to write result/Index.md for an existing multi-package workspace where completed package pages cover a base package, two framework integration packages, and one aggregate package. The package pages already contain package-specific API lists, examples, and installation commands.",
+      "expected_output": "Writes result/Index.md as a concept-led page. It uses ## Concepts with an introductory paragraph followed by concept subsections whose headings describe shared ideas, layered boundaries, framework integration patterns, or trade-offs rather than package names. Concept prose uses completed package Overview and Key APIs details to connect related packages where the evidence supports a relationship, but it does not use a concept-to-package table, one subsection per package, repeated package summaries, API inventories, Basic usage examples, or installation commands.",
+      "expectations": [
+        "Writes result/Index.md with a ## Concepts section",
+        "Starts ## Concepts with an introductory paragraph before the first third-level concept heading",
+        "Treats ## Concepts followed immediately by a third-level heading as invalid because the introductory paragraph is required",
+        "Uses concept headings instead of package-name headings",
+        "Allows concepts to link inline to multiple package pages when a concept spans packages",
+        "Connects related packages in concept prose where package responsibilities, dependencies, or APIs show a relationship",
+        "Uses completed package Overview and Key APIs sections to describe the full concept picture without copying API inventories",
+        "Uses relative Markdown package links inside prose rather than a package table",
+        "Does not create one third-level heading per package",
+        "Does not create a concept-to-package table",
+        "Does not repeat package-page API lists",
+        "Does not repeat package-page Basic usage examples or installation commands",
+        "Does not flatten package-page summaries into a redundant overview"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Use git-repo-digest to write a package digest for a normal library package whose source evidence declares a public package-owned base class with protected lifecycle hooks and whose tests show consumers deriving from that base class to exercise the package's main workflow. The evidence also contains a convenience package that references this library.",
+      "expected_output": "The normal library package digest treats the package-owned base class as a central API, includes it in Key APIs when it is consumer-facing, and writes a grounded real-life Basic usage example that derives from that base class when that best demonstrates the package's full capability. The Usage guidance paragraph starts with why the package is a good choice for the supported scenario before mentioning boundaries. The convenience package examples remain direct use cases and do not try to demonstrate every deep capability of each referenced package.",
+      "expectations": [
+        "Treats public package-owned base classes, protected hooks, virtual members, or template-method APIs as consumer-facing APIs when source or tests show that consumers inherit from them",
+        "Prefers a base class declared in the current package's primary namespace or main consumer-facing namespace when multiple abstractions are available",
+        "Includes the base class in Key APIs when inheritance is the primary consumer extension model",
+        "Uses a derived-class Basic usage example for a normal code package when source, tests, or external usage show that derivation is the clearest full-strength usage pattern",
+        "Allows a slightly richer example when it is grounded, readable, and demonstrates the package's real strength better than a thin minimal snippet",
+        "Keeps every type, namespace, constructor, method, override, protected hook, and assertion grounded in source, test, or source-valid external usage evidence",
+        "Starts Usage guidance with the positive adoption case for the package before naming boundaries or alternatives",
+        "Does not make Usage guidance primarily negative or focused on reasons not to use the package",
+        "Keeps convenience-package examples straight to the point with one clear use case per referenced package",
+        "Does not force convenience-package examples to demonstrate every deep capability of each referenced package"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "Use git-repo-digest to write result/Index.md for an existing workspace where completed package digests describe a shared base package, a hosting integration package, an ASP.NET Core integration package, and an aggregate convenience package. Each package page has Overview and Key APIs sections that reveal shared base classes, factory shortcuts, hosting lifecycle hooks, and framework-specific adapters.",
+      "expected_output": "Writes a concept-led overview whose ## Concepts section starts with a short framing paragraph, then uses concept subsections to synthesize the full picture from package Overview and Key APIs details. It connects the base package, hosting integration, ASP.NET Core integration, and aggregate package in prose where their responsibilities and APIs layer together. It does not create one subsection per package, does not copy API inventories, and does not reduce concepts to generic filler.",
+      "expectations": [
+        "Starts ## Concepts with a short introductory paragraph before the first concept heading",
+        "Treats ## Concepts followed immediately by a third-level heading as invalid because the introductory paragraph is required",
+        "Derives concepts from completed package Overview and Key APIs sections rather than project/readme evidence alone",
+        "Uses Key APIs details to identify the APIs that define each concept while summarizing them in prose",
+        "Connects base, hosting, ASP.NET Core, and aggregate package roles when package responsibilities or APIs layer together",
+        "Mentions package links inline only where they help the reader move from a concept to package detail",
+        "Does not create one concept subsection per package",
+        "Does not create package-named concept headings",
+        "Does not create a concept-to-package table",
+        "Does not copy package-page API lists, Basic usage examples, installation commands, or overview paragraphs",
+        "Avoids generic filler that could apply to any .NET repository"
       ]
     }
   ]
