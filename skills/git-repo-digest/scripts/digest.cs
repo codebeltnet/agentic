@@ -1780,14 +1780,16 @@ internal static class DigestScript
         The example must:
         - include explicit `using` statements
         - use a consumer namespace such as `MyProject.Tests`
-        - contain exactly one `[Fact]` or `[Theory]` method unless tests are clearly irrelevant for this package type
+        - compile as a complete snippet with a namespace, a public test class, and exactly one `[Fact]` or `[Theory]` method unless tests are clearly irrelevant for this package type
         - include at least one assertion or observable result
         - demonstrate the current package's central API, normally one declared by this package
+        - show a realistic consumer task where the package API changes how the code is written, not just a smoke test that calls one method with a literal value
         - use only real namespaces, type names, constructors, methods, overloads, return types, and extension methods from the evidence
         - define any helper, fake service, fake domain type, or derived class it needs inside the snippet
         - avoid external files, network resources, databases, environment variables, and machine-specific resources
         - avoid pseudocode, ellipses, TODO comments, placeholder methods, and unexplained magic
         - stay between 10 and 35 lines when feasible
+        - avoid top-level statements; assertions must live inside the single test method
 
         For normal code packages, after the code block write exactly two sentences:
         1. When to use this pattern.
@@ -1799,7 +1801,9 @@ internal static class DigestScript
         3. the most representative test-backed usage
         4. a full-strength example showing the package's distinctive feature, including a package-owned base class or lifecycle hook when relevant
 
-        Reject any candidate that invents APIs, hides setup, demonstrates a lower-level package instead of this package, lacks assertions, contains placeholder helpers, or lets framework setup dominate the package-specific API.
+        Prefer the candidate that makes the package's primary value obvious to a consumer.
+        For foundational packages, prefer a small domain-like example that combines the central validation, configuration, decorator, option, or lifecycle pattern when evidence supports it.
+        Reject any candidate that invents APIs, hides setup, demonstrates a lower-level package instead of this package, lacks assertions, uses top-level statements, contains placeholder helpers, only proves that a trivial literal round-trips, or lets framework setup dominate the package-specific API.
         Output only the best candidate.
 
         For metadata-only, aggregate, convenience, or no-assembly packages:
@@ -1880,6 +1884,7 @@ internal static class DigestScript
         Preserve substantial distinct domains instead of collapsing them into a broad umbrella just because they share dependencies or factory patterns.
         Merge candidates only when the same concept would make the same point with the same packages and APIs.
         If a repository has many supported domains, prefer more precise concept subsections over a short polished list that hides important work.
+        Do a final coverage pass against the completed package digest names and Key APIs before writing; any package-owned domain that disappears needs either its own concept or an explicit merge into a named related concept.
 
         Write exactly these three sections.
 

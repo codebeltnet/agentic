@@ -308,6 +308,43 @@
         "Does not copy package-page API lists, Basic usage examples, installation commands, or overview paragraphs",
         "Avoids generic filler that could apply to any .NET repository"
       ]
+    },
+    {
+      "id": 22,
+      "prompt": "Use git-repo-digest to write result/Index.md for an existing multi-package workspace where completed package digests cover a foundation package, a general utilities package, a security cryptography package, a data integrity package, authentication middleware, diagnostics, caching, and data access. The cryptography and authentication package pages have Key APIs and Basic usage examples that show hashing, keyed hashing, authorization header builders, authenticators, and validation guards.",
+      "expected_output": "Writes a granular concept-led overview. It starts ## Concepts with an introductory paragraph, derives concept candidates from every completed package digest instead of only the most architectural packages, preserves security and cryptography as a distinct concept when the package pages show package-owned APIs for that work, connects authentication, data integrity, and hashing only where the package pages support the relationship, and does not collapse substantial domains into a short generic list.",
+      "expectations": [
+        "Starts ## Concepts with a short introductory paragraph before the first concept heading",
+        "Derives concept candidates from every completed package digest's Overview, Key APIs, Basic usage, and Usage guidance sections",
+        "Preserves security, cryptography, or authentication as a distinct concept when completed package pages contain package-owned APIs for that domain",
+        "Mentions package-owned APIs such as hashing factories, keyed hashing, authorization header builders, authenticators, or validation guards only when present in completed package pages",
+        "Connects authentication, data integrity, and hashing in concept prose only where package responsibilities or APIs show a relationship",
+        "Does not collapse security work into a generic foundation, factory, or middleware concept when separate concept prose would reveal important package work",
+        "Allows a more granular concept list when the completed package digests support multiple substantial domains",
+        "Does not create one concept subsection per package",
+        "Does not create package-named concept headings",
+        "Does not create a concept-to-package table",
+        "Does not copy package-page API inventories, Basic usage examples, installation commands, or overview paragraphs"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "Use git-repo-digest to write a package digest for a normal foundational library package. The source evidence includes public guard methods, parameter-object validation, decorator wrappers, configuration helpers, and disposable lifecycle hooks. The test evidence shows consumer-style tests using these APIs, but there is no external usage evidence.",
+      "expected_output": "Writes a Basic usage section with one complete C# fenced code block containing explicit using statements, a consumer namespace, a public test class, and exactly one [Fact] or [Theory] method with assertions inside that method. The example demonstrates a realistic consumer task that uses the package's foundational APIs meaningfully, rather than top-level statements or a trivial literal round-trip.",
+      "expectations": [
+        "Writes exactly one C# fenced code block for the normal package Basic usage section",
+        "Includes explicit using statements",
+        "Includes a consumer namespace",
+        "Includes a public test class",
+        "Contains exactly one [Fact] or [Theory] method",
+        "Places assertions inside the single test method instead of at top level",
+        "Avoids top-level statements",
+        "Demonstrates a realistic consumer task where the package API changes how the code is written",
+        "Uses package-owned APIs from source evidence such as guards, parameter-object validation, decorators, configuration helpers, or lifecycle hooks",
+        "Does not choose a thin smoke test that only proves a literal value round-trips",
+        "Does not invent helper APIs or framework setup not present in the evidence",
+        "Keeps the two-sentence explanation aligned with what the example actually demonstrates"
+      ]
     }
   ]
 }

@@ -250,6 +250,7 @@ Write `result/Index.md` as a conceptual overview:
 - Derive concept candidates from every completed package digest's `## Overview`, `## Key APIs`, `## Basic usage`, and `## Usage guidance` sections, then connect package responsibilities and APIs across layers where the evidence supports it.
 - Build concepts from coverage first, then merge only true duplicates. A concept should survive when ignoring it would hide a substantial package-owned capability, extension model, boundary, or trade-off.
 - Preserve distinct capability domains represented by package-owned APIs even when they share the same lower-level pattern, dependency, or factory model.
+- Before writing, do a coverage pass against completed package names and Key APIs; any package-owned domain that disappears needs either its own concept or an explicit merge into a named related concept.
 - Include as many concept subsections as the completed package digests genuinely support; do not force a fixed concept count.
 - Link to package pages only as inline relative Markdown links such as `[Package.Name](Package.Name.md)`.
 - For single-package repositories, skip package-selection framing entirely and still explain the real concepts the package introduces.
@@ -291,7 +292,8 @@ Before finishing, verify:
 - Basic usage examples inspired by external usage validate every API call, constructor, namespace, and extension method against current source evidence.
 - External usage evidence may shape the consumer scenario, but stale external code does not override current source or test evidence.
 - For normal code packages, `## Basic usage` contains exactly one C# fenced code block unless the generated prompt explicitly allows more.
-- For normal code packages, the Basic usage C# example contains exactly one `[Fact]` or `[Theory]` method unless the generated prompt explicitly allows more.
+- For normal code packages, the Basic usage C# example is a complete test-style snippet with explicit `using` statements, a consumer namespace, a public test class, and exactly one `[Fact]` or `[Theory]` method unless the generated prompt explicitly allows more.
+- For normal code packages, the Basic usage example demonstrates a realistic consumer task where the package API changes how the code is written, not just a smoke test that calls one method with a literal value.
 - For normal code packages, the two-sentence Basic usage explanation describes only what the example actually demonstrates.
 - For convenience, aggregate, metadata-only, or no-assembly packages that reference code packages, `## Basic usage` contains one C# fenced code block per referenced code package.
 - For convenience packages, each Basic usage example is introduced by a third-level heading naming the referenced package, for example `### Codebelt.Extensions.Xunit`.
@@ -389,6 +391,8 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Convenience package examples are introduced by referenced-package subheadings and make API ownership clear.
 - Convenience package examples complement the individual package pages instead of repeating their Basic usage examples verbatim.
 - Basic usage examples are small but complete: imports, namespace, one focused `[Fact]` or `[Theory]`, and an observable assertion/result.
+- Basic usage examples avoid top-level statements; assertions live inside the single test method.
+- Foundational package examples may combine central validation, configuration, decorator, option, or lifecycle patterns when that better reveals the package's actual consumer value.
 - API shape, inheritance, generic constraints, required overrides, factory overloads, and lifecycle claims are verified against source declarations.
 - External usage influences examples without overriding current source declarations.
 - README content is used for tone and positioning only, unless source code is unavailable.
@@ -421,6 +425,8 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Repeating package-page API lists, Basic usage examples, installation commands, or overview paragraphs in `Index.md`.
 - Using package names as concept headings.
 - Inventing usage examples from plausible framework patterns rather than supplied source and tests.
+- Writing top-level-statement Basic usage snippets for normal packages when the prompt requires a complete test-style example.
+- Choosing a thin literal round-trip smoke test when source or tests support a more representative consumer scenario.
 - Copying external usage that no longer validates against the current package source.
 - Treating external usage as proof of API shape, current method signatures, package ownership, popularity, or frequency.
 - Copying staged files into website content without an explicit user request.
