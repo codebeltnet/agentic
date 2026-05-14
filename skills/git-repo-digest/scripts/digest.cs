@@ -161,11 +161,11 @@ internal static class DigestScript
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex CSharpCodeBlockExpression = new(
-        @"(?ms)^```csharp\s*(?<code>.*?)^```",
+        @"(?ms)^```csharp[^\r\n]*\r?\n(?<code>.*?)(?:\r?\n)^```[ \t]*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex ClassDeclarationExpression = new(
-        @"(?m)^\s*(?:public\s+)?class\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*(?<base>[^{\r\n]+))?",
+        @"(?m)^\s*(?:public\s+)?(?:(?:sealed|abstract|partial)\s+)*class\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*(?<base>[^{\r\n]+))?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex ConstructorParameterExpression = new(
@@ -187,6 +187,30 @@ internal static class DigestScript
     private static readonly Regex ToyExampleTermExpression = new(
         @"\b(?<term>" + string.Join("|", ToyExampleTerms.Select(Regex.Escape)) + @")\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly Regex CodebeltTestConstructorExpression = new(
+        @"(?ms)\bpublic\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\bITestOutputHelper\s+(?<output>[A-Za-z_][A-Za-z0-9_]*)[^)]*\)\s*:\s*base\s*\([^)]*\k<output>[^)]*\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex TestOutputExpression = new(
+        @"\bTestOutput\.(?:Write|WriteLine|WriteLines)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex FenceLineInsideCodeExpression = new(
+        @"(?m)^```",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex MarkdownHeadingInsideCodeExpression = new(
+        @"(?m)^##\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex FileScopedNamespaceExpression = new(
+        @"(?m)^\s*namespace\s+[A-Za-z_][A-Za-z0-9_.]*\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex BlockScopedNamespaceExpression = new(
+        @"(?m)^\s*namespace\s+[A-Za-z_][A-Za-z0-9_.]*\s*(?:\r?\n\s*)?\{",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -1967,6 +1991,7 @@ internal static class DigestScript
         - README evidence is editorial context only when source or project evidence exists.
         - External usage evidence may guide realistic examples only after validating the API shape against current source evidence.
         - For every C# example, validate API shape before finalizing: map each real package-owned variable or receiver to its static type, then verify every member access, method call, constructor call, override, generic constraint, namespace, and extension method against the declaring package's source evidence.
+        - For every C# test example, use the Codebelt.Extensions.Xunit shape: import `Codebelt.Extensions.Xunit` and `Xunit`, never import `Xunit.Abstractions`, inherit the test class from `Test`, wire `ITestOutputHelper output` through `base(output)`, and write useful `TestOutput` context.
         - For convenience, aggregate, metadata-only, or no-assembly package examples, use the referenced package evidence paths in the generated prompt; the aggregate package's own metadata-only evidence is not enough to validate referenced APIs.
         - Every result file starts with YAML frontmatter using the generated prompt's schema and static metadata hints.
         - Replace editorial frontmatter placeholders with grounded page-specific `title`, `description`, and `lede` values before writing.
@@ -1987,8 +2012,16 @@ internal static class DigestScript
         7. Read `prompts/overview.prompt.md` and every completed package result listed by the manifest.
         8. Write `result/Index.md`.
         9. Validate that all manifest result paths exist and begin with complete YAML frontmatter.
-        10. Validate every C# example against source evidence and revise any example that uses plausible but undeclared APIs.
+        10. Validate every C# example against source evidence and revise any example that uses plausible but undeclared APIs or misses the Codebelt.Extensions.Xunit test shape.
         11. Run `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. Revise any reported result errors from source evidence and rerun until validation passes.
+
+        ## Result Edit Discipline
+
+        - Read the affected `result/*.md` file immediately before editing it.
+        - Replace named sections from the `## ` heading through the complete section body, not from inside a paragraph or code block.
+        - When replacing a fenced code example, include the opening fence, the whole code block, the closing fence, and any section-specific explanatory prose in the replacement boundary.
+        - After every result-file edit, re-read the affected section and verify the heading appears exactly once, code fences are balanced, and no old fragment remains.
+        - Rerun `--validate-results` after the final result-file edit. A previous validation pass is stale after any `result/*.md` change.
         """;
 
     private static string BuildSharedEditorialRules() =>
@@ -2516,9 +2549,12 @@ internal static class DigestScript
         For a normal code package, write exactly one complete C# example from a consumer's point of view.
         The example must:
         - include explicit `using` statements
-        - use a consumer namespace such as `MyProject.Tests`
-        - compile as a complete snippet with a namespace, a public test class, and exactly one `[Fact]` or `[Theory]` method unless tests are clearly irrelevant for this package type
+        - include `using Codebelt.Extensions.Xunit;` and `using Xunit;`
+        - not include `using Xunit.Abstractions;`
+        - use a file-scoped consumer namespace such as `namespace MyProject.Tests;`
+        - compile as a complete Codebelt-style xUnit snippet with a namespace, a public test class that inherits from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, a constructor that accepts `ITestOutputHelper output` and passes it to the base constructor, and exactly one `[Fact]` or `[Theory]` method unless tests are clearly irrelevant for this package type
         - include at least one assertion or observable result
+        - use `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` to emit concise, human-friendly information about the scenario or observable result
         - demonstrate the current package's central API, normally one declared by this package
         - show a realistic consumer task where the package API changes how the code is written, not just a smoke test that calls one method with a literal value
         - show a system under test interacting through the package API when the package supports DI, pipelines, handlers, factories, lifecycle hooks, loggers, collectors, stores, recorders, fixtures, or test hosts
@@ -2528,7 +2564,7 @@ internal static class DigestScript
         - avoid pseudocode, ellipses, TODO comments, placeholder methods, and unexplained magic
         - avoid toy/greeting-oriented names and literal-only bodies such as `Greeting`, `MessageService`, `Hello World`, `OK`, `Foo`, `Bar`, `Sample`, or `Dummy` unless those exact terms are source-backed and central to the package
         - avoid direct helper round-trips where the test only writes to a package-owned store/logger/sink/collector/recorder/provider/factory/fixture/host and then reads the same object back
-        - be copy/paste ready: the deterministic validator will place the snippet in a temporary xUnit test project, install the page's NuGet package plus xUnit test packages, run `dotnet test`, and fail validation unless the test compiles and passes
+        - be copy/paste ready: the deterministic validator will place the snippet in a temporary Codebelt.Extensions.Xunit test project, install the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, run `dotnet test`, and fail validation unless the test compiles and passes
         - stay between 10 and 35 lines when feasible
         - avoid top-level statements; assertions must live inside the single test method
 
@@ -2551,7 +2587,7 @@ internal static class DigestScript
         For metadata-only, aggregate, convenience, or no-assembly packages:
         - Write exactly one C# example for each referenced code package with consumer-facing APIs.
         - Use a third-level heading for each example: `### Referenced.Package.Name`.
-        - Each example must contain exactly one `[Fact]` or `[Theory]` method and at least one assertion.
+        - Each example must follow the Codebelt-style xUnit shape: `using Codebelt.Extensions.Xunit;`, `using Xunit;`, a file-scoped consumer namespace, no `using Xunit.Abstractions;`, a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, a constructor with `ITestOutputHelper output` passed to the base constructor, exactly one `[Fact]` or `[Theory]` method, at least one assertion, and useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output.
         - Each example must make an API declared by the referenced package the central API.
         - Before writing each example, use the referenced package evidence map above to read and validate the referenced package's API shape.
         - Do not assume a fixture, base class, builder, options type, service, or other object exposes a member just because the member is common in a framework or plausible from its name.
@@ -2717,9 +2753,20 @@ internal static class DigestScript
             ValidateCSharpExample(resultFile, match.Groups["code"].Value, apiSurface, diagnostics);
         }
 
-        var basicUsage = ExtractMarkdownSectionText(markdown, "## Basic usage");
-        if (!string.IsNullOrWhiteSpace(basicUsage))
+        var basicUsageSections = ExtractMarkdownSections(markdown, "## Basic usage");
+        if (basicUsageSections.Count > 1)
         {
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", $"Result file contains {basicUsageSections.Count} top-level Basic usage sections. Keep exactly one `## Basic usage` section per package page."));
+        }
+
+        foreach (var basicUsage in basicUsageSections)
+        {
+            var codeBlocks = CSharpCodeBlockExpression.Matches(basicUsage);
+            if (codeBlocks.Count == 0)
+            {
+                diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", "Basic usage section must contain at least one complete fenced C# code block."));
+            }
+
             foreach (Match match in CSharpCodeBlockExpression.Matches(basicUsage))
             {
                 ValidateBasicUsageQuality(resultFile, match.Groups["code"].Value, apiSurface, diagnostics);
@@ -2758,17 +2805,20 @@ internal static class DigestScript
 
     private static IEnumerable<BasicUsageExample> ExtractBasicUsageExamples(string resultFile, string markdown)
     {
-        var basicUsage = ExtractMarkdownSectionText(markdown, "## Basic usage");
-        if (string.IsNullOrWhiteSpace(basicUsage))
+        var basicUsageSections = ExtractMarkdownSections(markdown, "## Basic usage");
+        if (basicUsageSections.Count == 0)
         {
             yield break;
         }
 
         var index = 0;
-        foreach (Match match in CSharpCodeBlockExpression.Matches(basicUsage))
+        foreach (var basicUsage in basicUsageSections)
         {
-            index++;
-            yield return new BasicUsageExample(resultFile, index, ResolveResultPackageId(resultFile, markdown), match.Groups["code"].Value.Trim());
+            foreach (Match match in CSharpCodeBlockExpression.Matches(basicUsage))
+            {
+                index++;
+                yield return new BasicUsageExample(resultFile, index, ResolveResultPackageId(resultFile, markdown), match.Groups["code"].Value.Trim());
+            }
         }
     }
 
@@ -2799,7 +2849,11 @@ internal static class DigestScript
             await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "Microsoft.NET.Test.Sdk");
             await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "xunit.v3");
             await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "xunit.runner.visualstudio");
-            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, example.PackageId);
+            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "Codebelt.Extensions.Xunit");
+            if (!string.Equals(example.PackageId, "Codebelt.Extensions.Xunit", StringComparison.OrdinalIgnoreCase))
+            {
+                await AddExampleValidationPackageAsync(exampleDirectory, projectPath, example.PackageId);
+            }
             await RunProcessCaptureAsync(
                 "dotnet",
                 [
@@ -2814,7 +2868,7 @@ internal static class DigestScript
         }
         catch (Exception ex)
         {
-            var message = $"Basic usage example #{example.CodeBlockIndex} does not compile and pass as a copy/paste xUnit test. Rewrite the example from source evidence and rerun validation. {TrimDiagnostic(ex.Message)}";
+            var message = $"Basic usage example #{example.CodeBlockIndex} does not compile and pass as a copy/paste Codebelt.Extensions.Xunit test. Rewrite the example from source evidence and rerun validation. {TrimDiagnostic(ex.Message)}";
             diagnostics.Add(new ResultValidationDiagnostic(example.ResultFile, "error", message));
         }
     }
@@ -2893,8 +2947,134 @@ internal static class DigestScript
         IReadOnlyDictionary<string, ApiTypeSurface> apiSurface,
         List<ResultValidationDiagnostic> diagnostics)
     {
+        ValidateBasicUsageCodeBlockStructure(resultFile, code, diagnostics);
+        ValidateFileScopedNamespace(resultFile, code, diagnostics);
+        ValidateCodebeltXunitShape(resultFile, code, apiSurface, diagnostics);
         ValidateToyExampleTerms(resultFile, code, diagnostics);
         ValidateDirectRoleRoundTrip(resultFile, code, apiSurface, diagnostics);
+    }
+
+    private static void ValidateBasicUsageCodeBlockStructure(
+        string resultFile,
+        string code,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        if (FenceLineInsideCodeExpression.IsMatch(code) || MarkdownHeadingInsideCodeExpression.IsMatch(code))
+        {
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", "Basic usage C# code block appears to contain nested Markdown fences or headings. Repair the Markdown so each Basic usage example is one complete fenced C# block."));
+        }
+    }
+
+    private static void ValidateFileScopedNamespace(
+        string resultFile,
+        string code,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        if (!FileScopedNamespaceExpression.IsMatch(code))
+        {
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", "Basic usage example must use a file-scoped consumer namespace such as `namespace MyProject.Tests;`."));
+        }
+
+        if (BlockScopedNamespaceExpression.IsMatch(code))
+        {
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", "Basic usage example must not use a block-scoped namespace. Use file-scoped namespace syntax instead."));
+        }
+    }
+
+    private static void ValidateCodebeltXunitShape(
+        string resultFile,
+        string code,
+        IReadOnlyDictionary<string, ApiTypeSurface> apiSurface,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        var missing = new List<string>();
+        if (!code.Contains("using Codebelt.Extensions.Xunit;", StringComparison.Ordinal))
+        {
+            missing.Add("using Codebelt.Extensions.Xunit;");
+        }
+
+        if (!code.Contains("using Xunit;", StringComparison.Ordinal))
+        {
+            missing.Add("using Xunit;");
+        }
+
+        if (code.Contains("using Xunit.Abstractions;", StringComparison.Ordinal))
+        {
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", "Basic usage example must not import Xunit.Abstractions; xUnit v3 exposes ITestOutputHelper through the Xunit namespace and Codebelt.Extensions.Xunit.Test handles output."));
+        }
+
+        if (!HasCodebeltTestBaseClass(code, apiSurface))
+        {
+            missing.Add("a public test class inheriting from Codebelt.Extensions.Xunit.Test or a source-evidence type derived from Test");
+        }
+
+        if (!CodebeltTestConstructorExpression.IsMatch(code))
+        {
+            missing.Add("a constructor that accepts ITestOutputHelper output and calls base(output)");
+        }
+
+        if (!TestOutputExpression.IsMatch(code))
+        {
+            missing.Add("TestOutput.Write, TestOutput.WriteLine, or TestOutput.WriteLines with human-friendly scenario output");
+        }
+
+        if (missing.Count > 0)
+        {
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", "Basic usage example must follow the Codebelt.Extensions.Xunit test shape: " + string.Join("; ", missing) + "."));
+        }
+    }
+
+    private static bool HasCodebeltTestBaseClass(string code, IReadOnlyDictionary<string, ApiTypeSurface> apiSurface)
+    {
+        foreach (Match classMatch in ClassDeclarationExpression.Matches(code))
+        {
+            var body = TryExtractTypeBody(code, classMatch.Index);
+            if (body is null || !ContainsXunitTestMethod(body))
+            {
+                continue;
+            }
+
+            if (!classMatch.Groups["base"].Success)
+            {
+                continue;
+            }
+
+            foreach (var baseType in SplitBaseTypes(classMatch.Groups["base"].Value))
+            {
+                if (IsTestOrDerivedFromTest(apiSurface, baseType))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsXunitTestMethod(string body) =>
+        body.Contains("[Fact]", StringComparison.Ordinal) ||
+        body.Contains("[Theory]", StringComparison.Ordinal);
+
+    private static bool IsTestOrDerivedFromTest(IReadOnlyDictionary<string, ApiTypeSurface> apiSurface, string typeName)
+    {
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return IsTestOrDerivedFromTest(apiSurface, NormalizeTypeReference(typeName), visited);
+    }
+
+    private static bool IsTestOrDerivedFromTest(IReadOnlyDictionary<string, ApiTypeSurface> apiSurface, string typeName, HashSet<string> visited)
+    {
+        if (string.Equals(typeName, "Test", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!visited.Add(typeName))
+        {
+            return false;
+        }
+
+        return apiSurface.TryGetValue(typeName, out var surface) &&
+               surface.BaseTypes.Any(baseType => IsTestOrDerivedFromTest(apiSurface, NormalizeTypeReference(baseType), visited));
     }
 
     private static void ValidateToyExampleTerms(
@@ -2958,16 +3138,111 @@ internal static class DigestScript
 
     private static string ExtractMarkdownSectionText(string markdown, string heading)
     {
-        var headingIndex = markdown.IndexOf(heading, StringComparison.OrdinalIgnoreCase);
-        if (headingIndex < 0)
+        var sections = ExtractMarkdownSections(markdown, heading);
+        return sections.Count == 0 ? string.Empty : sections[0];
+    }
+
+    private static IReadOnlyList<string> ExtractMarkdownSections(string markdown, string heading)
+    {
+        var sections = new List<string>();
+        var inFence = false;
+        var fenceMarker = string.Empty;
+        int? sectionStart = null;
+
+        foreach (var line in EnumerateMarkdownLines(markdown))
         {
-            return string.Empty;
+            if (!inFence && IsLevelTwoHeadingLine(line.Text))
+            {
+                if (sectionStart.HasValue)
+                {
+                    sections.Add(markdown[sectionStart.Value..line.Start]);
+                    sectionStart = null;
+                }
+
+                if (IsExactHeadingLine(line.Text, heading))
+                {
+                    sectionStart = line.Start;
+                }
+            }
+
+            var trimmed = line.Text.TrimStart();
+            if (inFence)
+            {
+                if (IsFenceClosingLine(trimmed, fenceMarker))
+                {
+                    inFence = false;
+                    fenceMarker = string.Empty;
+                }
+            }
+            else if (TryGetFenceOpeningMarker(trimmed, out var marker))
+            {
+                inFence = true;
+                fenceMarker = marker;
+            }
         }
 
-        var nextHeading = Regex.Match(markdown[(headingIndex + heading.Length)..], @"(?m)^##\s+", RegexOptions.CultureInvariant);
-        return nextHeading.Success
-            ? markdown.Substring(headingIndex, heading.Length + nextHeading.Index)
-            : markdown[headingIndex..];
+        if (sectionStart.HasValue)
+        {
+            sections.Add(markdown[sectionStart.Value..]);
+        }
+
+        return sections;
+    }
+
+    private static IEnumerable<MarkdownLine> EnumerateMarkdownLines(string markdown)
+    {
+        for (var index = 0; index < markdown.Length;)
+        {
+            var start = index;
+            var newlineIndex = markdown.IndexOf('\n', index);
+            var next = newlineIndex < 0 ? markdown.Length : newlineIndex + 1;
+            var end = newlineIndex < 0 ? markdown.Length : newlineIndex;
+            if (end > start && markdown[end - 1] == '\r')
+            {
+                end--;
+            }
+
+            yield return new MarkdownLine(start, markdown[start..end]);
+            index = next;
+        }
+    }
+
+    private static bool IsExactHeadingLine(string line, string heading) =>
+        string.Equals(line.Trim(), heading, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLevelTwoHeadingLine(string line)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("## ", StringComparison.Ordinal) ||
+               trimmed.StartsWith("##\t", StringComparison.Ordinal);
+    }
+
+    private static bool TryGetFenceOpeningMarker(string trimmedLine, out string marker)
+    {
+        if (trimmedLine.StartsWith("```", StringComparison.Ordinal))
+        {
+            marker = "```";
+            return true;
+        }
+
+        if (trimmedLine.StartsWith("~~~", StringComparison.Ordinal))
+        {
+            marker = "~~~";
+            return true;
+        }
+
+        marker = string.Empty;
+        return false;
+    }
+
+    private static bool IsFenceClosingLine(string trimmedLine, string marker)
+    {
+        if (!trimmedLine.StartsWith(marker, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return trimmedLine[marker.Length..].Trim().Length == 0;
     }
 
     private static bool IsExampleRoleType(string typeName) =>
@@ -3142,6 +3417,8 @@ internal static class DigestScript
         var namespaceIndex = normalized.LastIndexOf('.');
         return namespaceIndex < 0 ? normalized : normalized[(namespaceIndex + 1)..];
     }
+
+    private static string NormalizeTypeReference(string typeName) => StripGenericArity(typeName);
 
     private static string ExtractMemberName(string declaration)
     {
@@ -3355,6 +3632,8 @@ internal sealed record ResultValidationDiagnostic(string File, string Severity, 
 internal sealed record ResultValidationReport(string Workspace, IReadOnlyList<ResultValidationDiagnostic> Diagnostics);
 
 internal sealed record MarkdownResultFile(string Path, string Markdown);
+
+internal sealed record MarkdownLine(int Start, string Text);
 
 internal sealed record BasicUsageExample(string ResultFile, int CodeBlockIndex, string PackageId, string Code);
 
