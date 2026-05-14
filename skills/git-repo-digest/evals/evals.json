@@ -566,6 +566,20 @@
         "Still requires useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output",
         "Still requires the snippet to compile and pass executable validation"
       ]
+    },
+    {
+      "id": 39,
+      "prompt": "Use git-repo-digest to validate an existing workspace where preflight searches find `OK` in one Basic usage example and the deterministic validator reports several Basic usage failures, including one executable xUnit failure. The result files otherwise appear complete.",
+      "expected_output": "Handles validation repair as a bounded diagnostic loop. It treats preflight search hits as triage rather than automatic failures, records each validator diagnostic with the affected file, snippet, source evidence needed, and planned edit, inspects the failing snippet and exact failure line before theorizing about framework internals, makes source-backed edits instead of continuing open-ended speculation, and reruns `--validate-results` after the final result-file edit.",
+      "expectations": [
+        "Treats targeted `rg` hits as triage and does not rewrite passing examples solely because a token such as `OK` appears",
+        "Distinguishes framework or enum usages such as `HttpStatusCode.OK` from toy literal response bodies",
+        "Creates a concise repair ledger for validator diagnostics before editing result files",
+        "Inspects the affected Basic usage snippet and exact executable failure line before speculating about framework internals",
+        "Limits hypothesis loops and replaces failing examples from source-backed evidence when the cause is not quickly confirmed",
+        "Makes focused edits tied to validator diagnostics rather than broad rewrites from unrelated search hits",
+        "Reruns `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after the final result-file edit"
+      ]
     }
   ]
 }
