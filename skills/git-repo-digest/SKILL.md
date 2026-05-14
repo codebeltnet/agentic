@@ -88,7 +88,9 @@ The runner also supports deterministic result validation for authored workspaces
 dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>
 ```
 
-Use this as a deterministic gate after authoring result files. It reports unsupported package-owned API member access in C# examples, low-signal Basic usage patterns, and Basic usage snippets that do not compile and pass as temporary xUnit tests. For executable validation, the runner creates a temp test project, installs the page's NuGet package plus xUnit test packages, and runs `dotnet test`. The agent must revise from source evidence and rerun until validation passes.
+Use this as a deterministic gate after authoring result files. It reports unsupported package-owned API member access in C# examples, low-signal Basic usage patterns, non-Codebelt-style xUnit snippets, and Basic usage snippets that do not compile and pass as temporary Codebelt.Extensions.Xunit tests. For executable validation, the runner creates a temp test project, installs the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, and runs `dotnet test`. The agent must revise from source evidence and rerun until validation passes.
+
+Any result-file edit after a validation pass invalidates that pass. Rerun `--validate-results` after the final write to `result/*.md`, including after small copy edits, regenerated Basic usage snippets, or manual repairs.
 
 Packing notes:
 
@@ -249,6 +251,14 @@ For each package in the first phase:
 
 Do not use another package's evidence to fill gaps unless the current prompt explicitly includes it or the manifest marks that relationship as required.
 
+When editing an existing package result:
+
+- Read the affected file immediately before editing. Do not rely on memory, stale subagent output, or a previously displayed excerpt.
+- When replacing a named section such as `## Basic usage`, select from the section heading through the complete section body. Do not start the replacement inside the section or inside a fenced code block.
+- If replacing a code example, include the opening fence, the entire code block, the closing fence, and any section-specific explanatory prose in the replacement boundary.
+- After every result-file edit, re-read the affected section and verify the heading appears exactly once, every fenced code block has a matching closing fence, and no old fragment survived above or below the replacement.
+- Rerun `--validate-results` after the final result-file edit. A previous validation pass is stale after any result-file change.
+
 ### Optional Subagent Strategy
 
 If the agent runtime can delegate work, use subagents to keep each package evidence set isolated and roomy:
@@ -309,7 +319,9 @@ Run the deterministic result validator and require a pass before reporting compl
 dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>
 ```
 
-This validator catches C# Basic usage member accesses on package-owned receiver types that do not exist in source evidence, low-signal Basic usage examples, and snippets that fail an executable xUnit harness. It intentionally does not guess replacement APIs. If it reports an error, revise the example from source evidence and rerun validation until it passes.
+This validator catches C# Basic usage member accesses on package-owned receiver types that do not exist in source evidence, non-Codebelt-style xUnit snippets, malformed Basic usage sections, low-signal Basic usage examples, and snippets that fail an executable Codebelt.Extensions.Xunit harness. It intentionally does not guess replacement APIs. If it reports an error, revise the example from source evidence and rerun validation until it passes.
+
+Treat validation as a final-state check, not a milestone from earlier in the session. If any `result/*.md` file changes after `--validate-results` passes, rerun validation before reporting completion.
 
 Before finishing, verify:
 
@@ -337,25 +349,27 @@ Before finishing, verify:
 - No result file contains analysis notes, citations, XML, JSON, confidence scores, or chat commentary unless the generated prompt explicitly asks for them.
 - Code examples mention only APIs visible in the relevant evidence.
 - Basic usage examples pass API-shape validation: every namespace, type, constructor, method, extension method, override, generic constraint, and property access used in the snippet exists on the declaring type in source evidence or on the framework type shown by the snippet's static type.
-- Basic usage examples pass executable validation: the validator writes each Basic usage C# block to a temporary xUnit test project, installs the page's NuGet package plus xUnit test packages, runs `dotnet test`, and treats any compile or test failure as blocking.
+- Basic usage examples pass Codebelt xUnit validation: every C# test snippet includes `using Codebelt.Extensions.Xunit;` and `using Xunit;`, uses a file-scoped consumer namespace such as `namespace MyProject.Tests;`, omits `using Xunit.Abstractions;`, declares a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, defines a constructor that accepts `ITestOutputHelper output` and passes that output helper to the base constructor, and uses `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` for concise human-friendly scenario output.
+- Basic usage examples pass executable validation: the validator writes each Basic usage C# block to a temporary Codebelt.Extensions.Xunit project, installs the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, runs `dotnet test`, and treats any compile or test failure as blocking.
+- Basic usage sections are structurally valid: package pages have one top-level `## Basic usage` section, headings inside fenced code blocks do not count as Markdown section boundaries, and every Basic usage section contains at least one complete fenced C# code block.
 - If executable validation fails, rewrite the example from source, tests, and source-valid external usage, then rerun `--validate-results` until the workspace passes.
 - Basic usage examples inspired by external usage validate every API call, constructor, namespace, and extension method against current source evidence.
 - Basic usage examples for convenience, aggregate, metadata-only, or no-assembly packages validate referenced-package API shape against the referenced package's source evidence, not the aggregate package's empty or metadata-only evidence.
 - Property accesses in C# examples are API-shape claims. For any real package-owned type, fixture, base class, builder, options object, context, factory result, or service object, verify that the accessed member is declared by the relevant source evidence or by a known framework type used with the correct static type.
 - External usage evidence may shape the consumer scenario, but stale external code does not override current source or test evidence.
 - For normal code packages, `## Basic usage` contains exactly one C# fenced code block unless the generated prompt explicitly allows more.
-- For normal code packages, the Basic usage C# example is a complete test-style snippet with explicit `using` statements, a consumer namespace, a public test class, and exactly one `[Fact]` or `[Theory]` method unless the generated prompt explicitly allows more.
+- For normal code packages, the Basic usage C# example is a complete Codebelt-style test snippet with explicit `using` statements, a file-scoped consumer namespace, a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, a constructor with `ITestOutputHelper output` passed to the base constructor, useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output, and exactly one `[Fact]` or `[Theory]` method unless the generated prompt explicitly allows more.
 - For normal code packages, the Basic usage example demonstrates a realistic consumer task where the package API changes how the code is written, not just a smoke test that calls one method with a literal value.
 - For normal code packages, the Basic usage example shows a system under test interacting through the package API when the package supports DI, pipelines, handlers, factories, lifecycle hooks, loggers, collectors, stores, recorders, fixtures, providers, or test hosts.
 - For normal code packages, the two-sentence Basic usage explanation describes only what the example actually demonstrates.
 - For convenience, aggregate, metadata-only, or no-assembly packages that reference code packages, `## Basic usage` contains one C# fenced code block per referenced code package.
 - For convenience packages, each Basic usage example is introduced by a third-level heading naming the referenced package, for example `### Codebelt.Extensions.Xunit`.
-- For convenience packages, each referenced-package example contains exactly one `[Fact]` or `[Theory]` method.
+- For convenience packages, each referenced-package example follows the same Codebelt-style xUnit shape and contains exactly one `[Fact]` or `[Theory]` method.
 - For convenience packages, the Basic usage section includes a final paragraph explaining that the convenience package provides the single package reference and that the APIs come from the referenced packages.
 - Convenience-package examples must not reuse individual package Basic usage examples verbatim.
 - Convenience-package examples must not describe referenced APIs as if they are implemented by the convenience package itself.
 - Convenience-package examples should be shorter and use-case-oriented. They should complement, not duplicate, the normal package pages.
-- Every C# Basic usage example includes necessary `using` statements, prefers explicit imports, uses a consumer namespace, and includes at least one assertion or observable result.
+- Every C# Basic usage example includes necessary `using` statements, prefers explicit imports, uses a file-scoped consumer namespace, and includes at least one assertion or observable result plus human-friendly `TestOutput` context.
 - Every C# Basic usage example is small but complete enough to understand without hidden files, hidden helpers, hidden services, or unexplained setup.
 - Basic usage examples do not contain placeholder comments, ellipses, TODOs, or magic helper calls.
 - Basic usage examples do not introduce fake services, middleware, controllers, repositories, options, validators, domain types, or helper methods unless those types are defined inside the snippet or exist in the package evidence.
@@ -450,8 +464,8 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Convenience package Basic usage sections contain one focused C# example per referenced code package.
 - Convenience package examples are introduced by referenced-package subheadings and make API ownership clear.
 - Convenience package examples complement the individual package pages instead of repeating their Basic usage examples verbatim.
-- Basic usage examples are small but complete: imports, namespace, one focused `[Fact]` or `[Theory]`, and an observable assertion/result.
-- Basic usage examples are copy/paste ready enough to pass the generated temporary xUnit project during post-validation.
+- Basic usage examples are small but complete: imports, file-scoped namespace, Codebelt.Extensions.Xunit `Test` inheritance directly or through a source-backed derived Codebelt test base class, output helper wiring, one focused `[Fact]` or `[Theory]`, useful `TestOutput` context, and an observable assertion/result.
+- Basic usage examples are copy/paste ready enough to pass the generated temporary Codebelt.Extensions.Xunit project during post-validation.
 - Basic usage examples avoid top-level statements; assertions live inside the single test method.
 - Basic usage examples model real engineering roles instead of greeting/message/sample scenarios; package-owned stores, loggers, collectors, fixtures, factories, and hosts are demonstrated through a producer/consumer, pipeline, service, or lifecycle interaction when the evidence supports one.
 - Foundational package examples may combine central validation, configuration, decorator, option, or lifecycle patterns when that better reveals the package's actual consumer value.
