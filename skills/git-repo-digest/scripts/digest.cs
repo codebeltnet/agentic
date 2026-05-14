@@ -21,6 +21,7 @@ internal static class DigestScript
     private const string SourceDirectoryName = "src";
     private const string TestDirectoryName = "test";
     private const string AgentGeneratedBy = "git-repo-digest";
+    private const string ExampleValidationProjectName = "DigestBasicUsageValidation";
 
     private const int MaxEvidenceChunkBodyBytes = 36 * 1024;
     private const int MaxExternalUsageFilesPerPackage = 96;
@@ -29,6 +30,117 @@ internal static class DigestScript
 
     private static readonly TimeSpan DefaultProcessTimeout = TimeSpan.FromMinutes(5);
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    private static readonly string[] EngineeringRoleSuffixes =
+    [
+        "Base",
+        "Binder",
+        "Builder",
+        "Converter",
+        "Decorator",
+        "Dispatcher",
+        "Endpoint",
+        "Extensions",
+        "Factory",
+        "Filter",
+        "Handler",
+        "Mapper",
+        "Middleware",
+        "Options",
+        "Parser",
+        "Provider",
+        "Resolver",
+        "Serializer",
+        "Specification",
+        "Strategy",
+        "Validator"
+    ];
+
+    private static readonly string[] LowSignalLifecycleValues =
+    [
+        "Application",
+        "ConfigureAwait",
+        "ConfiguredTaskAwaitable",
+        "Host",
+        "Hosting",
+        "Initialized",
+        "Initializes"
+    ];
+
+    private static readonly string[] ExampleRoleSuffixes =
+    [
+        "Builder",
+        "Client",
+        "Collector",
+        "Comparer",
+        "Context",
+        "Dispatcher",
+        "Factory",
+        "Fixture",
+        "Host",
+        "Logger",
+        "Pipeline",
+        "Provider",
+        "Recorder",
+        "Sink",
+        "Store",
+        "Test"
+    ];
+
+    private static readonly string[] DirectWriteMemberNames =
+    [
+        "Add",
+        "Append",
+        "Capture",
+        "Dispatch",
+        "Emit",
+        "Enqueue",
+        "Log",
+        "Publish",
+        "Raise",
+        "Record",
+        "Save",
+        "Send",
+        "Set",
+        "Write"
+    ];
+
+    private static readonly string[] DirectReadMemberNames =
+    [
+        "Any",
+        "Contains",
+        "Count",
+        "Find",
+        "Get",
+        "Query",
+        "QueryFor",
+        "Read",
+        "Single"
+    ];
+
+    private static readonly string[] ToyExampleTerms =
+    [
+        "BuildHost",
+        "CreateClient",
+        "CreateService",
+        "Dummy",
+        "FakeRepository",
+        "Foo",
+        "FormatInvoice",
+        "GenerateReport",
+        "Greeting",
+        "Hello",
+        "IMessageService",
+        "IMyRepository",
+        "IMyService",
+        "MessageService",
+        "MyRepository",
+        "MyService",
+        "OK",
+        "Sample",
+        "SampleController",
+        "SampleMiddleware",
+        "World"
+    ];
 
     private static readonly string[] OwnedTestProjectSuffixes = ["Tests", "FunctionalTests"];
     private static readonly string[] RootProjectMetadataFileNames =
@@ -48,6 +160,34 @@ internal static class DigestScript
         @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:public|protected(?:\s+internal)?|internal\s+protected)\s+(?<decl>[^\r\n{;]+(?:\([^\r\n;{}]*\))?)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex CSharpCodeBlockExpression = new(
+        @"(?ms)^```csharp\s*(?<code>.*?)^```",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ClassDeclarationExpression = new(
+        @"(?m)^\s*(?:public\s+)?class\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*(?<base>[^{\r\n]+))?",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ConstructorParameterExpression = new(
+        @"(?m)\b(?<ctor>[A-Za-z_][A-Za-z0-9_]*)\s*\((?<parameters>[^)]*)\)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex TypedVariableDeclarationExpression = new(
+        @"(?m)\b(?<type>[A-Z][A-Za-z0-9_.]*(?:<[^;=()]+>)?)\s+(?<name>_?[A-Za-z_][A-Za-z0-9_]*)\s*(?:=|;)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex VarConstructionExpression = new(
+        @"(?m)\b(?:using\s+)?var\s+(?<name>_?[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+(?<type>[A-Z][A-Za-z0-9_.]*(?:<[^;=()]+>)?)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex MemberAccessExpression = new(
+        @"\b(?<receiver>[A-Za-z_][A-Za-z0-9_]*)\.(?<member>[A-Z][A-Za-z0-9_]*)\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ToyExampleTermExpression = new(
+        @"\b(?<term>" + string.Join("|", ToyExampleTerms.Select(Regex.Escape)) + @")\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
     public static async Task<int> RunAsync(string[] args)
     {
         if (args.Length == 0 || HasFlag(args, "--help") || HasFlag(args, "-h"))
@@ -58,6 +198,14 @@ internal static class DigestScript
 
         try
         {
+            if (HasFlag(args, "--validate-results"))
+            {
+                var validationOptions = ParseValidationOptions(args);
+                var report = await ValidateResultWorkspaceAsync(validationOptions);
+                PrintValidationReport(report);
+                return report.Diagnostics.Count == 0 ? 0 : 1;
+            }
+
             var options = ParseOptions(args);
             var repoId = DeriveRepoId(options.RepoUrl);
             var runId = CreateRunId();
@@ -85,20 +233,22 @@ internal static class DigestScript
                 foreach (var package in packages)
                 {
                     var resultPath = ToRepositoryPath(ResultDirectoryName, package.Name + ".md");
-                    var packageArtifacts = await WritePackageWorkspaceAsync(workspace, repositoryDirectory, package, packages, externalRepositories);
+                    var packageArtifacts = await WritePackageWorkspaceAsync(workspace, repositoryDirectory, package, packages, externalRepositories, options.RepoUrl);
 
                     packageEntries.Add(new PackageManifestEntry(
                         Kind: "package",
                         Name: package.Name,
                         Prompt: packageArtifacts.PromptPath,
                         Evidence: packageArtifacts.Evidence,
-                        Result: resultPath));
+                        Result: resultPath,
+                        FrontmatterHints: packageArtifacts.FrontmatterHints));
                 }
 
                 var overviewPromptPath = ToRepositoryPath(PromptDirectoryName, "overview.prompt.md");
-                await WriteUtf8Async(Path.Combine(workspace, overviewPromptPath), BuildOverviewPrompt(packages));
+                var overviewFrontmatterHints = BuildOverviewFrontmatterHints(repositoryDirectory, repoId, options.RepoUrl, packages);
+                await WriteUtf8Async(Path.Combine(workspace, overviewPromptPath), BuildOverviewPrompt(packages, overviewFrontmatterHints));
                 await WriteUtf8Async(Path.Combine(workspace, "instructions.md"), BuildInstructions(options.RepoUrl, repoId));
-                await WriteManifestAsync(Path.Combine(workspace, "manifest.json"), options, repoId, runId, workspace, packageEntries, overviewPromptPath);
+                await WriteManifestAsync(Path.Combine(workspace, "manifest.json"), options, repoId, runId, workspace, packageEntries, overviewPromptPath, overviewFrontmatterHints);
 
                 Console.WriteLine();
                 Console.WriteLine("[digest] deterministic workspace written:");
@@ -147,6 +297,19 @@ internal static class DigestScript
         }
 
         return new DigestOptions(repoUrl, outputRoot, externalRepoUrls);
+    }
+
+    private static ResultValidationOptions ParseValidationOptions(string[] args)
+    {
+        var parser = new OptionReader(args);
+        var workspace = Path.GetFullPath(parser.GetRequired("--workspace").Trim());
+        parser.ThrowIfUnknownOptions("--validate-results", "--workspace", "--help", "-h");
+        if (!Directory.Exists(workspace))
+        {
+            throw new InvalidOperationException($"Workspace does not exist: {workspace}");
+        }
+
+        return new ResultValidationOptions(workspace);
     }
 
     private static bool HasFlag(string[] args, string name) => args.Contains(name, StringComparer.Ordinal);
@@ -261,7 +424,7 @@ internal static class DigestScript
         var packages = new List<PackageInfo>();
         foreach (var projectFile in projectFiles)
         {
-            var metadata = ReadProjectMetadata(projectFile);
+            var metadata = ReadProjectMetadata(repositoryDirectory, projectFile);
             if (metadata.IsPackable is false)
             {
                 continue;
@@ -281,19 +444,34 @@ internal static class DigestScript
                 SourcePath: ToRepositoryPath(Path.GetRelativePath(repositoryDirectory, sourceDirectory)),
                 TestPath: testDirectory is null ? null : ToRepositoryPath(Path.GetRelativePath(repositoryDirectory, testDirectory)),
                 IsConveniencePackage: sourceFiles.Count == 0,
-                BundledPackages: metadata.BundledPackages));
+                BundledPackages: metadata.BundledPackages,
+                TargetFrameworkMonikers: metadata.TargetFrameworkMonikers,
+                TargetFrameworks: metadata.TargetFrameworks,
+                License: metadata.License,
+                Title: metadata.Title,
+                Description: metadata.Description,
+                ProjectUrl: metadata.ProjectUrl,
+                RepositoryUrl: metadata.RepositoryUrl));
         }
 
         return packages;
     }
 
-    private static ProjectMetadata ReadProjectMetadata(string projectFile)
+    private static ProjectMetadata ReadProjectMetadata(string repositoryDirectory, string projectFile)
     {
-        var document = XDocument.Load(projectFile, LoadOptions.PreserveWhitespace);
-        var packageId = ElementValue(document, "PackageId");
-        var assemblyName = ElementValue(document, "AssemblyName");
-        var isPackable = TryParseBoolean(ElementValue(document, "IsPackable"));
-        var bundledPackages = document.Descendants()
+        var documents = LoadProjectMetadataDocuments(repositoryDirectory, projectFile);
+        var projectDocument = XDocument.Load(projectFile, LoadOptions.PreserveWhitespace);
+        var packageId = ElementValue(documents, "PackageId");
+        var assemblyName = ElementValue(documents, "AssemblyName");
+        var isPackable = TryParseBoolean(ProjectElementValue(projectDocument, "IsPackable"));
+        var targetFrameworkMonikers = ReadTargetFrameworkMonikers(documents);
+        var targetFrameworks = targetFrameworkMonikers.Select(ToFriendlyTargetFramework).ToList();
+        var license = FirstNonEmptyOrDefault(ElementValue(documents, "PackageLicenseExpression"), ElementValue(documents, "PackageLicenseFile"));
+        var title = ElementValue(documents, "Title");
+        var description = ElementValue(documents, "Description");
+        var projectUrl = ElementValue(documents, "PackageProjectUrl");
+        var repositoryUrl = ElementValue(documents, "RepositoryUrl");
+        var bundledPackages = projectDocument.Descendants()
             .Where(element => element.Name.LocalName is "PackageReference" or "ProjectReference")
             .Select(element => element.Attribute("Include")?.Value)
             .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -302,17 +480,99 @@ internal static class DigestScript
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return new ProjectMetadata(packageId, assemblyName, isPackable, bundledPackages);
+        return new ProjectMetadata(
+            PackageId: packageId,
+            AssemblyName: assemblyName,
+            IsPackable: isPackable,
+            BundledPackages: bundledPackages,
+            TargetFrameworkMonikers: targetFrameworkMonikers,
+            TargetFrameworks: targetFrameworks,
+            License: license,
+            Title: title,
+            Description: description,
+            ProjectUrl: projectUrl,
+            RepositoryUrl: repositoryUrl);
+    }
+
+    private static IReadOnlyList<XDocument> LoadProjectMetadataDocuments(string repositoryDirectory, string projectFile)
+    {
+        var candidates = new[]
+        {
+            Path.Combine(repositoryDirectory, "Directory.Build.props"),
+            Path.Combine(repositoryDirectory, "Directory.Packages.props"),
+            projectFile,
+            Path.Combine(repositoryDirectory, "Directory.Build.targets")
+        };
+
+        return candidates
+            .Where(File.Exists)
+            .Select(path => XDocument.Load(path, LoadOptions.PreserveWhitespace))
+            .ToList();
     }
 
     private static bool? TryParseBoolean(string value) =>
         bool.TryParse(value, out var parsed) ? parsed : null;
 
-    private static string ElementValue(XDocument document, string localName) =>
-        document.Descendants().FirstOrDefault(element => element.Name.LocalName == localName)?.Value.Trim() ?? string.Empty;
+    private static string ElementValue(IReadOnlyList<XDocument> documents, string localName) =>
+        documents
+            .SelectMany(document => document.Descendants())
+            .Where(element => element.Name.LocalName == localName)
+            .Select(element => element.Value.Trim())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .LastOrDefault() ?? string.Empty;
+
+    private static string ProjectElementValue(XDocument document, string localName) =>
+        document
+            .Descendants()
+            .Where(element => element.Name.LocalName == localName)
+            .Select(element => element.Value.Trim())
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .LastOrDefault() ?? string.Empty;
+
+    private static IReadOnlyList<string> ReadTargetFrameworkMonikers(IReadOnlyList<XDocument> documents)
+    {
+        var plural = ElementValue(documents, "TargetFrameworks");
+        var singular = ElementValue(documents, "TargetFramework");
+        return new[] { plural, singular }
+            .SelectMany(value => value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Where(value => !value.Contains("$(", StringComparison.Ordinal))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     private static string FirstNonEmpty(params string[] values) =>
         values.First(value => !string.IsNullOrWhiteSpace(value)).Trim();
+
+    private static string FirstNonEmptyOrDefault(params string[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static string ToFriendlyTargetFramework(string moniker)
+    {
+        var normalized = moniker.Trim();
+        if (Regex.IsMatch(normalized, @"^net\d+\.\d+$", RegexOptions.CultureInvariant))
+        {
+            return ".NET " + normalized[3..];
+        }
+
+        if (Regex.IsMatch(normalized, @"^netstandard\d+\.\d+$", RegexOptions.CultureInvariant))
+        {
+            return ".NET Standard " + normalized["netstandard".Length..];
+        }
+
+        if (Regex.IsMatch(normalized, @"^netcoreapp\d+\.\d+$", RegexOptions.CultureInvariant))
+        {
+            return ".NET Core " + normalized["netcoreapp".Length..];
+        }
+
+        if (Regex.IsMatch(normalized, @"^net\d+$", RegexOptions.CultureInvariant) && normalized.Length >= 5)
+        {
+            return ".NET Framework " + normalized[3] + "." + normalized[4..];
+        }
+
+        return normalized;
+    }
 
     private static string? FindTestDirectory(string repositoryDirectory, string sourceProjectFile, string packageName)
     {
@@ -378,7 +638,8 @@ internal static class DigestScript
         string repositoryDirectory,
         PackageInfo package,
         IReadOnlyList<PackageInfo> packages,
-        IReadOnlyList<ExternalRepository> externalRepositories)
+        IReadOnlyList<ExternalRepository> externalRepositories,
+        string repoUrl)
     {
         Console.WriteLine($"[digest] writing evidence for {package.Name}...");
 
@@ -455,8 +716,9 @@ internal static class DigestScript
             ApiSummary: apiSummaryPath,
             EngineeringSignals: engineeringSignalsPath);
 
-        await WriteUtf8Async(Path.Combine(workspace, promptPath), BuildPackageDigestPrompt(package, evidence));
-        return new PackageWorkspaceArtifacts(promptPath, evidence);
+        var frontmatterHints = BuildPackageFrontmatterHints(repositoryDirectory, package, repoUrl, packages);
+        await WriteUtf8Async(Path.Combine(workspace, promptPath), BuildPackageDigestPrompt(package, packages, evidence, frontmatterHints));
+        return new PackageWorkspaceArtifacts(promptPath, evidence, frontmatterHints);
     }
 
     private static async Task<EvidenceArtifacts> WriteEvidenceArtifactsAsync(
@@ -763,7 +1025,8 @@ internal static class DigestScript
     {
         var files = EnumerateSignalFiles(repositoryDirectory, package).ToList();
         var exceptionSignals = FindSignals(files, @"(?:throw\s+new|Assert\.Throws(?:Async)?)\s*<?([A-Za-z0-9_.]+Exception)", "exception guard").Take(12).ToList();
-        var lifecycleSignals = FindSignals(files, @"\b([A-Za-z0-9_]*(?:Configure|Callback|Fixture|Factory|Initialize|Dispose|Lifetime|Host|Application)[A-Za-z0-9_]*)\b", "lifecycle or composition name").Take(16).ToList();
+        var declarationSignals = FindDeclarationSignals(files.Where(file => !IsTestEvidenceFile(file.RelativePath, package))).Take(16).ToList();
+        var lifecycleSignals = FindSignals(files, @"\b([A-Za-z0-9_]*(?:Configure|Callback|Fixture|Factory|Initialize|Dispose|Lifetime|Host|Application)[A-Za-z0-9_]*)\b", "lifecycle or composition name", IsUsefulLifecycleSignal).Take(16).ToList();
         var hostingSignals = FindSignals(files, @"\b(IHostBuilder|HostApplicationBuilder|Host\.CreateApplicationBuilder|WebApplicationBuilder|IApplicationBuilder|WebApplicationFactory|TestServer)\b", "hosting model").Take(12).ToList();
         var testSignals = files
             .Where(file => IsTestEvidenceFile(file.RelativePath, package))
@@ -774,10 +1037,11 @@ internal static class DigestScript
             .ToList();
 
         var sb = new StringBuilder();
-        sb.AppendLine("This section is a deterministic signal map. It highlights places where the code may reveal design invariants, lifecycle contracts, package boundaries, or test-backed behavior. Validate every claim against source.xml, tests.xml, projects.xml, or their complete ordered chunks before writing.");
+        sb.AppendLine("This section is a deterministic signal map. It highlights places where the code may reveal abstractions, extension points, design invariants, lifecycle contracts, package boundaries, or test-backed behavior. Validate every claim against source.xml, tests.xml, projects.xml, or their complete ordered chunks before writing.");
         sb.AppendLine();
 
         AppendSignalGroup(sb, "Exception guards and validation evidence", exceptionSignals);
+        AppendSignalGroup(sb, "Abstraction and extension-point declarations", declarationSignals);
         AppendSignalGroup(sb, "Lifecycle, callback, factory, and composition names", lifecycleSignals);
         AppendSignalGroup(sb, "Hosting model markers", hostingSignals);
 
@@ -817,7 +1081,65 @@ internal static class DigestScript
         }
     }
 
-    private static IEnumerable<EngineeringSignal> FindSignals(IEnumerable<SignalFile> files, string pattern, string kind)
+    private static IEnumerable<EngineeringSignal> FindDeclarationSignals(IEnumerable<SignalFile> files)
+    {
+        var expression = new Regex(
+            @"(?m)^\s*(?:\[[^\]]+\]\s*)*(?:(?:public|internal|protected\s+internal|internal\s+protected|protected|private)\s+)?(?<modifiers>(?:(?:static|sealed|abstract|partial|readonly|unsafe|file)\s+)*)(?<kind>record\s+class|record\s+struct|class|interface|struct|record)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*(?:<[^>{};]+>)?)",
+            RegexOptions.Multiline | RegexOptions.CultureInvariant);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var file in files)
+        {
+            foreach (Match match in expression.Matches(file.Content))
+            {
+                var modifiers = NormalizeDeclaration(match.Groups["modifiers"].Value);
+                var kind = NormalizeDeclaration(match.Groups["kind"].Value);
+                var name = NormalizeDeclaration(match.Groups["name"].Value);
+                if (!IsUsefulDeclarationSignal(modifiers, kind, name))
+                {
+                    continue;
+                }
+
+                var value = FormatDeclarationSignal(modifiers, kind, name);
+                if (seen.Add(value))
+                {
+                    yield return new EngineeringSignal("abstraction or extension point", value, file.RelativePath);
+                }
+            }
+        }
+    }
+
+    private static bool IsUsefulDeclarationSignal(string modifiers, string kind, string name) =>
+        kind.Equals("interface", StringComparison.OrdinalIgnoreCase)
+        || modifiers.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("abstract", StringComparer.OrdinalIgnoreCase)
+        || EngineeringRoleSuffixes.Any(suffix => name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+
+    private static string FormatDeclarationSignal(string modifiers, string kind, string name)
+    {
+        var hasAbstractModifier = modifiers.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("abstract", StringComparer.OrdinalIgnoreCase);
+        var displayKind = hasAbstractModifier && !kind.StartsWith("abstract ", StringComparison.OrdinalIgnoreCase)
+            ? "abstract " + kind
+            : kind;
+        return displayKind + " " + name;
+    }
+
+    private static bool IsUsefulLifecycleSignal(string relativePath, string value)
+    {
+        if (LowSignalLifecycleValues.Contains(value, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (value.Contains("_Should", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("_Verify", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static IEnumerable<EngineeringSignal> FindSignals(IEnumerable<SignalFile> files, string pattern, string kind, Func<string, string, bool>? shouldInclude = null)
     {
         var expression = new Regex(pattern, RegexOptions.Multiline | RegexOptions.CultureInvariant);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -833,8 +1155,12 @@ internal static class DigestScript
                     continue;
                 }
 
-                var key = file.RelativePath + "|" + value;
-                if (seen.Add(key))
+                if (shouldInclude is not null && !shouldInclude(file.RelativePath, value))
+                {
+                    continue;
+                }
+
+                if (seen.Add(value))
                 {
                     yield return new EngineeringSignal(kind, value, file.RelativePath);
                 }
@@ -1489,7 +1815,8 @@ internal static class DigestScript
         string runId,
         string workspace,
         IReadOnlyList<PackageManifestEntry> packages,
-        string overviewPromptPath)
+        string overviewPromptPath,
+        PageFrontmatterHints overviewFrontmatterHints)
     {
         var packageTargets = packages.Select(package => new
         {
@@ -1497,7 +1824,8 @@ internal static class DigestScript
             package.Name,
             package.Prompt,
             package.Evidence,
-            package.Result
+            package.Result,
+            package.FrontmatterHints
         }).ToList();
 
         var packagesPhase = new
@@ -1519,7 +1847,8 @@ internal static class DigestScript
                 projects = package.Evidence.Projects.Path,
                 readmes = package.Evidence.Readmes.Path
             }).ToList(),
-            result = "result/Index.md"
+            result = "result/Index.md",
+            frontmatterHints = overviewFrontmatterHints
         };
 
         var overviewPhase = new
@@ -1637,6 +1966,10 @@ internal static class DigestScript
         - Project evidence wins for dependencies, target frameworks, packability, and package relationships.
         - README evidence is editorial context only when source or project evidence exists.
         - External usage evidence may guide realistic examples only after validating the API shape against current source evidence.
+        - For every C# example, validate API shape before finalizing: map each real package-owned variable or receiver to its static type, then verify every member access, method call, constructor call, override, generic constraint, namespace, and extension method against the declaring package's source evidence.
+        - For convenience, aggregate, metadata-only, or no-assembly package examples, use the referenced package evidence paths in the generated prompt; the aggregate package's own metadata-only evidence is not enough to validate referenced APIs.
+        - Every result file starts with YAML frontmatter using the generated prompt's schema and static metadata hints.
+        - Replace editorial frontmatter placeholders with grounded page-specific `title`, `description`, and `lede` values before writing.
         - If evidence is missing, stale, contradictory, or unsafe to use completely, stop and report the blocker instead of filling gaps.
 
         ## Shared Editorial Rules
@@ -1653,7 +1986,9 @@ internal static class DigestScript
         6. Write every `result/{PackageName}.md` file.
         7. Read `prompts/overview.prompt.md` and every completed package result listed by the manifest.
         8. Write `result/Index.md`.
-        9. Validate that all manifest result paths exist.
+        9. Validate that all manifest result paths exist and begin with complete YAML frontmatter.
+        10. Validate every C# example against source evidence and revise any example that uses plausible but undeclared APIs.
+        11. Run `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. Revise any reported result errors from source evidence and rerun until validation passes.
         """;
 
     private static string BuildSharedEditorialRules() =>
@@ -1674,6 +2009,7 @@ internal static class DigestScript
         Use README and metadata files only for positioning, vocabulary, and high-level intent.
 
         Never invent APIs, dependencies, package relationships, scenarios, examples, support statements, performance claims, or architectural claims.
+        Treat property access as an API claim, not harmless syntax. A receiver such as a fixture, builder, options object, context, factory result, client, service, or base class exposes only the members declared by its static type or inherited framework type.
         Prefer public types, extension methods, options/configuration types, factories, abstractions, protected hooks, and test-visible usage patterns.
         Ignore implementation details unless they explain a public contract.
         If evidence conflicts, prefer source for API shape, tests for usage, projects for packaging, and current source over external usage.
@@ -1692,7 +2028,393 @@ internal static class DigestScript
         - Do not include analysis notes, confidence scores, citations, XML, JSON, or chat commentary unless explicitly requested by the prompt.
         """;
 
-    private static string BuildPackageDigestPrompt(PackageInfo package, PackageEvidenceArtifacts evidence) =>
+    private static PageFrontmatterHints BuildPackageFrontmatterHints(string repositoryDirectory, PackageInfo package, string repoUrl, IReadOnlyList<PackageInfo> packages)
+    {
+        var packageNugetUrl = BuildNugetPackageUrl(package.Name);
+        var repositoryUrl = FirstNonEmptyOrDefault(package.RepositoryUrl, repoUrl);
+        var documentationUrl = BuildDocumentationUrl(repositoryUrl, package.ProjectUrl);
+        var links = BuildImportantLinks(packageNugetUrl, repositoryUrl, documentationUrl).ToList();
+        var familyLinks = BuildFamilyLinks(repositoryDirectory, packages).ToList();
+
+        return new PageFrontmatterHints(
+            PageKind: "package",
+            Title: FirstNonEmptyOrDefault(package.Title, package.Name),
+            Description: package.Description,
+            Lede: string.Empty,
+            PackageId: package.Name,
+            PackageCount: 1,
+            LibraryCount: package.IsConveniencePackage ? Math.Max(1, package.BundledPackages.Count) : 1,
+            TargetFrameworks: package.TargetFrameworks,
+            TargetFrameworkMonikers: package.TargetFrameworkMonikers,
+            License: package.License,
+            Links: links,
+            FamilyLinks: familyLinks);
+    }
+
+    private static PageFrontmatterHints BuildOverviewFrontmatterHints(string repositoryDirectory, string repoId, string repoUrl, IReadOnlyList<PackageInfo> packages)
+    {
+        var targetFrameworkMonikers = packages
+            .SelectMany(package => package.TargetFrameworkMonikers)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var targetFrameworks = targetFrameworkMonikers.Select(ToFriendlyTargetFramework).ToList();
+        var licenses = packages
+            .Select(package => package.License)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var license = licenses.Count switch
+        {
+            0 => string.Empty,
+            1 => licenses[0],
+            _ => "Mixed"
+        };
+        var nugetUrl = BuildNugetQueryUrl(BuildNugetQuery(repoId, packages));
+        var documentationUrl = BuildDocumentationUrl(repoUrl, string.Empty);
+        var links = BuildImportantLinks(nugetUrl, repoUrl, documentationUrl).ToList();
+        var familyLinks = BuildFamilyLinks(repositoryDirectory, packages).ToList();
+
+        return new PageFrontmatterHints(
+            PageKind: "index",
+            Title: repoId,
+            Description: string.Empty,
+            Lede: string.Empty,
+            PackageId: null,
+            PackageCount: packages.Count,
+            LibraryCount: packages.Count,
+            TargetFrameworks: targetFrameworks,
+            TargetFrameworkMonikers: targetFrameworkMonikers,
+            License: license,
+            Links: links,
+            FamilyLinks: familyLinks);
+    }
+
+    private static string BuildNugetPackageUrl(string packageId) =>
+        "https://www.nuget.org/packages/" + Uri.EscapeDataString(packageId);
+
+    private static string BuildNugetQueryUrl(string query) =>
+        "https://www.nuget.org/packages?q=" + Uri.EscapeDataString(query);
+
+    private static string BuildNugetQuery(string repoId, IReadOnlyList<PackageInfo> packages)
+    {
+        if (packages.Count == 0)
+        {
+            return repoId;
+        }
+
+        var packageNames = packages.Select(package => package.Name).ToList();
+        if (packageNames.Count == 1)
+        {
+            return packageNames[0];
+        }
+
+        var commonSegments = packageNames[0].Split('.');
+        foreach (var packageName in packageNames.Skip(1))
+        {
+            var segments = packageName.Split('.');
+            var length = Math.Min(commonSegments.Length, segments.Length);
+            var i = 0;
+            while (i < length && string.Equals(commonSegments[i], segments[i], StringComparison.OrdinalIgnoreCase))
+            {
+                i++;
+            }
+
+            commonSegments = commonSegments.Take(i).ToArray();
+            if (commonSegments.Length == 0)
+            {
+                break;
+            }
+        }
+
+        return commonSegments.Length == 0 ? repoId : string.Join('.', commonSegments);
+    }
+
+    private static IEnumerable<FrontmatterLink> BuildImportantLinks(string nugetUrl, string repoUrl, string documentationUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(nugetUrl))
+        {
+            yield return new FrontmatterLink("NuGet", nugetUrl, "\U0001F4E6");
+        }
+
+        var repositoryUrl = NormalizeWebUrl(repoUrl);
+        if (!string.IsNullOrWhiteSpace(repositoryUrl))
+        {
+            yield return new FrontmatterLink("Repository", repositoryUrl, "\U0001F419");
+
+            if (IsGitHubUrl(repositoryUrl))
+            {
+                yield return new FrontmatterLink("Releases", repositoryUrl + "/releases", "\U0001F3F7\uFE0F");
+                yield return new FrontmatterLink("Issues", repositoryUrl + "/issues", "\U0001F41B");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(documentationUrl))
+        {
+            yield return new FrontmatterLink("Documentation", documentationUrl, "\U0001F4DA");
+        }
+
+    }
+
+    private static IEnumerable<FamilyLink> BuildFamilyLinks(string repositoryDirectory, IReadOnlyList<PackageInfo> packages)
+    {
+        var packageGlyphs = ReadRelatedPackageGlyphs(repositoryDirectory, packages);
+        foreach (var package in packages.OrderBy(package => package.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var glyph = packageGlyphs.TryGetValue(package.Name, out var relatedGlyph)
+                ? relatedGlyph
+                : InferPackageGlyph(package);
+            yield return new FamilyLink(
+                Label: package.Name,
+                PackageId: package.Name,
+                Url: package.Name + ".md",
+                Glyph: glyph);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadRelatedPackageGlyphs(string repositoryDirectory, IReadOnlyList<PackageInfo> packages)
+    {
+        var glyphs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(repositoryDirectory) || !Directory.Exists(repositoryDirectory))
+        {
+            return glyphs;
+        }
+
+        var nugetDirectory = Path.Combine(repositoryDirectory, ".nuget");
+        if (!Directory.Exists(nugetDirectory))
+        {
+            return glyphs;
+        }
+
+        var packageNames = packages.Select(package => package.Name).ToList();
+        foreach (var readmePath in Directory.EnumerateFiles(nugetDirectory, "README.md", SearchOption.AllDirectories))
+        {
+            var markdown = File.ReadAllText(readmePath, Utf8NoBom);
+            foreach (var line in ExtractMarkdownSection(markdown, "Related Packages"))
+            {
+                foreach (var packageName in packageNames)
+                {
+                    if (glyphs.ContainsKey(packageName) || !line.Contains(packageName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var glyph = ExtractLeadingGlyph(line, packageName);
+                    if (!string.IsNullOrWhiteSpace(glyph))
+                    {
+                        glyphs[packageName] = glyph;
+                    }
+                }
+            }
+        }
+
+        return glyphs;
+    }
+
+    private static IEnumerable<string> ExtractMarkdownSection(string markdown, string heading)
+    {
+        var inSection = false;
+        foreach (var line in markdown.ReplaceLineEndings("\n").Split('\n'))
+        {
+            var headingMatch = Regex.Match(line, @"^\s{0,3}(?<level>#{1,6})\s+(?<text>.+?)\s*#*\s*$", RegexOptions.CultureInvariant);
+            if (headingMatch.Success)
+            {
+                var text = headingMatch.Groups["text"].Value.Trim();
+                if (inSection)
+                {
+                    yield break;
+                }
+
+                inSection = string.Equals(text, heading, StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (inSection)
+            {
+                yield return line;
+            }
+        }
+    }
+
+    private static string ExtractLeadingGlyph(string line, string packageName)
+    {
+        var packageIndex = line.IndexOf(packageName, StringComparison.OrdinalIgnoreCase);
+        if (packageIndex <= 0)
+        {
+            return string.Empty;
+        }
+
+        var prefix = line[..packageIndex];
+        var matches = Regex.Matches(prefix, @"[\p{So}\p{Sk}][\uFE0F\u20E3]?", RegexOptions.CultureInvariant);
+        return matches.Count == 0 ? string.Empty : matches[^1].Value;
+    }
+
+    private static string InferPackageGlyph(PackageInfo package)
+    {
+        var normalized = package.Name.ToLowerInvariant();
+        var glyph = "\U0001F4E6";
+        if (normalized.Contains("xunit", StringComparison.Ordinal)) glyph = "\U0001F9EA";
+        else if (normalized.Contains("test", StringComparison.Ordinal)) glyph = "\U0001F9EA";
+        else if (normalized.Contains("kernel", StringComparison.Ordinal)) glyph = "\u2699\uFE0F";
+        else if (normalized.Contains("aspnet", StringComparison.Ordinal) || normalized.Contains("web", StringComparison.Ordinal)) glyph = "\U0001F310";
+        else if (normalized.Contains("hosting", StringComparison.Ordinal)) glyph = "\U0001F3D7\uFE0F";
+        else if (normalized.Contains("security", StringComparison.Ordinal) || normalized.Contains("crypt", StringComparison.Ordinal)) glyph = "\U0001F510";
+        else if (normalized.Contains("data", StringComparison.Ordinal) || normalized.Contains("sql", StringComparison.Ordinal)) glyph = "\U0001F5C4\uFE0F";
+        else if (normalized.Contains("cache", StringComparison.Ordinal)) glyph = "\U0001F4BE";
+        else if (normalized.Contains("diagnostic", StringComparison.Ordinal) || normalized.Contains("logging", StringComparison.Ordinal)) glyph = "\U0001FA7A";
+        else if (normalized.Contains("json", StringComparison.Ordinal) || normalized.Contains("text", StringComparison.Ordinal)) glyph = "\U0001F4DD";
+        else if (normalized.EndsWith(".app", StringComparison.Ordinal)) glyph = "\U0001F9E9";
+        return package.IsConveniencePackage ? "\U0001F3ED" : glyph;
+    }
+
+    private static string BuildDocumentationUrl(string repoUrl, string projectUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(projectUrl))
+        {
+            return NormalizeWebUrl(projectUrl);
+        }
+
+        var repositoryUrl = NormalizeWebUrl(repoUrl);
+        return !string.IsNullOrWhiteSpace(repositoryUrl) && IsGitHubUrl(repositoryUrl)
+            ? repositoryUrl + "#readme"
+            : string.Empty;
+    }
+
+    private static string NormalizeWebUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme is not "http" and not "https"))
+        {
+            return string.Empty;
+        }
+
+        var builder = new UriBuilder(uri)
+        {
+            Fragment = string.Empty,
+            Query = string.Empty
+        };
+        var normalized = builder.Uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
+        return normalized.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? normalized[..^4]
+            : normalized;
+    }
+
+    private static bool IsGitHubUrl(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase);
+
+    private static string BuildFrontmatterContract(PageFrontmatterHints hints)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("## YAML frontmatter");
+        builder.AppendLine();
+        builder.AppendLine("Start the file with YAML frontmatter before the first Markdown heading.");
+        builder.AppendLine("Use the generated static values below unless the raw evidence proves they are wrong.");
+        builder.AppendLine("Replace empty or editorial values for `title`, `description`, and `lede` with grounded page-specific prose.");
+        builder.AppendLine("Keep link glyphs paired with their context.");
+        builder.AppendLine("Keep every `familyLinks.url` value exactly as generated with the `.md` suffix so website importers recognize it as an internal Markdown link.");
+        builder.AppendLine();
+        builder.AppendLine("```yaml");
+        builder.AppendLine("---");
+        AppendYamlScalar(builder, "title", hints.Title);
+        AppendYamlScalar(builder, "description", string.IsNullOrWhiteSpace(hints.Description) ? "Write a source-grounded one-sentence description." : hints.Description);
+        AppendYamlScalar(builder, "lede", string.IsNullOrWhiteSpace(hints.Lede) ? "Write a short lede for listing cards and previews." : hints.Lede);
+        AppendYamlScalar(builder, "pageKind", hints.PageKind);
+        if (!string.IsNullOrWhiteSpace(hints.PackageId))
+        {
+            AppendYamlScalar(builder, "packageId", hints.PackageId);
+        }
+
+        builder.AppendLine(FormattableString.Invariant($"packageCount: {hints.PackageCount}"));
+        builder.AppendLine(FormattableString.Invariant($"libraryCount: {hints.LibraryCount}"));
+        AppendYamlList(builder, "targetFrameworks", hints.TargetFrameworks);
+        AppendYamlList(builder, "targetFrameworkMonikers", hints.TargetFrameworkMonikers);
+        AppendYamlScalar(builder, "license", hints.License);
+        AppendYamlLinks(builder, hints.Links);
+        AppendYamlFamilyLinks(builder, hints.FamilyLinks);
+        builder.AppendLine("---");
+        builder.AppendLine("```");
+        builder.AppendLine();
+        builder.AppendLine("Do not leave placeholder wording such as `Write a source-grounded` or `Write a short lede` in the final frontmatter.");
+        return builder.ToString();
+    }
+
+    private static void AppendYamlScalar(StringBuilder builder, string key, string value) =>
+        builder.AppendLine($"{key}: {ToYamlSingleQuoted(value)}");
+
+    private static void AppendYamlList(StringBuilder builder, string key, IReadOnlyList<string> values)
+    {
+        if (values.Count == 0)
+        {
+            builder.AppendLine($"{key}: []");
+            return;
+        }
+
+        builder.AppendLine(key + ":");
+        foreach (var value in values)
+        {
+            builder.AppendLine("  - " + ToYamlSingleQuoted(value));
+        }
+    }
+
+    private static void AppendYamlLinks(StringBuilder builder, IReadOnlyList<FrontmatterLink> links)
+    {
+        if (links.Count == 0)
+        {
+            builder.AppendLine("links: []");
+            return;
+        }
+
+        builder.AppendLine("links:");
+        foreach (var link in links)
+        {
+            builder.AppendLine("  - label: " + ToYamlSingleQuoted(link.Label));
+            builder.AppendLine("    url: " + ToYamlSingleQuoted(link.Url));
+            builder.AppendLine("    glyph: " + ToYamlSingleQuoted(link.Glyph));
+        }
+    }
+
+    private static void AppendYamlFamilyLinks(StringBuilder builder, IReadOnlyList<FamilyLink> links)
+    {
+        if (links.Count == 0)
+        {
+            builder.AppendLine("familyLinks: []");
+            return;
+        }
+
+        builder.AppendLine("familyLinks:");
+        foreach (var link in links)
+        {
+            builder.AppendLine("  - label: " + ToYamlSingleQuoted(link.Label));
+            builder.AppendLine("    packageId: " + ToYamlSingleQuoted(link.PackageId));
+            builder.AppendLine("    url: " + ToYamlSingleQuoted(link.Url));
+            builder.AppendLine("    glyph: " + ToYamlSingleQuoted(link.Glyph));
+        }
+    }
+
+    private static string ToYamlSingleQuoted(string value) =>
+        "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+
+    private static string BuildReferencedPackageEvidenceMap(PackageInfo package, IReadOnlyList<PackageInfo> packages)
+    {
+        var referencedPackages = package.BundledPackages
+            .Select(reference => packages.FirstOrDefault(candidate => !string.Equals(candidate.Name, package.Name, StringComparison.OrdinalIgnoreCase)
+                && ReferenceMatchesPackage(reference, candidate)))
+            .OfType<PackageInfo>()
+            .DistinctBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (referencedPackages.Count == 0)
+        {
+            return "- No repository-local referenced package evidence was discovered.";
+        }
+
+        return string.Join(Environment.NewLine, referencedPackages.Select(referencedPackage =>
+            $"- `{referencedPackage.Name}`: source `{ToRepositoryPath(EvidenceDirectoryName, referencedPackage.Name, "source.xml")}`, tests `{ToRepositoryPath(EvidenceDirectoryName, referencedPackage.Name, "tests.xml")}`, API summary `{ToRepositoryPath(EvidenceDirectoryName, referencedPackage.Name, "api-summary.md")}`"));
+    }
+
+    private static string BuildPackageDigestPrompt(PackageInfo package, IReadOnlyList<PackageInfo> packages, PackageEvidenceArtifacts evidence, PageFrontmatterHints frontmatterHints) =>
         $$"""
         Write the documentation page for `{{package.Name}}`.
 
@@ -1708,12 +2430,19 @@ internal static class DigestScript
         - API summary: `{{evidence.ApiSummary}}`
         - Engineering signals: `{{evidence.EngineeringSignals}}`
 
+        Referenced package evidence, for convenience, aggregate, metadata-only, or no-assembly package examples:
+        {{BuildReferencedPackageEvidenceMap(package, packages)}}
+
         ## Package metadata
 
         - Source path: `{{package.SourcePath}}`
         - Test path: `{{package.TestPath ?? "(not discovered)"}}`
         - Metadata-only package: `{{package.IsConveniencePackage}}`
         - Referenced packages: {{(package.BundledPackages.Count == 0 ? "(none declared)" : string.Join(", ", package.BundledPackages))}}
+        - Target framework monikers: {{(package.TargetFrameworkMonikers.Count == 0 ? "(not declared in project metadata)" : string.Join(", ", package.TargetFrameworkMonikers))}}
+        - License: {{(string.IsNullOrWhiteSpace(package.License) ? "(not declared in project metadata)" : package.License)}}
+
+        {{BuildFrontmatterContract(frontmatterHints)}}
 
         {{BuildSharedEditorialRules()}}
 
@@ -1725,6 +2454,14 @@ internal static class DigestScript
         Treat source as authoritative for API shape. Treat tests as authoritative for usage. Treat projects as authoritative for package relationships. Treat README as editorial context.
         Use external usage only when it references this package or a transitive package discovered by the runner and current source confirms the API shape.
         If source evidence is unclear and README is the only source for a claim, either write conservatively or omit the claim.
+        For examples that demonstrate a referenced package, read that referenced package's source evidence or complete ordered source chunks before writing the example.
+        Verify every property access, method call, constructor call, override, generic constraint, namespace, and extension method in each example against the package that declares the API.
+        Before finalizing each C# example, internally build an API-shape ledger:
+        - receiver or constructed type
+        - static type declared or implied by the snippet
+        - member, constructor, override, namespace, or extension method used
+        - source evidence file or chunk that declares it
+        Revise the example until every ledger entry is verified.
 
         ## Package-local API preference
 
@@ -1739,7 +2476,7 @@ internal static class DigestScript
         Internally identify:
         - the package's specific responsibility
         - the primary developer scenario
-        - the 3-6 package-owned public APIs that matter most
+        - the 3-9 package-owned public APIs that matter most
         - the representative usage pattern from source, tests, and external usage
         - relevant base classes, hooks, lifecycle contracts, guards, and package boundaries
         - what the package deliberately does not solve
@@ -1757,10 +2494,10 @@ internal static class DigestScript
 
         ## Key APIs
 
-        List the 3-6 most important consumer-facing APIs.
-        Format each item exactly:
-
-        `ApiName` - Description.
+        List the 3-9 most important consumer-facing APIs.
+        Write one short paragraph per API.
+        Start each paragraph with the API name in code formatting, then continue as a natural sentence.
+        Do not use definition-list or glossary-style separators such as `` `ApiName` - Description.``, `` `ApiName`: Description.``, or `` `ApiName` -- Description.`` unless the entry is intentionally terse and the generated evidence leaves no useful prose to write.
 
         Rules:
         - Mention only APIs visible in source evidence.
@@ -1784,10 +2521,14 @@ internal static class DigestScript
         - include at least one assertion or observable result
         - demonstrate the current package's central API, normally one declared by this package
         - show a realistic consumer task where the package API changes how the code is written, not just a smoke test that calls one method with a literal value
+        - show a system under test interacting through the package API when the package supports DI, pipelines, handlers, factories, lifecycle hooks, loggers, collectors, stores, recorders, fixtures, or test hosts
         - use only real namespaces, type names, constructors, methods, overloads, return types, and extension methods from the evidence
         - define any helper, fake service, fake domain type, or derived class it needs inside the snippet
         - avoid external files, network resources, databases, environment variables, and machine-specific resources
         - avoid pseudocode, ellipses, TODO comments, placeholder methods, and unexplained magic
+        - avoid toy/greeting-oriented names and literal-only bodies such as `Greeting`, `MessageService`, `Hello World`, `OK`, `Foo`, `Bar`, `Sample`, or `Dummy` unless those exact terms are source-backed and central to the package
+        - avoid direct helper round-trips where the test only writes to a package-owned store/logger/sink/collector/recorder/provider/factory/fixture/host and then reads the same object back
+        - be copy/paste ready: the deterministic validator will place the snippet in a temporary xUnit test project, install the page's NuGet package plus xUnit test packages, run `dotnet test`, and fail validation unless the test compiles and passes
         - stay between 10 and 35 lines when feasible
         - avoid top-level statements; assertions must live inside the single test method
 
@@ -1803,7 +2544,8 @@ internal static class DigestScript
 
         Prefer the candidate that makes the package's primary value obvious to a consumer.
         For foundational packages, prefer a small domain-like example that combines the central validation, configuration, decorator, option, or lifecycle pattern when evidence supports it.
-        Reject any candidate that invents APIs, hides setup, demonstrates a lower-level package instead of this package, lacks assertions, uses top-level statements, contains placeholder helpers, only proves that a trivial literal round-trips, or lets framework setup dominate the package-specific API.
+        For collector, logger, store, sink, recorder, fixture, factory, host, or provider APIs, prefer indirect observation: a producer, handler, pipeline, service, lifecycle hook, or hosted component should produce the observable artifact; the test should query/assert it afterward.
+        Reject any candidate that invents APIs, hides setup, demonstrates a lower-level package instead of this package, lacks assertions, uses top-level statements, contains placeholder helpers, only proves that a trivial literal round-trips, writes and reads the same package-owned helper directly, relies on greeting/message/sample naming, fails as an executable xUnit test, or lets framework setup dominate the package-specific API.
         Output only the best candidate.
 
         For metadata-only, aggregate, convenience, or no-assembly packages:
@@ -1811,6 +2553,9 @@ internal static class DigestScript
         - Use a third-level heading for each example: `### Referenced.Package.Name`.
         - Each example must contain exactly one `[Fact]` or `[Theory]` method and at least one assertion.
         - Each example must make an API declared by the referenced package the central API.
+        - Before writing each example, use the referenced package evidence map above to read and validate the referenced package's API shape.
+        - Do not assume a fixture, base class, builder, options type, service, or other object exposes a member just because the member is common in a framework or plausible from its name.
+        - Do not use the same toy/greeting scenario across referenced packages; each example should demonstrate the referenced package's distinct engineering role.
         - Do not imply that the convenience package owns the referenced APIs.
         - After all examples, write one short paragraph explaining that this package provides a single package reference while APIs come from the referenced packages.
 
@@ -1828,7 +2573,7 @@ internal static class DigestScript
         Do not oversell the package.
         """;
 
-    private static string BuildOverviewPrompt(IReadOnlyList<PackageInfo> packages)
+    private static string BuildOverviewPrompt(IReadOnlyList<PackageInfo> packages, PageFrontmatterHints frontmatterHints)
     {
         var packageResults = packages.Count == 0
             ? "- No packages discovered."
@@ -1854,6 +2599,8 @@ internal static class DigestScript
         Supplementary evidence:
         Read project and README evidence only as needed to clarify package relationships, target frameworks, dependency boundaries, and repository positioning:
         {{supplementaryEvidence}}
+
+        {{BuildFrontmatterContract(frontmatterHints)}}
 
         {{BuildSharedEditorialRules()}}
 
@@ -1929,6 +2676,506 @@ internal static class DigestScript
         """;
     }
 
+    private static async Task<ResultValidationReport> ValidateResultWorkspaceAsync(ResultValidationOptions options)
+    {
+        var evidenceDirectory = Path.Combine(options.Workspace, EvidenceDirectoryName);
+        var resultDirectory = Path.Combine(options.Workspace, ResultDirectoryName);
+        if (!Directory.Exists(evidenceDirectory))
+        {
+            throw new InvalidOperationException($"Evidence directory does not exist: {evidenceDirectory}");
+        }
+
+        if (!Directory.Exists(resultDirectory))
+        {
+            throw new InvalidOperationException($"Result directory does not exist: {resultDirectory}");
+        }
+
+        var apiSurface = BuildWorkspaceApiSurface(evidenceDirectory);
+        var diagnostics = new List<ResultValidationDiagnostic>();
+        var resultFiles = Directory.EnumerateFiles(resultDirectory, "*.md", SearchOption.TopDirectoryOnly)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(path => new MarkdownResultFile(path, File.ReadAllText(path, Utf8NoBom)))
+            .ToList();
+
+        foreach (var resultFile in resultFiles)
+        {
+            ValidateResultMarkdown(resultFile.Path, resultFile.Markdown, apiSurface, diagnostics);
+        }
+
+        await ValidateExecutableBasicUsageExamplesAsync(options, resultFiles, diagnostics);
+        return new ResultValidationReport(options.Workspace, diagnostics);
+    }
+
+    private static void ValidateResultMarkdown(
+        string resultFile,
+        string markdown,
+        IReadOnlyDictionary<string, ApiTypeSurface> apiSurface,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        foreach (Match match in CSharpCodeBlockExpression.Matches(markdown))
+        {
+            ValidateCSharpExample(resultFile, match.Groups["code"].Value, apiSurface, diagnostics);
+        }
+
+        var basicUsage = ExtractMarkdownSectionText(markdown, "## Basic usage");
+        if (!string.IsNullOrWhiteSpace(basicUsage))
+        {
+            foreach (Match match in CSharpCodeBlockExpression.Matches(basicUsage))
+            {
+                ValidateBasicUsageQuality(resultFile, match.Groups["code"].Value, apiSurface, diagnostics);
+            }
+        }
+    }
+
+    private static async Task ValidateExecutableBasicUsageExamplesAsync(
+        ResultValidationOptions options,
+        IReadOnlyList<MarkdownResultFile> resultFiles,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        var examples = resultFiles
+            .SelectMany(resultFile => ExtractBasicUsageExamples(resultFile.Path, resultFile.Markdown))
+            .ToList();
+        if (examples.Count == 0)
+        {
+            return;
+        }
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), ToolName + "-example-tests-" + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            for (var i = 0; i < examples.Count; i++)
+            {
+                await ValidateExecutableBasicUsageExampleAsync(tempRoot, examples[i], i + 1, diagnostics);
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static IEnumerable<BasicUsageExample> ExtractBasicUsageExamples(string resultFile, string markdown)
+    {
+        var basicUsage = ExtractMarkdownSectionText(markdown, "## Basic usage");
+        if (string.IsNullOrWhiteSpace(basicUsage))
+        {
+            yield break;
+        }
+
+        var index = 0;
+        foreach (Match match in CSharpCodeBlockExpression.Matches(basicUsage))
+        {
+            index++;
+            yield return new BasicUsageExample(resultFile, index, ResolveResultPackageId(resultFile, markdown), match.Groups["code"].Value.Trim());
+        }
+    }
+
+    private static async Task ValidateExecutableBasicUsageExampleAsync(
+        string tempRoot,
+        BasicUsageExample example,
+        int exampleNumber,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        var exampleDirectory = Path.Combine(tempRoot, "example-" + exampleNumber.ToString("D3", CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(exampleDirectory);
+
+        if (string.IsNullOrWhiteSpace(example.PackageId))
+        {
+            diagnostics.Add(new ResultValidationDiagnostic(example.ResultFile, "error", $"Basic usage example #{example.CodeBlockIndex} cannot be executable-validated because no packageId was found in frontmatter or the result filename."));
+            return;
+        }
+
+        var projectPath = Path.Combine(exampleDirectory, ExampleValidationProjectName + ".csproj");
+        await WriteUtf8Async(projectPath, BuildExampleValidationProject());
+        await WriteUtf8Async(Path.Combine(exampleDirectory, "BasicUsageExampleTests.cs"), example.Code + Environment.NewLine);
+
+        var outputPath = Path.Combine(exampleDirectory, "bin") + Path.DirectorySeparatorChar;
+        var intermediatePath = Path.Combine(exampleDirectory, "obj") + Path.DirectorySeparatorChar;
+
+        try
+        {
+            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "Microsoft.NET.Test.Sdk");
+            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "xunit.v3");
+            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "xunit.runner.visualstudio");
+            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, example.PackageId);
+            await RunProcessCaptureAsync(
+                "dotnet",
+                [
+                    "test",
+                    ExampleValidationProjectName + ".csproj",
+                    "--nologo",
+                    "/p:BaseOutputPath=" + outputPath,
+                    "/p:BaseIntermediateOutputPath=" + intermediatePath
+                ],
+                exampleDirectory,
+                TimeSpan.FromMinutes(3));
+        }
+        catch (Exception ex)
+        {
+            var message = $"Basic usage example #{example.CodeBlockIndex} does not compile and pass as a copy/paste xUnit test. Rewrite the example from source evidence and rerun validation. {TrimDiagnostic(ex.Message)}";
+            diagnostics.Add(new ResultValidationDiagnostic(example.ResultFile, "error", message));
+        }
+    }
+
+    private static async Task AddExampleValidationPackageAsync(string exampleDirectory, string projectPath, string packageId)
+    {
+        await RunProcessCaptureAsync("dotnet", ["add", projectPath, "package", packageId], exampleDirectory, TimeSpan.FromMinutes(2));
+    }
+
+    private static string BuildExampleValidationProject()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
+        sb.AppendLine("  <PropertyGroup>");
+        sb.AppendLine("    <TargetFramework>net10.0</TargetFramework>");
+        sb.AppendLine("    <Nullable>enable</Nullable>");
+        sb.AppendLine("    <ImplicitUsings>enable</ImplicitUsings>");
+        sb.AppendLine("    <IsPackable>false</IsPackable>");
+        sb.AppendLine("  </PropertyGroup>");
+        sb.AppendLine("</Project>");
+        return sb.ToString();
+    }
+
+    private static string ResolveResultPackageId(string resultFile, string markdown)
+    {
+        var frontmatterMatch = Regex.Match(markdown, @"(?m)^packageId:\s*['""]?(?<packageId>[^'""\r\n]+)['""]?\s*$", RegexOptions.CultureInvariant);
+        if (frontmatterMatch.Success)
+        {
+            return frontmatterMatch.Groups["packageId"].Value.Trim();
+        }
+
+        var fileName = Path.GetFileNameWithoutExtension(resultFile);
+        return string.Equals(fileName, "Index", StringComparison.OrdinalIgnoreCase) ? string.Empty : fileName;
+    }
+
+    private static string TrimDiagnostic(string message)
+    {
+        var normalized = message.Replace("\r\n", "\n", StringComparison.Ordinal).Trim();
+        return normalized.Length <= 4000 ? normalized : normalized[..4000] + "...";
+    }
+
+    private static void ValidateCSharpExample(
+        string resultFile,
+        string code,
+        IReadOnlyDictionary<string, ApiTypeSurface> apiSurface,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        var typeByVariable = InferSnippetVariables(code);
+        foreach (Match access in MemberAccessExpression.Matches(code))
+        {
+            var receiver = access.Groups["receiver"].Value;
+            var member = access.Groups["member"].Value;
+            if (!typeByVariable.TryGetValue(receiver, out var receiverType))
+            {
+                continue;
+            }
+
+            if (!apiSurface.ContainsKey(StripGenericArity(receiverType)))
+            {
+                continue;
+            }
+
+            if (IsMemberDeclared(apiSurface, receiverType, member))
+            {
+                continue;
+            }
+
+            var message = $"`{receiver}.{member}` is not declared on `{receiverType}` in source evidence.";
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", message));
+        }
+    }
+
+    private static void ValidateBasicUsageQuality(
+        string resultFile,
+        string code,
+        IReadOnlyDictionary<string, ApiTypeSurface> apiSurface,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        ValidateToyExampleTerms(resultFile, code, diagnostics);
+        ValidateDirectRoleRoundTrip(resultFile, code, apiSurface, diagnostics);
+    }
+
+    private static void ValidateToyExampleTerms(
+        string resultFile,
+        string code,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        var terms = ToyExampleTermExpression.Matches(code)
+            .Select(match => match.Groups["term"].Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(term => term, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (terms.Count < 2)
+        {
+            return;
+        }
+
+        var message = "Basic usage example looks toy or greeting-oriented because it uses low-signal terms: " + string.Join(", ", terms) + ". Prefer a source-backed engineering scenario unless those terms are central in the evidence.";
+        diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", message));
+    }
+
+    private static void ValidateDirectRoleRoundTrip(
+        string resultFile,
+        string code,
+        IReadOnlyDictionary<string, ApiTypeSurface> apiSurface,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        var typeByVariable = InferSnippetVariables(code);
+        var membersByReceiver = MemberAccessExpression.Matches(code)
+            .GroupBy(match => match.Groups["receiver"].Value, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(match => match.Groups["member"].Value).ToHashSet(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (variableName, typeName) in typeByVariable)
+        {
+            var simpleTypeName = StripGenericArity(typeName);
+            if (!apiSurface.ContainsKey(simpleTypeName) || !IsExampleRoleType(simpleTypeName))
+            {
+                continue;
+            }
+
+            if (!membersByReceiver.TryGetValue(variableName, out var members))
+            {
+                continue;
+            }
+
+            var writeMembers = members.Where(member => DirectWriteMemberNames.Contains(member, StringComparer.OrdinalIgnoreCase)).ToList();
+            var readMembers = members.Where(member => DirectReadMemberNames.Contains(member, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (writeMembers.Count == 0 || readMembers.Count == 0)
+            {
+                continue;
+            }
+
+            var message = $"Basic usage example directly writes to and reads from package-owned `{simpleTypeName}` via `{variableName}` ({string.Join(", ", writeMembers.Concat(readMembers).Distinct(StringComparer.OrdinalIgnoreCase))}). Prefer an indirect scenario where a producer, service, handler, pipeline, or lifecycle hook creates the observable result.";
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", message));
+        }
+    }
+
+    private static string ExtractMarkdownSectionText(string markdown, string heading)
+    {
+        var headingIndex = markdown.IndexOf(heading, StringComparison.OrdinalIgnoreCase);
+        if (headingIndex < 0)
+        {
+            return string.Empty;
+        }
+
+        var nextHeading = Regex.Match(markdown[(headingIndex + heading.Length)..], @"(?m)^##\s+", RegexOptions.CultureInvariant);
+        return nextHeading.Success
+            ? markdown.Substring(headingIndex, heading.Length + nextHeading.Index)
+            : markdown[headingIndex..];
+    }
+
+    private static bool IsExampleRoleType(string typeName) =>
+        ExampleRoleSuffixes.Any(suffix => typeName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+
+    private static IReadOnlyDictionary<string, string> InferSnippetVariables(string code)
+    {
+        var variables = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match classMatch in ClassDeclarationExpression.Matches(code))
+        {
+            var name = classMatch.Groups["name"].Value;
+            variables["this"] = name;
+        }
+
+        foreach (Match constructorMatch in ConstructorParameterExpression.Matches(code))
+        {
+            foreach (var parameter in SplitCommaSeparatedTopLevel(constructorMatch.Groups["parameters"].Value))
+            {
+                var parts = parameter.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (parts.Length < 2)
+                {
+                    continue;
+                }
+
+                var variableName = parts[^1].TrimStart('@');
+                var typeName = StripGenericArity(parts[^2]);
+                variables[variableName] = typeName;
+            }
+        }
+
+        foreach (Match variableMatch in TypedVariableDeclarationExpression.Matches(code))
+        {
+            var variableName = variableMatch.Groups["name"].Value.TrimStart('@');
+            var typeName = StripGenericArity(variableMatch.Groups["type"].Value);
+            variables[variableName] = typeName;
+        }
+
+        foreach (Match variableMatch in VarConstructionExpression.Matches(code))
+        {
+            var variableName = variableMatch.Groups["name"].Value.TrimStart('@');
+            var typeName = StripGenericArity(variableMatch.Groups["type"].Value);
+            variables[variableName] = typeName;
+        }
+
+        return variables;
+    }
+
+    private static bool IsMemberDeclared(IReadOnlyDictionary<string, ApiTypeSurface> apiSurface, string typeName, string member)
+    {
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return IsMemberDeclared(apiSurface, StripGenericArity(typeName), member, visited);
+    }
+
+    private static bool IsMemberDeclared(IReadOnlyDictionary<string, ApiTypeSurface> apiSurface, string typeName, string member, HashSet<string> visited)
+    {
+        if (!visited.Add(typeName))
+        {
+            return false;
+        }
+
+        if (!apiSurface.TryGetValue(typeName, out var surface))
+        {
+            return false;
+        }
+
+        if (surface.Members.Contains(member))
+        {
+            return true;
+        }
+
+        return surface.BaseTypes.Any(baseType => IsMemberDeclared(apiSurface, baseType, member, visited));
+    }
+
+    private static IReadOnlyDictionary<string, ApiTypeSurface> BuildWorkspaceApiSurface(string evidenceDirectory)
+    {
+        var surfaces = new Dictionary<string, ApiTypeSurface>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sourceFile in Directory.EnumerateFiles(evidenceDirectory, "source.xml", SearchOption.AllDirectories)
+                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            var text = File.ReadAllText(sourceFile, Utf8NoBom);
+            foreach (Match match in PublicTypeExpression.Matches(text))
+            {
+                var name = StripGenericArity(NormalizeDeclaration(match.Groups["name"].Value));
+                var body = TryExtractTypeBody(text, match.Index);
+                var members = body is null
+                    ? []
+                    : ExtractPublicMemberCandidates(body, name).Select(ExtractMemberName).Where(value => !string.IsNullOrWhiteSpace(value)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var baseTypes = match.Groups["base"].Success
+                    ? SplitBaseTypes(match.Groups["base"].Value).Select(StripGenericArity).Where(value => !string.IsNullOrWhiteSpace(value)).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                if (surfaces.TryGetValue(name, out var existing))
+                {
+                    existing.Members.UnionWith(members);
+                    existing.BaseTypes.UnionWith(baseTypes);
+                }
+                else
+                {
+                    surfaces[name] = new ApiTypeSurface(name, members, baseTypes);
+                }
+            }
+        }
+
+        return surfaces;
+    }
+
+    private static IEnumerable<string> SplitBaseTypes(string baseTypes)
+    {
+        var constraintIndex = baseTypes.IndexOf(" where ", StringComparison.Ordinal);
+        var declarationBaseTypes = constraintIndex < 0 ? baseTypes : baseTypes[..constraintIndex];
+        return SplitCommaSeparatedTopLevel(declarationBaseTypes)
+            .Select(type => type.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? string.Empty)
+            .Select(type => type.Trim())
+            .Where(type => !string.IsNullOrWhiteSpace(type));
+    }
+
+    private static IEnumerable<string> SplitCommaSeparatedTopLevel(string value)
+    {
+        var start = 0;
+        var depth = 0;
+        for (var i = 0; i < value.Length; i++)
+        {
+            switch (value[i])
+            {
+                case '<':
+                    depth++;
+                    break;
+                case '>':
+                    if (depth > 0)
+                    {
+                        depth--;
+                    }
+                    break;
+                case ',':
+                    if (depth == 0)
+                    {
+                        var segment = value[start..i].Trim();
+                        if (segment.Length > 0)
+                        {
+                            yield return segment;
+                        }
+
+                        start = i + 1;
+                    }
+                    break;
+            }
+        }
+
+        var last = value[start..].Trim();
+        if (last.Length > 0)
+        {
+            yield return last;
+        }
+    }
+
+    private static string StripGenericArity(string typeName)
+    {
+        var normalized = NormalizeDeclaration(typeName);
+        var genericIndex = normalized.IndexOf('<', StringComparison.Ordinal);
+        normalized = genericIndex < 0 ? normalized : normalized[..genericIndex];
+        normalized = normalized.Trim().TrimEnd('?');
+        while (normalized.EndsWith("[]", StringComparison.Ordinal))
+        {
+            normalized = normalized[..^2];
+        }
+
+        if (normalized.StartsWith("global::", StringComparison.Ordinal))
+        {
+            normalized = normalized["global::".Length..];
+        }
+
+        var namespaceIndex = normalized.LastIndexOf('.');
+        return namespaceIndex < 0 ? normalized : normalized[(namespaceIndex + 1)..];
+    }
+
+    private static string ExtractMemberName(string declaration)
+    {
+        var constructorMatch = Regex.Match(declaration, @"^(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(", RegexOptions.CultureInvariant);
+        if (constructorMatch.Success)
+        {
+            return constructorMatch.Groups["name"].Value;
+        }
+
+        var methodMatch = Regex.Match(declaration, @"\b(?<name>[A-Za-z_][A-Za-z0-9_]*)(?:<[^>]+>)?\s*\(", RegexOptions.CultureInvariant);
+        if (methodMatch.Success)
+        {
+            return methodMatch.Groups["name"].Value;
+        }
+
+        var propertyMatch = Regex.Match(declaration, @"\b(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*$", RegexOptions.CultureInvariant);
+        return propertyMatch.Success ? propertyMatch.Groups["name"].Value : string.Empty;
+    }
+
+    private static void PrintValidationReport(ResultValidationReport report)
+    {
+        Console.WriteLine($"[digest] result validation workspace={report.Workspace}");
+        if (report.Diagnostics.Count == 0)
+        {
+            Console.WriteLine("[digest] result validation passed.");
+            return;
+        }
+
+        foreach (var diagnostic in report.Diagnostics)
+        {
+            Console.WriteLine($"[{diagnostic.Severity}] {diagnostic.File}: {diagnostic.Message}");
+        }
+    }
+
     private static void PrintUsage()
     {
         Console.WriteLine(
@@ -1938,6 +3185,7 @@ internal static class DigestScript
             Usage:
               dotnet run --file scripts/digest.cs -- --repo-url <url> --output-root <path>
               dotnet run --file scripts/digest.cs -- --repo-url <url> --output-root <path> --external-repo-url <url> [--external-repo-url <url>]
+              dotnet run --file scripts/digest.cs -- --validate-results --workspace <path>
 
             Required:
               --repo-url      Fully qualified git repository URL, for example https://github.com/owner/repo
@@ -1946,6 +3194,8 @@ internal static class DigestScript
             Optional:
               --external-repo-url  Public repository URL to clone and search locally for curated consumer usage.
                                    Repeat this option to provide multiple external usage repositories.
+              --validate-results   Validate authored result/*.md examples against source evidence.
+              --workspace          Existing digest workspace to validate.
 
             Fixed conventions:
               repo-id      Derived from the final repository URL path segment
@@ -2042,13 +3292,38 @@ internal static class DigestScript
 
 internal sealed record DigestOptions(string RepoUrl, string OutputRoot, IReadOnlyList<string> ExternalRepoUrls);
 
-internal sealed record ProjectMetadata(string PackageId, string AssemblyName, bool? IsPackable, IReadOnlyList<string> BundledPackages);
+internal sealed record ResultValidationOptions(string Workspace);
 
-internal sealed record PackageInfo(string Name, string SourcePath, string? TestPath, bool IsConveniencePackage, IReadOnlyList<string> BundledPackages);
+internal sealed record ProjectMetadata(
+    string PackageId,
+    string AssemblyName,
+    bool? IsPackable,
+    IReadOnlyList<string> BundledPackages,
+    IReadOnlyList<string> TargetFrameworkMonikers,
+    IReadOnlyList<string> TargetFrameworks,
+    string License,
+    string Title,
+    string Description,
+    string ProjectUrl,
+    string RepositoryUrl);
+
+internal sealed record PackageInfo(
+    string Name,
+    string SourcePath,
+    string? TestPath,
+    bool IsConveniencePackage,
+    IReadOnlyList<string> BundledPackages,
+    IReadOnlyList<string> TargetFrameworkMonikers,
+    IReadOnlyList<string> TargetFrameworks,
+    string License,
+    string Title,
+    string Description,
+    string ProjectUrl,
+    string RepositoryUrl);
 
 internal sealed record TestProjectMatch(string ProjectFile, bool IsOwnTestProjectName, bool ReferencesProject);
 
-internal sealed record PackageWorkspaceArtifacts(string PromptPath, PackageEvidenceArtifacts Evidence);
+internal sealed record PackageWorkspaceArtifacts(string PromptPath, PackageEvidenceArtifacts Evidence, PageFrontmatterHints FrontmatterHints);
 
 internal sealed record PackageEvidenceArtifacts(
     EvidenceArtifacts Source,
@@ -2073,6 +3348,34 @@ internal sealed record ExternalRepository(string Url, string CloneDir, Repositor
 
 internal sealed record ExternalUsageSearchTerm(string Value, bool IsStrong);
 
-internal sealed record PackageManifestEntry(string Kind, string Name, string Prompt, PackageEvidenceArtifacts Evidence, string Result);
+internal sealed record ApiTypeSurface(string Name, HashSet<string> Members, HashSet<string> BaseTypes);
+
+internal sealed record ResultValidationDiagnostic(string File, string Severity, string Message);
+
+internal sealed record ResultValidationReport(string Workspace, IReadOnlyList<ResultValidationDiagnostic> Diagnostics);
+
+internal sealed record MarkdownResultFile(string Path, string Markdown);
+
+internal sealed record BasicUsageExample(string ResultFile, int CodeBlockIndex, string PackageId, string Code);
+
+internal sealed record PageFrontmatterHints(
+    string PageKind,
+    string Title,
+    string Description,
+    string Lede,
+    string? PackageId,
+    int PackageCount,
+    int LibraryCount,
+    IReadOnlyList<string> TargetFrameworks,
+    IReadOnlyList<string> TargetFrameworkMonikers,
+    string License,
+    IReadOnlyList<FrontmatterLink> Links,
+    IReadOnlyList<FamilyLink> FamilyLinks);
+
+internal sealed record FrontmatterLink(string Label, string Url, string Glyph);
+
+internal sealed record FamilyLink(string Label, string PackageId, string Url, string Glyph);
+
+internal sealed record PackageManifestEntry(string Kind, string Name, string Prompt, PackageEvidenceArtifacts Evidence, string Result, PageFrontmatterHints FrontmatterHints);
 
 internal sealed record PackedFile(string FullPath, string RelativePath);
