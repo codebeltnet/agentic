@@ -2015,6 +2015,14 @@ internal static class DigestScript
         10. Validate every C# example against source evidence and revise any example that uses plausible but undeclared APIs or misses the Codebelt.Extensions.Xunit test shape.
         11. Run `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. Revise any reported result errors from source evidence and rerun until validation passes.
 
+        ## Validation Repair Discipline
+
+        - Treat targeted `rg` searches as triage only. A search hit is not automatically a defect; decide from context and source evidence. For example, `HttpStatusCode.OK` is not the same as a toy literal response body.
+        - Create a short repair ledger for each validation diagnostic: result file, exact diagnostic, affected Basic usage block, source evidence needed, and planned edit.
+        - Inspect the failing snippet and exact failing line before speculating about framework internals, overload resolution, dependency injection, logger categories, or validator behavior.
+        - Allow at most one quick hypothesis pass. If the cause is not confirmed from source, tests, or the executable failure line, replace the example from source-backed evidence instead of continuing an open-ended investigation.
+        - Prefer one focused edit per diagnostic, then rerun `--validate-results`. Do not treat unrelated preflight search hits as reasons to rewrite passing examples.
+
         ## Result Edit Discipline
 
         - Read the affected `result/*.md` file immediately before editing it.
