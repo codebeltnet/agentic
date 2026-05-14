@@ -334,11 +334,11 @@
     {
       "id": 23,
       "prompt": "Use git-repo-digest to write a package digest for a normal foundational library package. The source evidence includes public guard methods, parameter-object validation, decorator wrappers, configuration helpers, and disposable lifecycle hooks. The test evidence shows consumer-style tests using these APIs, but there is no external usage evidence.",
-      "expected_output": "Writes a Basic usage section with one complete C# fenced code block containing explicit using statements, a consumer namespace, a public test class, and exactly one [Fact] or [Theory] method with assertions inside that method. The example demonstrates a realistic consumer task that uses the package's foundational APIs meaningfully, rather than top-level statements or a trivial literal round-trip.",
+      "expected_output": "Writes a Basic usage section with one complete C# fenced code block containing explicit using statements, a file-scoped consumer namespace, a public test class, and exactly one [Fact] or [Theory] method with assertions inside that method. The example demonstrates a realistic consumer task that uses the package's foundational APIs meaningfully, rather than top-level statements or a trivial literal round-trip.",
       "expectations": [
         "Writes exactly one C# fenced code block for the normal package Basic usage section",
         "Includes explicit using statements",
-        "Includes a consumer namespace",
+        "Includes a file-scoped consumer namespace",
         "Includes a public test class",
         "Contains exactly one [Fact] or [Theory] method",
         "Places assertions inside the single test method instead of at top level",
@@ -477,7 +477,7 @@
       "expectations": [
         "Avoids `Greeting`, `MessageService`, `Hello World`, `Hello from DI`, and bare `OK` examples when richer source or test evidence exists",
         "Demonstrates the package's hosting, DI, factory, logging, lifecycle, or pipeline value rather than plain framework service resolution",
-        "Keeps the example complete with explicit using statements, a consumer namespace, one test class, one fact or theory, and assertions inside the test method",
+        "Keeps the example complete with explicit using statements, a file-scoped consumer namespace, one test class, one fact or theory, and assertions inside the test method",
         "Does not let generic framework setup dominate the package-specific API",
         "Reports toy/greeting-oriented Basic usage snippets as deterministic quality diagnostics",
         "Does not hardcode package-specific sample names in the repair guidance"
@@ -512,15 +512,59 @@
     {
       "id": 35,
       "prompt": "Use git-repo-digest to validate an existing workspace whose package page has YAML frontmatter packageId WidgetPack and a Basic usage C# block. The package is published on NuGet, and the local machine has the .NET SDK available.",
-      "expected_output": "Runs deterministic post-validation with `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. For each Basic usage C# block, the validator creates a temporary xUnit test project outside the repository, installs Microsoft.NET.Test.Sdk, xunit.v3, xunit.runner.visualstudio, and the page packageId from NuGet, writes the snippet as a test file, runs `dotnet test`, and treats any restore, compile, or test failure as blocking. The agent rewrites failing examples from evidence and reruns validation until it passes.",
+      "expected_output": "Runs deterministic post-validation with `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. For each Basic usage C# block, the validator creates a temporary Codebelt.Extensions.Xunit test project outside the repository, installs Microsoft.NET.Test.Sdk, xunit.v3, xunit.runner.visualstudio, Codebelt.Extensions.Xunit, and the page packageId from NuGet, writes the snippet as a test file, runs `dotnet test`, and treats any restore, compile, or test failure as blocking. The agent rewrites failing examples from evidence and reruns validation until it passes.",
       "expectations": [
         "Uses the page frontmatter packageId, or the result filename when packageId is absent, as the NuGet package to install for executable validation",
         "Creates the executable validation project in a temp directory rather than inside the repository or digest workspace",
-        "Installs the page NuGet package plus xUnit test packages in the temp validation project",
+        "Installs Codebelt.Extensions.Xunit, the page NuGet package, and xUnit test packages in the temp validation project",
         "Runs dotnet test for every Basic usage C# block",
         "Treats NuGet restore failures, compile failures, and failing tests as blocking validation diagnostics",
         "Requires the agent to rewrite the Basic usage example and rerun validation until it passes",
         "Does not rely on repository source project references for consumer copy/paste validation"
+      ]
+    },
+    {
+      "id": 36,
+      "prompt": "Use git-repo-digest to write a package digest for a normal Codebelt library package. The source and test evidence support a focused Basic usage example, and the package page will be validated with `--validate-results`.",
+      "expected_output": "The Basic usage C# example is written as a Codebelt.Extensions.Xunit test: it imports Codebelt.Extensions.Xunit and Xunit, does not import Xunit.Abstractions, uses a file-scoped consumer namespace, declares the public test class containing the Fact or Theory method as inheriting from Test or a source-backed Codebelt test base class that the evidence shows derives from Test, defines a constructor that accepts ITestOutputHelper output and passes that output helper to the base constructor, has exactly one Fact or Theory method with assertions, uses TestOutput.Write/WriteLine/WriteLines for human-friendly context, and passes deterministic validation in a temp project that installs Codebelt.Extensions.Xunit plus the page package.",
+      "expectations": [
+        "Includes `using Codebelt.Extensions.Xunit;` and `using Xunit;` in the Basic usage C# block",
+        "Uses file-scoped namespace syntax such as `namespace MyProject.Tests;`",
+        "Does not use block-scoped namespace syntax such as `namespace MyProject.Tests { ... }`",
+        "Does not include `using Xunit.Abstractions;`",
+        "Declares the public test class containing the `[Fact]` or `[Theory]` method as inheriting from `Test` or a source-backed Codebelt test base class that evidence shows derives from `Test`",
+        "Defines a constructor that accepts `ITestOutputHelper output` and passes that output helper to the base constructor",
+        "Contains exactly one `[Fact]` or `[Theory]` method with assertions",
+        "Uses `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` to describe the scenario or observable result",
+        "Installs Codebelt.Extensions.Xunit in the temporary executable validation project",
+        "Treats missing Codebelt-style xUnit shape or missing TestOutput usage as deterministic validation diagnostics"
+      ]
+    },
+    {
+      "id": 37,
+      "prompt": "Use git-repo-digest to validate an existing workspace where result/WidgetPack.Web.md has a malformed Basic usage section: a C# fenced code block starts, a second `## Basic usage` heading appears before the first fence closes, and the repaired-looking snippet appears after that heading.",
+      "expected_output": "The validator treats headings inside an open fenced code block as code, not as Markdown section boundaries. It validates the final result-file state, sends the malformed combined C# block to executable validation, and fails the workspace instead of silently validating only the repaired-looking later snippet. The agent must repair the result file and rerun `--validate-results` after the final edit.",
+      "expectations": [
+        "Does not split Basic usage sections at a `## Basic usage` line that appears inside an open fenced code block",
+        "Does not ignore the malformed first C# code fence",
+        "Reports a blocking validation diagnostic for the malformed Basic usage section or its failing executable Codebelt.Extensions.Xunit test",
+        "Requires the result file to contain exactly one top-level `## Basic usage` section",
+        "Requires every Basic usage section to contain a complete fenced C# code block",
+        "Treats any result-file edit after a validation pass as invalidating that prior pass",
+        "Reruns `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after the final result-file repair"
+      ]
+    },
+    {
+      "id": 38,
+      "prompt": "Use git-repo-digest to validate a package digest whose Basic usage example uses a package-owned Codebelt hosting base class: `public class InventoryServiceTest : HostTest<ManagedHostFixture>`, a constructor with `(ManagedHostFixture hostFixture, ITestOutputHelper output) : base(hostFixture, output)`, one `[Fact]` method, assertions, and `TestOutput.WriteLine`.",
+      "expected_output": "The deterministic Codebelt xUnit shape validation accepts source-backed Codebelt test base classes derived from Test, including generic bases such as HostTest<ManagedHostFixture> or WebHostTest<TFixture>. It does not require the class declaration to be exactly `: Test` when the base class is a Codebelt test abstraction and the constructor passes the output helper to the base constructor.",
+      "expectations": [
+        "Accepts `public class InventoryServiceTest : HostTest<ManagedHostFixture>` as a valid Codebelt test shape when HostTest is source-backed as derived from Test",
+        "Accepts constructors that pass `ITestOutputHelper output` to a multi-argument base constructor such as `base(hostFixture, output)`",
+        "Still requires `using Codebelt.Extensions.Xunit;` and `using Xunit;`",
+        "Still rejects `using Xunit.Abstractions;`",
+        "Still requires useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output",
+        "Still requires the snippet to compile and pass executable validation"
       ]
     }
   ]
