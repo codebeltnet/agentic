@@ -164,6 +164,14 @@ Presentation rules (enforced in every `FORMS.md`):
 
 This applies to all skills that collect user input, not just scaffolding skills.
 
+## Status Update Hygiene
+
+Interim progress updates should describe user-relevant progress, evidence, blockers, and next steps. Do not narrate runner internals, sandbox mechanics, approved command paths, or retry plumbing unless that detail affects user approval, reproducibility, validation, or the final outcome.
+
+- Say what changed in the task state, not how the host executed the command
+- Mention tool/runtime failures only when they block progress, require approval, or change the planned validation
+- Prefer concise phrasing such as "The first read attempt failed before returning file content; I'm retrying and will report only if that changes the result"
+
 ## Anthropic Skill Authoring Reference
 
 Essential conventions from [The Complete Guide to Building Skills for Claude](https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf) (Anthropic, Jan 2026). All skills in this repo must follow these rules.
