@@ -323,6 +323,14 @@ This validator catches C# Basic usage member accesses on package-owned receiver 
 
 Treat validation as a final-state check, not a milestone from earlier in the session. If any `result/*.md` file changes after `--validate-results` passes, rerun validation before reporting completion.
 
+Use a tight repair loop when validation fails:
+
+- Treat targeted `rg` searches as triage only. A search hit is not automatically a defect; decide from context and source evidence, for example `HttpStatusCode.OK` is not the same as a toy literal response body.
+- Create a short repair ledger for each validation diagnostic: result file, exact diagnostic, affected Basic usage block, source evidence needed, and planned edit.
+- Inspect the failing snippet and the exact failing line before speculating about framework internals, overload resolution, dependency injection, logger categories, or validator behavior.
+- Allow at most one quick hypothesis pass. If the cause is not confirmed from source, tests, or the executable failure line, replace the example from source-backed evidence instead of continuing an open-ended investigation.
+- Prefer one focused edit per diagnostic, then rerun `--validate-results`. Do not treat unrelated preflight search hits as reasons to rewrite passing examples.
+
 Before finishing, verify:
 
 - Every manifest package has a corresponding result file.
