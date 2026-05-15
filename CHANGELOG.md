@@ -6,18 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.4.3] - 2026-05-06
+## [0.4.3] - 2026-05-15
 
-This is a patch release focused on strengthening `git-repo-digest` with enhanced output-root path labeling, comprehensive validation rules, and improved example guidance for Basic usage sections.
+This is a patch release focused on strengthening `git-repo-digest` with external usage evidence collection, a deterministic `--validate-results` validation gate, Codebelt.Extensions.Xunit test shape enforcement, bounded validation repair discipline, enhanced output-root path labeling, and comprehensive eval coverage for all new capabilities. A Status Update Hygiene section is also added to `AGENTS.md` to keep agents focused on user-relevant outcomes rather than sandbox mechanics.
+
+### Added
+
+- External usage evidence collection in `digest.cs` that accepts user-provided public consumer repositories, clones them locally, rejects the digest repo itself, and writes reference-plus-code matches to `external-usage.xml` including direct package references and transitive graph matches where external projects reference the target package,
+- `--validate-results --workspace <workspace>` entry point in `digest.cs` for deterministic API-shape checks, quality diagnostics for toy and greeting examples, non-Codebelt-style xUnit snippets, and malformed Basic usage sections, plus NuGet-backed executable xUnit tests for every Basic usage C# block,
+- `CodebeltTestConstructorExpression`, `TestOutputExpression`, `FenceLineInsideCodeExpression`, `MarkdownHeadingInsideCodeExpression`, `FileScopedNamespaceExpression`, and `BlockScopedNamespaceExpression` regex constants in `digest.cs` for Codebelt xUnit shape detection,
+- `ValidateCodebeltXunitShape`, `ValidateFileScopedNamespace`, `ValidateBasicUsageCodeBlockStructure`, `HasCodebeltTestBaseClass`, and `IsTestOrDerivedFromTest` validation functions in `digest.cs` that catch non-Codebelt-style snippets as blocking diagnostics and walk the source type graph for recursive base class resolution,
+- Validation Repair Discipline section in the embedded digest prompt guiding agents to treat targeted `rg` searches as triage, create a concise repair ledger per diagnostic, inspect the exact failing line before theorizing, allow at most one hypothesis pass, and prefer one focused source-backed edit followed by rerun,
+- Evals 24–39 covering YAML frontmatter authoring, `IsPackable` regression, fresh vs. reuse workspace behavior, positional URL mapping, API-shape validation with fixture types, indirect producer/consumer examples, executable xUnit validation, Codebelt xUnit shape, malformed fence boundaries, source-backed generic base class acceptance, and bounded validation repair loops,
+- Status Update Hygiene section in `AGENTS.md` requiring agents to report user-relevant progress and evidence without narrating sandbox mechanics or retry plumbing.
 
 ### Changed
 
 - Refactored `git-repo-digest` output-root path labeling to use runtime-visible model and reasoning values (e.g., `.bot/digests/gpt-5.5-high`), with explicit guidance for requesting missing label values instead of guessing,
-- Enhanced evidence-precedence hierarchy in `digest.cs`: source files are authoritative for APIs and method signatures, tests are authoritative for usage patterns, and project files are authoritative for dependencies and package relationships,
-- Strengthened validation rules for C# Basic usage examples including explicit rejection of helper methods, fake services, missing namespaces, and unverified inheritance or signature claims,
+- Enhanced evidence-precedence hierarchy in `digest.cs`: source files are authoritative for APIs and method signatures, tests for usage patterns, and project files for dependencies and package relationships,
+- Strengthened validation rules for C# Basic usage examples with explicit rejection of helper methods, fake services, missing namespaces, and unverified inheritance or signature claims,
 - Expanded Basic usage guidance to distinguish normal packages (single focused example) from convenience and aggregate packages (one focused example per referenced code package with subheadings),
+- Clarified positional URL mapping in `git-repo-digest` SKILL.md so slash commands, bare pasted URLs, and prose invocations all follow the same first-URL-is-digest-repo rule,
+- Added YAML frontmatter contract requirement for every authored result file and introduced `frontmatterHints` in package manifest entries and the overview prompt,
+- Strengthened result-edit discipline in `git-repo-digest` SKILL.md and the embedded prompt: read the file before editing, replace whole sections including fences, verify fence balance after every edit, and rerun `--validate-results` after the final write,
 - Strengthened metadata guidance in package digests to reject framework claims, dependency lists, and repository facts from Overview sections,
-- Updated skill description in README to reflect new output-root labeling format and the conditions for when the recommendation applies.
+- Updated README to reflect external usage evidence, URL mapping, frontmatter contract, Codebelt.Extensions.Xunit snippet requirements, deterministic validation gate, and validation repair discipline.
+
+### Fixed
+
+- Fixed `CSharpCodeBlockExpression` regex in `digest.cs` to correctly handle info strings after the `csharp` language tag and enforce strict line endings on the closing fence, preventing false matches on adjacent code blocks,
+- Fixed `ClassDeclarationExpression` regex in `digest.cs` to match `sealed`, `abstract`, and `partial` class modifiers that were previously missed, causing false negatives in class declaration detection.
 
 ## [0.4.2] - 2026-05-05
 
@@ -236,8 +254,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.4...HEAD
-[0.4.4]: https://github.com/codebeltnet/agentic/compare/v0.4.2...v0.4.4
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/codebeltnet/agentic/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/codebeltnet/agentic/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/codebeltnet/agentic/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/codebeltnet/agentic/compare/v0.3.4...v0.4.0
