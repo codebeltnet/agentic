@@ -22,7 +22,7 @@ This is a patch release focused on strengthening `git-repo-digest` with external
 
 ### Changed
 
-- Refactored `git-repo-digest` output-root path labeling to use runtime-visible model and reasoning values (e.g., `.bot/digests/gpt-5.5-high`), with explicit guidance for requesting missing label values instead of guessing,
+- Refactored `git-repo-digest` output-root path labeling to use `{output-root}/{repo-id}/{yyyyMMdd-HHmmssZ}`, with explicit guidance for recommending `.bot/digests` only when a `.bot` folder exists and no output path was supplied,
 - Enhanced evidence-precedence hierarchy in `digest.cs`: source files are authoritative for APIs and method signatures, tests for usage patterns, and project files for dependencies and package relationships,
 - Strengthened validation rules for C# Basic usage examples with explicit rejection of helper methods, fake services, missing namespaces, and unverified inheritance or signature claims,
 - Expanded Basic usage guidance to distinguish normal packages (single focused example) from convenience and aggregate packages (one focused example per referenced code package with subheadings),
