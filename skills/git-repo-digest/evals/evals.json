@@ -3,57 +3,60 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Use git-repo-digest to write package digests and the overview for an existing digest workspace at .bot/digests/example-project. The workspace has manifest.json, instructions.md, two package context files with context indexes and chunk directories, overview.context.md, and an empty result folder.",
-      "expected_output": "Reads manifest.json and instructions.md first, writes result/{PackageName}.md files before result/Index.md, processes one package context at a time, treats generated output as source of truth, uses manifest-declared context indexes and chunks when a full context read is capped, reads the completed package result files as primary source material for the overview, writes the overview with a Package selection section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
+      "prompt": "Use git-repo-digest to write package digests and the overview for an existing digest workspace at .bot/digests/example-project. The workspace has manifest.json, instructions.md, prompts/{PackageName}.prompt.md files, evidence/{PackageName}/source.xml, tests.xml, projects.xml, readmes.xml files with evidence indexes and optional chunk directories, prompts/overview.prompt.md, and an empty result folder.",
+      "expected_output": "Reads manifest.json and instructions.md first, writes result/{PackageName}.md files before result/Index.md, processes one package evidence set at a time, treats generated output as source of truth, uses manifest-declared evidence indexes and chunks when a full evidence read is capped, reads the completed package result files as primary source material for the overview, writes the overview with a Concepts section, and reports validation gaps without copying files to a website content tree unless explicitly asked.",
       "expectations": [
         "Reads manifest.json and instructions.md before writing any result file",
         "Writes result/{PackageName}.md files before result/Index.md",
-        "Processes one package context file at a time instead of loading all contexts together",
-        "Reads each required package context completely before writing its result file",
-        "Uses the manifest-declared context index and ordered context chunks when a full context file cannot be read completely",
-        "Treats the generated manifest as authoritative for package names, context paths, result paths, and phase order",
-        "Reads the completed result/{PackageName}.md files before writing result/Index.md instead of relying only on overview.context.md",
-        "Does not invent APIs, namespaces, or capabilities not present in the package context",
-        "Writes result/Index.md with a ## Package selection section and does not use the previous package-oriented heading",
+        "Processes one package evidence set at a time instead of loading all evidence sets together",
+        "Reads each required package evidence file completely before writing its result file",
+        "Uses the manifest-declared evidence index and ordered evidence chunks when a full evidence file cannot be read completely",
+        "Treats the generated manifest as authoritative for package names, prompt paths, evidence paths, result paths, and phase order",
+        "Reads the completed result/{PackageName}.md files before writing result/Index.md instead of relying only on project/readme evidence",
+        "Does not invent APIs, namespaces, or capabilities not present in the package evidence",
+        "Writes result/Index.md with a ## Concepts section and does not use package-selection headings or tables",
+        "Treats ## Concepts followed immediately by a third-level heading as invalid because the introductory paragraph is required",
         "Stops after reporting validation gaps rather than copying result files to a website content tree"
       ]
     },
     {
       "id": 2,
       "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject and then write the resulting digests. The active workspace contains a .bot folder.",
-      "expected_output": "Recommends .bot/digests as the output root, runs dotnet run --file with --repo-url and the full URL and --output-root, does not ask for repo-id or result directory, avoids LLM options, then follows the generated manifest, including contextIndex and contextChunks entries, to write package digests before result/Index.md.",
+      "expected_output": "When a .bot folder exists and no output path was supplied, may recommend .bot/digests as the output root but asks before using it, runs dotnet run --file with --repo-url, the full URL, and --output-root so the runner creates .bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}, does not ask for repo-id, run-id, or result directory, avoids unsupported runner inputs, then follows the generated manifest, including evidence index and chunk entries, to write package digests before result/Index.md.",
       "expectations": [
-        "Recommends .bot/digests as the output root because a .bot folder exists in the workspace",
-        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root",
+        "May recommend .bot/digests as the output root because a .bot folder exists in the workspace and the user supplied no output path",
+        "Asks before using the recommended output root instead of inventing defaults silently",
+        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root for the .bot/digests default",
         "Passes the full repository URL, not a slug or partial reference",
-        "Does not ask the user for repo-id or result directory",
-        "Does not pass provider, model, or LLM flags to the runner",
-        "Recognizes that the generated manifest can include contextIndex and contextChunks entries for capped context reads",
+        "Does not ask the user for repo-id, run-id, or result directory",
+        "Uses a run-id formatted yyyyMMdd-HHmmssZ so default workspaces sort chronologically",
+        "Does not pass unsupported runner flags beyond --repo-url, --output-root, and repeated --external-repo-url when external usage repositories were supplied",
+        "Recognizes that the generated manifest can include evidence index and chunk entries for capped evidence reads",
         "Follows the generated manifest after the runner completes to write package digests before Index.md"
       ]
     },
     {
       "id": 3,
-      "prompt": "Use git-repo-digest to write result/Index.md from an existing digest workspace. The context files and manifest are present but the result folder is empty.",
-      "expected_output": "Writes all required package result files before writing result/Index.md, reads those completed package digests as required primary source material for the overview, and uses Package selection as the visible overview section heading.",
+      "prompt": "Use git-repo-digest to write result/Index.md from an existing digest workspace. The prompt files, evidence files, and manifest are present but the result folder is empty.",
+      "expected_output": "Writes all required package result files before writing result/Index.md, reads those completed package digests as required primary source material for the overview, and uses Concepts as the visible overview section heading.",
       "expectations": [
         "Writes all required package result files before writing result/Index.md",
         "Does not skip package digests even when the user asks only for the overview",
         "Reads each completed package result file as editorial input when writing Index.md",
-        "Does not treat overview.context.md by itself as sufficient source material for Index.md",
-        "Writes result/Index.md with a ## Package selection section and does not use the previous package-oriented heading",
+        "Does not treat project/readme evidence by itself as sufficient source material for Index.md",
+        "Writes result/Index.md with a ## Concepts section and does not use package-selection headings or tables",
         "Names any missing package digests in the response if any cannot be completed before proceeding"
       ]
     },
     {
       "id": 4,
-      "prompt": "Use git-repo-digest to write a package digest for a library package. The context file includes source files but contains no performance benchmarks, third-party integration examples, or architecture diagrams.",
-      "expected_output": "The result file contains only claims grounded in the context; no invented benchmarks, integration examples, broad marketing adjectives, or API shapes that do not appear in the source.",
+      "prompt": "Use git-repo-digest to write a package digest for a library package. The evidence set includes source files but contains no performance benchmarks, third-party integration examples, or architecture diagrams.",
+      "expected_output": "The result file contains only claims grounded in the evidence; no invented benchmarks, integration examples, broad marketing adjectives, or API shapes that do not appear in the source.",
       "expectations": [
-        "Grounds every capability claim in source, tests, project metadata, or README content from the context",
-        "Does not invent API shapes, method signatures, or namespaces not visible in the context",
-        "Omits benchmark or performance claims when no benchmark data is present in the context",
-        "Avoids broad adjectives such as robust, seamless, powerful, or comprehensive unless immediately backed by concrete evidence from the context",
+        "Grounds every capability claim in source, tests, project metadata, or README content from the evidence",
+        "Does not invent API shapes, method signatures, or namespaces not visible in the evidence",
+        "Omits benchmark or performance claims when no benchmark data is present in the evidence",
+        "Avoids broad adjectives such as robust, seamless, powerful, or comprehensive unless immediately backed by concrete evidence",
         "Uses the rg validation commands from the skill to check result files before reporting completion"
       ]
     },
@@ -71,37 +74,37 @@
     {
       "id": 6,
       "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject while .NET 10 and git are available, but Node/npm, Repomix, and public packing services are unavailable.",
-      "expected_output": "Runs the bundled digest.cs runner with the full repository URL and output root, recognizes that context packing is handled locally by the C# packer over the cloned repository's tracked files, and follows the generated manifest instead of treating missing Node/npm or Repomix as relevant dependencies.",
+      "expected_output": "Runs the bundled digest.cs runner with the full repository URL and output root, recognizes that evidence packing is handled locally by the C# packer over the cloned repository's tracked files, and follows the generated manifest instead of treating missing Node/npm or Repomix as relevant dependencies.",
       "expectations": [
         "Does not stop or request Node/npm solely because local npx or local Repomix is unavailable",
-        "Recognizes that the runner performs one shallow git clone and packs local tracked files with the bundled C# packer",
+        "Recognizes that the runner performs one shallow git clone and packs local tracked files into separated evidence files with the bundled C# packer",
         "Does not suggest sending the repository URL or include patterns to a public packing service",
-        "Treats the C# packer as the primary deterministic context packer rather than a lower-fidelity fallback",
+        "Treats the C# packer as the primary deterministic evidence packer rather than a lower-fidelity fallback",
         "Still treats .NET 10 SDK and git failures as blocking dependencies"
       ]
     },
     {
       "id": 7,
-      "prompt": "Use git-repo-digest to write a package digest from an existing workspace. The first file-read response for WidgetPack.context.md says the file was capped at 50 KB and only shows the beginning of the context.",
-      "expected_output": "Uses the manifest-declared WidgetPack.context.index.md and every ordered file under WidgetPack.context.chunks/ to inspect the full package context before writing result/WidgetPack.md. It does not treat the index as source evidence, and it does not use token limits, context budget, or strategic reading as a reason to skip source sections; if the chunks cannot be read completely, it stops and reports the blocker.",
+      "prompt": "Use git-repo-digest to write a package digest from an existing workspace. The first file-read response for evidence/WidgetPack/source.xml says the file was capped at 50 KB and only shows the beginning of the source evidence.",
+      "expected_output": "Uses the manifest-declared evidence/WidgetPack/source.index.md and every ordered file under evidence/WidgetPack/source.chunks/ to inspect the full source evidence before writing result/WidgetPack.md. It does not treat the index as source evidence, and it does not use token limits, evidence budget, or strategic reading as a reason to skip source sections; if the chunks cannot be read completely, it stops and reports the blocker.",
       "expectations": [
         "Treats capped or truncated file output as an incomplete read",
-        "Reads the manifest-declared context index to find the ordered chunk list",
-        "Reads every context chunk in numeric order until the whole required package context is inspected",
-        "Does not treat the context index as a substitute for raw source evidence",
-        "Does not write the package digest from only the first capped portion of the context file",
-        "Does not describe strategic source selection as acceptable before the full package context has been read",
-        "Stops and reports a blocker if the full required package context cannot be read from the full file or complete chunk set"
+        "Reads the manifest-declared evidence index to find the ordered chunk list",
+        "Reads every evidence chunk in numeric order until the whole required source evidence is inspected",
+        "Does not treat the evidence index as a substitute for raw source evidence",
+        "Does not write the package digest from only the first capped portion of the evidence file",
+        "Does not describe strategic source selection as acceptable before the full package evidence set has been read",
+        "Stops and reports a blocker if the full required evidence cannot be read from the full file or complete chunk set"
       ]
     },
     {
       "id": 8,
-      "prompt": "Use git-repo-digest to write package digests for an existing workspace with manifest.json, instructions.md, and four independent package context files. The agent runtime supports subagents.",
-      "expected_output": "Uses one subagent per independent package context when practical, gives each subagent only its assigned context plus the relevant instructions and manifest entry, requires each subagent to fully read its assigned context before drafting, writes package result files before result/Index.md, and keeps the main agent responsible as orchestrator and final overview author.",
+      "prompt": "Use git-repo-digest to write package digests for an existing workspace with manifest.json, instructions.md, prompts, and four independent package evidence sets. The agent runtime supports subagents.",
+      "expected_output": "Uses one subagent per independent package evidence set when practical, gives each subagent only its assigned prompt and evidence plus the relevant instructions and manifest entry, requires each subagent to fully read its assigned evidence before drafting, writes package result files before result/Index.md, and keeps the main agent responsible as orchestrator and final overview author.",
       "expectations": [
-        "Prefers one subagent per independent package context when the runtime supports subagents",
-        "Does not give unrelated package contexts to the same subagent",
-        "Requires each subagent to completely read its assigned context before drafting the package digest",
+        "Prefers one subagent per independent package evidence set when the runtime supports subagents",
+        "Does not give unrelated package evidence sets to the same subagent",
+        "Requires each subagent to completely read its assigned evidence before drafting the package digest",
         "Keeps result/Index.md blocked until all required package result files exist",
         "Does not treat subagent summaries as a replacement for completed package result files during overview synthesis",
         "Requires the main agent to gather completed package digests, subagent caveats, and validation notes before drafting the overview",
@@ -110,8 +113,8 @@
     },
     {
       "id": 9,
-      "prompt": "Use git-repo-digest to write result/Index.md for an existing package workspace. The context proves that an aggregate package transitively references hosting and ASP.NET Core packages, and the overview prompt asks for common mistakes and use-less guidance. The context contains no NuGet analytics, GitHub issue frequency, telemetry, survey data, or docs saying which mistake is most common.",
-      "expected_output": "Writes grounded use-less guidance without claiming measured developer behavior. It may explain that installing the aggregate package in a project that only needs the base package adds unnecessary references, but it must not call that the most common mistake or say developers often/frequently do it unless the context includes frequency evidence.",
+      "prompt": "Use git-repo-digest to write result/Index.md for an existing package workspace. The evidence proves that an aggregate package transitively references hosting and ASP.NET Core packages, and the overview prompt asks for common mistakes and use-less guidance. The evidence contains no NuGet analytics, GitHub issue frequency, telemetry, survey data, or docs saying which mistake is most common.",
+      "expected_output": "Writes grounded use-less guidance without claiming measured developer behavior. It may explain that installing the aggregate package in a project that only needs the base package adds unnecessary references, but it must not call that the most common mistake or say developers often/frequently do it unless the evidence includes frequency evidence.",
       "expectations": [
         "Separates source-backed package dependency evidence from inferred usage guidance",
         "Does not use phrases such as most common mistake, developers often, users frequently, typical failure, popular choice, or widely used without explicit frequency evidence",
@@ -122,20 +125,22 @@
     },
     {
       "id": 10,
-      "prompt": "Use git-repo-digest to generate and write package digests for a library workspace whose source contains public classes, internal helper classes, callback-based lifecycle wiring, tests for exception guards, and a GlobalSuppressions.cs file.",
-      "expected_output": "Uses generated public API summaries and engineering signals to focus source inspection, filters GlobalSuppressions.cs from packed context, does not list internal helpers as consumer APIs, but uses internal implementation details only when they explain public lifecycle behavior, validation guards, callback flow, or package boundaries.",
+      "prompt": "Use git-repo-digest to generate and write package digests for a library workspace whose source evidence contains public classes, interfaces, abstract base classes, internal helper classes, callback-based lifecycle wiring, test evidence for exception guards, and a GlobalSuppressions.cs file.",
+      "expected_output": "Uses generated public API summaries and engineering signals to focus source inspection, including abstraction and extension-point declarations, filters GlobalSuppressions.cs from packed evidence, does not list internal helpers as consumer APIs, but uses internal implementation details only when they explain public lifecycle behavior, validation guards, callback flow, or package boundaries.",
       "expectations": [
-        "Recognizes PUBLIC API SUMMARY and ENGINEERING SIGNALS sections as navigation aids rather than final evidence",
+        "Recognizes api-summary.md and engineering-signals.md as navigation aids rather than final evidence",
+        "Uses abstraction and extension-point declaration signals to revisit interfaces, abstract base classes, and role-bearing types in raw source",
+        "Does not let generic lifecycle words such as ConfigureAwait, Host, Hosting, Application, or Initializes crowd out more specific engineering signals",
         "Verifies public API and engineering-depth claims against raw source or tests before writing",
         "Does not document internal helper classes as public consumer APIs",
         "Uses internal implementation details only to explain public behavior such as lifecycle, validation, callback flow, or package boundaries",
-        "Excludes GlobalSuppressions.cs from packed context instead of spending digest budget on suppression metadata"
+        "Excludes GlobalSuppressions.cs from packed evidence instead of spending digest budget on suppression metadata"
       ]
     },
     {
       "id": 11,
-      "prompt": "Use git-repo-digest to generate a digest workspace for a repository where Codebelt.Extensions.Xunit is a shared base package, Directory.Build.props adds it to test projects, and downstream test projects such as Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests exist but there is no dedicated Codebelt.Extensions.Xunit.Tests project.",
-      "expected_output": "The generated Codebelt.Extensions.Xunit package context does not assign a downstream hosting test directory as its Test path. It either uses a dedicated exact-name test project when present or leaves Test path undiscovered when only downstream package test projects match the base package prefix.",
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository where Codebelt.Extensions.Xunit is a shared base package, Directory.Build.props adds it to test projects, and downstream test projects such as Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests exist but there is no dedicated Codebelt.Extensions.Xunit.Tests project. Some source files in src/ are framework abstractions named WebHostTest.cs, MinimalWebHostTest.cs, IPipelineTest.cs, or IWebHostTest.cs.",
+      "expected_output": "The generated Codebelt.Extensions.Xunit package evidence does not assign a downstream hosting test directory as its Test path. It either uses a dedicated exact-name test project when present or leaves Test path undiscovered when only downstream package test projects match the base package prefix. Source files under src/ whose names end in Test remain source evidence and are not listed as test evidence files.",
       "expectations": [
         "Discovers source projects only from the Codebelt src/ root",
         "Discovers owned test projects only from the Codebelt test/ root, not a generic tests/ root",
@@ -146,23 +151,434 @@
         "Does not treat Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests as the owned test project for Codebelt.Extensions.Xunit",
         "Leaves Test path as not discovered when no dedicated test project or single unambiguous direct project reference exists",
         "Still allows Codebelt.Extensions.Xunit.Hosting.AspNetCore.Tests to map to the Codebelt.Extensions.Xunit.Hosting.AspNetCore package",
+        "Keeps source files whose names end in Test.cs under source evidence instead of excluding them as tests",
+        "Lists test evidence files only from the discovered owned test/ path, not from src/",
         "Reports missing dedicated tests as a confidence risk instead of smoothing it over with another package's tests"
       ]
     },
     {
       "id": 12,
-      "prompt": "Use git-repo-digest to generate a digest workspace for a repository whose package context has large packed source and test files split across multiple chunks. Some chunks contain markdown section headings, XML <file path=\"...\"> entries from src/, test/, .nuget/, and root project metadata files, or a mixture of both.",
-      "expected_output": "The generated context index uses a Contents column, keeps all real markdown headings when present, adds deterministic inferred labels such as Source Code, Test Coverage, NuGet Documentation, Documentation, Project Metadata, or Packed Content from packed file paths, and can show both heading and path-derived labels in the same semicolon-delimited cell without truncating the list with ellipses.",
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository whose package evidence has large packed source and test files split across multiple chunks. Some chunks contain XML <file path=\"...\"> entries from src/, test/, .nuget/, and root project metadata files.",
+      "expected_output": "The generated evidence index uses a Contents column, adds deterministic inferred labels such as Source Code, Test Coverage, NuGet Documentation, Documentation, Project Metadata, or Packed Content from packed file paths, and can show path-derived labels in the same semicolon-delimited cell without truncating the list with ellipses.",
       "expectations": [
         "Uses Contents rather than Headings as the chunk index table column name",
-        "Keeps all existing real markdown headings in the chunk index when a chunk contains them",
         "Adds Source Code for chunks with packed file paths under src/",
         "Adds Test Coverage for chunks with packed file paths under test/",
         "Adds NuGet Documentation, Documentation, or Project Metadata for documentation and project metadata chunks",
-        "Allows a single semicolon-delimited Contents cell to include both markdown headings and packed-path labels",
+        "Allows a single semicolon-delimited Contents cell to include multiple packed-path labels",
         "Does not truncate the Contents cell with ellipses",
         "Uses a deterministic Packed Content fallback only when no packed file paths are visible",
-        "Does not emit (none) for packed-content chunks in the context index"
+        "Does not emit (none) for packed-content chunks in the evidence index"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Use git-repo-digest like this: /git-repo-digest https://github.com/example/library .bot/digests https://github.com/example/consumer-one https://github.com/example/consumer-two",
+      "expected_output": "Interprets the first URL as the repository under digest, the non-URL second value as the output root, and the later URLs as curated external usage repositories. Runs the bundled runner with --repo-url, --output-root, and one repeated --external-repo-url flag per external URL.",
+      "expectations": [
+        "Treats https://github.com/example/library as the digest repo URL",
+        "Treats .bot/digests as the output root because it is not a URL",
+        "Relies on the runner's default {output-root}/{repo-id}/{yyyyMMdd-HHmmssZ} workspace shape",
+        "Treats https://github.com/example/consumer-one and https://github.com/example/consumer-two as external usage repositories",
+        "Passes external usage repositories to the runner with repeated --external-repo-url flags",
+        "Does not pass external usage repositories as implicit positional runner arguments",
+        "Does not ask for repo-id or result directory"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Use git-repo-digest with /git-repo-digest https://github.com/example/library https://github.com/example/consumer-one. The active workspace has a .bot folder.",
+      "expected_output": "Recognizes that the second positional value is a URL, treats it as an external usage repository rather than output-root, recommends .bot/digests or asks for an output root, and then runs the explicit runner flags after output-root is known. The runner creates {output-root}/{repo-id}/{yyyyMMdd-HHmmssZ}.",
+      "expectations": [
+        "Treats the first URL as the digest repo URL",
+        "Does not treat the second URL as output-root",
+        "Treats the second URL as an external usage repository",
+        "Asks for output-root or recommends .bot/digests because the active workspace has a .bot folder",
+        "Uses a run-id formatted yyyyMMdd-HHmmssZ when the .bot/digests default is accepted",
+        "Uses repeated --external-repo-url flags when running the runner"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Use git-repo-digest to generate a workspace for https://github.com/example/library with --external-repo-url https://github.com/example/library.git.",
+      "expected_output": "Rejects the external usage repository because it normalizes to the same repository as the repo under digest, and stops before writing digest prose.",
+      "expectations": [
+        "Normalizes repository URLs before comparing the digest repo and external usage repos",
+        "Rejects an external usage repository that points to the same owner/repo as --repo-url",
+        "Stops before package digest writing begins",
+        "Reports the same-repository external usage input clearly"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Use git-repo-digest to generate a workspace with one curated external usage repository, but that external repository cannot be cloned.",
+      "expected_output": "Fails fast with a clear clone or inspection error instead of continuing without the requested external usage evidence.",
+      "expectations": [
+        "Treats provided external usage repositories as required inputs",
+        "Fails the runner when a provided external usage repository cannot be cloned or inspected",
+        "Does not continue to package digest prose generation after the external usage clone failure",
+        "Reports which external repository caused the failure"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Use git-repo-digest to generate package evidence where a provided external consumer repo has a project that references Codebelt.Example and C# files using Codebelt.Example namespaces and public APIs.",
+      "expected_output": "Generates evidence/{PackageName}/external-usage.xml and matching index/chunk artifacts, includes only reference-plus-code matches, and instructs Basic usage generation to prefer source-valid external usage when it is clearer than owned tests.",
+      "expectations": [
+        "Generates external-usage.xml for each package evidence folder",
+        "Generates external-usage.index.md and ordered external-usage chunks when the external usage evidence is oversized",
+        "Includes external C# usage only when the containing project references the package and the source or test code contains a strong current-package marker such as the package namespace or package id",
+        "Counts package references declared in the project file or nearest ancestor Directory.Build.props / Directory.Build.targets instead of requiring every PackageReference to appear directly in the csproj",
+        "Does not try to evaluate MSBuild conditions on external package references because external usage packing is read-only evidence selection rather than runtime dependency resolution",
+        "Can count usage through a discovered package that transitively references the current package, but only when the selected C# code also matches the current package's own namespace or package id",
+        "Considers both external source projects and external test projects eligible when their code has a strong current-package match",
+        "Records external usage evidence paths in the manifest package evidence entry",
+        "Treats external usage as Basic usage inspiration rather than API authority",
+        "Validates every API used in Basic usage against current source evidence"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Use git-repo-digest to write package digests and result/Index.md for an existing workspace that contains exactly one package digest result, result/WidgetPack.md. The completed package page already has Overview, Key APIs, Basic usage, Installation, and Usage guidance sections.",
+      "expected_output": "Writes result/Index.md as a conceptual overview with ## Overview, ## Concepts, and ## Usage guidance. The Concepts section starts with a short introductory paragraph before the first concept heading. Because there is only one package, it does not create package-selection framing, a package-selection table, or a WidgetPack subsection. It links to [WidgetPack](WidgetPack.md) inline only where that link helps the concept prose, and it uses the package Overview and Key APIs to explain concepts without repeating the package page's API list, Basic usage example, installation command, or package overview paragraph.",
+      "expectations": [
+        "Writes result/Index.md with ## Overview, ## Concepts, and ## Usage guidance",
+        "Starts ## Concepts with an introductory paragraph before the first third-level concept heading",
+        "Treats ## Concepts followed immediately by a third-level heading as invalid because the introductory paragraph is required",
+        "Does not write a ## Package selection section",
+        "Does not create a package-selection table",
+        "Does not create a package-named subsection such as ### WidgetPack",
+        "Uses concept headings that describe ideas, patterns, boundaries, responsibilities, or trade-offs",
+        "Uses inline relative package links such as [WidgetPack](WidgetPack.md) only where useful",
+        "Uses the completed package page's Overview and Key APIs sections to explain the concept at a high level",
+        "Does not repeat the package page's Key APIs list",
+        "Does not repeat the package page's Basic usage example or Installation command",
+        "Does not copy the package page Overview paragraph into Index.md"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Use git-repo-digest to write result/Index.md for an existing multi-package workspace where completed package pages cover a base package, two framework integration packages, and one aggregate package. The package pages already contain package-specific API lists, examples, and installation commands.",
+      "expected_output": "Writes result/Index.md as a concept-led page. It uses ## Concepts with an introductory paragraph followed by concept subsections whose headings describe shared ideas, layered boundaries, framework integration patterns, or trade-offs rather than package names. Concept prose uses completed package Overview and Key APIs details to connect related packages where the evidence supports a relationship, but it does not use a concept-to-package table, one subsection per package, repeated package summaries, API inventories, Basic usage examples, or installation commands.",
+      "expectations": [
+        "Writes result/Index.md with a ## Concepts section",
+        "Starts ## Concepts with an introductory paragraph before the first third-level concept heading",
+        "Treats ## Concepts followed immediately by a third-level heading as invalid because the introductory paragraph is required",
+        "Uses concept headings instead of package-name headings",
+        "Allows concepts to link inline to multiple package pages when a concept spans packages",
+        "Connects related packages in concept prose where package responsibilities, dependencies, or APIs show a relationship",
+        "Uses completed package Overview and Key APIs sections to describe the full concept picture without copying API inventories",
+        "Uses relative Markdown package links inside prose rather than a package table",
+        "Does not create one third-level heading per package",
+        "Does not create a concept-to-package table",
+        "Does not repeat package-page API lists",
+        "Does not repeat package-page Basic usage examples or installation commands",
+        "Does not flatten package-page summaries into a redundant overview"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Use git-repo-digest to write a package digest for a normal library package whose source evidence declares a public package-owned base class with protected lifecycle hooks and whose tests show consumers deriving from that base class to exercise the package's main workflow. The evidence also contains a convenience package that references this library.",
+      "expected_output": "The normal library package digest treats the package-owned base class as a central API, includes it in Key APIs when it is consumer-facing, and writes a grounded real-life Basic usage example that derives from that base class when that best demonstrates the package's full capability. The Usage guidance paragraph starts with why the package is a good choice for the supported scenario before mentioning boundaries. The convenience package examples remain direct use cases and do not try to demonstrate every deep capability of each referenced package.",
+      "expectations": [
+        "Treats public package-owned base classes, protected hooks, virtual members, or template-method APIs as consumer-facing APIs when source or tests show that consumers inherit from them",
+        "Prefers a base class declared in the current package's primary namespace or main consumer-facing namespace when multiple abstractions are available",
+        "Includes the base class in Key APIs when inheritance is the primary consumer extension model",
+        "Formats Key APIs entries as prose paragraphs that begin with the API name in code formatting",
+        "Avoids definition-list Key APIs entries such as `Type` - description or hard separators such as colons and dashes when natural prose is possible",
+        "Uses a derived-class Basic usage example for a normal code package when source, tests, or external usage show that derivation is the clearest full-strength usage pattern",
+        "Allows a slightly richer example when it is grounded, readable, and demonstrates the package's real strength better than a thin minimal snippet",
+        "Keeps every type, namespace, constructor, method, override, protected hook, and assertion grounded in source, test, or source-valid external usage evidence",
+        "Starts Usage guidance with the positive adoption case for the package before naming boundaries or alternatives",
+        "Does not make Usage guidance primarily negative or focused on reasons not to use the package",
+        "Keeps convenience-package examples straight to the point with one clear use case per referenced package",
+        "Does not force convenience-package examples to demonstrate every deep capability of each referenced package"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "Use git-repo-digest to write result/Index.md for an existing workspace where completed package digests describe a shared base package, a hosting integration package, an ASP.NET Core integration package, and an aggregate convenience package. Each package page has Overview and Key APIs sections that reveal shared base classes, factory shortcuts, hosting lifecycle hooks, and framework-specific adapters.",
+      "expected_output": "Writes a concept-led overview whose ## Concepts section starts with a short framing paragraph, then uses concept subsections to synthesize the full picture from package Overview and Key APIs details. It connects the base package, hosting integration, ASP.NET Core integration, and aggregate package in prose where their responsibilities and APIs layer together. It does not create one subsection per package, does not copy API inventories, and does not reduce concepts to generic filler.",
+      "expectations": [
+        "Starts ## Concepts with a short introductory paragraph before the first concept heading",
+        "Treats ## Concepts followed immediately by a third-level heading as invalid because the introductory paragraph is required",
+        "Derives concepts from completed package Overview and Key APIs sections rather than project/readme evidence alone",
+        "Uses Key APIs details to identify the APIs that define each concept while summarizing them in prose",
+        "Connects base, hosting, ASP.NET Core, and aggregate package roles when package responsibilities or APIs layer together",
+        "Mentions package links inline only where they help the reader move from a concept to package detail",
+        "Does not create one concept subsection per package",
+        "Does not create package-named concept headings",
+        "Does not create a concept-to-package table",
+        "Does not copy package-page API lists, Basic usage examples, installation commands, or overview paragraphs",
+        "Avoids generic filler that could apply to any .NET repository"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Use git-repo-digest to write result/Index.md for an existing multi-package workspace where completed package digests cover a foundation package, a general utilities package, a security cryptography package, a data integrity package, authentication middleware, diagnostics, caching, and data access. The cryptography and authentication package pages have Key APIs and Basic usage examples that show hashing, keyed hashing, authorization header builders, authenticators, and validation guards.",
+      "expected_output": "Writes a granular concept-led overview. It starts ## Concepts with an introductory paragraph, derives concept candidates from every completed package digest instead of only the most architectural packages, preserves security and cryptography as a distinct concept when the package pages show package-owned APIs for that work, connects authentication, data integrity, and hashing only where the package pages support the relationship, and does not collapse substantial domains into a short generic list.",
+      "expectations": [
+        "Starts ## Concepts with a short introductory paragraph before the first concept heading",
+        "Derives concept candidates from every completed package digest's Overview, Key APIs, Basic usage, and Usage guidance sections",
+        "Preserves security, cryptography, or authentication as a distinct concept when completed package pages contain package-owned APIs for that domain",
+        "Mentions package-owned APIs such as hashing factories, keyed hashing, authorization header builders, authenticators, or validation guards only when present in completed package pages",
+        "Connects authentication, data integrity, and hashing in concept prose only where package responsibilities or APIs show a relationship",
+        "Does not collapse security work into a generic foundation, factory, or middleware concept when separate concept prose would reveal important package work",
+        "Allows a more granular concept list when the completed package digests support multiple substantial domains",
+        "Does not create one concept subsection per package",
+        "Does not create package-named concept headings",
+        "Does not create a concept-to-package table",
+        "Does not copy package-page API inventories, Basic usage examples, installation commands, or overview paragraphs"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "Use git-repo-digest to write a package digest for a normal foundational library package. The source evidence includes public guard methods, parameter-object validation, decorator wrappers, configuration helpers, and disposable lifecycle hooks. The test evidence shows consumer-style tests using these APIs, but there is no external usage evidence.",
+      "expected_output": "Writes a Basic usage section with one complete C# fenced code block containing explicit using statements, a file-scoped consumer namespace, a public test class, and exactly one [Fact] or [Theory] method with assertions inside that method. The example demonstrates a realistic consumer task that uses the package's foundational APIs meaningfully, rather than top-level statements or a trivial literal round-trip.",
+      "expectations": [
+        "Writes exactly one C# fenced code block for the normal package Basic usage section",
+        "Includes explicit using statements",
+        "Includes a file-scoped consumer namespace",
+        "Includes a public test class",
+        "Contains exactly one [Fact] or [Theory] method",
+        "Places assertions inside the single test method instead of at top level",
+        "Avoids top-level statements",
+        "Demonstrates a realistic consumer task where the package API changes how the code is written",
+        "Uses package-owned APIs from source evidence such as guards, parameter-object validation, decorators, configuration helpers, or lifecycle hooks",
+        "Does not choose a thin smoke test that only proves a literal value round-trips",
+        "Does not invent helper APIs or framework setup not present in the evidence",
+        "Keeps the two-sentence explanation aligned with what the example actually demonstrates"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/library and write result/Index.md plus result/WidgetPack.md. The project metadata declares TargetFrameworks net8.0;net10.0, PackageLicenseExpression MIT, PackageProjectUrl https://example.com/docs/widgetpack, and package id WidgetPack.",
+      "expected_output": "The generated prompts and manifest include frontmatterHints. The authored package and index Markdown files begin with YAML frontmatter before the first heading, preserve generated static metadata, write grounded title, description, and lede values, keep NuGet URLs inside links instead of a redundant top-level nugetUrl, include target framework friendly names and monikers, include license metadata, include package and library counts, include important links with context glyphs for NuGet, repository, releases, issues, and documentation when available, and include familyLinks for every package page with package-context glyphs.",
+      "expectations": [
+        "Reads frontmatterHints from the manifest or generated prompt before writing result files",
+        "Starts result/WidgetPack.md and result/Index.md with YAML frontmatter before the first Markdown heading",
+        "Includes title, description, lede, pageKind, packageCount, libraryCount, targetFrameworks, targetFrameworkMonikers, license, links, and familyLinks in frontmatter",
+        "Includes packageId on package pages",
+        "Does not include a redundant top-level nugetUrl field",
+        "Uses https://www.nuget.org/packages/WidgetPack as the package page NuGet link URL",
+        "Uses a queryable NuGet URL in result/Index.md links instead of a single exact package URL",
+        "Preserves target framework monikers such as net8.0 and net10.0 and friendly target framework names",
+        "Preserves the MIT license metadata when the project evidence supports it",
+        "Includes important links with context glyphs for available NuGet, repository, releases, issues, and documentation links",
+        "Includes familyLinks on both result/Index.md and result/WidgetPack.md",
+        "Each familyLinks entry has label, packageId, relative url, and glyph fields",
+        "Each familyLinks url keeps the generated internal Markdown target shape such as WidgetPack.md instead of WidgetPack",
+        "Uses glyphs from .nuget/<PackageName>/README.md Related Packages sections when those sections include package glyphs",
+        "Falls back to package-context glyphs for familyLinks such as a lab glyph for xUnit or test packages, web glyph for ASP.NET Core packages, hosting glyph for hosting packages, puzzle glyph for convenience packages, and package glyph fallback",
+        "Does not leave placeholder frontmatter text such as Write a source-grounded or Write a short lede"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository where Directory.Build.props contains conditional <IsPackable>false</IsPackable> values for test, benchmark, and tooling projects, while normal src/*.csproj package projects do not set IsPackable explicitly.",
+      "expected_output": "Discovers normal source package projects instead of treating conditional shared IsPackable=false values as applying to every project. Only projects with IsPackable=false in the project file itself are skipped unless the runner later gains real MSBuild condition evaluation.",
+      "expectations": [
+        "Does not resolve IsPackable by taking the last raw IsPackable element from Directory.Build.props, Directory.Packages.props, the project file, and Directory.Build.targets",
+        "Ignores conditional shared IsPackable=false values when deciding whether a normal source project is packable",
+        "Treats a missing IsPackable value in a source project as not explicitly false, so the package remains discoverable",
+        "Skips a project when its own project file explicitly sets IsPackable to false",
+        "Does not require full MSBuild condition evaluation for this regression fix"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "Use git-repo-digest to generate and write digests for https://github.com/codebeltnet/xunit. The active workspace has a .bot folder, and .bot/digests/xunit already contains several previous run-id folders with result files.",
+      "expected_output": "Treats the bare repository URL as a request for fresh evidence. It recommends or asks to use .bot/digests as output-root, then runs the bundled runner with --repo-url and --output-root so a new .bot/digests/xunit/{yyyyMMdd-HHmmssZ} workspace is created. It does not select the latest existing run folder or reuse prior result files unless the user explicitly asks to reuse, continue, inspect, validate, or repair existing output.",
+      "expectations": [
+        "Does not treat the presence of .bot/digests/xunit as permission to reuse an existing run",
+        "Does not pick the latest existing run-id folder when the user supplied only a repository URL",
+        "Asks for output-root or recommends .bot/digests because the active workspace has a .bot folder",
+        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url https://github.com/codebeltnet/xunit and --output-root after output-root is known",
+        "Creates or expects a new run-id folder under {output-root}/xunit/{yyyyMMdd-HHmmssZ}",
+        "Reads the generated manifest from the new run before writing result files",
+        "Reuses an existing run only when the user explicitly provides a workspace path or asks to reuse, continue, inspect, validate, or repair existing output"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "Use git-repo-digest to generate frontmatter for a multi-package repository whose .nuget package READMEs have a Related Packages section with distinct glyphs before package links, for example 🧪 Codebelt.Extensions.Xunit, 🏗️ Codebelt.Extensions.Xunit.Hosting, 🌐 Codebelt.Extensions.Xunit.Hosting.AspNetCore, and 🧩 Codebelt.Extensions.Xunit.App.",
+      "expected_output": "The generated frontmatterHints and authored YAML frontmatter keep familyLinks on Index.md and every package page. Each familyLinks url is an internal Markdown page target ending in .md, and the family glyphs come from the .nuget README Related Packages section when present instead of falling back to generic package glyphs.",
+      "expectations": [
+        "Reads .nuget/<PackageName>/README.md Related Packages sections as package-family metadata",
+        "Uses the glyph immediately associated with a package name in Related Packages when generating that package's familyLinks glyph",
+        "Keeps fallback glyph inference only for packages without a Related Packages glyph",
+        "Emits familyLinks url values like Codebelt.Extensions.Xunit.md, not Codebelt.Extensions.Xunit",
+        "Preserves the .md suffix when authoring final YAML frontmatter",
+        "Includes the same package familyLinks collection on Index.md and each package page"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "Use git-repo-digest to write package digests for an existing workspace where an aggregate convenience package has no source files of its own and references two repository-local code packages. One referenced package declares consumer-facing fixture, builder, factory, context, and service APIs in its source evidence. The aggregate package prompt asks for one Basic usage example per referenced package.",
+      "expected_output": "The aggregate package page writes one example per referenced code package, but each example is grounded in the referenced package's source evidence. The agent reads the referenced package source or complete ordered source chunks before writing the example, validates every namespace, type, constructor, method, extension method, override, generic constraint, and property access against the declaring package's source, and avoids plausible-but-undeclared members on fixtures, builders, factories, contexts, services, or options objects.",
+      "expectations": [
+        "Recognizes that the aggregate package's own empty or metadata-only source evidence is not enough to author referenced-package examples",
+        "Uses the prompt's referenced package evidence paths to read the referenced package source evidence or complete ordered source chunks before writing each referenced-package example",
+        "Writes one Basic usage example per referenced code package with third-level referenced-package headings",
+        "Makes an API declared by the referenced package central to each example without implying the aggregate package owns it",
+        "Validates property accesses on real package-owned variables such as fixtures, builders, factories, contexts, clients, services, and options against the referenced package source",
+        "Validates method calls, constructor calls, overrides, generic constraints, namespaces, and extension methods against the declaring package source",
+        "Does not invent plausible members merely because they are common framework concepts or appear elsewhere in evidence in a different context",
+        "Reports a validation risk instead of publishing an example when referenced-package source evidence is missing, unreadable, or contradictory"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "Use git-repo-digest with these bare positional values: https://github.com/example/library https://github.com/example/consumer. The active workspace has a .bot folder.",
+      "expected_output": "Treats the first URL as the repository under digest and the second URL as a curated external usage repository, even though the user did not include a /git-repo-digest prefix. Because no non-URL output root was supplied, it recommends or asks to use .bot/digests, then runs the bundled runner with --repo-url https://github.com/example/library, --output-root after it is known, and --external-repo-url https://github.com/example/consumer. It does not treat the two URLs as independent digest runs.",
+      "expectations": [
+        "Applies positional URL mapping even without a slash-command prefix",
+        "Treats the first URL as the digest repo-url",
+        "Treats the second value as external-repo-url because it is a URL, not an output-root",
+        "Recommends or asks for .bot/digests as output-root because the active workspace has a .bot folder and no non-URL output path was supplied",
+        "Runs or plans the runner with one --repo-url and one repeated --external-repo-url flag after output-root is known",
+        "Does not interpret the two URLs as two independent digest requests",
+        "Does not ask whether the second URL should be a separate digest target",
+        "Does not second-guess the mapping because the repository names or domains seem unrelated",
+        "Does not discard the second URL or ask the user to restate it as evidence"
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "Use git-repo-digest to validate an existing workspace whose aggregate package result contains a C# Basic usage snippet with a package-owned fixture parameter named fixture and the invalid member access fixture.ServiceProvider. The referenced package source evidence declares the fixture type, but the fixture type itself does not declare ServiceProvider.",
+      "expected_output": "Runs deterministic result validation, catches that fixture.ServiceProvider is not declared on the fixture type in source evidence, treats that as a blocking API-shape error, revises the example from source evidence rather than relying on a hardcoded repair, and reruns validation until it passes. Framework receivers that are not package-owned, such as IServiceCollection, are not treated as package API-shape errors.",
+      "expectations": [
+        "Runs dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>",
+        "Reports the missing ServiceProvider member on the package-owned fixture receiver as a deterministic validation finding",
+        "Does not use hardcoded ServiceProvider or Host.Services rewrite rules inside digest.cs",
+        "Requires the agent to revise the example from source evidence before reporting completion",
+        "Reruns deterministic validation and requires a pass after revision",
+        "Does not flag framework receivers such as IServiceCollection as package-owned API-shape errors when those framework types are outside the generated source evidence"
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "Use git-repo-digest to write a package digest for a normal code package whose source declares a package-owned store, logger, collector, or recorder abstraction. Test and external usage evidence show the type being injected into handlers, services, pipelines, or dispatchers so a test can assert what the system under test emitted.",
+      "expected_output": "The Basic usage example avoids a direct helper round-trip. It does not only instantiate the package-owned store/logger/collector/recorder, add or write an item, and query it back. Instead, it shows a producer, handler, service, pipeline, lifecycle hook, or hosted component using the package API indirectly, then asserts the observable artifact afterward. The validator treats direct write-then-read examples on package-owned role types as quality diagnostics without hardcoding a specific class name.",
+      "expectations": [
+        "Chooses an indirect producer/consumer or system-under-test scenario when evidence supports it",
+        "Does not use a direct write-then-read snippet as the Basic usage example for package-owned store/logger/collector/recorder APIs",
+        "Keeps every type, member, namespace, constructor, and assertion grounded in current source, tests, or source-valid external usage evidence",
+        "Uses generic role-based guidance rather than a hardcoded rule for any specific type name",
+        "Runs or plans `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after authoring results",
+        "Requires the NuGet-backed executable Basic usage test to pass before reporting completion",
+        "Reports direct helper round-trips as deterministic Basic usage quality diagnostics"
+      ]
+    },
+    {
+      "id": 32,
+      "prompt": "Use git-repo-digest to write a package digest for a hosting or dependency-injection integration package. The evidence includes factory APIs, host or service-provider setup, logging or lifecycle hooks, and richer tests, but no external usage evidence.",
+      "expected_output": "The Basic usage example avoids greeting/message-service filler. It does not use `GreetingService`, `MessageService`, `Hello World`, `Hello from DI`, or an `OK` body as the central scenario when the tests support a more meaningful engineering example. The generated result validator reports toy/greeting-oriented Basic usage snippets as quality diagnostics.",
+      "expectations": [
+        "Avoids `Greeting`, `MessageService`, `Hello World`, `Hello from DI`, and bare `OK` examples when richer source or test evidence exists",
+        "Demonstrates the package's hosting, DI, factory, logging, lifecycle, or pipeline value rather than plain framework service resolution",
+        "Keeps the example complete with explicit using statements, a file-scoped consumer namespace, one test class, one fact or theory, and assertions inside the test method",
+        "Does not let generic framework setup dominate the package-specific API",
+        "Reports toy/greeting-oriented Basic usage snippets as deterministic quality diagnostics",
+        "Does not hardcode package-specific sample names in the repair guidance"
+      ]
+    },
+    {
+      "id": 33,
+      "prompt": "Use git-repo-digest to write a package digest for a small normal code package whose evidence exposes only one simple public helper method and tests only prove a small deterministic transformation. There is no DI, pipeline, lifecycle, logging, collector, store, factory, host, or external usage evidence.",
+      "expected_output": "The Basic usage example remains simple and source-grounded. The skill does not force a fake producer/consumer, fake service, fake pipeline, fake domain model, or over-engineered setup when the evidence only supports a small helper API. The quality rubric preserves valid simple examples and only rejects low-signal examples when better evidence-backed scenarios are available or the snippet uses toy filler.",
+      "expectations": [
+        "Uses the small helper API directly when that is the package's real consumer value",
+        "Does not invent DI, pipeline, lifecycle, logging, collector, store, factory, host, or domain setup that is not present in evidence",
+        "Keeps the example compact, complete, and assertion-backed",
+        "Does not flag valid simple examples solely because they are short",
+        "Still avoids greeting/sample/filler naming unless those terms are evidence-derived and central",
+        "Preserves source evidence as the deciding factor for example complexity"
+      ]
+    },
+    {
+      "id": 34,
+      "prompt": "Use git-repo-digest to write an aggregate convenience package digest for a metadata-only package that references three code packages. The referenced package digests already contain Basic usage examples for a base helper package, a hosting package, and a web pipeline package.",
+      "expected_output": "The aggregate Basic usage section contains one example per referenced code package, but the examples complement rather than copy the individual package pages. They avoid repeating the same greeting/message/OK scenario across packages, keep each referenced package's API ownership clear, and demonstrate distinct engineering roles for the base, hosting, and web packages.",
+      "expectations": [
+        "Writes one Basic usage example per referenced code package with referenced-package subheadings",
+        "Does not reuse individual package Basic usage examples verbatim",
+        "Does not repeat one greeting/message/OK scenario across multiple referenced packages",
+        "Makes each example shorter and use-case-oriented while preserving the referenced package's distinct role",
+        "Makes referenced-package API ownership clear and does not imply the aggregate package owns those APIs",
+        "Validates referenced-package API shape against the referenced package source evidence before finalizing examples"
+      ]
+    },
+    {
+      "id": 35,
+      "prompt": "Use git-repo-digest to validate an existing workspace whose package page has YAML frontmatter packageId WidgetPack and a Basic usage C# block. The package is published on NuGet, and the local machine has the .NET SDK available.",
+      "expected_output": "Runs deterministic post-validation with `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. For each Basic usage C# block, the validator creates a temporary Codebelt.Extensions.Xunit test project outside the repository, installs Microsoft.NET.Test.Sdk, xunit.v3, xunit.runner.visualstudio, Codebelt.Extensions.Xunit, and the page packageId from NuGet, writes the snippet as a test file, runs `dotnet test`, and treats any restore, compile, or test failure as blocking. The agent rewrites failing examples from evidence and reruns validation until it passes.",
+      "expectations": [
+        "Uses the page frontmatter packageId, or the result filename when packageId is absent, as the NuGet package to install for executable validation",
+        "Creates the executable validation project in a temp directory rather than inside the repository or digest workspace",
+        "Installs Codebelt.Extensions.Xunit, the page NuGet package, and xUnit test packages in the temp validation project",
+        "Runs dotnet test for every Basic usage C# block",
+        "Treats NuGet restore failures, compile failures, and failing tests as blocking validation diagnostics",
+        "Requires the agent to rewrite the Basic usage example and rerun validation until it passes",
+        "Does not rely on repository source project references for consumer copy/paste validation"
+      ]
+    },
+    {
+      "id": 36,
+      "prompt": "Use git-repo-digest to write a package digest for a normal Codebelt library package. The source and test evidence support a focused Basic usage example, and the package page will be validated with `--validate-results`.",
+      "expected_output": "The Basic usage C# example is written as a Codebelt.Extensions.Xunit test: it imports Codebelt.Extensions.Xunit and Xunit, does not import Xunit.Abstractions, uses a file-scoped consumer namespace, declares the public test class containing the Fact or Theory method as inheriting from Test or a source-backed Codebelt test base class that the evidence shows derives from Test, defines a constructor that accepts ITestOutputHelper output and passes that output helper to the base constructor, has exactly one Fact or Theory method with assertions, uses TestOutput.Write/WriteLine/WriteLines for human-friendly context, and passes deterministic validation in a temp project that installs Codebelt.Extensions.Xunit plus the page package.",
+      "expectations": [
+        "Includes `using Codebelt.Extensions.Xunit;` and `using Xunit;` in the Basic usage C# block",
+        "Uses file-scoped namespace syntax such as `namespace MyProject.Tests;`",
+        "Does not use block-scoped namespace syntax such as `namespace MyProject.Tests { ... }`",
+        "Does not include `using Xunit.Abstractions;`",
+        "Declares the public test class containing the `[Fact]` or `[Theory]` method as inheriting from `Test` or a source-backed Codebelt test base class that evidence shows derives from `Test`",
+        "Defines a constructor that accepts `ITestOutputHelper output` and passes that output helper to the base constructor",
+        "Contains exactly one `[Fact]` or `[Theory]` method with assertions",
+        "Uses `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` to describe the scenario or observable result",
+        "Installs Codebelt.Extensions.Xunit in the temporary executable validation project",
+        "Treats missing Codebelt-style xUnit shape or missing TestOutput usage as deterministic validation diagnostics"
+      ]
+    },
+    {
+      "id": 37,
+      "prompt": "Use git-repo-digest to validate an existing workspace where result/WidgetPack.Web.md has a malformed Basic usage section: a C# fenced code block starts, a second `## Basic usage` heading appears before the first fence closes, and the repaired-looking snippet appears after that heading.",
+      "expected_output": "The validator treats headings inside an open fenced code block as code, not as Markdown section boundaries. It validates the final result-file state, sends the malformed combined C# block to executable validation, and fails the workspace instead of silently validating only the repaired-looking later snippet. The agent must repair the result file and rerun `--validate-results` after the final edit.",
+      "expectations": [
+        "Does not split Basic usage sections at a `## Basic usage` line that appears inside an open fenced code block",
+        "Does not ignore the malformed first C# code fence",
+        "Reports a blocking validation diagnostic for the malformed Basic usage section or its failing executable Codebelt.Extensions.Xunit test",
+        "Requires the result file to contain exactly one top-level `## Basic usage` section",
+        "Requires every Basic usage section to contain a complete fenced C# code block",
+        "Treats any result-file edit after a validation pass as invalidating that prior pass",
+        "Reruns `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after the final result-file repair"
+      ]
+    },
+    {
+      "id": 38,
+      "prompt": "Use git-repo-digest to validate a package digest whose Basic usage example uses a package-owned Codebelt hosting base class: `public class InventoryServiceTest : HostTest<ManagedHostFixture>`, a constructor with `(ManagedHostFixture hostFixture, ITestOutputHelper output) : base(hostFixture, output)`, one `[Fact]` method, assertions, and `TestOutput.WriteLine`.",
+      "expected_output": "The deterministic Codebelt xUnit shape validation accepts source-backed Codebelt test base classes derived from Test, including generic bases such as HostTest<ManagedHostFixture> or WebHostTest<TFixture>. It does not require the class declaration to be exactly `: Test` when the base class is a Codebelt test abstraction and the constructor passes the output helper to the base constructor.",
+      "expectations": [
+        "Accepts `public class InventoryServiceTest : HostTest<ManagedHostFixture>` as a valid Codebelt test shape when HostTest is source-backed as derived from Test",
+        "Accepts constructors that pass `ITestOutputHelper output` to a multi-argument base constructor such as `base(hostFixture, output)`",
+        "Still requires `using Codebelt.Extensions.Xunit;` and `using Xunit;`",
+        "Still rejects `using Xunit.Abstractions;`",
+        "Still requires useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output",
+        "Still requires the snippet to compile and pass executable validation"
+      ]
+    },
+    {
+      "id": 39,
+      "prompt": "Use git-repo-digest to validate an existing workspace where preflight searches find `OK` in one Basic usage example and the deterministic validator reports several Basic usage failures, including one executable xUnit failure. The result files otherwise appear complete.",
+      "expected_output": "Handles validation repair as a bounded diagnostic loop. It treats preflight search hits as triage rather than automatic failures, records each validator diagnostic with the affected file, snippet, source evidence needed, and planned edit, inspects the failing snippet and exact failure line before theorizing about framework internals, makes source-backed edits instead of continuing open-ended speculation, and reruns `--validate-results` after the final result-file edit.",
+      "expectations": [
+        "Treats targeted `rg` hits as triage and does not rewrite passing examples solely because a token such as `OK` appears",
+        "Distinguishes framework or enum usages such as `HttpStatusCode.OK` from toy literal response bodies",
+        "Creates a concise repair ledger for validator diagnostics before editing result files",
+        "Inspects the affected Basic usage snippet and exact executable failure line before speculating about framework internals",
+        "Limits hypothesis loops and replaces failing examples from source-backed evidence when the cause is not quickly confirmed",
+        "Makes focused edits tied to validator diagnostics rather than broad rewrites from unrelated search hits",
+        "Reruns `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after the final result-file edit"
       ]
     }
   ]
