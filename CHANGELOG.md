@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-05-18
+
+This is a minor release strengthening `git-repo-digest` with HTTP-validated documentation URL resolution and repository-owned product title discovery from project metadata. The runner now resolves documentation hosts from package URLs and project configuration, validates candidate documentation URLs with HTTP HEAD requests, falls back across multiple sources (root `PackageProjectUrl`, `.docfx/docfx.json`, README `## Documentation` links), and fails fast when no candidate returns `200 OK`. Repository titles for `result/Index.md` are now sourced from a root `Directory.Build.props` `<Product>` value, with fallback to the highest-referenced top-level packable `.csproj` `<Product>` when the root value is absent.
+
+### Added
+
+- HTTP-validated documentation URL resolution in `digest.cs` that accepts `PackageProjectUrl` as the primary candidate, probes package-specific API URLs derived from `.docfx/docfx.json`, falls back to `## Documentation` links in `README.md` and `.nuget/**/README.md`, and requires at least one `200 OK` response before generating digest prose,
+- Repository product title discovery in `digest.cs` that reads `<Product>` from root `Directory.Build.props` first, then from the most-referenced top-level packable `.csproj` when the root value is absent, failing fast when no literal product metadata is available,
+- `ResolveRepositoryProductTitle`, `ReadRootProduct`, `DiscoverProjectProductCandidates`, `ResolveDocumentationUrlAsync`, and `ResolveRepositoryPackageProjectUrl` methods in `digest.cs` to support robust title and documentation resolution,
+- HTTP client with 10-second timeout for documentation URL validation in `digest.cs`,
+- Evals 40, 41, and 42 covering repository product title resolution, HTTP-validated documentation URL fallback chains, and convenience package documentation linking behavior.
+
+### Changed
+
+- Enhanced `git-repo-digest` SKILL.md guidance to preserve generated `title` from repository-owned `<Product>` metadata instead of replacing it with invented prose, and to treat generated documentation links as already validated by the runner,
+- Updated manifest documentation for `frontmatterHints` to clarify that documentation entries are validated HTTP URLs and that the overview `title` is repository-owned product metadata, not a URL-derived repository id,
+- Updated eval 24 to use a direct documentation URL candidate instead of a generic documentation host, ensuring tests exercise the URL validation path.
+
 ## [0.4.3] - 2026-05-15
 
 This is a patch release focused on strengthening `git-repo-digest` with external usage evidence collection, a deterministic `--validate-results` validation gate, Codebelt.Extensions.Xunit test shape enforcement, bounded validation repair discipline, enhanced output-root path labeling, and comprehensive eval coverage for all new capabilities. A Status Update Hygiene section is also added to `AGENTS.md` to keep agents focused on user-relevant outcomes rather than sandbox mechanics.
@@ -254,7 +272,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/codebeltnet/agentic/compare/v0.4.3...v0.4.5
 [0.4.3]: https://github.com/codebeltnet/agentic/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/codebeltnet/agentic/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/codebeltnet/agentic/compare/v0.4.0...v0.4.1
