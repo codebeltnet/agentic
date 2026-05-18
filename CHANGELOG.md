@@ -8,21 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.4.5] - 2026-05-18
 
-This is a minor release strengthening `git-repo-digest` with HTTP-validated documentation URL resolution and repository-owned product title discovery from project metadata. The runner now resolves documentation hosts from package URLs and project configuration, validates candidate documentation URLs with HTTP HEAD requests, falls back across multiple sources (root `PackageProjectUrl`, `.docfx/docfx.json`, README `## Documentation` links), and fails fast when no candidate returns `200 OK`. Repository titles for `result/Index.md` are now sourced from a root `Directory.Build.props` `<Product>` value, with fallback to the highest-referenced top-level packable `.csproj` `<Product>` when the root value is absent.
+This is a minor release strengthening `git-repo-digest` with HTTP-validated documentation URL resolution and repository-owned product title discovery, plus clarifying `git-visual-squash-summary` base branch resolution behavior to prevent stale same-named tracking branches from hiding work. The `git-repo-digest` runner now resolves documentation hosts from package URLs and project configuration, validates candidate documentation URLs with HTTP HEAD requests, falls back across multiple sources (root `PackageProjectUrl`, `.docfx/docfx.json`, README `## Documentation` links), and fails fast when no candidate returns `200 OK`. Repository titles for `result/Index.md` are sourced from a root `Directory.Build.props` `<Product>` value, with fallback to the highest-referenced top-level packable `.csproj` `<Product>` when the root value is absent. The `git-visual-squash-summary` skill now explicitly avoids using a same-named tracking remote such as `origin/<current-branch>` as a squash base; instead it resolves against the repository's actual base branch such as `origin/main`, `origin/master`, `main`, or `master` before declaring there is nothing to summarize.
 
 ### Added
 
-- HTTP-validated documentation URL resolution in `digest.cs` that accepts `PackageProjectUrl` as the primary candidate, probes package-specific API URLs derived from `.docfx/docfx.json`, falls back to `## Documentation` links in `README.md` and `.nuget/**/README.md`, and requires at least one `200 OK` response before generating digest prose,
-- Repository product title discovery in `digest.cs` that reads `<Product>` from root `Directory.Build.props` first, then from the most-referenced top-level packable `.csproj` when the root value is absent, failing fast when no literal product metadata is available,
-- `ResolveRepositoryProductTitle`, `ReadRootProduct`, `DiscoverProjectProductCandidates`, `ResolveDocumentationUrlAsync`, and `ResolveRepositoryPackageProjectUrl` methods in `digest.cs` to support robust title and documentation resolution,
-- HTTP client with 10-second timeout for documentation URL validation in `digest.cs`,
-- Evals 40, 41, and 42 covering repository product title resolution, HTTP-validated documentation URL fallback chains, and convenience package documentation linking behavior.
+- HTTP-validated documentation URL resolution in `git-repo-digest` `digest.cs` that accepts `PackageProjectUrl` as the primary candidate, probes package-specific API URLs derived from `.docfx/docfx.json`, falls back to `## Documentation` links in `README.md` and `.nuget/**/README.md`, and requires at least one `200 OK` response before generating digest prose,
+- Repository product title discovery in `git-repo-digest` `digest.cs` that reads `<Product>` from root `Directory.Build.props` first, then from the most-referenced top-level packable `.csproj` when the root value is absent, failing fast when no literal product metadata is available,
+- `ResolveRepositoryProductTitle`, `ReadRootProduct`, `DiscoverProjectProductCandidates`, `ResolveDocumentationUrlAsync`, and `ResolveRepositoryPackageProjectUrl` methods in `git-repo-digest` `digest.cs` to support robust title and documentation resolution,
+- HTTP client with 10-second timeout for documentation URL validation in `git-repo-digest` `digest.cs`,
+- Evals 40, 41, and 42 covering repository product title resolution, HTTP-validated documentation URL fallback chains, and convenience package documentation linking behavior,
+- Eval 13 for `git-visual-squash-summary` covering the case where a feature branch is in sync with a same-named tracking remote but has real changes versus the repository base branch, ensuring the skill compares against the base branch and not the tracking copy.
 
 ### Changed
 
 - Enhanced `git-repo-digest` SKILL.md guidance to preserve generated `title` from repository-owned `<Product>` metadata instead of replacing it with invented prose, and to treat generated documentation links as already validated by the runner,
-- Updated manifest documentation for `frontmatterHints` to clarify that documentation entries are validated HTTP URLs and that the overview `title` is repository-owned product metadata, not a URL-derived repository id,
-- Updated eval 24 to use a direct documentation URL candidate instead of a generic documentation host, ensuring tests exercise the URL validation path.
+- Updated `git-repo-digest` manifest documentation for `frontmatterHints` to clarify that documentation entries are validated HTTP URLs and that the overview `title` is repository-owned product metadata, not a URL-derived repository id,
+- Updated `git-repo-digest` eval 24 to use a direct documentation URL candidate instead of a generic documentation host, ensuring tests exercise the URL validation path,
+- Refined `git-visual-squash-summary` SKILL.md to clarify base branch resolution order: prefer the remote default branch such as `origin/HEAD`, then `origin/main`, `origin/master`, local `main`, and local `master` automatically; treat a same-named tracking branch as a sync target only and never as a squash base unless explicitly requested,
+- Updated `git-visual-squash-summary` README description to highlight base-branch-not-tracking-copy behavior and to remove outdated non-mutating language in favor of read-only clarity.
 
 ## [0.4.3] - 2026-05-15
 
