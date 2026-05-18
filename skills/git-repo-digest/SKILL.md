@@ -14,6 +14,8 @@ Use this skill to turn a deterministic digest workspace into website-ready or do
 
 - Treat generated output as the source of truth. If `manifest.json`, `instructions.md`, `prompts/*.prompt.md`, or `evidence/**/*.xml` files disagree with this skill, follow the generated files unless they are internally inconsistent.
 - Every authored `result/*.md` file must start with the YAML frontmatter contract from its generated prompt. Preserve generated static metadata such as package counts, library counts, target framework monikers, external links, family links, internal `.md` family URLs, and link glyphs unless raw evidence proves the hint wrong.
+- For `result/Index.md`, preserve the generated `title` hint exactly unless raw evidence proves the product metadata is wrong. The runner resolves that title from a literal root `Directory.Build.props` `<Product>` value, then from a literal `<Product>` on the most-referenced top-level packable `.csproj`; it fails generation when no product can be resolved instead of falling back to `repo-id`.
+- Preserve generated documentation links as validated static metadata. The runner resolves documentation hosts from `PackageProjectUrl` first, falls back to `README.md` / `.nuget/**/README.md` `## Documentation` links when package-specific URLs are not `200 OK`, derives normal package API paths from `.docfx/**/docfx.json`, links packages with no DocFX API entry to the same docs root as `result/Index.md`, and fails before prose is written when no documentation URL returns `200 OK`.
 - Keep the workflow generic. The runner input is a full repository URL, not an implied owner/slug convention.
 - Require both runner inputs `--repo-url` and `--output-root`. Do not invent defaults silently.
 - Accept curated external usage repositories from the user's natural invocation when present, then pass each one to the runner with a repeated `--external-repo-url` flag.
@@ -153,7 +155,7 @@ Generated shape:
 ```
 
 The manifest is authoritative after generation. Always follow the manifest for concrete package names, prompt paths, evidence paths, evidence index paths, evidence chunk paths, result paths, and phase order.
-Manifest targets also include `frontmatterHints`, which are generated metadata values for the YAML frontmatter required in each result file.
+Manifest targets also include `frontmatterHints`, which are generated metadata values for the YAML frontmatter required in each result file. For the overview target, `frontmatterHints.title` is repository-owned product metadata, not a URL-derived repository id. Documentation entries in `frontmatterHints.links` are validated URLs only; the runner does not emit repository `#readme` documentation fallbacks.
 
 ## Workflow
 
@@ -284,8 +286,9 @@ The overview should help readers understand the repository's concepts before the
 
 Write `result/Index.md` as a conceptual overview:
 
-- Start with the generated YAML frontmatter schema, replacing editorial placeholders for `title`, `description`, and `lede` with grounded repository-level prose.
+- Start with the generated YAML frontmatter schema, preserving the generated `title` because it comes from repository-owned `<Product>` metadata, and replacing editorial placeholders for `description` and `lede` with grounded repository-level prose.
 - Keep NuGet URLs inside `links`, with the index NuGet link queryable and package-page NuGet links package-exact. Keep generated repository, releases, issues, documentation, NuGet, and `familyLinks` entries when they are present in `frontmatterHints`.
+- Treat generated documentation links as already validated by the runner. Do not replace them with repository README anchors or invented docs paths.
 - Use the generated overview prompt's exact required headings, currently `## Overview`, `## Concepts`, and `## Usage guidance`.
 - Start `## Concepts` with a short introductory paragraph before the first concept heading.
 - Use concept subsection headings for ideas, patterns, boundaries, responsibilities, or trade-offs, not package names.

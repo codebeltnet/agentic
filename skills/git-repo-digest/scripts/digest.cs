@@ -5,6 +5,7 @@
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -29,6 +30,10 @@ internal static class DigestScript
     private const int MaxApiSummaryMembersPerType = 32;
 
     private static readonly TimeSpan DefaultProcessTimeout = TimeSpan.FromMinutes(5);
+    private static readonly HttpClient HttpClient = new()
+    {
+        Timeout = TimeSpan.FromSeconds(10)
+    };
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private static readonly string[] EngineeringRoleSuffixes =
     [
@@ -269,7 +274,7 @@ internal static class DigestScript
                 }
 
                 var overviewPromptPath = ToRepositoryPath(PromptDirectoryName, "overview.prompt.md");
-                var overviewFrontmatterHints = BuildOverviewFrontmatterHints(repositoryDirectory, repoId, options.RepoUrl, packages);
+                var overviewFrontmatterHints = await BuildOverviewFrontmatterHintsAsync(repositoryDirectory, repoId, options.RepoUrl, packages);
                 await WriteUtf8Async(Path.Combine(workspace, overviewPromptPath), BuildOverviewPrompt(packages, overviewFrontmatterHints));
                 await WriteUtf8Async(Path.Combine(workspace, "instructions.md"), BuildInstructions(options.RepoUrl, repoId));
                 await WriteManifestAsync(Path.Combine(workspace, "manifest.json"), options, repoId, runId, workspace, packageEntries, overviewPromptPath, overviewFrontmatterHints);
@@ -740,7 +745,7 @@ internal static class DigestScript
             ApiSummary: apiSummaryPath,
             EngineeringSignals: engineeringSignalsPath);
 
-        var frontmatterHints = BuildPackageFrontmatterHints(repositoryDirectory, package, repoUrl, packages);
+        var frontmatterHints = await BuildPackageFrontmatterHintsAsync(repositoryDirectory, package, repoUrl, packages);
         await WriteUtf8Async(Path.Combine(workspace, promptPath), BuildPackageDigestPrompt(package, packages, evidence, frontmatterHints));
         return new PackageWorkspaceArtifacts(promptPath, evidence, frontmatterHints);
     }
@@ -2069,11 +2074,15 @@ internal static class DigestScript
         - Do not include analysis notes, confidence scores, citations, XML, JSON, or chat commentary unless explicitly requested by the prompt.
         """;
 
-    private static PageFrontmatterHints BuildPackageFrontmatterHints(string repositoryDirectory, PackageInfo package, string repoUrl, IReadOnlyList<PackageInfo> packages)
+    private static async Task<PageFrontmatterHints> BuildPackageFrontmatterHintsAsync(string repositoryDirectory, PackageInfo package, string repoUrl, IReadOnlyList<PackageInfo> packages)
     {
         var packageNugetUrl = BuildNugetPackageUrl(package.Name);
         var repositoryUrl = FirstNonEmptyOrDefault(package.RepositoryUrl, repoUrl);
-        var documentationUrl = BuildDocumentationUrl(repositoryUrl, package.ProjectUrl);
+        var documentationProjectUrl = package.IsConveniencePackage
+            ? ResolveRepositoryPackageProjectUrl(repositoryDirectory, packages)
+            : package.ProjectUrl;
+        var documentationPackageName = package.IsConveniencePackage ? null : package.Name;
+        var documentationUrl = await ResolveDocumentationUrlAsync(repositoryDirectory, documentationProjectUrl, documentationPackageName);
         var links = BuildImportantLinks(packageNugetUrl, repositoryUrl, documentationUrl).ToList();
         var familyLinks = BuildFamilyLinks(repositoryDirectory, packages).ToList();
 
@@ -2092,7 +2101,7 @@ internal static class DigestScript
             FamilyLinks: familyLinks);
     }
 
-    private static PageFrontmatterHints BuildOverviewFrontmatterHints(string repositoryDirectory, string repoId, string repoUrl, IReadOnlyList<PackageInfo> packages)
+    private static async Task<PageFrontmatterHints> BuildOverviewFrontmatterHintsAsync(string repositoryDirectory, string repoId, string repoUrl, IReadOnlyList<PackageInfo> packages)
     {
         var targetFrameworkMonikers = packages
             .SelectMany(package => package.TargetFrameworkMonikers)
@@ -2113,13 +2122,15 @@ internal static class DigestScript
             _ => "Mixed"
         };
         var nugetUrl = BuildNugetQueryUrl(BuildNugetQuery(repoId, packages));
-        var documentationUrl = BuildDocumentationUrl(repoUrl, string.Empty);
+        var projectUrl = ResolveRepositoryPackageProjectUrl(repositoryDirectory, packages);
+        var documentationUrl = await ResolveDocumentationUrlAsync(repositoryDirectory, projectUrl, packageName: null);
         var links = BuildImportantLinks(nugetUrl, repoUrl, documentationUrl).ToList();
         var familyLinks = BuildFamilyLinks(repositoryDirectory, packages).ToList();
+        var title = ResolveRepositoryProductTitle(repositoryDirectory);
 
         return new PageFrontmatterHints(
             PageKind: "index",
-            Title: repoId,
+            Title: title,
             Description: string.Empty,
             Lede: string.Empty,
             PackageId: null,
@@ -2130,6 +2141,122 @@ internal static class DigestScript
             License: license,
             Links: links,
             FamilyLinks: familyLinks);
+    }
+
+    private static string ResolveRepositoryProductTitle(string repositoryDirectory)
+    {
+        var rootProduct = ReadRootProduct(repositoryDirectory);
+        if (!string.IsNullOrWhiteSpace(rootProduct))
+        {
+            return rootProduct;
+        }
+
+        var candidates = DiscoverProjectProductCandidates(repositoryDirectory);
+        if (candidates.Count == 0)
+        {
+            throw new InvalidOperationException("Could not resolve repository Product for result/Index.md. Add a literal <Product> value to the root Directory.Build.props file or to the top-level packable .csproj.");
+        }
+
+        var highestReferenceCount = candidates.Max(candidate => candidate.ReferenceCount);
+        var topCandidates = candidates
+            .Where(candidate => candidate.ReferenceCount == highestReferenceCount)
+            .ToList();
+        var products = topCandidates
+            .Select(candidate => candidate.Product)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (products.Count == 1)
+        {
+            return products[0];
+        }
+
+        var projectList = string.Join(", ", topCandidates.Select(candidate => ToRepositoryPath(Path.GetRelativePath(repositoryDirectory, candidate.ProjectFile))));
+        throw new InvalidOperationException($"Could not resolve repository Product for result/Index.md because multiple top-level packable projects define different <Product> values: {projectList}. Add a literal <Product> value to the root Directory.Build.props file.");
+    }
+
+    private static string ReadRootProduct(string repositoryDirectory)
+    {
+        var rootProps = Path.Combine(repositoryDirectory, "Directory.Build.props");
+        if (!File.Exists(rootProps))
+        {
+            return string.Empty;
+        }
+
+        var document = XDocument.Load(rootProps, LoadOptions.PreserveWhitespace);
+        return NormalizeProductValue(ProjectElementValue(document, "Product"), "Directory.Build.props");
+    }
+
+    private static IReadOnlyList<ProjectProductCandidate> DiscoverProjectProductCandidates(string repositoryDirectory)
+    {
+        var sourceRoot = Path.Combine(repositoryDirectory, SourceDirectoryName);
+        if (!Directory.Exists(sourceRoot))
+        {
+            return [];
+        }
+
+        var projectFiles = Directory.EnumerateFiles(sourceRoot, "*.csproj", SearchOption.AllDirectories)
+            .Select(Path.GetFullPath)
+            .OrderBy(path => Path.GetRelativePath(repositoryDirectory, path), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var referenceCounts = projectFiles.ToDictionary(path => path, _ => 0, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var projectFile in projectFiles)
+        {
+            var projectDirectory = Path.GetDirectoryName(projectFile)
+                ?? throw new InvalidOperationException($"Could not resolve project directory for '{projectFile}'.");
+            var document = XDocument.Load(projectFile, LoadOptions.PreserveWhitespace);
+            foreach (var referencedProject in document.Descendants()
+                         .Where(element => element.Name.LocalName == "ProjectReference")
+                         .Select(element => element.Attribute("Include")?.Value)
+                         .Where(value => !string.IsNullOrWhiteSpace(value))
+                         .Select(value => Path.GetFullPath(Path.Combine(projectDirectory, value!))))
+            {
+                if (referenceCounts.ContainsKey(referencedProject))
+                {
+                    referenceCounts[referencedProject]++;
+                }
+            }
+        }
+
+        var candidates = new List<ProjectProductCandidate>();
+        foreach (var projectFile in projectFiles)
+        {
+            var document = XDocument.Load(projectFile, LoadOptions.PreserveWhitespace);
+            if (TryParseBoolean(ProjectElementValue(document, "IsPackable")) is false)
+            {
+                continue;
+            }
+
+            var product = NormalizeProductValue(ProjectElementValue(document, "Product"), ToRepositoryPath(Path.GetRelativePath(repositoryDirectory, projectFile)));
+            if (string.IsNullOrWhiteSpace(product))
+            {
+                continue;
+            }
+
+            candidates.Add(new ProjectProductCandidate(projectFile, product, referenceCounts[projectFile]));
+        }
+
+        return candidates
+            .OrderByDescending(candidate => candidate.ReferenceCount)
+            .ThenBy(candidate => Path.GetRelativePath(repositoryDirectory, candidate.ProjectFile), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string NormalizeProductValue(string value, string source)
+    {
+        var product = value.Trim();
+        if (product.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (product.Contains("$(", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Could not resolve repository Product for result/Index.md because <Product> in {source} contains an unresolved MSBuild property expression: {product}");
+        }
+
+        return product;
     }
 
     private static string BuildNugetPackageUrl(string packageId) =>
@@ -2309,17 +2436,284 @@ internal static class DigestScript
         return package.IsConveniencePackage ? "\U0001F3ED" : glyph;
     }
 
-    private static string BuildDocumentationUrl(string repoUrl, string projectUrl)
+    private static string ResolveRepositoryPackageProjectUrl(string repositoryDirectory, IReadOnlyList<PackageInfo> packages)
     {
-        if (!string.IsNullOrWhiteSpace(projectUrl))
+        var rootProps = Path.Combine(repositoryDirectory, "Directory.Build.props");
+        if (File.Exists(rootProps))
         {
-            return NormalizeWebUrl(projectUrl);
+            var document = XDocument.Load(rootProps, LoadOptions.PreserveWhitespace);
+            var rootProjectUrl = ProjectElementValue(document, "PackageProjectUrl");
+            if (!string.IsNullOrWhiteSpace(rootProjectUrl))
+            {
+                return rootProjectUrl;
+            }
         }
 
-        var repositoryUrl = NormalizeWebUrl(repoUrl);
-        return !string.IsNullOrWhiteSpace(repositoryUrl) && IsGitHubUrl(repositoryUrl)
-            ? repositoryUrl + "#readme"
-            : string.Empty;
+        var projectUrls = packages
+            .Select(package => package.ProjectUrl)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return projectUrls.Count == 1 ? projectUrls[0] : string.Empty;
+    }
+
+    private static async Task<string> ResolveDocumentationUrlAsync(string repositoryDirectory, string projectUrl, string? packageName)
+    {
+        var errors = new List<string>();
+
+        foreach (var candidate in BuildDocumentationCandidates(repositoryDirectory, projectUrl, packageName, includeReadmeFallbacks: false))
+        {
+            if (await IsHttpOkAsync(candidate))
+            {
+                return candidate;
+            }
+
+            errors.Add(candidate);
+        }
+
+        foreach (var candidate in BuildDocumentationCandidates(repositoryDirectory, projectUrl, packageName, includeReadmeFallbacks: true))
+        {
+            if (errors.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (await IsHttpOkAsync(candidate))
+            {
+                return candidate;
+            }
+
+            errors.Add(candidate);
+        }
+
+        var target = string.IsNullOrWhiteSpace(packageName) ? "result/Index.md" : packageName;
+        var attempted = errors.Count == 0 ? "No documentation URL candidates could be derived." : "Attempted: " + string.Join(", ", errors);
+        throw new InvalidOperationException($"Could not resolve a validated documentation URL for {target}. Documentation links must return HTTP 200 OK. {attempted}");
+    }
+
+    private static IEnumerable<string> BuildDocumentationCandidates(string repositoryDirectory, string projectUrl, string? packageName, bool includeReadmeFallbacks)
+    {
+        var roots = new List<string>();
+        if (!includeReadmeFallbacks)
+        {
+            roots.AddRange(ExtractDocumentationRootCandidates([projectUrl]));
+        }
+        else
+        {
+            roots.AddRange(ExtractDocumentationRootCandidates(ReadDocumentationUrlsFromReadmes(repositoryDirectory, packageName)));
+        }
+
+        foreach (var root in roots.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(packageName))
+            {
+                yield return root;
+                continue;
+            }
+
+            if (!includeReadmeFallbacks && TryNormalizePackageSpecificDocumentationUrl(projectUrl, packageName, out var packageSpecificUrl))
+            {
+                yield return packageSpecificUrl;
+            }
+
+            var docfxApiPathCandidates = BuildDocfxApiPathCandidates(repositoryDirectory, packageName);
+            if (docfxApiPathCandidates.Count == 0)
+            {
+                yield return root;
+                continue;
+            }
+
+            foreach (var relativePath in docfxApiPathCandidates)
+            {
+                yield return CombineUrl(root, relativePath);
+            }
+        }
+    }
+
+    private static IReadOnlyList<string> ExtractDocumentationRootCandidates(IEnumerable<string> urls)
+    {
+        var roots = new List<string>();
+        foreach (var url in urls)
+        {
+            if (!TryCreateDocumentationUri(url, out var uri))
+            {
+                continue;
+            }
+
+            roots.Add(uri.GetLeftPart(UriPartial.Authority).TrimEnd('/'));
+        }
+
+        return roots
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool TryNormalizePackageSpecificDocumentationUrl(string url, string packageName, out string normalized)
+    {
+        normalized = string.Empty;
+        if (!TryCreateDocumentationUri(url, out var uri))
+        {
+            return false;
+        }
+
+        var path = uri.AbsolutePath.Trim('/');
+        if (!path.EndsWith(".html", StringComparison.OrdinalIgnoreCase) && !path.Contains(packageName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        normalized = NormalizeWebUrl(url);
+        return normalized.Length > 0;
+    }
+
+    private static bool TryCreateDocumentationUri(string url, out Uri uri)
+    {
+        uri = null!;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("http" or "https"))
+        {
+            return false;
+        }
+
+        var hostParts = parsed.Host.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (hostParts.Length < 3)
+        {
+            return false;
+        }
+
+        uri = parsed;
+        return true;
+    }
+
+    private static IEnumerable<string> ReadDocumentationUrlsFromReadmes(string repositoryDirectory, string? packageName)
+    {
+        foreach (var readmePath in EnumerateDocumentationReadmes(repositoryDirectory, packageName))
+        {
+            var markdown = File.ReadAllText(readmePath, Utf8NoBom);
+            foreach (var line in ExtractMarkdownSection(markdown, "Documentation"))
+            {
+                foreach (Match match in Regex.Matches(line, @"https?://[^\s\)>'""]+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
+                {
+                    yield return match.Value.TrimEnd('.', ',', ';', ':');
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDocumentationReadmes(string repositoryDirectory, string? packageName)
+    {
+        var rootReadme = Path.Combine(repositoryDirectory, "README.md");
+        if (File.Exists(rootReadme))
+        {
+            yield return rootReadme;
+        }
+
+        var nugetDirectory = Path.Combine(repositoryDirectory, ".nuget");
+        if (!Directory.Exists(nugetDirectory))
+        {
+            yield break;
+        }
+
+        var readmes = Directory.EnumerateFiles(nugetDirectory, "README.md", SearchOption.AllDirectories)
+            .OrderBy(path => Path.GetRelativePath(nugetDirectory, path), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!string.IsNullOrWhiteSpace(packageName))
+        {
+            foreach (var readme in readmes.Where(path => path.Contains(packageName, StringComparison.OrdinalIgnoreCase)))
+            {
+                yield return readme;
+            }
+        }
+
+        foreach (var readme in readmes)
+        {
+            yield return readme;
+        }
+    }
+
+    private static IReadOnlyList<string> BuildDocfxApiPathCandidates(string repositoryDirectory, string packageName)
+    {
+        var docfxDirectory = Path.Combine(repositoryDirectory, ".docfx");
+        if (!Directory.Exists(docfxDirectory))
+        {
+            return [];
+        }
+
+        var paths = new List<string>();
+        var packageSeenInDocfx = false;
+        foreach (var file in Directory.EnumerateFiles(docfxDirectory, "docfx.json", SearchOption.AllDirectories)
+                     .OrderBy(path => Path.GetRelativePath(docfxDirectory, path), StringComparer.OrdinalIgnoreCase))
+        {
+            var text = File.ReadAllText(file, Utf8NoBom);
+            if (!text.Contains(packageName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            packageSeenInDocfx = true;
+            foreach (Match match in Regex.Matches(text, @"(?<path>[A-Za-z0-9_.\-/]*" + Regex.Escape(packageName) + @"[A-Za-z0-9_.\-/]*\.html)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
+            {
+                var path = ToRepositoryPath(match.Groups["path"].Value);
+                if (path.Length > 0 && !path.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                {
+                    paths.Add(path);
+                }
+            }
+        }
+
+        if (packageSeenInDocfx)
+        {
+            paths.Add(ToRepositoryPath("api", packageName + ".html"));
+        }
+
+        return paths
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string CombineUrl(string root, string relativePath) =>
+        root.TrimEnd('/') + "/" + ToRepositoryPath(relativePath);
+
+    private static async Task<bool> IsHttpOkAsync(string url)
+    {
+        try
+        {
+            using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
+            using var headResponse = await HttpClient.SendAsync(headRequest, HttpCompletionOption.ResponseHeadersRead);
+            if (headResponse.StatusCode == HttpStatusCode.OK)
+            {
+                return true;
+            }
+
+            if (headResponse.StatusCode is not HttpStatusCode.MethodNotAllowed and not HttpStatusCode.Forbidden and not HttpStatusCode.NotFound)
+            {
+                return false;
+            }
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+        catch (TaskCanceledException)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var getRequest = new HttpRequestMessage(HttpMethod.Get, url);
+            using var getResponse = await HttpClient.SendAsync(getRequest, HttpCompletionOption.ResponseHeadersRead);
+            return getResponse.StatusCode == HttpStatusCode.OK;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+        catch (TaskCanceledException)
+        {
+            return false;
+        }
     }
 
     private static string NormalizeWebUrl(string url)
@@ -2351,7 +2745,15 @@ internal static class DigestScript
         builder.AppendLine();
         builder.AppendLine("Start the file with YAML frontmatter before the first Markdown heading.");
         builder.AppendLine("Use the generated static values below unless the raw evidence proves they are wrong.");
-        builder.AppendLine("Replace empty or editorial values for `title`, `description`, and `lede` with grounded page-specific prose.");
+        if (string.Equals(hints.PageKind, "index", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.AppendLine("Preserve the generated `title` because it comes from repository-owned `<Product>` metadata.");
+            builder.AppendLine("Replace empty or editorial values for `description` and `lede` with grounded page-specific prose.");
+        }
+        else
+        {
+            builder.AppendLine("Replace empty or editorial values for `title`, `description`, and `lede` with grounded page-specific prose.");
+        }
         builder.AppendLine("Keep link glyphs paired with their context.");
         builder.AppendLine("Keep every `familyLinks.url` value exactly as generated with the `.md` suffix so website importers recognize it as an internal Markdown link.");
         builder.AppendLine();
@@ -3605,6 +4007,8 @@ internal sealed record PackageInfo(
     string Description,
     string ProjectUrl,
     string RepositoryUrl);
+
+internal sealed record ProjectProductCandidate(string ProjectFile, string Product, int ReferenceCount);
 
 internal sealed record TestProjectMatch(string ProjectFile, bool IsOwnTestProjectName, bool ReferencesProject);
 

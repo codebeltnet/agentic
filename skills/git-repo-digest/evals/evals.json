@@ -352,8 +352,8 @@
     },
     {
       "id": 24,
-      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/library and write result/Index.md plus result/WidgetPack.md. The project metadata declares TargetFrameworks net8.0;net10.0, PackageLicenseExpression MIT, PackageProjectUrl https://example.com/docs/widgetpack, and package id WidgetPack.",
-      "expected_output": "The generated prompts and manifest include frontmatterHints. The authored package and index Markdown files begin with YAML frontmatter before the first heading, preserve generated static metadata, write grounded title, description, and lede values, keep NuGet URLs inside links instead of a redundant top-level nugetUrl, include target framework friendly names and monikers, include license metadata, include package and library counts, include important links with context glyphs for NuGet, repository, releases, issues, and documentation when available, and include familyLinks for every package page with package-context glyphs.",
+      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/library and write result/Index.md plus result/WidgetPack.md. The project metadata declares TargetFrameworks net8.0;net10.0, PackageLicenseExpression MIT, PackageProjectUrl https://docs.example.com/widgetpack, and package id WidgetPack.",
+      "expected_output": "The generated prompts and manifest include frontmatterHints. The authored package and index Markdown files begin with YAML frontmatter before the first heading, preserve generated static metadata, write grounded title, description, and lede values, keep NuGet URLs inside links instead of a redundant top-level nugetUrl, include target framework friendly names and monikers, include license metadata, include package and library counts, include important links with context glyphs for NuGet, repository, releases, issues, and validated documentation links when available, and include familyLinks for every package page with package-context glyphs.",
       "expectations": [
         "Reads frontmatterHints from the manifest or generated prompt before writing result files",
         "Starts result/WidgetPack.md and result/Index.md with YAML frontmatter before the first Markdown heading",
@@ -364,7 +364,7 @@
         "Uses a queryable NuGet URL in result/Index.md links instead of a single exact package URL",
         "Preserves target framework monikers such as net8.0 and net10.0 and friendly target framework names",
         "Preserves the MIT license metadata when the project evidence supports it",
-        "Includes important links with context glyphs for available NuGet, repository, releases, issues, and documentation links",
+        "Includes important links with context glyphs for available NuGet, repository, releases, issues, and validated documentation links",
         "Includes familyLinks on both result/Index.md and result/WidgetPack.md",
         "Each familyLinks entry has label, packageId, relative url, and glyph fields",
         "Each familyLinks url keeps the generated internal Markdown target shape such as WidgetPack.md instead of WidgetPack",
@@ -579,6 +579,50 @@
         "Limits hypothesis loops and replaces failing examples from source-backed evidence when the cause is not quickly confirmed",
         "Makes focused edits tied to validator diagnostics rather than broad rewrites from unrelated search hits",
         "Reruns `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after the final result-file edit"
+      ]
+    },
+    {
+      "id": 40,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository whose URL-derived repo id is inconsistent with the desired product name. The root Directory.Build.props contains `<Product>Contoso Messaging Toolkit</Product>`. A different repository has no root Product, but its most-referenced top-level packable .csproj contains `<Product>Contoso Core Toolkit</Product>`. A third repository has neither root nor project Product metadata.",
+      "expected_output": "The generated overview frontmatter for result/Index.md uses repository-owned Product metadata instead of the URL-derived repo id. Root Directory.Build.props Product wins. If the root Product is absent, the runner may use the Product from the most-referenced top-level packable .csproj. If no literal Product can be resolved, generation fails clearly before digest prose is written.",
+      "expectations": [
+        "Uses the root Directory.Build.props `<Product>` value as the generated result/Index.md frontmatter title when it exists",
+        "Does not use the URL-derived repo id as a fallback title for result/Index.md",
+        "Falls back only to a literal `<Product>` on the most-referenced top-level packable .csproj when the root Product is absent",
+        "Treats ambiguous top project Product values as an error instead of choosing by repository path",
+        "Fails fast when no literal Product can be discovered",
+        "Rejects unresolved Product values that contain MSBuild property expressions such as `$(`",
+        "Preserves the generated Product-derived title in result/Index.md instead of replacing it with invented prose"
+      ]
+    },
+    {
+      "id": 41,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a root .docfx/docfx.json whose metadata names package WidgetPack.Hosting.AspNetCore, a root README.md `## Documentation` section linking to https://learn.contoso.dev, and a .nuget/WidgetPack.Hosting.AspNetCore/README.md `## Documentation` section linking to https://packages.contoso.dev. The PackageProjectUrl host is reachable, but https://docs.contoso.dev/api/WidgetPack.Hosting.AspNetCore.html returns 404 while https://packages.contoso.dev/api/WidgetPack.Hosting.AspNetCore.html returns 200 OK.",
+      "expected_output": "The generated documentation links are validated before they enter frontmatter. result/Index.md uses the validated docs root from PackageProjectUrl. The package page first tries PackageProjectUrl plus the DocFX-derived API path, then falls back to README Documentation hosts when the package URL is not 200 OK, and uses the package-specific 200 OK URL from the fallback host. If no candidate returns 200 OK, generation fails before digest prose is written.",
+      "expectations": [
+        "Uses root Directory.Build.props PackageProjectUrl as the first documentation host candidate",
+        "Requires documentation hosts to be URL hosts shaped like xxx.yyy.zzz",
+        "Uses .docfx/docfx.json evidence to form package-level API path candidates such as api/WidgetPack.Hosting.AspNetCore.html",
+        "Validates documentation URLs with HTTP and accepts only 200 OK responses",
+        "Uses the PackageProjectUrl documentation root for result/Index.md when that root returns 200 OK",
+        "Falls back to README.md and .nuget/**/README.md ## Documentation links when the PackageProjectUrl-derived package URL is not 200 OK",
+        "Prefers package-local .nuget README Documentation hosts when resolving that package's documentation link",
+        "Fails fast when no documentation URL candidate can be derived or validated",
+        "Does not fall back to repository #readme links for documentation frontmatter"
+      ]
+    },
+    {
+      "id": 42,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a .docfx/docfx.json that includes WidgetPack.Hosting.AspNetCore but does not include WidgetPack, a normal package WidgetPack.Hosting.AspNetCore with source files, and a convenience package WidgetPack that only references the normal package and has no source files. The docs root https://docs.contoso.dev returns 200 OK and the normal package API page https://docs.contoso.dev/api/WidgetPack.Hosting.AspNetCore.html returns 200 OK.",
+      "expected_output": "The generated documentation link for result/Index.md is https://docs.contoso.dev. The generated documentation link for the normal code package is the package-specific API URL because docfx.json includes that package. The generated documentation link for the convenience package is the same docs root as result/Index.md because docfx.json has no API entry for it, not a made-up convenience-package API page.",
+      "expectations": [
+        "Recognizes the package with no source files as a convenience package",
+        "Uses the validated PackageProjectUrl docs root for result/Index.md",
+        "Uses the DocFX-derived package API URL for the normal code package documentation link",
+        "Uses the exact same documentation URL for the convenience package as result/Index.md when docfx.json has no API entry for that package",
+        "Does not probe or emit api/WidgetPack.html for the convenience package",
+        "Does not invent a convenience-package documentation page",
+        "Still fails fast if the shared docs root cannot be validated with HTTP 200 OK"
       ]
     }
   ]

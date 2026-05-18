@@ -1,7 +1,7 @@
 ---
 name: git-visual-squash-summary
 description: >
-  Turn many commits into a curated grouped squash summary compatible with the opinionated wording style of git-visual-commits. Use when the user asks to squash a branch into a concise summary, write a squash-and-merge summary, summarize this branch, summarize a commit range or PR as grouped lines, clean up noisy commit history, or asks for a curated summary without committing. For normal squash-and-merge requests, default to the full current feature branch from merge-base to HEAD without asking the user to choose among commits already on that branch. This skill is non-mutating: it inspects git history and diffs, returns grouped summary lines only, preserves technical identifiers, merges overlap, drops low-signal noise, keeps lines at or below 72 characters, and avoids unsupported claims or changelog wording.
+  Turn many commits into a curated grouped squash summary compatible with the opinionated wording style of git-visual-commits. Use when the user asks to squash a branch into a concise summary, write a squash-and-merge summary, summarize this branch, summarize a commit range or PR as grouped lines, clean up noisy commit history, or asks for a curated summary without committing. For normal squash-and-merge requests, default to the full current feature branch from merge-base to HEAD against the base branch, not the same-named tracking remote, and do not ask for yolo because the skill is read-only. Returns grouped lines only, preserves identifiers, merges overlap, drops noise, and avoids changelog wording.
 ---
 
 # Git Visual Squash Summary
@@ -33,9 +33,11 @@ This skill has one job: produce a ready-to-paste squash-and-merge summary for th
 - Return grouped lines only, never a title or body.
 - Keep every output line at or below 72 characters.
 - For squash-and-merge requests that target the current branch, default to the full feature branch range from merge-base to `HEAD`.
-- A bare invocation such as `git-visual-squash-summary` or `/git-visual-squash-summary` is itself a complete request: resolve the current branch against upstream, `main`, or `master`, then return the grouped summary directly.
+- A bare invocation such as `git-visual-squash-summary` or `/git-visual-squash-summary` is itself a complete request: resolve the current branch against the base branch, then return the grouped summary directly.
+- Never require, infer, or ask for `yolo` / `auto`. Those modes approve mutating workflows; this skill is read-only and should act directly.
 - Do not collect commit-set parameters through follow-up questions, widgets, or choice UIs for ordinary squash-and-merge requests.
 - Do not ask the user to choose between earlier branch commits and later branch commits such as changelog, version-bump, or release-finalization follow-ups. They are part of the branch unless the user explicitly narrows scope.
+- Do not stop after comparing `HEAD` to a same-named tracking branch such as `origin/<current-branch>`. That only proves local sync with the remote copy of the feature branch, not that there is nothing to summarize.
 
 ## Workflow
 
@@ -44,13 +46,16 @@ This skill has one job: produce a ready-to-paste squash-and-merge summary for th
 Resolve the commit set in this order:
 
 1. If the user explicitly provided a commit range, branch comparison, PR branch, or base branch, use that.
-2. Otherwise, for normal squash-and-merge, "summarize this branch", or bare skill-invocation requests, use the full current branch against its upstream merge-base.
-3. If no upstream is configured, try `main`, then `master` automatically.
-4. If you still cannot determine a safe comparison point after those silent fallbacks, stop and ask for the range or base branch instead of guessing.
+2. Otherwise, for normal squash-and-merge, "summarize this branch", or bare skill-invocation requests, resolve the current branch and compare it to the repository's base branch.
+3. Prefer the remote default branch, such as `origin/HEAD` resolving to `origin/main`, then try `origin/main`, `origin/master`, local `main`, and local `master` automatically.
+4. Treat a same-named tracking branch such as `origin/<current-branch>` as a sync target only. Do not use it as the squash base unless the user explicitly requested that comparison.
+5. If the first attempted comparison is empty but the current branch is not the base branch, try the remaining base-branch fallbacks before declaring there is nothing to summarize.
+6. If you still cannot determine a safe comparison point after those silent fallbacks, stop and ask for the range or base branch instead of guessing.
 
 Never turn steps 2 or 3 into a user-facing choice. Resolve them automatically and continue.
 Do not stop to ask whether the latest branch commit "should count". If it is on the branch, it is in scope by default.
 Do not open with "What would you like me to summarize?" when the user invoked this skill directly or otherwise already asked for a squash summary.
+If every safe base-branch comparison is genuinely empty, say `No branch changes to summarize.` and stop. Do not ask for a hypothetical range or demo.
 
 Helpful read-only commands:
 
@@ -58,7 +63,10 @@ Helpful read-only commands:
 git status --short --branch
 git rev-parse --abbrev-ref HEAD
 git rev-parse --abbrev-ref --symbolic-full-name @{upstream}
+git symbolic-ref refs/remotes/origin/HEAD --short
 git merge-base HEAD @{upstream}
+git merge-base HEAD origin/main
+git merge-base HEAD origin/master
 git merge-base HEAD main
 git merge-base HEAD master
 ```

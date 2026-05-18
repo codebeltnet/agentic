@@ -139,6 +139,18 @@
         "Does not add conventional prefixes unless explicitly requested",
         "Returns grouped summary lines only without explaining the casing rule"
       ]
+    },
+    {
+      "id": 13,
+      "prompt": "/git-visual-squash-summary on a feature branch that is in sync with origin/current-feature, while origin/HEAD points to origin/main and the feature branch has real changes versus origin/main.",
+      "expected_output": "A direct grouped summary of the feature branch changes versus the repository base branch, not a no-commits-ahead response based on the same-named tracking remote.",
+      "expectations": [
+        "Does not treat origin/current-feature as the squash base merely because it is the tracking upstream",
+        "Falls back to the remote default branch or main/master before declaring there is nothing to summarize",
+        "Does not ask what branch or range to summarize when the bare invocation already implies the current branch",
+        "Does not ask for or imply yolo because the skill is read-only",
+        "Returns GitHub-ready grouped summary lines only when changes exist versus the base branch"
+      ]
     }
   ]
 }
