@@ -37,6 +37,15 @@ If you add a new skill or modify an existing repo-managed skill, update that ski
 
 Never set or override `git user.name`, `git user.email`, or `alias.bot` in the **local** git config of this repository. Always use the global config. Local overrides silently shadow global settings and produce commits with the wrong author.
 
+## Git Operations Safeguards
+
+Agents must never automatically commit code changes or push to remote repositories. Both actions require explicit user approval:
+
+- **Commits**: Always request confirmation from the user before staging and committing code. Present a clear summary of changes and wait for user approval before executing the commit.
+- **Remote Operations**: Do not push, pull, fetch, or interact with `origin` or any remote repository without explicit user instruction. These operations modify repository history and can cause data loss if performed unexpectedly.
+
+**Why:** Automatic commits can pollute history with incomplete work, debugging code, or unintended changes. Unexpected remote operations can overwrite or lose commits on shared branches. Always require the user to explicitly approve these operations.
+
 ## Skill Creation
 
 Always use the `skill-creator` skill (by Anthropic) when creating new skills, modifying existing skills, or running evals. It enforces best practices for structure, description quality, testing, and progressive disclosure. Do not create or edit skills manually without invoking it first.
