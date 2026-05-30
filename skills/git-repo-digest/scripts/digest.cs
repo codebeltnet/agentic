@@ -2494,6 +2494,17 @@ internal static class DigestScript
 
     private static IEnumerable<string> BuildDocumentationCandidates(string repositoryDirectory, string projectUrl, string? packageName, bool includeReadmeFallbacks)
     {
+        if (includeReadmeFallbacks && !string.IsNullOrWhiteSpace(packageName))
+        {
+            foreach (var readmeUrl in ReadDocumentationUrlsFromReadmes(repositoryDirectory, packageName)
+                         .Select(NormalizeWebUrl)
+                         .Where(url => url.Length > 0)
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                yield return readmeUrl;
+            }
+        }
+
         var roots = new List<string>();
         if (!includeReadmeFallbacks)
         {
@@ -2602,21 +2613,12 @@ internal static class DigestScript
 
     private static IEnumerable<string> EnumerateDocumentationReadmes(string repositoryDirectory, string? packageName)
     {
-        var rootReadme = Path.Combine(repositoryDirectory, "README.md");
-        if (File.Exists(rootReadme))
-        {
-            yield return rootReadme;
-        }
-
         var nugetDirectory = Path.Combine(repositoryDirectory, ".nuget");
-        if (!Directory.Exists(nugetDirectory))
-        {
-            yield break;
-        }
-
-        var readmes = Directory.EnumerateFiles(nugetDirectory, "README.md", SearchOption.AllDirectories)
-            .OrderBy(path => Path.GetRelativePath(nugetDirectory, path), StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var readmes = Directory.Exists(nugetDirectory)
+            ? Directory.EnumerateFiles(nugetDirectory, "README.md", SearchOption.AllDirectories)
+                .OrderBy(path => Path.GetRelativePath(nugetDirectory, path), StringComparer.OrdinalIgnoreCase)
+                .ToList()
+            : [];
 
         if (!string.IsNullOrWhiteSpace(packageName))
         {
@@ -2624,6 +2626,12 @@ internal static class DigestScript
             {
                 yield return readme;
             }
+        }
+
+        var rootReadme = Path.Combine(repositoryDirectory, "README.md");
+        if (File.Exists(rootReadme))
+        {
+            yield return rootReadme;
         }
 
         foreach (var readme in readmes)
@@ -2646,12 +2654,18 @@ internal static class DigestScript
                      .OrderBy(path => Path.GetRelativePath(docfxDirectory, path), StringComparer.OrdinalIgnoreCase))
         {
             var text = File.ReadAllText(file, Utf8NoBom);
-            if (!text.Contains(packageName, StringComparison.OrdinalIgnoreCase))
+            var destPaths = ExtractDocfxDestPaths(text, packageName);
+            if (destPaths.Count == 0 && !text.Contains(packageName, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
             packageSeenInDocfx = true;
+            foreach (var destPath in destPaths)
+            {
+                paths.Add(ToRepositoryPath(destPath, packageName + ".html"));
+            }
+
             foreach (Match match in Regex.Matches(text, @"(?<path>[A-Za-z0-9_.\-/]*" + Regex.Escape(packageName) + @"[A-Za-z0-9_.\-/]*\.html)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
             {
                 var path = ToRepositoryPath(match.Groups["path"].Value);
@@ -2670,6 +2684,78 @@ internal static class DigestScript
         return paths
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static IReadOnlyList<string> ExtractDocfxDestPaths(string text, string packageName)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            if (!document.RootElement.TryGetProperty("metadata", out var metadata) || metadata.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            var destPaths = new List<string>();
+            foreach (var entry in metadata.EnumerateArray())
+            {
+                if (!entry.TryGetProperty("dest", out var destElement) || destElement.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                if (!entry.TryGetProperty("src", out var sourceElement) || sourceElement.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                if (!DocfxMetadataContainsPackage(sourceElement, packageName))
+                {
+                    continue;
+                }
+
+                var destPath = ToRepositoryPath(destElement.GetString() ?? string.Empty);
+                if (destPath.Length > 0)
+                {
+                    destPaths.Add(destPath);
+                }
+            }
+
+            return destPaths
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static bool DocfxMetadataContainsPackage(JsonElement sourceElement, string packageName)
+    {
+        foreach (var sourceEntry in sourceElement.EnumerateArray())
+        {
+            if (!sourceEntry.TryGetProperty("files", out var filesElement) || filesElement.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var fileElement in filesElement.EnumerateArray())
+            {
+                if (fileElement.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var pattern = fileElement.GetString();
+                if (!string.IsNullOrWhiteSpace(pattern) && pattern.Contains(packageName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static string CombineUrl(string root, string relativePath) =>
