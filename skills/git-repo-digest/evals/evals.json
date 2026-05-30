@@ -627,11 +627,12 @@
     },
     {
       "id": 43,
-      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a normal package WidgetPack.Core, no package-specific DocFX API entry for WidgetPack.Core, and .nuget/WidgetPack.Core/README.md `## Documentation` linking to https://docs.contoso.dev/api/dotnet/WidgetPack.html. The docs root returns 200 OK, https://docs.contoso.dev/api/WidgetPack.Core.html returns 404, and the exact README documentation URL returns 200 OK.",
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a normal package WidgetPack.Core, no package-specific DocFX API entry for WidgetPack.Core, and .nuget/WidgetPack.Core/README.md containing `More documentation available at our documentation site:` followed by https://docs.contoso.dev/api/dotnet/WidgetPack.html before `## Related Packages`. The docs root returns 200 OK, https://docs.contoso.dev/api/WidgetPack.Core.html returns 404, and the exact README documentation URL returns 200 OK.",
       "expected_output": "The generated documentation link for WidgetPack.Core keeps the exact package README documentation URL instead of reducing it to the docs host or manufacturing api/WidgetPack.Core.html. The runner validates the exact README URL with HTTP 200 OK before emitting it.",
       "expectations": [
-        "Reads package-local .nuget/WidgetPack.Core/README.md Documentation links as candidate documentation URLs",
+        "Reads package-local .nuget/WidgetPack.Core/README.md documentation links as candidate documentation URLs even when they are in a prose documentation block instead of a `## Documentation` heading",
         "Keeps exact package README Documentation URLs before deriving host-plus-DocFX fallback candidates",
+        "Ignores exact README Documentation links that do not pass the documentation-host filter, such as two-label repository hosts",
         "Accepts https://docs.contoso.dev/api/dotnet/WidgetPack.html even though the final HTML file name does not contain WidgetPack.Core",
         "Does not strip the README Documentation URL down to https://docs.contoso.dev for the package page",
         "Does not emit a fabricated https://docs.contoso.dev/api/WidgetPack.Core.html link when it returns 404",

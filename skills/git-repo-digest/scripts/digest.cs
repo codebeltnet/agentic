@@ -2497,6 +2497,7 @@ internal static class DigestScript
         if (includeReadmeFallbacks && !string.IsNullOrWhiteSpace(packageName))
         {
             foreach (var readmeUrl in ReadDocumentationUrlsFromReadmes(repositoryDirectory, packageName)
+                         .Where(url => TryCreateDocumentationUri(url, out _))
                          .Select(NormalizeWebUrl)
                          .Where(url => url.Length > 0)
                          .Distinct(StringComparer.OrdinalIgnoreCase))
@@ -2531,7 +2532,11 @@ internal static class DigestScript
             var docfxApiPathCandidates = BuildDocfxApiPathCandidates(repositoryDirectory, packageName);
             if (docfxApiPathCandidates.Count == 0)
             {
-                yield return root;
+                if (includeReadmeFallbacks)
+                {
+                    yield return root;
+                }
+
                 continue;
             }
 
@@ -2608,6 +2613,44 @@ internal static class DigestScript
                     yield return match.Value.TrimEnd('.', ',', ';', ':');
                 }
             }
+
+            if (!string.IsNullOrWhiteSpace(packageName) && readmePath.Contains(packageName, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var line in ExtractDocumentationBlockLines(markdown))
+                {
+                    foreach (Match match in Regex.Matches(line, @"https?://[^\s\)>'""]+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
+                    {
+                        yield return match.Value.TrimEnd('.', ',', ';', ':');
+                    }
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> ExtractDocumentationBlockLines(string markdown)
+    {
+        var inDocumentationBlock = false;
+        foreach (var line in markdown.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (Regex.IsMatch(line, @"\bdocumentation\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
+            {
+                inDocumentationBlock = true;
+                yield return line;
+                continue;
+            }
+
+            if (!inDocumentationBlock)
+            {
+                continue;
+            }
+
+            if (line.StartsWith("#", StringComparison.Ordinal))
+            {
+                inDocumentationBlock = false;
+                continue;
+            }
+
+            yield return line;
         }
     }
 
