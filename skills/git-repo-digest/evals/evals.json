@@ -654,6 +654,20 @@
         "For root abstraction packages ending in .Core or .Kernel, also tries the root namespace page name without that suffix after package-id candidates 404",
         "Uses namespaces declared under src/<PackageName>/**/*.cs as additional DocFX page-name candidates when the package id page 404s"
       ]
+    },
+    {
+      "id": 45,
+      "prompt": "Use git-repo-digest to generate and write a fresh digest for https://github.com/example/widgetpack. The active workspace already contains .bot/digests/widgetpack/20260201-120000Z/result/Index.md, .bot/digests/widgetpack/20260201-120000Z/result/WidgetPack.md, and copied website content under src/Website/Content/Markdown/widgetpack/. The user did not ask to reuse, continue, inspect, validate, or repair any existing workspace.",
+      "expected_output": "Treats the repository URL request as fresh generation, runs the bundled digest.cs runner with --repo-url and --output-root so a new UTC run workspace is created, and writes from the new run's manifest, instructions, prompts, and evidence only. It does not read, summarize, adapt, compare against, or use prior result files or website/docs copies as evidence or style material.",
+      "expectations": [
+        "Runs a fresh workspace because the user supplied a repository URL and did not explicitly request reuse",
+        "Does not inspect prior .bot/digests/widgetpack run folders to choose the latest existing workspace",
+        "Does not read previous result/Index.md or result/WidgetPack.md files from sibling runs before writing fresh results",
+        "Does not read copied website or docs digest pages as source material for the fresh digest",
+        "Uses only the new workspace's manifest.json, instructions.md, generated prompts, evidence files, evidence indexes, evidence chunks, and same-run result files for digest writing",
+        "Treats previous digest prose as contamination rather than authoritative evidence or preferred style",
+        "Reuses an existing digest only when the user explicitly provides that workspace path or asks to reuse, continue, inspect, validate, or repair it"
+      ]
     }
   ]
 }

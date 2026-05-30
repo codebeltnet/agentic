@@ -24,6 +24,7 @@ Use this skill to turn a deterministic digest workspace into website-ready or do
 - Do not second-guess URL mapping from repository names, package names, topical similarity, or whether an external repository seems likely to consume the digest repository. The runner is responsible for finding reference-plus-code matches or reporting that no external usage matches were found.
 - A bare repository URL means generate a fresh workspace with the runner after `output-root` is known. Do not search for or reuse the latest existing `{output-root}/{repo-id}/{run-id}` merely because it exists.
 - Reuse an existing digest workspace only when the user explicitly provides a workspace path or asks to reuse, continue, inspect, validate, or repair existing output.
+- For fresh generation, treat prior `result/*.md` files, copied website/docs pages, sibling `.bot/digests` runs, and any previously authored digest prose as contamination, not evidence. Do not read, summarize, adapt, compare against, or use them as style/source material unless the user explicitly asked to reuse, continue, inspect, validate, or repair that exact existing workspace.
 - If the user did not provide an output path, use `<active-workspace>/.bot/digests` as the output root so the workspace becomes `<active-workspace>/.bot/digests/{repo-id}/{run-id}`. Do not ask for confirmation just to use this default.
 - If the user provides an output path, pass that value as `--output-root`; the runner still appends `{repo-id}/{run-id}`.
 - Do not make `repo-id` customizable. It is derived from the final repository URL path segment.
@@ -197,6 +198,7 @@ Choose the workspace mode from the user's input, not from folders you happen to 
 
 - Generate fresh when the user provides a repository URL and does not explicitly ask to reuse existing output.
 - Generate fresh even when `{output-root}/{repo-id}` already contains prior run folders; the runner appends a new UTC `{run-id}`.
+- In fresh mode, do not inspect old `result/*.md` files, website copies, docs copies, sibling run folders, or other digest prose before writing. The only digest-writing inputs are the newly generated workspace's `manifest.json`, `instructions.md`, prompts, evidence files, evidence indexes, evidence chunks, and any result files produced earlier in the same new workspace phase order.
 - Locate existing only when the user explicitly provides a digest workspace path such as `{output-root}/{repo-id}` or `{output-root}/{repo-id}/{run-id}`, or asks to reuse, continue, inspect, validate, or repair existing output.
 - If the user provides `{output-root}/{repo-id}` as an existing-workspace path and does not name a run-id, inspect the folder and ask before choosing among prior run folders unless the user asked for the latest run.
 
@@ -491,6 +493,7 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Running a separate .NET project instead of the bundled `scripts/digest.cs` runner.
 - Passing only a repository slug when the runner requires a full URL.
 - Passing user-provided external usage repositories as implicit runner positional arguments instead of repeated `--external-repo-url` flags.
+- Reading, adapting, comparing against, or using previous digest prose from sibling `.bot/digests` runs, `result/*.md`, website content, docs content, or other folders during fresh generation.
 - Assuming a fixed organization such as `codebeltnet` or a fixed repository host such as GitHub.
 - Searching GitHub for external usage when the runner only supports user-provided external repository URLs.
 - Loading every package evidence set for every package digest.
