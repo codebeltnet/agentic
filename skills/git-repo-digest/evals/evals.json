@@ -631,6 +631,7 @@
       "expected_output": "The generated documentation link for WidgetPack.Core keeps the exact package README documentation URL instead of reducing it to the docs host or manufacturing api/WidgetPack.Core.html. The runner validates the exact README URL with HTTP 200 OK before emitting it.",
       "expectations": [
         "Reads package-local .nuget/WidgetPack.Core/README.md documentation links as candidate documentation URLs even when they are in a prose documentation block instead of a `## Documentation` heading",
+        "Prefers the exact `.nuget/<PackageName>/README.md` package directory over other package README paths whose names merely contain the package id as a prefix",
         "Keeps exact package README Documentation URLs before deriving host-plus-DocFX fallback candidates",
         "Ignores exact README Documentation links that do not pass the documentation-host filter, such as two-label repository hosts",
         "Accepts https://docs.contoso.dev/api/dotnet/WidgetPack.html even though the final HTML file name does not contain WidgetPack.Core",

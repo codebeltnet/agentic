@@ -2665,7 +2665,7 @@ internal static class DigestScript
 
         if (!string.IsNullOrWhiteSpace(packageName))
         {
-            foreach (var readme in readmes.Where(path => path.Contains(packageName, StringComparison.OrdinalIgnoreCase)))
+            foreach (var readme in readmes.Where(path => IsPackageReadme(path, packageName)))
             {
                 yield return readme;
             }
@@ -2681,6 +2681,13 @@ internal static class DigestScript
         {
             yield return readme;
         }
+    }
+
+    private static bool IsPackageReadme(string readmePath, string packageName)
+    {
+        var directory = Path.GetDirectoryName(readmePath);
+        var packageDirectoryName = directory is null ? string.Empty : Path.GetFileName(directory);
+        return string.Equals(packageDirectoryName, packageName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<string> BuildDocfxApiPathCandidates(string repositoryDirectory, string packageName)
