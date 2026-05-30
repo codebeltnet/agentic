@@ -2394,7 +2394,7 @@ internal static class DigestScript
                     yield break;
                 }
 
-                inSection = string.Equals(text, heading, StringComparison.OrdinalIgnoreCase);
+                inSection = IsMarkdownHeadingMatch(text, heading);
                 continue;
             }
 
@@ -2404,6 +2404,10 @@ internal static class DigestScript
             }
         }
     }
+
+    private static bool IsMarkdownHeadingMatch(string text, string heading) =>
+        string.Equals(text, heading, StringComparison.OrdinalIgnoreCase)
+        || text.Contains(heading, StringComparison.OrdinalIgnoreCase);
 
     private static string ExtractLeadingGlyph(string line, string packageName)
     {
@@ -2496,8 +2500,9 @@ internal static class DigestScript
     {
         if (includeReadmeFallbacks && !string.IsNullOrWhiteSpace(packageName))
         {
-            foreach (var readmeUrl in ReadDocumentationUrlsFromReadmes(repositoryDirectory, packageName)
+            foreach (var readmeUrl in ReadDocumentationUrlsFromPackageReadme(repositoryDirectory, packageName)
                          .Where(url => TryCreateDocumentationUri(url, out _))
+                         .Where(HasDocumentationPath)
                          .Select(NormalizeWebUrl)
                          .Where(url => url.Length > 0)
                          .Distinct(StringComparer.OrdinalIgnoreCase))
@@ -2565,6 +2570,10 @@ internal static class DigestScript
             .ToList();
     }
 
+    private static bool HasDocumentationPath(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && uri.AbsolutePath.Trim('/').Length > 0;
+
     private static bool TryNormalizePackageSpecificDocumentationUrl(string url, string packageName, out string normalized)
     {
         normalized = string.Empty;
@@ -2605,23 +2614,50 @@ internal static class DigestScript
     {
         foreach (var readmePath in EnumerateDocumentationReadmes(repositoryDirectory, packageName))
         {
-            var markdown = File.ReadAllText(readmePath, Utf8NoBom);
-            foreach (var line in ExtractMarkdownSection(markdown, "Documentation"))
+            foreach (var url in ReadDocumentationUrlsFromReadme(readmePath, packageName))
+            {
+                yield return url;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ReadDocumentationUrlsFromPackageReadme(string repositoryDirectory, string packageName)
+    {
+        var nugetDirectory = Path.Combine(repositoryDirectory, ".nuget");
+        if (!Directory.Exists(nugetDirectory))
+        {
+            yield break;
+        }
+
+        foreach (var readmePath in Directory.EnumerateFiles(nugetDirectory, "README.md", SearchOption.AllDirectories)
+                     .Where(path => IsPackageReadme(path, packageName))
+                     .OrderBy(path => Path.GetRelativePath(nugetDirectory, path), StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var url in ReadDocumentationUrlsFromReadme(readmePath, packageName))
+            {
+                yield return url;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ReadDocumentationUrlsFromReadme(string readmePath, string? packageName)
+    {
+        var markdown = File.ReadAllText(readmePath, Utf8NoBom);
+        foreach (var line in ExtractMarkdownSection(markdown, "Documentation"))
+        {
+            foreach (Match match in Regex.Matches(line, @"https?://[^\s\)>'""]+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
+            {
+                yield return match.Value.TrimEnd('.', ',', ';', ':');
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(packageName) && IsPackageReadme(readmePath, packageName))
+        {
+            foreach (var line in ExtractDocumentationBlockLines(markdown))
             {
                 foreach (Match match in Regex.Matches(line, @"https?://[^\s\)>'""]+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
                 {
                     yield return match.Value.TrimEnd('.', ',', ';', ':');
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(packageName) && readmePath.Contains(packageName, StringComparison.OrdinalIgnoreCase))
-            {
-                foreach (var line in ExtractDocumentationBlockLines(markdown))
-                {
-                    foreach (Match match in Regex.Matches(line, @"https?://[^\s\)>'""]+", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
-                    {
-                        yield return match.Value.TrimEnd('.', ',', ';', ':');
-                    }
                 }
             }
         }
@@ -2699,6 +2735,12 @@ internal static class DigestScript
         }
 
         var paths = new List<string>();
+        var sourceNamespacePageNames = BuildSourceNamespaceDocfxPageNames(repositoryDirectory, packageName);
+        var alternativePageNames = BuildAlternativeDocfxPageNames(packageName)
+            .Concat(sourceNamespacePageNames)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var packageSeenInDocfx = false;
         foreach (var file in Directory.EnumerateFiles(docfxDirectory, "docfx.json", SearchOption.AllDirectories)
                      .OrderBy(path => Path.GetRelativePath(docfxDirectory, path), StringComparer.OrdinalIgnoreCase))
@@ -2714,6 +2756,10 @@ internal static class DigestScript
             foreach (var destPath in destPaths)
             {
                 paths.Add(ToRepositoryPath(destPath, packageName + ".html"));
+                foreach (var alternativePageName in alternativePageNames)
+                {
+                    paths.Add(ToRepositoryPath(destPath, alternativePageName + ".html"));
+                }
             }
 
             foreach (Match match in Regex.Matches(text, @"(?<path>[A-Za-z0-9_.\-/]*" + Regex.Escape(packageName) + @"[A-Za-z0-9_.\-/]*\.html)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
@@ -2729,11 +2775,56 @@ internal static class DigestScript
         if (packageSeenInDocfx)
         {
             paths.Add(ToRepositoryPath("api", packageName + ".html"));
+            foreach (var alternativePageName in alternativePageNames)
+            {
+                paths.Add(ToRepositoryPath("api", alternativePageName + ".html"));
+            }
         }
 
         return paths
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static IReadOnlyList<string> BuildSourceNamespaceDocfxPageNames(string repositoryDirectory, string packageName)
+    {
+        var sourceDirectory = Path.Combine(repositoryDirectory, SourceDirectoryName, packageName);
+        if (!Directory.Exists(sourceDirectory))
+        {
+            return [];
+        }
+
+        var namespaces = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(sourceDirectory, "*.cs", SearchOption.AllDirectories)
+                     .OrderBy(path => Path.GetRelativePath(sourceDirectory, path), StringComparer.OrdinalIgnoreCase))
+        {
+            var text = File.ReadAllText(file, Utf8NoBom);
+            foreach (Match match in Regex.Matches(text, @"^\s*namespace\s+(?<name>[A-Za-z_][A-Za-z0-9_.]*)\s*[;{]", RegexOptions.CultureInvariant | RegexOptions.Multiline))
+            {
+                var namespaceName = match.Groups["name"].Value.Trim();
+                if (namespaceName.Length > 0)
+                {
+                    namespaces.Add(namespaceName);
+                }
+            }
+        }
+
+        return namespaces
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(namespaceName => namespaceName.Length)
+            .Take(16)
+            .ToList();
+    }
+
+    private static IEnumerable<string> BuildAlternativeDocfxPageNames(string packageName)
+    {
+        foreach (var suffix in new[] { ".Core", ".Kernel" })
+        {
+            if (packageName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && packageName.Length > suffix.Length)
+            {
+                yield return packageName[..^suffix.Length];
+            }
+        }
     }
 
     private static IReadOnlyList<string> ExtractDocfxDestPaths(string text, string packageName)

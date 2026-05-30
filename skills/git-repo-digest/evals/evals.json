@@ -639,6 +639,21 @@
         "Does not emit a fabricated https://docs.contoso.dev/api/WidgetPack.Core.html link when it returns 404",
         "Validates the emitted documentation URL with HTTP 200 OK"
       ]
+    },
+    {
+      "id": 44,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://www.widgetpack.dev</PackageProjectUrl>`, root README.md heading `## 📚 Documentation` linking to https://docs.widgetpack.dev/, and .docfx/docfx.json metadata entries whose `src.files` list includes WidgetPack.Commands.Messaging/**.csproj with `dest` set to `api/dotnet`. The product site returns 200 OK at the root, but https://www.widgetpack.dev/api/dotnet/WidgetPack.Commands.Messaging.html returns 404 while https://docs.widgetpack.dev/api/dotnet/WidgetPack.Commands.Messaging.html returns 200 OK.",
+      "expected_output": "The runner does not assume the product website is the documentation host after package API probes 404. It reads the emoji-prefixed README Documentation section, combines the README documentation host with the DocFX metadata dest path, validates the package URL, and emits https://docs.widgetpack.dev/api/dotnet/WidgetPack.Commands.Messaging.html for the package documentation link.",
+      "expectations": [
+        "Treats an emoji-prefixed heading such as `## 📚 Documentation` as a Documentation section",
+        "Reads https://docs.widgetpack.dev/ from the root README as a documentation host candidate rather than an exact package documentation URL",
+        "Uses .docfx/docfx.json metadata src.files and dest entries to derive api/dotnet/WidgetPack.Commands.Messaging.html",
+        "Rejects the product-site package API URL when it returns 404 even if the product-site root returns 200 OK",
+        "Combines the README documentation host with the DocFX dest-derived package API path",
+        "Emits the validated package-scoped docs URL instead of falling back to https://www.widgetpack.dev or https://docs.widgetpack.dev",
+        "For root abstraction packages ending in .Core or .Kernel, also tries the root namespace page name without that suffix after package-id candidates 404",
+        "Uses namespaces declared under src/<PackageName>/**/*.cs as additional DocFX page-name candidates when the package id page 404s"
+      ]
     }
   ]
 }
