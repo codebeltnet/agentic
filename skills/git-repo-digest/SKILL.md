@@ -15,16 +15,16 @@ Use this skill to turn a deterministic digest workspace into website-ready or do
 - Treat generated output as the source of truth. If `manifest.json`, `instructions.md`, `prompts/*.prompt.md`, or `evidence/**/*.xml` files disagree with this skill, follow the generated files unless they are internally inconsistent.
 - Every authored `result/*.md` file must start with the YAML frontmatter contract from its generated prompt. Preserve generated static metadata such as package counts, library counts, target framework monikers, external links, family links, internal `.md` family URLs, and link glyphs unless raw evidence proves the hint wrong.
 - For `result/Index.md`, preserve the generated `title` hint exactly unless raw evidence proves the product metadata is wrong. The runner resolves that title from a literal root `Directory.Build.props` `<Product>` value, then from a literal `<Product>` on the most-referenced top-level packable `.csproj`; it fails generation when no product can be resolved instead of falling back to `repo-id`.
-- Preserve generated documentation links as validated static metadata. The runner resolves documentation hosts from `PackageProjectUrl` first, falls back to `README.md` / `.nuget/**/README.md` `## Documentation` links when package-specific URLs are not `200 OK`, derives normal package API paths from `.docfx/**/docfx.json`, links packages with no DocFX API entry to the same docs root as `result/Index.md`, and fails before prose is written when no documentation URL returns `200 OK`.
+- Preserve generated documentation links as validated static metadata. The runner resolves documentation hosts from `PackageProjectUrl` first, falls back to exact `README.md` / `.nuget/**/README.md` `## Documentation` links when package-specific URLs are not `200 OK`, derives normal package API paths from `.docfx/**/docfx.json` `metadata[].dest` entries when they name the package, links packages with no DocFX API entry to the same docs root as `result/Index.md`, and fails before prose is written when no documentation URL returns `200 OK`.
 - Keep the workflow generic. The runner input is a full repository URL, not an implied owner/slug convention.
-- Require both runner inputs `--repo-url` and `--output-root`. Do not invent defaults silently.
+- Require the runner input `--repo-url`. The runner also requires `--output-root`; if the user omits it, resolve it deterministically to `<active-workspace>/.bot/digests` and pass that explicit value to the runner.
 - Accept curated external usage repositories from the user's natural invocation when present, then pass each one to the runner with a repeated `--external-repo-url` flag.
 - Map repository URLs and optional output paths positionally, regardless of whether the user typed a slash command, pasted bare URLs, or wrote a natural-language request. First URL is always the digest `repo-url`; a second value is `output-root` only when it is not a URL; every URL after the first is an `external-repo-url`.
 - A bare list of two or more URLs is not ambiguous: treat it as one digest target plus external usage repositories. Do not reinterpret later URLs as separate digest targets unless the user explicitly says to digest multiple repositories independently, for example "digest both repos", "create separate digests", or "run one digest per URL".
 - Do not second-guess URL mapping from repository names, package names, topical similarity, or whether an external repository seems likely to consume the digest repository. The runner is responsible for finding reference-plus-code matches or reporting that no external usage matches were found.
 - A bare repository URL means generate a fresh workspace with the runner after `output-root` is known. Do not search for or reuse the latest existing `{output-root}/{repo-id}/{run-id}` merely because it exists.
 - Reuse an existing digest workspace only when the user explicitly provides a workspace path or asks to reuse, continue, inspect, validate, or repair existing output.
-- If a `.bot` folder exists and the user did not provide an output path, recommend `<workspace>/.bot/digests` as the output root so the workspace becomes `<workspace>/.bot/digests/{repo-id}/{run-id}`.
+- If the user did not provide an output path, use `<active-workspace>/.bot/digests` as the output root so the workspace becomes `<active-workspace>/.bot/digests/{repo-id}/{run-id}`. Do not ask for confirmation just to use this default.
 - If the user provides an output path, pass that value as `--output-root`; the runner still appends `{repo-id}/{run-id}`.
 - Do not make `repo-id` customizable. It is derived from the final repository URL path segment.
 - Do not make `run-id` customizable. It is always generated in UTC as `yyyyMMdd-HHmmssZ`.
@@ -110,16 +110,16 @@ Packing notes:
 
 ## Expected Workspace
 
-The digest root is chosen by the caller. For repositories that already use `.bot` and where the user did not supply an output path, the conventional staging root is:
+The digest root is chosen by the caller when an output path is supplied. When the user does not supply an output path, the deterministic default staging root is:
 
 ```text
-.bot/digests
+<active-workspace>/.bot/digests
 ```
 
-When that conventional root is used by default, the generated workspace is:
+When that default root is used, the generated workspace is:
 
 ```text
-.bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}
+<active-workspace>/.bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}
 ```
 
 If the user supplies an output path, use that value as the root while keeping the same generated child shape:
@@ -164,7 +164,7 @@ Manifest targets also include `frontmatterHints`, which are generated metadata v
 Collect or infer these runner inputs:
 
 - `repo-url`: required. Ask for it if the user gives only a slug or a repository nickname.
-- `output-root`: required. If the active workspace has a `.bot` directory and the user did not provide an output path, recommend `<workspace>/.bot/digests`; otherwise ask for the path.
+- `output-root`: pass this explicitly to the runner. If the user did not provide an output path, use `<active-workspace>/.bot/digests`.
 - `external-repo-url`: optional and repeatable. Use only public repository URLs the user supplied as curated usage sources.
 
 Apply this positional mapping to slash commands, pasted bare values, and natural-language invocations alike:
@@ -178,13 +178,13 @@ Map them as follows:
 - First URL: `repo-url`.
 - Second value: `output-root` only when it is not a URL.
 - Every URL after the first, including the second value when it is a URL: repeated `external-repo-url` values.
-- If the second value is a URL and no output root was supplied, keep it as `external-repo-url` and ask for `output-root` or recommend `.bot/digests` when the active workspace has `.bot`.
+- If the second value is a URL and no output root was supplied, keep it as `external-repo-url` and use `<active-workspace>/.bot/digests` as `output-root`.
 - Do not ask whether later URLs should be independent digest targets. That question is already answered by the positional mapping unless the user explicitly asks for multiple independent digests.
 - Do not reject or question an `external-repo-url` because the repository name or domain seems unrelated. Pass the user-supplied URL to the runner and let deterministic external usage selection decide whether it contributes evidence.
 
 Examples:
 
-- `https://github.com/example/library https://github.com/example/consumer` maps to `--repo-url https://github.com/example/library --external-repo-url https://github.com/example/consumer`; output root still needs to be supplied or recommended.
+- `https://github.com/example/library https://github.com/example/consumer` maps to `--repo-url https://github.com/example/library --output-root <active-workspace>/.bot/digests --external-repo-url https://github.com/example/consumer` unless the user supplies an explicit output path.
 - `/git-repo-digest https://github.com/example/library .bot/digests https://github.com/example/consumer` maps to `--repo-url https://github.com/example/library --output-root .bot/digests --external-repo-url https://github.com/example/consumer`.
 - `generate a digest for https://github.com/example/library using https://github.com/example/consumer as evidence` uses the same mapping: first URL is the digest repo, second URL is external usage evidence.
 - `digest both https://github.com/example/library and https://github.com/example/other-library separately` is different because the user explicitly requested independent digests; handle that as separate digest runs.
