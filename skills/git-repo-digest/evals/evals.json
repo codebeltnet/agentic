@@ -21,14 +21,14 @@
     },
     {
       "id": 2,
-      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject and then write the resulting digests. The active workspace contains a .bot folder.",
-      "expected_output": "When a .bot folder exists and no output path was supplied, may recommend .bot/digests as the output root but asks before using it, runs dotnet run --file with --repo-url, the full URL, and --output-root so the runner creates .bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}, does not ask for repo-id, run-id, or result directory, avoids unsupported runner inputs, then follows the generated manifest, including evidence index and chunk entries, to write package digests before result/Index.md.",
+      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject and then write the resulting digests. The active workspace does not have a .bot folder.",
+      "expected_output": "When no output path was supplied, resolves the output root to the active workspace's .bot/digests path without asking, runs dotnet run --file with --repo-url, the full URL, and --output-root so the runner creates .bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}, does not ask for repo-id, run-id, output-root, or result directory, avoids unsupported runner inputs, then follows the generated manifest, including evidence index and chunk entries, to write package digests before result/Index.md.",
       "expectations": [
-        "May recommend .bot/digests as the output root because a .bot folder exists in the workspace and the user supplied no output path",
-        "Asks before using the recommended output root instead of inventing defaults silently",
+        "Uses .bot/digests under the active workspace as the output root because the user supplied no output path",
+        "Does not ask before using the well-defined .bot/digests output-root default",
         "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root for the .bot/digests default",
         "Passes the full repository URL, not a slug or partial reference",
-        "Does not ask the user for repo-id, run-id, or result directory",
+        "Does not ask the user for repo-id, run-id, output-root, or result directory",
         "Uses a run-id formatted yyyyMMdd-HHmmssZ so default workspaces sort chronologically",
         "Does not pass unsupported runner flags beyond --repo-url, --output-root, and repeated --external-repo-url when external usage repositories were supplied",
         "Recognizes that the generated manifest can include evidence index and chunk entries for capped evidence reads",
@@ -188,13 +188,13 @@
     {
       "id": 14,
       "prompt": "Use git-repo-digest with /git-repo-digest https://github.com/example/library https://github.com/example/consumer-one. The active workspace has a .bot folder.",
-      "expected_output": "Recognizes that the second positional value is a URL, treats it as an external usage repository rather than output-root, recommends .bot/digests or asks for an output root, and then runs the explicit runner flags after output-root is known. The runner creates {output-root}/{repo-id}/{yyyyMMdd-HHmmssZ}.",
+      "expected_output": "Recognizes that the second positional value is a URL, treats it as an external usage repository rather than output-root, uses .bot/digests under the active workspace as the output root, and then runs the explicit runner flags. The runner creates {output-root}/{repo-id}/{yyyyMMdd-HHmmssZ}.",
       "expectations": [
         "Treats the first URL as the digest repo URL",
         "Does not treat the second URL as output-root",
         "Treats the second URL as an external usage repository",
-        "Asks for output-root or recommends .bot/digests because the active workspace has a .bot folder",
-        "Uses a run-id formatted yyyyMMdd-HHmmssZ when the .bot/digests default is accepted",
+        "Uses .bot/digests under the active workspace because no non-URL output path was supplied",
+        "Uses a run-id formatted yyyyMMdd-HHmmssZ with the .bot/digests default",
         "Uses repeated --external-repo-url flags when running the runner"
       ]
     },
@@ -334,13 +334,14 @@
     {
       "id": 23,
       "prompt": "Use git-repo-digest to write a package digest for a normal foundational library package. The source evidence includes public guard methods, parameter-object validation, decorator wrappers, configuration helpers, and disposable lifecycle hooks. The test evidence shows consumer-style tests using these APIs, but there is no external usage evidence.",
-      "expected_output": "Writes a Basic usage section with one complete C# fenced code block containing explicit using statements, a file-scoped consumer namespace, a public test class, and exactly one [Fact] or [Theory] method with assertions inside that method. The example demonstrates a realistic consumer task that uses the package's foundational APIs meaningfully, rather than top-level statements or a trivial literal round-trip.",
+      "expected_output": "Writes a Basic usage section with one complete C# fenced code block containing explicit using statements, a file-scoped consumer namespace, a public test class, and exactly one [Fact] or [Theory] method named with MethodName_Scenario_ExpectedBehavior where each part is PascalCase and assertions live inside that method. The example demonstrates a realistic consumer task that uses the package's foundational APIs meaningfully, rather than top-level statements or a trivial literal round-trip.",
       "expectations": [
         "Writes exactly one C# fenced code block for the normal package Basic usage section",
         "Includes explicit using statements",
         "Includes a file-scoped consumer namespace",
         "Includes a public test class",
         "Contains exactly one [Fact] or [Theory] method",
+        "Names the test method with exactly three PascalCase parts in the MethodName_Scenario_ExpectedBehavior shape",
         "Places assertions inside the single test method instead of at top level",
         "Avoids top-level statements",
         "Demonstrates a realistic consumer task where the package API changes how the code is written",
@@ -388,12 +389,12 @@
     {
       "id": 26,
       "prompt": "Use git-repo-digest to generate and write digests for https://github.com/codebeltnet/xunit. The active workspace has a .bot folder, and .bot/digests/xunit already contains several previous run-id folders with result files.",
-      "expected_output": "Treats the bare repository URL as a request for fresh evidence. It recommends or asks to use .bot/digests as output-root, then runs the bundled runner with --repo-url and --output-root so a new .bot/digests/xunit/{yyyyMMdd-HHmmssZ} workspace is created. It does not select the latest existing run folder or reuse prior result files unless the user explicitly asks to reuse, continue, inspect, validate, or repair existing output.",
+      "expected_output": "Treats the bare repository URL as a request for fresh evidence. It uses .bot/digests under the active workspace as output-root, then runs the bundled runner with --repo-url and --output-root so a new .bot/digests/xunit/{yyyyMMdd-HHmmssZ} workspace is created. It does not select the latest existing run folder or reuse prior result files unless the user explicitly asks to reuse, continue, inspect, validate, or repair existing output.",
       "expectations": [
         "Does not treat the presence of .bot/digests/xunit as permission to reuse an existing run",
         "Does not pick the latest existing run-id folder when the user supplied only a repository URL",
-        "Asks for output-root or recommends .bot/digests because the active workspace has a .bot folder",
-        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url https://github.com/codebeltnet/xunit and --output-root after output-root is known",
+        "Uses .bot/digests under the active workspace as output-root when no output path was supplied",
+        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url https://github.com/codebeltnet/xunit and --output-root",
         "Creates or expects a new run-id folder under {output-root}/xunit/{yyyyMMdd-HHmmssZ}",
         "Reads the generated manifest from the new run before writing result files",
         "Reuses an existing run only when the user explicitly provides a workspace path or asks to reuse, continue, inspect, validate, or repair existing output"
@@ -430,13 +431,13 @@
     {
       "id": 29,
       "prompt": "Use git-repo-digest with these bare positional values: https://github.com/example/library https://github.com/example/consumer. The active workspace has a .bot folder.",
-      "expected_output": "Treats the first URL as the repository under digest and the second URL as a curated external usage repository, even though the user did not include a /git-repo-digest prefix. Because no non-URL output root was supplied, it recommends or asks to use .bot/digests, then runs the bundled runner with --repo-url https://github.com/example/library, --output-root after it is known, and --external-repo-url https://github.com/example/consumer. It does not treat the two URLs as independent digest runs.",
+      "expected_output": "Treats the first URL as the repository under digest and the second URL as a curated external usage repository, even though the user did not include a /git-repo-digest prefix. Because no non-URL output root was supplied, it uses .bot/digests under the active workspace, then runs the bundled runner with --repo-url https://github.com/example/library, --output-root, and --external-repo-url https://github.com/example/consumer. It does not treat the two URLs as independent digest runs.",
       "expectations": [
         "Applies positional URL mapping even without a slash-command prefix",
         "Treats the first URL as the digest repo-url",
         "Treats the second value as external-repo-url because it is a URL, not an output-root",
-        "Recommends or asks for .bot/digests as output-root because the active workspace has a .bot folder and no non-URL output path was supplied",
-        "Runs or plans the runner with one --repo-url and one repeated --external-repo-url flag after output-root is known",
+        "Uses .bot/digests under the active workspace as output-root because no non-URL output path was supplied",
+        "Runs or plans the runner with one --repo-url, one --output-root, and one repeated --external-repo-url flag",
         "Does not interpret the two URLs as two independent digest requests",
         "Does not ask whether the second URL should be a separate digest target",
         "Does not second-guess the mapping because the repository names or domains seem unrelated",
@@ -512,12 +513,13 @@
     {
       "id": 35,
       "prompt": "Use git-repo-digest to validate an existing workspace whose package page has YAML frontmatter packageId WidgetPack and a Basic usage C# block. The package is published on NuGet, and the local machine has the .NET SDK available.",
-      "expected_output": "Runs deterministic post-validation with `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. For each Basic usage C# block, the validator creates a temporary Codebelt.Extensions.Xunit test project outside the repository, installs Microsoft.NET.Test.Sdk, xunit.v3, xunit.runner.visualstudio, Codebelt.Extensions.Xunit, and the page packageId from NuGet, writes the snippet as a test file, runs `dotnet test`, and treats any restore, compile, or test failure as blocking. The agent rewrites failing examples from evidence and reruns validation until it passes.",
+      "expected_output": "Runs deterministic post-validation with `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. For each Basic usage C# block, the validator creates a temporary Codebelt.Extensions.Xunit test project outside the repository with direct package references for Microsoft.NET.Test.Sdk, xunit.v3, xunit.runner.visualstudio, Codebelt.Extensions.Xunit, and the page packageId from NuGet, writes the snippet as a test file, runs `dotnet test` with bounded parallelism, and treats any restore, compile, or test failure as blocking. The agent rewrites failing examples from evidence and reruns validation until it passes.",
       "expectations": [
         "Uses the page frontmatter packageId, or the result filename when packageId is absent, as the NuGet package to install for executable validation",
         "Creates the executable validation project in a temp directory rather than inside the repository or digest workspace",
-        "Installs Codebelt.Extensions.Xunit, the page NuGet package, and xUnit test packages in the temp validation project",
+        "References Codebelt.Extensions.Xunit, the page NuGet package, and xUnit test packages in the temp validation project without per-package dotnet add restore loops",
         "Runs dotnet test for every Basic usage C# block",
+        "Uses bounded parallelism for independent executable Basic usage validations",
         "Treats NuGet restore failures, compile failures, and failing tests as blocking validation diagnostics",
         "Requires the agent to rewrite the Basic usage example and rerun validation until it passes",
         "Does not rely on repository source project references for consumer copy/paste validation"
@@ -526,7 +528,7 @@
     {
       "id": 36,
       "prompt": "Use git-repo-digest to write a package digest for a normal Codebelt library package. The source and test evidence support a focused Basic usage example, and the package page will be validated with `--validate-results`.",
-      "expected_output": "The Basic usage C# example is written as a Codebelt.Extensions.Xunit test: it imports Codebelt.Extensions.Xunit and Xunit, does not import Xunit.Abstractions, uses a file-scoped consumer namespace, declares the public test class containing the Fact or Theory method as inheriting from Test or a source-backed Codebelt test base class that the evidence shows derives from Test, defines a constructor that accepts ITestOutputHelper output and passes that output helper to the base constructor, has exactly one Fact or Theory method with assertions, uses TestOutput.Write/WriteLine/WriteLines for human-friendly context, and passes deterministic validation in a temp project that installs Codebelt.Extensions.Xunit plus the page package.",
+      "expected_output": "The Basic usage C# example is written as a Codebelt.Extensions.Xunit test: it imports Codebelt.Extensions.Xunit and Xunit, does not import Xunit.Abstractions, uses a file-scoped consumer namespace, declares the public test class containing the Fact or Theory method as inheriting from Test or a source-backed Codebelt test base class that the evidence shows derives from Test, defines a constructor that accepts ITestOutputHelper output and passes that output helper to the base constructor, has exactly one Fact or Theory method with a MethodName_Scenario_ExpectedBehavior name whose three parts are PascalCase, includes assertions, uses TestOutput.Write/WriteLine/WriteLines for human-friendly context, and passes deterministic validation in a temp project that references Codebelt.Extensions.Xunit plus the page package.",
       "expectations": [
         "Includes `using Codebelt.Extensions.Xunit;` and `using Xunit;` in the Basic usage C# block",
         "Uses file-scoped namespace syntax such as `namespace MyProject.Tests;`",
@@ -535,9 +537,10 @@
         "Declares the public test class containing the `[Fact]` or `[Theory]` method as inheriting from `Test` or a source-backed Codebelt test base class that evidence shows derives from `Test`",
         "Defines a constructor that accepts `ITestOutputHelper output` and passes that output helper to the base constructor",
         "Contains exactly one `[Fact]` or `[Theory]` method with assertions",
+        "Names the test method with exactly three PascalCase parts in the `MethodName_Scenario_ExpectedBehavior` shape",
         "Uses `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` to describe the scenario or observable result",
-        "Installs Codebelt.Extensions.Xunit in the temporary executable validation project",
-        "Treats missing Codebelt-style xUnit shape or missing TestOutput usage as deterministic validation diagnostics"
+        "References Codebelt.Extensions.Xunit in the temporary executable validation project",
+        "Treats missing Codebelt-style xUnit shape, non-PascalCase method naming, or missing TestOutput usage as deterministic validation diagnostics"
       ]
     },
     {
@@ -597,32 +600,76 @@
     },
     {
       "id": 41,
-      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a root .docfx/docfx.json whose metadata names package WidgetPack.Hosting.AspNetCore, a root README.md `## Documentation` section linking to https://learn.contoso.dev, and a .nuget/WidgetPack.Hosting.AspNetCore/README.md `## Documentation` section linking to https://packages.contoso.dev. The PackageProjectUrl host is reachable, but https://docs.contoso.dev/api/WidgetPack.Hosting.AspNetCore.html returns 404 while https://packages.contoso.dev/api/WidgetPack.Hosting.AspNetCore.html returns 200 OK.",
-      "expected_output": "The generated documentation links are validated before they enter frontmatter. result/Index.md uses the validated docs root from PackageProjectUrl. The package page first tries PackageProjectUrl plus the DocFX-derived API path, then falls back to README Documentation hosts when the package URL is not 200 OK, and uses the package-specific 200 OK URL from the fallback host. If no candidate returns 200 OK, generation fails before digest prose is written.",
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a root .docfx/docfx.json whose metadata entry names package WidgetPack.Hosting.AspNetCore and has `dest` set to `api/web`, a root README.md `## Documentation` section linking to https://learn.contoso.dev, and a .nuget/WidgetPack.Hosting.AspNetCore/README.md `## Documentation` section linking to https://packages.contoso.dev/api/web/WidgetPack.Hosting.AspNetCore.html. The PackageProjectUrl host is reachable, but https://docs.contoso.dev/api/web/WidgetPack.Hosting.AspNetCore.html returns 404 while https://packages.contoso.dev/api/web/WidgetPack.Hosting.AspNetCore.html returns 200 OK.",
+      "expected_output": "The generated documentation links are validated before they enter frontmatter. result/Index.md uses the validated docs root from PackageProjectUrl. The package page first tries PackageProjectUrl plus the DocFX-derived API path using the matching metadata dest, then falls back to exact README Documentation links when the package URL is not 200 OK, and uses the package-specific 200 OK URL from the package-local README. If no candidate returns 200 OK, generation fails before digest prose is written.",
       "expectations": [
         "Uses root Directory.Build.props PackageProjectUrl as the first documentation host candidate",
         "Requires documentation hosts to be URL hosts shaped like xxx.yyy.zzz",
-        "Uses .docfx/docfx.json evidence to form package-level API path candidates such as api/WidgetPack.Hosting.AspNetCore.html",
+        "Uses .docfx/docfx.json metadata dest evidence to form package-level API path candidates such as api/web/WidgetPack.Hosting.AspNetCore.html",
         "Validates documentation URLs with HTTP and accepts only 200 OK responses",
         "Uses the PackageProjectUrl documentation root for result/Index.md when that root returns 200 OK",
-        "Falls back to README.md and .nuget/**/README.md ## Documentation links when the PackageProjectUrl-derived package URL is not 200 OK",
-        "Prefers package-local .nuget README Documentation hosts when resolving that package's documentation link",
+        "Falls back to exact README.md and .nuget/**/README.md ## Documentation links when the PackageProjectUrl-derived package URL is not 200 OK",
+        "Prefers package-local .nuget README Documentation links when resolving that package's documentation link",
         "Fails fast when no documentation URL candidate can be derived or validated",
         "Does not fall back to repository #readme links for documentation frontmatter"
       ]
     },
     {
       "id": 42,
-      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a .docfx/docfx.json that includes WidgetPack.Hosting.AspNetCore but does not include WidgetPack, a normal package WidgetPack.Hosting.AspNetCore with source files, and a convenience package WidgetPack that only references the normal package and has no source files. The docs root https://docs.contoso.dev returns 200 OK and the normal package API page https://docs.contoso.dev/api/WidgetPack.Hosting.AspNetCore.html returns 200 OK.",
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a .docfx/docfx.json metadata entry that includes WidgetPack.Hosting.AspNetCore with `dest` set to `api/web` but does not include WidgetPack, a normal package WidgetPack.Hosting.AspNetCore with source files, and a convenience package WidgetPack that only references the normal package and has no source files. The docs root https://docs.contoso.dev returns 200 OK and the normal package API page https://docs.contoso.dev/api/web/WidgetPack.Hosting.AspNetCore.html returns 200 OK.",
       "expected_output": "The generated documentation link for result/Index.md is https://docs.contoso.dev. The generated documentation link for the normal code package is the package-specific API URL because docfx.json includes that package. The generated documentation link for the convenience package is the same docs root as result/Index.md because docfx.json has no API entry for it, not a made-up convenience-package API page.",
       "expectations": [
         "Recognizes the package with no source files as a convenience package",
         "Uses the validated PackageProjectUrl docs root for result/Index.md",
-        "Uses the DocFX-derived package API URL for the normal code package documentation link",
+        "Uses the DocFX metadata dest-derived package API URL for the normal code package documentation link",
         "Uses the exact same documentation URL for the convenience package as result/Index.md when docfx.json has no API entry for that package",
         "Does not probe or emit api/WidgetPack.html for the convenience package",
         "Does not invent a convenience-package documentation page",
         "Still fails fast if the shared docs root cannot be validated with HTTP 200 OK"
+      ]
+    },
+    {
+      "id": 43,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://docs.contoso.dev</PackageProjectUrl>`, a normal package WidgetPack.Core, no package-specific DocFX API entry for WidgetPack.Core, and .nuget/WidgetPack.Core/README.md containing `More documentation available at our documentation site:` followed by https://docs.contoso.dev/api/dotnet/WidgetPack.html before `## Related Packages`. The docs root returns 200 OK, https://docs.contoso.dev/api/WidgetPack.Core.html returns 404, and the exact README documentation URL returns 200 OK.",
+      "expected_output": "The generated documentation link for WidgetPack.Core keeps the exact package README documentation URL instead of reducing it to the docs host or manufacturing api/WidgetPack.Core.html. The runner validates the exact README URL with HTTP 200 OK before emitting it.",
+      "expectations": [
+        "Reads package-local .nuget/WidgetPack.Core/README.md documentation links as candidate documentation URLs even when they are in a prose documentation block instead of a `## Documentation` heading",
+        "Prefers the exact `.nuget/<PackageName>/README.md` package directory over other package README paths whose names merely contain the package id as a prefix",
+        "Keeps exact package README Documentation URLs before deriving host-plus-DocFX fallback candidates",
+        "Ignores exact README Documentation links that do not pass the documentation-host filter, such as two-label repository hosts",
+        "Accepts https://docs.contoso.dev/api/dotnet/WidgetPack.html even though the final HTML file name does not contain WidgetPack.Core",
+        "Does not strip the README Documentation URL down to https://docs.contoso.dev for the package page",
+        "Does not emit a fabricated https://docs.contoso.dev/api/WidgetPack.Core.html link when it returns 404",
+        "Validates the emitted documentation URL with HTTP 200 OK"
+      ]
+    },
+    {
+      "id": 44,
+      "prompt": "Use git-repo-digest to generate a digest workspace for a repository with root Directory.Build.props `<PackageProjectUrl>https://www.widgetpack.dev</PackageProjectUrl>`, root README.md heading `## 📚 Documentation` linking to https://docs.widgetpack.dev/, and .docfx/docfx.json metadata entries whose `src.files` list includes WidgetPack.Commands.Messaging/**.csproj with `dest` set to `api/dotnet`. The product site returns 200 OK at the root, but https://www.widgetpack.dev/api/dotnet/WidgetPack.Commands.Messaging.html returns 404 while https://docs.widgetpack.dev/api/dotnet/WidgetPack.Commands.Messaging.html returns 200 OK.",
+      "expected_output": "The runner does not assume the product website is the documentation host after package API probes 404. It reads the emoji-prefixed README Documentation section, combines the README documentation host with the DocFX metadata dest path, validates the package URL, and emits https://docs.widgetpack.dev/api/dotnet/WidgetPack.Commands.Messaging.html for the package documentation link.",
+      "expectations": [
+        "Treats an emoji-prefixed heading such as `## 📚 Documentation` as a Documentation section",
+        "Reads https://docs.widgetpack.dev/ from the root README as a documentation host candidate rather than an exact package documentation URL",
+        "Uses .docfx/docfx.json metadata src.files and dest entries to derive api/dotnet/WidgetPack.Commands.Messaging.html",
+        "Rejects the product-site package API URL when it returns 404 even if the product-site root returns 200 OK",
+        "Combines the README documentation host with the DocFX dest-derived package API path",
+        "Emits the validated package-scoped docs URL instead of falling back to https://www.widgetpack.dev or https://docs.widgetpack.dev",
+        "For root abstraction packages ending in .Core or .Kernel, also tries the root namespace page name without that suffix after package-id candidates 404",
+        "Uses namespaces declared under src/<PackageName>/**/*.cs as additional DocFX page-name candidates when the package id page 404s"
+      ]
+    },
+    {
+      "id": 45,
+      "prompt": "Use git-repo-digest to generate and write a fresh digest for https://github.com/example/widgetpack. The active workspace already contains .bot/digests/widgetpack/20260201-120000Z/result/Index.md, .bot/digests/widgetpack/20260201-120000Z/result/WidgetPack.md, and copied website content under src/Website/Content/Markdown/widgetpack/. The user did not ask to reuse, continue, inspect, validate, or repair any existing workspace.",
+      "expected_output": "Treats the repository URL request as fresh generation, runs the bundled digest.cs runner with --repo-url and --output-root so a new UTC run workspace is created, and writes from the new run's manifest, instructions, prompts, and evidence only. It does not read, summarize, adapt, compare against, or use prior result files or website/docs copies as evidence or style material.",
+      "expectations": [
+        "Runs a fresh workspace because the user supplied a repository URL and did not explicitly request reuse",
+        "Does not inspect prior .bot/digests/widgetpack run folders to choose the latest existing workspace",
+        "Does not read previous result/Index.md or result/WidgetPack.md files from sibling runs before writing fresh results",
+        "Does not read copied website or docs digest pages as source material for the fresh digest",
+        "Uses only the new workspace's manifest.json, instructions.md, generated prompts, evidence files, evidence indexes, evidence chunks, and same-run result files for digest writing",
+        "Treats previous digest prose as contamination rather than authoritative evidence or preferred style",
+        "Reuses an existing digest only when the user explicitly provides that workspace path or asks to reuse, continue, inspect, validate, or repair it"
       ]
     }
   ]

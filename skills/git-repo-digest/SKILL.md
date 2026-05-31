@@ -15,16 +15,17 @@ Use this skill to turn a deterministic digest workspace into website-ready or do
 - Treat generated output as the source of truth. If `manifest.json`, `instructions.md`, `prompts/*.prompt.md`, or `evidence/**/*.xml` files disagree with this skill, follow the generated files unless they are internally inconsistent.
 - Every authored `result/*.md` file must start with the YAML frontmatter contract from its generated prompt. Preserve generated static metadata such as package counts, library counts, target framework monikers, external links, family links, internal `.md` family URLs, and link glyphs unless raw evidence proves the hint wrong.
 - For `result/Index.md`, preserve the generated `title` hint exactly unless raw evidence proves the product metadata is wrong. The runner resolves that title from a literal root `Directory.Build.props` `<Product>` value, then from a literal `<Product>` on the most-referenced top-level packable `.csproj`; it fails generation when no product can be resolved instead of falling back to `repo-id`.
-- Preserve generated documentation links as validated static metadata. The runner resolves documentation hosts from `PackageProjectUrl` first, falls back to `README.md` / `.nuget/**/README.md` `## Documentation` links when package-specific URLs are not `200 OK`, derives normal package API paths from `.docfx/**/docfx.json`, links packages with no DocFX API entry to the same docs root as `result/Index.md`, and fails before prose is written when no documentation URL returns `200 OK`.
+- Preserve generated documentation links as validated static metadata. The runner resolves documentation hosts from `PackageProjectUrl` first, falls back to exact `README.md` / `.nuget/<PackageName>/README.md` documentation links that pass the documentation-host filter when package-specific URLs are not `200 OK`, including emoji-prefixed Documentation headings and package-local "More documentation..." blocks before Related Packages, derives normal package API paths from `.docfx/**/docfx.json` `metadata[].dest` entries when they name the package, uses namespaces declared under `src/<PackageName>/**/*.cs` as additional DocFX page candidates, links packages with no DocFX API entry to the same docs root as `result/Index.md`, and fails before prose is written when no documentation URL returns `200 OK`.
 - Keep the workflow generic. The runner input is a full repository URL, not an implied owner/slug convention.
-- Require both runner inputs `--repo-url` and `--output-root`. Do not invent defaults silently.
+- Require the runner input `--repo-url`. The runner also requires `--output-root`; if the user omits it, resolve it deterministically to `<active-workspace>/.bot/digests` and pass that explicit value to the runner.
 - Accept curated external usage repositories from the user's natural invocation when present, then pass each one to the runner with a repeated `--external-repo-url` flag.
 - Map repository URLs and optional output paths positionally, regardless of whether the user typed a slash command, pasted bare URLs, or wrote a natural-language request. First URL is always the digest `repo-url`; a second value is `output-root` only when it is not a URL; every URL after the first is an `external-repo-url`.
 - A bare list of two or more URLs is not ambiguous: treat it as one digest target plus external usage repositories. Do not reinterpret later URLs as separate digest targets unless the user explicitly says to digest multiple repositories independently, for example "digest both repos", "create separate digests", or "run one digest per URL".
 - Do not second-guess URL mapping from repository names, package names, topical similarity, or whether an external repository seems likely to consume the digest repository. The runner is responsible for finding reference-plus-code matches or reporting that no external usage matches were found.
 - A bare repository URL means generate a fresh workspace with the runner after `output-root` is known. Do not search for or reuse the latest existing `{output-root}/{repo-id}/{run-id}` merely because it exists.
 - Reuse an existing digest workspace only when the user explicitly provides a workspace path or asks to reuse, continue, inspect, validate, or repair existing output.
-- If a `.bot` folder exists and the user did not provide an output path, recommend `<workspace>/.bot/digests` as the output root so the workspace becomes `<workspace>/.bot/digests/{repo-id}/{run-id}`.
+- For fresh generation, treat prior `result/*.md` files, copied website/docs pages, sibling `.bot/digests` runs, and any previously authored digest prose as contamination, not evidence. Do not read, summarize, adapt, compare against, or use them as style/source material unless the user explicitly asked to reuse, continue, inspect, validate, or repair that exact existing workspace.
+- If the user did not provide an output path, use `<active-workspace>/.bot/digests` as the output root so the workspace becomes `<active-workspace>/.bot/digests/{repo-id}/{run-id}`. Do not ask for confirmation just to use this default.
 - If the user provides an output path, pass that value as `--output-root`; the runner still appends `{repo-id}/{run-id}`.
 - Do not make `repo-id` customizable. It is derived from the final repository URL path segment.
 - Do not make `run-id` customizable. It is always generated in UTC as `yyyyMMdd-HHmmssZ`.
@@ -90,7 +91,7 @@ The runner also supports deterministic result validation for authored workspaces
 dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>
 ```
 
-Use this as a deterministic gate after authoring result files. It reports unsupported package-owned API member access in C# examples, low-signal Basic usage patterns, non-Codebelt-style xUnit snippets, and Basic usage snippets that do not compile and pass as temporary Codebelt.Extensions.Xunit tests. For executable validation, the runner creates a temp test project, installs the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, and runs `dotnet test`. The agent must revise from source evidence and rerun until validation passes.
+Use this as a deterministic gate after authoring result files. It reports unsupported package-owned API member access in C# examples, low-signal Basic usage patterns, non-Codebelt-style xUnit snippets, non-PascalCase `MethodName_Scenario_ExpectedBehavior` test-method names, and Basic usage snippets that do not compile and pass as temporary Codebelt.Extensions.Xunit tests. For executable validation, the runner creates temp test projects with direct package references for the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, then runs `dotnet test` with bounded parallelism. The agent must revise from source evidence and rerun until validation passes.
 
 Any result-file edit after a validation pass invalidates that pass. Rerun `--validate-results` after the final write to `result/*.md`, including after small copy edits, regenerated Basic usage snippets, or manual repairs.
 
@@ -110,16 +111,16 @@ Packing notes:
 
 ## Expected Workspace
 
-The digest root is chosen by the caller. For repositories that already use `.bot` and where the user did not supply an output path, the conventional staging root is:
+The digest root is chosen by the caller when an output path is supplied. When the user does not supply an output path, the deterministic default staging root is:
 
 ```text
-.bot/digests
+<active-workspace>/.bot/digests
 ```
 
-When that conventional root is used by default, the generated workspace is:
+When that default root is used, the generated workspace is:
 
 ```text
-.bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}
+<active-workspace>/.bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}
 ```
 
 If the user supplies an output path, use that value as the root while keeping the same generated child shape:
@@ -164,7 +165,7 @@ Manifest targets also include `frontmatterHints`, which are generated metadata v
 Collect or infer these runner inputs:
 
 - `repo-url`: required. Ask for it if the user gives only a slug or a repository nickname.
-- `output-root`: required. If the active workspace has a `.bot` directory and the user did not provide an output path, recommend `<workspace>/.bot/digests`; otherwise ask for the path.
+- `output-root`: pass this explicitly to the runner. If the user did not provide an output path, use `<active-workspace>/.bot/digests`.
 - `external-repo-url`: optional and repeatable. Use only public repository URLs the user supplied as curated usage sources.
 
 Apply this positional mapping to slash commands, pasted bare values, and natural-language invocations alike:
@@ -178,13 +179,13 @@ Map them as follows:
 - First URL: `repo-url`.
 - Second value: `output-root` only when it is not a URL.
 - Every URL after the first, including the second value when it is a URL: repeated `external-repo-url` values.
-- If the second value is a URL and no output root was supplied, keep it as `external-repo-url` and ask for `output-root` or recommend `.bot/digests` when the active workspace has `.bot`.
+- If the second value is a URL and no output root was supplied, keep it as `external-repo-url` and use `<active-workspace>/.bot/digests` as `output-root`.
 - Do not ask whether later URLs should be independent digest targets. That question is already answered by the positional mapping unless the user explicitly asks for multiple independent digests.
 - Do not reject or question an `external-repo-url` because the repository name or domain seems unrelated. Pass the user-supplied URL to the runner and let deterministic external usage selection decide whether it contributes evidence.
 
 Examples:
 
-- `https://github.com/example/library https://github.com/example/consumer` maps to `--repo-url https://github.com/example/library --external-repo-url https://github.com/example/consumer`; output root still needs to be supplied or recommended.
+- `https://github.com/example/library https://github.com/example/consumer` maps to `--repo-url https://github.com/example/library --output-root <active-workspace>/.bot/digests --external-repo-url https://github.com/example/consumer` unless the user supplies an explicit output path.
 - `/git-repo-digest https://github.com/example/library .bot/digests https://github.com/example/consumer` maps to `--repo-url https://github.com/example/library --output-root .bot/digests --external-repo-url https://github.com/example/consumer`.
 - `generate a digest for https://github.com/example/library using https://github.com/example/consumer as evidence` uses the same mapping: first URL is the digest repo, second URL is external usage evidence.
 - `digest both https://github.com/example/library and https://github.com/example/other-library separately` is different because the user explicitly requested independent digests; handle that as separate digest runs.
@@ -197,6 +198,7 @@ Choose the workspace mode from the user's input, not from folders you happen to 
 
 - Generate fresh when the user provides a repository URL and does not explicitly ask to reuse existing output.
 - Generate fresh even when `{output-root}/{repo-id}` already contains prior run folders; the runner appends a new UTC `{run-id}`.
+- In fresh mode, do not inspect old `result/*.md` files, website copies, docs copies, sibling run folders, or other digest prose before writing. The only digest-writing inputs are the newly generated workspace's `manifest.json`, `instructions.md`, prompts, evidence files, evidence indexes, evidence chunks, and any result files produced earlier in the same new workspace phase order.
 - Locate existing only when the user explicitly provides a digest workspace path such as `{output-root}/{repo-id}` or `{output-root}/{repo-id}/{run-id}`, or asks to reuse, continue, inspect, validate, or repair existing output.
 - If the user provides `{output-root}/{repo-id}` as an existing-workspace path and does not name a run-id, inspect the folder and ask before choosing among prior run folders unless the user asked for the latest run.
 
@@ -322,7 +324,9 @@ Run the deterministic result validator and require a pass before reporting compl
 dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>
 ```
 
-This validator catches C# Basic usage member accesses on package-owned receiver types that do not exist in source evidence, non-Codebelt-style xUnit snippets, malformed Basic usage sections, low-signal Basic usage examples, and snippets that fail an executable Codebelt.Extensions.Xunit harness. It intentionally does not guess replacement APIs. If it reports an error, revise the example from source evidence and rerun validation until it passes.
+This validator catches C# Basic usage member accesses on package-owned receiver types that do not exist in source evidence, non-Codebelt-style xUnit snippets, test methods not named with the exact PascalCase `MethodName_Scenario_ExpectedBehavior` convention, malformed Basic usage sections, low-signal Basic usage examples, and snippets that fail an executable Codebelt.Extensions.Xunit harness. It intentionally does not guess replacement APIs. If it reports an error, revise the example from source evidence and rerun validation until it passes.
+
+The executable validation path is optimized for large digest workspaces: it writes direct package references into each temporary test project, runs examples with bounded parallelism, and honors `GIT_REPO_DIGEST_VALIDATE_PARALLELISM` when a host needs to lower or raise concurrency. Do not replace this with manual `dotnet add package` loops.
 
 Treat validation as a final-state check, not a milestone from earlier in the session. If any `result/*.md` file changes after `--validate-results` passes, rerun validation before reporting completion.
 
@@ -360,8 +364,8 @@ Before finishing, verify:
 - No result file contains analysis notes, citations, XML, JSON, confidence scores, or chat commentary unless the generated prompt explicitly asks for them.
 - Code examples mention only APIs visible in the relevant evidence.
 - Basic usage examples pass API-shape validation: every namespace, type, constructor, method, extension method, override, generic constraint, and property access used in the snippet exists on the declaring type in source evidence or on the framework type shown by the snippet's static type.
-- Basic usage examples pass Codebelt xUnit validation: every C# test snippet includes `using Codebelt.Extensions.Xunit;` and `using Xunit;`, uses a file-scoped consumer namespace such as `namespace MyProject.Tests;`, omits `using Xunit.Abstractions;`, declares a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, defines a constructor that accepts `ITestOutputHelper output` and passes that output helper to the base constructor, and uses `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` for concise human-friendly scenario output.
-- Basic usage examples pass executable validation: the validator writes each Basic usage C# block to a temporary Codebelt.Extensions.Xunit project, installs the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, runs `dotnet test`, and treats any compile or test failure as blocking.
+- Basic usage examples pass Codebelt xUnit validation: every C# test snippet includes `using Codebelt.Extensions.Xunit;` and `using Xunit;`, uses a file-scoped consumer namespace such as `namespace MyProject.Tests;`, omits `using Xunit.Abstractions;`, declares a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, defines a constructor that accepts `ITestOutputHelper output` and passes that output helper to the base constructor, names the single `[Fact]` or `[Theory]` method with exactly three PascalCase parts in the `MethodName_Scenario_ExpectedBehavior` shape such as `ResolveOptions_MissingName_ThrowsOptionsException`, and uses `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` for concise human-friendly scenario output.
+- Basic usage examples pass executable validation: the validator writes each Basic usage C# block to a temporary Codebelt.Extensions.Xunit project with direct package references to the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, runs `dotnet test` with bounded parallelism, and treats any compile or test failure as blocking.
 - Basic usage sections are structurally valid: package pages have one top-level `## Basic usage` section, headings inside fenced code blocks do not count as Markdown section boundaries, and every Basic usage section contains at least one complete fenced C# code block.
 - If executable validation fails, rewrite the example from source, tests, and source-valid external usage, then rerun `--validate-results` until the workspace passes.
 - Basic usage examples inspired by external usage validate every API call, constructor, namespace, and extension method against current source evidence.
@@ -369,13 +373,13 @@ Before finishing, verify:
 - Property accesses in C# examples are API-shape claims. For any real package-owned type, fixture, base class, builder, options object, context, factory result, or service object, verify that the accessed member is declared by the relevant source evidence or by a known framework type used with the correct static type.
 - External usage evidence may shape the consumer scenario, but stale external code does not override current source or test evidence.
 - For normal code packages, `## Basic usage` contains exactly one C# fenced code block unless the generated prompt explicitly allows more.
-- For normal code packages, the Basic usage C# example is a complete Codebelt-style test snippet with explicit `using` statements, a file-scoped consumer namespace, a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, a constructor with `ITestOutputHelper output` passed to the base constructor, useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output, and exactly one `[Fact]` or `[Theory]` method unless the generated prompt explicitly allows more.
+- For normal code packages, the Basic usage C# example is a complete Codebelt-style test snippet with explicit `using` statements, a file-scoped consumer namespace, a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, a constructor with `ITestOutputHelper output` passed to the base constructor, useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output, and exactly one `[Fact]` or `[Theory]` method named with exactly three PascalCase parts in the `MethodName_Scenario_ExpectedBehavior` shape unless the generated prompt explicitly allows more.
 - For normal code packages, the Basic usage example demonstrates a realistic consumer task where the package API changes how the code is written, not just a smoke test that calls one method with a literal value.
 - For normal code packages, the Basic usage example shows a system under test interacting through the package API when the package supports DI, pipelines, handlers, factories, lifecycle hooks, loggers, collectors, stores, recorders, fixtures, providers, or test hosts.
 - For normal code packages, the two-sentence Basic usage explanation describes only what the example actually demonstrates.
 - For convenience, aggregate, metadata-only, or no-assembly packages that reference code packages, `## Basic usage` contains one C# fenced code block per referenced code package.
 - For convenience packages, each Basic usage example is introduced by a third-level heading naming the referenced package, for example `### Codebelt.Extensions.Xunit`.
-- For convenience packages, each referenced-package example follows the same Codebelt-style xUnit shape and contains exactly one `[Fact]` or `[Theory]` method.
+- For convenience packages, each referenced-package example follows the same Codebelt-style xUnit shape and contains exactly one `[Fact]` or `[Theory]` method named with the PascalCase `MethodName_Scenario_ExpectedBehavior` convention.
 - For convenience packages, the Basic usage section includes a final paragraph explaining that the convenience package provides the single package reference and that the APIs come from the referenced packages.
 - Convenience-package examples must not reuse individual package Basic usage examples verbatim.
 - Convenience-package examples must not describe referenced APIs as if they are implemented by the convenience package itself.
@@ -491,6 +495,7 @@ Do not copy staged results there unless the user asks for website sync, publicat
 - Running a separate .NET project instead of the bundled `scripts/digest.cs` runner.
 - Passing only a repository slug when the runner requires a full URL.
 - Passing user-provided external usage repositories as implicit runner positional arguments instead of repeated `--external-repo-url` flags.
+- Reading, adapting, comparing against, or using previous digest prose from sibling `.bot/digests` runs, `result/*.md`, website content, docs content, or other folders during fresh generation.
 - Assuming a fixed organization such as `codebeltnet` or a fixed repository host such as GitHub.
 - Searching GitHub for external usage when the runner only supports user-provided external repository URLs.
 - Loading every package evidence set for every package digest.
