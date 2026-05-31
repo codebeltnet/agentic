@@ -2414,9 +2414,28 @@ internal static class DigestScript
         }
     }
 
-    private static bool IsMarkdownHeadingMatch(string text, string heading) =>
-        string.Equals(text, heading, StringComparison.OrdinalIgnoreCase)
-        || text.Contains(heading, StringComparison.OrdinalIgnoreCase);
+    private static bool IsMarkdownHeadingMatch(string text, string heading)
+    {
+        if (string.Equals(text, heading, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var undecoratedText = TrimLeadingHeadingDecoration(text);
+        return !string.Equals(text, undecoratedText, StringComparison.Ordinal)
+            && string.Equals(undecoratedText, heading, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string TrimLeadingHeadingDecoration(string text)
+    {
+        var index = 0;
+        while (index < text.Length && !char.IsLetterOrDigit(text[index]))
+        {
+            index++;
+        }
+
+        return text[index..].TrimStart();
+    }
 
     private static string ExtractLeadingGlyph(string line, string packageName)
     {
