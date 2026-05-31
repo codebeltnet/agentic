@@ -21,7 +21,7 @@
     },
     {
       "id": 2,
-      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject and then write the resulting digests. The active workspace contains a .bot folder.",
+      "prompt": "Use git-repo-digest to generate a digest workspace for https://github.com/example/myproject and then write the resulting digests. The active workspace does not have a .bot folder.",
       "expected_output": "When no output path was supplied, resolves the output root to the active workspace's .bot/digests path without asking, runs dotnet run --file with --repo-url, the full URL, and --output-root so the runner creates .bot/digests/{repo-id}/{yyyyMMdd-HHmmssZ}, does not ask for repo-id, run-id, output-root, or result directory, avoids unsupported runner inputs, then follows the generated manifest, including evidence index and chunk entries, to write package digests before result/Index.md.",
       "expectations": [
         "Uses .bot/digests under the active workspace as the output root because the user supplied no output path",
