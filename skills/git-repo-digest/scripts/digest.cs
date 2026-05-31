@@ -3556,11 +3556,12 @@ internal static class DigestScript
     private static int GetExampleValidationParallelism()
     {
         var processorCount = Math.Max(1, Environment.ProcessorCount);
+        const int MaxSupportedParallelism = 8;
         var defaultParallelism = Math.Min(DefaultExampleValidationParallelism, processorCount);
         var rawValue = Environment.GetEnvironmentVariable("GIT_REPO_DIGEST_VALIDATE_PARALLELISM");
         if (int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) && configured > 0)
         {
-            return Math.Min(configured, processorCount);
+            return Math.Min(configured, Math.Min(processorCount, MaxSupportedParallelism));
         }
 
         return defaultParallelism;
