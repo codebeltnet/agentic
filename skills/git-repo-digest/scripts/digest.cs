@@ -28,6 +28,7 @@ internal static class DigestScript
     private const int MaxExternalUsageFilesPerPackage = 96;
     private const int MaxApiSummaryTypes = 512;
     private const int MaxApiSummaryMembersPerType = 32;
+    private const int DefaultExampleValidationParallelism = 2;
 
     private static readonly TimeSpan DefaultProcessTimeout = TimeSpan.FromMinutes(5);
     private static readonly HttpClient HttpClient = new()
@@ -199,6 +200,14 @@ internal static class DigestScript
 
     private static readonly Regex TestOutputExpression = new(
         @"\bTestOutput\.(?:Write|WriteLine|WriteLines)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex XunitTestMethodExpression = new(
+        @"(?ms)^\s*\[(?:Fact|Theory)(?:\([^\]]*\))?\]\s*(?:\r?\n\s*\[[^\]]+\]\s*)*(?:public\s+)?(?:async\s+)?[A-Za-z_][A-Za-z0-9_<>,\.\s?]*\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex PascalCaseIdentifierExpression = new(
+        @"^[A-Z][A-Za-z0-9]*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex FenceLineInsideCodeExpression = new(
@@ -3190,6 +3199,7 @@ internal static class DigestScript
         - not include `using Xunit.Abstractions;`
         - use a file-scoped consumer namespace such as `namespace MyProject.Tests;`
         - compile as a complete Codebelt-style xUnit snippet with a namespace, a public test class that inherits from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, a constructor that accepts `ITestOutputHelper output` and passes it to the base constructor, and exactly one `[Fact]` or `[Theory]` method unless tests are clearly irrelevant for this package type
+        - name the single test method with the exact `MethodName_Scenario_ExpectedBehavior` convention, with all three underscore-separated parts in PascalCase, for example `ResolveOptions_MissingName_ThrowsOptionsException`
         - include at least one assertion or observable result
         - use `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` to emit concise, human-friendly information about the scenario or observable result
         - demonstrate the current package's central API, normally one declared by this package
@@ -3201,7 +3211,7 @@ internal static class DigestScript
         - avoid pseudocode, ellipses, TODO comments, placeholder methods, and unexplained magic
         - avoid toy/greeting-oriented names and literal-only bodies such as `Greeting`, `MessageService`, `Hello World`, `OK`, `Foo`, `Bar`, `Sample`, or `Dummy` unless those exact terms are source-backed and central to the package
         - avoid direct helper round-trips where the test only writes to a package-owned store/logger/sink/collector/recorder/provider/factory/fixture/host and then reads the same object back
-        - be copy/paste ready: the deterministic validator will place the snippet in a temporary Codebelt.Extensions.Xunit test project, install the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, run `dotnet test`, and fail validation unless the test compiles and passes
+        - be copy/paste ready: the deterministic validator will place the snippet in a temporary Codebelt.Extensions.Xunit test project with direct package references to the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, run `dotnet test`, and fail validation unless the test compiles and passes
         - stay between 10 and 35 lines when feasible
         - avoid top-level statements; assertions must live inside the single test method
 
@@ -3224,7 +3234,7 @@ internal static class DigestScript
         For metadata-only, aggregate, convenience, or no-assembly packages:
         - Write exactly one C# example for each referenced code package with consumer-facing APIs.
         - Use a third-level heading for each example: `### Referenced.Package.Name`.
-        - Each example must follow the Codebelt-style xUnit shape: `using Codebelt.Extensions.Xunit;`, `using Xunit;`, a file-scoped consumer namespace, no `using Xunit.Abstractions;`, a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, a constructor with `ITestOutputHelper output` passed to the base constructor, exactly one `[Fact]` or `[Theory]` method, at least one assertion, and useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output.
+        - Each example must follow the Codebelt-style xUnit shape: `using Codebelt.Extensions.Xunit;`, `using Xunit;`, a file-scoped consumer namespace, no `using Xunit.Abstractions;`, a public test class inheriting from `Test` or a source-backed Codebelt test base class that the evidence shows derives from `Test`, a constructor with `ITestOutputHelper output` passed to the base constructor, exactly one `[Fact]` or `[Theory]` method named with `MethodName_Scenario_ExpectedBehavior` where every part is PascalCase, at least one assertion, and useful `TestOutput.Write`, `TestOutput.WriteLine`, or `TestOutput.WriteLines` output.
         - Each example must make an API declared by the referenced package the central API.
         - Before writing each example, use the referenced package evidence map above to read and validate the referenced package's API shape.
         - Do not assume a fixture, base class, builder, options type, service, or other object exposes a member just because the member is common in a framework or plausible from its name.
@@ -3429,9 +3439,31 @@ internal static class DigestScript
 
         try
         {
-            for (var i = 0; i < examples.Count; i++)
+            var maxParallelism = GetExampleValidationParallelism();
+            using var semaphore = new SemaphoreSlim(maxParallelism, maxParallelism);
+            var diagnosticsByExample = new List<ResultValidationDiagnostic>[examples.Count];
+            var tasks = examples.Select(async (example, index) =>
             {
-                await ValidateExecutableBasicUsageExampleAsync(tempRoot, examples[i], i + 1, diagnostics);
+                await semaphore.WaitAsync();
+                try
+                {
+                    var localDiagnostics = new List<ResultValidationDiagnostic>();
+                    await ValidateExecutableBasicUsageExampleAsync(tempRoot, example, index + 1, localDiagnostics);
+                    diagnosticsByExample[index] = localDiagnostics;
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+            foreach (var exampleDiagnostics in diagnosticsByExample)
+            {
+                if (exampleDiagnostics is { Count: > 0 })
+                {
+                    diagnostics.AddRange(exampleDiagnostics);
+                }
             }
         }
         finally
@@ -3475,7 +3507,7 @@ internal static class DigestScript
         }
 
         var projectPath = Path.Combine(exampleDirectory, ExampleValidationProjectName + ".csproj");
-        await WriteUtf8Async(projectPath, BuildExampleValidationProject());
+        await WriteUtf8Async(projectPath, BuildExampleValidationProject(GetExampleValidationPackageIds(example.PackageId)));
         await WriteUtf8Async(Path.Combine(exampleDirectory, "BasicUsageExampleTests.cs"), example.Code + Environment.NewLine);
 
         var outputPath = Path.Combine(exampleDirectory, "bin") + Path.DirectorySeparatorChar;
@@ -3483,14 +3515,6 @@ internal static class DigestScript
 
         try
         {
-            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "Microsoft.NET.Test.Sdk");
-            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "xunit.v3");
-            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "xunit.runner.visualstudio");
-            await AddExampleValidationPackageAsync(exampleDirectory, projectPath, "Codebelt.Extensions.Xunit");
-            if (!string.Equals(example.PackageId, "Codebelt.Extensions.Xunit", StringComparison.OrdinalIgnoreCase))
-            {
-                await AddExampleValidationPackageAsync(exampleDirectory, projectPath, example.PackageId);
-            }
             await RunProcessCaptureAsync(
                 "dotnet",
                 [
@@ -3510,12 +3534,42 @@ internal static class DigestScript
         }
     }
 
-    private static async Task AddExampleValidationPackageAsync(string exampleDirectory, string projectPath, string packageId)
+    private static int GetExampleValidationParallelism()
     {
-        await RunProcessCaptureAsync("dotnet", ["add", projectPath, "package", packageId], exampleDirectory, TimeSpan.FromMinutes(2));
+        var processorCount = Math.Max(1, Environment.ProcessorCount);
+        var defaultParallelism = Math.Min(DefaultExampleValidationParallelism, processorCount);
+        var rawValue = Environment.GetEnvironmentVariable("GIT_REPO_DIGEST_VALIDATE_PARALLELISM");
+        if (int.TryParse(rawValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var configured) && configured > 0)
+        {
+            return Math.Min(configured, processorCount);
+        }
+
+        return defaultParallelism;
     }
 
-    private static string BuildExampleValidationProject()
+    private static IReadOnlyList<string> GetExampleValidationPackageIds(string packageId)
+    {
+        var packageIds = new List<string>
+        {
+            "Microsoft.NET.Test.Sdk",
+            "xunit.v3",
+            "xunit.runner.visualstudio",
+            "Codebelt.Extensions.Xunit"
+        };
+
+        if (!string.Equals(packageId, "Codebelt.Extensions.Xunit", StringComparison.OrdinalIgnoreCase))
+        {
+            packageIds.Add(packageId);
+        }
+
+        return packageIds
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string BuildExampleValidationProject(IReadOnlyList<string> packageIds)
     {
         var sb = new StringBuilder();
         sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
@@ -3525,6 +3579,16 @@ internal static class DigestScript
         sb.AppendLine("    <ImplicitUsings>enable</ImplicitUsings>");
         sb.AppendLine("    <IsPackable>false</IsPackable>");
         sb.AppendLine("  </PropertyGroup>");
+        sb.AppendLine();
+        sb.AppendLine("  <ItemGroup>");
+        foreach (var packageId in packageIds)
+        {
+            sb.Append("    <PackageReference Include=\"");
+            sb.Append(EscapeXmlAttribute(packageId));
+            sb.AppendLine("\" Version=\"*\" />");
+        }
+
+        sb.AppendLine("  </ItemGroup>");
         sb.AppendLine("</Project>");
         return sb.ToString();
     }
@@ -3587,6 +3651,7 @@ internal static class DigestScript
         ValidateBasicUsageCodeBlockStructure(resultFile, code, diagnostics);
         ValidateFileScopedNamespace(resultFile, code, diagnostics);
         ValidateCodebeltXunitShape(resultFile, code, apiSurface, diagnostics);
+        ValidateXunitTestMethodName(resultFile, code, diagnostics);
         ValidateToyExampleTerms(resultFile, code, diagnostics);
         ValidateDirectRoleRoundTrip(resultFile, code, apiSurface, diagnostics);
     }
@@ -3659,6 +3724,30 @@ internal static class DigestScript
         {
             diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", "Basic usage example must follow the Codebelt.Extensions.Xunit test shape: " + string.Join("; ", missing) + "."));
         }
+    }
+
+    private static void ValidateXunitTestMethodName(
+        string resultFile,
+        string code,
+        List<ResultValidationDiagnostic> diagnostics)
+    {
+        var methods = XunitTestMethodExpression.Matches(code)
+            .Select(match => match.Groups["name"].Value)
+            .ToList();
+        if (methods.Count != 1)
+        {
+            diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", $"Basic usage example must contain exactly one `[Fact]` or `[Theory]` test method; found {methods.Count}."));
+            return;
+        }
+
+        var methodName = methods[0];
+        var parts = methodName.Split('_', StringSplitOptions.None);
+        if (parts.Length == 3 && parts.All(part => PascalCaseIdentifierExpression.IsMatch(part)))
+        {
+            return;
+        }
+
+        diagnostics.Add(new ResultValidationDiagnostic(resultFile, "error", $"Basic usage test method `{methodName}` must follow `MethodName_Scenario_ExpectedBehavior` with all three parts in PascalCase, for example `ResolveOptions_MissingName_ThrowsOptionsException`."));
     }
 
     private static bool HasCodebeltTestBaseClass(string code, IReadOnlyDictionary<string, ApiTypeSurface> apiSurface)
