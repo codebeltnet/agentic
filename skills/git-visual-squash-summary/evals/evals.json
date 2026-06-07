@@ -151,6 +151,18 @@
         "Does not ask for or imply yolo because the skill is read-only",
         "Returns GitHub-ready grouped summary lines only when changes exist versus the base branch"
       ]
+    },
+    {
+      "id": 14,
+      "prompt": "Summarize this feature branch for squash merge. The branch contains commits from me, a teammate, and a bot account; all contributors' commits belong in the squash description unless I explicitly ask for an author filter.",
+      "expected_output": "A grouped squash summary that inspects and semantically collapses the whole selected branch/range across all authors instead of filtering to the current user's commits.",
+      "expectations": [
+        "Treats branch topology as the summary scope rather than author identity",
+        "Includes commits from every author/contributor in the selected branch or range before semantic collapsing",
+        "Does not apply an implicit --author, --committer, current-user, current-email, current-contributor, or identity-mode filter",
+        "Treats author metadata as context only unless the user explicitly asks for an author-filtered summary",
+        "Returns grouped summary lines only without explaining the author-scope rule"
+      ]
     }
   ]
 }

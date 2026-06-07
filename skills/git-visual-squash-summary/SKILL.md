@@ -1,7 +1,7 @@
 ---
 name: git-visual-squash-summary
 description: >
-  Turn many commits into a curated grouped squash summary compatible with the opinionated wording style of git-visual-commits. Use when the user asks to squash a branch into a concise summary, write a squash-and-merge summary, summarize this branch, summarize a commit range or PR as grouped lines, clean up noisy commit history, or asks for a curated summary without committing. For normal squash-and-merge requests, default to the full current feature branch from merge-base to HEAD against the base branch, not the same-named tracking remote, and do not ask for yolo because the skill is read-only. Returns grouped lines only, preserves identifiers, merges overlap, drops noise, and avoids changelog wording.
+  Turn many commits into a curated grouped squash summary compatible with the opinionated wording style of git-visual-commits. Use when the user asks to squash a branch into a concise summary, write a squash-and-merge summary, summarize this branch, summarize a commit range or PR as grouped lines, clean up noisy commit history, or asks for a curated summary without committing. For normal squash-and-merge requests, default to the full current feature branch from merge-base to HEAD against the base branch instead of a same-named tracking remote, include commits from all authors unless the user explicitly narrows by author, and do not ask for yolo because the skill is read-only. Returns grouped lines only, preserves identifiers, merges overlap, drops noise, and avoids changelog wording.
 ---
 
 # Git Visual Squash Summary
@@ -33,6 +33,8 @@ This skill has one job: produce a ready-to-paste squash-and-merge summary for th
 - Return grouped lines only, never a title or body.
 - Keep every output line at or below 72 characters.
 - For squash-and-merge requests that target the current branch, default to the full feature branch range from merge-base to `HEAD`.
+- Treat branch topology as the scope source of truth, not author identity.
+- Include commits from every author/contributor in the selected range. Do not filter to the current git user, current contributor, bot identity, configured author, or "my changes" unless the user explicitly asks for an author-filtered summary.
 - A bare invocation such as `git-visual-squash-summary` or `/git-visual-squash-summary` is itself a complete request: resolve the current branch against the base branch, then return the grouped summary directly.
 - Never require, infer, or ask for `yolo` / `auto`. Those modes approve mutating workflows; this skill is read-only and should act directly.
 - Do not collect commit-set parameters through follow-up questions, widgets, or choice UIs for ordinary squash-and-merge requests.
@@ -53,6 +55,7 @@ Resolve the commit set in this order:
 6. If you still cannot determine a safe comparison point after those silent fallbacks, stop and ask for the range or base branch instead of guessing.
 
 Never turn steps 2 or 3 into a user-facing choice. Resolve them automatically and continue.
+Never add `--author`, `--committer`, current-user, current-email, current-contributor, or identity-mode filters while resolving ordinary branch-level squash summaries. Author metadata may help understand ownership, but it must not narrow the default commit set.
 Do not stop to ask whether the latest branch commit "should count". If it is on the branch, it is in scope by default.
 Do not open with "What would you like me to summarize?" when the user invoked this skill directly or otherwise already asked for a squash summary.
 If every safe base-branch comparison is genuinely empty, say `No branch changes to summarize.` and stop. Do not ask for a hypothetical range or demo.
@@ -80,6 +83,7 @@ Helpful read-only commands:
 ```bash
 git log --reverse --oneline <range>
 git log --reverse --stat --format=medium <range>
+git log --reverse --format="%h %an <%ae> %s" <range>
 git diff --stat <base>..HEAD
 git diff <base>..HEAD
 ```
@@ -144,6 +148,7 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Preserves names such as commands, types, files, APIs, flags, and paths.
 - Keeps each line compact enough to scan at a glance.
 - Uses the whole current feature branch by default for squash-and-merge requests instead of asking needless range questions.
+- Treats the branch/range as author-agnostic scope and includes every author's commits before semantic collapsing.
 - Produces the GitHub-ready squash summary directly instead of turning commit-set resolution into a mini interview.
 
 ## Bad Output Characteristics
@@ -153,6 +158,7 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Dumping raw commit subjects line by line.
 - Asking the user to choose among commits that are all on the current feature branch when they asked for a squash summary of that branch.
 - Presenting commit-selection widgets or multiple-choice prompts for ordinary branch-level squash requests.
+- Filtering the branch to the current user's or current contributor's commits, or treating "my changes" as the default scope.
 - Collapsing several unique top-level efforts into one stitched sentence.
 - Collapsing dependency updates into the same line as build-system configuration or refactor work when the diff shows separate intents.
 - Starting normal descriptions with uppercase verbs such as `Add`, `Update`, `Refresh`, or `Preserve`.
