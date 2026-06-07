@@ -84,8 +84,8 @@ git rev-parse --abbrev-ref HEAD
 git remote
 git symbolic-ref refs/remotes/origin/HEAD --short
 git symbolic-ref refs/remotes/upstream/HEAD --short
-git merge-base HEAD origin/HEAD
-git log --oneline origin/main...HEAD
+git merge-base HEAD {resolvedBase}
+git log --oneline {resolvedBase}...HEAD
 ```
 
 ## Contributor Handling
@@ -320,7 +320,7 @@ git rev-parse --abbrev-ref HEAD
 git remote
 git symbolic-ref refs/remotes/origin/HEAD --short
 git log --oneline {resolvedBase}...HEAD
-git log --format="%H %an %ae" {resolvedBase}...HEAD
+git log --format="%H%x09%an%x09%ae%x09%s%x09%b" {resolvedBase}...HEAD
 ```
 
 Then use the GitHub API to enrich local commit data with pull request metadata, labels, and descriptions.
