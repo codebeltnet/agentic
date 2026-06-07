@@ -311,14 +311,14 @@ gh api repos/{owner}/{repo}/commits/{sha}/pulls --jq '.[]'
 gh pr view {number} --repo {owner}/{repo} --json title,author,body,labels,files,url
 ```
 
-**When using default resolution (no explicit input)**, combine local Git commands with GitHub API:
+**When using default resolution (no explicit input)**, combine local Git commands with GitHub API. First resolve the base branch (see **Default Resolution Behavior** above), then substitute the resolved value into `{resolvedBase}` — do not hardcode `origin/main`:
 
 ```bash
 git rev-parse --abbrev-ref HEAD
 git remote
 git symbolic-ref refs/remotes/origin/HEAD --short
-git log --oneline origin/main...HEAD
-git log --format="%H %an %ae" origin/main...HEAD
+git log --oneline {resolvedBase}...HEAD
+git log --format="%H %an %ae" {resolvedBase}...HEAD
 ```
 
 Then use the GitHub API to enrich local commit data with pull request metadata, labels, and descriptions.

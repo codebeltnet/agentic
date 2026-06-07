@@ -34,6 +34,7 @@ Collect input values, present a summary, and ask for confirmation before generat
      Previous:    {previousRef}
      Current:     {currentRef}
    ```
-2. If the user provided separate values, present them in the same summary format.
+   Then ask: "Ready to proceed? (yes / no)"
+2. If the user provided separate values, present them in the same summary format, then ask: "Ready to proceed? (yes / no)"
 3. If any required value is missing and the user did provide partial input, ask for it individually before presenting the summary.
 4. After confirmation, proceed immediately to data collection.
