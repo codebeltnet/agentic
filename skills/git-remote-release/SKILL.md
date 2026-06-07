@@ -186,6 +186,34 @@ For larger releases, prefer grouped bullets organized by theme: new features, fi
 
 Avoid simply repeating PR titles or commit messages unless they are already clear and release-note friendly. Rewrite them into prose that explains the effect.
 
+### Key capabilities formatting (when included)
+
+When the release note includes a "Key capabilities" section, each bullet must be written as a natural sentence with a bolded lead-in.
+
+Do not use a bold label followed by an em dash, colon, or definition-style fragment.
+
+Avoid this style:
+
+```markdown
+- **Thematic grouping** — Related changes are discussed together instead of listed chronologically
+```
+
+Use this style instead:
+
+```markdown
+- **Thematic grouping** where related changes are discussed together instead of listed chronologically,
+```
+
+The bold text should highlight the capability name, but the full bullet must read as one natural sentence.
+
+Preferred pattern:
+
+```markdown
+- **<Capability name>** where/that/so/with <natural sentence continuation>,
+```
+
+End each bullet with `,` except the final bullet in a populated section, which must end with `.`.
+
 ### GitHub alert blocks (optional)
 
 Alert blocks draw attention to information that deserves special notice. Use them sparingly — prefer zero to two per release. Only include alerts when the release data genuinely supports the attention level.
