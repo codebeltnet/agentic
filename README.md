@@ -61,6 +61,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-app-slnx
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-lib-slnx
+npx skills add https://github.com/codebeltnet/agentic --skill git-remote-release
 # npx skills add https://github.com/codebeltnet/agentic --skill another-skill
 ```
 
@@ -92,6 +93,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-lib-sln
 | [dotnet-new-app-slnx](skills/dotnet-new-app-slnx/SKILL.md) | Scaffold a new .NET standalone application solution following codebeltnet engineering conventions. Supports Console, Web, and Worker host families with Startup or Minimal hosting patterns; Web expands into Empty Web, Web API, MVC, or Web App / Razor, plus functional tests and a simplified CI pipeline. |
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
 | [dotnet-strong-name-signing](skills/dotnet-strong-name-signing/SKILL.md) | Generate a strong name key (`.snk`) file for signing .NET assemblies using pure .NET cryptography — no Visual Studio Developer PowerShell or `sn.exe` required. Works in any terminal. Defaults to 1024-bit RSA (matching `sn.exe`), with 2048 and 4096 available as options. |
+| [git-remote-release](skills/git-remote-release/SKILL.md) | Generate GitHub release notes by summarizing all commits and pull requests between two Git tags or branches in a remote GitHub repository. Accepts a compare URL or separate owner/repo, previous ref, and current ref values; falls back to comparing the current branch against the upstream default branch when no input is provided. Produces a human-friendly `## What's Changed` summary with optional GitHub alert blocks, a `Sources:` section preserving PR and commit references, and a full changelog compare link. |
 
 ### Copyable Install Commands
 
@@ -167,6 +169,12 @@ npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name-signing
+```
+
+`git-remote-release`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill git-remote-release
 ```
 
 ### Why git-visual-commits?
@@ -469,6 +477,24 @@ Most repositories start with `git init` followed by committing everything direct
 - **Clean, meaningful history** — main tells the story of reviewed, approved changes
 - **Version-aware branches** — `v0.0.1/spike-auth` vs `v1.0.0/release-prep` signals project maturity at a glance
 - **Zero-friction setup** — one skill invocation, not a 10-step checklist
+
+### Why git-remote-release?
+
+Writing release notes is tedious. Raw commit logs are too noisy, PR titles often lack context, and the best release notes explain what changed and why it matters — not just what was merged. That gap between "here are the commits" and "here is what this release means for you" is where **git-remote-release** fits.
+
+**git-remote-release** reads all commits and pull requests between two tags or branches in a remote GitHub repository and produces a polished, paste-ready release note.
+
+- **Remote-first workflow** that works entirely through GitHub's API, with no local clone required,
+- **Compare URL awareness** where a pasted GitHub compare URL is used to extract the owner, repository, and both tags,
+- **Pull request-preferred analysis** that uses rich PR metadata when available and gracefully falls back to raw commits,
+- **Default-branch-aware comparisons** that resolve the upstream base and collect only commits on the current branch,
+- **Effect-oriented summaries** that explain what users and maintainers can expect from the release, not just what code was merged,
+- **Thematic grouping** where related changes are discussed together instead of listed chronologically,
+- **GitHub alert blocks** that use `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, and `CAUTION` alerts sparingly and only when the release data supports the attention level,
+- **Source preservation** where every release note includes a `Sources:` section with the original PR and commit references,
+- **Strict format** that always starts with `## What's Changed` and always ends with the full changelog compare link,
+- **No invented claims** so every statement in the summary is backed by the commits and pull requests collected,
+- **Read-only operation** that never mutates repository state.
 
 ## Repository structure
 
