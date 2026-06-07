@@ -1,0 +1,58 @@
+{
+  "skill_name": "git-remote-release",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Generate release notes for https://github.com/codebeltnet/agentic/compare/v0.4.5...v0.4.6",
+      "expected_output": "Release notes starting with ## What's Changed, a human-friendly summary of changes between v0.4.5 and v0.4.6, a Sources section with PR/commit references, and ending with the full changelog link.",
+      "expectations": [
+        "First line is exactly ## What's Changed",
+        "Parses the compare URL to extract owner, repo, previous tag, and current tag",
+        "Summary explains the effect of changes rather than listing raw commit messages",
+        "Sources section includes all contributing PRs and/or commits with author and URL",
+        "Final line is the full changelog compare link in the exact required format",
+        "Nothing appears after the changelog link"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I need release notes for the cli/cli repo, from v2.60.0 to v2.61.0. Write something I can paste directly into a GitHub release.",
+      "expected_output": "Release notes for cli/cli between v2.60.0 and v2.61.0, formatted for direct paste into a GitHub release, with grouped changes and proper sources.",
+      "expectations": [
+        "First line is exactly ## What's Changed",
+        "Uses separate repository, previous tag, and current tag values correctly",
+        "Summary groups related changes by theme rather than listing chronologically",
+        "Alert blocks are included only when supported by the release data",
+        "Sources section lists every contributing PR and/or commit",
+        "Final line is the full changelog compare link for cli/cli v2.60.0...v2.61.0"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Write release notes for dotnet/runtime from v9.0.0 to v9.0.1. This is a patch release so it should be concise. Highlight any security fixes if there are any.",
+      "expected_output": "A concise release note for a patch release with focused summary, any justified security alerts using CAUTION blocks, and complete sources.",
+      "expectations": [
+        "First line is exactly ## What's Changed",
+        "Summary is appropriately concise for a patch release",
+        "Security-sensitive changes are highlighted with CAUTION alert blocks when supported by evidence",
+        "No alerts are invented without supporting evidence from the commits or PRs",
+        "Sources section preserves all contributing references",
+        "Final line is the full changelog compare link"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Generate release notes for my current branch.",
+      "expected_output": "Release notes generated from the current branch compared against the upstream default branch, with all contributors included in the Sources section.",
+      "expectations": [
+        "First line is exactly ## What's Changed",
+        "Detects the current branch from the local Git working repository",
+        "Resolves the upstream remote and default branch using the fallback order",
+        "Compares current branch against the upstream default branch",
+        "Includes all contributors from the detected commits and pull requests",
+        "Sources section uses @author format when GitHub username is available, plain author name otherwise",
+        "Final line is the full changelog compare link using branch names"
+      ]
+    }
+  ]
+}
