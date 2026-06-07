@@ -484,16 +484,16 @@ Writing release notes is tedious. Raw commit logs are too noisy, PR titles often
 
 **git-remote-release** reads all commits and pull requests between two tags in a remote GitHub repository and produces a polished, paste-ready release note.
 
-- **Remote-first** — works entirely through GitHub's API, no local clone required
-- **Compare URL aware** — accepts a GitHub compare URL directly and infers owner, repo, and both tags
-- **PR-preferred sources** — uses pull request metadata (descriptions, labels, files changed) when available, falls back to raw commits only when PR data is unavailable
-- **Effect-oriented summary** — explains what users and maintainers can expect, not just what code was modified
-- **Grouped by theme** — related changes are discussed together instead of listed chronologically
-- **GitHub alert blocks** — uses `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, and `CAUTION` alerts sparingly and only when the release data supports the attention level
-- **Source preservation** — every release note includes a `Sources:` section with the original PR and commit references
-- **Strict format** — always starts with `## What's Changed`, always ends with the full changelog compare link
-- **No invented claims** — every statement in the summary is backed by the commits and pull requests collected
-- **Read-only** — never mutates repository state
+- **Remote-first workflow** that works entirely through GitHub's API, with no local clone required,
+- **Compare URL awareness** where a pasted GitHub compare URL is used to extract the owner, repository, and both tags,
+- **Pull request-preferred analysis** that uses rich PR metadata when available and gracefully falls back to raw commits,
+- **Effect-oriented summaries** that explain what users and maintainers can expect from the release, not just what code was merged,
+- **Thematic grouping** where related changes are discussed together instead of listed chronologically,
+- **GitHub alert blocks** that use `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, and `CAUTION` alerts sparingly and only when the release data supports the attention level,
+- **Source preservation** where every release note includes a `Sources:` section with the original PR and commit references,
+- **Strict format** that always starts with `## What's Changed` and always ends with the full changelog compare link,
+- **No invented claims** so every statement in the summary is backed by the commits and pull requests collected,
+- **Read-only operation** that never mutates repository state.
 
 ## Repository structure
 
