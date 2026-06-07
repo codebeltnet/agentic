@@ -62,6 +62,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-app-slnx
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-lib-slnx
 npx skills add https://github.com/codebeltnet/agentic --skill git-remote-release
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-change-impact
 # npx skills add https://github.com/codebeltnet/agentic --skill another-skill
 ```
 
@@ -94,6 +95,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill git-remote-release
 | [trunk-first-repo](skills/trunk-first-repo/SKILL.md) | Initialize a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). Seeds an empty `main` branch and creates a versioned feature branch (`v0.1.0/init`), enforcing a PR-first workflow where content only reaches main through peer-reviewed pull requests. |
 | [dotnet-strong-name-signing](skills/dotnet-strong-name-signing/SKILL.md) | Generate a strong name key (`.snk`) file for signing .NET assemblies using pure .NET cryptography — no Visual Studio Developer PowerShell or `sn.exe` required. Works in any terminal. Defaults to 1024-bit RSA (matching `sn.exe`), with 2048 and 4096 available as options. |
 | [git-remote-release](skills/git-remote-release/SKILL.md) | Generate GitHub release notes by summarizing all commits and pull requests between two Git tags or branches in a remote GitHub repository. Accepts a compare URL or separate owner/repo, previous ref, and current ref values; falls back to comparing the current branch against the upstream default branch when no input is provided. Produces a human-friendly `## What's Changed` summary with optional GitHub alert blocks, a `Sources:` section preserving PR and commit references, and a full changelog compare link. |
+| [dotnet-change-impact](skills/dotnet-change-impact/SKILL.md) | Classify a proposed .NET library or NuGet package change and recommend the correct release bump — `Major`, `Minor`, or `Patch` — for both Semantic Versioning (`MAJOR.MINOR.PATCH`) and .NET assembly/file versioning (`Major.Minor.Build.Revision`), grounded in Microsoft's official .NET compatibility rules. Outputs exactly one word in deterministic mode when the change is clear, or a structured behavioral/binary/source/design-time/backwards compatibility analysis when the change is ambiguous, mixed, depends on public-vs-internal scope, or the user asks "why". Conservative by design so breaking changes never slip out as a patch or minor, without inflating internal-only refactors. |
 
 ### Copyable Install Commands
 
@@ -175,6 +177,12 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-strong-name
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill git-remote-release
+```
+
+`dotnet-change-impact`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-change-impact
 ```
 
 ### Why git-visual-commits?
@@ -495,6 +503,20 @@ Writing release notes is tedious. Raw commit logs are too noisy, PR titles often
 - **Strict format** that always starts with `## What's Changed` and always ends with the full changelog compare link,
 - **No invented claims** so every statement in the summary is backed by the commits and pull requests collected,
 - **Read-only operation** that never mutates repository state.
+
+### Why dotnet-change-impact?
+
+Picking the wrong version number is one of the easiest ways to break downstream consumers. A "bug fix" that quietly changes exception behavior, an "innocent" new overload that makes existing calls ambiguous, or a dependency bump that drops a target framework — any of these can be a breaking change shipped as a patch. Conversely, teams sometimes panic and burn a major version on a purely internal refactor. **dotnet-change-impact** brings Microsoft's official .NET compatibility model to that decision.
+
+**dotnet-change-impact** reads a description of one or more proposed changes and recommends `Major`, `Minor`, or `Patch` for both SemVer and .NET `Major.Minor.Build.Revision` versioning.
+
+- **Two-mode output** — emits exactly one word (`Major`, `Minor`, or `Patch`) when the change is unambiguous, so it drops straight into a pipeline, or a structured analysis when the call is genuinely close,
+- **Grounded in Microsoft guidance** — decisions follow the official [library change rules](https://learn.microsoft.com/en-us/dotnet/core/compatibility/library-change-rules) and [compatibility categories](https://learn.microsoft.com/en-us/dotnet/core/compatibility/categories),
+- **Five-category compatibility lens** — behavioral, binary, source, design-time, and backwards compatibility are evaluated explicitly,
+- **Conservative by default** — a change that might break existing consumers is treated as breaking, so accidental breaking releases don't ship as a patch or minor,
+- **But not alarmist** — internal, non-observable refactors are not inflated to major just because something changed,
+- **Precedence-aware** — mixed releases take the highest required bump,
+- **Special-case savvy** — dependency updates, bug fixes, new overloads, interface and enum changes, analyzers/source generators, TFM/platform support, and performance changes each get the right default and the right escalation triggers.
 
 ## Repository structure
 
