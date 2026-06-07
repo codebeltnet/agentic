@@ -482,7 +482,7 @@ Most repositories start with `git init` followed by committing everything direct
 
 Writing release notes is tedious. Raw commit logs are too noisy, PR titles often lack context, and the best release notes explain what changed and why it matters — not just what was merged. That gap between "here are the commits" and "here is what this release means for you" is where **git-remote-release** fits.
 
-**git-remote-release** reads all commits and pull requests between two tags in a remote GitHub repository and produces a polished, paste-ready release note.
+**git-remote-release** reads all commits and pull requests between two tags or branches in a remote GitHub repository and produces a polished, paste-ready release note.
 
 - **Remote-first workflow** that works entirely through GitHub's API, with no local clone required,
 - **Compare URL awareness** where a pasted GitHub compare URL is used to extract the owner, repository, and both tags,

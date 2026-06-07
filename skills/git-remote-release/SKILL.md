@@ -130,6 +130,8 @@ Fetch all commits included in the range `previousRef...currentRef` using the Git
 
 For each commit in the range, determine whether it belongs to a merged pull request. Prefer pull request metadata over raw commit data when available, because PRs carry richer context: descriptions, labels, review discussions, and linked issues.
 
+Collect unique pull requests only. If multiple commits map to the same pull request, record that pull request once and preserve all contributing commits through the single PR source entry.
+
 For each pull request, collect:
 
 - PR number and title
