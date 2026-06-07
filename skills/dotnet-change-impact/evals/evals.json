@@ -85,6 +85,18 @@
         "Treats removing TFM support as breaking for existing consumers",
         "Does not classify dropped framework support as Minor or Patch"
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use dotnet-change-impact to classify the version bump for this branch.",
+      "expected_output": "Current-branch default-resolution behavior: inspect the local Git repository, resolve the current branch against the upstream/default base branch, collect commits and net diff, then classify those changes. Must not ask the user to provide change details first.",
+      "expectations": [
+        "Follows Default Resolution Behavior when no explicit change details or compare range are provided",
+        "Detects the current branch and resolves a base branch using local Git state, following the documented fallback order",
+        "Collects both branch commits and net diff before classifying compatibility impact",
+        "Does not respond with a generic request for release notes, diffs, PR summaries, or bug descriptions when the current repository can be inspected",
+        "Asks only for the missing base branch or compare range if local default resolution cannot identify one"
+      ]
     }
   ]
 }

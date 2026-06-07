@@ -1,7 +1,7 @@
 ---
 name: dotnet-change-impact
 description: >
-  Classifies proposed .NET library or NuGet package changes and recommends the correct release bump: Major, Minor, or Patch. Applies both Semantic Versioning (MAJOR.MINOR.PATCH) and .NET assembly/file versioning (Major.Minor.Build.Revision), grounded in Microsoft’s official .NET library compatibility rules. Use when evaluating breaking changes, API diffs, public API changes, dependency updates, TFM/platform support, interface or enum changes, overloads, analyzers, source generators, or binary/source/behavioral/design-time/backwards compatibility. Outputs only Major, Minor, or Patch when clear; otherwise provides structured compatibility reasoning.
+  Classifies .NET library or NuGet package changes and recommends the correct release bump: Major, Minor, or Patch. Applies both Semantic Versioning (MAJOR.MINOR.PATCH) and .NET assembly/file versioning (Major.Minor.Build.Revision), grounded in Microsoft’s official .NET library compatibility rules. Use when evaluating the current branch, breaking changes, API diffs, public API changes, dependency updates, TFM/platform support, interface or enum changes, overloads, analyzers, source generators, or binary/source/behavioral/design-time/backwards compatibility. When no explicit change details or compare range are provided, inspects the current Git branch and compares it against the upstream default branch automatically. Outputs only Major, Minor, or Patch when clear; otherwise provides structured compatibility reasoning.
 ---
 
 # .NET Change Impact
@@ -22,6 +22,102 @@ The authority for every decision is Microsoft's official .NET compatibility guid
 
 Treat those two sources as normative. When the deep category definitions or the long tail of
 special cases matter, read `references/compatibility-categories.md`.
+
+## Input
+
+The skill accepts input in three ways, checked in this order:
+
+**1. Explicit change details:**
+
+When the user provides release notes, a PR summary, an API diff, a git diff, a changelog entry,
+dependency update details, a bug-fix description, or a stated release intent, classify those
+provided changes directly.
+
+**2. Explicit compare range:**
+
+When the user provides a base ref, current ref, compare URL, branch name, tag range, or commit
+range, inspect that range and classify the changes found there.
+
+**3. Default resolution (no input provided):**
+
+When the user does not provide explicit change details or a compare range, operate on the
+current Git working repository. See **Default Resolution Behavior** below.
+
+If required information is missing and cannot be inferred or resolved, ask only for the missing
+fact. Do not ask the user to restate the whole change set when the current repository or an
+explicit compare range can be inspected.
+
+## Default Resolution Behavior
+
+If the user does not provide explicit change details, a compare URL, branch name, tag range, or
+commit range, the skill must operate on the current Git working repository.
+
+In that case, the skill must:
+
+1. Detect the current branch.
+2. Detect the upstream remote for the repository.
+3. Detect the upstream repository's default branch — usually `main`, but do not assume `main` if
+   the remote default branch can be resolved.
+4. Compare the current branch against the upstream remote default branch.
+5. Include all commits on the current branch that are not present in the upstream remote default
+   branch.
+6. Include the net diff for the comparison range, because compatibility impact often depends on
+   files changed, signatures, project metadata, target frameworks, package references, generated
+   assets, and build props/targets.
+7. Classify the release bump from the collected branch changes using the normal compatibility
+   rules.
+
+The default comparison should be conceptually equivalent to:
+
+```text
+upstream/default-branch...current-branch
+```
+
+For example, if the current branch is `feature/change-impact` and the upstream default branch is
+`main`, the comparison should be treated as:
+
+```text
+upstream/main...feature/change-impact
+```
+
+If the repository uses `origin` as the upstream remote, use:
+
+```text
+origin/main...current-branch
+```
+
+If the repository has both `origin` and `upstream`, prefer the remote that represents the
+canonical source repository. In fork-based workflows, this is usually `upstream`. In
+single-repository workflows, this is usually `origin`.
+
+The skill must not silently assume the wrong base branch. If the default branch cannot be
+resolved, fall back in this order:
+
+1. `origin/HEAD`
+2. `upstream/HEAD`
+3. `origin/main`
+4. `origin/master`
+5. `upstream/main`
+6. `upstream/master`
+
+If none of these can be resolved, ask the user to provide the base branch or compare range.
+
+Useful read-only commands for default resolution:
+
+```bash
+git rev-parse --abbrev-ref HEAD
+git remote
+git symbolic-ref refs/remotes/origin/HEAD --short
+git symbolic-ref refs/remotes/upstream/HEAD --short
+git merge-base HEAD {resolvedBase}
+git log --oneline {resolvedBase}..HEAD
+git log --format="%H%x09%an%x09%ae%x09%s%x09%b" {resolvedBase}..HEAD
+git diff --name-status {resolvedBase}...HEAD
+git diff --find-renames {resolvedBase}...HEAD
+```
+
+Use local Git state only for default resolution unless the user explicitly asks to refresh remote
+state. Do not fetch, pull, push, or mutate repository state as part of this skill.
 
 ## Critical: choose the output mode first
 
@@ -250,11 +346,11 @@ These recur often enough to call out directly. The full catalog is in
 ## Input interpretation
 
 Input may arrive as release notes, git commits, PR summaries, API diffs, changelog entries,
-dependency updates, bug-fix descriptions, or a stated release intent. Distinguish carefully
-between: public API changes, internal implementation changes, consumer-visible behavior
-changes, build/design-time changes, documentation-only changes, package/dependency changes,
-and platform/TFM support changes. The bump follows the most impactful real change, not the
-loudest commit subject.
+dependency updates, bug-fix descriptions, a stated release intent, or the default current-branch
+comparison. Distinguish carefully between: public API changes, internal implementation changes,
+consumer-visible behavior changes, build/design-time changes, documentation-only changes,
+package/dependency changes, and platform/TFM support changes. The bump follows the most
+impactful real change, not the loudest commit subject.
 
 ## Explanation output format
 
