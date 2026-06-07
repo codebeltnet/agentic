@@ -154,7 +154,7 @@
     },
     {
       "id": 14,
-      "prompt": "Summarize this feature branch for squash merge. The branch contains commits from me, a teammate, and a bot account; all contributors' commits belong in the squash description unless I explicitly ask for an author filter.",
+      "prompt": "Summarize this feature branch for squash merge.",
       "expected_output": "A grouped squash summary that inspects and semantically collapses the whole selected branch/range across all authors instead of filtering to the current user's commits.",
       "expectations": [
         "Treats branch topology as the summary scope rather than author identity",
