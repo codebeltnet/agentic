@@ -1,0 +1,90 @@
+{
+  "skill_name": "dotnet-change-impact",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "In my .NET library I removed the public method `HttpRetryHandler.Send(HttpRequestMessage)` and renamed the public property `Client.BaseUri` to `Client.BaseAddress`. Should I bump major, minor, or patch?",
+      "expected_output": "Deterministic single-word answer: Major.",
+      "expectations": [
+        "Outputs exactly the single word Major with no markdown, preamble, or extra prose",
+        "Does not add an explanation, since the breaking removal and public rename are unambiguous",
+        "Treats removing a public method and renaming a public property as binary and source breaking"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I added a brand-new public class `RetryPolicy` and a new `WithRetry(this HttpClient client, int attempts)` extension method to my NuGet package. No existing public APIs were touched. What's the version bump?",
+      "expected_output": "Deterministic single-word answer: Minor.",
+      "expectations": [
+        "Outputs exactly the single word Minor with no extra text",
+        "Recognizes purely additive, backward-compatible public surface as Minor",
+        "Does not escalate to Major when nothing existing was changed or removed"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "This release only fixes a NullReferenceException inside an internal cache class (no public API or observable behavior change), updates a transitive dependency from 8.0.1 to 8.0.3, and refreshes the README. Major, minor, or patch?",
+      "expected_output": "Deterministic single-word answer: Patch.",
+      "expectations": [
+        "Outputs exactly the single word Patch with no extra text",
+        "Treats internal-only fix, compatible patch dependency bump, and docs as non-breaking",
+        "Does not inflate an internal, non-observable refactor to Minor or Major"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I changed `DateParser.Parse` to throw a FormatException on empty input instead of returning null. Should this be a patch? It's just a bug fix.",
+      "expected_output": "Explanation-mode answer: ambiguous because it depends on whether Parse is public and whether consumers rely on the null-return behavior. Should not just say Patch.",
+      "expectations": [
+        "Switches to explanation mode instead of emitting a bare single word",
+        "Uses the structured template with Recommendation, Compatibility impact, Reasoning, and Deterministic decision sections",
+        "Flags this as a behavioral change that can be breaking even though it compiles",
+        "Does not accept the user's framing that a bug fix is automatically a Patch",
+        "Identifies the deciding fact: whether Parse is public and whether the old null-return behavior is relied upon or documented"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Big release: I added two new public extension methods, fixed a couple of internal bugs, AND removed a public `ILogger` overload that nobody should be using. One command answer please: major, minor, or patch?",
+      "expected_output": "Deterministic single-word answer: Major, because precedence picks the highest required bump and the public removal is breaking.",
+      "expectations": [
+        "Outputs exactly the single word Major",
+        "Applies precedence: the breaking public removal dominates the additive and internal changes",
+        "Does not downgrade to Minor or Patch despite the user implying the removed overload is unused"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "I added a new member `Task FlushAsync()` to my public interface `IMessageSink`. Existing implementations are out in the wild via my NuGet package. Why would this be more than a patch?",
+      "expected_output": "Explanation-mode answer recommending Major, explaining that adding a member to a public interface breaks existing implementers (source compatibility).",
+      "expectations": [
+        "Switches to explanation mode because the user asked why",
+        "Recommends Major",
+        "Explains that adding a member to an existing public interface breaks existing implementers' source compilation",
+        "Mentions default interface members as a nuance without treating them as automatically safe",
+        "Uses the structured explanation template"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "I added a new enum value `LogLevel.Trace` to an existing public enum. My library serializes these values to JSON and some consumers switch over them. Patch, minor, or major?",
+      "expected_output": "Explanation-mode answer: usually Minor but flag the exhaustive-switch and serialization-contract risk that could make it behavioral/source-impacting.",
+      "expectations": [
+        "Does not emit a bare one-word answer given the explicit switch and serialization caveats",
+        "Notes that adding an enum value is usually Minor",
+        "Flags exhaustive consumer switch statements and serialization contracts as escalation risks",
+        "Uses the structured explanation template with a clear recommendation"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "My library dropped support for net6.0 and now targets only net8.0 and net9.0. Existing consumers on net6.0 will be affected. Version bump?",
+      "expected_output": "Deterministic single-word answer: Major, because removing TFM/platform support is breaking for existing consumers.",
+      "expectations": [
+        "Outputs exactly the single word Major",
+        "Treats removing TFM support as breaking for existing consumers",
+        "Does not classify dropped framework support as Minor or Patch"
+      ]
+    }
+  ]
+}
