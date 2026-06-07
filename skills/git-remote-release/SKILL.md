@@ -6,6 +6,8 @@ description: >
 
 # Git Remote Release
 
+![Git Remote Release](assets/hero.jpg)
+
 This skill generates polished GitHub release notes from the commits and pull requests between two tags, two branches, or the current branch and the upstream default branch. It produces a human-friendly summary optimized for release notes, not a raw commit log.
 
 When explicit tags or a compare URL are provided, the skill works entirely through GitHub's API — no local clone is needed. When no input is provided, the skill detects the current Git working repository and resolves the comparison range from local branch and remote state.
