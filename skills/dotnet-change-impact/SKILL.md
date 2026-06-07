@@ -1,7 +1,7 @@
 ---
 name: dotnet-change-impact
 description: >
-  Classifies .NET library or NuGet package changes and recommends the correct release bump: Major, Minor, or Patch. Applies both Semantic Versioning (MAJOR.MINOR.PATCH) and .NET assembly/file versioning (Major.Minor.Build.Revision), grounded in Microsoft’s official .NET library compatibility rules. Use when evaluating the current branch, breaking changes, API diffs, public API changes, dependency updates, TFM/platform support, interface or enum changes, overloads, analyzers, source generators, or binary/source/behavioral/design-time/backwards compatibility. When no explicit change details or compare range are provided, inspects the current Git branch and compares it against the upstream default branch automatically. Outputs only Major, Minor, or Patch when clear; otherwise provides structured compatibility reasoning.
+  Classifies .NET library or NuGet package changes and recommends the correct release bump: Major, Minor, or Patch. Applies both Semantic Versioning (MAJOR.MINOR.PATCH) and .NET assembly/file versioning (Major.Minor.Build.Revision), grounded in Microsoft’s official .NET library compatibility rules. Use when evaluating the current branch, breaking changes, API diffs, public API changes, dependency updates, TFM/platform support, interface or enum changes, overloads, analyzers, source generators, or binary/source/behavioral/design-time/backwards compatibility. When no explicit change details or compare range are provided, inspects the current Git branch and compares it against the upstream default branch automatically. Always returns structured compatibility reasoning with the recommendation.
 ---
 
 # .NET Change Impact
@@ -119,57 +119,23 @@ git diff --find-renames {resolvedBase}...HEAD
 Use local Git state only for default resolution unless the user explicitly asks to refresh remote
 state. Do not fetch, pull, push, or mutate repository state as part of this skill.
 
-## Critical: choose the output mode first
+## Critical: include reasoning every time
 
-Before answering, decide which mode applies. This choice is the most important behavior of the
-skill, because the two modes look completely different to the user.
+Always return a structured answer with the recommendation and reasoning. Do not collapse clear
+decisions to a bare one-word `Major`, `Minor`, or `Patch` response. The reasoning is part of the
+value of this skill, especially for branch-level analysis where the user needs to trust why the
+bump follows from the diff.
 
-### Deterministic mode
+Use the template in **Output format** below for every answer. Keep the answer concise when the
+decision is simple, but still explain the compatibility impact and the deciding facts.
 
-Use this when the change is clear and unambiguous and a single bump obviously applies. Output
-**exactly one** of the following words and **nothing else** — no markdown, no preamble, no
-explanation, no trailing punctuation:
-
-```text
-Major
-```
-
-```text
-Minor
-```
-
-```text
-Patch
-```
-
-The value of deterministic mode is that it can be dropped straight into a release pipeline,
-a commit, or a script. Any extra prose defeats that purpose, so resist the urge to justify a
-clear answer.
-
-### Explanation mode
-
-Use this when the answer is genuinely not clear-cut. Switch to explanation mode whenever any
-of these is true:
-
-- The user asks for an explanation or asks "why".
-- The input is ambiguous, incomplete, or mixed (several unrelated changes at once).
-- More than one category is plausible and the deciding fact is missing.
-- The decision depends on whether an API is **public or internal**.
-- The decision depends on **consumer reliance**, or on documented vs. undocumented behavior.
-- The decision depends on whether downstream projects treat **warnings as errors**.
-- The user appears to be steering toward a lower bump than the change warrants.
-
-In explanation mode, do not collapse to a bare word. Surface the trade-off so the developer
-can make an informed, deliberate call. Use the template in **Explanation output format** below.
-
-When in genuine doubt about which mode applies, prefer explanation mode. A bare word that hides
-a real compatibility risk is worse than a short, honest analysis.
+When the answer is ambiguous, incomplete, or depends on a missing fact, still provide the best
+current recommendation and make the missing fact explicit in **Deterministic decision**.
 
 ## Internal analysis process
 
 Run this analysis internally for every request, regardless of which mode you output. Do **not**
-print this checklist when deterministic output is possible — it is reasoning scaffolding, not
-part of the answer.
+print this checklist verbatim — it is reasoning scaffolding, not the answer format.
 
 1. Identify all public contract changes (types, members, signatures, accessibility, contracts).
 2. Identify all observable behavior changes (return values, exceptions, ordering, serialization).
@@ -178,8 +144,8 @@ part of the answer.
 5. Identify all design-time compatibility risks (analyzers, generators, build, tooling, restore).
 6. Determine whether existing consumers remain backwards compatible end to end.
 7. Determine the highest required bump across every change present.
-8. If the result is clear, produce deterministic output.
-9. If the result is ambiguous or an explanation was requested, produce explanatory output.
+8. Produce the structured output with recommendation, compatibility impact, reasoning, and the
+   deterministic decision.
 
 ## Version bump rules
 
@@ -352,14 +318,19 @@ consumer-visible behavior changes, build/design-time changes, documentation-only
 package/dependency changes, and platform/TFM support changes. The bump follows the most
 impactful real change, not the loudest commit subject.
 
-## Explanation output format
+## Output format
 
-When explanation mode applies, use exactly this structure:
+Use exactly this structure:
 
 ```markdown
 ## Recommendation
 
 <Major|Minor|Patch>
+
+## Key changes identified
+
+<Short bullet list of the branch changes or provided changes that drive the bump. Omit only when
+there is truly no concrete change to list.>
 
 ## Compatibility impact
 
@@ -376,16 +347,16 @@ especially whether existing consumers can compile, run, and observe equivalent b
 
 ## Deterministic decision
 
-<The single fact that would make the answer deterministic if it is currently ambiguous —
-for example, "Is `Parse` part of the public API or internal?" Once that fact is known, the
-bump follows directly.>
+<If clear: the decisive fact that makes the recommendation unambiguous. If ambiguous: the single
+missing fact that would make the answer deterministic, for example, "Is `Parse` part of the public
+API or internal?">
 ```
 
 ## Good output characteristics
 
-- Emits exactly one word in deterministic mode, with no decoration.
-- Switches to the structured template the moment the decision is genuinely ambiguous or an
-  explanation is requested.
+- Always includes reasoning, even for clear `Major`, `Minor`, or `Patch` recommendations.
+- Puts the recommendation first so the answer is still easy to scan.
+- Names the key changes found in the branch or input before interpreting them.
 - Picks the highest required bump when changes are mixed.
 - Grounds every breaking-change call in whether existing consumers can compile, run, and
   observe equivalent behavior.
@@ -393,8 +364,8 @@ bump follows directly.>
 
 ## Bad output characteristics
 
-- Adding prose, markdown, or punctuation around a clear one-word answer.
-- Collapsing an ambiguous or mixed change into a bare word that hides a compatibility risk.
+- Collapsing a clear change into a bare one-word answer without explaining why.
+- Collapsing an ambiguous or mixed change into a recommendation that hides a compatibility risk.
 - Labeling a publicly observable behavior change as `Patch` just because it is "a fix".
 - Calling an internal, non-observable refactor `Major`.
 - Hiding a breaking change behind a Build/Revision bump.
