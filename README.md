@@ -487,6 +487,7 @@ Writing release notes is tedious. Raw commit logs are too noisy, PR titles often
 - **Remote-first workflow** that works entirely through GitHub's API, with no local clone required,
 - **Compare URL awareness** where a pasted GitHub compare URL is used to extract the owner, repository, and both tags,
 - **Pull request-preferred analysis** that uses rich PR metadata when available and gracefully falls back to raw commits,
+- **Default-branch-aware comparisons** that resolve the upstream base and collect only commits on the current branch,
 - **Effect-oriented summaries** that explain what users and maintainers can expect from the release, not just what code was merged,
 - **Thematic grouping** where related changes are discussed together instead of listed chronologically,
 - **GitHub alert blocks** that use `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, and `CAUTION` alerts sparingly and only when the release data supports the attention level,

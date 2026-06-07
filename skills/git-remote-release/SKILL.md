@@ -85,7 +85,7 @@ git remote
 git symbolic-ref refs/remotes/origin/HEAD --short
 git symbolic-ref refs/remotes/upstream/HEAD --short
 git merge-base HEAD {resolvedBase}
-git log --oneline {resolvedBase}...HEAD
+git log --oneline {resolvedBase}..HEAD
 ```
 
 ## Contributor Handling
@@ -313,14 +313,16 @@ gh api repos/{owner}/{repo}/commits/{sha}/pulls --jq '.[]'
 gh pr view {number} --repo {owner}/{repo} --json title,author,body,labels,files,url
 ```
 
+The GitHub compare API can return fewer commits than the range contains. After fetching a compare response, compare `total_commits` with the number of collected `.commits[]` entries. If `total_commits` is greater than the collected commit count, fetch remaining pages when possible; otherwise warn the user that commit data is capped and do not present the `Sources:` section as complete.
+
 **When using default resolution (no explicit input)**, combine local Git commands with GitHub API. First resolve the base branch (see **Default Resolution Behavior** above), then substitute the resolved value into `{resolvedBase}` — do not hardcode `origin/main`:
 
 ```bash
 git rev-parse --abbrev-ref HEAD
 git remote
 git symbolic-ref refs/remotes/origin/HEAD --short
-git log --oneline {resolvedBase}...HEAD
-git log --format="%H%x09%an%x09%ae%x09%s%x09%b" {resolvedBase}...HEAD
+git log --oneline {resolvedBase}..HEAD
+git log --format="%H%x09%an%x09%ae%x09%s%x09%b" {resolvedBase}..HEAD
 ```
 
 Then use the GitHub API to enrich local commit data with pull request metadata, labels, and descriptions.

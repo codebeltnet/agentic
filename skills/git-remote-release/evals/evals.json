@@ -43,7 +43,8 @@
     {
       "id": 4,
       "prompt": "Generate release notes for my current branch.",
-      "expected_output": "Setup prerequisite: run this eval from a manually bootstrapped Git workspace with a non-default branch containing at least one commit not present on the upstream default branch, a configured upstream remote, and a resolvable remote default branch. Expected result: release notes generated from the current branch compared against the upstream default branch, with all contributors included in the Sources section.",
+      "prerequisites": "Run this eval from a manually bootstrapped Git workspace with a non-default branch containing at least one commit not present on the upstream default branch, a configured upstream remote, and a resolvable remote default branch.",
+      "expected_output": "Release notes generated from the current branch compared against the upstream default branch, with all contributors included in the Sources section.",
       "expectations": [
         "First line is exactly ## What's Changed",
         "Detects the current branch from the local Git working repository",
