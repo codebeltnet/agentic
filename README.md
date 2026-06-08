@@ -63,6 +63,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-app-sln
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-new-lib-slnx
 npx skills add https://github.com/codebeltnet/agentic --skill git-remote-release
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-change-impact
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-docfx-digest
 # npx skills add https://github.com/codebeltnet/agentic --skill another-skill
 ```
 
@@ -96,6 +97,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-change-impa
 | [dotnet-strong-name-signing](skills/dotnet-strong-name-signing/SKILL.md) | Generate a strong name key (`.snk`) file for signing .NET assemblies using pure .NET cryptography — no Visual Studio Developer PowerShell or `sn.exe` required. Works in any terminal. Defaults to 1024-bit RSA (matching `sn.exe`), with 2048 and 4096 available as options. |
 | [git-remote-release](skills/git-remote-release/SKILL.md) | Generate GitHub release notes by summarizing all commits and pull requests between two Git tags or branches in a remote GitHub repository. Accepts a compare URL or separate owner/repo, previous ref, and current ref values; falls back to comparing the current branch against the upstream default branch when no input is provided. Produces a human-friendly `## What's Changed` summary with optional GitHub alert blocks, a `Sources:` section preserving PR and commit references, and a full changelog compare link. |
 | [dotnet-change-impact](skills/dotnet-change-impact/SKILL.md) | Classify .NET library or NuGet package changes and recommend the correct release bump — `Major`, `Minor`, or `Patch` — for both Semantic Versioning (`MAJOR.MINOR.PATCH`) and .NET assembly/file versioning (`Major.Minor.Build.Revision`), grounded in Microsoft's official .NET compatibility rules. Uses the current Git branch by default when no explicit change details or compare range are provided, resolving it against the upstream/default base branch with local read-only git state. Always returns structured behavioral/binary/source/design-time/backwards compatibility reasoning with the recommendation, even when the bump is clear. |
+| [dotnet-docfx-digest](skills/dotnet-docfx-digest/SKILL.md) | Create and maintain developer-friendly DocFX documentation for .NET public APIs, including repo-wide no-input audits that inspect source, tests, DocFX config, existing overwrite files, namespace pages, and availability includes before asking for clarification. Enforces the workflow with two bundled .NET 10 file-based scripts: `scripts/agents.cs` writes an idempotent, marker-bounded DocFX maintenance block into the repository `AGENTS.md`; `scripts/docfx.cs` builds the solution, discovers public API, namespaces, and extension methods from compiled metadata via `MetadataLoadContext`, then validates namespace overview pages (uid front matter, fly-in, availability), `Extension Members` tables, and compiles every C# documentation sample as a file-based app. Documents public API only, uses a bundled DocFX overwrite reference, requires buildable copy/paste-ready examples for concrete types, preserves manual edits, and returns deterministic exit codes plus `--json` reports so CI can gate on real failures instead of AI claims. |
 
 ### Copyable Install Commands
 
@@ -183,6 +185,12 @@ npx skills add https://github.com/codebeltnet/agentic --skill git-remote-release
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill dotnet-change-impact
+```
+
+`dotnet-docfx-digest`
+
+```bash
+npx skills add https://github.com/codebeltnet/agentic --skill dotnet-docfx-digest
 ```
 
 ### Why git-visual-commits?
@@ -518,6 +526,23 @@ Picking the wrong version number is one of the easiest ways to break downstream 
 - **But not alarmist** — internal, non-observable refactors are not inflated to major just because something changed,
 - **Precedence-aware** — mixed releases take the highest required bump,
 - **Special-case savvy** — dependency updates, bug fixes, new overloads, interface and enum changes, analyzers/source generators, TFM/platform support, and performance changes each get the right default and the right escalation triggers.
+
+### Why dotnet-docfx-digest?
+
+API documentation rots the moment code changes. A new public type ships without a namespace page, an extension method never makes it into the `Extension Members` table, a copy/paste example silently stops compiling, and "availability" drifts away from the real target frameworks. The usual fix — telling an agent to "remember to update the docs" — relies on AI memory, which is exactly the thing that fails on the next change.
+
+**dotnet-docfx-digest** moves the rules from prose into deterministic .NET 10 tooling, so guidance persists and verification is real.
+
+- **No-input audits by default** — `Use dotnet-docfx-digest` means inspect the repository, DocFX config, public API, tests, samples, overwrite files, namespace pages, and availability includes, then repair missing complementary documentation that can be derived from evidence before asking any clarifying questions,
+- **Persistent guidance by script, not memory** — `scripts/agents.cs` writes an idempotent, marker-bounded DocFX maintenance block into the repository `AGENTS.md`; running it twice never duplicates the block, and `--check` gates it in CI,
+- **DocFX overwrite grounding** — the skill includes a concise `references/docfx-overwrite-files.md` summary of the official overwrite-file and `docfx.json` rules agents need when creating namespace fly-ins, summaries, examples, remarks, and extension-member documentation,
+- **Verification from compiled metadata** — `scripts/docfx.cs` builds the solution and discovers public API, namespaces, and extension methods from compiled assemblies (preferring reference assemblies) via `MetadataLoadContext`, instead of guessing from text,
+- **Real namespace-page checks** — uid front matter, a human-written fly-in, availability, and `Extension Members` tables are validated against the actual public surface, with deterministic error codes like `NAMESPACE_PAGE_MISSING`, `NAMESPACE_UID_MISMATCH`, and `EXTENSION_METHOD_MISSING`,
+- **Examples that actually compile** — every `csharp`/`cs` documentation fence is compiled as a file-based app referencing the real library projects; failures report the file, fence index, line, exit code, and compiler diagnostics,
+- **Honest opt-outs only** — a sample can skip compilation solely with `// dotnet-docfx-digest:skip-compile - <reason>`; a missing reason is flagged,
+- **Public API only** — internal and private members, and namespaces with no public API, are deliberately left undocumented,
+- **Preserves manual edits** — additive by default, correcting stale or contradictory statements rather than overwriting hand-written documentation,
+- **CI-friendly** — deterministic exit codes plus `--json` reports let pipelines fail on actual documentation drift instead of trusting an agent's claim that it checked.
 
 ## Repository structure
 
