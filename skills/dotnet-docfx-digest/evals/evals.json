@@ -144,6 +144,19 @@
         "Runs agents.cs before documentation validation so AGENTS.md receives the managed DocFX maintenance block",
         "Reports the exact command, exit code, output, and checked script locations if script resolution or execution fails"
       ]
+    },
+    {
+      "id": 12,
+      "prompt": "Use dotnet-docfx-digest on a Codebelt library repository that is strong-name signed but this checkout does not have the author's root `.snk` file. Update the docs and run verification.",
+      "expected_output": "Agent preserves or copies the root `.snk` file when it exists, but because this checkout has no root `.snk`, it runs build and test verification with `-p:SkipSignAssembly=true`. The deterministic docfx.cs validator also uses the skip-sign fallback for its repository build, sample compilation builds, and temp-workspace DocFX verification instead of reporting signing-key failures as documentation failures.",
+      "expectations": [
+        "Checks whether the Codebelt repository root contains a `.snk` file before choosing verification commands",
+        "Uses `dotnet build -p:SkipSignAssembly=true` when no root `.snk` is present",
+        "Uses `dotnet test -p:SkipSignAssembly=true` when no root `.snk` is present",
+        "Preserves and copies a root `.snk` file into temp workspaces when one exists instead of disabling signing unnecessarily",
+        "Does not treat a missing local signing key as a documentation validation failure",
+        "Reports the skip-sign fallback in the verification summary when it was used"
+      ]
     }
   ]
 }

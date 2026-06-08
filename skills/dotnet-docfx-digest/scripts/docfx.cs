@@ -604,7 +604,10 @@ internal static class DocfxValidator
             CopyDirectory(repoRoot, tempRoot);
             var relativeDocfxPath = Path.GetRelativePath(repoRoot, docfxPath);
             var tempDocfxPath = Path.Combine(tempRoot, relativeDocfxPath);
-            var result = RunProcess(docfxExecutable, $"\"{tempDocfxPath}\"", tempRoot);
+            var environment = HasRootStrongNameKey(tempRoot)
+                ? null
+                : new Dictionary<string, string> { ["SkipSignAssembly"] = "true" };
+            var result = RunProcess(docfxExecutable, $"\"{tempDocfxPath}\"", tempRoot, environment);
             if (result.ExitCode != 0)
             {
                 report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
@@ -702,11 +705,24 @@ internal static class DocfxValidator
     {
         // Build a solution if one is present, otherwise let dotnet resolve the project in the repo root.
         var target = Directory.GetFiles(repoRoot, "*.slnx").Concat(Directory.GetFiles(repoRoot, "*.sln")).FirstOrDefault();
+        var signingProperty = HasRootStrongNameKey(repoRoot) ? string.Empty : " -p:SkipSignAssembly=true";
         var args = target is null
-            ? $"build -c {configuration} --nologo"
-            : $"build \"{target}\" -c {configuration} --nologo";
+            ? $"build -c {configuration} --nologo{signingProperty}"
+            : $"build \"{target}\" -c {configuration} --nologo{signingProperty}";
         var result = RunProcess("dotnet", args, repoRoot);
         return (result.ExitCode == 0, result.StdOut + result.StdErr);
+    }
+
+    private static bool HasRootStrongNameKey(string repoRoot)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(repoRoot, "*.snk", SearchOption.TopDirectoryOnly).Any();
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -1770,7 +1786,7 @@ internal static class DocfxValidator
                     continue;
                 }
 
-                var (ok, diagnostics, exitCode) = CompileSample(tempRoot, index, sample, libraryProjects, options.Configuration);
+                var (ok, diagnostics, exitCode) = CompileSample(tempRoot, index, sample, libraryProjects, options.Configuration, repoRoot);
                 if (ok)
                 {
                     report.Summary.SamplesCompiled++;
@@ -1789,7 +1805,7 @@ internal static class DocfxValidator
     }
 
     private static (bool Ok, string Diagnostics, int ExitCode) CompileSample(string tempRoot, int index, SampleFence sample,
-        List<ProjectInfo> libraryProjects, string configuration)
+        List<ProjectInfo> libraryProjects, string configuration, string repoRoot)
     {
         var dir = Path.Combine(tempRoot, "sample_" + index);
         Directory.CreateDirectory(dir);
@@ -1813,7 +1829,8 @@ internal static class DocfxValidator
 
         File.WriteAllText(file, sb.ToString(), new UTF8Encoding(false));
 
-        var result = RunProcess("dotnet", $"build \"{file}\" -c {configuration} --nologo", dir);
+        var signingProperty = HasRootStrongNameKey(repoRoot) ? string.Empty : " -p:SkipSignAssembly=true";
+        var result = RunProcess("dotnet", $"build \"{file}\" -c {configuration} --nologo{signingProperty}", dir);
         return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
     }
 
@@ -1992,7 +2009,8 @@ internal static class DocfxValidator
     // Process + output helpers
     // ----------------------------------------------------------------------
 
-    private static ProcessResult RunProcess(string fileName, string arguments, string workingDirectory)
+    private static ProcessResult RunProcess(string fileName, string arguments, string workingDirectory,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -2004,6 +2022,14 @@ internal static class DocfxValidator
             UseShellExecute = false,
             CreateNoWindow = true
         };
+
+        if (environment is not null)
+        {
+            foreach (var (key, value) in environment)
+            {
+                psi.Environment[key] = value;
+            }
+        }
 
         try
         {

@@ -271,6 +271,17 @@ The reason is mandatory. Do not use silent opt-outs.
 
 Do not claim a sample compiles unless the validator or an equivalent repository verification command has compiled it successfully.
 
+## Codebelt Signing Keys
+
+Codebelt solutions are normally strong-name signed with a `.snk` file in the repository root on the main author's codespace. When building a Codebelt repository or a temporary copy of one, preserve and copy the root `.snk` file when it is present. If the target repository or temp copy does not have a root `.snk`, run build and test verification with signing disabled:
+
+```bash
+dotnet build -p:SkipSignAssembly=true
+dotnet test -p:SkipSignAssembly=true
+```
+
+Use the same MSBuild property for any equivalent repository build that documentation validation performs. This avoids reporting signing-key failures as documentation failures while preserving normal signed builds when the key is available.
+
 ## Namespace Overview Pages
 
 Every namespace containing public API must have a namespace overview Markdown page.
@@ -542,8 +553,8 @@ When the user names a changed API or namespace:
 16. Build an example inventory that maps each required public type and extension method to its example location.
 17. Preserve manual edits.
 18. Run `git diff` for touched documentation paths and confirm the diff is intentional.
-19. Run `dotnet build`.
-20. Run `dotnet test`.
+19. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
+20. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 21. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
 22. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
 23. Report verification results.
@@ -570,8 +581,8 @@ When no specific API or namespace is named:
 18. Build an example inventory that maps each required public type and extension method to its example location.
 19. Preserve manual edits and correct stale contradictions instead of replacing whole files.
 20. Run `git diff` for touched documentation paths and confirm the diff is intentional.
-21. Run `dotnet build`.
-22. Run `dotnet test`.
+21. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
+22. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 23. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
 24. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
 25. Report verification results and any remaining findings.
@@ -664,8 +675,8 @@ Before completing documentation work, verify:
 - [ ] Stale documentation is corrected.
 - [ ] No contradictory documentation remains.
 - [ ] `git diff` for touched documentation paths was inspected before final verification.
-- [ ] `dotnet build` has been run or the failure is reported.
-- [ ] `dotnet test` has been run or the failure is reported.
+- [ ] `dotnet build` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.
+- [ ] `dotnet test` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.
 - [ ] `docfx.cs --verify-docfx-build` has run successfully, including the temp-workspace DocFX build, or the failure is reported.
 - [ ] Generated DocFX metadata files and build output directories did not remain in the working tree after verification, and authored Markdown or documentation assets were not deleted as cleanup.
 - [ ] No broad restore or checkout command discarded authored documentation changes.
@@ -681,6 +692,7 @@ When reporting completion, include:
 - Availability handling,
 - Related namespace pages inspected and whether each was updated or left unchanged,
 - `AGENTS.md` created, updated, already compliant, or failed,
+- Signing-key handling: whether a root `.snk` was used/copied or `-p:SkipSignAssembly=true` was used because no root `.snk` was present,
 - Verification commands run,
 - Any verification failures or skipped checks.
 
