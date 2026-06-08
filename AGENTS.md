@@ -141,6 +141,12 @@ When committing changes to this repo, group by technology and logical purpose â€
 - Template files (`.csproj`, `.yml`, `.cs`) get their own commit(s)
 - Documentation updates (`README.md`, `CONTRIBUTING.md`) get their own commit
 
+## Markdown Formatting
+
+All markdown files in this repository must use natural paragraph flow. Do not artificially break paragraphs at fixed column widths or insert hard line breaks within sentences. Paragraphs should flow as complete thoughts, allowing line wrapping to be determined by the reader's viewport or rendering engine, not by arbitrary character limits.
+
+**Why:** Natural paragraphs are more readable, easier to edit, and render correctly across all devices and markdown renderers. Artificially clipped paragraphs create maintenance friction and look awkward in source control diffs.
+
 ## README Sync
 
 After modifying any skill (`SKILL.md`, `FORMS.md`) or repo-level config (`AGENTS.md`), **always update `README.md` before considering the task done**. This is a mandatory gate â€” not a nice-to-have. The README's "Available Skills" table, install examples, and "Why" sections must reflect the current state of all skills. A new skill without a README entry is incomplete work.
