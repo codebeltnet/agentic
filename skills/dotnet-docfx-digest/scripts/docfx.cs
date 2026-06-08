@@ -167,7 +167,7 @@ internal static class DocfxValidator
         }
 
         report.Summary.PublicNamespaces = api.Namespaces.Count;
-        report.Summary.ConcreteApiTargets = api.ConcreteTargets.Count;
+        report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
         report.Summary.ExtensionMethods = api.Namespaces.Sum(n => n.ExtensionMethods.Count);
 
         // 8. Discover DocFX Markdown files under the workspace.
@@ -516,12 +516,12 @@ internal static class DocfxValidator
             }
         }
 
-        var concreteTargets = namespaces.Values
-            .SelectMany(ns => ns.ConcreteTargets)
+        var requiredExampleTargets = namespaces.Values
+            .SelectMany(ns => ns.RequiredExampleTargets)
             .OrderBy(t => t.Uid, StringComparer.Ordinal)
             .ToList();
 
-        return new ApiModel(namespaces.Values.ToList(), concreteTargets);
+        return new ApiModel(namespaces.Values.ToList(), requiredExampleTargets);
     }
 
     private static void CollectApiTargets(Type type, NamespaceInfo ns)
@@ -532,9 +532,9 @@ internal static class DocfxValidator
             return;
         }
 
-        if (IsConcreteDocumentableType(type))
+        if (IsExampleRequiredType(type))
         {
-            ns.ConcreteTargets.Add(new ApiTargetInfo(typeUid, ns.Name, ApiTargetKind.Type, SimpleTypeName(type)));
+            ns.RequiredExampleTargets.Add(new ApiTargetInfo(typeUid, ns.Name, ApiTargetKind.Type, SimpleTypeName(type)));
         }
 
         MethodInfo[] methods;
@@ -554,7 +554,7 @@ internal static class DocfxValidator
                 continue;
             }
 
-            ns.ConcreteTargets.Add(new ApiTargetInfo(MethodUid(typeUid, method), ns.Name, ApiTargetKind.ExtensionMethod, method.Name, typeUid));
+            ns.RequiredExampleTargets.Add(new ApiTargetInfo(MethodUid(typeUid, method), ns.Name, ApiTargetKind.ExtensionMethod, method.Name, typeUid));
         }
     }
 
@@ -636,42 +636,14 @@ internal static class DocfxValidator
         }
     }
 
-    private static bool IsConcreteDocumentableType(Type type)
+    private static bool IsExampleRequiredType(Type type)
     {
-        if (type.IsInterface || type.IsAbstract || type.IsEnum || type.IsValueType)
-        {
-            return false;
-        }
-
-        if (InheritsFrom(type, "System.Attribute") || InheritsFrom(type, "System.MulticastDelegate"))
+        if (type.IsInterface || type.IsAbstract)
         {
             return false;
         }
 
         return true;
-    }
-
-    private static bool InheritsFrom(Type type, string baseTypeFullName)
-    {
-        try
-        {
-            var current = type.BaseType;
-            while (current is not null)
-            {
-                if (string.Equals(current.FullName, baseTypeFullName, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-
-                current = current.BaseType;
-            }
-        }
-        catch
-        {
-            // ignore
-        }
-
-        return false;
     }
 
     private static string? TypeUid(Type type)
@@ -905,7 +877,7 @@ internal static class DocfxValidator
             sections.AddRange(ExtractOverwriteSections(md));
         }
 
-        foreach (var target in api.ConcreteTargets)
+        foreach (var target in api.RequiredExampleTargets)
         {
             var candidates = sections.Where(s => IsExampleCandidate(s, target)).ToList();
             if (candidates.Any(s => HasExampleForTarget(s, target)))
@@ -919,7 +891,7 @@ internal static class DocfxValidator
                 : target.DeclaringTypeUid ?? target.Uid;
 
             var message = target.Kind == ApiTargetKind.Type
-                ? $"Concrete public type `{target.DisplayName}` requires a DocFX overwrite section with uid `{target.Uid}` and an Examples section containing a C# code fence."
+                ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to the generated type page/overwrite section for uid `{target.Uid}` (for example `{target.DisplayName}.md` when that is the repository's API-page convention)."
                 : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}`, its declaring type uid `{expectedUid}`, or the namespace page `{target.Namespace}`.";
 
             report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", null, target.Namespace, message));
@@ -1353,7 +1325,7 @@ internal static class DocfxValidator
 
             Console.WriteLine(
                 $"  Summary: namespaces={report.Summary.PublicNamespaces}, pages={report.Summary.NamespacePagesValidated}, " +
-                $"concreteTargets={report.Summary.ConcreteApiTargets}, requiredExamples={report.Summary.RequiredExamples}, " +
+                $"requiredExampleTargets={report.Summary.RequiredExampleTargets}, requiredExamples={report.Summary.RequiredExamples}, " +
                 $"extMethods={report.Summary.ExtensionMethods}, samplesCompiled={report.Summary.SamplesCompiled}, " +
                 $"samplesSkipped={report.Summary.SamplesSkipped}, errors={report.Summary.Errors}, warnings={report.Summary.Warnings}");
         }
@@ -1527,11 +1499,11 @@ internal static class DocfxValidator
     private sealed class NamespaceInfo(string name)
     {
         public string Name { get; } = name;
-        public List<ApiTargetInfo> ConcreteTargets { get; } = new();
+        public List<ApiTargetInfo> RequiredExampleTargets { get; } = new();
         public List<ExtensionMethodInfo> ExtensionMethods { get; } = new();
     }
 
-    private sealed record ApiModel(List<NamespaceInfo> Namespaces, List<ApiTargetInfo> ConcreteTargets);
+    private sealed record ApiModel(List<NamespaceInfo> Namespaces, List<ApiTargetInfo> RequiredExampleTargets);
 
     private sealed record SampleFence(string File, int FenceIndex, int StartLine, string Code);
 
@@ -1560,7 +1532,7 @@ internal sealed class Summary
 {
     public int PublicNamespaces { get; set; }
     public int NamespacePagesValidated { get; set; }
-    public int ConcreteApiTargets { get; set; }
+    public int RequiredExampleTargets { get; set; }
     public int RequiredExamples { get; set; }
     public int ExtensionMethods { get; set; }
     public int SamplesCompiled { get; set; }
