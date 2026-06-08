@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Xml.Linq;
 
 return DocfxValidator.Run(args);
@@ -24,6 +25,7 @@ internal static class DocfxValidator
 
     private static readonly string[] IgnoredDirectorySegments = ["bin", "obj", "_site", ".git", ".vs", ".vscode", ".idea", "node_modules"];
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ProcessStreamDrainTimeout = TimeSpan.FromSeconds(5);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -1558,11 +1560,6 @@ internal static class DocfxValidator
     private static void ValidateRequiredExamples(string repoRoot, List<string> markdownFiles, ApiModel api,
         Options options, HashSet<string>? changedFiles, Report report)
     {
-        if (options.ChangedOnly && changedFiles is not null)
-        {
-            return;
-        }
-
         var sections = new List<OverwriteSection>();
         foreach (var md in markdownFiles)
         {
@@ -1571,6 +1568,12 @@ internal static class DocfxValidator
 
         foreach (var target in api.RequiredExampleTargets)
         {
+            if (options.ChangedOnly && changedFiles is not null &&
+                !ShouldValidateRequiredExampleTarget(target, changedFiles))
+            {
+                continue;
+            }
+
             var candidates = sections.Where(s => IsExampleCandidate(s, target)).ToList();
             if (candidates.Any(s => HasExampleForTarget(s, target)))
             {
@@ -1588,6 +1591,73 @@ internal static class DocfxValidator
 
             report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", null, target.Namespace, message));
         }
+    }
+
+    private static bool ShouldValidateRequiredExampleTarget(ApiTargetInfo target, HashSet<string> changedFiles)
+    {
+        foreach (var changedFile in changedFiles)
+        {
+            if (IsChangedExampleCandidateFile(changedFile, target) || ChangedSourceTouchesTarget(changedFile, target))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsChangedExampleCandidateFile(string path, ApiTargetInfo target)
+    {
+        if (string.Equals(Path.GetFileName(path), "docfx.json", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.Equals(Path.GetExtension(path), ".md", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(path);
+        if (string.Equals(stem, target.Namespace, StringComparison.Ordinal) ||
+            string.Equals(stem, target.Uid, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return target.Kind == ApiTargetKind.ExtensionMethod &&
+               string.Equals(stem, target.DeclaringTypeUid, StringComparison.Ordinal);
+    }
+
+    private static bool ChangedSourceTouchesTarget(string path, ApiTargetInfo target)
+    {
+        if (!string.Equals(Path.GetExtension(path), ".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string sourceText;
+        try
+        {
+            sourceText = File.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        if (!Regex.IsMatch(sourceText, $@"(?m)^\s*namespace\s+{Regex.Escape(target.Namespace)}(?:\s*;|\s*\{{)"))
+        {
+            return false;
+        }
+
+        if (target.Kind == ApiTargetKind.Type)
+        {
+            return Regex.IsMatch(sourceText,
+                $@"(?m)\b(?:class|struct|interface|enum|delegate|record(?:\s+class|\s+struct)?)\s+{Regex.Escape(target.DisplayName)}\b");
+        }
+
+        return Regex.IsMatch(sourceText, $@"(?s)\b{Regex.Escape(target.DisplayName)}\s*\([^)]*\bthis\b");
     }
 
     private static bool IsExampleCandidate(OverwriteSection section, ApiTargetInfo target)
@@ -1930,8 +2000,8 @@ internal static class DocfxValidator
                 return new ProcessResult(-1, string.Empty, $"Failed to start process '{fileName}'.");
             }
 
-            var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
+            var stdoutTask = Task.Run(() => process.StandardOutput.ReadToEnd());
+            var stderrTask = Task.Run(() => process.StandardError.ReadToEnd());
             if (!process.WaitForExit(ProcessTimeout))
             {
                 try
@@ -1943,10 +2013,15 @@ internal static class DocfxValidator
                     // ignore
                 }
 
+                process.WaitForExit(ProcessStreamDrainTimeout);
+                Task.WaitAll([stdoutTask, stderrTask], ProcessStreamDrainTimeout);
+                var stdout = stdoutTask.IsCompletedSuccessfully ? stdoutTask.Result : string.Empty;
+                var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : string.Empty;
                 return new ProcessResult(-1, stdout, stderr + $"\nProcess '{fileName}' timed out after {ProcessTimeout.TotalMinutes} minutes.");
             }
 
-            return new ProcessResult(process.ExitCode, stdout, stderr);
+            Task.WaitAll([stdoutTask, stderrTask]);
+            return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result);
         }
         catch (Exception ex)
         {

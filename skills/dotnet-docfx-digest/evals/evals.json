@@ -88,6 +88,18 @@
         "Runs scripts/docfx.cs and responds to EXAMPLE_MISSING diagnostics before claiming completion, then uses --verify-docfx-build for final DocFX build verification",
         "Compiles changed C# examples or reports the exact verification failure"
       ]
+    },
+    {
+      "id": 8,
+      "prompt": "Run dotnet-docfx-digest validation with `--changed-only` after I added a new public concrete type `Acme.Http.RetryPolicy` and a public extension method `WithRetry(this HttpClient client, int attempts)`, but I still have not added the required overwrite examples. Git is available and only the changed source files, the namespace page, and docfx.json should be considered.",
+      "expected_output": "Agent runs scripts/docfx.cs with --changed-only and still surfaces EXAMPLE_MISSING for the affected changed public APIs instead of skipping required-example validation wholesale. It scopes the check to the changed APIs and related DocFX inputs, explains which examples are still missing, and uses --verify-docfx-build before claiming the docs are verified.",
+      "expectations": [
+        "Runs scripts/docfx.cs with --changed-only when collecting incremental findings",
+        "Still surfaces EXAMPLE_MISSING for the changed concrete type and extension method when their overwrite examples are absent",
+        "Does not silently skip all required-example validation just because git returned a changed file set",
+        "Scopes the example validation to changed APIs or related DocFX inputs rather than re-reporting the whole repository by default",
+        "Uses --verify-docfx-build before claiming final verification"
+      ]
     }
   ]
 }

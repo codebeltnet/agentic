@@ -34,6 +34,8 @@ dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . -
 
 If either script cannot run, the agent must report the exact command, exit code, and failure output. Do not claim repository instructions or documentation were verified unless the scripts ran successfully.
 
+Read `references/scripts.md` when you need the exact CLI surface, exit codes, JSON diagnostics, or validator behavior for `agents.cs` and `docfx.cs`.
+
 ## Core Principles
 
 Documentation is part of the public contract. When changing public .NET APIs, the agent must update the corresponding documentation in the same change set. This includes XML documentation comments, DocFX overwrite files, namespace overview pages, examples, extension-method listings, and availability information.
