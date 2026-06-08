@@ -377,6 +377,13 @@ internal static class DocfxValidator
                 continue;
             }
 
+            if (ContainsAuthoredOrSourceFiles(buildOutputPath))
+            {
+                report.Warnings.Add(new Diagnostic("GENERATED_OUTPUT_CLEANUP_SKIPPED", buildOutputPath, null,
+                    "Generated output cleanup was skipped because the resolved DocFX build destination contains Markdown, source, project, solution, or DocFX configuration files. These may be authored documentation or repository source files."));
+                continue;
+            }
+
             try
             {
                 Directory.Delete(buildOutputPath, recursive: true);
@@ -517,6 +524,12 @@ internal static class DocfxValidator
                !string.Equals(Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                    Path.GetFullPath(repoRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                    StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsAuthoredOrSourceFiles(string path)
+    {
+        string[] patterns = ["*.md", "*.mdoc", "docfx.json", "toc.yml", "toc.md", "*.cs", "*.csproj", "*.sln", "*.slnx"];
+        return patterns.Any(pattern => EnumerateFiles(path, pattern).Any());
     }
 
     private static List<string> DiscoverMarkdown(string docfxWorkspace)
@@ -2070,6 +2083,8 @@ internal static class DocfxValidator
             report.Status = code == ExitCode.Success ? "passed" : "failed";
         }
 
+        WriteRepairPlanIfRequested(options, report);
+
         report.Summary.Errors = report.Errors.Count;
         report.Summary.Warnings = report.Warnings.Count;
 
@@ -2107,6 +2122,126 @@ internal static class DocfxValidator
         var location = d.Namespace is not null ? $"({d.Namespace}) " : string.Empty;
         var path = d.Path is not null ? $"{d.Path}: " : string.Empty;
         return $"{path}{location}{d.Message}";
+    }
+
+    private static void WriteRepairPlanIfRequested(Options options, Report report)
+    {
+        if (string.IsNullOrWhiteSpace(options.RepairPlanPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var basePath = Directory.Exists(report.RepoRoot) ? report.RepoRoot : Directory.GetCurrentDirectory();
+            var planPath = Path.GetFullPath(options.RepairPlanPath, basePath);
+            var directory = Path.GetDirectoryName(planPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            File.WriteAllText(planPath, BuildRepairPlan(report), new UTF8Encoding(false));
+            report.RepairPlanPath = planPath;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            report.Warnings.Add(new Diagnostic("REPAIR_PLAN_WRITE_FAILED", options.RepairPlanPath, null,
+                $"Unable to write repair plan: {ex.Message}"));
+        }
+    }
+
+    private static string BuildRepairPlan(Report report)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# DocFX Repair Plan");
+        sb.AppendLine();
+        sb.AppendLine($"Repository: `{report.RepoRoot}`");
+        if (!string.IsNullOrWhiteSpace(report.DocfxPath))
+        {
+            sb.AppendLine($"DocFX config: `{report.DocfxPath}`");
+        }
+
+        sb.AppendLine($"Status: `{report.Status ?? "unknown"}`");
+        sb.AppendLine();
+        sb.AppendLine("## Summary");
+        sb.AppendLine();
+        sb.AppendLine($"- Public namespaces: {report.Summary.PublicNamespaces}");
+        sb.AppendLine($"- Namespace pages validated: {report.Summary.NamespacePagesValidated}");
+        sb.AppendLine($"- Required example targets: {report.Summary.RequiredExampleTargets}");
+        sb.AppendLine($"- Required examples found: {report.Summary.RequiredExamples}");
+        sb.AppendLine($"- Extension methods: {report.Summary.ExtensionMethods}");
+        sb.AppendLine($"- Samples compiled: {report.Summary.SamplesCompiled}");
+        sb.AppendLine($"- DocFX builds verified: {report.Summary.DocfxBuildsVerified}");
+        sb.AppendLine($"- Errors: {report.Errors.Count}");
+        sb.AppendLine($"- Warnings: {report.Warnings.Count}");
+        sb.AppendLine();
+        sb.AppendLine("## Execution Gates");
+        sb.AppendLine();
+        sb.AppendLine("- Do not use broad restore or checkout commands to recover documentation files.");
+        sb.AppendLine("- Preserve authored `.md` and `.mdoc` files, including files created earlier in the run.");
+        sb.AppendLine("- Treat `Extension Members` tables as incomplete until required examples exist.");
+        sb.AppendLine("- Repair related namespace pages together; do not update only the first page that exposes a shared issue.");
+        sb.AppendLine("- Rerun validation with `--verify-docfx-build` before claiming completion.");
+        sb.AppendLine();
+
+        AppendDiagnostics(sb, "Repository Guidance", report.Errors.Where(e => e.Code is "AGENTS_BLOCK_MISSING"));
+        AppendDiagnostics(sb, "Namespace And Extension Table Repairs", report.Errors.Where(e =>
+            e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) ||
+            e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal)));
+        AppendDiagnostics(sb, "Required Example Inventory", report.Errors.Where(e => e.Code is "EXAMPLE_MISSING"));
+        AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
+            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING"));
+        AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
+            e.Code is not "AGENTS_BLOCK_MISSING" &&
+            !e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) &&
+            !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
+            e.Code is not "EXAMPLE_MISSING" &&
+            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING"));
+        AppendDiagnostics(sb, "Warnings", report.Warnings);
+
+        sb.AppendLine("## Completion Checklist");
+        sb.AppendLine();
+        sb.AppendLine("- [ ] `agents.cs` has run successfully when `AGENTS_BLOCK_MISSING` appears.");
+        sb.AppendLine("- [ ] Every namespace diagnostic above has been resolved or intentionally excluded with evidence.");
+        sb.AppendLine("- [ ] Every `EXAMPLE_MISSING` diagnostic above maps to a concrete example location.");
+        sb.AppendLine("- [ ] Changed C# examples compile.");
+        sb.AppendLine("- [ ] Authored Markdown files still exist after generated-artifact cleanup.");
+        sb.AppendLine("- [ ] Final validation command and exit code are reported.");
+
+        return sb.ToString();
+    }
+
+    private static void AppendDiagnostics(StringBuilder sb, string title, IEnumerable<Diagnostic> diagnostics)
+    {
+        var items = diagnostics
+            .OrderBy(d => d.Namespace ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(d => d.Path ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(d => d.Code, StringComparer.Ordinal)
+            .ThenBy(d => d.Message, StringComparer.Ordinal)
+            .ToList();
+
+        sb.AppendLine($"## {title}");
+        sb.AppendLine();
+        if (items.Count == 0)
+        {
+            sb.AppendLine("None.");
+            sb.AppendLine();
+            return;
+        }
+
+        foreach (var group in items.GroupBy(d => d.Namespace ?? "(repository)", StringComparer.Ordinal))
+        {
+            sb.AppendLine($"### {group.Key}");
+            sb.AppendLine();
+            foreach (var diagnostic in group)
+            {
+                var path = string.IsNullOrWhiteSpace(diagnostic.Path) ? string.Empty : $" `{diagnostic.Path}`";
+                sb.AppendLine($"- `{diagnostic.Code}`{path}: {diagnostic.Message}");
+            }
+
+            sb.AppendLine();
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -2157,6 +2292,10 @@ internal static class DocfxValidator
                 case "--verify-docfx-build":
                     options.VerifyDocfxBuild = true;
                     break;
+                case "--repair-plan":
+                    if (!Next(args, ref i, out var rp)) { error = "--repair-plan requires a path."; return false; }
+                    options.RepairPlanPath = rp;
+                    break;
                 case "--clean-generated-metadata":
                     options.CleanGeneratedMetadata = true;
                     break;
@@ -2171,6 +2310,7 @@ internal static class DocfxValidator
                     if (TrySplit(arg, "--docfx", out var v2)) { options.DocfxPath = v2; break; }
                     if (TrySplit(arg, "--configuration", out var v3)) { options.Configuration = v3; break; }
                     if (TrySplit(arg, "--framework", out var v4)) { options.Framework = v4; break; }
+                    if (TrySplit(arg, "--repair-plan", out var v5)) { options.RepairPlanPath = v5; break; }
                     error = $"Unknown argument: {arg}";
                     return false;
             }
@@ -2222,6 +2362,7 @@ internal static class DocfxValidator
               --no-validate-samples    Skip C# sample compilation.
               --changed-only           Validate only files changed according to git.
               --verify-docfx-build     Run DocFX against a temp copy of the repository so generated output stays outside the working tree.
+              --repair-plan <path>     Write a deterministic Markdown repair plan from validation diagnostics.
               --clean-generated-metadata
                                       Remove DocFX-generated *.yml and manifest files under metadata.dest. Default: enabled.
               --no-clean-generated-metadata
@@ -2261,6 +2402,7 @@ internal static class DocfxValidator
         public string? DocfxPath { get; set; }
         public string Configuration { get; set; } = "Release";
         public string? Framework { get; set; }
+        public string? RepairPlanPath { get; set; }
         public bool ValidateSamples { get; set; } = true;
         public bool ChangedOnly { get; set; }
         public bool VerifyDocfxBuild { get; set; }
@@ -2334,6 +2476,7 @@ internal sealed class Report
     public string Script { get; set; } = string.Empty;
     public string RepoRoot { get; set; } = string.Empty;
     public string? DocfxPath { get; set; }
+    public string? RepairPlanPath { get; set; }
     public string? Status { get; set; }
     public Summary Summary { get; set; } = new();
     public List<Diagnostic> Errors { get; set; } = new();
