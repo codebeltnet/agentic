@@ -32,7 +32,7 @@ internal static class AgentsScript
 
         For public non-abstraction types, include at least one realistic, copy/paste-ready usage example on the generated type page/overwrite section for that type UID. For example, a public `Class1` requires an example on the `Class1` API page, not only on the namespace page. Prefer deriving examples from existing unit, functional, or integration tests, but convert test code into real-life consumer-oriented usage.
 
-        Missing examples must be added through DocFX overwrite content included by `build.overwrite` in `docfx.json`. Namespace overview text and `Extension Members` tables are not substitutes for type-page examples.
+        Missing type examples must be added through separate per-type DocFX overwrite files by default, such as `.docfx/api/{TypeUid}.md` in Codebelt repositories. If `build.overwrite` only includes namespace files, update `docfx.json` so it includes the per-type overwrite files too, for example with `api/**/*.md`. Namespace overview text and `Extension Members` tables are not substitutes for type-page examples.
 
         Public extension methods must have examples too. Listing an extension method in an `Extension Members` table is required, but it is not enough.
 

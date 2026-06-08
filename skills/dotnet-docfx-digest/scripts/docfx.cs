@@ -114,6 +114,7 @@ internal static class DocfxValidator
 
         report.DocfxPath = docfxPath;
         var docfxWorkspace = Path.GetDirectoryName(docfxPath)!;
+        options.Framework ??= ResolveDefaultFramework(docfxPath, report);
         CleanupGeneratedMetadata(repoRoot, docfxPath, docfxWorkspace, options, report);
 
         // 3. Verify AGENTS.md contains the managed block.
@@ -260,6 +261,60 @@ internal static class DocfxValidator
         foreach (var file in EnumerateFiles(repoRoot, "docfx.json"))
         {
             return file;
+        }
+
+        return null;
+    }
+
+    private static string? ResolveDefaultFramework(string docfxPath, Report report)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(docfxPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+            if (!doc.RootElement.TryGetProperty("metadata", out var metadata))
+            {
+                return null;
+            }
+
+            var frameworks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in EnumerateMetadataEntries(metadata))
+            {
+                if (entry.ValueKind != JsonValueKind.Object ||
+                    !entry.TryGetProperty("properties", out var properties) ||
+                    properties.ValueKind != JsonValueKind.Object ||
+                    !properties.TryGetProperty("TargetFramework", out var tfm) ||
+                    tfm.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var value = tfm.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    frameworks.Add(value.Trim());
+                }
+            }
+
+            if (frameworks.Count == 1)
+            {
+                return frameworks.First();
+            }
+
+            if (frameworks.Count > 1)
+            {
+                report.Warnings.Add(new Diagnostic("FRAMEWORK_DEFAULT_SKIPPED", docfxPath, null,
+                    "DocFX metadata declares multiple TargetFramework values; pass --framework explicitly to validate one target framework."));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            report.Warnings.Add(new Diagnostic("FRAMEWORK_DEFAULT_SKIPPED", docfxPath, null,
+                $"Unable to read DocFX metadata TargetFramework default: {ex.Message}"));
         }
 
         return null;
@@ -520,13 +575,21 @@ internal static class DocfxValidator
 
     private static void VerifyDocfxBuild(string repoRoot, string docfxPath, Report report)
     {
+        var docfxExecutable = ResolveDocfxExecutable();
+        if (docfxExecutable is null)
+        {
+            report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
+                "Unable to find the DocFX CLI on PATH. Install the docfx .NET tool or make docfx.exe available on PATH."));
+            return;
+        }
+
         var tempRoot = Path.Combine(Path.GetTempPath(), "docfx-digest-build-" + Guid.NewGuid().ToString("N"));
         try
         {
             CopyDirectory(repoRoot, tempRoot);
             var relativeDocfxPath = Path.GetRelativePath(repoRoot, docfxPath);
             var tempDocfxPath = Path.Combine(tempRoot, relativeDocfxPath);
-            var result = RunProcess("docfx", $"\"{tempDocfxPath}\"", tempRoot);
+            var result = RunProcess(docfxExecutable, $"\"{tempDocfxPath}\"", tempRoot);
             if (result.ExitCode != 0)
             {
                 report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
@@ -545,6 +608,43 @@ internal static class DocfxValidator
         {
             TryDeleteDirectory(tempRoot);
         }
+    }
+
+    private static string? ResolveDocfxExecutable()
+    {
+        var currentProcess = Environment.ProcessPath;
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var extensions = OperatingSystem.IsWindows()
+            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [string.Empty];
+
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            foreach (var extension in extensions)
+            {
+                var candidate = Path.Combine(directory, OperatingSystem.IsWindows() ? "docfx" + extension.ToLowerInvariant() : "docfx");
+                if (!File.Exists(candidate))
+                {
+                    continue;
+                }
+
+                var full = Path.GetFullPath(candidate);
+                if (currentProcess is not null && string.Equals(full, currentProcess, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                return full;
+            }
+        }
+
+        return null;
     }
 
     private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
@@ -707,6 +807,8 @@ internal static class DocfxValidator
             resolverPaths.Add(dll);
         }
 
+        AddDotNetPackResolverPaths(runtimeDir, framework, resolverPaths);
+
         foreach (var dll in assemblyPaths)
         {
             var dir = Path.GetDirectoryName(dll)!;
@@ -716,7 +818,17 @@ internal static class DocfxValidator
             }
         }
 
-        var resolver = new PathAssemblyResolver(resolverPaths);
+        foreach (var proj in libraryProjects)
+        {
+            var dll = assemblyPaths.FirstOrDefault(p =>
+                string.Equals(Path.GetFileNameWithoutExtension(p), proj.AssemblyName, StringComparison.OrdinalIgnoreCase));
+            if (dll is not null)
+            {
+                AddProjectDependencyResolverPaths(proj, dll, configuration, framework, resolverPaths);
+            }
+        }
+
+        var resolver = new PathAssemblyResolver(DistinctResolverPaths(resolverPaths));
         using var mlc = new MetadataLoadContext(resolver, "System.Private.CoreLib");
 
         var namespaces = new Dictionary<string, NamespaceInfo>(StringComparer.Ordinal);
@@ -776,6 +888,332 @@ internal static class DocfxValidator
             .ToList();
 
         return new ApiModel(namespaces.Values.ToList(), requiredExampleTargets);
+    }
+
+    private static List<string> DistinctResolverPaths(IEnumerable<string> paths)
+    {
+        var byIdentity = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var fallback = new List<string>();
+        foreach (var path in paths)
+        {
+            try
+            {
+                var identity = AssemblyName.GetAssemblyName(path).FullName;
+                byIdentity.TryAdd(identity, path);
+            }
+            catch
+            {
+                fallback.Add(path);
+            }
+        }
+
+        return byIdentity.Values.Concat(fallback).ToList();
+    }
+
+    private static void AddDotNetPackResolverPaths(string runtimeDir, string? framework, HashSet<string> resolverPaths)
+    {
+        if (string.IsNullOrWhiteSpace(framework))
+        {
+            return;
+        }
+
+        var dotnetRoot = Directory.GetParent(runtimeDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))?
+            .Parent?
+            .Parent?
+            .FullName;
+        if (dotnetRoot is null)
+        {
+            return;
+        }
+
+        var packsRoot = Path.Combine(dotnetRoot, "packs");
+        if (!Directory.Exists(packsRoot))
+        {
+            return;
+        }
+
+        foreach (var pack in Directory.GetDirectories(packsRoot))
+        {
+            if (string.Equals(Path.GetFileName(pack), "Microsoft.NETCore.App.Ref", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var refDir = Directory.GetDirectories(pack)
+                .Select(version => Path.Combine(version, "ref", framework))
+                .Where(Directory.Exists)
+                .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+
+            if (refDir is null)
+            {
+                continue;
+            }
+
+            foreach (var dll in Directory.GetFiles(refDir, "*.dll"))
+            {
+                resolverPaths.Add(dll);
+            }
+        }
+    }
+
+    private static void AddProjectDependencyResolverPaths(ProjectInfo project, string assemblyPath, string configuration,
+        string? framework, HashSet<string> resolverPaths)
+    {
+        var projectFramework = framework ?? DetectFrameworkFromAssemblyPath(project, assemblyPath);
+        AddProjectAssetsResolverPaths(project, projectFramework, resolverPaths);
+        AddDepsJsonResolverPaths(project, assemblyPath, configuration, projectFramework, resolverPaths);
+    }
+
+    private static string? DetectFrameworkFromAssemblyPath(ProjectInfo project, string assemblyPath)
+    {
+        if (project.TargetFrameworks.Count == 0)
+        {
+            return null;
+        }
+
+        var segments = Path.GetFullPath(assemblyPath)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        return project.TargetFrameworks.FirstOrDefault(tfm =>
+            segments.Any(s => string.Equals(s, tfm, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static void AddProjectAssetsResolverPaths(ProjectInfo project, string? framework, HashSet<string> resolverPaths)
+    {
+        var projectDir = Path.GetDirectoryName(project.Path)!;
+        var assetsPath = Path.Combine(projectDir, "obj", "project.assets.json");
+        if (!File.Exists(assetsPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(assetsPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+            if (!doc.RootElement.TryGetProperty("targets", out var targets) ||
+                targets.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            var packageFolders = ReadPackageFolders(doc.RootElement);
+            foreach (var target in targets.EnumerateObject())
+            {
+                if (!IsMatchingAssetsTarget(target.Name, framework))
+                {
+                    continue;
+                }
+
+                foreach (var dependency in target.Value.EnumerateObject())
+                {
+                    AddAssetGroupResolverPaths(dependency, "compile", packageFolders, resolverPaths);
+                    AddAssetGroupResolverPaths(dependency, "runtime", packageFolders, resolverPaths);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            // Missing asset details should not block metadata discovery when output-folder resolution is enough.
+        }
+    }
+
+    private static List<string> ReadPackageFolders(JsonElement root)
+    {
+        var packageFolders = new List<string>();
+        if (!root.TryGetProperty("packageFolders", out var folders) ||
+            folders.ValueKind != JsonValueKind.Object)
+        {
+            return packageFolders;
+        }
+
+        foreach (var folder in folders.EnumerateObject())
+        {
+            if (!string.IsNullOrWhiteSpace(folder.Name))
+            {
+                packageFolders.Add(folder.Name);
+            }
+        }
+
+        return packageFolders;
+    }
+
+    private static bool IsMatchingAssetsTarget(string targetName, string? framework)
+    {
+        if (string.IsNullOrWhiteSpace(framework))
+        {
+            return true;
+        }
+
+        return string.Equals(targetName, framework, StringComparison.OrdinalIgnoreCase) ||
+               targetName.StartsWith(framework + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AddAssetGroupResolverPaths(JsonProperty dependency, string groupName, List<string> packageFolders,
+        HashSet<string> resolverPaths)
+    {
+        if (dependency.Value.ValueKind != JsonValueKind.Object ||
+            !dependency.Value.TryGetProperty("type", out var typeElement) ||
+            typeElement.ValueKind != JsonValueKind.String ||
+            !string.Equals(typeElement.GetString(), "package", StringComparison.OrdinalIgnoreCase) ||
+            !dependency.Value.TryGetProperty(groupName, out var group) ||
+            group.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var slash = dependency.Name.IndexOf('/');
+        if (slash <= 0 || slash == dependency.Name.Length - 1)
+        {
+            return;
+        }
+
+        var packageId = dependency.Name[..slash];
+        var version = dependency.Name[(slash + 1)..];
+        foreach (var asset in group.EnumerateObject())
+        {
+            if (!asset.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                asset.Name.EndsWith("/_._", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (var packageFolder in packageFolders)
+            {
+                var packageRoot = Path.Combine(packageFolder, packageId.ToLowerInvariant(), version.ToLowerInvariant());
+                var fullPath = Path.GetFullPath(asset.Name.Replace('/', Path.DirectorySeparatorChar), packageRoot);
+                if (File.Exists(fullPath))
+                {
+                    resolverPaths.Add(fullPath);
+                    break;
+                }
+
+                packageRoot = Path.Combine(packageFolder, packageId, version);
+                fullPath = Path.GetFullPath(asset.Name.Replace('/', Path.DirectorySeparatorChar), packageRoot);
+                if (File.Exists(fullPath))
+                {
+                    resolverPaths.Add(fullPath);
+                    break;
+                }
+            }
+        }
+    }
+
+    private static void AddDepsJsonResolverPaths(ProjectInfo project, string assemblyPath, string configuration,
+        string? framework, HashSet<string> resolverPaths)
+    {
+        var projectDir = Path.GetDirectoryName(project.Path)!;
+        var outputDir = Path.GetDirectoryName(assemblyPath)!;
+        var depsName = Path.GetFileNameWithoutExtension(assemblyPath) + ".deps.json";
+        var candidates = new List<string> { Path.Combine(outputDir, depsName) };
+
+        if (!string.IsNullOrWhiteSpace(framework))
+        {
+            candidates.Add(Path.Combine(projectDir, "bin", configuration, framework, depsName));
+        }
+
+        foreach (var depsPath in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(depsPath))
+            {
+                continue;
+            }
+
+            AddDepsJsonPackagePaths(depsPath, resolverPaths);
+        }
+    }
+
+    private static void AddDepsJsonPackagePaths(string depsPath, HashSet<string> resolverPaths)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(depsPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+            if (!doc.RootElement.TryGetProperty("targets", out var targets) ||
+                targets.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            var packageFolders = ResolveNuGetPackageFolders();
+            foreach (var target in targets.EnumerateObject())
+            {
+                foreach (var dependency in target.Value.EnumerateObject())
+                {
+                    AddDepsRuntimeResolverPaths(dependency, packageFolders, resolverPaths);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            // project.assets.json is the primary package resolver; deps.json only supplements it.
+        }
+    }
+
+    private static List<string> ResolveNuGetPackageFolders()
+    {
+        var folders = new List<string>();
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(userProfile))
+        {
+            folders.Add(Path.Combine(userProfile, ".nuget", "packages"));
+        }
+
+        var packages = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        if (!string.IsNullOrWhiteSpace(packages))
+        {
+            folders.Insert(0, packages);
+        }
+
+        return folders.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static void AddDepsRuntimeResolverPaths(JsonProperty dependency, List<string> packageFolders,
+        HashSet<string> resolverPaths)
+    {
+        if (dependency.Value.ValueKind != JsonValueKind.Object ||
+            !dependency.Value.TryGetProperty("runtime", out var runtime) ||
+            runtime.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var slash = dependency.Name.IndexOf('/');
+        if (slash <= 0 || slash == dependency.Name.Length - 1)
+        {
+            return;
+        }
+
+        var packageId = dependency.Name[..slash];
+        var version = dependency.Name[(slash + 1)..];
+        foreach (var asset in runtime.EnumerateObject())
+        {
+            if (!asset.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                asset.Name.EndsWith("/_._", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (var packageFolder in packageFolders)
+            {
+                var packageRoot = Path.Combine(packageFolder, packageId.ToLowerInvariant(), version.ToLowerInvariant());
+                var fullPath = Path.GetFullPath(asset.Name.Replace('/', Path.DirectorySeparatorChar), packageRoot);
+                if (File.Exists(fullPath))
+                {
+                    resolverPaths.Add(fullPath);
+                    break;
+                }
+            }
+        }
     }
 
     private static void CollectApiTargets(Type type, NamespaceInfo ns)
@@ -1145,7 +1583,7 @@ internal static class DocfxValidator
                 : target.DeclaringTypeUid ?? target.Uid;
 
             var message = target.Kind == ApiTargetKind.Type
-                ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to the generated type page/overwrite section for uid `{target.Uid}` (for example `{target.DisplayName}.md` when that is the repository's API-page convention)."
+                ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to a per-type overwrite file for uid `{target.Uid}` (for Codebelt repositories, create `.docfx/api/{target.Uid}.md` and ensure build.overwrite includes it, for example with `api/**/*.md`)."
                 : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}`, its declaring type uid `{expectedUid}`, or the namespace page `{target.Namespace}`.";
 
             report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", null, target.Namespace, message));

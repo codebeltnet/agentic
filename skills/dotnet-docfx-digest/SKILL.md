@@ -155,7 +155,13 @@ A "material change" includes:
 
 Every automatically documented public non-abstraction type and every public extension method must include at least one example showing how to use it. A namespace overview fly-in or `Extension Members` table is not enough.
 
-Create or repair DocFX overwrite content for missing examples. If an overwrite section for the target `uid` does not exist, create one in a Markdown file included by `build.overwrite` in `docfx.json`. Do not stop after editing namespace pages when public non-abstraction types or public extension methods still lack examples.
+Create or repair DocFX overwrite content for missing examples. If an overwrite section for the target `uid` does not exist, create a separate per-type Markdown overwrite file by default. For Codebelt repositories, the default type example file is:
+
+```text
+.docfx/api/{TypeUid}.md
+```
+
+For example, create `.docfx/api/Codebelt.Bootstrapper.ProgramRoot.md` for uid `Codebelt.Bootstrapper.ProgramRoot`. If `build.overwrite` does not include the chosen per-type file path, update `docfx.json` so the overwrite glob includes both namespace pages and per-type API overwrite files, such as `api/**/*.md`. Do not hide type examples in namespace pages because the current overwrite glob only includes namespace files.
 
 For public non-abstraction types, the example must belong to the generated type page/overwrite section for that type `uid`. For example, if `Class1` is public and not an abstraction, add an `Examples` section to the DocFX overwrite content for `Class1` so the example appears on `Class1.md` at the bottom of the generated API page. A namespace page example does not satisfy the type-page example requirement for `Class1`.
 
@@ -390,6 +396,8 @@ Do not use overwrite files to conceal inaccurate XML documentation. Correct the 
 
 When the validator reports `EXAMPLE_MISSING`, create or update DocFX overwrite content for the reported UID instead of treating the missing example as a prose-only issue.
 
+When a repository has namespace overview files but no per-type overwrite files, create the per-type files. Do not treat the absence of existing type files as a signal to skip examples. For Codebelt repositories, place new type files beside generated API metadata under `.docfx/api/` and update `build.overwrite` if it currently points only at `.docfx/api/namespaces/**/*.md`.
+
 ## XML Documentation Comments
 
 Public API should have useful XML documentation comments. Prefer concise source-level XML comments and richer examples/remarks in DocFX overwrite files when documentation becomes long.
@@ -503,13 +511,15 @@ When no specific API or namespace is named:
 9. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins.
 10. Add or repair `Extension Members` tables for namespaces with public extension methods.
 11. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
-12. Create type-page overwrite example sections for public non-abstraction types and example sections for public extension methods that have no example yet.
-13. Preserve manual edits and correct stale contradictions instead of replacing whole files.
-14. Run `dotnet build`.
-15. Run `dotnet test`.
-16. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
-17. Confirm generated DocFX metadata and build output did not remain in the working tree.
-18. Report verification results and any remaining findings.
+12. Create separate type-page overwrite files for public non-abstraction types that have no example yet, using `.docfx/api/{TypeUid}.md` in Codebelt repositories unless the repo has a stronger existing convention.
+13. Ensure `build.overwrite` includes the per-type overwrite files you create; update a namespace-only overwrite glob to include API overwrite files when needed.
+14. Create example sections for public extension methods that have no example yet.
+15. Preserve manual edits and correct stale contradictions instead of replacing whole files.
+16. Run `dotnet build`.
+17. Run `dotnet test`.
+18. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
+19. Confirm generated DocFX metadata and build output did not remain in the working tree.
+20. Report verification results and any remaining findings.
 
 ## Namespace Page Template
 
@@ -535,7 +545,7 @@ Remove the `Extension Members` section when the namespace has no public extensio
 
 ## Type Example Template
 
-Use this shape for public non-abstraction type examples. Put this on the generated type page/overwrite section for the type `uid`; for a public `Class1`, the example belongs on the `Class1` API page, not only on the namespace page.
+Use this shape for public non-abstraction type examples. Put this on the generated type page/overwrite section for the type `uid`; for a public `Class1`, the example belongs on the `Class1` API page, not only on the namespace page. When no type overwrite file exists yet, create a separate per-type file such as `.docfx/api/X.Y.Z.Class1.md` and ensure `build.overwrite` includes that file.
 
 ````markdown
 ### Examples
