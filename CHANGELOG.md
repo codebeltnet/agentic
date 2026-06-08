@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-08
+
+This is a minor release introducing the `dotnet-change-impact` skill for classifying .NET library and NuGet package changes against Microsoft's official compatibility rules. The skill automatically resolves the current branch against the upstream default branch, compares commits and diffs, and recommends the correct SemVer release bump (Major, Minor, or Patch) along with structured compatibility reasoning.
+
+### Added
+
+- `dotnet-change-impact` skill that classifies .NET library changes and recommends version bumps according to Microsoft's official .NET library compatibility model, supporting breaking changes, API diffs, public API changes, dependency updates, TFM and platform support changes, interface and enum modifications, overloads, analyzers, and source generators,
+- Automatic default-branch resolution in `dotnet-change-impact` when no explicit change details or compare range are provided; the skill inspects the current Git branch and compares against the upstream default branch, with fallback to `main` or `master`,
+- Comprehensive compatibility-categories reference documentation in `references/compatibility-categories.md` covering Major (breaking changes, removals, contract modifications), Minor (new capabilities without breaking changes), and Patch (fixes, maintenance, non-breaking refinement) classifications,
+- Per-skill evals coverage for `dotnet-change-impact` including current-branch detection, breaking-change scenarios, API compatibility assessments, dependency updates, and SemVer classification validation,
+- `dotnet-change-impact` registered in README skill index with install snippet and detailed "Why dotnet-change-impact?" section explaining Microsoft compatibility grounding and key capabilities.
+
+### Changed
+
+- Enhanced README with `dotnet-change-impact` installation guidance and capability showcase, including examples of breaking changes, API diffs, and compatibility assessment workflows.
+
 ## [0.5.0] - 2026-06-07
 
 This is a minor release introducing the `git-remote-release` skill for generating GitHub release notes by summarizing commits and pull requests between git tags or branches. This complements the existing changelog and release-notes workflow by providing a GitHub-specific release entry point.
@@ -323,7 +339,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/codebeltnet/agentic/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/codebeltnet/agentic/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/codebeltnet/agentic/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/codebeltnet/agentic/compare/v0.4.4...v0.4.5
