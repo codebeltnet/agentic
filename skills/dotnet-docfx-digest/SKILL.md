@@ -32,6 +32,12 @@ Before reporting completion, the agent must run the deterministic validator:
 dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --verify-docfx-build
 ```
 
+For repo-wide audits or any validation run that produces more than a small number of diagnostics, the agent must also ask the validator to write a deterministic repair plan and use that plan as the authoritative work queue:
+
+```bash
+dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --json --repair-plan <temp-path>/docfx-repair-plan.md
+```
+
 If either script cannot run, the agent must report the exact command, exit code, and failure output. Do not claim repository instructions or documentation were verified unless the scripts ran successfully.
 
 Read `references/scripts.md` when you need the exact CLI surface, exit codes, JSON diagnostics, or validator behavior for `agents.cs` and `docfx.cs`.
@@ -156,6 +162,8 @@ A "material change" includes:
 ## Examples Are Mandatory
 
 Every automatically documented public non-abstraction type and every public extension method must include at least one example showing how to use it. A namespace overview fly-in or `Extension Members` table is not enough.
+
+Do not treat an `Extension Members` table as documentation completion. A table answers "what exists"; an example answers "how a consumer uses it." For each public extension method discovered or listed in a namespace page, create or verify an example before moving to final verification. If several related namespace pages are updated together, build an example inventory that maps every public extension method and every public non-abstraction type to the exact overwrite file and UID where its example lives.
 
 Create or repair DocFX overwrite content for missing examples. If an overwrite section for the target `uid` does not exist, create a separate per-type Markdown overwrite file by default. For Codebelt repositories, the default type example file is:
 
@@ -400,6 +408,12 @@ When the validator reports `EXAMPLE_MISSING`, create or update DocFX overwrite c
 
 When a repository has namespace overview files but no per-type overwrite files, create the per-type files. Do not treat the absence of existing type files as a signal to skip examples. For Codebelt repositories, place new type files beside generated API metadata under `.docfx/api/` and update `build.overwrite` if it currently points only at `.docfx/api/namespaces/**/*.md`.
 
+## Namespace Coverage
+
+When one namespace page in a public API family needs repair, audit the sibling namespace pages before finishing. For example, if `Codebelt.Bootstrapper.md` is touched, also inspect related namespace pages such as `Codebelt.Bootstrapper.Console.md`, `Codebelt.Bootstrapper.Web.md`, and `Codebelt.Bootstrapper.Worker.md` when they exist. Apply the same correctness rules to every affected namespace page: accurate fly-in, availability, extension-member table, and required examples.
+
+Do not update only the first namespace file that exposes the problem. If only one namespace is intentionally changed, state why the other related namespace pages were inspected and left unchanged.
+
 ## XML Documentation Comments
 
 Public API should have useful XML documentation comments. Prefer concise source-level XML comments and richer examples/remarks in DocFX overwrite files when documentation becomes long.
@@ -449,6 +463,20 @@ Before editing an existing Markdown file:
 
 Documentation must stay current. If additive-only editing would leave conflicting or stale information, update the stale information. Accuracy is more important than blindly appending content. Never leave two conflicting descriptions of the same API behavior.
 
+## Cleanup Boundary
+
+Authored DocFX Markdown is documentation output, not disposable build output. This includes namespace overview pages, per-type overwrite files, conceptual pages, includes, and Markdown files created earlier in the same run. Do not delete `.md` or `.mdoc` files, `docfx.json`, `toc.yml`, includes, images, examples, or directories that contain authored documentation while cleaning generated artifacts unless the user explicitly asks for that deletion.
+
+Prefer `docfx.cs --verify-docfx-build` because it runs DocFX in a temp copy and removes that temp workspace itself. After verification, do not run broad manual cleanup commands such as deleting DocFX directories by name. If `git status` shows remaining files, classify each path first:
+
+- Generated metadata cleanup is limited to DocFX-generated `*.yml`, `.manifest`, and `*.manifest` files under configured metadata destinations.
+- Generated site cleanup is limited to the configured `build.dest` directory when it is clearly generated output and contains no authored Markdown, source, project, solution, or DocFX configuration files.
+- Authored documentation changes, especially `.docfx/**/*.md`, must be kept and reported as created or updated documentation.
+
+If a cleanup candidate is ambiguous, leave it in place and report the ambiguity instead of deleting it.
+
+If a cleanup command accidentally deletes authored documentation, stop and inspect `git status` and `git diff` before attempting recovery. Do not run broad `git restore`, `git checkout --`, or equivalent whole-directory restores to hide the mistake. Those commands can discard already checked-out documentation work and make the final files worse than before. Recover only the exact files that were incorrectly removed, preserve any edits made earlier in the run, and report the recovery steps honestly.
+
 ## Style Rules
 
 Use developer-friendly documentation style.
@@ -491,14 +519,16 @@ When the user names a changed API or namespace:
 9. Convert test usage into real-life documentation examples.
 10. Update XML documentation where needed.
 11. Update or create namespace overview pages.
-12. Update extension-member tables.
-13. Update or create overwrite files, including type-page example sections for public non-abstraction types and example sections for public extension methods.
-14. Preserve manual edits.
-15. Run `dotnet build`.
-16. Run `dotnet test`.
-17. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
-18. Confirm generated DocFX metadata and build output did not remain in the working tree.
-19. Report verification results.
+12. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
+13. Update extension-member tables.
+14. Update or create overwrite files, including type-page example sections for public non-abstraction types and example sections for public extension methods.
+15. Build an example inventory that maps each required public type and extension method to its example location.
+16. Preserve manual edits.
+17. Run `dotnet build`.
+18. Run `dotnet test`.
+19. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
+20. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
+21. Report verification results.
 
 When no specific API or namespace is named:
 
@@ -507,21 +537,24 @@ When no specific API or namespace is named:
 3. Locate `.docfx/docfx.json` or repository-specific DocFX config.
 4. Read `references/docfx-overwrite-files.md`.
 5. Run `dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --json` to collect deterministic missing-doc findings when the repository is buildable.
-6. If the validator fails before documentation diagnostics can be produced, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
-7. Determine every namespace containing public API and whether each namespace exposes public extension methods.
-8. Determine every public non-abstraction type and every public extension method that requires an example.
-9. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins.
-10. Add or repair `Extension Members` tables for namespaces with public extension methods.
-11. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
-12. Create separate type-page overwrite files for public non-abstraction types that have no example yet, using `.docfx/api/{TypeUid}.md` in Codebelt repositories unless the repo has a stronger existing convention.
-13. Ensure `build.overwrite` includes the per-type overwrite files you create; update a namespace-only overwrite glob to include API overwrite files when needed.
-14. Create example sections for public extension methods that have no example yet.
-15. Preserve manual edits and correct stale contradictions instead of replacing whole files.
-16. Run `dotnet build`.
-17. Run `dotnet test`.
-18. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
-19. Confirm generated DocFX metadata and build output did not remain in the working tree.
-20. Report verification results and any remaining findings.
+6. If the validator reports multiple diagnostics, rerun it with `--repair-plan <temp-path>/docfx-repair-plan.md`, read that plan, and treat it as the work queue.
+7. If the validator fails before documentation diagnostics can be produced, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
+8. Determine every namespace containing public API and whether each namespace exposes public extension methods.
+9. Determine every public non-abstraction type and every public extension method that requires an example.
+10. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins.
+11. Audit related namespace pages together so fixes are consistent across the public API family.
+12. Add or repair `Extension Members` tables for namespaces with public extension methods.
+13. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
+14. Create separate type-page overwrite files for public non-abstraction types that have no example yet, using `.docfx/api/{TypeUid}.md` in Codebelt repositories unless the repo has a stronger existing convention.
+15. Ensure `build.overwrite` includes the per-type overwrite files you create; update a namespace-only overwrite glob to include API overwrite files when needed.
+16. Create example sections for public extension methods that have no example yet.
+17. Build an example inventory that maps each required public type and extension method to its example location.
+18. Preserve manual edits and correct stale contradictions instead of replacing whole files.
+19. Run `dotnet build`.
+20. Run `dotnet test`.
+21. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
+22. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
+23. Report verification results and any remaining findings.
 
 ## Namespace Page Template
 
@@ -590,12 +623,15 @@ Before completing documentation work, verify:
 
 - [ ] `agents.cs` has run successfully.
 - [ ] `AGENTS.md` contains the managed DocFX documentation maintenance block.
+- [ ] For multi-diagnostic audits, `docfx.cs --repair-plan` was written, read, and used as the authoritative work queue.
 - [ ] Only public API is documented.
 - [ ] Every namespace with public API has a namespace overview page.
+- [ ] Related namespace pages in the same public API family were inspected and updated consistently, or intentionally left unchanged with a reason.
 - [ ] Namespaces with public extension methods have an `Extension Members` section.
 - [ ] Extension methods are documented by extended type, not extension class.
 - [ ] Public non-abstraction types have at least one type-page example.
 - [ ] Public extension methods have at least one example, not only a table entry.
+- [ ] An example inventory maps every required public type and extension method to its example file and UID.
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`.
 - [ ] Abstractions without examples have a clear reason.
 - [ ] Examples are realistic and copy/paste-ready.
@@ -609,7 +645,8 @@ Before completing documentation work, verify:
 - [ ] `dotnet build` has been run or the failure is reported.
 - [ ] `dotnet test` has been run or the failure is reported.
 - [ ] `docfx.cs --verify-docfx-build` has run successfully, including the temp-workspace DocFX build, or the failure is reported.
-- [ ] Generated DocFX metadata files and build output directories did not remain in the working tree after verification.
+- [ ] Generated DocFX metadata files and build output directories did not remain in the working tree after verification, and authored Markdown or documentation assets were not deleted as cleanup.
+- [ ] No broad restore or checkout command discarded authored documentation changes.
 
 ## Completion Response
 
@@ -618,8 +655,9 @@ When reporting completion, include:
 - Public APIs documented,
 - Namespace pages added or updated,
 - Extension-member tables added or updated,
-- Examples added and their source test/sample when applicable,
+- Examples added, their source test/sample when applicable, and the example inventory by public type or extension method,
 - Availability handling,
+- Related namespace pages inspected and whether each was updated or left unchanged,
 - `AGENTS.md` created, updated, already compliant, or failed,
 - Verification commands run,
 - Any verification failures or skipped checks.

@@ -63,12 +63,13 @@
     {
       "id": 6,
       "prompt": "Use dotnet-docfx-digest on this repository.",
-      "expected_output": "Agent treats the request as a repo-wide DocFX documentation audit instead of asking what to document first. It runs scripts/agents.cs, inspects AGENTS.md, docfx.json, source projects, public API, tests, samples, overwrite files, namespace pages, and availability includes, runs scripts/docfx.cs to collect deterministic findings and with --verify-docfx-build before completion, repairs missing complementary DocFX documentation that can be derived from source evidence, reads the DocFX overwrite reference when creating or repairing overwrite files, and asks for clarification only if discovery exposes a correctness-affecting choice.",
+      "expected_output": "Agent treats the request as a repo-wide DocFX documentation audit instead of asking what to document first. It runs scripts/agents.cs, inspects AGENTS.md, docfx.json, source projects, public API, tests, samples, overwrite files, namespace pages, and availability includes, runs scripts/docfx.cs to collect deterministic findings and writes a deterministic --repair-plan for noisy diagnostics, uses that repair plan as the work queue, runs with --verify-docfx-build before completion, repairs missing complementary DocFX documentation that can be derived from source evidence, reads the DocFX overwrite reference when creating or repairing overwrite files, and asks for clarification only if discovery exposes a correctness-affecting choice.",
       "expectations": [
         "Does not start by asking the user which API or namespace to document",
         "Runs scripts/agents.cs to ensure the repository AGENTS.md contains the managed DocFX maintenance block",
         "Inspects docfx.json and existing DocFX overwrite, namespace, include, source, test, and sample evidence before editing",
         "Runs scripts/docfx.cs, preferably with --json when collecting repo-wide findings, and uses --verify-docfx-build before completion so generated output stays outside the working tree",
+        "For multi-diagnostic output, writes and reads a deterministic --repair-plan and uses it as the work queue before editing",
         "Creates or updates missing namespace overview pages, Extension Members tables, examples, and availability notes that can be derived from evidence",
         "Reads references/docfx-overwrite-files.md before creating or repairing DocFX overwrite files",
         "Asks a concise clarifying question only after inspection finds a correctness-affecting unresolved choice"
@@ -99,6 +100,34 @@
         "Does not silently skip all required-example validation just because git returned a changed file set",
         "Scopes the example validation to changed APIs or related DocFX inputs rather than re-reporting the whole repository by default",
         "Uses --verify-docfx-build before claiming final verification"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use dotnet-docfx-digest on a Codebelt.Bootstrapper-style repository. During the run you create `.docfx/api/Codebelt.Bootstrapper.ProgramRoot.md` and `.docfx/api/namespaces/Codebelt.Bootstrapper.md`, then validation leaves generated DocFX metadata files beside those authored markdown files. Clean up generated artifacts before completion.",
+      "expected_output": "Agent preserves all authored Markdown overwrite and namespace files, including files created earlier in the same run, and cleans only known generated DocFX metadata or safe generated site output. It does not delete `.docfx/api/**/*.md`, does not recursively delete DocFX directories that contain Markdown or source/configuration files, uses `docfx.cs --verify-docfx-build` for temp-workspace verification, classifies any remaining `git status` paths before deletion, and leaves ambiguous cleanup candidates in place with a note instead of deleting them.",
+      "expectations": [
+        "Treats newly created `.docfx/**/*.md` files as documentation deliverables rather than cleanup targets",
+        "Does not run broad manual cleanup commands that delete DocFX directories by name",
+        "Limits generated metadata cleanup to DocFX-generated `*.yml`, `.manifest`, and `*.manifest` files under configured metadata destinations",
+        "Does not recursively delete a configured build output directory when it contains Markdown, source, project, solution, or DocFX configuration files",
+        "Uses `docfx.cs --verify-docfx-build` so the DocFX build runs in a temp copy and generated site output stays out of the working tree",
+        "Reports any ambiguous leftover paths instead of deleting authored documentation"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Use dotnet-docfx-digest on the Codebelt.Bootstrapper docs after a bad previous run left `Codebelt.Bootstrapper.Console.md`, `Codebelt.Bootstrapper.md`, `Codebelt.Bootstrapper.Web.md`, and `Codebelt.Bootstrapper.Worker.md` checked out. The last agent restored or undid some of those files, only edited `Codebelt.Bootstrapper.md`, and added no required examples.",
+      "expected_output": "Agent does not run broad restore or checkout commands. It captures git status and diffs first, runs scripts/docfx.cs with --json and --repair-plan, reads the repair plan, audits all four Bootstrapper namespace pages as a related family, fixes Extension Members sections consistently, creates or repairs required examples for public non-abstraction types and public extension methods instead of stopping at tables, builds an example inventory mapping each required API to an example file and UID, preserves already checked-out Markdown edits, runs build/test/DocFX verification, and reports any remaining deterministic diagnostics.",
+      "expectations": [
+        "Captures git status and diffs before modifying or recovering checked-out Markdown files",
+        "Does not use broad git restore, checkout, reset, or whole-directory recovery commands",
+        "Runs scripts/docfx.cs with --json and --repair-plan, then reads the generated repair plan before editing",
+        "Audits `Codebelt.Bootstrapper.Console.md`, `Codebelt.Bootstrapper.md`, `Codebelt.Bootstrapper.Web.md`, and `Codebelt.Bootstrapper.Worker.md` together instead of updating only one file",
+        "Uses `Extension Members` headings where extension methods are present",
+        "Adds required examples for public non-abstraction types and public extension methods, not only namespace fly-ins or extension tables",
+        "Builds and reports an example inventory mapping each required API to its example file and UID",
+        "Preserves authored Markdown and reports any remaining validation diagnostics instead of claiming completion"
       ]
     }
   ]
