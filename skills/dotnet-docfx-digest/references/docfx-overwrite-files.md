@@ -33,7 +33,7 @@ The `build.overwrite` entry in `docfx.json` tells DocFX which conceptual Markdow
 
 When a repository has no obvious overwrite location, inspect `docfx.json` first. Look at `build.content`, `build.overwrite`, `metadata.dest`, include paths, and existing Markdown layout before deciding where a new namespace page belongs.
 
-If a concrete public type or public extension method lacks an example, create a matching overwrite section in a Markdown file that is included by `build.overwrite`. Namespace overview pages and `Extension Members` tables complement examples; they do not replace examples.
+If a public non-abstraction type lacks an example, create a matching type-UID overwrite section in a Markdown file that is included by `build.overwrite` so the example appears on the generated type API page. For example, a public `Class1` needs an example on the `Class1` API page. Namespace overview pages and `Extension Members` tables complement examples; they do not replace type-page examples.
 
 ## Practical Rules
 

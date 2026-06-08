@@ -76,11 +76,12 @@
     },
     {
       "id": 7,
-      "prompt": "Use dotnet-docfx-digest on a .NET library whose namespace pages and Extension Members tables are present, but concrete public types and extension methods have no examples. The DocFX config has build.overwrite pointing at .docfx/api/**/*.md.",
-      "expected_output": "Agent does not stop after confirming namespace pages and extension tables. It audits concrete public types and public extension methods for examples, creates or updates DocFX overwrite sections/files included by build.overwrite for missing examples, uses generated UIDs rather than guessing, derives buildable examples from tests or actual public API behavior, and reruns scripts/docfx.cs until EXAMPLE_MISSING findings are gone.",
+      "prompt": "Use dotnet-docfx-digest on a .NET library whose namespace pages and Extension Members tables are present, but public non-abstraction types such as `Class1` and public extension methods have no examples. The DocFX config has build.overwrite pointing at .docfx/api/**/*.md.",
+      "expected_output": "Agent does not stop after confirming namespace pages and extension tables. It audits public non-abstraction types and public extension methods for examples, creates or updates DocFX overwrite sections/files included by build.overwrite for missing examples, puts type examples on the generated type page/overwrite section such as Class1.md for Class1, uses generated UIDs rather than guessing, derives buildable examples from tests or actual public API behavior, and reruns scripts/docfx.cs until EXAMPLE_MISSING findings are gone.",
       "expectations": [
         "Treats namespace overview pages and Extension Members tables as insufficient when examples are missing",
-        "Creates or updates DocFX overwrite content included by build.overwrite for concrete public type examples",
+        "Creates or updates DocFX overwrite content included by build.overwrite for public non-abstraction type examples",
+        "Places a public Class1 example on the Class1 type page/overwrite section rather than only on the namespace page",
         "Creates or updates overwrite content for public extension method examples, or places the example on the extension class or namespace page while explicitly demonstrating the method",
         "Uses generated DocFX UIDs or verified metadata instead of inventing overwrite UIDs",
         "Runs scripts/docfx.cs and responds to EXAMPLE_MISSING diagnostics before claiming completion",

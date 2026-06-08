@@ -54,8 +54,8 @@ Validates the deterministic documentation requirements against the *compiled*
 repository, not against text in `SKILL.md`. It builds the solution, discovers
 public API from compiled assemblies (preferring reference assemblies) via
 `System.Reflection.MetadataLoadContext`, then checks namespace overview pages,
-extension-member tables, availability, required overwrite examples for concrete
-public types and public extension methods, and compiles every C# documentation
+extension-member tables, availability, required type-page overwrite examples for
+public non-abstraction types and public extension methods, and compiles every C# documentation
 sample as a file-based app.
 
 ```bash
