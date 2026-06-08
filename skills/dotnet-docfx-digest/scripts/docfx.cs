@@ -22,7 +22,7 @@ internal static class DocfxValidator
     private const string ExtensionAttributeFullName = "System.Runtime.CompilerServices.ExtensionAttribute";
     private const string SkipMarker = "dotnet-docfx-digest:skip-compile";
 
-    private static readonly string[] IgnoredDirectorySegments = ["bin", "obj", "_site", ".git", "node_modules"];
+    private static readonly string[] IgnoredDirectorySegments = ["bin", "obj", "_site", ".git", ".vs", ".vscode", ".idea", "node_modules"];
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(10);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -114,6 +114,7 @@ internal static class DocfxValidator
 
         report.DocfxPath = docfxPath;
         var docfxWorkspace = Path.GetDirectoryName(docfxPath)!;
+        CleanupGeneratedMetadata(repoRoot, docfxPath, docfxWorkspace, options, report);
 
         // 3. Verify AGENTS.md contains the managed block.
         var agentsPath = Path.Combine(repoRoot, "AGENTS.md");
@@ -204,6 +205,12 @@ internal static class DocfxValidator
             ValidateSamples(repoRoot, markdownFiles, libraryProjects, options, changedFiles, report);
         }
 
+        // Optional DocFX build verification happens in a temp copy so generated output never lands in the working tree.
+        if (options.VerifyDocfxBuild)
+        {
+            VerifyDocfxBuild(repoRoot, docfxPath, report);
+        }
+
         // 14-15. Produce report and return a deterministic exit code.
         bool hasSampleError = report.Errors.Any(e => e.Code is "SAMPLE_COMPILE_FAILED");
         bool hasOtherError = report.Errors.Any(e => e.Code is not "SAMPLE_COMPILE_FAILED");
@@ -256,6 +263,203 @@ internal static class DocfxValidator
         }
 
         return null;
+    }
+
+    private static void CleanupGeneratedMetadata(string repoRoot, string docfxPath, string docfxWorkspace, Options options, Report report)
+    {
+        if (!options.CleanGeneratedMetadata)
+        {
+            return;
+        }
+
+        foreach (var metadataPath in ResolveMetadataDestinations(docfxPath, docfxWorkspace, report)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(metadataPath))
+            {
+                continue;
+            }
+
+            if (!IsInsideDirectory(metadataPath, repoRoot) ||
+                string.Equals(Path.GetFullPath(metadataPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    Path.GetFullPath(repoRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                report.Warnings.Add(new Diagnostic("GENERATED_METADATA_CLEANUP_SKIPPED", metadataPath, null,
+                    "Generated metadata cleanup was skipped because the resolved metadata destination is outside the repository root or is the repository root."));
+                continue;
+            }
+
+            foreach (var file in EnumerateGeneratedMetadataFiles(metadataPath))
+            {
+                try
+                {
+                    File.Delete(file);
+                    report.Summary.GeneratedMetadataFilesRemoved++;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    report.Warnings.Add(new Diagnostic("GENERATED_METADATA_CLEANUP_FAILED", file, null,
+                        $"Unable to remove generated DocFX metadata file: {ex.Message}"));
+                }
+            }
+        }
+
+        foreach (var buildOutputPath in ResolveBuildOutputDestinations(docfxPath, docfxWorkspace, report)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(buildOutputPath))
+            {
+                continue;
+            }
+
+            if (!IsSafeGeneratedOutputDirectory(buildOutputPath, repoRoot))
+            {
+                report.Warnings.Add(new Diagnostic("GENERATED_OUTPUT_CLEANUP_SKIPPED", buildOutputPath, null,
+                    "Generated output cleanup was skipped because the resolved DocFX build destination is outside the repository root or is the repository root."));
+                continue;
+            }
+
+            try
+            {
+                Directory.Delete(buildOutputPath, recursive: true);
+                report.Summary.GeneratedOutputDirectoriesRemoved++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                report.Warnings.Add(new Diagnostic("GENERATED_OUTPUT_CLEANUP_FAILED", buildOutputPath, null,
+                    $"Unable to remove generated DocFX build output directory: {ex.Message}"));
+            }
+        }
+    }
+
+    private static IEnumerable<string> ResolveMetadataDestinations(string docfxPath, string docfxWorkspace, Report report)
+    {
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(File.ReadAllText(docfxPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            report.Warnings.Add(new Diagnostic("GENERATED_METADATA_CLEANUP_FAILED", docfxPath, null,
+                $"Unable to read DocFX metadata destinations for cleanup: {ex.Message}"));
+            yield break;
+        }
+
+        using (doc)
+        {
+            if (!doc.RootElement.TryGetProperty("metadata", out var metadata))
+            {
+                yield break;
+            }
+
+            var foundDest = false;
+            foreach (var entry in EnumerateMetadataEntries(metadata))
+            {
+                if (entry.ValueKind != JsonValueKind.Object ||
+                    !entry.TryGetProperty("dest", out var destElement) ||
+                    destElement.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var dest = destElement.GetString();
+                if (string.IsNullOrWhiteSpace(dest))
+                {
+                    continue;
+                }
+
+                foundDest = true;
+                yield return Path.GetFullPath(dest, docfxWorkspace);
+            }
+
+            if (!foundDest)
+            {
+                yield return Path.GetFullPath("api", docfxWorkspace);
+            }
+        }
+    }
+
+    private static IEnumerable<string> ResolveBuildOutputDestinations(string docfxPath, string docfxWorkspace, Report report)
+    {
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(File.ReadAllText(docfxPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            report.Warnings.Add(new Diagnostic("GENERATED_OUTPUT_CLEANUP_FAILED", docfxPath, null,
+                $"Unable to read DocFX build destination for cleanup: {ex.Message}"));
+            yield break;
+        }
+
+        using (doc)
+        {
+            if (!doc.RootElement.TryGetProperty("build", out var build) ||
+                build.ValueKind != JsonValueKind.Object ||
+                !build.TryGetProperty("dest", out var destElement) ||
+                destElement.ValueKind != JsonValueKind.String)
+            {
+                yield break;
+            }
+
+            var dest = destElement.GetString();
+            if (!string.IsNullOrWhiteSpace(dest))
+            {
+                yield return Path.GetFullPath(dest, docfxWorkspace);
+            }
+        }
+    }
+
+    private static IEnumerable<JsonElement> EnumerateMetadataEntries(JsonElement metadata)
+    {
+        if (metadata.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in metadata.EnumerateArray())
+            {
+                yield return entry;
+            }
+        }
+        else
+        {
+            yield return metadata;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateGeneratedMetadataFiles(string metadataPath)
+    {
+        return EnumerateFiles(metadataPath, "*.yml")
+            .Concat(EnumerateFiles(metadataPath, ".manifest"))
+            .Concat(EnumerateFiles(metadataPath, "*.manifest"))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsInsideDirectory(string path, string directory)
+    {
+        var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                       Path.DirectorySeparatorChar;
+        var fullDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                            Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(fullDirectory, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSafeGeneratedOutputDirectory(string path, string repoRoot)
+    {
+        return IsInsideDirectory(path, repoRoot) &&
+               !string.Equals(Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                   Path.GetFullPath(repoRoot).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<string> DiscoverMarkdown(string docfxWorkspace)
@@ -311,6 +515,56 @@ internal static class DocfxValidator
             {
                 yield return f;
             }
+        }
+    }
+
+    private static void VerifyDocfxBuild(string repoRoot, string docfxPath, Report report)
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "docfx-digest-build-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            CopyDirectory(repoRoot, tempRoot);
+            var relativeDocfxPath = Path.GetRelativePath(repoRoot, docfxPath);
+            var tempDocfxPath = Path.Combine(tempRoot, relativeDocfxPath);
+            var result = RunProcess("docfx", $"\"{tempDocfxPath}\"", tempRoot);
+            if (result.ExitCode != 0)
+            {
+                report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
+                    $"DocFX build failed in a temp workspace (exit {result.ExitCode}).\n{Trim(result.StdOut + result.StdErr)}"));
+                return;
+            }
+
+            report.Summary.DocfxBuildsVerified++;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
+                $"Unable to verify DocFX build in a temp workspace: {ex.Message}"));
+        }
+        finally
+        {
+            TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
+    {
+        Directory.CreateDirectory(destinationDirectory);
+
+        foreach (var file in Directory.GetFiles(sourceDirectory))
+        {
+            File.Copy(file, Path.Combine(destinationDirectory, Path.GetFileName(file)), overwrite: true);
+        }
+
+        foreach (var directory in Directory.GetDirectories(sourceDirectory))
+        {
+            var name = Path.GetFileName(directory);
+            if (IgnoredDirectorySegments.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            CopyDirectory(directory, Path.Combine(destinationDirectory, name));
         }
     }
 
@@ -1327,7 +1581,9 @@ internal static class DocfxValidator
                 $"  Summary: namespaces={report.Summary.PublicNamespaces}, pages={report.Summary.NamespacePagesValidated}, " +
                 $"requiredExampleTargets={report.Summary.RequiredExampleTargets}, requiredExamples={report.Summary.RequiredExamples}, " +
                 $"extMethods={report.Summary.ExtensionMethods}, samplesCompiled={report.Summary.SamplesCompiled}, " +
-                $"samplesSkipped={report.Summary.SamplesSkipped}, errors={report.Summary.Errors}, warnings={report.Summary.Warnings}");
+                $"samplesSkipped={report.Summary.SamplesSkipped}, generatedMetadataRemoved={report.Summary.GeneratedMetadataFilesRemoved}, " +
+                $"generatedOutputDirectoriesRemoved={report.Summary.GeneratedOutputDirectoriesRemoved}, " +
+                $"docfxBuildsVerified={report.Summary.DocfxBuildsVerified}, errors={report.Summary.Errors}, warnings={report.Summary.Warnings}");
         }
 
         return (int)code;
@@ -1384,6 +1640,15 @@ internal static class DocfxValidator
                     break;
                 case "--changed-only":
                     options.ChangedOnly = true;
+                    break;
+                case "--verify-docfx-build":
+                    options.VerifyDocfxBuild = true;
+                    break;
+                case "--clean-generated-metadata":
+                    options.CleanGeneratedMetadata = true;
+                    break;
+                case "--no-clean-generated-metadata":
+                    options.CleanGeneratedMetadata = false;
                     break;
                 case "--json":
                     options.Json = true;
@@ -1443,6 +1708,11 @@ internal static class DocfxValidator
               --validate-samples       Compile C# samples. Default: enabled.
               --no-validate-samples    Skip C# sample compilation.
               --changed-only           Validate only files changed according to git.
+              --verify-docfx-build     Run DocFX against a temp copy of the repository so generated output stays outside the working tree.
+              --clean-generated-metadata
+                                      Remove DocFX-generated *.yml and manifest files under metadata.dest. Default: enabled.
+              --no-clean-generated-metadata
+                                      Leave DocFX-generated metadata files untouched.
               --json                   Emit a machine-readable JSON summary.
               --help                   Print this usage.
 
@@ -1480,6 +1750,8 @@ internal static class DocfxValidator
         public string? Framework { get; set; }
         public bool ValidateSamples { get; set; } = true;
         public bool ChangedOnly { get; set; }
+        public bool VerifyDocfxBuild { get; set; }
+        public bool CleanGeneratedMetadata { get; set; } = true;
         public bool Json { get; set; }
         public bool Help { get; set; }
     }
@@ -1537,6 +1809,9 @@ internal sealed class Summary
     public int ExtensionMethods { get; set; }
     public int SamplesCompiled { get; set; }
     public int SamplesSkipped { get; set; }
+    public int GeneratedMetadataFilesRemoved { get; set; }
+    public int GeneratedOutputDirectoriesRemoved { get; set; }
+    public int DocfxBuildsVerified { get; set; }
     public int Errors { get; set; }
     public int Warnings { get; set; }
 }

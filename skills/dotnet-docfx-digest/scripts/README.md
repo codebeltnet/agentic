@@ -63,12 +63,15 @@ dotnet run --file docfx.cs -- --repo-root .
 dotnet run --file docfx.cs -- --repo-root . --json
 dotnet run --file docfx.cs -- --repo-root . --no-validate-samples
 dotnet run --file docfx.cs -- --repo-root . --changed-only
+dotnet run --file docfx.cs -- --repo-root . --verify-docfx-build
 dotnet run --file docfx.cs -- --repo-root . --configuration Debug --framework net10.0
 ```
 
 Arguments: `--repo-root`, `--docfx`, `--configuration` (default `Release`),
 `--framework`, `--validate-samples` / `--no-validate-samples` (default on),
-`--changed-only`, `--json`, `--help`.
+`--changed-only`, `--verify-docfx-build`, `--clean-generated-metadata` / `--no-clean-generated-metadata` (default on), `--json`, `--help`.
+
+`--verify-docfx-build` copies the repository to a temp workspace, runs the DocFX CLI against the resolved `docfx.json` there, and removes the temp workspace afterward. Use it instead of running `docfx .docfx/docfx.json` directly from the working tree, so generated API YAML, manifest files, and site output such as a configured `build.dest` folder do not flood git status. The default generated-output cleanup remains as a fallback for direct in-repo DocFX runs: it derives `metadata[].dest` and `build.dest` from `docfx.json`, removes generated `*.yml`, `.manifest`, and `*.manifest` files under metadata destinations, and removes the configured build output directory when it is safely inside the repository.
 
 Exit codes:
 
@@ -89,7 +92,7 @@ Error codes emitted in JSON include `AGENTS_BLOCK_MISSING`,
 `NAMESPACE_PAGE_MISSING`, `NAMESPACE_UID_MISSING`, `NAMESPACE_UID_MISMATCH`,
 `NAMESPACE_SUMMARY_MISSING`, `NAMESPACE_FLYIN_MISSING`, `AVAILABILITY_MISSING`,
 `EXTENSION_SECTION_MISSING`, `EXTENSION_TABLE_MISSING`, `EXTENSION_METHOD_MISSING`,
-`EXAMPLE_MISSING`, `SAMPLE_COMPILE_FAILED`, and `SAMPLE_SKIP_REASON_MISSING`.
+`EXAMPLE_MISSING`, `SAMPLE_COMPILE_FAILED`, `SAMPLE_SKIP_REASON_MISSING`, `DOCFX_BUILD_FAILED`, `GENERATED_METADATA_CLEANUP_FAILED`, `GENERATED_METADATA_CLEANUP_SKIPPED`, `GENERATED_OUTPUT_CLEANUP_FAILED`, and `GENERATED_OUTPUT_CLEANUP_SKIPPED`.
 
 ### Sample opt-out
 

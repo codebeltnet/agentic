@@ -29,7 +29,7 @@ dotnet run --file skills/dotnet-docfx-digest/scripts/agents.cs -- --repo-root .
 Before reporting completion, the agent must run the deterministic validator:
 
 ```bash
-dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root .
+dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --verify-docfx-build
 ```
 
 If either script cannot run, the agent must report the exact command, exit code, and failure output. Do not claim repository instructions or documentation were verified unless the scripts ran successfully.
@@ -224,10 +224,10 @@ If assertions are useful, use them only when the sample is explicitly framed as 
 
 Every code sample added or changed must be verified. A C# code sample must compile.
 
-The deterministic validator compiles C# documentation samples as .NET 10 file-based apps. Run:
+The deterministic validator compiles C# documentation samples as .NET 10 file-based apps. When completing DocFX documentation work, also ask it to verify the DocFX build in a temporary copy of the repository so generated metadata and site output stay outside the working tree. Run:
 
 ```bash
-dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root .
+dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --verify-docfx-build
 ```
 
 A sample may opt out only when the code fence includes:
@@ -486,8 +486,8 @@ When the user names a changed API or namespace:
 14. Preserve manual edits.
 15. Run `dotnet build`.
 16. Run `dotnet test`.
-17. Run `docfx .docfx/docfx.json`.
-18. Run `docfx.cs`.
+17. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
+18. Confirm generated DocFX metadata and build output did not remain in the working tree.
 19. Report verification results.
 
 When no specific API or namespace is named:
@@ -507,8 +507,8 @@ When no specific API or namespace is named:
 13. Preserve manual edits and correct stale contradictions instead of replacing whole files.
 14. Run `dotnet build`.
 15. Run `dotnet test`.
-16. Run `docfx .docfx/docfx.json`.
-17. Run `docfx.cs`.
+16. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
+17. Confirm generated DocFX metadata and build output did not remain in the working tree.
 18. Report verification results and any remaining findings.
 
 ## Namespace Page Template
@@ -596,8 +596,8 @@ Before completing documentation work, verify:
 - [ ] No contradictory documentation remains.
 - [ ] `dotnet build` has been run or the failure is reported.
 - [ ] `dotnet test` has been run or the failure is reported.
-- [ ] `docfx .docfx/docfx.json` has been run or the failure is reported.
-- [ ] `docfx.cs` has run successfully or the failure is reported.
+- [ ] `docfx.cs --verify-docfx-build` has run successfully, including the temp-workspace DocFX build, or the failure is reported.
+- [ ] Generated DocFX metadata files and build output directories did not remain in the working tree after verification.
 
 ## Completion Response
 

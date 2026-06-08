@@ -51,9 +51,10 @@ internal static class AgentsScript
         ```bash
         dotnet build
         dotnet test
-        docfx .docfx/docfx.json
-        dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root .
+        dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --verify-docfx-build
         ```
+
+        The DocFX build verification must run outside the working tree when possible. The `--verify-docfx-build` option copies the repository to a temp workspace, runs DocFX against the resolved `docfx.json` there, and removes the temp workspace afterward so generated API YAML, manifest files, and site output do not flood git status.
 
         If a command cannot be run, report the exact limitation or failure instead of claiming the documentation was verified.
         <!-- dotnet-docfx-digest:end -->
