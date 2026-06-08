@@ -17,7 +17,7 @@ This skill is autonomous by default. If the user invokes the skill without namin
 1. Run the repository-instruction script.
 2. Inspect repository guidance, `docfx.json`, source projects, generated metadata, tests, samples, existing overwrite files, namespace pages, and availability includes.
 3. Run the validator to discover missing or stale complementary documentation.
-4. Fill the missing DocFX pieces that can be derived from source evidence.
+4. Fill the missing DocFX pieces that can be derived from source evidence, including overwrite examples for concrete public types and public extension methods.
 5. Ask a concise clarifying question only when inspection exposes a correctness-affecting choice that cannot be resolved from repository evidence.
 
 When this skill is invoked against a repository, the agent must run the deterministic repository-instruction script before completing the task:
@@ -132,7 +132,7 @@ When a public API is added or materially changed, update all relevant documentat
 3. Namespace overview page.
 4. Extension members table when extension methods are involved.
 5. Availability information.
-6. At least one usage example unless the documented item is an abstraction.
+6. At least one usage example in DocFX overwrite content unless the documented item is an abstraction.
 7. Verification artifacts or commands proving the documentation remains buildable and accurate.
 
 A "material change" includes:
@@ -153,7 +153,11 @@ A "material change" includes:
 
 ## Examples Are Mandatory
 
-Every automatically documented concrete public type or concrete public member must include at least one example showing how to use it.
+Every automatically documented concrete public type and every public extension method must include at least one example showing how to use it. A namespace overview fly-in or `Extension Members` table is not enough.
+
+Create or repair DocFX overwrite content for missing examples. If an overwrite section for the target `uid` does not exist, create one in a Markdown file included by `build.overwrite` in `docfx.json`. Do not stop after editing namespace pages when concrete public types or public extension methods still lack examples.
+
+For concrete public types, prefer an overwrite section whose `uid` is the generated type UID. For public extension methods, add the example to the generated method UID when known; otherwise add it to the extension class UID or the namespace page, but the example must name and demonstrate the extension method.
 
 An example may be omitted only when the item is an abstraction, such as:
 
@@ -382,6 +386,8 @@ Use overwrite files for:
 
 Do not use overwrite files to conceal inaccurate XML documentation. Correct the source XML documentation when it is wrong.
 
+When the validator reports `EXAMPLE_MISSING`, create or update DocFX overwrite content for the reported UID instead of treating the missing example as a prose-only issue.
+
 ## XML Documentation Comments
 
 Public API should have useful XML documentation comments. Prefer concise source-level XML comments and richer examples/remarks in DocFX overwrite files when documentation becomes long.
@@ -474,7 +480,7 @@ When the user names a changed API or namespace:
 10. Update XML documentation where needed.
 11. Update or create namespace overview pages.
 12. Update extension-member tables.
-13. Update or create overwrite files.
+13. Update or create overwrite files, including example sections for concrete public types and public extension methods.
 14. Preserve manual edits.
 15. Run `dotnet build`.
 16. Run `dotnet test`.
@@ -491,15 +497,17 @@ When no specific API or namespace is named:
 5. Run `dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --json` to collect deterministic missing-doc findings when the repository is buildable.
 6. If the validator fails before documentation diagnostics can be produced, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
 7. Determine every namespace containing public API and whether each namespace exposes public extension methods.
-8. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins.
-9. Add or repair `Extension Members` tables for namespaces with public extension methods.
-10. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
-11. Preserve manual edits and correct stale contradictions instead of replacing whole files.
-12. Run `dotnet build`.
-13. Run `dotnet test`.
-14. Run `docfx .docfx/docfx.json`.
-15. Run `docfx.cs`.
-16. Report verification results and any remaining findings.
+8. Determine every concrete public type and every public extension method that requires an example.
+9. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins.
+10. Add or repair `Extension Members` tables for namespaces with public extension methods.
+11. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
+12. Create overwrite example sections for concrete public types and public extension methods that have no example yet.
+13. Preserve manual edits and correct stale contradictions instead of replacing whole files.
+14. Run `dotnet build`.
+15. Run `dotnet test`.
+16. Run `docfx .docfx/docfx.json`.
+17. Run `docfx.cs`.
+18. Report verification results and any remaining findings.
 
 ## Namespace Page Template
 
@@ -573,6 +581,8 @@ Before completing documentation work, verify:
 - [ ] Namespaces with public extension methods have an `Extension Members` section.
 - [ ] Extension methods are documented by extended type, not extension class.
 - [ ] Concrete public APIs have at least one example.
+- [ ] Public extension methods have at least one example, not only a table entry.
+- [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`.
 - [ ] Abstractions without examples have a clear reason.
 - [ ] Examples are realistic and copy/paste-ready.
 - [ ] Examples compile.

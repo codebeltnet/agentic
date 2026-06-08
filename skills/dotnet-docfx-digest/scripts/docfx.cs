@@ -167,6 +167,7 @@ internal static class DocfxValidator
         }
 
         report.Summary.PublicNamespaces = api.Namespaces.Count;
+        report.Summary.ConcreteApiTargets = api.ConcreteTargets.Count;
         report.Summary.ExtensionMethods = api.Namespaces.Sum(n => n.ExtensionMethods.Count);
 
         // 8. Discover DocFX Markdown files under the workspace.
@@ -194,7 +195,10 @@ internal static class DocfxValidator
             report.Summary.NamespacePagesValidated++;
         }
 
-        // 12-13. Extract and compile C# documentation samples.
+        // 12. Verify mandatory examples exist before compiling the examples that were found.
+        ValidateRequiredExamples(repoRoot, markdownFiles, api, options, changedFiles, report);
+
+        // 13. Extract and compile C# documentation samples.
         if (options.ValidateSamples)
         {
             ValidateSamples(repoRoot, markdownFiles, libraryProjects, options, changedFiles, report);
@@ -438,7 +442,7 @@ internal static class DocfxValidator
 
         if (assemblyPaths.Count == 0)
         {
-            return new ApiModel(new List<NamespaceInfo>());
+            return new ApiModel(new List<NamespaceInfo>(), new List<ApiTargetInfo>());
         }
 
         // Resolve dependencies from the runtime directory and the assemblies' own output folders.
@@ -507,11 +511,51 @@ internal static class DocfxValidator
                     namespaces[nsName] = info;
                 }
 
+                CollectApiTargets(type, info);
                 CollectExtensionMethods(type, info);
             }
         }
 
-        return new ApiModel(namespaces.Values.ToList());
+        var concreteTargets = namespaces.Values
+            .SelectMany(ns => ns.ConcreteTargets)
+            .OrderBy(t => t.Uid, StringComparer.Ordinal)
+            .ToList();
+
+        return new ApiModel(namespaces.Values.ToList(), concreteTargets);
+    }
+
+    private static void CollectApiTargets(Type type, NamespaceInfo ns)
+    {
+        var typeUid = TypeUid(type);
+        if (typeUid is null)
+        {
+            return;
+        }
+
+        if (IsConcreteDocumentableType(type))
+        {
+            ns.ConcreteTargets.Add(new ApiTargetInfo(typeUid, ns.Name, ApiTargetKind.Type, SimpleTypeName(type)));
+        }
+
+        MethodInfo[] methods;
+        try
+        {
+            methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
+        }
+        catch
+        {
+            return;
+        }
+
+        foreach (var method in methods)
+        {
+            if (!method.IsPublic || method.IsSpecialName || method.IsAbstract || !HasExtensionAttribute(method))
+            {
+                continue;
+            }
+
+            ns.ConcreteTargets.Add(new ApiTargetInfo(MethodUid(typeUid, method), ns.Name, ApiTargetKind.ExtensionMethod, method.Name, typeUid));
+        }
     }
 
     private static void CollectExtensionMethods(Type type, NamespaceInfo ns)
@@ -590,6 +634,63 @@ internal static class DocfxValidator
         {
             return false;
         }
+    }
+
+    private static bool IsConcreteDocumentableType(Type type)
+    {
+        if (type.IsInterface || type.IsAbstract || type.IsEnum || type.IsValueType)
+        {
+            return false;
+        }
+
+        if (InheritsFrom(type, "System.Attribute") || InheritsFrom(type, "System.MulticastDelegate"))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool InheritsFrom(Type type, string baseTypeFullName)
+    {
+        try
+        {
+            var current = type.BaseType;
+            while (current is not null)
+            {
+                if (string.Equals(current.FullName, baseTypeFullName, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                current = current.BaseType;
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return false;
+    }
+
+    private static string? TypeUid(Type type)
+    {
+        var fullName = type.FullName;
+        if (string.IsNullOrWhiteSpace(fullName))
+        {
+            return null;
+        }
+
+        return fullName.Replace('+', '.');
+    }
+
+    private static string MethodUid(string typeUid, MethodInfo method)
+    {
+        var parameters = method.GetParameters()
+            .Select(p => TypeUid(p.ParameterType) ?? SimpleTypeName(p.ParameterType));
+
+        return typeUid + "." + method.Name + "(" + string.Join(",", parameters) + ")";
     }
 
     private static string SimpleTypeName(Type type)
@@ -787,6 +888,95 @@ internal static class DocfxValidator
     }
 
     // ----------------------------------------------------------------------
+    // Required example validation
+    // ----------------------------------------------------------------------
+
+    private static void ValidateRequiredExamples(string repoRoot, List<string> markdownFiles, ApiModel api,
+        Options options, HashSet<string>? changedFiles, Report report)
+    {
+        if (options.ChangedOnly && changedFiles is not null)
+        {
+            return;
+        }
+
+        var sections = new List<OverwriteSection>();
+        foreach (var md in markdownFiles)
+        {
+            sections.AddRange(ExtractOverwriteSections(md));
+        }
+
+        foreach (var target in api.ConcreteTargets)
+        {
+            var candidates = sections.Where(s => IsExampleCandidate(s, target)).ToList();
+            if (candidates.Any(s => HasExampleForTarget(s, target)))
+            {
+                report.Summary.RequiredExamples++;
+                continue;
+            }
+
+            var expectedUid = target.Kind == ApiTargetKind.Type
+                ? target.Uid
+                : target.DeclaringTypeUid ?? target.Uid;
+
+            var message = target.Kind == ApiTargetKind.Type
+                ? $"Concrete public type `{target.DisplayName}` requires a DocFX overwrite section with uid `{target.Uid}` and an Examples section containing a C# code fence."
+                : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}`, its declaring type uid `{expectedUid}`, or the namespace page `{target.Namespace}`.";
+
+            report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", null, target.Namespace, message));
+        }
+    }
+
+    private static bool IsExampleCandidate(OverwriteSection section, ApiTargetInfo target)
+    {
+        if (string.Equals(section.Uid, target.Uid, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (target.Kind == ApiTargetKind.ExtensionMethod)
+        {
+            return string.Equals(section.Uid, target.DeclaringTypeUid, StringComparison.Ordinal) ||
+                   string.Equals(section.Uid, target.Namespace, StringComparison.Ordinal);
+        }
+
+        return false;
+    }
+
+    private static bool HasExampleForTarget(OverwriteSection section, ApiTargetInfo target)
+    {
+        if (!HasExampleSectionWithCSharpFence(section.Body))
+        {
+            return false;
+        }
+
+        if (target.Kind == ApiTargetKind.ExtensionMethod &&
+            !section.Body.Contains(target.DisplayName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasExampleSectionWithCSharpFence(string body)
+    {
+        var match = Regex.Match(body, @"(?im)^#{2,5}\s+Examples?\s*$");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var section = body[match.Index..];
+        var nextHeading = Regex.Match(section[match.Length..], @"(?im)^#{1,5}\s+\S");
+        if (nextHeading.Success)
+        {
+            section = section[..(match.Length + nextHeading.Index)];
+        }
+
+        return Regex.IsMatch(section, @"(?im)^```\s*(csharp|cs)\s*$");
+    }
+
+    // ----------------------------------------------------------------------
     // Sample validation
     // ----------------------------------------------------------------------
 
@@ -922,6 +1112,45 @@ internal static class DocfxValidator
         }
 
         return fences;
+    }
+
+    private static List<OverwriteSection> ExtractOverwriteSections(string mdFile)
+    {
+        var sections = new List<OverwriteSection>();
+        string text;
+        try
+        {
+            text = File.ReadAllText(mdFile);
+        }
+        catch
+        {
+            return sections;
+        }
+
+        var normalized = text.Replace("\r\n", "\n").Replace("\r", "\n");
+        var matches = Regex.Matches(normalized, @"(?ms)^---\s*\n(?<yaml>.*?)^---\s*$");
+        for (var i = 0; i < matches.Count; i++)
+        {
+            var match = matches[i];
+            var yaml = match.Groups["yaml"].Value;
+            var uid = ReadYamlScalar(yaml, "uid");
+            if (string.IsNullOrWhiteSpace(uid))
+            {
+                continue;
+            }
+
+            var bodyStart = match.Index + match.Length;
+            if (bodyStart < normalized.Length && normalized[bodyStart] == '\n')
+            {
+                bodyStart++;
+            }
+
+            var bodyEnd = i + 1 < matches.Count ? matches[i + 1].Index : normalized.Length;
+            var body = bodyEnd > bodyStart ? normalized[bodyStart..bodyEnd] : string.Empty;
+            sections.Add(new OverwriteSection(mdFile, uid, body));
+        }
+
+        return sections;
     }
 
     private static (bool Found, string Reason) FindSkip(string code)
@@ -1124,6 +1353,7 @@ internal static class DocfxValidator
 
             Console.WriteLine(
                 $"  Summary: namespaces={report.Summary.PublicNamespaces}, pages={report.Summary.NamespacePagesValidated}, " +
+                $"concreteTargets={report.Summary.ConcreteApiTargets}, requiredExamples={report.Summary.RequiredExamples}, " +
                 $"extMethods={report.Summary.ExtensionMethods}, samplesCompiled={report.Summary.SamplesCompiled}, " +
                 $"samplesSkipped={report.Summary.SamplesSkipped}, errors={report.Summary.Errors}, warnings={report.Summary.Warnings}");
         }
@@ -1286,15 +1516,26 @@ internal static class DocfxValidator
 
     private sealed record ExtensionMethodInfo(string MethodName, string ExtendedType, string DeclaringClass);
 
+    private sealed record ApiTargetInfo(string Uid, string Namespace, ApiTargetKind Kind, string DisplayName, string? DeclaringTypeUid = null);
+
+    private enum ApiTargetKind
+    {
+        Type,
+        ExtensionMethod
+    }
+
     private sealed class NamespaceInfo(string name)
     {
         public string Name { get; } = name;
+        public List<ApiTargetInfo> ConcreteTargets { get; } = new();
         public List<ExtensionMethodInfo> ExtensionMethods { get; } = new();
     }
 
-    private sealed record ApiModel(List<NamespaceInfo> Namespaces);
+    private sealed record ApiModel(List<NamespaceInfo> Namespaces, List<ApiTargetInfo> ConcreteTargets);
 
     private sealed record SampleFence(string File, int FenceIndex, int StartLine, string Code);
+
+    private sealed record OverwriteSection(string File, string Uid, string Body);
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
 }
@@ -1319,6 +1560,8 @@ internal sealed class Summary
 {
     public int PublicNamespaces { get; set; }
     public int NamespacePagesValidated { get; set; }
+    public int ConcreteApiTargets { get; set; }
+    public int RequiredExamples { get; set; }
     public int ExtensionMethods { get; set; }
     public int SamplesCompiled { get; set; }
     public int SamplesSkipped { get; set; }

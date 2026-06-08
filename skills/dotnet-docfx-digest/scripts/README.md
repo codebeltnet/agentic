@@ -54,7 +54,8 @@ Validates the deterministic documentation requirements against the *compiled*
 repository, not against text in `SKILL.md`. It builds the solution, discovers
 public API from compiled assemblies (preferring reference assemblies) via
 `System.Reflection.MetadataLoadContext`, then checks namespace overview pages,
-extension-member tables, availability, and compiles every C# documentation
+extension-member tables, availability, required overwrite examples for concrete
+public types and public extension methods, and compiles every C# documentation
 sample as a file-based app.
 
 ```bash
@@ -88,7 +89,7 @@ Error codes emitted in JSON include `AGENTS_BLOCK_MISSING`,
 `NAMESPACE_PAGE_MISSING`, `NAMESPACE_UID_MISSING`, `NAMESPACE_UID_MISMATCH`,
 `NAMESPACE_SUMMARY_MISSING`, `NAMESPACE_FLYIN_MISSING`, `AVAILABILITY_MISSING`,
 `EXTENSION_SECTION_MISSING`, `EXTENSION_TABLE_MISSING`, `EXTENSION_METHOD_MISSING`,
-`SAMPLE_COMPILE_FAILED`, and `SAMPLE_SKIP_REASON_MISSING`.
+`EXAMPLE_MISSING`, `SAMPLE_COMPILE_FAILED`, and `SAMPLE_SKIP_REASON_MISSING`.
 
 ### Sample opt-out
 

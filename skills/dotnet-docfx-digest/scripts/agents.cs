@@ -32,6 +32,10 @@ internal static class AgentsScript
 
         For concrete public APIs, include at least one realistic, copy/paste-ready usage example unless the item is an abstraction. Prefer deriving examples from existing unit, functional, or integration tests, but convert test code into real-life consumer-oriented usage.
 
+        Missing examples must be added through DocFX overwrite content included by `build.overwrite` in `docfx.json`. Namespace overview text and `Extension Members` tables are not substitutes for examples.
+
+        Public extension methods must have examples too. Listing an extension method in an `Extension Members` table is required, but it is not enough.
+
         All added or changed code samples must be deterministic and verified to compile. Do not add pseudo-code, ellipses, hidden test helpers, or examples that rely on unverified behavior.
 
         Every namespace containing public API must have a DocFX namespace overview page named after the namespace, such as `X.Y.Z.md`, using DocFX overwrite front matter with the namespace `uid`.
