@@ -50,6 +50,19 @@ The documentation must reflect the actual code, not intended code. Do not invent
 
 Manual documentation is authoritative context. Preserve existing manual edits unless they are factually incorrect. Prefer additive changes. When information is stale, update the stale portion while retaining nearby human-written explanations, tone, and structure.
 
+## Safety Gates
+
+Before making documentation changes, capture the current repository state:
+
+1. Run `git status --short` and identify modified, staged, and untracked documentation files.
+2. If source documentation files already have uncommitted changes, treat them as user work. Do not overwrite, restore, reformat, or regenerate them wholesale.
+3. Read each affected Markdown file before editing it.
+4. For cleanup candidates, list the exact files or directories first and classify them as generated metadata, generated site output, build artifacts, or authored documentation.
+
+Before any git operation that can discard or overwrite content, stop and report the exact files that would be affected. Do not run broad `git restore`, `git checkout --`, `git reset`, or whole-directory recovery commands on documentation source directories. If recovery is needed, recover only the specific generated or accidentally removed file after inspecting `git status` and `git diff`.
+
+After modifications, run `git diff` for the touched documentation paths and verify the diff contains only intended documentation changes. If the work cannot be completed without partial, inconsistent, or unverifiable documentation, stop and report the limitation instead of proceeding partially.
+
 ## Scope
 
 Apply this skill to:
@@ -471,7 +484,8 @@ Prefer `docfx.cs --verify-docfx-build` because it runs DocFX in a temp copy and 
 
 - Generated metadata cleanup is limited to DocFX-generated `*.yml`, `.manifest`, and `*.manifest` files under configured metadata destinations.
 - Generated site cleanup is limited to the configured `build.dest` directory when it is clearly generated output and contains no authored Markdown, source, project, solution, or DocFX configuration files.
-- Authored documentation changes, especially `.docfx/**/*.md`, must be kept and reported as created or updated documentation.
+- Build artifacts such as `bin/` and `obj/` directories may be cleanup candidates only after confirming they are build output and not documentation source.
+- Authored documentation changes, especially Markdown files included by `build.content` or `build.overwrite`, must be kept and reported as created or updated documentation.
 
 If a cleanup candidate is ambiguous, leave it in place and report the ambiguity instead of deleting it.
 
@@ -509,52 +523,56 @@ Avoid:
 When the user names a changed API or namespace:
 
 1. Run `agents.cs`.
-2. Inspect the changed public API.
-3. Determine affected namespaces.
-4. Determine whether public extension methods are involved.
-5. Locate `.docfx/docfx.json` or repository-specific DocFX config.
-6. Locate existing overwrite files and namespace pages.
-7. Locate availability include files.
-8. Locate relevant tests that demonstrate the API.
-9. Convert test usage into real-life documentation examples.
-10. Update XML documentation where needed.
-11. Update or create namespace overview pages.
-12. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
-13. Update extension-member tables.
-14. Update or create overwrite files, including type-page example sections for public non-abstraction types and example sections for public extension methods.
-15. Build an example inventory that maps each required public type and extension method to its example location.
-16. Preserve manual edits.
-17. Run `dotnet build`.
-18. Run `dotnet test`.
-19. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
-20. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
-21. Report verification results.
-
-When no specific API or namespace is named:
-
-1. Run `agents.cs`.
-2. Read repository guidance, especially root `AGENTS.md`.
-3. Locate `.docfx/docfx.json` or repository-specific DocFX config.
-4. Read `references/docfx-overwrite-files.md`.
-5. Run `dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --json` to collect deterministic missing-doc findings when the repository is buildable.
-6. If the validator reports multiple diagnostics, rerun it with `--repair-plan <temp-path>/docfx-repair-plan.md`, read that plan, and treat it as the work queue.
-7. If the validator fails before documentation diagnostics can be produced, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
-8. Determine every namespace containing public API and whether each namespace exposes public extension methods.
-9. Determine every public non-abstraction type and every public extension method that requires an example.
-10. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins.
-11. Audit related namespace pages together so fixes are consistent across the public API family.
-12. Add or repair `Extension Members` tables for namespaces with public extension methods.
-13. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
-14. Create separate type-page overwrite files for public non-abstraction types that have no example yet, using `.docfx/api/{TypeUid}.md` in Codebelt repositories unless the repo has a stronger existing convention.
-15. Ensure `build.overwrite` includes the per-type overwrite files you create; update a namespace-only overwrite glob to include API overwrite files when needed.
-16. Create example sections for public extension methods that have no example yet.
-17. Build an example inventory that maps each required public type and extension method to its example location.
-18. Preserve manual edits and correct stale contradictions instead of replacing whole files.
+2. Run the safety gates: capture `git status`, identify existing documentation changes, and avoid broad restore/recovery commands.
+3. Inspect the changed public API.
+4. Determine affected namespaces.
+5. Determine whether public extension methods are involved.
+6. Locate `.docfx/docfx.json` or repository-specific DocFX config.
+7. Locate existing overwrite files and namespace pages.
+8. Locate availability include files.
+9. Locate relevant tests that demonstrate the API.
+10. Convert test usage into real-life documentation examples.
+11. Update XML documentation where needed.
+12. Update or create namespace overview pages.
+13. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
+14. Update extension-member tables.
+15. Update or create overwrite files, including type-page example sections for public non-abstraction types and example sections for public extension methods.
+16. Build an example inventory that maps each required public type and extension method to its example location.
+17. Preserve manual edits.
+18. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 19. Run `dotnet build`.
 20. Run `dotnet test`.
 21. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
 22. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
-23. Report verification results and any remaining findings.
+23. Report verification results.
+
+When no specific API or namespace is named:
+
+1. Run `agents.cs`.
+2. Run the safety gates: capture `git status`, identify existing documentation changes, and avoid broad restore/recovery commands.
+3. Read repository guidance, especially root `AGENTS.md`.
+4. Locate `.docfx/docfx.json` or repository-specific DocFX config.
+5. Read `references/docfx-overwrite-files.md`.
+6. Run `dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --json` to collect deterministic missing-doc findings when the repository is buildable.
+7. If the validator reports multiple diagnostics, rerun it with `--repair-plan <temp-path>/docfx-repair-plan.md`, read that plan, and treat it as the work queue.
+8. If the validator fails before documentation diagnostics can be produced, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
+9. Determine every namespace containing public API and whether each namespace exposes public extension methods.
+10. Determine every public non-abstraction type and every public extension method that requires an example.
+11. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins.
+12. Audit related namespace pages together so fixes are consistent across the public API family.
+13. Add or repair `Extension Members` tables for namespaces with public extension methods.
+14. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
+15. Create separate type-page overwrite files for public non-abstraction types that have no example yet, using `.docfx/api/{TypeUid}.md` in Codebelt repositories unless the repo has a stronger existing convention.
+16. Ensure `build.overwrite` includes the per-type overwrite files you create; update a namespace-only overwrite glob to include API overwrite files when needed.
+17. Create example sections for public extension methods that have no example yet.
+18. Build an example inventory that maps each required public type and extension method to its example location.
+19. Preserve manual edits and correct stale contradictions instead of replacing whole files.
+20. Run `git diff` for touched documentation paths and confirm the diff is intentional.
+21. Run `dotnet build`.
+22. Run `dotnet test`.
+23. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
+24. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
+25. Report verification results and any remaining findings.
 
 ## Namespace Page Template
 
@@ -623,6 +641,7 @@ Before completing documentation work, verify:
 
 - [ ] `agents.cs` has run successfully.
 - [ ] `AGENTS.md` contains the managed DocFX documentation maintenance block.
+- [ ] Initial `git status --short` was inspected and existing documentation changes were treated as user work.
 - [ ] For multi-diagnostic audits, `docfx.cs --repair-plan` was written, read, and used as the authoritative work queue.
 - [ ] Only public API is documented.
 - [ ] Every namespace with public API has a namespace overview page.
@@ -642,6 +661,7 @@ Before completing documentation work, verify:
 - [ ] Existing manual edits are preserved.
 - [ ] Stale documentation is corrected.
 - [ ] No contradictory documentation remains.
+- [ ] `git diff` for touched documentation paths was inspected before final verification.
 - [ ] `dotnet build` has been run or the failure is reported.
 - [ ] `dotnet test` has been run or the failure is reported.
 - [ ] `docfx.cs --verify-docfx-build` has run successfully, including the temp-workspace DocFX build, or the failure is reported.

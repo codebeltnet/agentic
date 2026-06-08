@@ -109,6 +109,7 @@
       "expectations": [
         "Treats newly created `.docfx/**/*.md` files as documentation deliverables rather than cleanup targets",
         "Does not run broad manual cleanup commands that delete DocFX directories by name",
+        "Lists cleanup candidates before deletion and classifies them as generated metadata, generated site output, or build artifacts",
         "Limits generated metadata cleanup to DocFX-generated `*.yml`, `.manifest`, and `*.manifest` files under configured metadata destinations",
         "Does not recursively delete a configured build output directory when it contains Markdown, source, project, solution, or DocFX configuration files",
         "Uses `docfx.cs --verify-docfx-build` so the DocFX build runs in a temp copy and generated site output stays out of the working tree",
@@ -122,11 +123,13 @@
       "expectations": [
         "Captures git status and diffs before modifying or recovering checked-out Markdown files",
         "Does not use broad git restore, checkout, reset, or whole-directory recovery commands",
+        "Stops and reports existing uncommitted documentation changes if they cannot be preserved safely",
         "Runs scripts/docfx.cs with --json and --repair-plan, then reads the generated repair plan before editing",
         "Audits `Codebelt.Bootstrapper.Console.md`, `Codebelt.Bootstrapper.md`, `Codebelt.Bootstrapper.Web.md`, and `Codebelt.Bootstrapper.Worker.md` together instead of updating only one file",
         "Uses `Extension Members` headings where extension methods are present",
         "Adds required examples for public non-abstraction types and public extension methods, not only namespace fly-ins or extension tables",
         "Builds and reports an example inventory mapping each required API to its example file and UID",
+        "Runs git diff for touched documentation paths after edits and before final verification",
         "Preserves authored Markdown and reports any remaining validation diagnostics instead of claiming completion"
       ]
     }

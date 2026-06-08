@@ -2179,9 +2179,13 @@ internal static class DocfxValidator
         sb.AppendLine("## Execution Gates");
         sb.AppendLine();
         sb.AppendLine("- Do not use broad restore or checkout commands to recover documentation files.");
+        sb.AppendLine("- Before deleting generated artifacts, list the exact paths and verify they are generated metadata, generated site output, or build artifacts.");
         sb.AppendLine("- Preserve authored `.md` and `.mdoc` files, including files created earlier in the run.");
+        sb.AppendLine("- Treat uncommitted documentation changes as user work; stop and report them if they cannot be preserved.");
         sb.AppendLine("- Treat `Extension Members` tables as incomplete until required examples exist.");
         sb.AppendLine("- Repair related namespace pages together; do not update only the first page that exposes a shared issue.");
+        sb.AppendLine("- After edits, inspect `git diff` for the touched documentation paths before final verification.");
+        sb.AppendLine("- If examples cannot be sourced or compiled, report the limitation instead of claiming completion.");
         sb.AppendLine("- Rerun validation with `--verify-docfx-build` before claiming completion.");
         sb.AppendLine();
 
