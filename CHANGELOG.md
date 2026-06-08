@@ -16,11 +16,13 @@ This is a minor release introducing the `dotnet-change-impact` skill for classif
 - Automatic default-branch resolution in `dotnet-change-impact` when no explicit change details or compare range are provided; the skill inspects the current Git branch and compares against the upstream default branch, with fallback to `main` or `master`,
 - Comprehensive compatibility-categories reference documentation in `references/compatibility-categories.md` covering Major (breaking changes, removals, contract modifications), Minor (new capabilities without breaking changes), and Patch (fixes, maintenance, non-breaking refinement) classifications,
 - Per-skill evals coverage for `dotnet-change-impact` including current-branch detection, breaking-change scenarios, API compatibility assessments, dependency updates, and SemVer classification validation,
-- `dotnet-change-impact` registered in README skill index with install snippet and detailed "Why dotnet-change-impact?" section explaining Microsoft compatibility grounding and key capabilities.
+- `dotnet-change-impact` registered in README skill index with install snippet and detailed "Why dotnet-change-impact?" section explaining Microsoft compatibility grounding and key capabilities,
+- Hero image asset for `dotnet-change-impact`.
 
 ### Changed
 
-- Enhanced README with `dotnet-change-impact` installation guidance and capability showcase, including examples of breaking changes, API diffs, and compatibility assessment workflows.
+- Enhanced README with `dotnet-change-impact` installation guidance and capability showcase, including examples of breaking changes, API diffs, and compatibility assessment workflows,
+- Improved prose readability in `dotnet-change-impact` SKILL.md by removing artificial line breaks to enhance natural reading flow.
 
 ## [0.5.0] - 2026-06-07
 

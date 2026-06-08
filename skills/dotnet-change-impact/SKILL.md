@@ -6,10 +6,9 @@ description: >
 
 # .NET Change Impact
 
-Classify a proposed change to a .NET library or NuGet package and recommend the correct
-release bump. This skill exists to stop accidental breaking releases from being shipped as
-a patch or minor, while staying practical enough not to label every internal refactor as
-breaking.
+![.NET Change Impact](assets/hero.jpg)
+
+Classify a proposed change to a .NET library or NuGet package and recommend the correct release bump. This skill exists to stop accidental breaking releases from being shipped as a patch or minor, while staying practical enough not to label every internal refactor as breaking.
 
 It answers one question:
 
@@ -311,12 +310,7 @@ These recur often enough to call out directly. The full catalog is in
 
 ## Input interpretation
 
-Input may arrive as release notes, git commits, PR summaries, API diffs, changelog entries,
-dependency updates, bug-fix descriptions, a stated release intent, or the default current-branch
-comparison. Distinguish carefully between: public API changes, internal implementation changes,
-consumer-visible behavior changes, build/design-time changes, documentation-only changes,
-package/dependency changes, and platform/TFM support changes. The bump follows the most
-impactful real change, not the loudest commit subject.
+Input may arrive as release notes, git commits, PR summaries, API diffs, changelog entries, dependency updates, bug-fix descriptions, a stated release intent, or the default current-branch comparison. Distinguish carefully between: public API changes, internal implementation changes, consumer-visible behavior changes, build/design-time changes, documentation-only changes, package/dependency changes, and platform/TFM support changes. The bump follows the most impactful real change, not the loudest commit subject.
 
 ## Output format
 
