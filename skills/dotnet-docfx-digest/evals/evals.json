@@ -132,6 +132,18 @@
         "Runs git diff for touched documentation paths after edits and before final verification",
         "Preserves authored Markdown and reports any remaining validation diagnostics instead of claiming completion"
       ]
+    },
+    {
+      "id": 11,
+      "prompt": "Use dotnet-docfx-digest on a .NET repository that does not contain a `skills/dotnet-docfx-digest/` folder. The skill is installed globally, and the target repository root is the current working directory.",
+      "expected_output": "Agent resolves agents.cs and docfx.cs from the loaded installed dotnet-docfx-digest skill directory instead of assuming the target repository vendors the skill source. It runs agents.cs first with an explicit --repo-root pointing at the target repository, verifies AGENTS.md was created or updated by the script, then runs docfx.cs against the same repository root. If either script path cannot be resolved, it reports every checked location plus the exact command failure instead of claiming the scripts are unavailable.",
+      "expectations": [
+        "Checks the loaded installed skill directory for scripts/agents.cs and scripts/docfx.cs before concluding the scripts are missing",
+        "Does not require the target repository to contain skills/dotnet-docfx-digest/scripts/*.cs",
+        "Passes the target repository path explicitly with --repo-root instead of relying on the skill install directory or a temp workspace as the repository root",
+        "Runs agents.cs before documentation validation so AGENTS.md receives the managed DocFX maintenance block",
+        "Reports the exact command, exit code, output, and checked script locations if script resolution or execution fails"
+      ]
     }
   ]
 }

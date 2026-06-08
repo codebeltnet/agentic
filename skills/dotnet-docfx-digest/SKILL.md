@@ -20,22 +20,24 @@ This skill is autonomous by default. If the user invokes the skill without namin
 4. Fill the missing DocFX pieces that can be derived from source evidence, including type-page overwrite examples for public non-abstraction types and public extension methods.
 5. Ask a concise clarifying question only when inspection exposes a correctness-affecting choice that cannot be resolved from repository evidence.
 
-When this skill is invoked against a repository, the agent must run the deterministic repository-instruction script before completing the task:
+When this skill is invoked against a repository, resolve the target repository root and bundled script paths before running any validation. Prefer the loaded `dotnet-docfx-digest` skill directory as the script source, for example `<skill-dir>/scripts/agents.cs` and `<skill-dir>/scripts/docfx.cs`. If the loaded skill directory is unavailable and the target repository contains the repo-managed source copy, use `skills/dotnet-docfx-digest/scripts/*.cs`. Do not conclude a script is unavailable until both locations have been checked.
+
+Run the deterministic repository-instruction script before completing the task:
 
 ```bash
-dotnet run --file skills/dotnet-docfx-digest/scripts/agents.cs -- --repo-root .
+dotnet run --file <resolved-skill-dir>/scripts/agents.cs -- --repo-root <repo-root>
 ```
 
 Before reporting completion, the agent must run the deterministic validator:
 
 ```bash
-dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --verify-docfx-build
+dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --verify-docfx-build
 ```
 
 For repo-wide audits or any validation run that produces more than a small number of diagnostics, the agent must also ask the validator to write a deterministic repair plan and use that plan as the authoritative work queue:
 
 ```bash
-dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --json --repair-plan <temp-path>/docfx-repair-plan.md
+dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --json --repair-plan <temp-path>/docfx-repair-plan.md
 ```
 
 If either script cannot run, the agent must report the exact command, exit code, and failure output. Do not claim repository instructions or documentation were verified unless the scripts ran successfully.
@@ -131,10 +133,10 @@ When creating or repairing overwrite files, read `references/docfx-overwrite-fil
 Persistent repository guidance is enforced by script, not by AI memory. When this skill is invoked, run:
 
 ```bash
-dotnet run --file skills/dotnet-docfx-digest/scripts/agents.cs -- --repo-root .
+dotnet run --file <resolved-skill-dir>/scripts/agents.cs -- --repo-root <repo-root>
 ```
 
-The script must create or update a marker-bounded DocFX documentation maintenance section in the repository root `AGENTS.md`. Do not manually duplicate this section. If the script fails, report the failure and do not claim `AGENTS.md` was updated.
+The script must create or update a marker-bounded DocFX documentation maintenance section in the repository root `AGENTS.md`. Resolve `<repo-root>` from the actual repository being documented, not from a temp workspace or the skill install folder. If the current working directory is already the target repository root, `<repo-root>` may be `.` after confirming it with repository evidence such as `git rev-parse --show-toplevel` or equivalent path inspection. Do not manually duplicate this section. If the script fails, report the exact command, exit code, and output, and do not claim `AGENTS.md` was updated.
 
 ## Public API Rule
 
@@ -256,7 +258,7 @@ Every code sample added or changed must be verified. A C# code sample must compi
 The deterministic validator compiles C# documentation samples as .NET 10 file-based apps. When completing DocFX documentation work, also ask it to verify the DocFX build in a temporary copy of the repository so generated metadata and site output stay outside the working tree. Run:
 
 ```bash
-dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --verify-docfx-build
+dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --verify-docfx-build
 ```
 
 A sample may opt out only when the code fence includes:
@@ -553,7 +555,7 @@ When no specific API or namespace is named:
 3. Read repository guidance, especially root `AGENTS.md`.
 4. Locate `.docfx/docfx.json` or repository-specific DocFX config.
 5. Read `references/docfx-overwrite-files.md`.
-6. Run `dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --json` to collect deterministic missing-doc findings when the repository is buildable.
+6. Run `dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --json` to collect deterministic missing-doc findings when the repository is buildable.
 7. If the validator reports multiple diagnostics, rerun it with `--repair-plan <temp-path>/docfx-repair-plan.md`, read that plan, and treat it as the work queue.
 8. If the validator fails before documentation diagnostics can be produced, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
 9. Determine every namespace containing public API and whether each namespace exposes public extension methods.
