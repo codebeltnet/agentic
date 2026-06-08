@@ -34,6 +34,19 @@ Before reporting completion, the agent must run the deterministic validator:
 dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --verify-docfx-build
 ```
 
+## Completion Repair Loop
+
+Do not stop at namespace pages, extension-member tables, or a first-pass documentation edit. Those surfaces are useful discovery aids, but they do not prove that generated type pages have the required examples. Before deeming a DocFX documentation request complete, run a closure loop:
+
+1. Run `docfx.cs --json` after edits and read the remaining diagnostics.
+2. If diagnostics include `EXAMPLE_MISSING`, missing namespace pages, stale extension-member tables, sample compile failures, missing availability, or overwrite inclusion problems, treat them as the next work queue rather than final notes.
+3. For every `EXAMPLE_MISSING` public non-abstraction type, create or update the type-page overwrite file for that type UID, such as `.docfx/api/ApplicationHostFactory.md`, and put the example in that file or another overwrite section that targets the type UID directly.
+4. For every required example file, verify `build.overwrite` includes the file path or a glob that reaches it. Widen namespace-only overwrite globs when needed.
+5. Update the example inventory so each required public non-abstraction type and public extension method maps to the exact example file and UID.
+6. Rerun the validator and repeat the loop until required diagnostics are gone, or stop and report the exact blocker, command, exit code, and remaining diagnostic codes.
+
+The completion loop is the guard against the common failure where an agent finishes namespace overview pages but forgets per-type API overwrite pages. Namespace-level examples do not satisfy `EXAMPLE_MISSING` for public non-abstraction types.
+
 For repo-wide audits or any validation run that produces more than a small number of diagnostics, the agent must also ask the validator to write a deterministic repair plan and use that plan as the authoritative work queue:
 
 ```bash
@@ -555,9 +568,10 @@ When the user names a changed API or namespace:
 18. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 19. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 20. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-21. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
-22. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
-23. Report verification results.
+21. Run the Completion Repair Loop: rerun `docfx.cs --json`, read remaining diagnostics, repair missing per-type examples and overwrite inclusion issues, update the example inventory, and repeat until required diagnostics are gone or a precise blocker is reported.
+22. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
+23. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
+24. Report verification results.
 
 When no specific API or namespace is named:
 
@@ -583,9 +597,10 @@ When no specific API or namespace is named:
 20. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 21. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 22. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-23. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
-24. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
-25. Report verification results and any remaining findings.
+23. Run the Completion Repair Loop: rerun `docfx.cs --json`, read remaining diagnostics, repair missing per-type examples and overwrite inclusion issues, update the example inventory, and repeat until required diagnostics are gone or a precise blocker is reported.
+24. Run `docfx.cs --verify-docfx-build` so the DocFX CLI runs against a temp copy of the repository.
+25. Inspect `git status` and confirm no disposable generated DocFX metadata or build output remained in the working tree; preserve authored Markdown and other documentation files.
+26. Report verification results and any remaining findings.
 
 ## Namespace Page Template
 
@@ -665,6 +680,7 @@ Before completing documentation work, verify:
 - [ ] Public extension methods have at least one example, not only a table entry.
 - [ ] An example inventory maps every required public type and extension method to its example file and UID.
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`.
+- [ ] The Completion Repair Loop was run after edits, and remaining `EXAMPLE_MISSING` or overwrite inclusion diagnostics were fixed or reported as exact blockers.
 - [ ] Abstractions without examples have a clear reason.
 - [ ] Examples are realistic and copy/paste-ready.
 - [ ] Examples compile.
