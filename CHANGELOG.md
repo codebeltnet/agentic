@@ -6,6 +6,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-08
+
+This is a minor release introducing the `dotnet-change-impact` skill for classifying .NET library and NuGet package changes against Microsoft's official compatibility rules. The skill automatically resolves the current branch against the upstream default branch, compares commits and diffs, and recommends the correct SemVer release bump (Major, Minor, or Patch) along with structured compatibility reasoning.
+
+### Added
+
+- `dotnet-change-impact` skill that classifies .NET library changes and recommends version bumps according to Microsoft's official .NET library compatibility model, supporting breaking changes, API diffs, public API changes, dependency updates, TFM and platform support changes, interface and enum modifications, overloads, analyzers, and source generators,
+- Automatic default-branch resolution in `dotnet-change-impact` when no explicit change details or compare range are provided; the skill inspects the current Git branch and compares against the upstream default branch, with fallback to `main` or `master`,
+- Comprehensive compatibility-categories reference documentation in `references/compatibility-categories.md` covering Major (breaking changes, removals, contract modifications), Minor (new capabilities without breaking changes), and Patch (fixes, maintenance, non-breaking refinement) classifications,
+- Per-skill evals coverage for `dotnet-change-impact` including current-branch detection, breaking-change scenarios, API compatibility assessments, dependency updates, and SemVer classification validation,
+- `dotnet-change-impact` registered in README skill index with install snippet and detailed "Why dotnet-change-impact?" section explaining Microsoft compatibility grounding and key capabilities,
+- Hero image asset for `dotnet-change-impact`.
+
+### Changed
+
+- Enhanced README with `dotnet-change-impact` installation guidance and capability showcase, including examples of breaking changes, API diffs, and compatibility assessment workflows,
+- Improved prose readability in `dotnet-change-impact` SKILL.md by removing artificial line breaks to enhance natural reading flow.
+
+## [0.5.0] - 2026-06-07
+
+This is a minor release introducing the `git-remote-release` skill for generating GitHub release notes by summarizing commits and pull requests between git tags or branches. This complements the existing changelog and release-notes workflow by providing a GitHub-specific release entry point.
+
+### Added
+
+- `git-remote-release` skill that reads a commit range or github.com compare URL, summarizes all commits and pull requests between two git references, and generates GitHub release notes with proper markdown formatting,
+- `FORMS.md` for `git-remote-release` with structured input collection for branch/tag range specification,
+- Hero image asset for `git-remote-release`,
+- Evals coverage for `git-remote-release` release notes generation.
+
+### Changed
+
+- Expanded README with `git-remote-release` installation snippet and capability showcase documenting release notes generation from commits, PRs, and branch comparisons.
+
+## [0.4.6] - 2026-06-07
+
+This is a patch release focused on strengthening scaffolding templates with safeguards and coverage guidance, plus clarifying the author-neutral scope of `git-visual-squash-summary` to prevent stale same-named tracking branches from hiding work.
+
+### Added
+
+- Safeguards and coverage guidance in `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` shared assets (`AGENTS.md` and `.github/copilot-instructions.md`) documenting bot workspace management, eval isolation discipline, and git identity rules,
+- Eval coverage for `git-visual-squash-summary` documenting author-neutral scope and base-branch resolution behavior.
+
+### Changed
+
+- Enhanced `git-visual-squash-summary` SKILL.md guidance to clarify author-neutral scope and to explicitly document how the skill compares against repository base branches rather than same-named tracking remotes, preventing stale tracking copies from masking real work,
+- Updated `git-visual-squash-summary` shared documentation in scaffold templates to reflect author-neutral behavior and base-branch-first resolution.
+
+## [0.4.5] - 2026-05-31
+
+This is a patch release focused on improving `git-repo-digest` documentation link extraction and validation logic, expanding eval coverage, and establishing explicit git operations safeguards policy for agent-driven repositories. The skill now validates documentation URLs with HTTP HEAD requests before accepting them, provides fallback chains across multiple documentation sources, and fails fast when no valid URL is found.
+
+### Added
+
+- Enhanced `git-repo-digest` documentation URL resolution with HTTP validation, probing multiple fallback sources (package URLs, `.docfx/docfx.json` hints, `README.md` links) and requiring at least one `200 OK` response before generating digest prose,
+- Evals 43–45 covering HTTP-validated documentation URL fallback chains, convenience package documentation linking, and edge cases,
+- Git Operations Safeguards section in `AGENTS.md` establishing mandatory approval gates for agent-driven commits and remote operations, explicitly forbidding automatic pushes, pulls, or fetches without user instruction,
+- Additional safeguards context in README and AGENTS.md clarifying that automatic commits pollute history and unexpected remote operations risk data loss.
+
+### Changed
+
+- Refined `git-repo-digest` SKILL.md guidance to preserve generated `title` from repository-owned `<Product>` metadata instead of replacing with invented prose, and to treat generated documentation links as validated HTTP URLs,
+- Enhanced `git-repo-digest` `digest.cs` with robust HTTP client setup, 10-second timeout for documentation validation, improved error handling for failed URL validation requests, and clear retry guidance when candidates fail,
+- Updated manifest documentation for `frontmatterHints` to clarify that documentation entries are validated HTTP URLs and that overview `title` comes from repository metadata,
+- Expanded eval contracts and test case documentation to cover HTTP validation failures, timeout behavior, and fallback chain exhaustion,
+- Updated README.md guidance to highlight HTTP-validated documentation URL resolution and documented git operations safeguards.
+
 ## [0.4.4] - 2026-05-18
 
 This is a minor release strengthening `git-repo-digest` with HTTP-validated documentation URL resolution and repository-owned product title discovery, plus clarifying `git-visual-squash-summary` base branch resolution behavior to prevent stale same-named tracking branches from hiding work. The `git-repo-digest` runner now resolves documentation hosts from package URLs and project configuration, validates candidate documentation URLs with HTTP HEAD requests, falls back across multiple sources (root `PackageProjectUrl`, `.docfx/docfx.json`, README `## Documentation` links), and fails fast when no candidate returns `200 OK`. Repository titles for `result/Index.md` are sourced from a root `Directory.Build.props` `<Product>` value, with fallback to the highest-referenced top-level packable `.csproj` `<Product>` when the root value is absent. The `git-visual-squash-summary` skill now explicitly avoids using a same-named tracking remote such as `origin/<current-branch>` as a squash base; instead it resolves against the repository's actual base branch such as `origin/main`, `origin/master`, `main`, or `master` before declaring there is nothing to summarize.
@@ -275,8 +341,12 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.4.4...HEAD
-[0.4.5]: https://github.com/codebeltnet/agentic/compare/v0.4.3...v0.4.4
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/codebeltnet/agentic/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/codebeltnet/agentic/compare/v0.4.6...v0.5.0
+[0.4.6]: https://github.com/codebeltnet/agentic/compare/v0.4.5...v0.4.6
+[0.4.5]: https://github.com/codebeltnet/agentic/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/codebeltnet/agentic/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/codebeltnet/agentic/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/codebeltnet/agentic/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/codebeltnet/agentic/compare/v0.4.0...v0.4.1
