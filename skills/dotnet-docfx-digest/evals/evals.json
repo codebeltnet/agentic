@@ -1,0 +1,78 @@
+{
+  "skill_name": "dotnet-docfx-digest",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just added a new public class `RetryPolicy` and a public extension method `WithRetry(this HttpClient client, int attempts)` to my .NET library in the `Acme.Net.Http` namespace. Please update the DocFX documentation for this change.",
+      "expected_output": "Agent runs scripts/agents.cs to seed AGENTS.md, creates/updates the Acme.Net.Http namespace overview page with uid front matter, a fly-in, availability, and an Extension Members table listing the extended type with the WithRetry method, adds a buildable example for RetryPolicy, and runs scripts/docfx.cs to verify.",
+      "expectations": [
+        "Runs the deterministic scripts/agents.cs against the repository before completing",
+        "Creates or updates a namespace overview page named Acme.Net.Http.md with DocFX overwrite front matter whose uid matches the namespace",
+        "Adds an Extension Members table documenting the extended type (HttpClient), the ⬇️ marker, and the WithRetry method in backticks",
+        "Adds at least one copy/paste-ready, buildable example for the concrete RetryPolicy type",
+        "Includes availability information via an include or explicit Availability text",
+        "Runs scripts/docfx.cs to verify before claiming the documentation was verified"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Document the new `internal` helper class `BufferPool` and the `private` method `Rent` I added under `Acme.Buffers`. There is no other public type in that namespace yet.",
+      "expected_output": "Agent declines to create documentation for internal/private members and does not create a namespace overview page for a namespace that contains no public API, explaining the public-API-only rule.",
+      "expectations": [
+        "Does not create documentation pages or overwrite files for internal or private members",
+        "Does not create a namespace overview page for Acme.Buffers because it contains no public API",
+        "Explains that only public API is documented and points to the public-API rule",
+        "Does not fabricate public API that does not exist"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Add a usage example to the `Acme.Text` namespace page for the `Greeter` class. Base it on the existing unit test `GreeterTest.Greet_WithName_ReturnsGreeting`.",
+      "expected_output": "Agent converts the Arrange/Act/Assert test into a real-life consumer-oriented, buildable example without raw assertions, and verifies it compiles with scripts/docfx.cs.",
+      "expectations": [
+        "Derives the example from the referenced test rather than inventing behavior",
+        "Converts the Arrange/Act/Assert structure into developer-oriented usage instead of pasting raw assertions",
+        "Produces a minimal, deterministic, copy/paste-ready C# example with a real using directive for Acme.Text",
+        "Avoids pseudo-code, ellipses, and hidden helpers in the sample",
+        "Verifies the sample compiles via scripts/docfx.cs or an equivalent build command"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Run the DocFX documentation validator on this repository and tell me whether the docs are in good shape.",
+      "expected_output": "Agent runs scripts/docfx.cs (and scripts/agents.cs if needed), reports the exact command, exit code, and the deterministic JSON/console findings, and does not claim verification without running the script.",
+      "expectations": [
+        "Runs scripts/docfx.cs against the repository root",
+        "Reports the exact command run and its exit code",
+        "Surfaces the deterministic findings (errors/warnings with their codes) rather than guessing",
+        "Does not claim the documentation was verified unless the script actually ran successfully"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "The `Acme.Text` namespace page already has a hand-written introduction and a couple of links I care about. I changed the `Shout` extension method to also trim whitespace. Update the docs but keep my wording.",
+      "expected_output": "Agent preserves the manual introduction and links, updates only the stale parts relevant to the behavior change, keeps the Extension Members table accurate, and avoids wholesale file replacement.",
+      "expectations": [
+        "Preserves the existing hand-written introduction and links instead of replacing the whole file",
+        "Updates only the stale portions affected by the behavior change",
+        "Keeps the Extension Members table accurate for the Shout method",
+        "Does not leave contradictory descriptions of the Shout behavior",
+        "Re-verifies any changed sample compiles"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use dotnet-docfx-digest on this repository.",
+      "expected_output": "Agent treats the request as a repo-wide DocFX documentation audit instead of asking what to document first. It runs scripts/agents.cs, inspects AGENTS.md, docfx.json, source projects, public API, tests, samples, overwrite files, namespace pages, and availability includes, runs scripts/docfx.cs to collect deterministic findings, repairs missing complementary DocFX documentation that can be derived from source evidence, reads the DocFX overwrite reference when creating or repairing overwrite files, and asks for clarification only if discovery exposes a correctness-affecting choice.",
+      "expectations": [
+        "Does not start by asking the user which API or namespace to document",
+        "Runs scripts/agents.cs to ensure the repository AGENTS.md contains the managed DocFX maintenance block",
+        "Inspects docfx.json and existing DocFX overwrite, namespace, include, source, test, and sample evidence before editing",
+        "Runs scripts/docfx.cs, preferably with --json when collecting repo-wide findings",
+        "Creates or updates missing namespace overview pages, Extension Members tables, examples, and availability notes that can be derived from evidence",
+        "Reads references/docfx-overwrite-files.md before creating or repairing DocFX overwrite files",
+        "Asks a concise clarifying question only after inspection finds a correctness-affecting unresolved choice"
+      ]
+    }
+  ]
+}
