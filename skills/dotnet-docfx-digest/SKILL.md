@@ -47,6 +47,27 @@ Do not stop at namespace pages, extension-member tables, or a first-pass documen
 
 The completion loop is the guard against the common failure where an agent finishes namespace overview pages but forgets per-type API overwrite pages. Namespace-level examples do not satisfy `EXAMPLE_MISSING` for public non-abstraction types.
 
+## Type-Page Example Gate
+
+Before editing examples, build a small example inventory from validator output and source evidence. This inventory is the task queue, not a summary for the final response. Each required item should have this shape:
+
+```markdown
+| UID | Kind | Required example location | Source evidence | Status |
+|---|---|---|---|---|
+| Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | ApplicationHostFactoryTest | Missing |
+```
+
+For every public non-abstraction type, the required example location is a type UID overwrite section. In Codebelt repositories, default to a separate file named `.docfx/api/{TypeUid}.md`. For example, when the missing type is `ApplicationHostFactory`, create `.docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or the exact UID path reported by the validator. Do not put the only example in `.docfx/api/namespaces/*.md`, because that improves the namespace page while leaving the generated type page incomplete.
+
+For public extension methods, the inventory must name the method and the section that demonstrates it. Prefer the generated method UID when known; otherwise use the declaring extension class UID or namespace page only when the example explicitly calls the extension method.
+
+Do not mark the inventory item complete until all of these are true:
+
+- The overwrite section targets the required UID or an allowed extension-method fallback UID.
+- `build.overwrite` includes the file by exact path or a glob such as `api/**/*.md`.
+- The example code fence compiles or carries an explicit, justified skip marker.
+- A rerun of `docfx.cs --json` no longer reports `EXAMPLE_MISSING` for that UID.
+
 For repo-wide audits or any validation run that produces more than a small number of diagnostics, the agent must also ask the validator to write a deterministic repair plan and use that plan as the authoritative work queue:
 
 ```bash

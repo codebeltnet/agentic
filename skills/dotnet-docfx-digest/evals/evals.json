@@ -158,6 +158,20 @@
         "Does not treat a missing local signing key as a documentation validation failure",
         "Reports the skip-sign fallback in the verification summary when it was used"
       ]
+    },
+    {
+      "id": 13,
+      "prompt": "A previous run of dotnet-docfx-digest enhanced only `.docfx/api/namespaces/Codebelt.Extensions.Xunit.Hosting.md` and added examples there, but the validator still reports `EXAMPLE_MISSING` for the public concrete type `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory`. Fix the documentation gap and explain why namespace examples were insufficient.",
+      "expected_output": "Agent treats the remaining EXAMPLE_MISSING diagnostic as an unfinished work item, creates or updates `.docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` with DocFX front matter for uid `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory`, adds a buildable ApplicationHostFactory example derived from source or tests, updates build.overwrite when needed so `.docfx/api/**/*.md` files are included, reruns scripts/docfx.cs --json until the diagnostic is gone, and explains that namespace examples and Extension Members tables complement but do not replace examples on generated type pages.",
+      "expectations": [
+        "Does not treat the namespace page examples as sufficient for the ApplicationHostFactory concrete type",
+        "Creates or updates the per-type overwrite file `.docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or an equivalent file that targets the exact ApplicationHostFactory UID",
+        "Uses DocFX front matter with uid `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory` for the type example section",
+        "Adds a realistic, copy/paste-ready C# example for ApplicationHostFactory based on actual source, tests, or public behavior",
+        "Updates build.overwrite when the existing glob only includes `.docfx/api/namespaces/**/*.md`",
+        "Reruns scripts/docfx.cs --json after the edit and treats any remaining EXAMPLE_MISSING diagnostic as blocking completion",
+        "Explains that namespace overview examples and Extension Members tables are complementary surfaces, not substitutes for type-page examples"
+      ]
     }
   ]
 }

@@ -200,7 +200,7 @@ internal static class DocfxValidator
         }
 
         // 12. Verify mandatory examples exist before compiling the examples that were found.
-        ValidateRequiredExamples(repoRoot, markdownFiles, api, options, changedFiles, report);
+        ValidateRequiredExamples(repoRoot, docfxWorkspace, markdownFiles, api, options, changedFiles, report);
 
         // 13. Extract and compile C# documentation samples.
         if (options.ValidateSamples)
@@ -1586,7 +1586,7 @@ internal static class DocfxValidator
     // Required example validation
     // ----------------------------------------------------------------------
 
-    private static void ValidateRequiredExamples(string repoRoot, List<string> markdownFiles, ApiModel api,
+    private static void ValidateRequiredExamples(string repoRoot, string docfxWorkspace, List<string> markdownFiles, ApiModel api,
         Options options, HashSet<string>? changedFiles, Report report)
     {
         var sections = new List<OverwriteSection>();
@@ -1613,12 +1613,17 @@ internal static class DocfxValidator
             var expectedUid = target.Kind == ApiTargetKind.Type
                 ? target.Uid
                 : target.DeclaringTypeUid ?? target.Uid;
+            var expectedPath = target.Kind == ApiTargetKind.Type
+                ? Rel(repoRoot, Path.Combine(docfxWorkspace, "api", $"{target.Uid}.md"))
+                : target.DeclaringTypeUid is null
+                    ? null
+                    : Rel(repoRoot, Path.Combine(docfxWorkspace, "api", $"{target.DeclaringTypeUid}.md"));
 
             var message = target.Kind == ApiTargetKind.Type
-                ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to a per-type overwrite file for uid `{target.Uid}` (for Codebelt repositories, create `.docfx/api/{target.Uid}.md` and ensure build.overwrite includes it, for example with `api/**/*.md`)."
-                : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}`, its declaring type uid `{expectedUid}`, or the namespace page `{target.Namespace}`.";
+                ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}` in `{expectedPath}` or another overwrite file that targets this exact type UID. Namespace overview examples do not satisfy this diagnostic. Ensure build.overwrite includes the file, for example with `api/**/*.md`."
+                : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}`, its declaring type uid `{expectedUid}`, or the namespace page `{target.Namespace}`. The example must explicitly call `{target.DisplayName}`.";
 
-            report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", null, target.Namespace, message));
+            report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", expectedPath, target.Namespace, message));
         }
     }
 
@@ -2219,7 +2224,7 @@ internal static class DocfxValidator
         AppendDiagnostics(sb, "Namespace And Extension Table Repairs", report.Errors.Where(e =>
             e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) ||
             e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal)));
-        AppendDiagnostics(sb, "Required Example Inventory", report.Errors.Where(e => e.Code is "EXAMPLE_MISSING"));
+        AppendRequiredExampleDiagnostics(sb, report.Errors.Where(e => e.Code is "EXAMPLE_MISSING"));
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
             e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING"));
         AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
@@ -2272,6 +2277,47 @@ internal static class DocfxValidator
 
             sb.AppendLine();
         }
+    }
+
+    private static void AppendRequiredExampleDiagnostics(StringBuilder sb, IEnumerable<Diagnostic> diagnostics)
+    {
+        var items = diagnostics
+            .OrderBy(d => d.Namespace ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(d => d.Path ?? string.Empty, StringComparer.Ordinal)
+            .ThenBy(d => d.Message, StringComparer.Ordinal)
+            .ToList();
+
+        sb.AppendLine("## Required Example Inventory");
+        sb.AppendLine();
+        if (items.Count == 0)
+        {
+            sb.AppendLine("None.");
+            sb.AppendLine();
+            return;
+        }
+
+        sb.AppendLine("Treat this section as the authoritative example work queue. Namespace overview pages and `Extension Members` tables are not complete until each item below maps to a concrete overwrite example and rerunning `docfx.cs --json` removes the diagnostic.");
+        sb.AppendLine();
+        sb.AppendLine("| Namespace | Expected overwrite location | Diagnostic | Required action |");
+        sb.AppendLine("|---|---|---|---|");
+
+        foreach (var diagnostic in items)
+        {
+            var ns = EscapeTable(diagnostic.Namespace ?? "(repository)");
+            var path = EscapeTable(string.IsNullOrWhiteSpace(diagnostic.Path) ? "(method UID, declaring type UID, or namespace page)" : diagnostic.Path);
+            var message = EscapeTable(diagnostic.Message);
+            var action = diagnostic.Message.Contains("Public non-abstraction type", StringComparison.Ordinal)
+                ? "Create or update the per-type UID overwrite file, include it in build.overwrite, add a compiling Examples section, then rerun validation."
+                : "Add a compiling Examples section that explicitly calls the extension method, then rerun validation.";
+            sb.AppendLine($"| {ns} | `{path}` | `EXAMPLE_MISSING` | {EscapeTable(action)} {message} |");
+        }
+
+        sb.AppendLine();
+    }
+
+    private static string EscapeTable(string value)
+    {
+        return value.Replace("|", "\\|", StringComparison.Ordinal).ReplaceLineEndings(" ");
     }
 
     // ----------------------------------------------------------------------
