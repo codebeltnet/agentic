@@ -2237,7 +2237,7 @@ internal static class DocfxValidator
             return null;
         }
 
-        var diff = RunProcess("git", "diff --name-only --diff-filter=ACMRTUXB HEAD", repoRoot);
+        var diff = RunProcess("git", "diff --name-only --diff-filter=ACMRTUXBD HEAD", repoRoot);
         if (diff.ExitCode != 0)
         {
             return null;
