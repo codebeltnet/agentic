@@ -1,14 +1,14 @@
 ---
 name: dotnet-docfx-digest
 description: >
-  Create and maintain developer-friendly DocFX documentation digests for .NET public APIs, including repo-wide no-input audits, namespace overview pages, extension-member documentation, overwrite files, examples, availability notes, AGENTS.md maintenance, and verification. Use when the user asks to document a .NET API, create or update DocFX documentation, write namespace overview pages, add extension-method tables, update XML documentation comments, add API examples, maintain DocFX overwrite files, or verify documentation builds. Treat requests like "use dotnet-docfx-digest", "update the DocFX docs", "complete missing documentation", "create namespace pages", "add examples for this type", "update the extension members table", or "verify the documentation builds" as automatic triggers. Also use whenever public .NET API surface changes and documentation needs to stay aligned with source code.
+  Create and maintain developer-friendly DocFX documentation digests for .NET public APIs, including repo-wide no-input audits, concept-led namespace overview pages, purpose-first type/member summaries, extension-member documentation, overwrite files, examples, availability notes, AGENTS.md maintenance, and verification. Use when the user asks to document a .NET API, create or update DocFX documentation, write namespace overview pages, improve API summaries, add extension-method tables, update XML documentation comments, add API examples, maintain DocFX overwrite files, or verify documentation builds. Treat requests like "use dotnet-docfx-digest", "update the DocFX docs", "complete missing documentation", "create namespace pages", "improve these API summaries", "add examples for this type", "update the extension members table", or "verify the documentation builds" as automatic triggers. Also use whenever public .NET API surface changes and documentation needs to stay aligned with source code.
 ---
 
 # .NET DocFX Digest Steward
 
 ## Description
 
-Create and maintain developer-friendly DocFX documentation digests for .NET public APIs, including namespace overview pages, extension-member documentation, overwrite files, examples, availability notes, and verification. Preserve manual edits, document public API only, require buildable copy/paste-ready examples for concrete APIs, and keep documentation aligned with actual source code and tests.
+Create and maintain developer-friendly DocFX documentation digests for .NET public APIs, including concept-led namespace overview pages, purpose-first type/member summaries, extension-member documentation, overwrite files, examples, availability notes, and verification. Preserve manual edits, document public API only, require buildable copy/paste-ready examples for concrete APIs, and keep documentation aligned with actual source code and tests.
 
 ## Activation Requirements
 
@@ -52,10 +52,59 @@ The completion loop is the guard against the common failure where an agent finis
 Do not trade one documentation surface for the other. Namespace pages and per-type pages have different jobs, and both must remain useful:
 
 - Namespace pages explain the package or namespace shape: what problem the namespace solves, when to use it, important type families, extension-method groups, availability, and links or references to representative type pages.
-- Per-type pages explain how to use a specific public concrete type with copy/paste-ready examples.
+- Per-type pages explain what a specific public concrete type is for, when a developer would reach for it, and how to use it with copy/paste-ready examples.
 - Extension-method examples normally live on the declaring extension class page or the namespace page, but the namespace page must still read like curated API documentation, not a dumping ground for examples.
 
 When per-type examples are added, revisit the related namespace page and keep its fly-in well-versed and developer-friendly. Moving examples out of the namespace page must not leave the namespace page as a generic sentence plus table. Preserve or improve the curated namespace overview that helps readers choose the right type before they drill into generated type pages.
+
+## Conceptual Orientation
+
+Namespace pages, type summaries, and member summaries should orient a developer to purpose, not just inventory API shape. Use an inverted-pyramid writing order:
+
+1. Lead with the biggest idea: what problem this namespace, type, or member solves, or what outcome it enables.
+2. Follow with when a developer would use it in normal work.
+3. Give quick orientation such as "If you're trying to do X, start with Y" when an entry-point type, option type, or extension method helps readers choose where to go next.
+4. Then add structural detail such as important type families, representative members, or constraints.
+
+Write for a developer who is new to the domain, not for someone who already knows why the API exists. A strong summary should answer "why would I care?" before it answers "what names live here?"
+
+Avoid filing-cabinet labels such as "contains types and extension methods for..." or generic blurbs such as "represents options..." and "adds services..." when they are not followed by concrete purpose. Those phrases are acceptable only when the rest of the sentence explains the real job of the API.
+
+Bad namespace summary:
+
+```markdown
+The `Acme.OpenApi.ModelContextProtocol` namespace contains types and extension methods for MCP integration.
+```
+
+Better namespace summary:
+
+```markdown
+The `Acme.OpenApi.ModelContextProtocol` namespace bridges Model Context Protocol servers with OpenAPI documentation. Use it when you want MCP-enabled services to stay discoverable through standard Swagger/OpenAPI tooling. If you're wiring the integration into an ASP.NET Core app, start with `AddMcpServer`.
+```
+
+Bad type/member summaries:
+
+```csharp
+/// <summary>
+/// Represents options for the server.
+/// </summary>
+
+/// <summary>
+/// Adds MCP server services.
+/// </summary>
+```
+
+Better type/member summaries:
+
+```csharp
+/// <summary>
+/// Configures how the MCP server is exposed through the application's OpenAPI pipeline.
+/// </summary>
+
+/// <summary>
+/// Registers the MCP/OpenAPI integration during service configuration so MCP endpoints appear in generated API documentation.
+/// </summary>
+```
 
 ## Type-Page Example Gate
 
@@ -351,15 +400,16 @@ summary: *content
 
 The page must provide a developer-friendly fly-in explaining what the namespace is for. The fly-in should be similar in usefulness and tone to Microsoft .NET API documentation:
 
-- Start with what the namespace contains.
-- Explain the developer problem it solves.
+- Lead with the developer problem or outcome the namespace exists for.
 - Explain when to use it.
+- Give quick orientation for a newcomer, such as "If you're trying to do X, start with Y."
 - Mention important concepts or type families.
 - Mention representative concrete types or extension-method groups when that helps readers choose where to go next.
 - Link or refer to type pages that carry detailed examples when examples are intentionally kept out of the namespace page.
 - Avoid marketing language.
-- Avoid restating type names without explaining purpose.
+- Avoid inventory-only wording that merely restates type names without explaining purpose.
 - Keep the explanation accurate to the public API.
+- Use the inverted-pyramid structure from the Conceptual Orientation section before falling back to structural detail.
 
 Minimum namespace overview structure:
 
@@ -368,7 +418,9 @@ Minimum namespace overview structure:
 uid: X.Y.Z
 summary: *content
 ---
-The `X.Y.Z` namespace contains types that ...
+The `X.Y.Z` namespace helps you ...
+Use it when ...
+If you're trying to ..., start with `PrimaryType` or `PrimaryExtensions`.
 
 [!INCLUDE [availability-default](../../includes/availability-default.md)]
 ```
@@ -503,6 +555,8 @@ XML documentation should describe:
 - Nullability expectations,
 - Thread-safety or lifecycle behavior when relevant.
 
+The opening summary sentence should explain the API's job in consumer terms. Lead with purpose and likely use, especially for entry-point extension methods, option types, factories, builders, and orchestration types. Prefer "what this enables and when to call it" over empty structural labels.
+
 Do not use empty boilerplate summaries.
 
 Bad:
@@ -518,6 +572,30 @@ Better:
 ```csharp
 /// <summary>
 /// Gets or sets the normalized name used when matching configuration keys.
+/// </summary>
+```
+
+Bad:
+
+```csharp
+/// <summary>
+/// Represents options for the server.
+/// </summary>
+
+/// <summary>
+/// Adds MCP server services.
+/// </summary>
+```
+
+Better:
+
+```csharp
+/// <summary>
+/// Configures how the MCP server is exposed through the application's OpenAPI pipeline.
+/// </summary>
+
+/// <summary>
+/// Registers the MCP/OpenAPI integration during service configuration so MCP endpoints appear in generated API documentation.
 /// </summary>
 ```
 
@@ -564,7 +642,8 @@ Prefer:
 - Accurate terminology,
 - Small complete samples,
 - Links to related APIs when useful,
-- Namespace-level fly-ins that explain purpose.
+- Namespace-level fly-ins that explain purpose,
+- Purpose-first type/member summaries that explain why a developer would use the API.
 
 Avoid:
 
@@ -577,7 +656,9 @@ Avoid:
 - Incomplete snippets,
 - Unverified claims,
 - Duplicating generated API signatures manually,
-- Restating the namespace name without explaining its purpose.
+- Restating the namespace name without explaining its purpose,
+- Filing-cabinet summaries that only say what a namespace or type contains,
+- Generic verbs like "represents", "provides", or "adds" when they do not explain the API's real role.
 
 ## Documentation Workflow
 
@@ -593,8 +674,8 @@ When the user names a changed API or namespace:
 8. Locate availability include files.
 9. Locate relevant tests that demonstrate the API.
 10. Convert test usage into real-life documentation examples.
-11. Update XML documentation where needed.
-12. Update or create namespace overview pages.
+11. Update XML documentation where needed, especially purpose-first type/member summaries for public entry points and high-traffic APIs.
+12. Update or create namespace overview pages with conceptual orientation and start-here cues.
 13. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
 14. Update extension-member tables.
 15. Update or create overwrite files, including type-page example sections for public non-abstraction types and example sections for public extension methods.
@@ -620,7 +701,7 @@ When no specific API or namespace is named:
 8. If the validator fails before documentation diagnostics can be produced, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
 9. Determine every namespace containing public API and whether each namespace exposes public extension methods.
 10. Determine every public non-abstraction type and every public extension method that requires an example.
-11. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins.
+11. Create or update missing namespace overview pages using DocFX overwrite front matter and developer-friendly fly-ins that lead with purpose, use case, and start-here guidance.
 12. Audit related namespace pages together so fixes are consistent across the public API family.
 13. Add or repair `Extension Members` tables for namespaces with public extension methods.
 14. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
@@ -646,7 +727,9 @@ Use this template when creating a new namespace overview page:
 uid: X.Y.Z
 summary: *content
 ---
-The `X.Y.Z` namespace contains types that ...
+The `X.Y.Z` namespace helps you ...
+Use it when ...
+If you're trying to ..., start with `PrimaryType` or `PrimaryExtensions`.
 
 [!INCLUDE [availability-default](../../includes/availability-default.md)]
 
@@ -657,7 +740,7 @@ The `X.Y.Z` namespace contains types that ...
 |String|⬇️|`ExampleMethod`|
 ```
 
-Remove the `Extension Members` section when the namespace has no public extension methods. Adjust the include path based on the actual file location.
+Remove the `Extension Members` section when the namespace has no public extension methods. Adjust the include path based on the actual file location. Mirror the same purpose-first narrative in any nearby type summaries or entry-point member summaries you touch so the namespace page and generated API pages orient readers consistently.
 
 ## Type Example Template
 

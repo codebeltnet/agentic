@@ -208,6 +208,18 @@
         "Still surfaces stale namespace-page and Extension Members diagnostics after a build.overwrite glob change",
         "Keeps required-example validation aligned with the same changed `docfx.json` trigger"
       ]
+    },
+    {
+      "id": 17,
+      "prompt": "The `Acme.OpenApi.ModelContextProtocol` namespace page currently says `Contains types and extension methods for MCP integration.` The public type `McpServerOptions` says `Represents options for the server.` The extension method `AddMcpServer(this IServiceCollection services)` says `Adds MCP server services.` Use dotnet-docfx-digest to rewrite the documentation so a developer new to this domain immediately understands what each API is for.",
+      "expected_output": "Agent rewrites the namespace overview and affected API summaries with conceptual orientation instead of structural inventory. The namespace fly-in leads with the problem solved, when to use the namespace, and a start-here cue such as AddMcpServer. The type and member summaries explain the role and likely use of the API in consumer terms, while keeping every claim grounded in the real public API and still following the normal script-and-verification workflow.",
+      "expectations": [
+        "Rewrites the namespace overview so it leads with the problem or outcome the namespace enables instead of only saying what it contains",
+        "Explains when a developer would use the namespace and includes a newcomer-oriented start-here cue that points to a representative type or entry-point member",
+        "Rewrites type or member summaries so they explain the API's role and likely use instead of generic structural labels such as `Represents options` or `Adds services`",
+        "Keeps the summaries grounded in actual public API behavior rather than inventing capabilities or marketing language",
+        "Applies the same conceptual-orientation pattern consistently across the namespace page and the touched API summaries"
+      ]
     }
   ]
 }
