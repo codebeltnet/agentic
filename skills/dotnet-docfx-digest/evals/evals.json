@@ -77,16 +77,16 @@
     },
     {
       "id": 7,
-      "prompt": "Use dotnet-docfx-digest on a .NET library whose namespace pages and Extension Members tables are present, but public non-abstraction types such as `ApplicationHostFactory` and public extension methods have no examples. The DocFX config currently has build.overwrite pointing only at .docfx/api/namespaces/**/*.md, and there are no existing per-type overwrite files.",
-      "expected_output": "Agent does not stop after confirming namespace pages and extension tables. It audits public non-abstraction types and public extension methods for examples, creates separate per-type DocFX overwrite files such as .docfx/api/Acme.ApplicationHostFactory.md for missing concrete-type examples, updates build.overwrite so those per-type files are included, puts type examples on the generated type page/overwrite section rather than namespace pages, uses generated UIDs rather than guessing, derives buildable examples from tests or actual public API behavior, runs the Completion Repair Loop by rerunning scripts/docfx.cs --json after edits, fixes remaining EXAMPLE_MISSING or overwrite inclusion diagnostics instead of listing them as final notes, and uses --verify-docfx-build before completion so DocFX output is generated in temp space.",
+      "prompt": "Use dotnet-docfx-digest on a .NET library whose namespace pages and Extension Members tables are present, but public non-abstraction types such as `ApplicationHostFactory` and public extension methods have no examples. The DocFX config already points `build.overwrite` at `.docfx/api/namespaces/**/*.md`, but some earlier authored overwrite Markdown still lives directly under `.docfx/api/*.md`.",
+      "expected_output": "Agent does not stop after confirming namespace pages and extension tables. It audits public non-abstraction types and public extension methods for examples, creates or moves readable overwrite files under `.docfx/api/namespaces/` for missing concrete-type examples, keeps `api/namespaces/**/*.md` under `build.overwrite` only, keeps `api/namespaces/**` excluded from `build.content`, puts type examples on the generated type page/overwrite section rather than the namespace UID page, uses generated UIDs rather than guessing, derives buildable examples from tests or actual public API behavior, runs the Completion Repair Loop by rerunning scripts/docfx.cs --json after edits, fixes remaining EXAMPLE_MISSING or overwrite-layout diagnostics instead of listing them as final notes, and uses --verify-docfx-build before completion so DocFX output is generated in temp space.",
       "expectations": [
         "Treats namespace overview pages and Extension Members tables as insufficient when examples are missing",
-        "Creates separate per-type DocFX overwrite files for public non-abstraction type examples when no type files exist yet",
-        "Updates a namespace-only build.overwrite glob so the new per-type overwrite files are included",
+        "Creates or moves readable type-targeting DocFX overwrite files under `.docfx/api/namespaces/` for public non-abstraction type examples",
+        "Keeps `api/namespaces/**/*.md` under `build.overwrite` only and excludes `api/namespaces/**` from `build.content`",
         "Places a public ApplicationHostFactory example on the ApplicationHostFactory type page/overwrite section rather than only on the namespace page",
         "Creates or updates overwrite content for public extension method examples, or places the example on the extension class or namespace page while explicitly demonstrating the method",
         "Uses generated DocFX UIDs or verified metadata instead of inventing overwrite UIDs",
-        "Runs the Completion Repair Loop after edits by rerunning scripts/docfx.cs --json, fixing remaining EXAMPLE_MISSING and overwrite inclusion diagnostics, and updating the example inventory before claiming completion",
+        "Runs the Completion Repair Loop after edits by rerunning scripts/docfx.cs --json, fixing remaining EXAMPLE_MISSING and overwrite-layout diagnostics, and updating the example inventory before claiming completion",
         "Uses --verify-docfx-build for final DocFX build verification",
         "Compiles changed C# examples or reports the exact verification failure"
       ]
@@ -105,8 +105,8 @@
     },
     {
       "id": 9,
-      "prompt": "Use dotnet-docfx-digest on a Codebelt.Bootstrapper-style repository. During the run you create `.docfx/api/Codebelt.Bootstrapper.ProgramRoot.md` and `.docfx/api/namespaces/Codebelt.Bootstrapper.md`, then validation leaves generated DocFX metadata files beside those authored markdown files. Clean up generated artifacts before completion.",
-      "expected_output": "Agent preserves all authored Markdown overwrite and namespace files, including files created earlier in the same run, and cleans only known generated DocFX metadata or safe generated site output. It does not delete `.docfx/api/**/*.md`, does not recursively delete DocFX directories that contain Markdown or source/configuration files, uses `docfx.cs --verify-docfx-build` for temp-workspace verification, classifies any remaining `git status` paths before deletion, and leaves ambiguous cleanup candidates in place with a note instead of deleting them.",
+      "prompt": "Use dotnet-docfx-digest on a Codebelt.Bootstrapper-style repository. During the run you create `.docfx/api/namespaces/Codebelt.Bootstrapper.ProgramRoot.md` and `.docfx/api/namespaces/Codebelt.Bootstrapper.md`, then validation leaves generated DocFX metadata files beside those authored markdown files. Clean up generated artifacts before completion.",
+      "expected_output": "Agent preserves all authored Markdown overwrite and namespace files, including files created earlier in the same run, and cleans only known generated DocFX metadata or safe generated site output. It does not delete `.docfx/api/namespaces/**/*.md`, does not recursively delete DocFX directories that contain Markdown or source/configuration files, uses `docfx.cs --verify-docfx-build` for temp-workspace verification, classifies any remaining `git status` paths before deletion, and leaves ambiguous cleanup candidates in place with a note instead of deleting them.",
       "expectations": [
         "Treats newly created `.docfx/**/*.md` files as documentation deliverables rather than cleanup targets",
         "Does not run broad manual cleanup commands that delete DocFX directories by name",
@@ -162,13 +162,13 @@
     {
       "id": 13,
       "prompt": "A previous run of dotnet-docfx-digest enhanced only `.docfx/api/namespaces/Codebelt.Extensions.Xunit.Hosting.md` and added examples there, but the validator still reports `EXAMPLE_MISSING` for the public concrete type `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory`. Fix the documentation gap and explain why namespace examples were insufficient.",
-      "expected_output": "Agent treats the remaining EXAMPLE_MISSING diagnostic as an unfinished work item, creates or updates `.docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` with DocFX front matter for uid `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory`, adds a buildable ApplicationHostFactory example derived from source or tests, updates build.overwrite when needed so `.docfx/api/**/*.md` files are included, reruns scripts/docfx.cs --json until the diagnostic is gone, and explains that namespace examples and Extension Members tables complement but do not replace examples on generated type pages.",
+      "expected_output": "Agent treats the remaining EXAMPLE_MISSING diagnostic as an unfinished work item, creates or updates `.docfx/api/namespaces/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` with DocFX front matter for uid `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory`, adds a buildable ApplicationHostFactory example derived from source or tests, keeps `.docfx/api/namespaces/**/*.md` under `build.overwrite` only, reruns scripts/docfx.cs --json until the diagnostic is gone, and explains that namespace examples and Extension Members tables complement but do not replace examples on generated type pages.",
       "expectations": [
         "Does not treat the namespace page examples as sufficient for the ApplicationHostFactory concrete type",
-        "Creates or updates the per-type overwrite file `.docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or an equivalent file that targets the exact ApplicationHostFactory UID",
+        "Creates or updates the type-targeting overwrite file `.docfx/api/namespaces/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or an equivalent file that targets the exact ApplicationHostFactory UID",
         "Uses DocFX front matter with uid `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory` for the type example section",
         "Adds a realistic, copy/paste-ready C# example for ApplicationHostFactory based on actual source, tests, or public behavior",
-        "Updates build.overwrite when the existing glob only includes `.docfx/api/namespaces/**/*.md`",
+        "Keeps `api/namespaces/**/*.md` under `build.overwrite` only and does not widen it to `api/**/*.md`",
         "Reruns scripts/docfx.cs --json after the edit and treats any remaining EXAMPLE_MISSING diagnostic as blocking completion",
         "Explains that namespace overview examples and Extension Members tables are complementary surfaces, not substitutes for type-page examples"
       ]
@@ -176,7 +176,7 @@
     {
       "id": 14,
       "prompt": "Use dotnet-docfx-digest on a Carter-style repository where `EndpointConventionBuilderExtensions` has generic extension methods whose generated DocFX method UIDs look like `Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.<G>$6D0D8037DBBD61D10816ECA5F93B896F`. The previous run created `.docfx/api/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.%3CG%3E%246D0D8037DBBD61D10816ECA5F93B896F.md`, added `// dotnet-docfx-digest:skip-compile - Full example requires Cuemon.Extensions.AspNetCore.Text.Yaml package`, and left the namespace page as a thin table. Repair the docs.",
-      "expected_output": "Agent removes or avoids the encoded/hash-like method UID filename, places extension-method examples in a readable declaring-class overwrite file such as `.docfx/api/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.md` or the namespace page, does not use a package-requirement skip marker as a compile escape hatch, either makes the sample compile or reports a precise deterministic blocker, and restores the namespace page as a curated overview with developer-friendly purpose, type-family context, extension-method groups, availability, and pointers to detailed examples.",
+      "expected_output": "Agent removes or avoids the encoded/hash-like method UID filename, places extension-method examples in a readable declaring-class overwrite file such as `.docfx/api/namespaces/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.md` or the namespace page, does not use a package-requirement skip marker as a compile escape hatch, either makes the sample compile or reports a precise deterministic blocker, and restores the namespace page as a curated overview with developer-friendly purpose, type-family context, extension-method groups, availability, and pointers to detailed examples.",
       "expectations": [
         "Does not create or keep URL-encoded/hash-like method UID filenames for generic extension methods such as `%3CG%3E%24...`",
         "Uses a readable declaring extension class overwrite file or namespace page for extension-method examples",
@@ -189,24 +189,37 @@
     },
     {
       "id": 15,
-      "prompt": "Run dotnet-docfx-digest validation on a .NET repository where `docfx.json` lives at the repository root. The DocFX config includes only `.docfx/api/**/*.md` in `build.overwrite`, but the repository also has `README.md` and `CHANGELOG.md` files with YAML front matter UIDs that happen to match public API targets.",
+      "prompt": "Run dotnet-docfx-digest validation on a .NET repository where `docfx.json` lives at the repository root. The DocFX config includes only `.docfx/api/namespaces/**/*.md` in `build.overwrite`, but the repository also has `README.md` and `CHANGELOG.md` files with YAML front matter UIDs that happen to match public API targets.",
       "expected_output": "Agent relies on scripts/docfx.cs resolving Markdown from configured DocFX `build.content` and `build.overwrite` inputs instead of treating every repository Markdown file as overwrite content. Unrelated root Markdown files do not satisfy required example checks, so missing per-type or extension examples still surface as `EXAMPLE_MISSING` diagnostics.",
       "expectations": [
         "Does not treat the repository root as the Markdown scan scope merely because `docfx.json` is at the root",
-        "Uses configured DocFX Markdown inputs such as `.docfx/api/**/*.md` as the overwrite discovery scope",
+        "Uses configured DocFX Markdown inputs such as `.docfx/api/namespaces/**/*.md` as the overwrite discovery scope",
         "Does not allow README.md or CHANGELOG.md front matter to satisfy required examples unless those files are included by DocFX config",
         "Still reports `EXAMPLE_MISSING` for public API targets whose configured overwrite files lack examples"
       ]
     },
     {
       "id": 16,
-      "prompt": "Run dotnet-docfx-digest validation with `--changed-only` after I changed only `docfx.json` to widen `build.overwrite` from namespace pages to per-type files. Existing namespace pages still contain stale Extension Members content, but the namespace page files themselves are not changed.",
+      "prompt": "Run dotnet-docfx-digest validation with `--changed-only` after I changed only `docfx.json` to exclude `api/namespaces/**` from `build.content` and keep `api/namespaces/**/*.md` under `build.overwrite`. Existing namespace pages still contain stale Extension Members content, but the namespace page files themselves are not changed.",
       "expected_output": "Agent runs scripts/docfx.cs with `--changed-only` and still revalidates namespace pages when `docfx.json` changes, because DocFX config changes can change which overwrite files and namespace pages participate in the documentation build. Stale namespace-page diagnostics are surfaced instead of being silently skipped.",
       "expectations": [
         "Treats a changed `docfx.json` as a reason to rerun namespace-page validation under `--changed-only`",
         "Does not require the namespace Markdown file itself to be in the changed file set when DocFX config changed",
-        "Still surfaces stale namespace-page and Extension Members diagnostics after a build.overwrite glob change",
+        "Still surfaces stale namespace-page and Extension Members diagnostics after a DocFX overwrite-layout change",
         "Keeps required-example validation aligned with the same changed `docfx.json` trigger"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Fix the DocFX overwrite setup in a Codebelt-style repository where `.docfx/docfx.json` currently uses `api/**/*.md` under both `build.content` and `build.overwrite`, and authored overwrite Markdown files like `.docfx/api/Codebelt.Extensions.Swashbuckle.AspNetCore.ConfigureSwaggerGenOptions.md` still sit directly under `.docfx/api/`. Move the authored overwrite Markdown into `.docfx/api/namespaces/`, preserve the YAML front matter and example content, keep generated `.yml` metadata in place, and verify that `docfx build --exportRawModel` still treats the API page as managed reference rather than conceptual-only.",
+      "expected_output": "Agent rewrites `docfx.json` so `api/namespaces/**/*.md` is treated as overwrite-only content, excludes `api/namespaces/**` from `build.content`, moves authored API overwrite Markdown from `.docfx/api/*.md` into `.docfx/api/namespaces/` without dropping content, preserves generated `.yml` files, reruns verification, and confirms the raw model remains a managed API page with overwrite content merged into it rather than collapsing to `{ \"type\": \"Conceptual\" }`.",
+      "expectations": [
+        "Moves authored API overwrite Markdown files from `.docfx/api/*.md` into `.docfx/api/namespaces/`",
+        "Preserves YAML front matter, UID targeting, and Markdown example content while moving the files",
+        "Keeps generated `.yml` metadata files in place",
+        "Ensures `api/namespaces/**/*.md` appears only under `build.overwrite` and that `build.content` excludes `api/namespaces/**`",
+        "Does not use `api/**/*.md` under `build.content` or `build.overwrite`",
+        "Verifies the affected API page remains managed reference output with merged overwrite content instead of conceptual-only raw model output"
       ]
     },
     {

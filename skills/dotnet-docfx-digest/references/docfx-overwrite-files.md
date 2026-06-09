@@ -57,7 +57,7 @@ The `build.overwrite` entry in `docfx.json` tells DocFX which conceptual Markdow
 
 When a repository has no obvious overwrite location, inspect `docfx.json` first. Look at `build.content`, `build.overwrite`, `metadata.dest`, include paths, and existing Markdown layout before deciding where a new namespace page belongs.
 
-If a public non-abstraction type lacks an example, create a matching type-UID overwrite section in a separate per-type Markdown file by default, and make sure that file is included by `build.overwrite` so the example appears on the generated type API page. In Codebelt repositories, create new type example files under `.docfx/api/{TypeUid}.md`, such as `.docfx/api/X.Y.Z.Class1.md`. If `build.overwrite` only includes namespace files such as `api/namespaces/**/*.md`, update it to include per-type API overwrite files too, such as `api/**/*.md`. Namespace overview pages and `Extension Members` tables complement examples; they do not replace type-page examples.
+If a public non-abstraction type lacks an example, create a matching type-UID overwrite section in a separate per-type Markdown file by default, and make sure that file is included by `build.overwrite` so the example appears on the generated type API page. In Codebelt repositories, keep authored API overwrite files under `.docfx/api/namespaces/{TypeUid}.md`, such as `.docfx/api/namespaces/X.Y.Z.Class1.md`. File location does not decide whether the page is a namespace page or a type page; the YAML front matter `uid` does. Keep `api/namespaces/**/*.md` under `build.overwrite`, exclude `api/namespaces/**` from `build.content`, and do not use `api/**/*.md` under either section. If authored overwrite Markdown already exists directly under `.docfx/api/*.md`, move it into `.docfx/api/namespaces/` without deleting the content. Namespace overview pages and `Extension Members` tables complement examples; they do not replace type-page examples.
 
 ## Practical Rules
 
@@ -67,6 +67,8 @@ If a public non-abstraction type lacks an example, create a matching type-UID ov
 - Use namespace overview pages for namespace fly-ins and extension-member tables.
 - Keep examples and remarks close to the API item or namespace they explain.
 - Create per-type overwrite files for missing concrete-type examples even when the repository currently has only namespace overview files.
+- Keep authored API overwrite Markdown under `.docfx/api/namespaces/` and move legacy `.docfx/api/*.md` files there.
+- Keep `api/namespaces/**/*.md` under `build.overwrite` only; do not use `api/**/*.md` under `build.content` or `build.overwrite`.
 - Add examples through overwrite sections when XML comments or generated metadata do not already provide developer-friendly examples.
 - Preserve existing hand-written overwrite sections unless they are stale or contradictory.
 - Prefer additive edits, but remove or revise contradictions.

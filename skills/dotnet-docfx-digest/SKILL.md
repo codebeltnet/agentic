@@ -40,8 +40,8 @@ Do not stop at namespace pages, extension-member tables, or a first-pass documen
 
 1. Run `docfx.cs --json` after edits and read the remaining diagnostics.
 2. If diagnostics include `EXAMPLE_MISSING`, missing namespace pages, stale extension-member tables, sample compile failures, missing availability, or overwrite inclusion problems, treat them as the next work queue rather than final notes.
-3. For every `EXAMPLE_MISSING` public non-abstraction type, create or update the type-page overwrite file for that type UID, such as `.docfx/api/ApplicationHostFactory.md`, and put the example in that file or another overwrite section that targets the type UID directly.
-4. For every required example file, verify `build.overwrite` includes the file path or a glob that reaches it. Widen namespace-only overwrite globs when needed.
+3. For every `EXAMPLE_MISSING` public non-abstraction type, create or update the type-page overwrite file for that type UID under `.docfx/api/namespaces/`, such as `.docfx/api/namespaces/ApplicationHostFactory.md`, and put the example in that file or another overwrite section that targets the type UID directly.
+4. For every required example file, verify `docfx.json` keeps `api/namespaces/**/*.md` under `build.overwrite`, excludes `api/namespaces/**` from `build.content`, and does not use `api/**/*.md` under either `content` or `overwrite`. Move legacy authored `.docfx/api/*.md` overwrite files into `.docfx/api/namespaces/` instead of widening the glob.
 5. Update the example inventory so each required public non-abstraction type and public extension method maps to the exact example file and UID.
 6. Rerun the validator and repeat the loop until required diagnostics are gone, or stop and report the exact blocker, command, exit code, and remaining diagnostic codes.
 
@@ -113,17 +113,17 @@ Before editing examples, build a small example inventory from validator output a
 ```markdown
 | UID | Kind | Required example location | Source evidence | Status |
 |---|---|---|---|---|
-| Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | ApplicationHostFactoryTest | Missing |
+| Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/namespaces/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | ApplicationHostFactoryTest | Missing |
 ```
 
-For every public non-abstraction type, the required example location is a type UID overwrite section. In Codebelt repositories, default to a separate file named `.docfx/api/{TypeUid}.md`. For example, when the missing type is `ApplicationHostFactory`, create `.docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or the exact UID path reported by the validator. Do not put the only example in `.docfx/api/namespaces/*.md`, because that improves the namespace page while leaving the generated type page incomplete.
+For every public non-abstraction type, the required example location is a type UID overwrite section. In Codebelt repositories, keep those authored overwrite files under `.docfx/api/namespaces/` using readable filenames such as `.docfx/api/namespaces/{TypeUid}.md`. For example, when the missing type is `ApplicationHostFactory`, create `.docfx/api/namespaces/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or the exact UID path reported by the validator. The file may live under `api/namespaces/` while still merging into the generated type page, because the YAML front matter `uid` determines the target model. Do not put the only example on the namespace UID page, because that improves the namespace page while leaving the generated type page incomplete.
 
 For public extension methods, the inventory must name the method and the section that demonstrates it. Prefer a readable overwrite file for the declaring extension class UID, or the namespace page when that is the existing extension-method documentation surface. Method UIDs can contain signatures, generic parameters, hashes, or URL-encoded characters — **never create filenames that mirror these synthetic UIDs** (e.g., `MyExtensions.-G-6D0D8037DBBD61D10816ECA5F93B896F.md` or `MyExtensions.%3CT%3E...md`). Always use the declaring extension class UID in front matter and keep the file at the readable class path. See the "Hash-Suffix Filenames Are Prohibited" section. The example must explicitly call the extension method.
 
 Do not mark the inventory item complete until all of these are true:
 
 - The overwrite section targets the required type UID or an allowed extension-method location such as the declaring extension class UID or namespace UID.
-- `build.overwrite` includes the file by exact path or a glob such as `api/**/*.md`.
+- `build.overwrite` includes the file through the namespace-folder convention, normally `api/namespaces/**/*.md`, and `build.content` excludes `api/namespaces/**`.
 - The example code fence compiles or carries an explicit, justified skip marker.
 - A rerun of `docfx.cs --json` no longer reports `EXAMPLE_MISSING` for that UID.
 
@@ -273,13 +273,13 @@ Every automatically documented public non-abstraction type and every public exte
 
 Do not treat an `Extension Members` table as documentation completion. A table answers "what exists"; an example answers "how a consumer uses it." For each public extension method discovered or listed in a namespace page, create or verify an example before moving to final verification. If several related namespace pages are updated together, build an example inventory that maps every public extension method and every public non-abstraction type to the exact overwrite file and UID where its example lives.
 
-Create or repair DocFX overwrite content for missing examples. If an overwrite section for the target `uid` does not exist, create a separate per-type Markdown overwrite file by default. For Codebelt repositories, the default type example file is:
+Create or repair DocFX overwrite content for missing examples. If an overwrite section for the target `uid` does not exist, create a separate per-type Markdown overwrite file by default. For Codebelt repositories, keep authored API overwrite files under `.docfx/api/namespaces/`, so the default type example file is:
 
 ```text
-.docfx/api/{TypeUid}.md
+.docfx/api/namespaces/{TypeUid}.md
 ```
 
-For example, create `.docfx/api/Codebelt.Bootstrapper.ProgramRoot.md` for uid `Codebelt.Bootstrapper.ProgramRoot`. If `build.overwrite` does not include the chosen per-type file path, update `docfx.json` so the overwrite glob includes both namespace pages and per-type API overwrite files, such as `api/**/*.md`. Do not hide type examples in namespace pages because the current overwrite glob only includes namespace files.
+For example, create `.docfx/api/namespaces/Codebelt.Bootstrapper.ProgramRoot.md` for uid `Codebelt.Bootstrapper.ProgramRoot`. Keep `docfx.json` on the namespace-folder convention: `build.content` excludes `api/namespaces/**`, `build.overwrite` includes `api/namespaces/**/*.md`, and neither section uses `api/**/*.md`. If legacy authored overwrite Markdown exists directly under `.docfx/api/*.md`, move it into `.docfx/api/namespaces/` without deleting the content. Do not hide type examples on the namespace UID page.
 
 For public non-abstraction types, the example must belong to the generated type page/overwrite section for that type `uid`. For example, if `Class1` is public and not an abstraction, add an `Examples` section to the DocFX overwrite content for `Class1` so the example appears on `Class1.md` at the bottom of the generated API page. A namespace page example does not satisfy the type-page example requirement for `Class1`.
 
@@ -532,7 +532,7 @@ Do not use overwrite files to conceal inaccurate XML documentation. Correct the 
 
 When the validator reports `EXAMPLE_MISSING`, create or update DocFX overwrite content for the reported UID instead of treating the missing example as a prose-only issue.
 
-When a repository has namespace overview files but no per-type overwrite files, create the per-type files. Do not treat the absence of existing type files as a signal to skip examples. For Codebelt repositories, place new type files beside generated API metadata under `.docfx/api/` and update `build.overwrite` if it currently points only at `.docfx/api/namespaces/**/*.md`.
+When a repository has namespace overview files but no type-targeting overwrite files, create the missing type files. Do not treat the absence of existing type files as a signal to skip examples. For Codebelt repositories, place new type-targeting overwrite files under `.docfx/api/namespaces/`, move legacy authored `.docfx/api/*.md` overwrite files into that folder, and keep `build.overwrite` on `.docfx/api/namespaces/**/*.md` instead of widening it to `.docfx/api/**/*.md`.
 
 ## Namespace Coverage
 
@@ -705,8 +705,8 @@ When no specific API or namespace is named:
 12. Audit related namespace pages together so fixes are consistent across the public API family.
 13. Add or repair `Extension Members` tables for namespaces with public extension methods.
 14. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
-15. Create separate type-page overwrite files for public non-abstraction types that have no example yet, using `.docfx/api/{TypeUid}.md` in Codebelt repositories unless the repo has a stronger existing convention.
-16. Ensure `build.overwrite` includes the per-type overwrite files you create; update a namespace-only overwrite glob to include API overwrite files when needed.
+15. Create separate type-page overwrite files for public non-abstraction types that have no example yet, using `.docfx/api/namespaces/{TypeUid}.md` in Codebelt repositories unless the repo has a stronger existing convention.
+16. Ensure `docfx.json` keeps `.docfx/api/namespaces/**/*.md` under `build.overwrite` only, excludes `.docfx/api/namespaces/**` from `build.content`, and move legacy authored `.docfx/api/*.md` overwrite files into `.docfx/api/namespaces/` when needed.
 17. Create example sections for public extension methods that have no example yet.
 18. Build an example inventory that maps each required public type and extension method to its example location.
 19. Preserve manual edits and correct stale contradictions instead of replacing whole files.
@@ -750,7 +750,7 @@ Use this shape for public non-abstraction type examples. The overwrite file **mu
 
 **Do not include a `### Examples` heading inside the body.** DocFX renders the "Examples" section header automatically from the `example` property; adding one manually creates a redundant nested heading.
 
-Put this on the generated type page/overwrite section for the type `uid`; for a public `Class1`, the example belongs on the `Class1` API page, not only on the namespace page. When no type overwrite file exists yet, create a separate per-type file such as `.docfx/api/X.Y.Z.Class1.md` and ensure `build.overwrite` includes that file.
+Put this on the generated type page/overwrite section for the type `uid`; for a public `Class1`, the example belongs on the `Class1` API page, not only on the namespace page. When no type overwrite file exists yet, create a separate per-type file such as `.docfx/api/namespaces/X.Y.Z.Class1.md`. The file location stays under `api/namespaces/`, but the type `uid` still makes the content merge into the generated type page.
 
 ````markdown
 ---
@@ -807,7 +807,7 @@ Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.%3CT%3EWithRespon
 - `EndpointConventionBuilderExtensions.-G-6D0D8037DBBD61D10816ECA5F93B896F.md`
 - `EndpointConventionBuilderExtensions.%3CT%3E....md`
 
-DocFX resolves overwrites by the `uid` value in front matter, not by filename. Place the extension method example in the **declaring extension class** overwrite file (e.g., `.docfx/api/X.Y.Z.EndpointConventionBuilderExtensions.md`) or the namespace page, and use the class or namespace UID in front matter. If a validator reports a hash-suffix method UID, document that method's example in the declaring class file using the class UID — never create a per-method file with the encoded or hashed UID as the filename.
+DocFX resolves overwrites by the `uid` value in front matter, not by filename. Place the extension method example in the **declaring extension class** overwrite file under `.docfx/api/namespaces/` (for example, `.docfx/api/namespaces/X.Y.Z.EndpointConventionBuilderExtensions.md`) or the namespace page, and use the class or namespace UID in front matter. If a validator reports a hash-suffix method UID, document that method's example in the declaring class file using the class UID — never create a per-method file with the encoded or hashed UID as the filename.
 
 ## Verification Checklist
 
