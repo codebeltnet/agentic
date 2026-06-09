@@ -174,8 +174,8 @@ internal static class DocfxValidator
         report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
         report.Summary.ExtensionMethods = api.Namespaces.Sum(n => n.ExtensionMethods.Count);
 
-        // 8. Discover DocFX Markdown files under the workspace.
-        var markdownFiles = DiscoverMarkdown(docfxWorkspace);
+        // 8. Discover DocFX Markdown files from the DocFX build inputs.
+        var markdownFiles = DiscoverMarkdown(repoRoot, docfxPath, docfxWorkspace, report);
 
         // 9-11. Validate namespace overview pages, extension tables and availability.
         foreach (var ns in api.Namespaces.OrderBy(n => n.Name, StringComparer.Ordinal))
@@ -190,7 +190,7 @@ internal static class DocfxValidator
                 continue;
             }
 
-            if (options.ChangedOnly && changedFiles is not null && !changedFiles.Contains(Path.GetFullPath(page)))
+            if (options.ChangedOnly && changedFiles is not null && !ShouldValidateNamespacePage(page, changedFiles))
             {
                 continue;
             }
@@ -514,8 +514,16 @@ internal static class DocfxValidator
         var fullPath = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
                        Path.DirectorySeparatorChar;
         var fullDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
-                            Path.DirectorySeparatorChar;
+                             Path.DirectorySeparatorChar;
         return fullPath.StartsWith(fullDirectory, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool PathsEqual(string left, string right)
+    {
+        return string.Equals(
+            Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSafeGeneratedOutputDirectory(string path, string repoRoot)
@@ -532,15 +540,253 @@ internal static class DocfxValidator
         return patterns.Any(pattern => EnumerateFiles(path, pattern).Any());
     }
 
-    private static List<string> DiscoverMarkdown(string docfxWorkspace)
+    private static List<string> DiscoverMarkdown(string repoRoot, string docfxPath, string docfxWorkspace, Report report)
     {
-        var list = new List<string>();
-        foreach (var file in EnumerateFiles(docfxWorkspace, "*.md"))
+        var configuredFiles = DiscoverMarkdownFromDocfxConfig(docfxPath, docfxWorkspace, report)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (configuredFiles.Count > 0)
         {
-            list.Add(Path.GetFullPath(file));
+            return configuredFiles;
         }
 
-        return list;
+        if (!PathsEqual(repoRoot, docfxWorkspace))
+        {
+            return EnumerateFiles(docfxWorkspace, "*.md")
+                .Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        report.Warnings.Add(new Diagnostic("DOCFX_MARKDOWN_DISCOVERY_SKIPPED", docfxPath, null,
+            "No Markdown inputs were resolved from build.content or build.overwrite, and docfx.json is at the repository root. Skipped the legacy full-repository Markdown scan to avoid treating unrelated repository Markdown as DocFX overwrite content."));
+        return new List<string>();
+    }
+
+    private static IEnumerable<string> DiscoverMarkdownFromDocfxConfig(string docfxPath, string docfxWorkspace, Report report)
+    {
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(File.ReadAllText(docfxPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            report.Warnings.Add(new Diagnostic("DOCFX_MARKDOWN_DISCOVERY_FAILED", docfxPath, null,
+                $"Unable to read DocFX Markdown inputs: {ex.Message}"));
+            yield break;
+        }
+
+        using (doc)
+        {
+            if (!doc.RootElement.TryGetProperty("build", out var build) || build.ValueKind != JsonValueKind.Object)
+            {
+                yield break;
+            }
+
+            foreach (var propertyName in new[] { "content", "overwrite" })
+            {
+                if (!build.TryGetProperty(propertyName, out var entries))
+                {
+                    continue;
+                }
+
+                foreach (var file in ResolveDocfxMarkdownInputFiles(entries, docfxWorkspace))
+                {
+                    yield return file;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> ResolveDocfxMarkdownInputFiles(JsonElement entries, string docfxWorkspace)
+    {
+        foreach (var entry in EnumerateDocfxFileMappingEntries(entries))
+        {
+            var src = docfxWorkspace;
+            var includePatterns = new List<string>();
+            var excludePatterns = new List<string>();
+
+            if (entry.ValueKind == JsonValueKind.String)
+            {
+                includePatterns.Add(entry.GetString() ?? string.Empty);
+            }
+            else if (entry.ValueKind == JsonValueKind.Object)
+            {
+                if (entry.TryGetProperty("src", out var srcElement) &&
+                    srcElement.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(srcElement.GetString()))
+                {
+                    src = Path.GetFullPath(srcElement.GetString()!, docfxWorkspace);
+                }
+
+                if (entry.TryGetProperty("files", out var files))
+                {
+                    includePatterns.AddRange(ReadDocfxGlobPatterns(files));
+                }
+
+                if (entry.TryGetProperty("exclude", out var exclude))
+                {
+                    excludePatterns.AddRange(ReadDocfxGlobPatterns(exclude));
+                }
+            }
+
+            foreach (var file in ResolveMarkdownGlobPatterns(src, includePatterns, excludePatterns))
+            {
+                yield return file;
+            }
+        }
+    }
+
+    private static IEnumerable<JsonElement> EnumerateDocfxFileMappingEntries(JsonElement entries)
+    {
+        if (entries.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in entries.EnumerateArray())
+            {
+                yield return entry;
+            }
+        }
+        else
+        {
+            yield return entries;
+        }
+    }
+
+    private static IEnumerable<string> ReadDocfxGlobPatterns(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            yield return element.GetString() ?? string.Empty;
+            yield break;
+        }
+
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                yield return item.GetString() ?? string.Empty;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ResolveMarkdownGlobPatterns(string srcRoot, IEnumerable<string> includePatterns, IEnumerable<string> excludePatterns)
+    {
+        var excludes = excludePatterns
+            .Where(IsMarkdownGlob)
+            .Select(GlobToRegex)
+            .ToList();
+
+        foreach (var pattern in includePatterns.Where(IsMarkdownGlob))
+        {
+            var searchRoot = ResolveGlobSearchRoot(srcRoot, pattern);
+            if (!Directory.Exists(searchRoot))
+            {
+                var exactFile = Path.GetFullPath(pattern, srcRoot);
+                if (File.Exists(exactFile))
+                {
+                    yield return exactFile;
+                }
+
+                continue;
+            }
+
+            var includeRegex = GlobToRegex(pattern);
+            foreach (var file in EnumerateFiles(searchRoot, "*.md"))
+            {
+                var relative = NormalizeDocfxPath(Path.GetRelativePath(srcRoot, file));
+                if (includeRegex.IsMatch(relative) && !excludes.Any(exclude => exclude.IsMatch(relative)))
+                {
+                    yield return Path.GetFullPath(file);
+                }
+            }
+        }
+    }
+
+    private static bool IsMarkdownGlob(string pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern))
+        {
+            return false;
+        }
+
+        var extension = Path.GetExtension(pattern);
+        return string.Equals(extension, ".md", StringComparison.OrdinalIgnoreCase) ||
+               (string.IsNullOrEmpty(extension) && pattern.IndexOfAny(['*', '?', '[']) >= 0);
+    }
+
+    private static string ResolveGlobSearchRoot(string srcRoot, string pattern)
+    {
+        var normalized = NormalizeDocfxPath(pattern);
+        var wildcardIndex = normalized.IndexOfAny(['*', '?', '[']);
+        if (wildcardIndex < 0)
+        {
+            var exactDirectory = Path.GetDirectoryName(Path.GetFullPath(normalized, srcRoot));
+            return string.IsNullOrWhiteSpace(exactDirectory) ? srcRoot : exactDirectory;
+        }
+
+        var prefix = normalized[..wildcardIndex];
+        var slashIndex = prefix.LastIndexOf('/');
+        if (slashIndex < 0)
+        {
+            return srcRoot;
+        }
+
+        return Path.GetFullPath(prefix[..slashIndex], srcRoot);
+    }
+
+    private static Regex GlobToRegex(string pattern)
+    {
+        var normalized = NormalizeDocfxPath(pattern);
+        var sb = new StringBuilder("^");
+        for (var i = 0; i < normalized.Length; i++)
+        {
+            var c = normalized[i];
+            if (c == '*')
+            {
+                if (i + 1 < normalized.Length && normalized[i + 1] == '*')
+                {
+                    i++;
+                    if (i + 1 < normalized.Length && normalized[i + 1] == '/')
+                    {
+                        i++;
+                        sb.Append("(?:.*/)?");
+                    }
+                    else
+                    {
+                        sb.Append(".*");
+                    }
+                }
+                else
+                {
+                    sb.Append("[^/]*");
+                }
+
+                continue;
+            }
+
+            sb.Append(c == '?' ? "[^/]" : Regex.Escape(c.ToString()));
+        }
+
+        sb.Append('$');
+        return new Regex(sb.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string NormalizeDocfxPath(string path)
+    {
+        return path.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
     }
 
     private static IEnumerable<string> EnumerateFiles(string root, string pattern)
@@ -1627,6 +1873,11 @@ internal static class DocfxValidator
         }
     }
 
+    private static bool ShouldValidateNamespacePage(string page, HashSet<string> changedFiles)
+    {
+        return changedFiles.Contains(Path.GetFullPath(page)) || changedFiles.Any(IsChangedDocfxConfig);
+    }
+
     private static bool ShouldValidateRequiredExampleTarget(ApiTargetInfo target, HashSet<string> changedFiles)
     {
         foreach (var changedFile in changedFiles)
@@ -1642,7 +1893,7 @@ internal static class DocfxValidator
 
     private static bool IsChangedExampleCandidateFile(string path, ApiTargetInfo target)
     {
-        if (string.Equals(Path.GetFileName(path), "docfx.json", StringComparison.OrdinalIgnoreCase))
+        if (IsChangedDocfxConfig(path))
         {
             return true;
         }
@@ -1661,6 +1912,11 @@ internal static class DocfxValidator
 
         return target.Kind == ApiTargetKind.ExtensionMethod &&
                string.Equals(stem, target.DeclaringTypeUid, StringComparison.Ordinal);
+    }
+
+    private static bool IsChangedDocfxConfig(string path)
+    {
+        return string.Equals(Path.GetFileName(path), "docfx.json", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ChangedSourceTouchesTarget(string path, ApiTargetInfo target)

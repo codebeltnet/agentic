@@ -186,6 +186,28 @@
         "Keeps or improves the namespace page as a curated overview rather than reducing it to a generic sentence and table",
         "Reruns scripts/docfx.cs --json and treats `SAMPLE_SKIP_REASON_INSUFFICIENT`, `SAMPLE_COMPILE_FAILED`, and `EXAMPLE_MISSING` as blocking diagnostics"
       ]
+    },
+    {
+      "id": 15,
+      "prompt": "Run dotnet-docfx-digest validation on a .NET repository where `docfx.json` lives at the repository root. The DocFX config includes only `.docfx/api/**/*.md` in `build.overwrite`, but the repository also has `README.md` and `CHANGELOG.md` files with YAML front matter UIDs that happen to match public API targets.",
+      "expected_output": "Agent relies on scripts/docfx.cs resolving Markdown from configured DocFX `build.content` and `build.overwrite` inputs instead of treating every repository Markdown file as overwrite content. Unrelated root Markdown files do not satisfy required example checks, so missing per-type or extension examples still surface as `EXAMPLE_MISSING` diagnostics.",
+      "expectations": [
+        "Does not treat the repository root as the Markdown scan scope merely because `docfx.json` is at the root",
+        "Uses configured DocFX Markdown inputs such as `.docfx/api/**/*.md` as the overwrite discovery scope",
+        "Does not allow README.md or CHANGELOG.md front matter to satisfy required examples unless those files are included by DocFX config",
+        "Still reports `EXAMPLE_MISSING` for public API targets whose configured overwrite files lack examples"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Run dotnet-docfx-digest validation with `--changed-only` after I changed only `docfx.json` to widen `build.overwrite` from namespace pages to per-type files. Existing namespace pages still contain stale Extension Members content, but the namespace page files themselves are not changed.",
+      "expected_output": "Agent runs scripts/docfx.cs with `--changed-only` and still revalidates namespace pages when `docfx.json` changes, because DocFX config changes can change which overwrite files and namespace pages participate in the documentation build. Stale namespace-page diagnostics are surfaced instead of being silently skipped.",
+      "expectations": [
+        "Treats a changed `docfx.json` as a reason to rerun namespace-page validation under `--changed-only`",
+        "Does not require the namespace Markdown file itself to be in the changed file set when DocFX config changed",
+        "Still surfaces stale namespace-page and Extension Members diagnostics after a build.overwrite glob change",
+        "Keeps required-example validation aligned with the same changed `docfx.json` trigger"
+      ]
     }
   ]
 }
