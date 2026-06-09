@@ -978,12 +978,16 @@ internal static class DocfxValidator
     private static List<ProjectInfo> DiscoverProjects(string repoRoot)
     {
         var projects = new List<ProjectInfo>();
-        foreach (var proj in EnumerateFiles(repoRoot, "*.csproj"))
+        var srcPath = Path.Combine(repoRoot, "src");
+        if (!Directory.Exists(srcPath))
+        {
+            return projects;
+        }
+        foreach (var proj in EnumerateFiles(srcPath, "*.csproj"))
         {
             var info = ReadProject(proj);
             projects.Add(info);
         }
-
         return projects;
     }
 
@@ -2237,7 +2241,7 @@ internal static class DocfxValidator
             return null;
         }
 
-        var diff = RunProcess("git", "diff --name-only --diff-filter=ACMRTUXBD HEAD", repoRoot);
+        var diff = RunProcess("git", "diff --name-only --diff-filter=ACMRTUXB HEAD", repoRoot);
         if (diff.ExitCode != 0)
         {
             return null;
