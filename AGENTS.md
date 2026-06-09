@@ -151,6 +151,14 @@ All markdown files in this repository must use natural paragraph flow. Do not ar
 
 After modifying any skill (`SKILL.md`, `FORMS.md`) or repo-level config (`AGENTS.md`), **always update `README.md` before considering the task done**. This is a mandatory gate — not a nice-to-have. The README's "Available Skills" table, install examples, and "Why" sections must reflect the current state of all skills. A new skill without a README entry is incomplete work.
 
+## Blocking Completion Gates
+
+When repository guidance, an active skill, or a conversation summary identifies required follow-up work as pending, critical, blocking, or equivalent, treat those items as the active completion checklist for the current task rather than as background context. Do not call `task_complete`, describe the task as complete, or claim verification succeeded until every blocking item has either run successfully or been reported with the exact command, exit code, and remaining blocker.
+
+Before any completion message, reread the skill instructions and the current conversation summary's pending-task or blocker sections. If either one names a required script, validator, or maintenance step, that step is a hard gate, not optional polish.
+
+For script-backed workflows, creating or editing files is not enough on its own. If a skill requires deterministic maintenance or verification commands, run them before completion and report their concrete outcome. For `dotnet-docfx-digest`, `scripts/agents.cs` and `scripts/docfx.cs --verify-docfx-build` are blocking completion gates whenever the skill or task summary says they are required.
+
 ## User Input UX
 
 When a skill collects parameters from the user, define the form in a dedicated `FORMS.md` file (Level 3 resource) rather than inlining field definitions in `SKILL.md`. This separates form structure from workflow logic and gives agents a parseable format to present fields correctly.

@@ -18,6 +18,8 @@ One more consistency rule matters for form-driven skills: native input fields ar
 
 Repo-level agent guidance also keeps progress updates user-facing: agents should report meaningful progress, evidence, blockers, and next steps without narrating sandbox mechanics, approved command paths, or retry plumbing unless those details affect approval, reproducibility, validation, or the final outcome.
 
+Completion gates are equally strict: if repository guidance, a loaded skill, or the conversation summary marks a script-backed step as pending, critical, or blocking, agents must treat it as an active checklist item and may not claim completion until that command has run or the exact blocker has been reported. In the DocFX workflow, that means `scripts/agents.cs` and `scripts/docfx.cs --verify-docfx-build` are completion gates, not optional cleanup after the documentation files look done.
+
 Validation follows the same philosophy: run `scripts/validate-skill-templates.ps1` locally for the fast feedback loop, and let GitHub Actions rerun that same script on pull requests as the safety net. That validator also checks skill frontmatter metadata such as per-skill `evals/evals.json` files, optional eval fixture paths declared through `files`, and the 1024-character YAML description limit; it does not replace the paired benchmark review workflow.
 
 ## Install a skill
