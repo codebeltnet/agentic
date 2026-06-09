@@ -23,7 +23,31 @@ summary: *content
 The `X.Y.Z` namespace contains types that ...
 ```
 
-If `*content` is not used, DocFX assigns the Markdown body to the default conceptual content property. Prefer `summary: *content` for namespace fly-ins and other summary replacements that should flow into generated API pages.
+If `*content` is not used, DocFX assigns the Markdown body to the `conceptual` property. **Do not rely on this default for managed reference (API) pages.** When `conceptual` is set on a managed reference page, some DocFX templates suppress the auto-generated member tables (constructors, methods, properties), leaving only the custom content visible. Always use an explicit property mapping.
+
+For **type-page and extension-method examples**, use the `example` array property instead of `summary`:
+
+```markdown
+---
+uid: X.Y.Z.MyType
+example:
+- *content
+---
+The following example shows how to use `MyType`.
+
+```csharp
+using X.Y.Z;
+
+var value = new MyType();
+Console.WriteLine(value);
+```
+```
+
+`example: - *content` maps the Markdown body to the first slot of the `example` string array. DocFX renders this as the "Examples" section on the type page **alongside** the auto-generated constructors, methods, and other members — it does not replace them. The `example` property has **Replace** overwrite behavior, so setting it via an overwrite replaces any example already present in generated metadata.
+
+Do **not** include a `### Examples` heading in the body. DocFX adds the section header automatically from the template.
+
+Do **not** use `summary: *content` for type example files. That replaces only the summary text and does nothing to add a visible Examples section to the page.
 
 DocFX applies overwrite models by `uid`. If the same `uid` appears more than once in one overwrite file, later sections in that same file override earlier sections. Across different overwrite files, ordering is not deterministic, so keep competing sections for the same `uid` together or consolidate them.
 

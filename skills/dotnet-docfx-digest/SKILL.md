@@ -69,7 +69,7 @@ Before editing examples, build a small example inventory from validator output a
 
 For every public non-abstraction type, the required example location is a type UID overwrite section. In Codebelt repositories, default to a separate file named `.docfx/api/{TypeUid}.md`. For example, when the missing type is `ApplicationHostFactory`, create `.docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or the exact UID path reported by the validator. Do not put the only example in `.docfx/api/namespaces/*.md`, because that improves the namespace page while leaving the generated type page incomplete.
 
-For public extension methods, the inventory must name the method and the section that demonstrates it. Prefer a readable overwrite file for the declaring extension class UID, or the namespace page when that is the existing extension-method documentation surface. Method UIDs can contain signatures, generic parameters, hashes, or URL-encoded characters, so do not create separate encoded method-UID filenames such as `MyExtensions.%3CT%3E...md` by default. Use a method UID section only when generated metadata confirms the UID and the section can live in a readable existing or declaring-class overwrite file. The example must explicitly call the extension method.
+For public extension methods, the inventory must name the method and the section that demonstrates it. Prefer a readable overwrite file for the declaring extension class UID, or the namespace page when that is the existing extension-method documentation surface. Method UIDs can contain signatures, generic parameters, hashes, or URL-encoded characters — **never create filenames that mirror these synthetic UIDs** (e.g., `MyExtensions.-G-6D0D8037DBBD61D10816ECA5F93B896F.md` or `MyExtensions.%3CT%3E...md`). Always use the declaring extension class UID in front matter and keep the file at the readable class path. See the "Hash-Suffix Filenames Are Prohibited" section. The example must explicitly call the extension method.
 
 Do not mark the inventory item complete until all of these are true:
 
@@ -661,11 +661,20 @@ Remove the `Extension Members` section when the namespace has no public extensio
 
 ## Type Example Template
 
-Use this shape for public non-abstraction type examples. Put this on the generated type page/overwrite section for the type `uid`; for a public `Class1`, the example belongs on the `Class1` API page, not only on the namespace page. When no type overwrite file exists yet, create a separate per-type file such as `.docfx/api/X.Y.Z.Class1.md` and ensure `build.overwrite` includes that file.
+Use this shape for public non-abstraction type examples. The overwrite file **must** begin with YAML front matter that maps the body to the `example` property using `example:\n- *content`. This maps the Markdown body to the first slot in the `example` array, which DocFX renders as the "Examples" section **alongside** the auto-generated content (constructors, methods, etc.).
+
+**Critical**: Do NOT use `summary: *content` and do NOT omit the property mapping. Without `example:\n- *content`, the Markdown body maps to the `conceptual` property. In managed reference pages this suppresses the auto-generated API members, leaving only the custom content on the rendered page.
+
+**Do not include a `### Examples` heading inside the body.** DocFX renders the "Examples" section header automatically from the `example` property; adding one manually creates a redundant nested heading.
+
+Put this on the generated type page/overwrite section for the type `uid`; for a public `Class1`, the example belongs on the `Class1` API page, not only on the namespace page. When no type overwrite file exists yet, create a separate per-type file such as `.docfx/api/X.Y.Z.Class1.md` and ensure `build.overwrite` includes that file.
 
 ````markdown
-### Examples
-
+---
+uid: X.Y.Z.MyType
+example:
+- *content
+---
 The following example shows how to use `MyType` in a consuming application.
 
 ```csharp
@@ -680,11 +689,14 @@ The sample must compile. Do not include `using` directives for namespaces that d
 
 ## Extension Method Example Template
 
-Use this shape for extension-method examples:
+Use this shape for extension-method examples. Apply the same YAML front matter rule as type examples: use `example:\n- *content` so the body maps to the `example` property and not to `conceptual`. Do not include a `### Examples` heading in the body.
 
 ````markdown
-### Examples
-
+---
+uid: X.Y.Z.MyExtensions
+example:
+- *content
+---
 The following example shows how to call `NormalizeLineEndings` on a string.
 
 ```csharp
@@ -698,7 +710,21 @@ Console.WriteLine(normalized);
 
 The namespace containing the extension method must be imported. The sample must compile in a consuming project.
 
-For generic extension methods or methods whose generated DocFX UID contains synthetic fragments such as `<G>$...`, `%3C...%3E`, hashes, or signature encodings, keep the example in a readable file such as `.docfx/api/X.Y.Z.EndpointConventionBuilderExtensions.md` or the namespace page. Do not mirror the synthetic method UID in the filename.
+## Hash-Suffix Filenames Are Prohibited
+
+DocFX generates synthetic UIDs for generic or overloaded extension methods that contain hash fragments, encoding characters, or computed suffixes. These UIDs look like:
+
+```
+Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.-G-6D0D8037DBBD61D10816ECA5F93B896F
+Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.%3CT%3EWithResponseNegotiator...
+```
+
+**Never create an overwrite file whose name mirrors such a synthetic UID.** That means never creating filenames such as:
+
+- `EndpointConventionBuilderExtensions.-G-6D0D8037DBBD61D10816ECA5F93B896F.md`
+- `EndpointConventionBuilderExtensions.%3CT%3E....md`
+
+DocFX resolves overwrites by the `uid` value in front matter, not by filename. Place the extension method example in the **declaring extension class** overwrite file (e.g., `.docfx/api/X.Y.Z.EndpointConventionBuilderExtensions.md`) or the namespace page, and use the class or namespace UID in front matter. If a validator reports a hash-suffix method UID, document that method's example in the declaring class file using the class UID — never create a per-method file with the encoded or hashed UID as the filename.
 
 ## Verification Checklist
 
