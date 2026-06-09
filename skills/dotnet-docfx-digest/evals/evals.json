@@ -172,6 +172,20 @@
         "Reruns scripts/docfx.cs --json after the edit and treats any remaining EXAMPLE_MISSING diagnostic as blocking completion",
         "Explains that namespace overview examples and Extension Members tables are complementary surfaces, not substitutes for type-page examples"
       ]
+    },
+    {
+      "id": 14,
+      "prompt": "Use dotnet-docfx-digest on a Carter-style repository where `EndpointConventionBuilderExtensions` has generic extension methods whose generated DocFX method UIDs look like `Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.<G>$6D0D8037DBBD61D10816ECA5F93B896F`. The previous run created `.docfx/api/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.%3CG%3E%246D0D8037DBBD61D10816ECA5F93B896F.md`, added `// dotnet-docfx-digest:skip-compile - Full example requires Cuemon.Extensions.AspNetCore.Text.Yaml package`, and left the namespace page as a thin table. Repair the docs.",
+      "expected_output": "Agent removes or avoids the encoded/hash-like method UID filename, places extension-method examples in a readable declaring-class overwrite file such as `.docfx/api/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.md` or the namespace page, does not use a package-requirement skip marker as a compile escape hatch, either makes the sample compile or reports a precise deterministic blocker, and restores the namespace page as a curated overview with developer-friendly purpose, type-family context, extension-method groups, availability, and pointers to detailed examples.",
+      "expectations": [
+        "Does not create or keep URL-encoded/hash-like method UID filenames for generic extension methods such as `%3CG%3E%24...`",
+        "Uses a readable declaring extension class overwrite file or namespace page for extension-method examples",
+        "Ensures the example explicitly calls the documented extension method",
+        "Does not use `// dotnet-docfx-digest:skip-compile - Full example requires ... package` as the final state",
+        "Documents any required package or setup outside the code fence when relevant",
+        "Keeps or improves the namespace page as a curated overview rather than reducing it to a generic sentence and table",
+        "Reruns scripts/docfx.cs --json and treats `SAMPLE_SKIP_REASON_INSUFFICIENT`, `SAMPLE_COMPILE_FAILED`, and `EXAMPLE_MISSING` as blocking diagnostics"
+      ]
     }
   ]
 }

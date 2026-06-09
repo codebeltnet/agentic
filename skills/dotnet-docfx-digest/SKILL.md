@@ -47,6 +47,16 @@ Do not stop at namespace pages, extension-member tables, or a first-pass documen
 
 The completion loop is the guard against the common failure where an agent finishes namespace overview pages but forgets per-type API overwrite pages. Namespace-level examples do not satisfy `EXAMPLE_MISSING` for public non-abstraction types.
 
+## Complementary Documentation Surfaces
+
+Do not trade one documentation surface for the other. Namespace pages and per-type pages have different jobs, and both must remain useful:
+
+- Namespace pages explain the package or namespace shape: what problem the namespace solves, when to use it, important type families, extension-method groups, availability, and links or references to representative type pages.
+- Per-type pages explain how to use a specific public concrete type with copy/paste-ready examples.
+- Extension-method examples normally live on the declaring extension class page or the namespace page, but the namespace page must still read like curated API documentation, not a dumping ground for examples.
+
+When per-type examples are added, revisit the related namespace page and keep its fly-in well-versed and developer-friendly. Moving examples out of the namespace page must not leave the namespace page as a generic sentence plus table. Preserve or improve the curated namespace overview that helps readers choose the right type before they drill into generated type pages.
+
 ## Type-Page Example Gate
 
 Before editing examples, build a small example inventory from validator output and source evidence. This inventory is the task queue, not a summary for the final response. Each required item should have this shape:
@@ -59,11 +69,11 @@ Before editing examples, build a small example inventory from validator output a
 
 For every public non-abstraction type, the required example location is a type UID overwrite section. In Codebelt repositories, default to a separate file named `.docfx/api/{TypeUid}.md`. For example, when the missing type is `ApplicationHostFactory`, create `.docfx/api/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or the exact UID path reported by the validator. Do not put the only example in `.docfx/api/namespaces/*.md`, because that improves the namespace page while leaving the generated type page incomplete.
 
-For public extension methods, the inventory must name the method and the section that demonstrates it. Prefer the generated method UID when known; otherwise use the declaring extension class UID or namespace page only when the example explicitly calls the extension method.
+For public extension methods, the inventory must name the method and the section that demonstrates it. Prefer a readable overwrite file for the declaring extension class UID, or the namespace page when that is the existing extension-method documentation surface. Method UIDs can contain signatures, generic parameters, hashes, or URL-encoded characters, so do not create separate encoded method-UID filenames such as `MyExtensions.%3CT%3E...md` by default. Use a method UID section only when generated metadata confirms the UID and the section can live in a readable existing or declaring-class overwrite file. The example must explicitly call the extension method.
 
 Do not mark the inventory item complete until all of these are true:
 
-- The overwrite section targets the required UID or an allowed extension-method fallback UID.
+- The overwrite section targets the required type UID or an allowed extension-method location such as the declaring extension class UID or namespace UID.
 - `build.overwrite` includes the file by exact path or a glob such as `api/**/*.md`.
 - The example code fence compiles or carries an explicit, justified skip marker.
 - A rerun of `docfx.cs --json` no longer reports `EXAMPLE_MISSING` for that UID.
@@ -224,7 +234,7 @@ For example, create `.docfx/api/Codebelt.Bootstrapper.ProgramRoot.md` for uid `C
 
 For public non-abstraction types, the example must belong to the generated type page/overwrite section for that type `uid`. For example, if `Class1` is public and not an abstraction, add an `Examples` section to the DocFX overwrite content for `Class1` so the example appears on `Class1.md` at the bottom of the generated API page. A namespace page example does not satisfy the type-page example requirement for `Class1`.
 
-For public extension methods, add the example to the generated method UID when known; otherwise add it to the extension class UID or the namespace page, but the example must name and demonstrate the extension method.
+For public extension methods, add the example to the declaring extension class UID or the namespace page by default, but the example must name and demonstrate the extension method. Add a generated method UID section only when the exact UID is verified and it can be kept in a readable overwrite file. Do not create URL-encoded or hash-like filenames just to mirror a method UID; DocFX cares about the `uid` in front matter, not that the filename repeats the UID.
 
 An example may be omitted only when the item is an abstraction, such as:
 
@@ -303,6 +313,8 @@ A sample may opt out only when the code fence includes:
 
 The reason is mandatory. Do not use silent opt-outs.
 
+Use skip markers sparingly. A reason such as "shows the framework pattern", "full example requires X package", or "example only" is not enough; it explains intent or setup, not why compilation is impossible. Prefer making the sample compile by adding normal public setup code, public package imports already available to the repository, or a smaller example. Reserve skip markers for samples that cannot be compiled deterministically by the validator, such as snippets that require a live external service, generated credentials, an OS-specific runtime service, or a host environment the file-based sample compiler cannot provide.
+
 Do not claim a sample compiles unless the validator or an equivalent repository verification command has compiled it successfully.
 
 ## Codebelt Signing Keys
@@ -343,6 +355,8 @@ The page must provide a developer-friendly fly-in explaining what the namespace 
 - Explain the developer problem it solves.
 - Explain when to use it.
 - Mention important concepts or type families.
+- Mention representative concrete types or extension-method groups when that helps readers choose where to go next.
+- Link or refer to type pages that carry detailed examples when examples are intentionally kept out of the namespace page.
 - Avoid marketing language.
 - Avoid restating type names without explaining purpose.
 - Keep the explanation accurate to the public API.
@@ -683,6 +697,8 @@ Console.WriteLine(normalized);
 ````
 
 The namespace containing the extension method must be imported. The sample must compile in a consuming project.
+
+For generic extension methods or methods whose generated DocFX UID contains synthetic fragments such as `<G>$...`, `%3C...%3E`, hashes, or signature encodings, keep the example in a readable file such as `.docfx/api/X.Y.Z.EndpointConventionBuilderExtensions.md` or the namespace page. Do not mirror the synthetic method UID in the filename.
 
 ## Verification Checklist
 

@@ -1621,7 +1621,7 @@ internal static class DocfxValidator
 
             var message = target.Kind == ApiTargetKind.Type
                 ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}` in `{expectedPath}` or another overwrite file that targets this exact type UID. Namespace overview examples do not satisfy this diagnostic. Ensure build.overwrite includes the file, for example with `api/**/*.md`."
-                : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}`, its declaring type uid `{expectedUid}`, or the namespace page `{target.Namespace}`. The example must explicitly call `{target.DisplayName}`.";
+                : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to the declaring extension class uid `{expectedUid}` or the namespace page `{target.Namespace}` by default. The example must explicitly call `{target.DisplayName}`. Do not create URL-encoded or hash-like method UID filenames; use a method UID section only when the exact generated UID is verified and can live in a readable overwrite file.";
 
             report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", expectedPath, target.Namespace, message));
         }
@@ -1783,6 +1783,11 @@ internal static class DocfxValidator
                         report.Errors.Add(new Diagnostic("SAMPLE_SKIP_REASON_MISSING", Rel(repoRoot, sample.File), null,
                             $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses the skip-compile marker without a mandatory reason."));
                     }
+                    else if (IsInsufficientSkipReason(skip.Reason))
+                    {
+                        report.Errors.Add(new Diagnostic("SAMPLE_SKIP_REASON_INSUFFICIENT", Rel(repoRoot, sample.File), null,
+                            $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses a weak skip-compile reason: '{skip.Reason}'. Package requirements, framework-pattern explanations, or full-example notes are documentation work, not a compile opt-out. Make the sample compile, document the package requirement outside the code fence, or use a deterministic blocker such as an external service or host environment that the sample compiler cannot provide."));
+                    }
                     else
                     {
                         report.Summary.SamplesSkipped++;
@@ -1942,6 +1947,26 @@ internal static class DocfxValidator
         }
 
         return (false, string.Empty);
+    }
+
+    private static bool IsInsufficientSkipReason(string reason)
+    {
+        if (Regex.IsMatch(reason, @"(?i)\b(full\s+)?example\s+(shows|demonstrates|requires)\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(reason, @"(?i)\brequires\b.*\b(package|nuget|reference|dependency)\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(reason, @"(?i)\b(package|nuget)\b.*\b(required|dependency|reference)\b"))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     // ----------------------------------------------------------------------
@@ -2226,13 +2251,13 @@ internal static class DocfxValidator
             e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal)));
         AppendRequiredExampleDiagnostics(sb, report.Errors.Where(e => e.Code is "EXAMPLE_MISSING"));
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
-            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING"));
+            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT"));
         AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
             e.Code is not "AGENTS_BLOCK_MISSING" &&
             !e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
             e.Code is not "EXAMPLE_MISSING" &&
-            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING"));
+            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT"));
         AppendDiagnostics(sb, "Warnings", report.Warnings);
 
         sb.AppendLine("## Completion Checklist");
@@ -2308,7 +2333,7 @@ internal static class DocfxValidator
             var message = EscapeTable(diagnostic.Message);
             var action = diagnostic.Message.Contains("Public non-abstraction type", StringComparison.Ordinal)
                 ? "Create or update the per-type UID overwrite file, include it in build.overwrite, add a compiling Examples section, then rerun validation."
-                : "Add a compiling Examples section that explicitly calls the extension method, then rerun validation.";
+                : "Add a compiling Examples section on the declaring extension class or namespace page that explicitly calls the extension method, then rerun validation.";
             sb.AppendLine($"| {ns} | `{path}` | `EXAMPLE_MISSING` | {EscapeTable(action)} {message} |");
         }
 
