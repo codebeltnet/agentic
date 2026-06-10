@@ -224,8 +224,8 @@ internal static class DocfxValidator
         }
 
         // 14-15. Produce report and return a deterministic exit code.
-        bool hasSampleError = report.Errors.Any(e => e.Code is "SAMPLE_COMPILE_FAILED");
-        bool hasOtherError = report.Errors.Any(e => e.Code is not "SAMPLE_COMPILE_FAILED");
+        bool hasSampleError = report.Errors.Any(e => e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_STRUCTURE_INVALID");
+        bool hasOtherError = report.Errors.Any(e => e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_STRUCTURE_INVALID");
 
         report.Status = report.Errors.Count == 0 ? "passed" : "failed";
         report.Summary.Errors = report.Errors.Count;
@@ -2456,7 +2456,15 @@ internal static class DocfxValidator
                     continue;
                 }
 
-                var (ok, diagnostics, exitCode) = CompileSample(tempRoot, index, sample, libraryProjects, options.Configuration, repoRoot);
+                var structureError = ValidateSampleStructure(sample.Code);
+                if (structureError is not null)
+                {
+                    report.Errors.Add(new Diagnostic("SAMPLE_STRUCTURE_INVALID", Rel(repoRoot, sample.File), null,
+                        $"C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) failed structure validation: {structureError}"));
+                    continue;
+                }
+
+                var (ok, diagnostics, exitCode) = CompileSample(tempRoot, index, sample, libraryProjects, options.Configuration, options.Framework, repoRoot);
                 if (ok)
                 {
                     report.Summary.SamplesCompiled++;
@@ -2475,14 +2483,29 @@ internal static class DocfxValidator
     }
 
     private static (bool Ok, string Diagnostics, int ExitCode) CompileSample(string tempRoot, int index, SampleFence sample,
-        List<ProjectInfo> libraryProjects, string configuration, string repoRoot)
+        List<ProjectInfo> libraryProjects, string configuration, string? framework, string repoRoot)
     {
         var dir = Path.Combine(tempRoot, "sample_" + index);
         Directory.CreateDirectory(dir);
+
+        // Examples labelled // Program.cs are compiled as file-based apps (top-level statements).
+        // All other examples (which have passed ValidateSampleStructure) are class-based and compiled
+        // as a class library project that references the documented assemblies.
+        if (IsProgramCsExample(sample.Code))
+        {
+            return CompileAsFileBasedApp(dir, sample, libraryProjects, framework, configuration, repoRoot);
+        }
+
+        return CompileAsClassLibrary(dir, sample, libraryProjects, framework, configuration, repoRoot);
+    }
+
+    private static (bool Ok, string Diagnostics, int ExitCode) CompileAsFileBasedApp(string dir, SampleFence sample,
+        List<ProjectInfo> libraryProjects, string? framework, string configuration, string repoRoot)
+    {
         var file = Path.Combine(dir, "sample.cs");
 
         var sb = new StringBuilder();
-        sb.Append("#:property TargetFramework=net10.0\n");
+        sb.Append("#:property TargetFramework=").Append(framework ?? "net10.0").Append('\n');
         sb.Append("#:property PublishAot=false\n");
         sb.Append("#:property Nullable=enable\n");
         foreach (var proj in libraryProjects)
@@ -2501,6 +2524,43 @@ internal static class DocfxValidator
 
         var signingProperty = HasRootStrongNameKey(repoRoot) ? string.Empty : " -p:SkipSignAssembly=true";
         var result = RunProcess("dotnet", $"build \"{file}\" -c {configuration} --nologo{signingProperty}", dir);
+        return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
+    }
+
+    private static (bool Ok, string Diagnostics, int ExitCode) CompileAsClassLibrary(string dir, SampleFence sample,
+        List<ProjectInfo> libraryProjects, string? framework, string configuration, string repoRoot)
+    {
+        var csFile = Path.Combine(dir, "Example.cs");
+        File.WriteAllText(csFile, sample.Code, new UTF8Encoding(false));
+
+        var tfm = framework ?? "net10.0";
+        var sb = new StringBuilder();
+        sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
+        sb.AppendLine("  <PropertyGroup>");
+        sb.AppendLine($"    <TargetFramework>{tfm}</TargetFramework>");
+        sb.AppendLine("    <OutputType>Library</OutputType>");
+        sb.AppendLine("    <Nullable>enable</Nullable>");
+        sb.AppendLine("    <LangVersion>latest</LangVersion>");
+        sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
+        sb.AppendLine("  </PropertyGroup>");
+        if (libraryProjects.Count > 0)
+        {
+            sb.AppendLine("  <ItemGroup>");
+            foreach (var proj in libraryProjects)
+            {
+                sb.AppendLine($"""    <ProjectReference Include="{proj.Path}" />""");
+            }
+
+            sb.AppendLine("  </ItemGroup>");
+        }
+
+        sb.AppendLine("</Project>");
+
+        var csprojFile = Path.Combine(dir, "SampleVerification.csproj");
+        File.WriteAllText(csprojFile, sb.ToString(), new UTF8Encoding(false));
+
+        var signingProperty = HasRootStrongNameKey(repoRoot) ? string.Empty : " -p:SkipSignAssembly=true";
+        var result = RunProcess("dotnet", $"build \"{csprojFile}\" -c {configuration} --nologo{signingProperty}", dir);
         return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
     }
 
@@ -2606,6 +2666,66 @@ internal static class DocfxValidator
                 {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    private static string? ValidateSampleStructure(string code)
+    {
+        // Examples explicitly labelled // Program.cs may use top-level statements.
+        if (IsProgramCsExample(code))
+        {
+            return null;
+        }
+
+        // A namespace declaration: file-scoped (namespace X;) or block-scoped (namespace X {)
+        bool hasNamespace = Regex.IsMatch(code, @"^\s*namespace\s+[\w.]+", RegexOptions.Multiline);
+
+        // A type declaration: class Foo, struct Foo, or record Foo (with or without access modifiers)
+        bool hasTypeDeclaration = Regex.IsMatch(code, @"\b(class|struct|record)\s+\w+");
+
+        if (!hasNamespace && !hasTypeDeclaration)
+        {
+            return "Example uses top-level statements without a namespace or type declaration. " +
+                   "All csharp code blocks must include a file-scoped namespace declaration (e.g., 'namespace X.Y;') " +
+                   "and at least one class, struct, or record declaration wrapping the usage code. " +
+                   "Label the example '// Program.cs' at the very top to allow top-level statements for console app examples.";
+        }
+
+        if (!hasNamespace)
+        {
+            return "Example has a type declaration but is missing a namespace declaration. " +
+                   "Add a file-scoped namespace such as 'namespace X.Y;' before the type declaration.";
+        }
+
+        if (!hasTypeDeclaration)
+        {
+            return "Example declares a namespace but contains no class, struct, or record declaration. " +
+                   "Wrap the usage code inside a class.";
+        }
+
+        return null;
+    }
+
+    private static bool IsProgramCsExample(string code)
+    {
+        foreach (var line in code.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("//", StringComparison.Ordinal) &&
+                trimmed.Contains("Program.cs", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // Stop checking once non-blank, non-comment, non-directive content begins.
+            if (trimmed.Length > 0 &&
+                !trimmed.StartsWith("//", StringComparison.Ordinal) &&
+                !trimmed.StartsWith("#", StringComparison.Ordinal))
+            {
+                break;
             }
         }
 
@@ -2947,13 +3067,13 @@ internal static class DocfxValidator
             e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal)));
         AppendRequiredExampleDiagnostics(sb, report.Errors.Where(e => e.Code is "EXAMPLE_MISSING"));
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
-            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT"));
+            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_STRUCTURE_INVALID"));
         AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
             e.Code is not "AGENTS_BLOCK_MISSING" &&
             !e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
             e.Code is not "EXAMPLE_MISSING" &&
-            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT"));
+            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_STRUCTURE_INVALID"));
         AppendDiagnostics(sb, "Warnings", report.Warnings);
 
         sb.AppendLine("## Completion Checklist");
@@ -2961,7 +3081,8 @@ internal static class DocfxValidator
         sb.AppendLine("- [ ] `agents.cs` has run successfully when `AGENTS_BLOCK_MISSING` appears.");
         sb.AppendLine("- [ ] Every namespace diagnostic above has been resolved or intentionally excluded with evidence.");
         sb.AppendLine("- [ ] Every `EXAMPLE_MISSING` diagnostic above maps to a concrete example location.");
-        sb.AppendLine("- [ ] Changed C# examples compile.");
+        sb.AppendLine("- [ ] Changed C# examples pass structural validation (namespace + type declaration, or labelled `// Program.cs`).");
+        sb.AppendLine("- [ ] Changed C# examples compile as a class library project referencing the documented assemblies.");
         sb.AppendLine("- [ ] Authored Markdown files still exist after generated-artifact cleanup.");
         sb.AppendLine("- [ ] Final validation command and exit code are reported.");
 
