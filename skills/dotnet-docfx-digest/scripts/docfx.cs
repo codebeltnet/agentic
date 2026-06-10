@@ -2379,6 +2379,17 @@ internal static class DocfxValidator
             set.Add(Path.GetFullPath(Path.Combine(repoRoot, line)));
         }
 
+        // Include untracked files so --changed-only still validates samples in new
+        // documentation files that have not been staged yet.
+        var untracked = RunProcess("git", "ls-files --others --exclude-standard", repoRoot);
+        if (untracked.ExitCode == 0)
+        {
+            foreach (var line in untracked.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                set.Add(Path.GetFullPath(Path.Combine(repoRoot, line)));
+            }
+        }
+
         return set;
     }
 

@@ -93,13 +93,14 @@
     },
     {
       "id": 8,
-      "prompt": "Run dotnet-docfx-digest validation with `--changed-only` after I added a new public concrete type `Acme.Http.RetryPolicy` and a public extension method `WithRetry(this HttpClient client, int attempts)`, but I still have not added the required overwrite examples. Git is available and only the changed source files, the namespace page, and docfx.json should be considered.",
-      "expected_output": "Agent runs scripts/docfx.cs with --changed-only and still surfaces EXAMPLE_MISSING for the affected changed public APIs instead of skipping required-example validation wholesale. It scopes the check to the changed APIs and related DocFX inputs, explains which examples are still missing, and uses --verify-docfx-build before claiming the docs are verified.",
+      "prompt": "Run dotnet-docfx-digest validation with `--changed-only` after I added a new public concrete type `Acme.Http.RetryPolicy` and a public extension method `WithRetry(this HttpClient client, int attempts)`. I also created a brand-new untracked overwrite file `.docfx/api/namespaces/Acme.Http.RetryPolicy.md`, but its C# example still does not compile and I have not run `git add` yet.",
+      "expected_output": "Agent runs scripts/docfx.cs with --changed-only and still validates the new untracked overwrite file instead of skipping it because git has not started tracking it yet. It surfaces SAMPLE_COMPILE_FAILED for the broken C# sample, still scopes the check to the changed APIs and related DocFX inputs, and uses --verify-docfx-build before claiming the docs are verified.",
       "expectations": [
         "Runs scripts/docfx.cs with --changed-only when collecting incremental findings",
-        "Still surfaces EXAMPLE_MISSING for the changed concrete type and extension method when their overwrite examples are absent",
-        "Does not silently skip all required-example validation just because git returned a changed file set",
-        "Scopes the example validation to changed APIs or related DocFX inputs rather than re-reporting the whole repository by default",
+        "Includes the new untracked `.docfx/api/namespaces/Acme.Http.RetryPolicy.md` file in the changed-file scope even though it has not been staged or committed",
+        "Surfaces SAMPLE_COMPILE_FAILED for the broken sample in the untracked overwrite file instead of silently skipping it",
+        "Does not silently skip changed-only sample validation just because git returned only tracked changes in `git diff`",
+        "Scopes the example and sample validation to changed APIs or related DocFX inputs rather than re-reporting the whole repository by default",
         "Uses --verify-docfx-build before claiming final verification"
       ]
     },
