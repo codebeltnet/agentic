@@ -490,6 +490,112 @@
         "Agent does not suggest adding a ### Examples heading as the fix; it correctly identifies the missing fence as the root cause",
         "Validator returns a non-zero exit code"
       ]
+    },
+    {
+      "id": 40,
+      "prompt": "A DocFX overwrite file for `Acme.Widgets.Spinner` contains the following csharp fence that uses only top-level statements:\n```csharp\nusing Acme.Widgets;\nvar spinner = new Spinner();\nspinner.Start();\n```\nRun scripts/docfx.cs validation and confirm the validator rejects this example.",
+      "expected_output": "The validator emits SAMPLE_STRUCTURE_INVALID for the top-level statement example because it lacks a namespace declaration and a type declaration. The exit code is non-zero. The diagnostic message instructs adding a file-scoped namespace and a class wrapper, or labelling the example '// Program.cs' if top-level statements are intentional.",
+      "expectations": [
+        "Validator emits SAMPLE_STRUCTURE_INVALID for the csharp fence that uses only top-level statements",
+        "Diagnostic message instructs adding a file-scoped namespace declaration (e.g., 'namespace X.Y;')",
+        "Diagnostic message instructs wrapping usage code in a class declaration",
+        "Validator returns a non-zero exit code",
+        "Validator does not attempt compilation for the structurally invalid example"
+      ]
+    },
+    {
+      "id": 41,
+      "prompt": "A DocFX overwrite file for `Acme.Widgets.Spinner` contains the following csharp fence that is labelled '// Program.cs' and uses top-level statements:\n```csharp\n// Program.cs\nusing Acme.Widgets;\nvar spinner = new Spinner();\nspinner.Start();\n```\nRun scripts/docfx.cs validation and confirm the validator allows this example.",
+      "expected_output": "The validator recognises the '// Program.cs' label and does not emit SAMPLE_STRUCTURE_INVALID. It compiles the example as a file-based app instead. Any compile errors are still reported as SAMPLE_COMPILE_FAILED.",
+      "expectations": [
+        "Validator does not emit SAMPLE_STRUCTURE_INVALID for the example labelled '// Program.cs'",
+        "Validator attempts compilation as a file-based app rather than a class library",
+        "Structural gate is bypassed for the // Program.cs label only",
+        "Compile errors in the labelled example are still reported as SAMPLE_COMPILE_FAILED"
+      ]
+    },
+    {
+      "id": 42,
+      "prompt": "Use dotnet-docfx-digest to generate an example for a public concrete class `Acme.Core.Options`. Confirm the generated example includes a file-scoped namespace, a class declaration, all required using directives, and compiles as a class library.",
+      "expected_output": "The generated csharp code block begins with using directives, then a file-scoped namespace declaration, then a class containing the usage code. The validator compiles it as a class library project referencing the documented assemblies. No SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED diagnostic is emitted.",
+      "expectations": [
+        "Generated example contains a 'using Acme.Core;' directive (or equivalent)",
+        "Generated example contains a file-scoped namespace declaration such as 'namespace AcmeExample;'",
+        "Generated example contains at least one class declaration wrapping the usage code",
+        "Generated example does not use top-level statements",
+        "Validator compiles the example as a class library project and emits no SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED diagnostic"
+      ]
+    },
+    {
+      "id": 43,
+      "prompt": "Use dotnet-docfx-digest to generate an example for a generic public type `Acme.Core.Repository<T>`. Confirm the generated example supplies a concrete type argument and compiles.",
+      "expected_output": "The generated example instantiates Repository with a concrete type argument (e.g., Repository<Product>), not the open generic Repository<T>. The example includes a namespace and class declaration. The validator compiles it without errors.",
+      "expectations": [
+        "Generated example provides a concrete type argument for Repository<T> (e.g., Repository<Product> or Repository<string>)",
+        "Generated example does not reference the open generic form Repository<T> as a concrete instantiation",
+        "Generated example includes a file-scoped namespace and class declaration",
+        "Validator compiles the example and emits no SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED diagnostic"
+      ]
+    },
+    {
+      "id": 44,
+      "prompt": "Use dotnet-docfx-digest on a library that has a public abstract generic base class `ApplicationTest<TEntryPoint, T>`. A previous run generated an example that derives from `ApplicationTest` (missing both generic arguments). Repair the documentation.",
+      "expected_output": "The agent recognises that ApplicationTest<TEntryPoint, T> requires two generic type arguments. It either generates a valid concrete derived class supplying both arguments (e.g., `public class MyAppTest : ApplicationTest<Program, HttpClient>`), or omits the example entirely with an omission comment. The validator does not emit SAMPLE_COMPILE_FAILED after the repair. No example is written that derives from ApplicationTest without generic arguments.",
+      "expectations": [
+        "Removes or repairs the example that derives from ApplicationTest without generic arguments",
+        "If an example is generated, it provides concrete values for both TEntryPoint and T",
+        "If no compile-valid example can be generated for the abstract type, the overwrite file omits the example and contains an omission comment",
+        "Validator emits no SAMPLE_COMPILE_FAILED after the repair",
+        "Agent explains that abstract generic base types require concrete type arguments in all derived-class examples"
+      ]
+    },
+    {
+      "id": 45,
+      "prompt": "Use dotnet-docfx-digest on a library where the public type `Acme.Http.Sender` has a constructor requiring two interface dependencies `ITransport` and `ILogger` that are not publicly constructible. No tests or samples exist for this type. Confirm the skill omits the example rather than inventing plausible but non-compiling code.",
+      "expected_output": "The agent does not generate a csharp code block that invents implementations of ITransport or ILogger that do not exist in the library. Instead, it omits the example for Acme.Http.Sender and adds the deterministic omission comment '<!-- No compile-valid example could be generated for this type. -->' to the overwrite file. It reports the omission as part of the example inventory.",
+      "expectations": [
+        "Does not write a csharp fence that invents ITransport or ILogger implementations not present in the documented API",
+        "Adds the omission comment to the type overwrite file instead of writing an unverified code block",
+        "Reports the omission in the example inventory summary",
+        "Does not emit a csharp fence that would fail SAMPLE_COMPILE_FAILED or SAMPLE_STRUCTURE_INVALID",
+        "Explains that the example was omitted because no compile-valid example could be derived from source evidence"
+      ]
+    },
+    {
+      "id": 46,
+      "prompt": "Run scripts/docfx.cs validation on a repository where an existing overwrite file has a correctly structured csharp example with a namespace and class declaration. Confirm the validator compiles it as a class library project, not as a file-based app.",
+      "expected_output": "The validator detects that the csharp sample has a namespace and class declaration, compiles it as a class library project (SampleVerification.csproj with OutputType=Library) referencing the documented assemblies from docfx.json, and reports SamplesCompiled incremented. No SAMPLE_STRUCTURE_INVALID is emitted.",
+      "expectations": [
+        "Validator does not emit SAMPLE_STRUCTURE_INVALID for the class-based example",
+        "Validator compiles the example as a class library project referencing library assemblies from docfx.json",
+        "Validator does not require a top-level statement or Main method in the example",
+        "Validator reports the sample as compiled (SamplesCompiled incremented in summary)",
+        "Validator does not emit SAMPLE_COMPILE_FAILED when the example is structurally and semantically correct"
+      ]
+    },
+    {
+      "id": 47,
+      "prompt": "Use dotnet-docfx-digest to generate a type example for a static extension class `Acme.Core.StringExtensions` that exposes a generic extension method `Parse<T>(this string input)`. Confirm the generated example shows a valid string receiver, supplies a concrete type argument, includes namespace and class structure, and compiles.",
+      "expected_output": "The generated example calls the extension method on a string receiver with a concrete type argument (e.g., '42'.Parse<int>() or var s = '3.14'; s.Parse<double>()). The example has a file-scoped namespace and a class declaration. The validator compiles it without SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED.",
+      "expectations": [
+        "Generated example calls Parse with a concrete type argument (e.g., Parse<int> or Parse<double>)",
+        "Generated example uses a valid string receiver (string literal or string variable)",
+        "Generated example includes a file-scoped namespace and a class declaration",
+        "Validator emits no SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED for the example",
+        "Generated example does not use the open generic form Parse<T> without a concrete type binding"
+      ]
+    },
+    {
+      "id": 48,
+      "prompt": "Run dotnet-docfx-digest twice on a repository where the first run generated structurally valid, compile-passing class-based examples. Confirm the second run emits no SAMPLE_STRUCTURE_INVALID, no SAMPLE_COMPILE_FAILED, and makes no changes to existing example overwrite files.",
+      "expected_output": "The second run validates all existing csharp code blocks, finds them structurally valid and compile-passing, and reports SamplesCompiled with zero errors. No overwrite files are modified. The validator exits with status 'passed'.",
+      "expectations": [
+        "Second run emits no SAMPLE_STRUCTURE_INVALID diagnostics",
+        "Second run emits no SAMPLE_COMPILE_FAILED diagnostics",
+        "Second run does not modify existing example overwrite files",
+        "Second run reports validation passed with zero errors",
+        "Example validation is deterministic: the same csharp content produces the same validation result on repeated runs"
+      ]
     }
   ]
 }
