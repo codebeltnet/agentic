@@ -106,6 +106,19 @@ Material changes include new or removed public API, signature or nullability cha
 
 Every public non-abstraction type and every public extension method needs at least one realistic, minimal, copy/paste-ready example. A namespace fly-in or `Extension Members` table alone is not enough.
 
+Every generated `csharp` code block is a complete, copy/paste-ready compilation unit. The default is always a compilable unit (option 1). Only use intentionally incomplete excerpts (option 2) when explicitly requested by the user, and label them clearly.
+
+**Complete C# example contract:**
+
+- Includes all required `using` directives.
+- Declares a file-scoped namespace (e.g., `namespace X.Y;`).
+- Declares at least one concrete class, struct, or record containing the usage.
+- Does **not** use top-level statements unless the example is explicitly labelled `// Program.cs` at the very top of the code block.
+- Does **not** invent placeholder services, interfaces, classes, methods, or overloads that are not defined inside the same code block.
+- Does **not** derive from an abstract or generic base type without supplying the correct concrete type arguments.
+- Does **not** call members that do not exist on the resolved public API surface.
+- Compiles in a minimal class library verification project referencing the documented assemblies.
+
 Prefer examples derived from existing unit, functional, or integration tests, then from samples, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw assertions.
 
 For public non-abstraction types, put the example on the generated type page by targeting the type UID in DocFX overwrite content. In Codebelt repositories, keep authored type overwrite Markdown under `.docfx/api/types/`, typically as `.docfx/api/types/{TypeUid}.md`.
@@ -120,17 +133,50 @@ For managed reference pages, map type and extension-method examples to the `exam
 
 ## Example Verification
 
-Every added or changed C# sample must compile. The validator compiles documentation samples as .NET 10 file-based apps.
+Every added or changed `csharp` code block must pass two validation gates before it is written to a markdown file. Do not write any `csharp` fence without first verifying both gates pass.
 
-Use a skip marker only when compilation is genuinely impossible in deterministic validation:
+**Gate 1 — Static structure (`SAMPLE_STRUCTURE_INVALID`):**
+
+Before attempting compilation, the validator rejects code that:
+
+- Contains top-level statements without a `// Program.cs` comment label at the top.
+- Lacks a namespace declaration.
+- Lacks a type declaration (class, struct, or record).
+
+A code block labelled `// Program.cs` at the very top passes Gate 1 and is compiled as a file-based app.
+
+**Gate 2 — Compilation (`SAMPLE_COMPILE_FAILED`):**
+
+Class-based examples that pass Gate 1 are compiled as a class library project referencing all assemblies from `docfx.json`. If compilation fails, the example is rejected. Either repair and re-run, or omit the example and add:
+
+```markdown
+<!-- No compile-valid example could be generated for this type. -->
+```
+
+**Example generation source priority:**
+
+1. Existing tests that reference the documented type or member.
+2. Existing samples or README usage in the repository.
+3. Synthesized examples only when the full public API shape is resolved and the synthesized sample compiles.
+4. Omit the example entirely if none of the above yields a compile-valid example.
+
+**Reflection and API-shape requirements:**
+
+Resolve constructors, generic arity, abstractness, constraints, and public members before writing examples:
+
+- Generic types: supply concrete type arguments (e.g., `Repository<Product>`, not `Repository<T>`).
+- Abstract types: do not instantiate directly; derive with a concrete class that supplies all required generic parameters.
+- Extension methods: show a valid receiver type.
+- Do not assume parameterless constructors or methods not present in the reflected API surface.
+- Do not invent members; if a member cannot be confirmed, omit the example.
+
+**Skip marker (last resort only):**
 
 ```csharp
 // dotnet-docfx-digest:skip-compile - <reason>
 ```
 
-The reason is mandatory and must explain the actual blocker. Reasons such as “full example requires package X” or “shows the framework pattern” are insufficient. Prefer making the sample compile by adding normal public setup code or reducing the sample to the smallest compiling example.
-
-Do not claim a sample compiles unless the validator or an equivalent repository verification command compiled it successfully.
+The reason is mandatory. Package requirements, "full example needs X", or "shows the framework pattern" are rejected. Prefer making the example compile. Do not claim an example compiles unless the validator actually ran it successfully.
 
 ## Namespace and Summary Style
 

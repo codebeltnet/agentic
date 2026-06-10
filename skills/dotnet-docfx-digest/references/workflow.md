@@ -110,12 +110,20 @@ The following example shows how to use `MyType` in a consuming application.
 ```csharp
 using X.Y.Z;
 
-var value = new MyType();
-Console.WriteLine(value);
+namespace MyNamespace;
+
+public class MyTypeExample
+{
+    public void ShowUsage()
+    {
+        var value = new MyType();
+        Console.WriteLine(value);
+    }
+}
 ```
 ````
 
-Do not include a manual `### Examples` heading in the body. DocFX renders that heading automatically for the `example` property.
+Do not include a manual `### Examples` heading in the body. DocFX renders that heading automatically for the `example` property. Every `csharp` code block must include a file-scoped namespace and at least one class declaration; top-level statements are not allowed unless the block is labelled `// Program.cs`.
 
 ## Extension method example template
 
@@ -132,13 +140,21 @@ The following example shows how to call `NormalizeLineEndings` on a string.
 ```csharp
 using X.Y.Z;
 
-string text = "first\r\nsecond";
-string normalized = text.NormalizeLineEndings();
-Console.WriteLine(normalized);
+namespace MyNamespace;
+
+public class MyExtensionsExample
+{
+    public void ShowUsage()
+    {
+        string text = "first\r\nsecond";
+        string normalized = text.NormalizeLineEndings();
+        Console.WriteLine(normalized);
+    }
+}
 ```
 ````
 
-The namespace containing the extension method must be imported, and the sample must compile in a consumer-style context.
+The namespace containing the extension method must be imported, the receiver type must be valid, and the sample must compile in a class library verification project.
 
 ## Synthetic hash-suffix filenames are prohibited
 
@@ -169,6 +185,11 @@ Before completing documentation work, verify:
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`. Namespace pages are under `api/namespaces/` and type pages are under `api/types/`.
 - [ ] The Completion Repair Loop was run after edits, and remaining `EXAMPLE_MISSING` or overwrite-layout diagnostics were fixed or reported as exact blockers.
 - [ ] Examples are realistic, copy/paste-ready, and compile unless a justified skip marker is present.
+- [ ] Generated C# examples include a file-scoped namespace and a type declaration (class, struct, or record), or are explicitly labelled `// Program.cs`.
+- [ ] No generated C# example uses top-level statements without a `// Program.cs` label.
+- [ ] No generated C# example derives from a generic base type without concrete type arguments.
+- [ ] No generated C# example calls members that are not confirmed on the public API surface.
+- [ ] Where no compile-valid example could be generated, the overwrite file contains the appropriate omission comment.
 - [ ] Availability is included or explicitly stated and matches actual target frameworks and conditions.
 - [ ] Existing manual edits are preserved, stale documentation is corrected, and no contradictory documentation remains.
 - [ ] `git diff` for touched documentation paths was inspected before final verification.
