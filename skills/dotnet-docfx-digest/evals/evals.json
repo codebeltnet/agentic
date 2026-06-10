@@ -430,6 +430,66 @@
         "Does not fall back to scanning src/**/*.csproj when docfx.json produces no projects",
         "Does not attempt to document any projects or generate any overwrite files when project discovery fails"
       ]
+    },
+    {
+      "id": 35,
+      "prompt": "Create a DocFX overwrite file for type `Acme.Widgets.Spinner` using the recommended `example: *content` front-matter form. The body should contain only a bare csharp fence with no `### Examples` heading. Confirm that the validator accepts this as a complete example.",
+      "expected_output": "The agent writes the overwrite file with front matter `example: *content` and a bare csharp fence in the body (no `### Examples` heading). The validator runs and reports zero `EXAMPLE_MISSING` diagnostics for `Acme.Widgets.Spinner`. The agent does not add a heading because the skill instructs that DocFX renders the section header automatically.",
+      "expectations": [
+        "Front matter uses `example: *content` (or the `- *content` list form), not `summary: *content`",
+        "Body contains a csharp or cs fenced code block",
+        "Body does NOT contain a `### Examples` or `## Example` heading",
+        "Validator runs and does not emit EXAMPLE_MISSING for the target type",
+        "Agent explains that DocFX adds the Examples section header automatically so a manual heading is not needed"
+      ]
+    },
+    {
+      "id": 36,
+      "prompt": "Create a DocFX overwrite file for type `Acme.Widgets.Spinner` using the `example:` list form (front matter has `example:` on one line and `- *content` on the next). The body contains only a bare csharp fence. Confirm that the validator accepts this as a complete example.",
+      "expected_output": "The agent writes the overwrite file with a multi-line `example:\\n- *content` front matter block and a bare csharp fence in the body. The validator runs and reports zero `EXAMPLE_MISSING` diagnostics for `Acme.Widgets.Spinner`.",
+      "expectations": [
+        "Front matter uses the list form with `example:` on one line and `- *content` on the next",
+        "Body contains a csharp or cs fenced code block",
+        "Body does NOT contain a `### Examples` or `## Example` heading",
+        "Validator runs and does not emit EXAMPLE_MISSING for the target type",
+        "Agent recognizes both inline and list `example:` forms as equivalent for validation purposes"
+      ]
+    },
+    {
+      "id": 37,
+      "prompt": "Create a DocFX overwrite file for a namespace overview page using `summary: *content` front matter. The body should embed a usage example under a `### Example` heading followed by a csharp fence. Confirm that the validator accepts this as a complete example.",
+      "expected_output": "The agent writes the overwrite file with `summary: *content` front matter and a `### Example` heading with a csharp fence inside the body. The validator runs and does not emit EXAMPLE_MISSING, because the heading-delimited fence satisfies the Form B detection rule.",
+      "expectations": [
+        "Front matter uses `summary: *content`",
+        "Body contains a `### Example` or `## Example` heading followed by a csharp or cs fenced code block",
+        "Validator runs and does not emit EXAMPLE_MISSING for the target",
+        "Agent correctly identifies this as the Form B (summary-anchored conceptual) pattern",
+        "Agent notes that this form is for conceptual content and is not the recommended form for type pages"
+      ]
+    },
+    {
+      "id": 38,
+      "prompt": "A developer created a DocFX overwrite for `Acme.Widgets.Spinner` using `example: *content` front matter but accidentally added a `### Examples` heading before the csharp fence. Confirm that the validator still passes (the redundant heading is tolerated by the validator) and that the prose guidance advises removing it to prevent a duplicate heading on the rendered page.",
+      "expected_output": "The validator runs and does not emit EXAMPLE_MISSING because the csharp fence is present regardless of the redundant heading. The agent flags the redundant heading as producing a duplicate 'Examples' section on the rendered DocFX page and advises removing it, citing the Form A guidance. The validator result is a pass; the rendered-page duplication is a separate documentation quality concern.",
+      "expectations": [
+        "Validator does not emit EXAMPLE_MISSING because a csharp fence is present",
+        "Agent identifies the `### Examples` heading as redundant for Form A (example: *content) overwrites",
+        "Agent explains that DocFX adds the section header automatically, so the manual heading causes a duplicate on the rendered page",
+        "Agent recommends removing the heading to avoid the duplicate-heading rendering defect",
+        "Validator exit code is 0 (or non-EXAMPLE_MISSING failure) — the redundant heading does not itself cause a validation error"
+      ]
+    },
+    {
+      "id": 39,
+      "prompt": "A DocFX overwrite file for `Acme.Widgets.Spinner` uses `example: *content` front matter but the body contains only descriptive prose with no csharp fence at all. Confirm that the validator reports EXAMPLE_MISSING.",
+      "expected_output": "The validator detects that the section has `example: *content` front matter (MappedToExample=true) but no csharp or cs fenced code block in the body. It emits an EXAMPLE_MISSING diagnostic for `Acme.Widgets.Spinner`. The absence of a heading alone does not satisfy the example requirement; a csharp fence is required regardless of the form.",
+      "expectations": [
+        "Validator emits EXAMPLE_MISSING for the target type",
+        "Diagnostic message identifies the expected overwrite path and instructs adding a C# code fence",
+        "Agent recognizes that the YAML anchor alone (example: *content) is not sufficient — a csharp fence must also be present",
+        "Agent does not suggest adding a ### Examples heading as the fix; it correctly identifies the missing fence as the root cause",
+        "Validator returns a non-zero exit code"
+      ]
     }
   ]
 }
