@@ -1625,15 +1625,20 @@ internal static class DocfxValidator
 
     private static void CollectApiTargets(Type type, NamespaceInfo ns)
     {
-        var typeUid = TypeUid(type);
+        var documentedType = DocumentedApiOwnerType(type);
+        var typeUid = TypeUid(documentedType);
         if (typeUid is null)
         {
             return;
         }
 
-        if (IsExampleRequiredType(type))
+        if (ReferenceEquals(documentedType, type) && IsExampleRequiredType(documentedType))
         {
-            ns.RequiredExampleTargets.Add(new ApiTargetInfo(typeUid, ns.Name, ApiTargetKind.Type, SimpleTypeName(type)));
+            var typeTarget = new ApiTargetInfo(typeUid, ns.Name, ApiTargetKind.Type, SimpleTypeName(documentedType));
+            if (!ns.RequiredExampleTargets.Contains(typeTarget))
+            {
+                ns.RequiredExampleTargets.Add(typeTarget);
+            }
         }
 
         MethodInfo[] methods;
@@ -1653,17 +1658,23 @@ internal static class DocfxValidator
                 continue;
             }
 
-            ns.RequiredExampleTargets.Add(new ApiTargetInfo(MethodUid(typeUid, method), ns.Name, ApiTargetKind.ExtensionMethod, method.Name, typeUid));
+            var methodTarget = new ApiTargetInfo(MethodUid(typeUid, method), ns.Name, ApiTargetKind.ExtensionMethod, method.Name, typeUid);
+            if (!ns.RequiredExampleTargets.Contains(methodTarget))
+            {
+                ns.RequiredExampleTargets.Add(methodTarget);
+            }
         }
     }
 
     private static void CollectExtensionMethods(Type type, NamespaceInfo ns)
     {
-        // A public extension method lives on a public static (abstract+sealed) non-generic class.
-        if (!type.IsClass || !type.IsAbstract || !type.IsSealed || type.IsGenericType || !type.IsPublic)
+        if (!type.IsClass || type.IsGenericType || !IsExternallyVisible(type))
         {
             return;
         }
+
+        var documentedType = DocumentedApiOwnerType(type);
+        var declaringClass = SimpleTypeName(documentedType);
 
         MethodInfo[] methods;
         try
@@ -1694,8 +1705,48 @@ internal static class DocfxValidator
             }
 
             var extendedType = SimpleTypeName(parameters[0].ParameterType);
-            ns.ExtensionMethods.Add(new ExtensionMethodInfo(method.Name, extendedType, type.Name));
+            var extensionInfo = new ExtensionMethodInfo(method.Name, extendedType, declaringClass);
+            if (!ns.ExtensionMethods.Contains(extensionInfo))
+            {
+                ns.ExtensionMethods.Add(extensionInfo);
+            }
         }
+    }
+
+    private static Type DocumentedApiOwnerType(Type type)
+    {
+        while (IsSyntheticExtensionBlockContainer(type))
+        {
+            type = type.DeclaringType!;
+        }
+
+        return type;
+    }
+
+    private static bool IsSyntheticExtensionBlockContainer(Type type)
+    {
+        if (!type.IsNested || !type.Name.StartsWith("<", StringComparison.Ordinal) || type.DeclaringType is null)
+        {
+            return false;
+        }
+
+        var declaringType = type.DeclaringType;
+        if (!declaringType.IsClass || !declaringType.IsAbstract || !declaringType.IsSealed || !IsExternallyVisible(declaringType))
+        {
+            return false;
+        }
+
+        MethodInfo[] methods;
+        try
+        {
+            methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
+        }
+        catch
+        {
+            return false;
+        }
+
+        return methods.Any(HasExtensionAttribute);
     }
 
     private static bool HasExtensionAttribute(MemberInfo member)
@@ -2077,7 +2128,9 @@ internal static class DocfxValidator
                 $@"(?m)\b(?:class|struct|interface|enum|delegate|record(?:\s+class|\s+struct)?)\s+{Regex.Escape(target.DisplayName)}\b");
         }
 
-        return Regex.IsMatch(sourceText, $@"(?s)\b{Regex.Escape(target.DisplayName)}\s*\([^)]*\bthis\b");
+        return Regex.IsMatch(sourceText, $@"(?s)\b{Regex.Escape(target.DisplayName)}\s*\([^)]*\bthis\b") ||
+               Regex.IsMatch(sourceText,
+                   $@"(?s)\bextension\s*\([^)]*\)\s*\{{.*?\b{Regex.Escape(target.DisplayName)}(?:\s*<[^>\r\n]+>)?\s*\(");
     }
 
     private static bool IsExampleCandidate(OverwriteSection section, ApiTargetInfo target)

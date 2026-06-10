@@ -234,6 +234,18 @@
         "Keeps the summaries grounded in actual public API behavior rather than inventing capabilities or marketing language",
         "Applies the same conceptual-orientation pattern consistently across the namespace page and the touched API summaries"
       ]
+    },
+    {
+      "id": 19,
+      "prompt": "Run dotnet-docfx-digest with `--changed-only` after I edited a C# 14 extension-block file in the `Codebelt.Extensions.Carter` namespace: `public static class EndpointConventionBuilderExtensions { extension(IEndpointConventionBuilder builder) { public IEndpointConventionBuilder Produces<TResponse>(int statusCode = StatusCodes.Status200OK, params string[] contentTypes) { ... } } }`. The previous run created `.docfx/api/namespaces/EndpointConventionBuilderExtensions.Produces-extensions.md` whose YAML `uid` is `Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.<G>$6D0D8037DBBD61D10816ECA5F93B896F`, and the namespace page still needs a real extension-method example.",
+      "expected_output": "Agent treats the compiler-generated `<G>$...` container as an implementation artifact of the outer `EndpointConventionBuilderExtensions` type, so the repair path stays on readable declaring-class or namespace overwrite pages. `--changed-only` still notices the edited extension-block source file, surfaces the missing example work, and avoids treating the synthetic nested type as a standalone documented API target.",
+      "expectations": [
+        "Collapses compiler-generated extension-block containers such as `<G>$...` back to the authored outer static class when choosing extension-method example targets",
+        "Does not treat the synthetic nested extension-block type as a required public type example target",
+        "Keeps the required example location on a readable declaring-class overwrite page or the namespace page instead of a synthetic method/type UID file",
+        "Under `--changed-only`, recognizes the edited extension-block source file as touching the `Produces` extension method even though the method declaration no longer uses `this` syntax",
+        "Still reports missing extension-method examples until a readable declaring-class or namespace overwrite file explicitly calls `Produces`"
+      ]
     }
   ]
 }
