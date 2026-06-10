@@ -9,7 +9,7 @@ Build a small example inventory from validator output and source evidence before
 ```markdown
 | UID | Kind | Required example location | Source evidence | Status |
 |---|---|---|---|---|
-| Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/namespaces/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | ApplicationHostFactoryTest | Missing |
+| Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | ApplicationHostFactoryTest | Missing |
 ```
 
 Do not mark an item complete until the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles or has a justified skip marker, and `docfx.cs --json` no longer reports the relevant missing-example diagnostic.
@@ -58,8 +58,8 @@ Use this path when the user invokes the skill without naming a specific API or n
 12. Audit related namespace pages together so fixes are consistent across the public API family.
 13. Add or repair `Extension Members` tables for namespaces with public extension methods.
 14. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
-15. Create separate type-page overwrite files for public non-abstraction types that have no example yet, normally under `.docfx/api/namespaces/{TypeUid}.md` in Codebelt repositories.
-16. Ensure `docfx.json` keeps `.docfx/api/namespaces/**/*.md` under `build.overwrite`, excludes `.docfx/api/namespaces/**` from `build.content`, and moves legacy authored `.docfx/api/*.md` files into `.docfx/api/namespaces/` when needed.
+15. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
+16. Ensure `docfx.json` includes both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, excludes both `api/namespaces/**` and `api/types/**` from `build.content`, and moves legacy authored `.docfx/api/*.md` files into either `api/namespaces/` (namespace pages) or `api/types/` (type pages).
 17. Create explicit examples for public extension methods that still have none.
 18. Build or refresh the example inventory.
 19. Preserve manual edits and correct stale contradictions instead of replacing whole files.
@@ -166,7 +166,7 @@ Before completing documentation work, verify:
 - [ ] Public non-abstraction types have at least one type-page example.
 - [ ] Public extension methods have at least one explicit example, not only a table entry.
 - [ ] The example inventory maps each required public type and extension method to its example file and UID.
-- [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`.
+- [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`. Namespace pages are under `api/namespaces/` and type pages are under `api/types/`.
 - [ ] The Completion Repair Loop was run after edits, and remaining `EXAMPLE_MISSING` or overwrite-layout diagnostics were fixed or reported as exact blockers.
 - [ ] Examples are realistic, copy/paste-ready, and compile unless a justified skip marker is present.
 - [ ] Availability is included or explicitly stated and matches actual target frameworks and conditions.

@@ -246,6 +246,118 @@
         "Under `--changed-only`, recognizes the edited extension-block source file as touching the `Produces` extension method even though the method declaration no longer uses `this` syntax",
         "Still reports missing extension-method examples until a readable declaring-class or namespace overwrite file explicitly calls `Produces`"
       ]
+    },
+    {
+      "id": 20,
+      "prompt": "Use dotnet-docfx-digest on a .NET library where the namespace `Acme.Core` contains a plain class `Options`, an enum `LogLevel`, a public struct `Range`, a public record `Result`, and a generic class `Repository<T>`. The library also has a static extension class `StringExtensions` with generic method `Parse<T>(this string input)`. The namespace currently has no DocFX documentation at all.",
+      "expected_output": "Agent generates both a namespace overview page at `.docfx/api/namespaces/Acme.Core.md` and type-targeting overwrite files at `.docfx/api/types/Acme.Core.Options.md`, `.docfx/api/types/Acme.Core.LogLevel.md`, `.docfx/api/types/Acme.Core.Range.md`, `.docfx/api/types/Acme.Core.Result.md`, `.docfx/api/types/Acme.Core.Repository.md`, and `.docfx/api/types/Acme.Core.StringExtensions.md` in the same run. The generic `Repository<T>` and generic extension method `Parse<T>` are included as valid documentation targets. Both `api/namespaces/**/*.md` and `api/types/**/*.md` are added under `build.overwrite`, and both directories are excluded from `build.content`.",
+      "expectations": [
+        "Generates the namespace overview page at `.docfx/api/namespaces/Acme.Core.md` with a uid front matter matching the namespace",
+        "Generates type overwrite files under `.docfx/api/types/` for every public non-abstraction type including Options, LogLevel, Range, Result, and Repository",
+        "Includes the generic class `Repository<T>` as a valid documentation target and does not skip it",
+        "Generates a type overwrite file for `StringExtensions` as a static extension container",
+        "Includes the generic extension method `Parse<T>` in the Extension Members table on the namespace page",
+        "Adds both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` in docfx.json",
+        "Excludes both `api/namespaces/**` and `api/types/**` from `build.content` in docfx.json",
+        "Does not treat namespace generation and type generation as mutually exclusive"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "Use dotnet-docfx-digest on a .NET library containing a public abstract base class `ValidatorBase` and a public interface `IValidator<T>`. The same namespace also has a concrete class `EmailValidator` that extends `ValidatorBase` and a static class `ValidatorExtensions` with extension methods.",
+      "expected_output": "Agent excludes `ValidatorBase` and `IValidator<T>` from required example targets because they are an abstract base class and an interface respectively. It does include `EmailValidator` and `ValidatorExtensions` as documentation targets. The type overwrite files are created only for `EmailValidator` and `ValidatorExtensions` under `.docfx/api/types/`.",
+      "expectations": [
+        "Does not create a required example target for `ValidatorBase` because it is an abstract base class",
+        "Does not create a required example target for `IValidator<T>` because it is an interface",
+        "Creates a required example target for the concrete class `EmailValidator`",
+        "Creates a required example target for `ValidatorExtensions` as a static extension container",
+        "Places type overwrite files under `.docfx/api/types/` only for included types"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Use dotnet-docfx-digest on a library where `docfx.json` currently has only `api/namespaces/**/*.md` under `build.overwrite` and only `api/namespaces/**` excluded from `build.content`. This is the first run for this repository.",
+      "expected_output": "Agent updates `docfx.json` on the first run to add `api/types/**/*.md` under `build.overwrite` and `api/types/**` to the `build.content` exclusions. It also creates the namespace overwrite pages and type overwrite pages in the same run. Running the skill a second time produces no further changes to `docfx.json`.",
+      "expectations": [
+        "Updates `docfx.json` to include `api/types/**/*.md` under `build.overwrite`",
+        "Updates `docfx.json` to exclude `api/types/**` from `build.content`",
+        "Creates namespace pages under `.docfx/api/namespaces/` and type pages under `.docfx/api/types/` in the same run",
+        "A second run does not change `docfx.json` again because it is already compliant",
+        "Does not use `api/**/*.md` as a catch-all pattern"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "Use dotnet-docfx-digest on a library where a previous run created type overwrite files under `.docfx/api/namespaces/Acme.Core.MyType.md` (the old single-directory convention). The new convention places type overwrite files under `.docfx/api/types/`. Migrate the repository to the new convention.",
+      "expected_output": "Agent moves the type overwrite file from `.docfx/api/namespaces/Acme.Core.MyType.md` to `.docfx/api/types/Acme.Core.MyType.md`, preserves the YAML front matter and example content, updates `docfx.json` to include both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, and excludes `api/types/**` from `build.content`. The namespace page `Acme.Core.md` remains in `api/namespaces/`.",
+      "expectations": [
+        "Moves type overwrite files from `api/namespaces/` to `api/types/` when they contain a type UID rather than a namespace UID",
+        "Keeps namespace overview pages under `api/namespaces/`",
+        "Preserves YAML front matter and Markdown content when moving files",
+        "Updates `docfx.json` to have both namespace and type globs under `build.overwrite`",
+        "Verifies that the validator no longer reports `API_OVERWRITE_CONFIG_INVALID` after the migration"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Use dotnet-docfx-digest on a library that exposes a static class `HttpClientExtensions` with generic extension methods `AddPolicy<TPolicy>(this IHttpClientBuilder builder)` and `UseTimeout<T>(this HttpClient client, TimeSpan timeout)`. The previous run skipped these because they were incorrectly filtered out as generic types.",
+      "expected_output": "Agent includes both generic extension methods in the Extension Members table and requires examples for both. It does not skip `HttpClientExtensions` or its methods because the declaring type is generic or the methods are generic. The type overwrite file for `HttpClientExtensions` is created under `.docfx/api/types/`.",
+      "expectations": [
+        "Does not skip `HttpClientExtensions` because it is a static class (abstract sealed in IL)",
+        "Includes `AddPolicy<TPolicy>` and `UseTimeout<T>` in the Extension Members table",
+        "Creates a type overwrite file for `HttpClientExtensions` under `.docfx/api/types/`",
+        "Generates `EXAMPLE_MISSING` for the extension methods until examples are provided",
+        "Does not depend on a `IsGenericType` filter to exclude valid API targets"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "Run dotnet-docfx-digest on a library that uses C# 14 extension blocks. The compiler generates a synthetic nested type `EndpointExtensions.<G>$AB12CD34` for the extension block. docfx.cs detects this during API discovery.",
+      "expected_output": "Agent emits a `DOCFX_EXTENSION_BLOCK_UNSUPPORTED` warning for the namespace explaining that DocFX issue #11010 means extension block metadata may be missing. It continues documenting all other discoverable public APIs without skipping them, collapses the synthetic container back to the outer `EndpointExtensions` class for documentation purposes, and does not try to fix DocFX metadata gaps by excluding APIs.",
+      "expectations": [
+        "Emits `DOCFX_EXTENSION_BLOCK_UNSUPPORTED` as a warning, not an error, for the affected namespace",
+        "Does not stop or skip other API targets because of the C# 14 extension block detection",
+        "Collapses the synthetic `<G>$...` nested type to the outer static class for example targeting",
+        "Does not create a separate overwrite file for the synthetic nested type",
+        "Continues generating namespace and type overwrite files for all other public APIs in the same run",
+        "Does not try to fix DocFX issue #11010 by excluding extension methods or inventing special rules"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "Run dotnet-docfx-digest twice on a correctly configured repository where all namespace pages, type overwrite files, and docfx.json settings are already present and valid. Confirm idempotency.",
+      "expected_output": "The second run produces no changes to `docfx.json`, no new overwrite files, and the validator exits with status `passed` with zero errors on both runs. The agent reports that the repository is already compliant and does not make spurious edits.",
+      "expectations": [
+        "Second run reports validation passed with zero errors",
+        "Second run makes no changes to `docfx.json`",
+        "Second run creates no new namespace or type overwrite files",
+        "Second run does not report spurious `API_OVERWRITE_CONFIG_INVALID` after `docfx.json` was already updated on the first run",
+        "Agent reports that the documentation is already in a compliant state"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "Run dotnet-docfx-digest on a repository. Confirm that the validator does not depend on DocFX-generated hash filenames like `*.md.G-*` or URL-encoded method UID filenames as source truth.",
+      "expected_output": "Agent discovers required example targets from compiled assembly metadata, not from DocFX-generated hash filenames. It reports `EXAMPLE_MISSING` when no overwrite file under `api/types/` or the namespace page has an example for the required UID. Hash-named files that may exist from a previous run do not satisfy the example requirement.",
+      "expectations": [
+        "Discovers required example targets from compiled assembly reflection, not from DocFX hash filenames",
+        "Does not use `*.md.G-*` files as evidence that an example exists",
+        "Reports `EXAMPLE_MISSING` even if a hash-named file exists but the correct UID is not in an overwrite file under `api/types/` or the namespace page",
+        "Does not create hash-named overwrite files as repair actions"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "Use dotnet-docfx-digest. During the run the skill creates `.docfx/api/namespaces/Acme.Core.md` and `.docfx/api/types/Acme.Core.MyClass.md`. Run agents.cs and confirm AGENTS.md is created or updated with the new managed block content that mentions both namespace and type overwrite files.",
+      "expected_output": "agents.cs creates or updates AGENTS.md with a managed block that explicitly states: both namespace overwrite files (`api/namespaces/`) and type overwrite files (`api/types/`) are required; generic public APIs are valid targets; extension members are rendered under `Extension Members`; and `docfx.json` must include both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`.",
+      "expectations": [
+        "AGENTS.md is created or updated by agents.cs before documentation validation",
+        "The managed block states that both namespace pages and type pages are required deliverables",
+        "The managed block states that generic public APIs are valid documentation targets",
+        "The managed block states that extension members are rendered under the heading `Extension Members`",
+        "The managed block states that `build.overwrite` must include both `api/namespaces/**/*.md` and `api/types/**/*.md`",
+        "The managed block states that type overwrite files live under `.docfx/api/types/`"
+      ]
     }
   ]
 }

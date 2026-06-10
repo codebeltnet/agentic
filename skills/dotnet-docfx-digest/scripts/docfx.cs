@@ -311,9 +311,9 @@ internal static class DocfxValidator
             var overwriteFiles = ReadDocfxBuildPatterns(build, "overwrite", "files");
 
             var configProblems = new List<string>();
-            if (contentFiles.Any(pattern => DocfxPatternEquals(pattern, "api/**/*.md") || DocfxPatternEquals(pattern, "api/namespaces/**/*.md")))
+            if (contentFiles.Any(pattern => DocfxPatternEquals(pattern, "api/**/*.md") || DocfxPatternEquals(pattern, "api/namespaces/**/*.md") || DocfxPatternEquals(pattern, "api/types/**/*.md")))
             {
-                configProblems.Add("Do not include `api/**/*.md` or `api/namespaces/**/*.md` under `build.content`.");
+                configProblems.Add("Do not include `api/**/*.md`, `api/namespaces/**/*.md`, or `api/types/**/*.md` under `build.content`.");
             }
 
             if (!contentExclude.Any(pattern => DocfxPatternEquals(pattern, "api/namespaces/**")))
@@ -321,9 +321,19 @@ internal static class DocfxValidator
                 configProblems.Add("Add `api/namespaces/**` to the `build.content` exclusions.");
             }
 
+            if (!contentExclude.Any(pattern => DocfxPatternEquals(pattern, "api/types/**")))
+            {
+                configProblems.Add("Add `api/types/**` to the `build.content` exclusions.");
+            }
+
             if (!overwriteFiles.Any(pattern => DocfxPatternEquals(pattern, "api/namespaces/**/*.md")))
             {
                 configProblems.Add("Include `api/namespaces/**/*.md` under `build.overwrite`.");
+            }
+
+            if (!overwriteFiles.Any(pattern => DocfxPatternEquals(pattern, "api/types/**/*.md")))
+            {
+                configProblems.Add("Include `api/types/**/*.md` under `build.overwrite`.");
             }
 
             if (overwriteFiles.Any(pattern => DocfxPatternEquals(pattern, "api/**/*.md")))
@@ -334,7 +344,7 @@ internal static class DocfxValidator
             if (configProblems.Count > 0)
             {
                 report.Errors.Add(new Diagnostic("API_OVERWRITE_CONFIG_INVALID", docfxPath, null,
-                    $"DocFX API overwrite Markdown must use the namespace-folder convention so overwrite content merges into managed API pages without being treated as normal content. {string.Join(" ", configProblems)}"));
+                    $"DocFX API overwrite Markdown must use separate namespace and type subdirectories so overwrite content merges into managed API pages without being treated as normal content. {string.Join(" ", configProblems)}"));
             }
         }
 
@@ -343,12 +353,12 @@ internal static class DocfxValidator
             return;
         }
 
+        var typesDirectory = Path.Combine(apiDirectory, "types");
         foreach (var file in Directory.EnumerateFiles(apiDirectory, "*.md", SearchOption.TopDirectoryOnly)
                      .Where(path => !string.Equals(Path.GetFileName(path), "toc.md", StringComparison.OrdinalIgnoreCase)))
         {
-            var destination = Rel(repoRoot, Path.Combine(namespacesDirectory, Path.GetFileName(file)));
             report.Errors.Add(new Diagnostic("API_OVERWRITE_FILE_MISPLACED", file, null,
-                $"Authored API overwrite Markdown must not live directly under `{Rel(repoRoot, apiDirectory)}`. Move this file to `{destination}` and keep its YAML front matter and Markdown content intact. Do not move generated `.yml` metadata files."));
+                $"Authored API overwrite Markdown must not live directly under `{Rel(repoRoot, apiDirectory)}`. Move namespace overwrite files to `{Rel(repoRoot, namespacesDirectory)}` and type overwrite files to `{Rel(repoRoot, typesDirectory)}`. Preserve YAML front matter and Markdown content. Do not move generated `.yml` metadata files."));
         }
     }
 
@@ -1284,9 +1294,24 @@ internal static class DocfxValidator
                     namespaces[nsName] = info;
                 }
 
+                // Track synthetic C# 14 extension-block containers so we can warn about DocFX #11010.
+                if (IsSyntheticExtensionBlockContainer(type))
+                {
+                    info.HasCSharp14ExtensionBlocks = true;
+                }
+
                 CollectApiTargets(type, info);
                 CollectExtensionMethods(type, info);
             }
+        }
+
+        // Emit a warning for namespaces that contain C# 14 extension blocks: DocFX issue #11010
+        // means those blocks do not yet generate correct API metadata. Extension methods declared
+        // with the classic `this` pattern are unaffected and remain supported.
+        foreach (var ns in namespaces.Values.Where(n => n.HasCSharp14ExtensionBlocks))
+        {
+            report.Warnings.Add(new Diagnostic("DOCFX_EXTENSION_BLOCK_UNSUPPORTED", null, ns.Name,
+                $"Namespace {ns.Name} contains C# 14 extension-block types. DocFX (issue #11010) does not currently generate correct API metadata for extension blocks, so generated UIDs for those members may be missing or synthetic. Classic static extension methods with 'this' parameters remain fully supported. Do not exclude these APIs or invent special rules; continue generating docs for all discoverable public APIs and document the limitation in the overwrite file when needed."));
         }
 
         var requiredExampleTargets = namespaces.Values
@@ -1668,7 +1693,7 @@ internal static class DocfxValidator
 
     private static void CollectExtensionMethods(Type type, NamespaceInfo ns)
     {
-        if (!type.IsClass || type.IsGenericType || !IsExternallyVisible(type))
+        if (!type.IsClass || !IsExternallyVisible(type))
         {
             return;
         }
@@ -1788,12 +1813,42 @@ internal static class DocfxValidator
 
     private static bool IsExampleRequiredType(Type type)
     {
-        if (type.IsInterface || type.IsAbstract)
+        if (type.IsInterface)
+        {
+            return false;
+        }
+
+        // Exclude abstract types, but allow static extension containers (abstract+sealed class
+        // with public static [Extension] members). These are valid documentation targets even
+        // though reflection reports IsAbstract == true for sealed abstract classes.
+        if (type.IsAbstract && !IsStaticExtensionContainer(type))
         {
             return false;
         }
 
         return true;
+    }
+
+    private static bool IsStaticExtensionContainer(Type type)
+    {
+        // A static extension container is a sealed abstract class (static class in C# terms)
+        // that has at least one public static member with [ExtensionAttribute].
+        if (!type.IsClass || !type.IsAbstract || !type.IsSealed)
+        {
+            return false;
+        }
+
+        MethodInfo[] methods;
+        try
+        {
+            methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
+        }
+        catch
+        {
+            return false;
+        }
+
+        return methods.Any(HasExtensionAttribute);
     }
 
     private static string? TypeUid(Type type)
@@ -2041,13 +2096,13 @@ internal static class DocfxValidator
                 ? target.Uid
                 : target.DeclaringTypeUid ?? target.Uid;
             var expectedPath = target.Kind == ApiTargetKind.Type
-                ? Rel(repoRoot, Path.Combine(docfxWorkspace, "api", "namespaces", $"{target.Uid}.md"))
+                ? Rel(repoRoot, Path.Combine(docfxWorkspace, "api", "types", $"{target.Uid}.md"))
                 : target.DeclaringTypeUid is null
                     ? null
                     : Rel(repoRoot, Path.Combine(docfxWorkspace, "api", "namespaces", $"{target.DeclaringTypeUid}.md"));
 
             var message = target.Kind == ApiTargetKind.Type
-                ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}` in `{expectedPath}` or another overwrite file under `api/namespaces/` that targets this exact type UID. Namespace overview examples do not satisfy this diagnostic. Keep `api/namespaces/**/*.md` under `build.overwrite`, exclude `api/namespaces/**` from `build.content`, and do not use `api/**/*.md` under either section."
+                ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}` in `{expectedPath}` or another overwrite file under `api/types/` that targets this exact type UID. Namespace overview examples do not satisfy this diagnostic. Keep `api/types/**/*.md` under `build.overwrite`, exclude `api/types/**` from `build.content`, and do not use `api/**/*.md` under either section."
                 : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to the declaring extension class uid `{expectedUid}` or the namespace page `{target.Namespace}` by default. The example must explicitly call `{target.DisplayName}`. Do not create URL-encoded or hash-like method UID filenames; use a method UID section only when the exact generated UID is verified and can live in a readable overwrite file.";
 
             report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", expectedPath, target.Namespace, message));
@@ -2782,7 +2837,7 @@ internal static class DocfxValidator
             var path = EscapeTable(string.IsNullOrWhiteSpace(diagnostic.Path) ? "(method UID, declaring type UID, or namespace page)" : diagnostic.Path);
             var message = EscapeTable(diagnostic.Message);
             var action = diagnostic.Message.Contains("Public non-abstraction type", StringComparison.Ordinal)
-                ? "Create or update the type-targeting overwrite file under `api/namespaces/`, keep `api/namespaces/**/*.md` under `build.overwrite` only, add a compiling Examples section, then rerun validation."
+                ? "Create or update the type-targeting overwrite file under `api/types/`, keep `api/types/**/*.md` under `build.overwrite` only, add a compiling Examples section, then rerun validation."
                 : "Add a compiling Examples section on the declaring extension class or namespace page that explicitly calls the extension method, then rerun validation.";
             sb.AppendLine($"| {ns} | `{path}` | `EXAMPLE_MISSING` | {EscapeTable(action)} {message} |");
         }
@@ -2979,6 +3034,7 @@ internal static class DocfxValidator
         public string Name { get; } = name;
         public List<ApiTargetInfo> RequiredExampleTargets { get; } = new();
         public List<ExtensionMethodInfo> ExtensionMethods { get; } = new();
+        public bool HasCSharp14ExtensionBlocks { get; set; }
     }
 
     private sealed record ApiModel(List<NamespaceInfo> Namespaces, List<ApiTargetInfo> RequiredExampleTargets);

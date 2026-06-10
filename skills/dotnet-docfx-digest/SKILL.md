@@ -31,11 +31,11 @@ Do not stop at namespace pages, extension-member tables, or a first-pass documen
 
 1. Run `docfx.cs --json` after edits and read the remaining diagnostics.
 2. If diagnostics include `EXAMPLE_MISSING`, missing namespace pages, stale extension-member tables, sample compile failures, missing availability, or overwrite inclusion problems, treat them as blocking follow-up work.
-3. For each missing public concrete-type example, create or update a type-targeting overwrite file under `.docfx/api/namespaces/`.
+3. For each missing public concrete-type example, create or update a type-targeting overwrite file under `.docfx/api/types/`.
 4. For each missing extension-method example, document it on the declaring extension class page or the namespace page, and explicitly demonstrate the method call.
 5. Rerun the validator until the required diagnostics are gone, or stop and report the exact blocker, command, exit code, and remaining diagnostic codes.
 
-Namespace pages and `Extension Members` tables complement type-page examples; they do not replace them.
+Namespace pages and `Extension Members` tables complement type-page examples; they do not replace them. Both namespace pages (`api/namespaces/`) and type pages (`api/types/`) are required deliverables. Generating only one is incomplete work.
 
 ## Core Principles
 
@@ -91,12 +91,14 @@ Run `agents.cs` against the actual repository root being documented, not a temp 
 When public API is added or materially changed, update every relevant surface:
 
 1. XML documentation comments in source code.
-2. Namespace overview pages for namespaces that contain public API.
+2. Namespace overview pages for namespaces that contain public API, under `.docfx/api/namespaces/`.
 3. `Extension Members` tables for namespaces that expose public extension methods.
-4. Type-targeting overwrite content for public non-abstraction types that require examples or richer guidance.
+4. Type-targeting overwrite content for public non-abstraction types that require examples or richer guidance, under `.docfx/api/types/`.
 5. Extension-method examples on the declaring extension class page or the namespace page.
 6. Availability information.
 7. Verification commands or artifacts that prove the documentation remains accurate and buildable.
+
+Namespace pages and type pages are both required deliverables in the same run. Do not generate namespace pages without type pages or vice versa.
 
 Material changes include new or removed public API, signature or nullability changes, behavioral changes, exception changes, changed availability, conditional extension-method availability, deprecation changes, default-value changes, or meaningful lifecycle and thread-safety changes.
 
@@ -106,13 +108,13 @@ Every public non-abstraction type and every public extension method needs at lea
 
 Prefer examples derived from existing unit, functional, or integration tests, then from samples, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw assertions.
 
-For public non-abstraction types, put the example on the generated type page by targeting the type UID in DocFX overwrite content. In Codebelt repositories, keep authored overwrite Markdown under `.docfx/api/namespaces/`, typically as `.docfx/api/namespaces/{TypeUid}.md`.
+For public non-abstraction types, put the example on the generated type page by targeting the type UID in DocFX overwrite content. In Codebelt repositories, keep authored type overwrite Markdown under `.docfx/api/types/`, typically as `.docfx/api/types/{TypeUid}.md`.
 
 For public extension methods, place examples on the declaring extension class page or the namespace page. The example must explicitly call the method.
 
 Never mirror synthetic method UIDs that contain hashes, encoding, or generated suffixes in filenames. Keep filenames readable and let the YAML `uid` decide what DocFX model the content targets.
 
-Keep `api/namespaces/**/*.md` under `build.overwrite` only, exclude `api/namespaces/**` from `build.content`, and do not widen either entry to `api/**/*.md`. Move legacy authored `.docfx/api/*.md` overwrite files into `.docfx/api/namespaces/` instead of widening the glob.
+Keep `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` only. Exclude both `api/namespaces/**` and `api/types/**` from `build.content`. Do not widen either entry to `api/**/*.md`. Move legacy authored `.docfx/api/*.md` overwrite files into either `api/namespaces/` (for namespace pages) or `api/types/` (for type pages) instead of widening the glob.
 
 For managed reference pages, map type and extension-method examples to the `example` property rather than to `summary` or implicit conceptual content. Read `references/docfx-overwrite-files.md` for the exact front-matter shape.
 
