@@ -150,7 +150,15 @@ internal static class DocfxValidator
         }
 
         // 5-7. Discover public API, namespaces and extension methods from compiled metadata.
-        var projects = DiscoverProjects(repoRoot);
+        // Use docfx.json as the canonical documentation boundary: only projects referenced
+        // by metadata[].src[] in the active docfx.json are included. Projects under src/ that
+        // are not configured in docfx.json (test harnesses, benchmarks, samples, etc.) are excluded.
+        var projects = DiscoverProjects(docfxPath, docfxWorkspace, report);
+        if (projects.Count == 0)
+        {
+            return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Project discovery failed.");
+        }
+
         var libraryProjects = projects.Where(p => !p.IsTest).ToList();
         ApiModel api;
         try
@@ -1111,20 +1119,165 @@ internal static class DocfxValidator
     // Project + API discovery
     // ----------------------------------------------------------------------
 
-    private static List<ProjectInfo> DiscoverProjects(string repoRoot)
+    /// <summary>
+    /// Resolves the candidate project list exclusively from the active <c>docfx.json</c>
+    /// metadata configuration.  Only <c>.csproj</c> files matched by a
+    /// <c>metadata[].src[].files</c> include pattern and not excluded by a corresponding
+    /// <c>exclude</c> pattern are returned.  Paths are resolved relative to the
+    /// <c>docfx.json</c> file location, de-duplicated, and sorted by normalised full path
+    /// for deterministic ordering.
+    /// </summary>
+    private static List<ProjectInfo> DiscoverProjects(string docfxPath, string docfxWorkspace, Report report)
     {
-        var projects = new List<ProjectInfo>();
-        var srcPath = Path.Combine(repoRoot, "src");
-        if (!Directory.Exists(srcPath))
+        JsonDocument doc;
+        try
         {
-            return projects;
+            doc = JsonDocument.Parse(File.ReadAllText(docfxPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
         }
-        foreach (var proj in EnumerateFiles(srcPath, "*.csproj"))
+        catch (Exception ex) when (ex is IOException or JsonException)
         {
-            var info = ReadProject(proj);
-            projects.Add(info);
+            report.Errors.Add(new Diagnostic("PROJECT_DISCOVERY_FAILED", docfxPath, null,
+                $"Unable to read docfx.json at '{docfxPath}' for project discovery: {ex.Message}"));
+            return new List<ProjectInfo>();
         }
-        return projects;
+
+        var resolvedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var resolvedProjects = new List<(string NormalizedPath, ProjectInfo Project)>();
+
+        using (doc)
+        {
+            if (!doc.RootElement.TryGetProperty("metadata", out var metadata))
+            {
+                report.Errors.Add(new Diagnostic("PROJECT_DISCOVERY_FAILED", docfxPath, null,
+                    $"docfx.json at '{docfxPath}' has no 'metadata' section. " +
+                    "Cannot determine which projects are included in the documentation surface."));
+                return new List<ProjectInfo>();
+            }
+
+            foreach (var entry in EnumerateMetadataEntries(metadata))
+            {
+                if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("src", out var srcArray))
+                {
+                    continue;
+                }
+
+                foreach (var srcEntry in EnumerateDocfxFileMappingEntries(srcArray))
+                {
+                    // Default base directory is the docfx.json workspace; overridden by src[].src.
+                    var baseDir = docfxWorkspace;
+                    var includePatterns = new List<string>();
+                    var excludePatterns = new List<string>();
+
+                    if (srcEntry.ValueKind == JsonValueKind.String)
+                    {
+                        includePatterns.Add(srcEntry.GetString() ?? string.Empty);
+                    }
+                    else if (srcEntry.ValueKind == JsonValueKind.Object)
+                    {
+                        if (srcEntry.TryGetProperty("src", out var srcBase) &&
+                            srcBase.ValueKind == JsonValueKind.String &&
+                            !string.IsNullOrWhiteSpace(srcBase.GetString()))
+                        {
+                            baseDir = Path.GetFullPath(srcBase.GetString()!, docfxWorkspace);
+                        }
+
+                        if (srcEntry.TryGetProperty("files", out var files))
+                        {
+                            includePatterns.AddRange(ReadDocfxGlobPatterns(files));
+                        }
+
+                        if (srcEntry.TryGetProperty("exclude", out var exclude))
+                        {
+                            excludePatterns.AddRange(ReadDocfxGlobPatterns(exclude));
+                        }
+                    }
+
+                    foreach (var projectPath in ResolveCsprojGlobPatterns(baseDir, includePatterns, excludePatterns))
+                    {
+                        var normalizedPath = Path.GetFullPath(projectPath);
+                        if (resolvedPaths.Add(normalizedPath))
+                        {
+                            resolvedProjects.Add((normalizedPath, ReadProject(normalizedPath)));
+                        }
+                    }
+                }
+            }
+        }
+
+        if (resolvedProjects.Count == 0)
+        {
+            report.Errors.Add(new Diagnostic("PROJECT_DISCOVERY_FAILED", docfxPath, null,
+                $"No projects were resolved from docfx.json at '{docfxPath}'. " +
+                "Review the metadata[].src[].files and metadata[].src[].exclude configuration to ensure " +
+                "it resolves to .csproj files in this repository. Projects not referenced by the active " +
+                "docfx.json metadata configuration are intentionally excluded."));
+            return new List<ProjectInfo>();
+        }
+
+        // Sort by normalised path for deterministic, idempotent ordering.
+        return resolvedProjects
+            .OrderBy(p => NormalizeDocfxPath(p.NormalizedPath), StringComparer.OrdinalIgnoreCase)
+            .Select(p => p.Project)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Resolves <c>.csproj</c> files from <paramref name="srcRoot"/> using DocFX-style glob
+    /// <paramref name="includePatterns"/>, excluding paths matched by
+    /// <paramref name="excludePatterns"/>. All patterns are resolved relative to
+    /// <paramref name="srcRoot"/> and converted to case-insensitive regular expressions using
+    /// the same <see cref="GlobToRegex"/> logic used for Markdown inputs.
+    /// </summary>
+    private static IEnumerable<string> ResolveCsprojGlobPatterns(
+        string srcRoot,
+        IEnumerable<string> includePatterns,
+        IEnumerable<string> excludePatterns)
+    {
+        var excludes = excludePatterns
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(GlobToRegex)
+            .ToList();
+
+        foreach (var pattern in includePatterns)
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+            {
+                continue;
+            }
+
+            var searchRoot = ResolveGlobSearchRoot(srcRoot, pattern);
+
+            if (!Directory.Exists(searchRoot))
+            {
+                // May be an exact path rather than a glob.
+                var exactFile = Path.GetFullPath(pattern, srcRoot);
+                if (File.Exists(exactFile) &&
+                    string.Equals(Path.GetExtension(exactFile), ".csproj", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rel = NormalizeDocfxPath(Path.GetRelativePath(srcRoot, exactFile));
+                    if (!excludes.Any(excl => excl.IsMatch(rel)))
+                    {
+                        yield return exactFile;
+                    }
+                }
+
+                continue;
+            }
+
+            var includeRegex = GlobToRegex(pattern);
+            foreach (var file in EnumerateFiles(searchRoot, "*.csproj"))
+            {
+                var relative = NormalizeDocfxPath(Path.GetRelativePath(srcRoot, file));
+                if (includeRegex.IsMatch(relative) && !excludes.Any(excl => excl.IsMatch(relative)))
+                {
+                    yield return Path.GetFullPath(file);
+                }
+            }
+        }
     }
 
     private static ProjectInfo ReadProject(string projectPath)

@@ -358,6 +358,78 @@
         "The managed block states that `build.overwrite` must include both `api/namespaces/**/*.md` and `api/types/**/*.md`",
         "The managed block states that type overwrite files live under `.docfx/api/types/`"
       ]
+    },
+    {
+      "id": 29,
+      "prompt": "Run dotnet-docfx-digest on a repository where `docfx.json` has `metadata[].src[].files = [\"src/Acme.Core/*.csproj\", \"src/Acme.Abstractions/*.csproj\"]` but a third project `src/Acme.Benchmarks/Acme.Benchmarks.csproj` also exists under `src/`. Confirm that `Acme.Benchmarks` is never reflected over or documented.",
+      "expected_output": "The validator reads the active `docfx.json` metadata configuration and builds the project list exclusively from the `metadata[].src[].files` patterns. `Acme.Benchmarks` is not included in the project list because it is not matched by any `metadata[].src` pattern in `docfx.json`. No namespace page, type overwrite file, or example is generated for types defined in `Acme.Benchmarks`.",
+      "expectations": [
+        "Builds the candidate project list from docfx.json metadata[].src[].files patterns, not by scanning all src/**/*.csproj",
+        "Does not include Acme.Benchmarks in the project list because it is not referenced by docfx.json",
+        "Does not generate namespace pages, type overwrite files, or examples for types defined in Acme.Benchmarks",
+        "Documents only Acme.Core and Acme.Abstractions as they are explicitly included by docfx.json",
+        "Reports PROJECT_DISCOVERY_FAILED with the docfx.json path if no projects are resolved"
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "Run dotnet-docfx-digest on a repository where `docfx.json` has two separate `metadata` entries: the first entry includes `src/Acme.Core/*.csproj` and the second entry includes `src/Acme.Extensions/*.csproj`. Both entries use `metadata[].src[].src = \"../\"` to resolve paths relative to the `.docfx/` directory.",
+      "expected_output": "The validator resolves projects from both metadata entries and merges the results into a single de-duplicated, sorted project list. Namespaces from both `Acme.Core` and `Acme.Extensions` assemblies appear in the public API surface. Both namespace pages and required type overwrite files are generated for all public non-abstraction types in both assemblies.",
+      "expectations": [
+        "Reads and processes all metadata entries in docfx.json, not only the first one",
+        "Resolves projects from each metadata entry's src[] configuration independently",
+        "Merges projects from all metadata entries into a single de-duplicated list",
+        "Discovers public API from both Acme.Core and Acme.Extensions assemblies",
+        "Generates namespace pages and type overwrite files for public APIs in both assemblies"
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "Run dotnet-docfx-digest on a repository where `docfx.json` lives under `.docfx/` and its metadata section uses `\"src\": \"../\"` to point at the repository root, with `\"files\": [\"src/**.csproj\"]`. Confirm that project paths are resolved relative to the `.docfx/` directory and not relative to the process working directory.",
+      "expected_output": "The validator resolves the `src` base directory for each metadata entry relative to the `docfx.json` file location, not relative to the process CWD. When `docfx.json` is at `.docfx/docfx.json` and `metadata[].src[].src = \"../\"`, the effective base resolves to the repository root, and `files = [\"src/**.csproj\"]` discovers projects under `<repo-root>/src/`. All resolved project paths are full, normalised absolute paths.",
+      "expectations": [
+        "Resolves metadata[].src[].src paths relative to the docfx.json file location",
+        "Does not resolve paths relative to the process working directory",
+        "Correctly derives the repository root when src = \"../\" and docfx.json is at .docfx/docfx.json",
+        "Discovers .csproj files under the resolved base directory using the files glob patterns",
+        "Returns normalised absolute paths for all resolved projects"
+      ]
+    },
+    {
+      "id": 32,
+      "prompt": "Run dotnet-docfx-digest on a repository where `docfx.json` includes `src/**.csproj` in `metadata[].src[].files` but also has `metadata[].src[].exclude = [\"src/Acme.Tests/**\", \"src/Acme.Samples/**\"]`. Projects `Acme.Tests` and `Acme.Samples` exist under `src/` and would otherwise be matched. Confirm they are excluded from the documentation surface.",
+      "expected_output": "The validator honours the `exclude` patterns in each `metadata[].src` entry and removes `Acme.Tests` and `Acme.Samples` from the resolved project list. No namespace pages, type overwrite files, or examples are generated for types in those assemblies. The project list matches only the assemblies that pass both the include and exclude filter.",
+      "expectations": [
+        "Applies metadata[].src[].exclude patterns to filter out matching .csproj files",
+        "Does not include Acme.Tests in the project list because it is matched by the exclude pattern",
+        "Does not include Acme.Samples in the project list because it is matched by the exclude pattern",
+        "Does not generate documentation for types in excluded projects",
+        "Reports PROJECT_DISCOVERY_FAILED when all projects are excluded and no projects remain"
+      ]
+    },
+    {
+      "id": 33,
+      "prompt": "Run dotnet-docfx-digest twice in succession on a repository where `docfx.json` is already correctly configured with `metadata[].src[].files = [\"src/**.csproj\"]` and `metadata[].src[].exclude = [\"src/tools/**\"]`. On the first run, all namespace pages and type overwrite files are generated. Confirm that the second run resolves the same project set and produces no new changes.",
+      "expected_output": "Both runs resolve the same set of projects from `docfx.json`. The second run discovers the same public API surface, validates the same namespace pages and type overwrite files, and reports no new changes, no spurious diagnostics, and no new files created. The resolved project list is identical on both runs because the discovery is based solely on the static `docfx.json` configuration.",
+      "expectations": [
+        "Second run resolves the same project list as the first run",
+        "Second run discovers the same public API namespaces and types",
+        "Second run reports no new namespace or type overwrite files created",
+        "Second run reports validation passed with zero errors when the first run left the repository in a compliant state",
+        "Project discovery is deterministic: the same docfx.json always produces the same project list regardless of run order"
+      ]
+    },
+    {
+      "id": 34,
+      "prompt": "Run dotnet-docfx-digest on a repository whose `docfx.json` metadata section has no `src` key at all in any metadata entry. Confirm that the validator fails with a clear error explaining which `docfx.json` was read and what configuration is missing.",
+      "expected_output": "The validator reads the active `docfx.json`, finds no resolvable projects from the metadata section, and emits a `PROJECT_DISCOVERY_FAILED` diagnostic that includes the full path to `docfx.json` and guidance explaining that `metadata[].src[].files` must reference `.csproj` files. The exit code is non-zero. No fallback scan of `src/**/*.csproj` is attempted.",
+      "expectations": [
+        "Emits PROJECT_DISCOVERY_FAILED with the full path to docfx.json in the diagnostic message",
+        "Explains that metadata[].src[].files must be configured to reference .csproj files",
+        "Returns a non-zero exit code",
+        "Does not fall back to scanning src/**/*.csproj when docfx.json produces no projects",
+        "Does not attempt to document any projects or generate any overwrite files when project discovery fails"
+      ]
     }
   ]
 }
