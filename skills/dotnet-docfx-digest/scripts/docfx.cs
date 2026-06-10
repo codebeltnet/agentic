@@ -2359,7 +2359,15 @@ internal static class DocfxValidator
 
     private static bool HasExampleForTarget(OverwriteSection section, ApiTargetInfo target)
     {
-        if (!HasExampleSectionWithCSharpFence(section.Body))
+        // MappedToExample (front-matter example: *content or - *content) only requires
+        // a bare csharp fence; the heading is added automatically by DocFX.
+        // The summary: *content form (MappedToExample=false) still requires the explicit
+        // heading to delimit the embedded example within conceptual content.
+        var hasFence = section.MappedToExample
+            ? HasCSharpFence(section.Body)
+            : HasExampleSectionWithCSharpFence(section.Body);
+
+        if (!hasFence)
         {
             return false;
         }
@@ -2371,6 +2379,11 @@ internal static class DocfxValidator
         }
 
         return true;
+    }
+
+    private static bool HasCSharpFence(string body)
+    {
+        return Regex.IsMatch(body, @"(?im)^```\s*(csharp|cs)\s*$");
     }
 
     private static bool HasExampleSectionWithCSharpFence(string body)
@@ -2568,10 +2581,35 @@ internal static class DocfxValidator
 
             var bodyEnd = i + 1 < matches.Count ? matches[i + 1].Index : normalized.Length;
             var body = bodyEnd > bodyStart ? normalized[bodyStart..bodyEnd] : string.Empty;
-            sections.Add(new OverwriteSection(mdFile, uid, body));
+            sections.Add(new OverwriteSection(mdFile, uid, body, IsMappedToExample(yaml)));
         }
 
         return sections;
+    }
+
+    private static bool IsMappedToExample(string yaml)
+    {
+        // Form A: example: *content  (inline scalar)
+        if (ReadYamlScalar(yaml, "example") is "*content")
+        {
+            return true;
+        }
+
+        // Form B: example:\n  - *content  (sequence / list form)
+        var lines = yaml.Split('\n');
+        for (var i = 0; i < lines.Length - 1; i++)
+        {
+            if (lines[i].Trim() == "example:")
+            {
+                var next = lines[i + 1].Trim();
+                if (next == "- *content")
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static (bool Found, string Reason) FindSkip(string code)
@@ -3194,7 +3232,7 @@ internal static class DocfxValidator
 
     private sealed record SampleFence(string File, int FenceIndex, int StartLine, string Code);
 
-    private sealed record OverwriteSection(string File, string Uid, string Body);
+    private sealed record OverwriteSection(string File, string Uid, string Body, bool MappedToExample = false);
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
 }
