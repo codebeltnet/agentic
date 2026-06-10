@@ -47,6 +47,14 @@ Console.WriteLine(value);
 
 Do **not** include a `### Examples` heading in the body. DocFX adds the section header automatically from the template.
 
+> The validator distinguishes two example forms by the front matter, not by headings in the body. Do not rely on a body heading to make the validator happy.
+>
+> **Form A — front matter `example: *content` (or the `- *content` list form).** This is the recommended form for type pages and extension-class pages. The body must contain at least one fenced `csharp` (or `cs`) block. Do **not** add a `## Example` or `### Example` heading; DocFX renders the section header automatically and a manual heading produces a duplicate "Examples" heading on the rendered page.
+>
+> **Form B — front matter `summary: *content`.** The body must contain a `## Example` or `### Example` heading followed by a fenced `csharp` (or `cs`) block. This form is only for the rare case where the example is embedded inside conceptual content.
+>
+> The validator recognizes Form A by the YAML anchor, not by a body heading; Form B by the body heading. Mixing them produces duplicate sections or validator failures.
+
 Do **not** use `summary: *content` for type example files. That replaces only the summary text and does nothing to add a visible Examples section to the page.
 
 DocFX applies overwrite models by `uid`. If the same `uid` appears more than once in one overwrite file, later sections in that same file override earlier sections. Across different overwrite files, ordering is not deterministic, so keep competing sections for the same `uid` together or consolidate them.

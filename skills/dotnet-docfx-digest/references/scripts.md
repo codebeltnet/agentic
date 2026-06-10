@@ -94,6 +94,15 @@ A skip marker without a reason is reported as `SAMPLE_SKIP_REASON_MISSING`.
 
 A skip marker with a weak reason such as "full example requires X package" or "example shows the framework pattern" is reported as `SAMPLE_SKIP_REASON_INSUFFICIENT`. Package requirements and framework setup belong in the documentation around a compiling sample; they are not enough to skip compilation by themselves.
 
+### Example detection
+
+The validator recognizes a complete example as one of:
+
+- A DocFX front-matter anchor (`example: *content` or the list form `example:\n- *content`) followed by a body that contains a fenced `csharp`/`cs` block; **or**
+- A `## Example` / `### Example` heading in the body followed by a fenced `csharp`/`cs` block.
+
+The first form is preferred for type pages and extension-class pages. Add a `### Examples` heading only when the front matter anchors the body to `summary` and you intend the heading to delimit the embedded example. The validator reports `EXAMPLE_MISSING` only when neither form is present. A run that reports `EXAMPLE_MISSING` while the rendered page clearly shows an example indicates a front-matter / heading mismatch — verify the YAML anchor before adding a body heading.
+
 ### Extension-method detection note
 
 Extension methods are detected from compiled metadata: a public static method carrying `System.Runtime.CompilerServices.ExtensionAttribute`, declared on a public class (which may be generic or a static extension container) with at least one parameter. The first parameter's type is recorded as the extended type. The C# compiler marks the method, not the first parameter, with `ExtensionAttribute`, so detection keys off the method attribute to match real metadata. Generic declaring classes and generic extension methods are both valid targets and are not excluded.
