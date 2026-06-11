@@ -7,12 +7,26 @@ Use this reference when you need the full step-by-step workflow, example invento
 Build a small example inventory from validator output and source evidence before writing examples. Treat it as a work queue, not as final-response prose.
 
 ```markdown
-| UID | Kind | Required example location | Source evidence | Status |
-|---|---|---|---|---|
-| Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | ApplicationHostFactoryTest | Missing |
+| UID | Kind | Required example location | Source evidence | Scenario | Status |
+|---|---|---|---|---|---|
+| Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | Package README, ApplicationHostFactoryTest | Host a test server and create a client | Missing |
 ```
 
 Do not mark an item complete until the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles or has a justified skip marker, and `docfx.cs --json` no longer reports the relevant missing-example diagnostic.
+
+## Scenario example design
+
+Before writing a type or extension-method example, choose the smallest real task that explains the API in context. Start from package-level evidence, then narrow to type-level evidence:
+
+1. Determine the NuGet package ID or IDs from packable projects, `.nuget/*/README.md`, package release notes, `Directory.Packages.props`, or `PackageReference` usage.
+2. Search local evidence for the exact package ID first, including README files, package docs, samples, tooling projects, tuning projects, functional tests, and generated package documentation.
+3. When internet or GitHub search is available and allowed, search for the exact package ID and prefer consumer repositories outside the target repository. Treat self-repo hits as package-authored docs or samples, not independent usage proof.
+4. Search by namespace, type, and member name only after package-ID evidence has been inspected.
+5. Pick a scenario that connects the documented type to the package workflow. A good sample can include multiple related public types, a small local helper type, dependency-injection setup, host setup, options configuration, file/path setup, or result inspection when that is what a real caller would do.
+6. Remove test-only structure, raw assertions, mocks, fixture base classes, and unused locals. Keep meaningful setup and result inspection.
+7. Prefer domain-specific names such as `BenchmarkRunner`, `WorkspaceUsage`, or `HttpRetryExample` over `Consumer` and `MyNamespace` when the package domain is clear.
+
+A scenario example is still concise. It should show one coherent task, not a tour of every member. If a compile-valid scenario cannot be produced from evidence, omit the example with the documented omission comment rather than inventing a plausible workflow.
 
 ## Targeted workflow
 
@@ -107,14 +121,14 @@ uid: X.Y.Z.MyType
 example:
 - *content
 ---
-The following example shows how to use `MyType` in a consuming application.
+The following example shows how to use `MyType` as part of a real consuming workflow.
 
 ```csharp
 using X.Y.Z;
 
-namespace MyNamespace;
+namespace MyProject.Workflows;
 
-public class Consumer
+public class WidgetWorkflow
 {
     public void Run()
     {
@@ -183,7 +197,9 @@ Before completing documentation work, verify:
 - [ ] Namespaces with public extension methods have an `Extension Members` section.
 - [ ] Public non-abstraction types have at least one type-page example.
 - [ ] Public extension methods have at least one explicit example, not only a table entry.
-- [ ] The example inventory maps each required public type and extension method to its example file and UID.
+- [ ] Package IDs and package-level usage evidence were inspected before type/member-only sample synthesis.
+- [ ] The example inventory maps each required public type and extension method to its example file, UID, source evidence, and chosen scenario.
+- [ ] Examples show a coherent consumer workflow, use related public types when helpful, and avoid placeholder-only `Consumer`/`MyNamespace` shells when a domain name is available.
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`. Namespace pages are under `api/namespaces/` and type pages are under `api/types/`.
 - [ ] The Completion Repair Loop was run after edits, and remaining `EXAMPLE_MISSING` or overwrite-layout diagnostics were fixed or reported as exact blockers.
 - [ ] Examples are realistic, copy/paste-ready, and compile unless a justified skip marker is present.

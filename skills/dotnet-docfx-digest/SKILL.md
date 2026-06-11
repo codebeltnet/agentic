@@ -104,7 +104,11 @@ Material changes include new or removed public API, signature or nullability cha
 
 ## Examples and Overwrites
 
-Every public non-abstraction type and every public extension method needs at least one realistic, minimal, copy/paste-ready example. A namespace fly-in or `Extension Members` table alone is not enough.
+Every public non-abstraction type and every public extension method needs at least one realistic, copy/paste-ready example. A namespace fly-in or `Extension Members` table alone is not enough.
+
+Prefer scenario examples over isolated constructor or method-call snippets. A strong type-page example shows the documented API inside the workflow a consumer is trying to complete, even when that means including nearby public types, a small local helper type, dependency-injection setup, configuration objects, or a short host entry point. The example should still be compact, but it should carry enough context that a developer can understand why the type exists and how it cooperates with the package.
+
+Before writing examples for a package, identify the package ID or IDs from packable project metadata, `.nuget/*/README.md`, package release notes, `Directory.Packages.props`, or `PackageReference` usage. Search local repository evidence by package ID first, then by namespace/type/member name. When internet or GitHub search is available and the user has not forbidden it, search for the exact package ID and exclude the target repository or treat self-repo hits as lower-priority evidence. Package-ID searches often find real `Program.cs`, `PackageReference`, README, and package-documentation usage that type-name searches miss.
 
 **Tests are evidence, not output.** Do not add `ShowUsage`, `Usage`, `Example`, or documentation-only methods to test files. Use tests to understand the documented type's behavior, then transform that knowledge into consumer-facing DocFX overwrite examples.
 
@@ -121,7 +125,7 @@ Every generated `csharp` code block is a complete, copy/paste-ready compilation 
 - Does **not** call members that do not exist on the resolved public API surface.
 - Compiles in a minimal class library verification project referencing the documented assemblies.
 
-Prefer examples derived from existing unit, functional, or integration tests as behavioral evidence, then from samples, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw test assertions, mocks, or fixture setup.
+Prefer examples derived from existing unit, functional, or integration tests as behavioral evidence, then from package-level usage evidence, samples, README content, and real consumer usage, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw test assertions, mocks, or fixture setup.
 
 For public non-abstraction types, put the example on the generated type page by targeting the type UID in DocFX overwrite content. In Codebelt repositories, keep authored type overwrite Markdown under `.docfx/api/types/`, typically as `.docfx/api/types/{TypeUid}.md`.
 
@@ -159,15 +163,17 @@ Class-based examples that pass Gate 1 are compiled as a class library project re
 
 Derive examples from these sources, in order:
 
-1. Public API surface and XML documentation comments — establish the supported constructor signatures, method signatures, and types.
-2. Existing unit or functional tests that reference the documented type or member — use as behavioral evidence only; do not copy Arrange/Act/Assert structure, test fixtures, mocks, or test helper patterns into the final example unless the public API is specifically about testing.
-3. README, package documentation, samples, or existing conceptual docs in the repository.
-4. Implementation source, only when the public surface alone is insufficient to construct a valid calling example.
-5. Official upstream documentation when the library wraps an external framework or library.
-6. Synthesized examples only when all of the above confirm the full public API shape and the synthesized sample compiles.
-7. Omit the example entirely if none of the above yields a compile-valid, consumer-facing example.
+1. Package IDs and package-family context — determine what a consumer installs and search local evidence for the exact package ID before narrowing to individual types.
+2. Public API surface and XML documentation comments — establish the supported constructor signatures, method signatures, and types.
+3. Existing unit, functional, or integration tests that reference the documented type or member — use as behavioral evidence only; do not copy Arrange/Act/Assert structure, test fixtures, mocks, or test helper patterns into the final example unless the public API is specifically about testing.
+4. README, `.nuget/*/README.md`, package documentation, samples, tuning/tooling projects, or existing conceptual docs in the repository.
+5. Real consumer usage found by exact package-ID search, preferring repositories other than the target repository when available; use self-repo hits only as package-authored documentation or sample evidence.
+6. Implementation source, only when the public surface alone is insufficient to construct a valid calling example.
+7. Official upstream documentation when the library wraps an external framework or library.
+8. Synthesized examples only when all of the above confirm the full public API shape and the synthesized sample compiles.
+9. Omit the example entirely if none of the above yields a compile-valid, consumer-facing example.
 
-Final examples must be consumer-facing, realistic, and compile. They must read like production calling code, not test scaffolding.
+Final examples must be consumer-facing, realistic, and compile. They must read like production calling code or Microsoft Learn-style task examples, not test scaffolding, placeholder `Consumer` shells, or one-line smoke tests. Avoid unused locals, `MyNamespace` when a domain-specific namespace is obvious, fake "sample" values that obscure the workflow, and examples that instantiate the documented type without showing the result or next step a real caller cares about.
 
 **Reflection and API-shape requirements:**
 

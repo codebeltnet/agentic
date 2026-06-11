@@ -620,6 +620,22 @@
         "No SAMPLE_COMPILE_FAILED is emitted because the sample is rejected at the skip-reason gate, not attempted for compilation",
         "Diagnostic points to the file and fence index of the offending skip marker"
       ]
+    },
+    {
+      "id": 51,
+      "prompt": "Use dotnet-docfx-digest on a BenchmarkDotNet-style library that ships NuGet packages `Codebelt.Extensions.BenchmarkDotNet` and `Codebelt.Extensions.BenchmarkDotNet.Console`. The validator reports missing type examples for `BenchmarkWorkspace`, `BenchmarkWorkspaceOptions`, `BenchmarkWorkspaceOptionsExtensions`, `ServiceCollectionExtensions`, `BenchmarkContext`, and `BenchmarkProgram`. Existing generated examples compile but are thin: they use `MyNamespace`, `Consumer`, isolated constructors, and unused locals. Improve the type-specific DocFX samples so they fit real consumer context.",
+      "expected_output": "The agent identifies the package IDs from project/package metadata, searches local evidence by `Codebelt.Extensions.BenchmarkDotNet` and `Codebelt.Extensions.BenchmarkDotNet.Console` before type-only searches, uses package README, tooling/tuning projects, functional tests, and available GitHub/package-ID usage as source evidence, and rewrites type-page examples as compact scenario examples. The examples may include multiple related public types when needed, such as `BenchmarkProgram.Run`, `BenchmarkWorkspaceOptions.Slim`, `ConfigureBenchmarkDotNet`, `BenchmarkContext`, `IBenchmarkWorkspace`, and dependency-injection registration, while remaining compile-valid. The agent avoids placeholder-only `Consumer`/`MyNamespace` shells, unused locals, raw test assertions, and isolated constructor smoke tests, updates the example inventory with source evidence and scenario, then reruns `docfx.cs --json` and `--verify-docfx-build` before claiming completion.",
+      "expectations": [
+        "Determines and searches for the exact package IDs `Codebelt.Extensions.BenchmarkDotNet` and `Codebelt.Extensions.BenchmarkDotNet.Console` before relying on type/member-only searches",
+        "Inspects package-level local evidence such as `.nuget/*/README.md`, README content, tooling runner programs, tuning projects, functional tests, or package documentation pages",
+        "Uses external GitHub/package-ID search when available and treats self-repository hits as lower-priority package-authored evidence rather than independent consumer proof",
+        "Creates scenario examples that explain a real workflow, such as configuring a benchmark runner, registering a workspace through DI, applying BenchmarkDotNet jobs, carrying command-line context, or post-processing artifacts",
+        "Allows a type-page example to include multiple related public types when that is the clearest way to show real usage",
+        "Avoids generic `MyNamespace` and `Consumer` wrappers when a domain-specific namespace or class name is obvious",
+        "Avoids unused locals and examples that only instantiate a type without showing a meaningful next step or result",
+        "Keeps every changed csharp example structurally valid and compile-verified through `docfx.cs`",
+        "Updates the example inventory with UID, required file, source evidence, chosen scenario, and final status"
+      ]
     }
   ]
 }
