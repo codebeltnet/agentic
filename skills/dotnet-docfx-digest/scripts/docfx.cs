@@ -22,6 +22,7 @@ internal static class DocfxValidator
     private const string EndMarker = "<!-- dotnet-docfx-digest:end -->";
     private const string ExtensionAttributeFullName = "System.Runtime.CompilerServices.ExtensionAttribute";
     private const string SkipMarker = "dotnet-docfx-digest:skip-compile";
+    private const int DefaultSampleValidationParallelism = 2;
 
     private static readonly string[] IgnoredDirectorySegments = ["bin", "obj", "_site", ".git", ".vs", ".vscode", ".idea", "node_modules"];
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(10);
@@ -87,6 +88,7 @@ internal static class DocfxValidator
     private static int Validate(Options options)
     {
         var report = new Report { Script = ScriptId };
+        var phaseTimer = new Stopwatch();
 
         // 1. Resolve repository root.
         string repoRoot;
@@ -140,8 +142,26 @@ internal static class DocfxValidator
             }
         }
 
-        // 4. Build the repository before metadata inspection.
-        var (buildOk, buildOutput) = BuildRepository(repoRoot, options.Configuration);
+        // Cache: compute once for the full validation run so callers do not repeatedly scan the repo root.
+        var hasStrongNameKey = HasRootStrongNameKey(repoRoot);
+
+        // 4. Discover DocFX metadata projects BEFORE building so the build is scoped to only
+        //    the projects included in the documentation boundary.
+        phaseTimer.Restart();
+        var projects = DiscoverProjects(docfxPath, docfxWorkspace, report);
+        WritePhase(options, "project discovery", phaseTimer.Elapsed);
+        if (projects.Count == 0)
+        {
+            return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Project discovery failed.");
+        }
+
+        var libraryProjects = projects.Where(p => !p.IsTest).ToList();
+
+        // 5. Restore and build only the projects referenced by the active docfx.json.
+        //    This avoids building the full solution when it contains unrelated projects.
+        phaseTimer.Restart();
+        var (buildOk, buildOutput) = BuildDocfxProjects(libraryProjects, repoRoot, options.Configuration, hasStrongNameKey);
+        WritePhase(options, "repository build", phaseTimer.Elapsed);
         if (!buildOk)
         {
             report.Errors.Add(new Diagnostic("BUILD_FAILED", null, null,
@@ -149,17 +169,8 @@ internal static class DocfxValidator
             return Emit(options, report, ExitCode.BuildFailed, "Build failed.");
         }
 
-        // 5-7. Discover public API, namespaces and extension methods from compiled metadata.
-        // Use docfx.json as the canonical documentation boundary: only projects referenced
-        // by metadata[].src[] in the active docfx.json are included. Projects under src/ that
-        // are not configured in docfx.json (test harnesses, benchmarks, samples, etc.) are excluded.
-        var projects = DiscoverProjects(docfxPath, docfxWorkspace, report);
-        if (projects.Count == 0)
-        {
-            return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Project discovery failed.");
-        }
-
-        var libraryProjects = projects.Where(p => !p.IsTest).ToList();
+        // 6. Discover public API, namespaces and extension methods from compiled metadata.
+        phaseTimer.Restart();
         ApiModel api;
         try
         {
@@ -172,6 +183,7 @@ internal static class DocfxValidator
             return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Public API discovery failed.");
         }
 
+        WritePhase(options, "api discovery", phaseTimer.Elapsed);
         if (api.Namespaces.Count == 0)
         {
             report.Errors.Add(new Diagnostic("PUBLIC_API_DISCOVERY_FAILED", null, null,
@@ -183,15 +195,24 @@ internal static class DocfxValidator
         report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
         report.Summary.ExtensionMethods = api.Namespaces.Sum(n => n.ExtensionMethods.Count);
 
-        // 8. Discover DocFX Markdown files from the DocFX build inputs.
+        // 7. Discover DocFX Markdown files from the DocFX build inputs.
+        phaseTimer.Restart();
         var markdownFiles = DiscoverMarkdown(repoRoot, docfxPath, docfxWorkspace, report);
+        WritePhase(options, "markdown discovery", phaseTimer.Elapsed);
 
-        // 9-11. Validate namespace overview pages, extension tables and availability.
+        // Build a filename-keyed index to replace the O(N*M) FirstOrDefault scan per namespace.
+        var namespacePageIndex = markdownFiles
+            .GroupBy(f => Path.GetFileNameWithoutExtension(f), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        // Pre-extract all overwrite sections once — reused by both namespace and required-example validation.
+        var allOverwriteSections = markdownFiles.SelectMany(ExtractOverwriteSections).ToList();
+
+        // 8. Validate namespace overview pages, extension tables and availability.
+        phaseTimer.Restart();
         foreach (var ns in api.Namespaces.OrderBy(n => n.Name, StringComparer.Ordinal))
         {
-            var page = markdownFiles.FirstOrDefault(f =>
-                string.Equals(Path.GetFileNameWithoutExtension(f), ns.Name, StringComparison.Ordinal));
-
+            namespacePageIndex.TryGetValue(ns.Name, out var page);
             if (page is null)
             {
                 report.Errors.Add(new Diagnostic("NAMESPACE_PAGE_MISSING", null, ns.Name,
@@ -208,22 +229,28 @@ internal static class DocfxValidator
             report.Summary.NamespacePagesValidated++;
         }
 
-        // 12. Verify mandatory examples exist before compiling the examples that were found.
-        ValidateRequiredExamples(repoRoot, docfxWorkspace, markdownFiles, api, options, changedFiles, report);
+        WritePhase(options, "namespace validation", phaseTimer.Elapsed);
 
-        // 13. Extract and compile C# documentation samples.
+        // 9. Verify mandatory examples exist before compiling the examples that were found.
+        phaseTimer.Restart();
+        ValidateRequiredExamples(repoRoot, docfxWorkspace, allOverwriteSections, api, options, changedFiles, report);
+        WritePhase(options, "required example validation", phaseTimer.Elapsed);
+
+        // 10. Extract and compile C# documentation samples with bounded parallelism.
         if (options.ValidateSamples)
         {
-            ValidateSamples(repoRoot, markdownFiles, libraryProjects, options, changedFiles, report);
+            ValidateSamples(repoRoot, markdownFiles, libraryProjects, options, changedFiles, hasStrongNameKey, report);
         }
 
         // Optional DocFX build verification happens in a temp copy so generated output never lands in the working tree.
         if (options.VerifyDocfxBuild)
         {
-            VerifyDocfxBuild(repoRoot, docfxPath, report);
+            phaseTimer.Restart();
+            VerifyDocfxBuild(repoRoot, docfxPath, hasStrongNameKey, report);
+            WritePhase(options, "docfx build verification", phaseTimer.Elapsed);
         }
 
-        // 14-15. Produce report and return a deterministic exit code.
+        // 11. Produce report and return a deterministic exit code.
         bool hasSampleError = report.Errors.Any(e => e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_STRUCTURE_INVALID");
         bool hasOtherError = report.Errors.Any(e => e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_STRUCTURE_INVALID");
 
@@ -978,7 +1005,7 @@ internal static class DocfxValidator
         }
     }
 
-    private static void VerifyDocfxBuild(string repoRoot, string docfxPath, Report report)
+    private static void VerifyDocfxBuild(string repoRoot, string docfxPath, bool hasStrongNameKey, Report report)
     {
         var docfxExecutable = ResolveDocfxExecutable();
         if (docfxExecutable is null)
@@ -994,7 +1021,7 @@ internal static class DocfxValidator
             CopyDirectory(repoRoot, tempRoot);
             var relativeDocfxPath = Path.GetRelativePath(repoRoot, docfxPath);
             var tempDocfxPath = Path.Combine(tempRoot, relativeDocfxPath);
-            var environment = HasRootStrongNameKey(tempRoot)
+            var environment = hasStrongNameKey
                 ? null
                 : new Dictionary<string, string> { ["SkipSignAssembly"] = "true" };
             var result = RunProcess(docfxExecutable, $"\"{tempDocfxPath}\"", tempRoot, environment);
@@ -1091,16 +1118,64 @@ internal static class DocfxValidator
     // Build
     // ----------------------------------------------------------------------
 
-    private static (bool Ok, string Output) BuildRepository(string repoRoot, string configuration)
+    /// <summary>
+    /// Restores and builds only the library projects referenced by the active docfx.json.
+    /// Restore runs once against the solution (when present) or each project individually.
+    /// Build runs per-project with <c>--no-restore</c> to avoid redundant NuGet evaluation.
+    /// </summary>
+    private static (bool Ok, string Output) BuildDocfxProjects(
+        List<ProjectInfo> libraryProjects, string repoRoot, string configuration, bool hasStrongNameKey)
     {
-        // Build a solution if one is present, otherwise let dotnet resolve the project in the repo root.
-        var target = Directory.GetFiles(repoRoot, "*.slnx").Concat(Directory.GetFiles(repoRoot, "*.sln")).FirstOrDefault();
-        var signingProperty = HasRootStrongNameKey(repoRoot) ? string.Empty : " -p:SkipSignAssembly=true";
-        var args = target is null
-            ? $"build -c {configuration} --nologo{signingProperty}"
-            : $"build \"{target}\" -c {configuration} --nologo{signingProperty}";
-        var result = RunProcess("dotnet", args, repoRoot);
-        return (result.ExitCode == 0, result.StdOut + result.StdErr);
+        if (libraryProjects.Count == 0)
+        {
+            return (true, string.Empty);
+        }
+
+        var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
+
+        // Prefer restoring the whole solution so the dependency graph for all documented
+        // projects is resolved in one pass; fall back to per-project restores when no
+        // solution exists.
+        var solutionFile = Directory.GetFiles(repoRoot, "*.slnx")
+            .Concat(Directory.GetFiles(repoRoot, "*.sln"))
+            .FirstOrDefault();
+
+        if (solutionFile is not null)
+        {
+            var restoreResult = RunProcess("dotnet",
+                $"restore \"{solutionFile}\" --nologo{signingProperty}", repoRoot);
+            if (restoreResult.ExitCode != 0)
+            {
+                return (false, restoreResult.StdOut + restoreResult.StdErr);
+            }
+        }
+        else
+        {
+            foreach (var proj in libraryProjects)
+            {
+                var restoreResult = RunProcess("dotnet",
+                    $"restore \"{proj.Path}\" --nologo{signingProperty}", repoRoot);
+                if (restoreResult.ExitCode != 0)
+                {
+                    return (false, restoreResult.StdOut + restoreResult.StdErr);
+                }
+            }
+        }
+
+        // Build each documented project individually with --no-restore.
+        var buildOutput = new StringBuilder();
+        foreach (var proj in libraryProjects)
+        {
+            var result = RunProcess("dotnet",
+                $"build \"{proj.Path}\" -c {configuration} --no-restore --nologo{signingProperty}", repoRoot);
+            buildOutput.Append(result.StdOut).Append(result.StdErr);
+            if (result.ExitCode != 0)
+            {
+                return (false, buildOutput.ToString());
+            }
+        }
+
+        return (true, buildOutput.ToString());
     }
 
     private static bool HasRootStrongNameKey(string repoRoot)
@@ -2221,15 +2296,9 @@ internal static class DocfxValidator
     // Required example validation
     // ----------------------------------------------------------------------
 
-    private static void ValidateRequiredExamples(string repoRoot, string docfxWorkspace, List<string> markdownFiles, ApiModel api,
+    private static void ValidateRequiredExamples(string repoRoot, string docfxWorkspace, IReadOnlyList<OverwriteSection> sections, ApiModel api,
         Options options, HashSet<string>? changedFiles, Report report)
     {
-        var sections = new List<OverwriteSection>();
-        foreach (var md in markdownFiles)
-        {
-            sections.AddRange(ExtractOverwriteSections(md));
-        }
-
         foreach (var target in api.RequiredExampleTargets)
         {
             if (options.ChangedOnly && changedFiles is not null &&
@@ -2409,8 +2478,10 @@ internal static class DocfxValidator
     // ----------------------------------------------------------------------
 
     private static void ValidateSamples(string repoRoot, List<string> markdownFiles, List<ProjectInfo> libraryProjects,
-        Options options, HashSet<string>? changedFiles, Report report)
+        Options options, HashSet<string>? changedFiles, bool hasStrongNameKey, Report report)
     {
+        // 1. Extract all C# samples from Markdown files.
+        var phaseTimer = Stopwatch.StartNew();
         var samples = new List<SampleFence>();
         foreach (var md in markdownFiles)
         {
@@ -2422,57 +2493,126 @@ internal static class DocfxValidator
             samples.AddRange(ExtractFences(md));
         }
 
+        WritePhase(options, "sample extraction", phaseTimer.Elapsed);
         if (samples.Count == 0)
         {
             return;
         }
 
+        // 2. Pre-validate structure (skip/structure checks) — no compilation.
+        //    Record which samples need compilation and their original index for deterministic ordering.
+        var toCompile = new List<(SampleFence Sample, int OriginalIndex)>(samples.Count);
+        for (int i = 0; i < samples.Count; i++)
+        {
+            var sample = samples[i];
+            var skip = FindSkip(sample.Code);
+            if (skip.Found)
+            {
+                if (string.IsNullOrWhiteSpace(skip.Reason))
+                {
+                    report.Errors.Add(new Diagnostic("SAMPLE_SKIP_REASON_MISSING", Rel(repoRoot, sample.File), null,
+                        $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses the skip-compile marker without a mandatory reason."));
+                }
+                else if (IsInsufficientSkipReason(skip.Reason))
+                {
+                    report.Errors.Add(new Diagnostic("SAMPLE_SKIP_REASON_INSUFFICIENT", Rel(repoRoot, sample.File), null,
+                        $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses a weak skip-compile reason: '{skip.Reason}'. Package requirements, framework-pattern explanations, or full-example notes are documentation work, not a compile opt-out. Make the sample compile, document the package requirement outside the code fence, or use a deterministic blocker such as an external service or host environment that the sample compiler cannot provide."));
+                }
+                else
+                {
+                    report.Summary.SamplesSkipped++;
+                }
+
+                continue;
+            }
+
+            var structureError = ValidateSampleStructure(sample.Code);
+            if (structureError is not null)
+            {
+                report.Errors.Add(new Diagnostic("SAMPLE_STRUCTURE_INVALID", Rel(repoRoot, sample.File), null,
+                    $"C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) failed structure validation: {structureError}"));
+                continue;
+            }
+
+            toCompile.Add((sample, i));
+        }
+
+        if (toCompile.Count == 0)
+        {
+            return;
+        }
+
+        // 3. Resolve built assembly DLL paths so worker projects can use direct <Reference> items
+        //    instead of rebuilding the project graph for every sample.
+        var assemblyRefs = ResolveBuiltAssemblyReferences(libraryProjects, options.Configuration, options.Framework);
+        if (assemblyRefs.Count < libraryProjects.Count && libraryProjects.Count > 0)
+        {
+            report.Warnings.Add(new Diagnostic("SAMPLE_WORKER_ASSEMBLY_FALLBACK", null, null,
+                $"Built DLL paths could not be resolved for {libraryProjects.Count - assemblyRefs.Count} of {libraryProjects.Count} documented " +
+                "project(s). Sample validation workers will use ProjectReference instead of direct assembly references for those projects, which may reduce performance."));
+        }
+
+        // 4. Create reusable sample-validation worker pool and compile with bounded parallelism.
         var tempRoot = Path.Combine(Path.GetTempPath(), "docfx-digest-samples-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
         try
         {
-            int index = 0;
-            foreach (var sample in samples)
+            var parallelism = GetSampleValidationParallelism(options);
+            var workerCount = Math.Min(parallelism, toCompile.Count);
+            WritePhaseStart(options, "sample validation", workerCount, toCompile.Count);
+            phaseTimer.Restart();
+
+            // Create and restore each worker once.
+            var workers = new SampleWorkerInfo[workerCount];
+            for (int w = 0; w < workerCount; w++)
             {
-                index++;
-                var skip = FindSkip(sample.Code);
-                if (skip.Found)
-                {
-                    if (string.IsNullOrWhiteSpace(skip.Reason))
-                    {
-                        report.Errors.Add(new Diagnostic("SAMPLE_SKIP_REASON_MISSING", Rel(repoRoot, sample.File), null,
-                            $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses the skip-compile marker without a mandatory reason."));
-                    }
-                    else if (IsInsufficientSkipReason(skip.Reason))
-                    {
-                        report.Errors.Add(new Diagnostic("SAMPLE_SKIP_REASON_INSUFFICIENT", Rel(repoRoot, sample.File), null,
-                            $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses a weak skip-compile reason: '{skip.Reason}'. Package requirements, framework-pattern explanations, or full-example notes are documentation work, not a compile opt-out. Make the sample compile, document the package requirement outside the code fence, or use a deterministic blocker such as an external service or host environment that the sample compiler cannot provide."));
-                    }
-                    else
-                    {
-                        report.Summary.SamplesSkipped++;
-                    }
+                workers[w] = CreateSampleWorker(
+                    tempRoot, w + 1, assemblyRefs, libraryProjects,
+                    options.Framework ?? "net10.0", options.Configuration, repoRoot, hasStrongNameKey, report);
+            }
 
-                    continue;
+            // Assign samples to workers in round-robin order. Each worker processes its
+            // stripe sequentially, so no synchronization is needed within a worker.
+            // Results are stored in a pre-sized indexed array to guarantee deterministic
+            // diagnostic ordering regardless of worker completion order.
+            var results = new SampleCompileResult?[samples.Count];
+            var workerTasks = Enumerable.Range(0, workerCount)
+                .Select(workerIdx =>
+                {
+                    var mySamples = toCompile.Where((_, si) => si % workerCount == workerIdx).ToList();
+                    var myWorker = workers[workerIdx];
+                    return Task.Run(() =>
+                    {
+                        foreach (var (sample, originalIndex) in mySamples)
+                        {
+                            var (ok, diags, exitCode) = CompileWithWorker(myWorker, sample, options.Configuration, hasStrongNameKey);
+                            results[originalIndex] = new SampleCompileResult(ok, diags, exitCode);
+                        }
+                    });
+                })
+                .ToArray();
+
+            Task.WaitAll(workerTasks);
+            WritePhase(options, "sample validation", phaseTimer.Elapsed);
+
+            // 5. Merge results in original sample order for deterministic diagnostics.
+            for (int i = 0; i < samples.Count; i++)
+            {
+                var result = results[i];
+                if (result is null)
+                {
+                    continue; // was skipped or had a structure error
                 }
 
-                var structureError = ValidateSampleStructure(sample.Code);
-                if (structureError is not null)
-                {
-                    report.Errors.Add(new Diagnostic("SAMPLE_STRUCTURE_INVALID", Rel(repoRoot, sample.File), null,
-                        $"C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) failed structure validation: {structureError}"));
-                    continue;
-                }
-
-                var (ok, diagnostics, exitCode) = CompileSample(tempRoot, index, sample, libraryProjects, options.Configuration, options.Framework, repoRoot);
-                if (ok)
+                if (result.Ok)
                 {
                     report.Summary.SamplesCompiled++;
                 }
                 else
                 {
+                    var sample = samples[i];
                     report.Errors.Add(new Diagnostic("SAMPLE_COMPILE_FAILED", Rel(repoRoot, sample.File), null,
-                        $"C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) failed to compile (exit {exitCode}).\n{Trim(diagnostics)}"));
+                        $"C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) failed to compile (exit {result.ExitCode}).\n{Trim(result.Diagnostics)}"));
                 }
             }
         }
@@ -2482,86 +2622,207 @@ internal static class DocfxValidator
         }
     }
 
-    private static (bool Ok, string Diagnostics, int ExitCode) CompileSample(string tempRoot, int index, SampleFence sample,
-        List<ProjectInfo> libraryProjects, string configuration, string? framework, string repoRoot)
+    private static int GetSampleValidationParallelism(Options options)
     {
-        var dir = Path.Combine(tempRoot, "sample_" + index);
-        Directory.CreateDirectory(dir);
+        var processorCount = Math.Max(1, Environment.ProcessorCount);
+        const int MaxSupportedParallelism = 8;
+        var defaultParallelism = Math.Min(DefaultSampleValidationParallelism, processorCount);
 
-        // Examples labelled // Program.cs are compiled as file-based apps (top-level statements).
-        // All other examples (which have passed ValidateSampleStructure) are class-based and compiled
-        // as a class library project that references the documented assemblies.
-        if (IsProgramCsExample(sample.Code))
+        // CLI argument takes precedence over the environment variable.
+        if (options.SampleParallelism.HasValue)
         {
-            return CompileAsFileBasedApp(dir, sample, libraryProjects, framework, configuration, repoRoot);
+            return Math.Max(1, Math.Min(options.SampleParallelism.Value, Math.Min(processorCount, MaxSupportedParallelism)));
         }
 
-        return CompileAsClassLibrary(dir, sample, libraryProjects, framework, configuration, repoRoot);
+        var rawValue = Environment.GetEnvironmentVariable("DOCFX_DIGEST_SAMPLE_PARALLELISM");
+        if (int.TryParse(rawValue, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var configured) && configured > 0)
+        {
+            return Math.Min(configured, Math.Min(processorCount, MaxSupportedParallelism));
+        }
+
+        return defaultParallelism;
     }
 
-    private static (bool Ok, string Diagnostics, int ExitCode) CompileAsFileBasedApp(string dir, SampleFence sample,
-        List<ProjectInfo> libraryProjects, string? framework, string configuration, string repoRoot)
+    private static List<(string AssemblyName, string DllPath)> ResolveBuiltAssemblyReferences(
+        List<ProjectInfo> libraryProjects, string configuration, string? framework)
     {
-        var file = Path.Combine(dir, "sample.cs");
-
-        var sb = new StringBuilder();
-        sb.Append("#:property TargetFramework=").Append(framework ?? "net10.0").Append('\n');
-        sb.Append("#:property PublishAot=false\n");
-        sb.Append("#:property Nullable=enable\n");
+        var refs = new List<(string, string)>(libraryProjects.Count);
         foreach (var proj in libraryProjects)
         {
-            sb.Append("#:project ").Append(proj.Path).Append('\n');
+            var dll = FindAssembly(proj, configuration, framework);
+            if (dll is not null && File.Exists(dll))
+            {
+                refs.Add((proj.AssemblyName, dll));
+            }
         }
 
-        sb.Append('\n');
-        sb.Append(sample.Code);
-        if (!sample.Code.EndsWith('\n'))
-        {
-            sb.Append('\n');
-        }
-
-        File.WriteAllText(file, sb.ToString(), new UTF8Encoding(false));
-
-        var signingProperty = HasRootStrongNameKey(repoRoot) ? string.Empty : " -p:SkipSignAssembly=true";
-        var result = RunProcess("dotnet", $"build \"{file}\" -c {configuration} --nologo{signingProperty}", dir);
-        return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
+        return refs;
     }
 
-    private static (bool Ok, string Diagnostics, int ExitCode) CompileAsClassLibrary(string dir, SampleFence sample,
-        List<ProjectInfo> libraryProjects, string? framework, string configuration, string repoRoot)
+    /// <summary>
+    /// Creates a reusable sample-validation worker under <paramref name="tempRoot"/> and
+    /// performs a one-time restore so all subsequent sample builds can use <c>--no-restore</c>.
+    /// </summary>
+    private static SampleWorkerInfo CreateSampleWorker(
+        string tempRoot, int workerNumber,
+        List<(string AssemblyName, string DllPath)> assemblyRefs,
+        List<ProjectInfo> libraryProjects,
+        string framework, string configuration,
+        string repoRoot, bool hasStrongNameKey, Report report)
     {
-        var csFile = Path.Combine(dir, "Example.cs");
-        File.WriteAllText(csFile, sample.Code, new UTF8Encoding(false));
+        var workerDir = Path.Combine(tempRoot, "docfx-sample-workers", $"worker-{workerNumber:D4}");
+        var libDir = Path.Combine(workerDir, "lib");
+        var appDir = Path.Combine(workerDir, "app");
+        Directory.CreateDirectory(libDir);
+        Directory.CreateDirectory(appDir);
 
-        var tfm = framework ?? "net10.0";
+        // Determine which documented projects need ProjectReference fallback (DLL not resolved).
+        var projectRefFallbacks = libraryProjects
+            .Where(p => !assemblyRefs.Any(r =>
+                string.Equals(r.AssemblyName, p.AssemblyName, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        // Class-library project — for class-based samples (namespace + type declaration).
+        var libProjPath = Path.Combine(libDir, "DocfxSampleLib.csproj");
+        File.WriteAllText(libProjPath, GenerateSampleLibProject(assemblyRefs, projectRefFallbacks, framework),
+            new UTF8Encoding(false));
+        // Compilable placeholder; overwritten per sample.
+        File.WriteAllText(Path.Combine(libDir, "Sample.cs"),
+            "namespace DocfxSamplePlaceholder { internal static class _Placeholder { } }",
+            new UTF8Encoding(false));
+
+        // Console-app project — for Program.cs / top-level-statement samples.
+        var appProjPath = Path.Combine(appDir, "DocfxSampleApp.csproj");
+        File.WriteAllText(appProjPath, GenerateSampleAppProject(assemblyRefs, projectRefFallbacks, framework),
+            new UTF8Encoding(false));
+        // Compilable placeholder; overwritten per sample.
+        File.WriteAllText(Path.Combine(appDir, "Program.cs"), "// placeholder", new UTF8Encoding(false));
+
+        // Restore once so --no-restore works for all subsequent sample builds.
+        var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
+        var libRestoreOk = RunProcess("dotnet",
+            $"restore \"{libProjPath}\" --nologo{signingProperty}", libDir).ExitCode == 0;
+        var appRestoreOk = RunProcess("dotnet",
+            $"restore \"{appProjPath}\" --nologo{signingProperty}", appDir).ExitCode == 0;
+
+        if (!libRestoreOk || !appRestoreOk)
+        {
+            report.Warnings.Add(new Diagnostic("SAMPLE_WORKER_RESTORE_FAILED", workerDir, null,
+                $"Sample validation worker {workerNumber} restore failed; affected samples will build without --no-restore and may be slower."));
+        }
+
+        return new SampleWorkerInfo(libDir, appDir, libProjPath, appProjPath, libRestoreOk, appRestoreOk);
+    }
+
+    private static string GenerateSampleLibProject(
+        List<(string AssemblyName, string DllPath)> assemblyRefs,
+        List<ProjectInfo> projectRefFallbacks,
+        string framework)
+    {
         var sb = new StringBuilder();
         sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
         sb.AppendLine("  <PropertyGroup>");
-        sb.AppendLine($"    <TargetFramework>{tfm}</TargetFramework>");
+        sb.AppendLine($"    <TargetFramework>{framework}</TargetFramework>");
         sb.AppendLine("    <OutputType>Library</OutputType>");
         sb.AppendLine("    <Nullable>enable</Nullable>");
         sb.AppendLine("    <LangVersion>latest</LangVersion>");
         sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
         sb.AppendLine("  </PropertyGroup>");
-        if (libraryProjects.Count > 0)
+        AppendReferenceItems(sb, assemblyRefs, projectRefFallbacks);
+        sb.AppendLine("</Project>");
+        return sb.ToString();
+    }
+
+    private static string GenerateSampleAppProject(
+        List<(string AssemblyName, string DllPath)> assemblyRefs,
+        List<ProjectInfo> projectRefFallbacks,
+        string framework)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
+        sb.AppendLine("  <PropertyGroup>");
+        sb.AppendLine($"    <TargetFramework>{framework}</TargetFramework>");
+        sb.AppendLine("    <OutputType>Exe</OutputType>");
+        sb.AppendLine("    <Nullable>enable</Nullable>");
+        sb.AppendLine("    <LangVersion>latest</LangVersion>");
+        sb.AppendLine("    <PublishAot>false</PublishAot>");
+        sb.AppendLine("  </PropertyGroup>");
+        AppendReferenceItems(sb, assemblyRefs, projectRefFallbacks);
+        sb.AppendLine("</Project>");
+        return sb.ToString();
+    }
+
+    private static void AppendReferenceItems(
+        StringBuilder sb,
+        List<(string AssemblyName, string DllPath)> assemblyRefs,
+        List<ProjectInfo> projectRefFallbacks)
+    {
+        if (assemblyRefs.Count > 0)
         {
             sb.AppendLine("  <ItemGroup>");
-            foreach (var proj in libraryProjects)
+            foreach (var (assemblyName, dllPath) in assemblyRefs)
             {
-                sb.AppendLine($"""    <ProjectReference Include="{proj.Path}" />""");
+                sb.AppendLine($"    <Reference Include=\"{assemblyName}\">");
+                sb.AppendLine($"      <HintPath>{dllPath}</HintPath>");
+                sb.AppendLine("      <Private>false</Private>");
+                sb.AppendLine("    </Reference>");
             }
 
             sb.AppendLine("  </ItemGroup>");
         }
 
-        sb.AppendLine("</Project>");
+        if (projectRefFallbacks.Count > 0)
+        {
+            sb.AppendLine("  <ItemGroup>");
+            foreach (var proj in projectRefFallbacks)
+            {
+                sb.AppendLine($"    <ProjectReference Include=\"{proj.Path}\" />");
+            }
 
-        var csprojFile = Path.Combine(dir, "SampleVerification.csproj");
-        File.WriteAllText(csprojFile, sb.ToString(), new UTF8Encoding(false));
+            sb.AppendLine("  </ItemGroup>");
+        }
+    }
 
-        var signingProperty = HasRootStrongNameKey(repoRoot) ? string.Empty : " -p:SkipSignAssembly=true";
-        var result = RunProcess("dotnet", $"build \"{csprojFile}\" -c {configuration} --nologo{signingProperty}", dir);
-        return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
+    private static (bool Ok, string Diagnostics, int ExitCode) CompileWithWorker(
+        SampleWorkerInfo worker, SampleFence sample, string configuration, bool hasStrongNameKey)
+    {
+        var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
+
+        if (IsProgramCsExample(sample.Code))
+        {
+            // Top-level statement sample: write to Program.cs and build the app project.
+            var noRestoreFlag = worker.AppRestoreSucceeded ? " --no-restore" : string.Empty;
+            File.WriteAllText(Path.Combine(worker.AppDirectory, "Program.cs"), sample.Code, new UTF8Encoding(false));
+            var result = RunProcess("dotnet",
+                $"build \"{worker.AppProjectPath}\" -c {configuration}{noRestoreFlag} --nologo{signingProperty}",
+                worker.AppDirectory);
+            return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
+        }
+
+        // Class-based sample: write to Sample.cs and build the library project.
+        var libNoRestoreFlag = worker.LibRestoreSucceeded ? " --no-restore" : string.Empty;
+        File.WriteAllText(Path.Combine(worker.LibDirectory, "Sample.cs"), sample.Code, new UTF8Encoding(false));
+        var libResult = RunProcess("dotnet",
+            $"build \"{worker.LibProjectPath}\" -c {configuration}{libNoRestoreFlag} --nologo{signingProperty}",
+            worker.LibDirectory);
+        return (libResult.ExitCode == 0, libResult.StdOut + libResult.StdErr, libResult.ExitCode);
+    }
+
+    private static void WritePhase(Options options, string name, TimeSpan elapsed)
+    {
+        if (!options.Json)
+        {
+            Console.WriteLine($"  [phase] {name}: {elapsed.TotalSeconds:F2}s");
+        }
+    }
+
+    private static void WritePhaseStart(Options options, string name, int workers, int count)
+    {
+        if (!options.Json)
+        {
+            Console.WriteLine($"  [phase] {name}: {count} sample(s), {workers} worker(s)");
+        }
     }
 
     private static List<SampleFence> ExtractFences(string mdFile)
@@ -3214,6 +3475,11 @@ internal static class DocfxValidator
                     if (!Next(args, ref i, out var rp)) { error = "--repair-plan requires a path."; return false; }
                     options.RepairPlanPath = rp;
                     break;
+                case "--sample-parallelism":
+                    if (!Next(args, ref i, out var sp)) { error = "--sample-parallelism requires a count."; return false; }
+                    if (!int.TryParse(sp, out var spv) || spv < 1) { error = "--sample-parallelism must be a positive integer."; return false; }
+                    options.SampleParallelism = spv;
+                    break;
                 case "--clean-generated-metadata":
                     options.CleanGeneratedMetadata = true;
                     break;
@@ -3229,6 +3495,13 @@ internal static class DocfxValidator
                     if (TrySplit(arg, "--configuration", out var v3)) { options.Configuration = v3; break; }
                     if (TrySplit(arg, "--framework", out var v4)) { options.Framework = v4; break; }
                     if (TrySplit(arg, "--repair-plan", out var v5)) { options.RepairPlanPath = v5; break; }
+                    if (TrySplit(arg, "--sample-parallelism", out var v6) &&
+                        int.TryParse(v6, out var spvInline) && spvInline >= 1)
+                    {
+                        options.SampleParallelism = spvInline;
+                        break;
+                    }
+
                     error = $"Unknown argument: {arg}";
                     return false;
             }
@@ -3278,6 +3551,8 @@ internal static class DocfxValidator
               --framework <tfm>        Optional target framework to validate against.
               --validate-samples       Compile C# samples. Default: enabled.
               --no-validate-samples    Skip C# sample compilation.
+              --sample-parallelism <n> Number of parallel sample-validation workers (1-8). Default: 2.
+                                       Override with env var DOCFX_DIGEST_SAMPLE_PARALLELISM.
               --changed-only           Validate only files changed according to git.
               --verify-docfx-build     Run DocFX against a temp copy of the repository so generated output stays outside the working tree.
               --repair-plan <path>     Write a deterministic Markdown repair plan from validation diagnostics.
@@ -3327,6 +3602,7 @@ internal static class DocfxValidator
         public bool CleanGeneratedMetadata { get; set; } = true;
         public bool Json { get; set; }
         public bool Help { get; set; }
+        public int? SampleParallelism { get; set; }
     }
 
     private sealed record ProjectInfo(string Path, string AssemblyName, List<string> TargetFrameworks, bool IsTest);
@@ -3356,6 +3632,16 @@ internal static class DocfxValidator
     private sealed record OverwriteSection(string File, string Uid, string Body, bool MappedToExample = false);
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
+
+    private sealed record SampleWorkerInfo(
+        string LibDirectory,
+        string AppDirectory,
+        string LibProjectPath,
+        string AppProjectPath,
+        bool LibRestoreSucceeded,
+        bool AppRestoreSucceeded);
+
+    private sealed record SampleCompileResult(bool Ok, string Diagnostics, int ExitCode);
 }
 
 internal sealed class Diagnostic
