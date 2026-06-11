@@ -62,6 +62,20 @@ Do not use broad `git restore`, `git checkout --`, `git reset`, or whole-directo
 
 After modifications, inspect `git diff` for touched documentation paths and confirm the diff contains only intended changes.
 
+## File Encoding Safety
+
+DocFX documentation files in Codebelt repositories use UTF-8 with BOM and LF line endings. When any tool must rewrite a documentation file to add or change encoding:
+
+- **Never use `Get-Content` + `[System.Text.Encoding]::UTF8.GetBytes()` round-trips.** On Windows, `Get-Content` reads in the OEM/ANSI code page by default. Multi-byte UTF-8 sequences — including emoji such as ⬇️ in `Extension Members` tables — are misread as Latin-1 and re-encoded as mojibake. The corruption is invisible until `git diff` reveals scrambled bytes.
+- **Use byte-level operations** to prepend a BOM without re-encoding content:
+  ```powershell
+  [System.IO.File]::WriteAllBytes($path, [byte[]](0xEF,0xBB,0xBF) + [System.IO.File]::ReadAllBytes($path))
+  ```
+- **Prefer the `edit` tool** for all Markdown content edits; it preserves bytes correctly and avoids encoding round-trip issues entirely.
+- **Check `git status` before any encoding-rewriting operation.** If bytes are corrupted and the file was committed, `git checkout HEAD -- <file>` restores the committed version — but discards any uncommitted in-flight changes. Do not use that recovery if there are unsaved edits.
+
+**Line ending inconsistency**: `.docfx/*.md` files may have mixed BOM presence or CRLF/LF line endings across a repository (pre-existing, not introduced by documentation edits). The DocFX validator does not enforce line endings, but mixed state increases encoding-corruption risk. If you discover mixed line endings during an audit, normalize all `.docfx/*.md` files to BOM + LF using the byte-level approach above, not `Set-Content` or `Out-File`.
+
 ## Scope
 
 Apply this skill to:
