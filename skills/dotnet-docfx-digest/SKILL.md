@@ -106,6 +106,8 @@ Material changes include new or removed public API, signature or nullability cha
 
 Every public non-abstraction type and every public extension method needs at least one realistic, minimal, copy/paste-ready example. A namespace fly-in or `Extension Members` table alone is not enough.
 
+**Tests are evidence, not output.** Do not add `ShowUsage`, `Usage`, `Example`, or documentation-only methods to test files. Use tests to understand the documented type's behavior, then transform that knowledge into consumer-facing DocFX overwrite examples.
+
 Every generated `csharp` code block is a complete, copy/paste-ready compilation unit. The default is always a compilable unit (option 1). Only use intentionally incomplete excerpts (option 2) when explicitly requested by the user, and label them clearly.
 
 **Complete C# example contract:**
@@ -119,7 +121,7 @@ Every generated `csharp` code block is a complete, copy/paste-ready compilation 
 - Does **not** call members that do not exist on the resolved public API surface.
 - Compiles in a minimal class library verification project referencing the documented assemblies.
 
-Prefer examples derived from existing unit, functional, or integration tests, then from samples, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw assertions.
+Prefer examples derived from existing unit, functional, or integration tests as behavioral evidence, then from samples, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw test assertions, mocks, or fixture setup.
 
 For public non-abstraction types, put the example on the generated type page by targeting the type UID in DocFX overwrite content. In Codebelt repositories, keep authored type overwrite Markdown under `.docfx/api/types/`, typically as `.docfx/api/types/{TypeUid}.md`.
 
@@ -155,10 +157,17 @@ Class-based examples that pass Gate 1 are compiled as a class library project re
 
 **Example generation source priority:**
 
-1. Existing tests that reference the documented type or member.
-2. Existing samples or README usage in the repository.
-3. Synthesized examples only when the full public API shape is resolved and the synthesized sample compiles.
-4. Omit the example entirely if none of the above yields a compile-valid example.
+Derive examples from these sources, in order:
+
+1. Public API surface and XML documentation comments — establish the supported constructor signatures, method signatures, and types.
+2. Existing unit or functional tests that reference the documented type or member — use as behavioral evidence only; do not copy Arrange/Act/Assert structure, test fixtures, mocks, or test helper patterns into the final example unless the public API is specifically about testing.
+3. README, package documentation, samples, or existing conceptual docs in the repository.
+4. Implementation source, only when the public surface alone is insufficient to construct a valid calling example.
+5. Official upstream documentation when the library wraps an external framework or library.
+6. Synthesized examples only when all of the above confirm the full public API shape and the synthesized sample compiles.
+7. Omit the example entirely if none of the above yields a compile-valid, consumer-facing example.
+
+Final examples must be consumer-facing, realistic, and compile. They must read like production calling code, not test scaffolding.
 
 **Reflection and API-shape requirements:**
 

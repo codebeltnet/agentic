@@ -95,7 +95,9 @@ If you're trying to ..., start with `PrimaryType` or `PrimaryExtensions`.
 
 Remove the `Extension Members` section when the namespace has no public extension methods. Adjust the include path to match the actual file location.
 
-## Type example template
+## Type example shape
+
+> **DocFX overwrite Markdown only.** This shape is for writing DocFX overwrite content. Do not create tests from it. Tests are evidence, not output — use tests to understand behavior, then transform that knowledge into consumer-facing examples.
 
 For public non-abstraction types, begin the overwrite file with front matter that maps the body to the `example` property:
 
@@ -112,9 +114,9 @@ using X.Y.Z;
 
 namespace MyNamespace;
 
-public class MyTypeExample
+public class Consumer
 {
-    public void ShowUsage()
+    public void Run()
     {
         var value = new MyType();
         Console.WriteLine(value);
@@ -142,9 +144,9 @@ using X.Y.Z;
 
 namespace MyNamespace;
 
-public class MyExtensionsExample
+public class Consumer
 {
-    public void ShowUsage()
+    public void Run()
     {
         string text = "first\r\nsecond";
         string normalized = text.NormalizeLineEndings();

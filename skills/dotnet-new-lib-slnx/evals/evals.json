@@ -11,7 +11,7 @@
         "Resolves package-specific version placeholders from NuGet before writing Directory.Packages.props",
         "Creates DocFX config using {DOCFX_TARGET_FRAMEWORK} rather than a hardcoded net10.0",
         "Locks DocFX metadata source to ../src (relative to .docfx/) so ONLY code in the src folder is digested for API documentation, excluding tools/, scripts/, and other root folders",
-        "Keeps api/namespaces/**/*.md under build.overwrite and excludes api/**/*.md from build.content so API overwrites are not emitted as standalone conceptual pages",
+        "Keeps api/namespaces/**/*.md and api/types/**/*.md under build.overwrite and excludes api/namespaces/** and api/types/** from build.content so API overwrites are not emitted as standalone conceptual pages",
         "Uses the current working directory as the scaffold root instead of creating a nested MyLibrary folder"
       ]
     },

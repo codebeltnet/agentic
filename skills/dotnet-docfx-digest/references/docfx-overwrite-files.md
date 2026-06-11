@@ -65,7 +65,7 @@ The `build.overwrite` entry in `docfx.json` tells DocFX which conceptual Markdow
 
 When a repository has no obvious overwrite location, inspect `docfx.json` first. Look at `build.content`, `build.overwrite`, `metadata.dest`, include paths, and existing Markdown layout before deciding where a new namespace page belongs.
 
-If a public non-abstraction type lacks an example, create a matching type-UID overwrite section in a separate per-type Markdown file by default, and make sure that file is included by `build.overwrite` so the example appears on the generated type API page. In Codebelt repositories, keep authored API overwrite files under `.docfx/api/namespaces/{TypeUid}.md`, such as `.docfx/api/namespaces/X.Y.Z.Class1.md`. File location does not decide whether the page is a namespace page or a type page; the YAML front matter `uid` does. Keep `api/namespaces/**/*.md` under `build.overwrite`, exclude `api/namespaces/**` from `build.content`, and do not use `api/**/*.md` under either section. If authored overwrite Markdown already exists directly under `.docfx/api/*.md`, move it into `.docfx/api/namespaces/` without deleting the content. Namespace overview pages and `Extension Members` tables complement examples; they do not replace type-page examples.
+If a public non-abstraction type lacks an example, create a matching type-UID overwrite section in a separate per-type Markdown file by default, and make sure that file is included by `build.overwrite` so the example appears on the generated type API page. In Codebelt repositories, keep type overwrite files under `.docfx/api/types/{TypeUid}.md`, such as `.docfx/api/types/X.Y.Z.Class1.md`, and namespace overview pages under `.docfx/api/namespaces/{Namespace}.md`. File location does not decide whether the page is a namespace page or a type page; the YAML front matter `uid` does. Keep both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, exclude both `api/namespaces/**` and `api/types/**` from `build.content`, and do not use `api/**/*.md` under either section. If authored overwrite Markdown already exists directly under `.docfx/api/*.md`, move it into either `api/namespaces/` (for namespace UIDs) or `api/types/` (for type UIDs) without deleting the content. Namespace overview pages and `Extension Members` tables complement examples; they do not replace type-page examples.
 
 ## Practical Rules
 
@@ -75,9 +75,13 @@ If a public non-abstraction type lacks an example, create a matching type-UID ov
 - Use namespace overview pages for namespace fly-ins and extension-member tables.
 - Keep examples and remarks close to the API item or namespace they explain.
 - Create per-type overwrite files for missing concrete-type examples even when the repository currently has only namespace overview files.
-- Keep authored API overwrite Markdown under `.docfx/api/namespaces/` and move legacy `.docfx/api/*.md` files there.
-- Keep `api/namespaces/**/*.md` under `build.overwrite` only; do not use `api/**/*.md` under `build.content` or `build.overwrite`.
+- Keep namespace overview Markdown under `.docfx/api/namespaces/` and type overwrite Markdown under `.docfx/api/types/`. Move legacy `.docfx/api/*.md` files into the appropriate subdirectory: namespace UIDs go to `api/namespaces/`, type UIDs go to `api/types/`.
+- Keep `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` only; do not use `api/**/*.md` under `build.content` or `build.overwrite`.
 - Add examples through overwrite sections when XML comments or generated metadata do not already provide developer-friendly examples.
 - Preserve existing hand-written overwrite sections unless they are stale or contradictory.
 - Prefer additive edits, but remove or revise contradictions.
 - Re-run `docfx.cs` after edits so missing namespace pages, extension tables, availability, and sample compilation are checked deterministically.
+
+## Section rendering order
+
+Overwrite files control what content is merged into the DocFX model. DocFX templates control where each property renders on the output page. Do not attempt to fix the order of sections such as "Examples before See Also" through overwrite paths, body headings, or front matter — that order is determined by the active template. If section ordering is wrong, the fix belongs in the template, not in the overwrite file.
