@@ -596,6 +596,30 @@
         "Second run reports validation passed with zero errors",
         "Example validation is deterministic: the same csharp content produces the same validation result on repeated runs"
       ]
+    },
+    {
+      "id": 49,
+      "prompt": "Run dotnet-docfx-digest on a library where a documented public class `Acme.Console.AppHost` derives from `Codebelt.Bootstrapper.Console.ConsoleProgram` and its example calls a DI helper `services.AddHostedService<Worker>()` that requires `Microsoft.Extensions.DependencyInjection.Abstractions`. The example does not contain a `dotnet-docfx-digest:skip-compile` marker. Confirm the sample compiles without errors.",
+      "expected_output": "The validator compiles the example without SAMPLE_COMPILE_FAILED. The worker project references the documented library project via ProjectReference, so NuGet restores the full transitive closure including `Codebelt.Bootstrapper.Console` and `Microsoft.Extensions.DependencyInjection.Abstractions`. No skip marker is needed or present.",
+      "expectations": [
+        "Validator compiles the example without SAMPLE_COMPILE_FAILED",
+        "No SAMPLE_SKIP_REASON_INSUFFICIENT or SAMPLE_SKIP_REASON_MISSING is emitted",
+        "Worker project uses ProjectReference so transitive NuGet dependencies such as Microsoft.Extensions.DependencyInjection.Abstractions are available at compile time",
+        "No dotnet-docfx-digest:skip-compile marker is required to compile an example that uses types from transitive NuGet dependencies",
+        "Validator exits with status passed when the only samples are this class-based DI registration example"
+      ]
+    },
+    {
+      "id": 50,
+      "prompt": "Run dotnet-docfx-digest on a repository where one csharp documentation sample contains the comment `// dotnet-docfx-digest:skip-compile - sample worker does not include that assembly`. Confirm the validator reports SAMPLE_SKIP_REASON_INSUFFICIENT.",
+      "expected_output": "The validator detects the skip-compile marker with the reason 'sample worker does not include that assembly' and emits SAMPLE_SKIP_REASON_INSUFFICIENT. The diagnostic message explains that missing assembly references are a validator defect, not a valid blocker. The exit code is non-zero.",
+      "expectations": [
+        "Validator emits SAMPLE_SKIP_REASON_INSUFFICIENT for the fence containing 'sample worker does not include that assembly'",
+        "Diagnostic message explains that missing compile-time assembly references are not a valid skip reason",
+        "Validator returns a non-zero exit code",
+        "No SAMPLE_COMPILE_FAILED is emitted because the sample is rejected at the skip-reason gate, not attempted for compilation",
+        "Diagnostic points to the file and fence index of the offending skip marker"
+      ]
     }
   ]
 }

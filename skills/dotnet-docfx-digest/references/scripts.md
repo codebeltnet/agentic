@@ -94,6 +94,8 @@ A skip marker without a reason is reported as `SAMPLE_SKIP_REASON_MISSING`.
 
 A skip marker with a weak reason such as "full example requires X package" or "example shows the framework pattern" is reported as `SAMPLE_SKIP_REASON_INSUFFICIENT`. Package requirements and framework setup belong in the documentation around a compiling sample; they are not enough to skip compilation by themselves.
 
+Reasons involving missing compile-time references are also rejected as insufficient. These include wording such as "transitive assembly", "transitive dependency", "sample worker does not include", "missing assembly", "referenced assembly", "does not include that assembly", "public signature includes", or "base class from a transitive assembly". Ordinary NuGet package references, project references, framework references, base classes, and extension-method dependencies all resolve correctly because sample worker projects reference documented library projects via `ProjectReference` items, which gives the full compile-time dependency closure. If a sample fails to compile because a dependency type is unresolved, that is a validator defect or a sample authoring error to fix — not a valid skip reason. Fix the example, or fix the validator worker setup; do not add `dotnet-docfx-digest:skip-compile` to hide the gap.
+
 ### Example detection
 
 The validator recognizes a complete example as one of:

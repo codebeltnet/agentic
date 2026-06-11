@@ -2542,17 +2542,10 @@ internal static class DocfxValidator
             return;
         }
 
-        // 3. Resolve built assembly DLL paths so worker projects can use direct <Reference> items
-        //    instead of rebuilding the project graph for every sample.
-        var assemblyRefs = ResolveBuiltAssemblyReferences(libraryProjects, options.Configuration, options.Framework);
-        if (assemblyRefs.Count < libraryProjects.Count && libraryProjects.Count > 0)
-        {
-            report.Warnings.Add(new Diagnostic("SAMPLE_WORKER_ASSEMBLY_FALLBACK", null, null,
-                $"Built DLL paths could not be resolved for {libraryProjects.Count - assemblyRefs.Count} of {libraryProjects.Count} documented " +
-                "project(s). Sample validation workers will use ProjectReference instead of direct assembly references for those projects, which may reduce performance."));
-        }
-
-        // 4. Create reusable sample-validation worker pool and compile with bounded parallelism.
+        // 3. Create reusable sample-validation worker pool and compile with bounded parallelism.
+        //    Workers use ProjectReference for all documented library projects so the full
+        //    compile-time dependency closure (NuGet packages, transitive references, framework
+        //    assemblies exposed through public signatures) is available without manual DLL enumeration.
         var tempRoot = Path.Combine(Path.GetTempPath(), "docfx-digest-samples-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
         try
@@ -2567,7 +2560,7 @@ internal static class DocfxValidator
             for (int w = 0; w < workerCount; w++)
             {
                 workers[w] = CreateSampleWorker(
-                    tempRoot, w + 1, assemblyRefs, libraryProjects,
+                    tempRoot, w + 1, libraryProjects,
                     options.Framework ?? "net10.0", options.Configuration, repoRoot, hasStrongNameKey, report);
             }
 
@@ -2644,29 +2637,12 @@ internal static class DocfxValidator
         return defaultParallelism;
     }
 
-    private static List<(string AssemblyName, string DllPath)> ResolveBuiltAssemblyReferences(
-        List<ProjectInfo> libraryProjects, string configuration, string? framework)
-    {
-        var refs = new List<(string, string)>(libraryProjects.Count);
-        foreach (var proj in libraryProjects)
-        {
-            var dll = FindAssembly(proj, configuration, framework);
-            if (dll is not null && File.Exists(dll))
-            {
-                refs.Add((proj.AssemblyName, dll));
-            }
-        }
-
-        return refs;
-    }
-
     /// <summary>
     /// Creates a reusable sample-validation worker under <paramref name="tempRoot"/> and
     /// performs a one-time restore so all subsequent sample builds can use <c>--no-restore</c>.
     /// </summary>
     private static SampleWorkerInfo CreateSampleWorker(
         string tempRoot, int workerNumber,
-        List<(string AssemblyName, string DllPath)> assemblyRefs,
         List<ProjectInfo> libraryProjects,
         string framework, string configuration,
         string repoRoot, bool hasStrongNameKey, Report report)
@@ -2677,15 +2653,9 @@ internal static class DocfxValidator
         Directory.CreateDirectory(libDir);
         Directory.CreateDirectory(appDir);
 
-        // Determine which documented projects need ProjectReference fallback (DLL not resolved).
-        var projectRefFallbacks = libraryProjects
-            .Where(p => !assemblyRefs.Any(r =>
-                string.Equals(r.AssemblyName, p.AssemblyName, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
-
         // Class-library project — for class-based samples (namespace + type declaration).
         var libProjPath = Path.Combine(libDir, "DocfxSampleLib.csproj");
-        File.WriteAllText(libProjPath, GenerateSampleLibProject(assemblyRefs, projectRefFallbacks, framework),
+        File.WriteAllText(libProjPath, GenerateSampleLibProject(libraryProjects, framework),
             new UTF8Encoding(false));
         // Compilable placeholder; overwritten per sample.
         File.WriteAllText(Path.Combine(libDir, "Sample.cs"),
@@ -2694,7 +2664,7 @@ internal static class DocfxValidator
 
         // Console-app project — for Program.cs / top-level-statement samples.
         var appProjPath = Path.Combine(appDir, "DocfxSampleApp.csproj");
-        File.WriteAllText(appProjPath, GenerateSampleAppProject(assemblyRefs, projectRefFallbacks, framework),
+        File.WriteAllText(appProjPath, GenerateSampleAppProject(libraryProjects, framework),
             new UTF8Encoding(false));
         // Compilable placeholder; overwritten per sample.
         File.WriteAllText(Path.Combine(appDir, "Program.cs"), "// placeholder", new UTF8Encoding(false));
@@ -2715,10 +2685,7 @@ internal static class DocfxValidator
         return new SampleWorkerInfo(libDir, appDir, libProjPath, appProjPath, libRestoreOk, appRestoreOk);
     }
 
-    private static string GenerateSampleLibProject(
-        List<(string AssemblyName, string DllPath)> assemblyRefs,
-        List<ProjectInfo> projectRefFallbacks,
-        string framework)
+    private static string GenerateSampleLibProject(List<ProjectInfo> libraryProjects, string framework)
     {
         var sb = new StringBuilder();
         sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
@@ -2729,15 +2696,12 @@ internal static class DocfxValidator
         sb.AppendLine("    <LangVersion>latest</LangVersion>");
         sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
         sb.AppendLine("  </PropertyGroup>");
-        AppendReferenceItems(sb, assemblyRefs, projectRefFallbacks);
+        AppendProjectReferences(sb, libraryProjects);
         sb.AppendLine("</Project>");
         return sb.ToString();
     }
 
-    private static string GenerateSampleAppProject(
-        List<(string AssemblyName, string DllPath)> assemblyRefs,
-        List<ProjectInfo> projectRefFallbacks,
-        string framework)
+    private static string GenerateSampleAppProject(List<ProjectInfo> libraryProjects, string framework)
     {
         var sb = new StringBuilder();
         sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
@@ -2748,40 +2712,25 @@ internal static class DocfxValidator
         sb.AppendLine("    <LangVersion>latest</LangVersion>");
         sb.AppendLine("    <PublishAot>false</PublishAot>");
         sb.AppendLine("  </PropertyGroup>");
-        AppendReferenceItems(sb, assemblyRefs, projectRefFallbacks);
+        AppendProjectReferences(sb, libraryProjects);
         sb.AppendLine("</Project>");
         return sb.ToString();
     }
 
-    private static void AppendReferenceItems(
-        StringBuilder sb,
-        List<(string AssemblyName, string DllPath)> assemblyRefs,
-        List<ProjectInfo> projectRefFallbacks)
+    private static void AppendProjectReferences(StringBuilder sb, List<ProjectInfo> libraryProjects)
     {
-        if (assemblyRefs.Count > 0)
+        if (libraryProjects.Count == 0)
         {
-            sb.AppendLine("  <ItemGroup>");
-            foreach (var (assemblyName, dllPath) in assemblyRefs)
-            {
-                sb.AppendLine($"    <Reference Include=\"{assemblyName}\">");
-                sb.AppendLine($"      <HintPath>{dllPath}</HintPath>");
-                sb.AppendLine("      <Private>false</Private>");
-                sb.AppendLine("    </Reference>");
-            }
-
-            sb.AppendLine("  </ItemGroup>");
+            return;
         }
 
-        if (projectRefFallbacks.Count > 0)
+        sb.AppendLine("  <ItemGroup>");
+        foreach (var proj in libraryProjects)
         {
-            sb.AppendLine("  <ItemGroup>");
-            foreach (var proj in projectRefFallbacks)
-            {
-                sb.AppendLine($"    <ProjectReference Include=\"{proj.Path}\" />");
-            }
-
-            sb.AppendLine("  </ItemGroup>");
+            sb.AppendLine($"    <ProjectReference Include=\"{proj.Path}\" />");
         }
+
+        sb.AppendLine("  </ItemGroup>");
     }
 
     private static (bool Ok, string Diagnostics, int ExitCode) CompileWithWorker(
@@ -3028,6 +2977,43 @@ internal static class DocfxValidator
         }
 
         if (Regex.IsMatch(reason, @"(?i)\b(package|nuget)\b.*\b(required|dependency|reference)\b"))
+        {
+            return true;
+        }
+
+        // Missing compile-time references are validator defects, not valid skip reasons.
+        // All ordinary NuGet, project, and framework references resolve through ProjectReference items.
+        if (Regex.IsMatch(reason, @"(?i)\btransitive\s+(assembly|dependency)\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(reason, @"(?i)\bsample\s+worker\s+does\s+not\s+include\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(reason, @"(?i)\bmissing\s+assembly\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(reason, @"(?i)\breferenced\s+assembly\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(reason, @"(?i)\bdoes\s+not\s+include\s+that\s+assembly\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(reason, @"(?i)\bpublic\s+signature\s+includes\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(reason, @"(?i)\bbase\s+class\s+from\s+a\s+transitive\s+assembly\b"))
         {
             return true;
         }

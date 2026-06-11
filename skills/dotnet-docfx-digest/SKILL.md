@@ -185,7 +185,7 @@ Resolve constructors, generic arity, abstractness, constraints, and public membe
 // dotnet-docfx-digest:skip-compile - <reason>
 ```
 
-The reason is mandatory. Package requirements, "full example needs X", or "shows the framework pattern" are rejected. Prefer making the example compile. Do not claim an example compiles unless the validator actually ran it successfully.
+The reason is mandatory. Package requirements, "full example needs X", "shows the framework pattern", or missing assembly/transitive/referenced assembly reasons are all rejected — these are authoring or validator-setup problems, not genuine blockers. Prefer making the example compile. Do not claim an example compiles unless the validator actually ran it successfully.
 
 ## Namespace and Summary Style
 
