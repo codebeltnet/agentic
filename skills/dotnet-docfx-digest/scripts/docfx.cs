@@ -157,6 +157,13 @@ internal static class DocfxValidator
 
         var libraryProjects = projects.Where(p => !p.IsTest).ToList();
 
+        // Store package IDs for use in the repair plan GitHub search section.
+        report.PackageIds.AddRange(
+            libraryProjects
+                .Select(p => p.PackageId ?? p.AssemblyName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(id => id, StringComparer.OrdinalIgnoreCase));
+
         // 5. Restore and build only the projects referenced by the active docfx.json.
         //    This avoids building the full solution when it contains unrelated projects.
         phaseTimer.Restart();
@@ -199,6 +206,9 @@ internal static class DocfxValidator
         phaseTimer.Restart();
         var markdownFiles = DiscoverMarkdown(repoRoot, docfxPath, docfxWorkspace, report);
         WritePhase(options, "markdown discovery", phaseTimer.Elapsed);
+
+        // 7.5. Validate documentation file encoding (mojibake, missing BOM).
+        ValidateDocumentationEncoding(repoRoot, markdownFiles, report);
 
         // Build a filename-keyed index to replace the O(N*M) FirstOrDefault scan per namespace.
         var namespacePageIndex = markdownFiles
@@ -248,6 +258,14 @@ internal static class DocfxValidator
             phaseTimer.Restart();
             VerifyDocfxBuild(repoRoot, docfxPath, hasStrongNameKey, report);
             WritePhase(options, "docfx build verification", phaseTimer.Elapsed);
+        }
+
+        // Optional GitHub example search to embed real usage snippets in the repair plan.
+        if (options.SearchExamples && report.PackageIds.Count > 0)
+        {
+            phaseTimer.Restart();
+            SearchGitHubForExamples(report.PackageIds, report);
+            WritePhase(options, "github example search", phaseTimer.Elapsed);
         }
 
         // 11. Produce report and return a deterministic exit code.
@@ -1115,8 +1133,77 @@ internal static class DocfxValidator
     }
 
     // ----------------------------------------------------------------------
-    // Build
+    // File encoding validation
     // ----------------------------------------------------------------------
+
+    private static void ValidateDocumentationEncoding(string repoRoot, List<string> markdownFiles, Report report)
+    {
+        foreach (var file in markdownFiles)
+        {
+            byte[] bytes;
+            try
+            {
+                bytes = File.ReadAllBytes(file);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (bytes.Length == 0)
+            {
+                continue;
+            }
+
+            var rel = Rel(repoRoot, file);
+
+            // Check for double-encoded UTF-8 sequences (mojibake).
+            // The most reliable indicator for Codebelt documentation files is C3 A2 C2 AC:
+            // the UTF-8 re-encoding of 'â' (U+00E2) followed by '¬' (U+00AC), which is what
+            // U+2B07 ⬇ (UTF-8: E2 AC 87) looks like after a Windows-1252 round-trip.
+            if (HasMojibakePattern(bytes))
+            {
+                report.Errors.Add(new Diagnostic("ENCODING_CORRUPTION", rel, null,
+                    $"File contains double-encoded UTF-8 sequences (mojibake). Multi-byte characters such as ⬇️ " +
+                    $"were likely written through a PowerShell Get-Content/Set-Content round-trip, which re-encodes " +
+                    $"UTF-8 bytes through Windows-1252. Restore: `git checkout HEAD -- {rel}` if the committed " +
+                    $"version was correct. To add or rewrite content safely, use the edit tool or byte-level operations: " +
+                    $"[System.IO.File]::WriteAllBytes($path, ...). Never use Get-Content + [System.Text.Encoding]::UTF8.GetBytes()."));
+            }
+
+            // Warn about missing UTF-8 BOM on DocFX API overwrite files.
+            var hasBom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+            if (!hasBom && IsDocfxApiOverwritePath(file))
+            {
+                report.Warnings.Add(new Diagnostic("ENCODING_BOM_MISSING", rel, null,
+                    "DocFX API overwrite file is missing a UTF-8 BOM. Codebelt DocFX files use UTF-8 with BOM. " +
+                    "Add BOM without re-encoding: [System.IO.File]::WriteAllBytes($path, [byte[]](0xEF,0xBB,0xBF) + [System.IO.File]::ReadAllBytes($path))"));
+            }
+        }
+    }
+
+    private static bool HasMojibakePattern(byte[] bytes)
+    {
+        // C3 A2 C2 AC is the UTF-8 encoding of â (U+00E2) followed by ¬ (U+00AC).
+        // This sequence is the mojibake fingerprint of U+2B07 (⬇, UTF-8: E2 AC 87) after a
+        // Windows-1252 round-trip: E2→â→C3A2, AC→¬→C2AC. Highly specific to the Extension
+        // Members table arrow emoji and unlikely to appear legitimately in .NET API documentation.
+        for (int i = 0; i + 3 < bytes.Length; i++)
+        {
+            if (bytes[i] == 0xC3 && bytes[i + 1] == 0xA2 && bytes[i + 2] == 0xC2 && bytes[i + 3] == 0xAC)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDocfxApiOverwritePath(string filePath)
+    {
+        return filePath.Contains(Path.DirectorySeparatorChar + "api" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+               filePath.Contains(Path.AltDirectorySeparatorChar + "api" + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Restores and builds only the library projects referenced by the active docfx.json.
@@ -1358,6 +1445,7 @@ internal static class DocfxValidator
     private static ProjectInfo ReadProject(string projectPath)
     {
         string? assemblyName = null;
+        string? packageId = null;
         var tfms = new List<string>();
         bool isTest = false;
 
@@ -1370,6 +1458,13 @@ internal static class DocfxValidator
                 {
                     case "AssemblyName":
                         assemblyName = el.Value.Trim();
+                        break;
+                    case "PackageId":
+                        if (!string.IsNullOrWhiteSpace(el.Value))
+                        {
+                            packageId = el.Value.Trim();
+                        }
+
                         break;
                     case "TargetFramework":
                         if (!string.IsNullOrWhiteSpace(el.Value))
@@ -1424,7 +1519,7 @@ internal static class DocfxValidator
             isTest = true;
         }
 
-        return new ProjectInfo(projectPath, assemblyName, tfms, isTest);
+        return new ProjectInfo(projectPath, assemblyName, tfms, isTest, packageId);
     }
 
     private static ApiModel DiscoverApi(List<ProjectInfo> libraryProjects, string configuration, string? framework, Report report)
@@ -2234,6 +2329,39 @@ internal static class DocfxValidator
         {
             report.Errors.Add(new Diagnostic("EXTENSION_TABLE_MISSING", rel, ns.Name,
                 $"The 'Extension Members' section for namespace {ns.Name} is missing the '|Type|Ext|Methods|' table header."));
+            return;
+        }
+
+        // Validate that data rows use the correct ⬇️ emoji (U+2B07 U+FE0F) in the Ext column.
+        // A missing or mojibake-encoded emoji passes the table-header check but renders incorrectly.
+        bool dataRowChecked = false;
+        foreach (Match row in Regex.Matches(section, @"^\|([^|\r\n]+)\|([^|\r\n]+)\|([^|\r\n]+)\|", RegexOptions.Multiline))
+        {
+            var extCell = row.Groups[2].Value.Trim();
+            // Skip the header row and separator rows.
+            if (extCell.Equals("Ext", StringComparison.OrdinalIgnoreCase) ||
+                Regex.IsMatch(extCell, @"^[\-: ]+$"))
+            {
+                continue;
+            }
+
+            dataRowChecked = true;
+            if (!extCell.Contains('\u2B07'))
+            {
+                report.Errors.Add(new Diagnostic("EXTENSION_TABLE_ENCODING", rel, ns.Name,
+                    $"A data row in the 'Extension Members' table for namespace {ns.Name} is missing the ⬇️ (U+2B07) " +
+                    $"character in the Ext column. Either the emoji is absent or it has been corrupted through an ANSI/OEM " +
+                    $"encoding round-trip (mojibake). Use the literal ⬇️ character: |TypeName|⬇️|MethodName|. " +
+                    $"Do not use HTML entities, Unicode escapes, or text substitutes. " +
+                    $"If the file was recently written by PowerShell, check for ENCODING_CORRUPTION and restore with git checkout."));
+                break;
+            }
+        }
+
+        if (!dataRowChecked && ns.ExtensionMethods.Count > 0)
+        {
+            report.Errors.Add(new Diagnostic("EXTENSION_TABLE_MISSING", rel, ns.Name,
+                $"The 'Extension Members' table for namespace {ns.Name} has a header row but no data rows listing extension methods."));
             return;
         }
 
@@ -3060,6 +3188,78 @@ internal static class DocfxValidator
     }
 
     // ----------------------------------------------------------------------
+    // GitHub example search
+    // ----------------------------------------------------------------------
+
+    private static void SearchGitHubForExamples(List<string> packageIds, Report report)
+    {
+        if (packageIds.Count == 0)
+        {
+            return;
+        }
+
+        report.ExampleSearchSnippets.Add("## GitHub Search Results");
+        report.ExampleSearchSnippets.Add(string.Empty);
+        report.ExampleSearchSnippets.Add("Results from `gh search code` for documented packages. Prefer usage from repositories other than the target repository.");
+        report.ExampleSearchSnippets.Add(string.Empty);
+
+        foreach (var packageId in packageIds)
+        {
+            report.ExampleSearchSnippets.Add($"### Package: `{packageId}`");
+            report.ExampleSearchSnippets.Add(string.Empty);
+
+            var result = RunProcess(
+                "gh",
+                $"search code \"{packageId}\" --language C# --limit 5 --json path,repository",
+                Directory.GetCurrentDirectory());
+
+            if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.StdOut))
+            {
+                report.ExampleSearchSnippets.Add($"Search unavailable (gh exit {result.ExitCode}). Use the URL below.");
+                report.ExampleSearchSnippets.Add(string.Empty);
+                continue;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(result.StdOut);
+                if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0)
+                {
+                    report.ExampleSearchSnippets.Add("No results found.");
+                    report.ExampleSearchSnippets.Add(string.Empty);
+                    continue;
+                }
+
+                foreach (var hit in doc.RootElement.EnumerateArray())
+                {
+                    var path = hit.TryGetProperty("path", out var pathEl) ? pathEl.GetString() ?? string.Empty : string.Empty;
+                    var repoName = string.Empty;
+                    if (hit.TryGetProperty("repository", out var repoEl) && repoEl.ValueKind == JsonValueKind.Object)
+                    {
+                        repoName = repoEl.TryGetProperty("fullName", out var fn) ? fn.GetString() ?? string.Empty : string.Empty;
+                        if (string.IsNullOrEmpty(repoName))
+                        {
+                            repoName = repoEl.TryGetProperty("nameWithOwner", out var nwo) ? nwo.GetString() ?? string.Empty : string.Empty;
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(repoName) || !string.IsNullOrEmpty(path))
+                    {
+                        report.ExampleSearchSnippets.Add($"- `{repoName}`: `{path}`");
+                    }
+                }
+
+                report.ExampleSearchSnippets.Add(string.Empty);
+            }
+            catch
+            {
+                report.ExampleSearchSnippets.Add("Unable to parse search results.");
+                report.ExampleSearchSnippets.Add(string.Empty);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------------
     // YAML / markdown helpers
     // ----------------------------------------------------------------------
 
@@ -3309,14 +3509,18 @@ internal static class DocfxValidator
         sb.AppendLine();
 
         AppendDiagnostics(sb, "Repository Guidance", report.Errors.Where(e => e.Code is "AGENTS_BLOCK_MISSING"));
+        AppendDiagnostics(sb, "Encoding Repairs", report.Errors.Where(e =>
+            e.Code.StartsWith("ENCODING_", StringComparison.Ordinal)));
         AppendDiagnostics(sb, "Namespace And Extension Table Repairs", report.Errors.Where(e =>
             e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) ||
             e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal)));
-        AppendRequiredExampleDiagnostics(sb, report.Errors.Where(e => e.Code is "EXAMPLE_MISSING"));
+        AppendRequiredExampleDiagnostics(sb, report.Errors.Where(e => e.Code is "EXAMPLE_MISSING"), report.PackageIds);
+        AppendGitHubExampleSources(sb, report.PackageIds, report.ExampleSearchSnippets);
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
             e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_STRUCTURE_INVALID"));
         AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
             e.Code is not "AGENTS_BLOCK_MISSING" &&
+            !e.Code.StartsWith("ENCODING_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
             e.Code is not "EXAMPLE_MISSING" &&
@@ -3326,7 +3530,9 @@ internal static class DocfxValidator
         sb.AppendLine("## Completion Checklist");
         sb.AppendLine();
         sb.AppendLine("- [ ] `agents.cs` has run successfully when `AGENTS_BLOCK_MISSING` appears.");
+        sb.AppendLine("- [ ] `ENCODING_CORRUPTION` files restored from git or rewritten using byte-level operations.");
         sb.AppendLine("- [ ] Every namespace diagnostic above has been resolved or intentionally excluded with evidence.");
+        sb.AppendLine("- [ ] GitHub example sources consulted before writing any new example (see 'GitHub Example Sources' section).");
         sb.AppendLine("- [ ] Every `EXAMPLE_MISSING` diagnostic above maps to a concrete example location.");
         sb.AppendLine("- [ ] Changed C# examples pass structural validation (namespace + type declaration, or labelled `// Program.cs`).");
         sb.AppendLine("- [ ] Changed C# examples compile as a class library project referencing the documented assemblies.");
@@ -3334,6 +3540,49 @@ internal static class DocfxValidator
         sb.AppendLine("- [ ] Final validation command and exit code are reported.");
 
         return sb.ToString();
+    }
+
+    private static void AppendGitHubExampleSources(StringBuilder sb, List<string> packageIds, List<string> searchSnippets)
+    {
+        sb.AppendLine("## GitHub Example Sources");
+        sb.AppendLine();
+        sb.AppendLine("Search for real consumer usage of the documented packages **before** writing examples. " +
+                      "Prefer hits from repositories other than the target repository. " +
+                      "Use package-ID searches first, then type-name or method-name searches only as fallback.");
+        sb.AppendLine();
+
+        if (packageIds.Count > 0)
+        {
+            sb.AppendLine("### Search Commands");
+            sb.AppendLine();
+            sb.AppendLine("Run with the `gh` CLI (requires authentication):");
+            sb.AppendLine();
+            sb.AppendLine("```bash");
+            foreach (var pkg in packageIds)
+            {
+                sb.AppendLine($"gh search code \"{pkg}\" --language \"C#\" --limit 10 --json path,repository,textMatches");
+            }
+
+            sb.AppendLine("```");
+            sb.AppendLine();
+            sb.AppendLine("### GitHub Search URLs");
+            sb.AppendLine();
+            foreach (var pkg in packageIds)
+            {
+                var encoded = Uri.EscapeDataString($"\"{pkg}\"");
+                sb.AppendLine($"- [{pkg}](https://github.com/search?q={encoded}+language%3AC%23&type=code)");
+            }
+
+            sb.AppendLine();
+        }
+
+        if (searchSnippets.Count > 0)
+        {
+            foreach (var line in searchSnippets)
+            {
+                sb.AppendLine(line);
+            }
+        }
     }
 
     private static void AppendDiagnostics(StringBuilder sb, string title, IEnumerable<Diagnostic> diagnostics)
@@ -3368,7 +3617,7 @@ internal static class DocfxValidator
         }
     }
 
-    private static void AppendRequiredExampleDiagnostics(StringBuilder sb, IEnumerable<Diagnostic> diagnostics)
+    private static void AppendRequiredExampleDiagnostics(StringBuilder sb, IEnumerable<Diagnostic> diagnostics, List<string> packageIds)
     {
         var items = diagnostics
             .OrderBy(d => d.Namespace ?? string.Empty, StringComparer.Ordinal)
@@ -3387,6 +3636,9 @@ internal static class DocfxValidator
 
         sb.AppendLine("Treat this section as the authoritative example work queue. Namespace overview pages and `Extension Members` tables are not complete until each item below maps to a concrete overwrite example and rerunning `docfx.cs --json` removes the diagnostic.");
         sb.AppendLine();
+        sb.AppendLine("**Before writing any example:** search GitHub for real consumer usage using the 'GitHub Example Sources' section below. " +
+                      "Base examples on actual evidence — do not invent API members, constructor signatures, or methods that are not verified in source or tests.");
+        sb.AppendLine();
         sb.AppendLine("| Namespace | Expected overwrite location | Diagnostic | Required action |");
         sb.AppendLine("|---|---|---|---|");
 
@@ -3396,8 +3648,8 @@ internal static class DocfxValidator
             var path = EscapeTable(string.IsNullOrWhiteSpace(diagnostic.Path) ? "(method UID, declaring type UID, or namespace page)" : diagnostic.Path);
             var message = EscapeTable(diagnostic.Message);
             var action = diagnostic.Message.Contains("Public non-abstraction type", StringComparison.Ordinal)
-                ? "Create or update the type-targeting overwrite file under `api/types/`, keep `api/types/**/*.md` under `build.overwrite` only, add a compiling Examples section, then rerun validation."
-                : "Add a compiling Examples section on the declaring extension class or namespace page that explicitly calls the extension method, then rerun validation.";
+                ? "Search GitHub (see below), verify public API surface, create or update the type-targeting overwrite file under `api/types/`, keep `api/types/**/*.md` under `build.overwrite` only, add a compiling Examples section, then rerun validation."
+                : "Search GitHub (see below), verify public API surface, add a compiling Examples section on the declaring extension class or namespace page that explicitly calls the extension method, then rerun validation.";
             sb.AppendLine($"| {ns} | `{path}` | `EXAMPLE_MISSING` | {EscapeTable(action)} {message} |");
         }
 
@@ -3460,6 +3712,9 @@ internal static class DocfxValidator
                 case "--repair-plan":
                     if (!Next(args, ref i, out var rp)) { error = "--repair-plan requires a path."; return false; }
                     options.RepairPlanPath = rp;
+                    break;
+                case "--search-examples":
+                    options.SearchExamples = true;
                     break;
                 case "--sample-parallelism":
                     if (!Next(args, ref i, out var sp)) { error = "--sample-parallelism requires a count."; return false; }
@@ -3542,6 +3797,8 @@ internal static class DocfxValidator
               --changed-only           Validate only files changed according to git.
               --verify-docfx-build     Run DocFX against a temp copy of the repository so generated output stays outside the working tree.
               --repair-plan <path>     Write a deterministic Markdown repair plan from validation diagnostics.
+              --search-examples        Run GitHub code search for each documented package and embed real usage snippets in the
+                                       repair plan. Requires the gh CLI to be authenticated. Use together with --repair-plan.
               --clean-generated-metadata
                                       Remove DocFX-generated *.yml and manifest files under metadata.dest. Default: enabled.
               --no-clean-generated-metadata
@@ -3585,13 +3842,14 @@ internal static class DocfxValidator
         public bool ValidateSamples { get; set; } = true;
         public bool ChangedOnly { get; set; }
         public bool VerifyDocfxBuild { get; set; }
+        public bool SearchExamples { get; set; }
         public bool CleanGeneratedMetadata { get; set; } = true;
         public bool Json { get; set; }
         public bool Help { get; set; }
         public int? SampleParallelism { get; set; }
     }
 
-    private sealed record ProjectInfo(string Path, string AssemblyName, List<string> TargetFrameworks, bool IsTest);
+    private sealed record ProjectInfo(string Path, string AssemblyName, List<string> TargetFrameworks, bool IsTest, string? PackageId = null);
 
     private sealed record ExtensionMethodInfo(string MethodName, string ExtendedType, string DeclaringClass);
 
@@ -3672,4 +3930,6 @@ internal sealed class Report
     public Summary Summary { get; set; } = new();
     public List<Diagnostic> Errors { get; set; } = new();
     public List<Diagnostic> Warnings { get; set; } = new();
+    public List<string> PackageIds { get; set; } = new();
+    public List<string> ExampleSearchSnippets { get; set; } = new();
 }
