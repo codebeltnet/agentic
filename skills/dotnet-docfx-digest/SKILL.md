@@ -21,7 +21,16 @@ dotnet run --file <resolved-skill-dir>/scripts/agents.cs -- --repo-root <repo-ro
 dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --verify-docfx-build
 ```
 
-- After edits, run `docfx.cs --json` and treat any remaining diagnostics as the next work queue, not as final notes. For noisy audits, also write and read a deterministic `--repair-plan`.
+- After edits, run `docfx.cs --json` and treat any remaining diagnostics as the next work queue, not as final notes. For noisy audits, write and read a deterministic `--repair-plan`:
+
+```bash
+dotnet run --file docfx.cs -- --repo-root <repo-root> --json --repair-plan /tmp/docfx-repair-plan.md --search-examples
+```
+
+The repair plan includes a "GitHub Example Sources" section with pre-computed `gh search code` commands and GitHub search URLs for each documented package. Read that section before writing any new example — do not write examples from memory or invention when real source evidence is available. If `--search-examples` is provided and `gh` is authenticated, actual search results are embedded; otherwise, the search commands are ready to run.
+
+- `ENCODING_CORRUPTION` in the JSON output means a documentation file has double-encoded UTF-8 (mojibake). Restore with `git checkout HEAD -- <file>` if the committed version was correct, or use the edit tool or byte-level operations to rewrite the file safely. Never pipe content through `Get-Content` + `Set-Content` or `[System.Text.Encoding]::UTF8.GetBytes()` on documentation files that contain multi-byte characters or emoji.
+- `EXTENSION_TABLE_ENCODING` means the ⬇️ emoji (U+2B07) is missing or corrupted in an Extension Members table data row. Use the literal `⬇️` character, not HTML entities or text substitutes.
 - If either script cannot run, report the exact command, exit code, and failure output. Do not claim repository guidance or documentation was verified unless the scripts actually ran successfully.
 - Read `references/workflow.md` when you need the detailed targeted/audit workflows, namespace and example templates, the verification checklist, or the completion response shape.
 
