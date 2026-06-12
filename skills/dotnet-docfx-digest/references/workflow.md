@@ -38,21 +38,22 @@ Use this path when the user names a changed API or namespace.
 4. Determine whether public extension methods are involved.
 5. Inspect `.docfx/docfx.json` or the repository-specific DocFX config.
 6. Locate existing overwrite files, namespace pages, availability includes, tests, and samples.
-7. Convert test usage into consumer-oriented examples when relevant.
-8. Update XML documentation comments where purpose-first summaries are needed.
-9. Update or create namespace overview pages with conceptual orientation and start-here cues.
-10. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
-11. Update `Extension Members` tables when public extension methods are involved.
-12. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods.
-13. Build or refresh the example inventory.
-14. Preserve manual edits and correct stale contradictions instead of replacing whole files.
-15. Run `git diff` for touched documentation paths and confirm the diff is intentional.
-16. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-17. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-18. Run the Completion Repair Loop by rerunning `docfx.cs --json`, repairing remaining diagnostics, and updating the example inventory until required diagnostics are gone or a precise blocker remains.
-19. Run `docfx.cs --verify-docfx-build` so DocFX builds in a temp copy.
-20. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
-21. Report verification results and any remaining deterministic findings.
+7. Run `docfx.cs --json --repair-plan /tmp/docfx-repair-plan.md --search-examples` and read the repair plan. The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs; use those results as evidence before writing examples.
+8. Convert test usage into consumer-oriented examples when relevant.
+9. Update XML documentation comments where purpose-first summaries are needed.
+10. Update or create namespace overview pages with conceptual orientation and start-here cues.
+11. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
+12. Update `Extension Members` tables when public extension methods are involved. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column — the validator now rejects corrupted or missing emoji with `EXTENSION_TABLE_ENCODING`.
+13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods.
+14. Build or refresh the example inventory.
+15. Preserve manual edits and correct stale contradictions instead of replacing whole files.
+16. Run `git diff` for touched documentation paths and confirm the diff is intentional.
+17. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
+18. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
+19. Run the Completion Repair Loop by rerunning `docfx.cs --json`, repairing remaining diagnostics, and updating the example inventory until required diagnostics are gone or a precise blocker remains.
+20. Run `docfx.cs --verify-docfx-build` so DocFX builds in a temp copy.
+21. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
+22. Report verification results and any remaining deterministic findings.
 
 ## Repo-wide audit workflow
 
@@ -63,14 +64,14 @@ Use this path when the user invokes the skill without naming a specific API or n
 3. Read repository guidance, especially root `AGENTS.md`.
 4. Inspect `.docfx/docfx.json` or the repository-specific DocFX config.
 5. Read `references/docfx-overwrite-files.md`.
-6. Run `docfx.cs --json` to collect deterministic findings when the repository is buildable.
-7. If the validator reports more than a small number of diagnostics, rerun it with `--repair-plan <temp-path>/docfx-repair-plan.md`, read that plan, and use it as the authoritative work queue.
-8. If the validator fails before producing documentation diagnostics, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
+6. Run `docfx.cs --json --repair-plan /tmp/docfx-repair-plan.md --search-examples` and read the repair plan. The plan is the authoritative work queue. The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs for each documented package — run or open these searches before writing any new example.
+7. If the validator fails before producing documentation diagnostics, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
+8. Check for `ENCODING_CORRUPTION` or `EXTENSION_TABLE_ENCODING` diagnostics first; restore affected files from git before doing any further editing.
 9. Determine every namespace containing public API and whether each namespace exposes public extension methods.
 10. Determine every public non-abstraction type and every public extension method that requires an example.
 11. Create or update missing namespace overview pages with purpose-first fly-ins and start-here guidance.
 12. Audit related namespace pages together so fixes are consistent across the public API family.
-13. Add or repair `Extension Members` tables for namespaces with public extension methods.
+13. Add or repair `Extension Members` tables for namespaces with public extension methods. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column.
 14. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
 15. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
 16. Ensure `docfx.json` includes both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, excludes both `api/namespaces/**` and `api/types/**` from `build.content`, and moves legacy authored `.docfx/api/*.md` files into either `api/namespaces/` (namespace pages) or `api/types/` (type pages).
