@@ -40,6 +40,12 @@ The repair plan includes a "GitHub Example Sources" section with pre-computed `g
 - `ENCODING_CORRUPTION` in the JSON output means a documentation file has double-encoded UTF-8 (mojibake). Restore with `git checkout HEAD -- <file>` if the committed version was correct, or use the edit tool or byte-level operations to rewrite the file safely. Never pipe content through `Get-Content` + `Set-Content` or `[System.Text.Encoding]::UTF8.GetBytes()` on documentation files that contain multi-byte characters or emoji.
 - `EXTENSION_TABLE_ENCODING` means the ⬇️ emoji (U+2B07) is missing or corrupted in an Extension Members table data row. Use the literal `⬇️` character, not HTML entities or text substitutes.
 - If either script cannot run, report the exact command, exit code, and failure output. Do not claim repository guidance or documentation was verified unless the scripts actually ran successfully.
+- Treat validator errors as the repo-wide repair queue, not as evidence that the repository is "blocked." A diagnostic being old, pre-existing, numerous, or outside the first files edited does not remove it from scope. A run with 1,228 `EXAMPLE_MISSING` findings means 1,228 documentation items remain; repairing one type page is a partial result, not a digest.
+- Use the JSON completion contract as the final authority: completion requires `summary.canClaimCompletion` to be `true`, `summary.remainingWorkItems` to be `0`, `summary.remainingGates` and `summary.remainingDiagnosticsByCode` to be empty, and the build-backed command to succeed. A clean fast run reports `completionState: verification-required`; it is an iteration checkpoint, not completion. Never describe `status: failed`, `completionState: incomplete`, or `completionState: verification-required` as completed work.
+- Continue documentation repair when `dotnet test` fails for an unrelated environmental dependency such as an unavailable database. Report that test failure separately. It is a blocker only if it prevents the documentation validator, source inspection, or required sample compilation from running.
+- Valid BOM-less UTF-8 is compliant. The validator must not emit `ENCODING_BOM_MISSING` (that diagnostic is intentionally unsupported), and an audit must not add/remove BOMs or normalize line endings solely for consistency. BOM presence has no documentation value; preserve the file's existing state and continue detecting actual `ENCODING_CORRUPTION` and `EXTENSION_TABLE_ENCODING` damage.
+- Final verification uses adaptive execution. In `auto`, machines with more than 8 available logical processors and more than 32 GiB available memory select `high-capacity`: DocFX verification runs concurrently in its isolated temp copy while the main lane builds/discovers API and then compiles samples, and MSBuild worker counts scale up to half the available processors (capped at 16). Smaller machines select `conservative` and keep the phases sequential with low worker counts. Override with `--execution-profile conservative|high-capacity` or `DOCFX_DIGEST_EXECUTION_PROFILE`.
+- Child processes time out after 30 minutes by default, configurable with `--process-timeout-minutes` or `DOCFX_DIGEST_PROCESS_TIMEOUT_MINUTES`. Set the host/tool command timeout at least five minutes higher (35 minutes for the default) so the validator can kill a timed-out child and return a deterministic diagnostic instead of being terminated by the caller first.
 - Read `references/workflow.md` when you need the detailed targeted/audit workflows, namespace and example templates, the verification checklist, or the completion response shape.
 
 ## Completion Repair Loop
@@ -50,9 +56,20 @@ Do not stop at namespace pages, extension-member tables, or a first-pass documen
 2. If diagnostics include `EXAMPLE_MISSING`, missing namespace pages, stale extension-member tables, missing availability, or overwrite inclusion problems, treat them as blocking follow-up work.
 3. For each missing public concrete-type example, create or update a type-targeting overwrite file under `.docfx/api/types/`.
 4. For each missing extension-method example, document it on the declaring extension class page or the namespace page, and explicitly demonstrate the method call.
-5. Rerun the fast validator until the required diagnostics are gone, then run the build-backed completion verification (`docfx.cs --build-api-model --validate-samples --verify-docfx-build`) to surface `SAMPLE_COMPILE_FAILED` and reflection-precise API gaps; resolve those too, or stop and report the exact blocker, command, exit code, and remaining diagnostic codes.
+5. Rerun the fast validator until the required diagnostics are gone, then run the build-backed completion verification (`docfx.cs --build-api-model --validate-samples --verify-docfx-build`) to surface `SAMPLE_COMPILE_FAILED` and reflection-precise API gaps; resolve those too and rerun until the JSON completion contract is clean.
+6. Do not convert repairable diagnostics into a blocker report. Stop incomplete only when the user pauses the task or an external condition still prevents progress after concrete attempts; report the exact blocker without claiming completion.
 
 Namespace pages and `Extension Members` tables complement type-page examples; they do not replace them. Both namespace pages (`api/namespaces/`) and type pages (`api/types/`) are required deliverables. Generating only one is incomplete work.
+
+### Restarting Partial Audits
+
+When continuing after another agent stopped with diagnostics remaining:
+
+1. Inspect `git status --short --untracked-files=all` and preserve every existing tracked and untracked documentation edit, not only the newly created namespace/type files.
+2. Rerun the fast validator with `--json --repair-plan <temp-path>` and read the generated plan.
+3. Use the repair plan and example inventory as the active queue across all affected namespaces, type pages, extension classes, and extension methods.
+4. Repair manageable batches, then rerun the fast validator after each batch so the queue measurably shrinks; do not stop after a representative subset.
+5. Run the exact final command `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` and continue until the completion contract is clean.
 
 ## Core Principles
 
@@ -81,17 +98,12 @@ After modifications, inspect `git diff` for touched documentation paths and conf
 
 ## File Encoding Safety
 
-DocFX documentation files in Codebelt repositories use UTF-8 with BOM and LF line endings. When any tool must rewrite a documentation file to add or change encoding:
+Use UTF-8 for DocFX documentation, but treat the BOM as optional. DocFX does not need a UTF-8 BOM, and adding or removing one across existing files creates noisy diffs with no documentation value. Preserve each file's existing BOM and line-ending state unless the user explicitly requests normalization.
 
-- **Never use `Get-Content` + `[System.Text.Encoding]::UTF8.GetBytes()` round-trips.** On Windows, `Get-Content` reads in the OEM/ANSI code page by default. Multi-byte UTF-8 sequences — including emoji such as ⬇️ in `Extension Members` tables — are misread as Latin-1 and re-encoded as mojibake. The corruption is invisible until `git diff` reveals scrambled bytes.
-- **Use byte-level operations** to prepend a BOM without re-encoding content:
-  ```powershell
-  [System.IO.File]::WriteAllBytes($path, [byte[]](0xEF,0xBB,0xBF) + [System.IO.File]::ReadAllBytes($path))
-  ```
+- **Never use an encoding-ambiguous `Get-Content` / `Set-Content` round-trip.** Legacy Windows PowerShell can interpret BOM-less UTF-8 through an ANSI code page. Multi-byte UTF-8 sequences, including ⬇️ in `Extension Members` tables, can become mojibake even though the original file was valid.
 - **Prefer the `edit` tool** for all Markdown content edits; it preserves bytes correctly and avoids encoding round-trip issues entirely.
 - **Check `git status` before any encoding-rewriting operation.** If bytes are corrupted and the file was committed, `git checkout HEAD -- <file>` restores the committed version — but discards any uncommitted in-flight changes. Do not use that recovery if there are unsaved edits.
-
-**Line ending inconsistency**: `.docfx/*.md` files may have mixed BOM presence or CRLF/LF line endings across a repository (pre-existing, not introduced by documentation edits). The DocFX validator does not enforce line endings, but mixed state increases encoding-corruption risk. If you discover mixed line endings during an audit, normalize all `.docfx/*.md` files to BOM + LF using the byte-level approach above, not `Set-Content` or `Out-File`.
+- **Do not normalize encoding or line endings as part of a documentation audit.** A BOM-only or line-ending-only diff obscures substantive work. The validator reports actual corruption such as `ENCODING_CORRUPTION`; it does not report BOM absence.
 
 ## Scope
 

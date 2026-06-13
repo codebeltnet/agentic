@@ -50,7 +50,7 @@ Use this path when the user names a changed API or namespace.
 16. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 17. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 18. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-19. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing remaining diagnostics, and updating the example inventory until required diagnostics are gone or a precise blocker remains.
+19. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing every remaining diagnostic, and updating the example inventory until `summary.canClaimCompletion` is `true`. Diagnostic age and volume are not blockers.
 20. Run the build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` so samples compile, API discovery is reflection-precise, and DocFX builds in a temp copy.
 21. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
 22. Report verification results and any remaining deterministic findings.
@@ -81,10 +81,14 @@ Use this path when the user invokes the skill without naming a specific API or n
 20. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 21. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 22. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-23. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing remaining diagnostics, and updating the example inventory until required diagnostics are gone or a precise blocker remains.
+23. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing every remaining diagnostic, and updating the example inventory until `summary.canClaimCompletion` is `true`. A large queue is still the task, not a reason to stop.
 24. Run the build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` so samples compile, API discovery is reflection-precise, and DocFX builds in a temp copy.
 25. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
 26. Report verification results and any remaining deterministic findings.
+
+When resuming a partial repo-wide audit, begin by inventorying all tracked and untracked documentation changes and preserving them as in-flight work. Regenerate the deterministic repair plan and example inventory, use both as the authoritative queue, and work in batches with a fast validator rerun after every batch. The exact final command is `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`; descriptive references to those activities do not replace running the flags together.
+
+For the final command, let `auto` choose the execution profile unless the user requests a specific resource policy. High-capacity machines run the isolated DocFX verification lane concurrently with API/sample work; conservative machines remain sequential. Give the outer command a timeout at least five minutes above the validator's child-process timeout (35 minutes with the default 30-minute setting) so timeout diagnostics can be returned normally.
 
 ## Namespace page template
 
@@ -202,7 +206,7 @@ Before completing documentation work, verify:
 - [ ] The example inventory maps each required public type and extension method to its example file, UID, source evidence, and chosen scenario.
 - [ ] Examples show a coherent consumer workflow, use related public types when helpful, and avoid placeholder-only `Consumer`/`MyNamespace` shells when a domain name is available.
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`. Namespace pages are under `api/namespaces/` and type pages are under `api/types/`.
-- [ ] The Completion Repair Loop was run after edits, and remaining `EXAMPLE_MISSING` or overwrite-layout diagnostics were fixed or reported as exact blockers.
+- [ ] The Completion Repair Loop was run after edits, and the final report has zero `EXAMPLE_MISSING`, namespace, extension, availability, overwrite-layout, sample, and DocFX-build diagnostics.
 - [ ] Examples are realistic, copy/paste-ready, and compile unless a justified skip marker is present.
 - [ ] Generated C# examples include a file-scoped namespace and a type declaration (class, struct, or record), or are explicitly labelled `// Program.cs`.
 - [ ] No generated C# example uses top-level statements without a `// Program.cs` label.
@@ -214,7 +218,7 @@ Before completing documentation work, verify:
 - [ ] `git diff` for touched documentation paths was inspected before final verification.
 - [ ] `dotnet build` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.
 - [ ] `dotnet test` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.
-- [ ] The build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` ran successfully (samples compiled, reflection-backed API discovery clean, DocFX built), or the failure is reported.
+- [ ] The build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` ran successfully, and final JSON reports `summary.canClaimCompletion: true`, `summary.remainingWorkItems: 0`, an empty `summary.remainingGates`, and an empty `summary.remainingDiagnosticsByCode`.
 - [ ] Generated metadata files and build output directories did not remain in the working tree after verification, and authored Markdown or documentation assets were not deleted as cleanup.
 - [ ] No broad restore or checkout command discarded authored documentation changes.
 
@@ -234,3 +238,5 @@ When reporting completion, include:
 - any verification failures or skipped checks
 
 Do not claim documentation was verified unless the relevant command actually ran successfully.
+
+If work must stop incomplete, distinguish a true external blocker from repair work. Pre-existing documentation gaps, large diagnostic counts, sample compile failures, and `DOCFX_BUILD_FAILED` output caused by the documentation/configuration being repaired are active work items. Only a user pause or an external condition that still prevents progress after concrete attempts justifies stopping, and that response must say the digest remains incomplete.

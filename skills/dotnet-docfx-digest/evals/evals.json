@@ -649,6 +649,48 @@
         "Preserves per-sample SAMPLE_COMPILE_FAILED diagnostics with the original Markdown file and fence index",
         "Reports sample-validation phase detail containing `1 batch` and the sample count"
       ]
+    },
+    {
+      "id": 53,
+      "prompt": "Use dotnet-docfx-digest for a repo-wide audit. The previous agent added 8 missing namespace pages and only 1 type overwrite page, then stopped after the build-backed validator reported 62 EXTENSION_SECTION_MISSING, 1228 EXAMPLE_MISSING, and 1 DOCFX_BUILD_FAILED diagnostic. It called those findings pre-existing documentation gaps. `dotnet build` passes, while `dotnet test` fails only because an integration test cannot connect to SQL Server. Inspect the untracked DocFX work and finish the full digest.",
+      "expected_output": "The agent identifies the existing work as a partial digest, preserves it, and treats all 1291 validator errors as the active repo-wide repair queue rather than as pre-existing blockers. It uses the repair plan and example inventory to continue across every affected namespace, extension section, concrete type, and extension method. The unrelated SQL Server test failure is reported separately and does not end documentation work. The agent reruns fast validation during repair and treats a clean fast result as verification-required, then runs the build-backed command at the end. It does not claim completion until JSON reports summary.canClaimCompletion=true, summary.remainingWorkItems=0, empty summary.remainingGates and summary.remainingDiagnosticsByCode collections, and the build-backed command exits 0.",
+      "expectations": [
+        "Inspects and preserves the 8 untracked namespace pages, 1 untracked type page, and other existing documentation edits instead of discarding or overwriting them wholesale",
+        "Explicitly identifies the prior output as partial because 62 extension-section, 1228 example, and 1 DocFX-build diagnostics remain",
+        "Does not describe pre-existing diagnostics, diagnostic volume, or the size of the work queue as a blocker",
+        "Uses the deterministic repair plan and complete validator queue to continue repairing every missing extension section and example across the affected documentation surfaces",
+        "Reports the SQL Server integration-test failure separately and continues DocFX repair because the failure does not prevent documentation validation or source inspection",
+        "Reruns the fast validator after batches of edits instead of stopping after the first namespace or type subset",
+        "Treats fast validation as an iteration checkpoint and still requires the final build-backed command before completion",
+        "Runs the final build-backed command with --build-api-model --validate-samples --verify-docfx-build",
+        "Does not claim a full digest until summary.canClaimCompletion is true, summary.remainingWorkItems is 0, summary.remainingGates and summary.remainingDiagnosticsByCode are empty, and the final command exits 0"
+      ]
+    },
+    {
+      "id": 54,
+      "prompt": "Run dotnet-docfx-digest on a repository whose DocFX overwrite Markdown is valid UTF-8 without BOM. The files contain the ⬇️ extension-table marker and have no mojibake. Do not make unrelated documentation changes.",
+      "expected_output": "The validator accepts BOM-less UTF-8 without prescribing an ENCODING_BOM_MISSING repair or rewriting files only to add a BOM. It continues to distinguish intact extension-table markers from actual encoding corruption. The agent preserves existing BOM and line-ending state, and git diff contains no encoding-only changes.",
+      "expectations": [
+        "Treats valid BOM-less UTF-8 as compliant and prescribes no missing-BOM repair",
+        "Does not add a UTF-8 BOM or normalize line endings solely as part of the DocFX audit",
+        "Preserves the literal ⬇️ marker and distinguishes intact content from actual encoding corruption",
+        "Does not treat BOM presence as documentation work or a completion requirement",
+        "Leaves git diff free of BOM-only and line-ending-only changes"
+      ]
+    },
+    {
+      "id": 55,
+      "prompt": "Run the final dotnet-docfx-digest verification on a machine where Environment.ProcessorCount is 24 and GC.GetGCMemoryInfo().TotalAvailableMemoryBytes is 128 GiB. The agent host previously killed the command after 10 minutes before the validator could report a DocFX timeout. Confirm the adaptive scheduling and timeout behavior.",
+      "expected_output": "Auto selects the high-capacity profile because the process has more than 8 available logical processors and more than 32 GiB available memory. DocFX verification runs concurrently in its isolated temp copy while the primary lane builds/discovers API and then compiles samples. Build and sample parallelism default to 12 workers (half of 24, capped below 16). Child-process timeout is 30 minutes by default, and the outer tool timeout is set to at least 35 minutes. JSON exposes the selected execution settings and phase timing. The sample phase is not started before API discovery because scoped references depend on the namespace-to-project map.",
+      "expectations": [
+        "Selects high-capacity automatically for 24 available logical processors and 128 GiB available memory",
+        "Starts isolated DocFX verification concurrently with the primary API/sample lane",
+        "Keeps sample compilation after API discovery because scoped sample references depend on the namespace-to-project map",
+        "Uses an adaptive default of 12 MSBuild workers for both documented-project and sample graph builds on this machine",
+        "Uses a 30-minute child-process timeout and requires an outer command timeout of at least 35 minutes",
+        "Reports profile, processors, memory, worker counts, timeout, concurrency choice, process counts, and phase timings in JSON",
+        "Allows explicit conservative/high-capacity, worker-count, and timeout overrides through CLI or environment variables"
+      ]
     }
   ]
 }
