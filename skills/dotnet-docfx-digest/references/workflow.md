@@ -12,7 +12,7 @@ Build a small example inventory from validator output and source evidence before
 | Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | Package README, ApplicationHostFactoryTest | Host a test server and create a client | Missing |
 ```
 
-Do not mark an item complete until the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles or has a justified skip marker, and `docfx.cs --json` no longer reports the relevant missing-example diagnostic.
+Do not mark an item complete until the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles under `docfx.cs --validate-samples` (or has a justified skip marker), and `docfx.cs --json` no longer reports the relevant missing-example diagnostic.
 
 ## Scenario example design
 
@@ -50,8 +50,8 @@ Use this path when the user names a changed API or namespace.
 16. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 17. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 18. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-19. Run the Completion Repair Loop by rerunning `docfx.cs --json`, repairing remaining diagnostics, and updating the example inventory until required diagnostics are gone or a precise blocker remains.
-20. Run `docfx.cs --verify-docfx-build` so DocFX builds in a temp copy.
+19. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing remaining diagnostics, and updating the example inventory until required diagnostics are gone or a precise blocker remains.
+20. Run the build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` so samples compile, API discovery is reflection-precise, and DocFX builds in a temp copy.
 21. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
 22. Report verification results and any remaining deterministic findings.
 
@@ -81,8 +81,8 @@ Use this path when the user invokes the skill without naming a specific API or n
 20. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 21. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 22. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-23. Run the Completion Repair Loop by rerunning `docfx.cs --json`, repairing remaining diagnostics, and updating the example inventory until required diagnostics are gone or a precise blocker remains.
-24. Run `docfx.cs --verify-docfx-build` so DocFX builds in a temp copy.
+23. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing remaining diagnostics, and updating the example inventory until required diagnostics are gone or a precise blocker remains.
+24. Run the build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` so samples compile, API discovery is reflection-precise, and DocFX builds in a temp copy.
 25. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
 26. Report verification results and any remaining deterministic findings.
 
@@ -214,7 +214,7 @@ Before completing documentation work, verify:
 - [ ] `git diff` for touched documentation paths was inspected before final verification.
 - [ ] `dotnet build` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.
 - [ ] `dotnet test` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.
-- [ ] `docfx.cs --verify-docfx-build` ran successfully, or the failure is reported.
+- [ ] The build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` ran successfully (samples compiled, reflection-backed API discovery clean, DocFX built), or the failure is reported.
 - [ ] Generated metadata files and build output directories did not remain in the working tree after verification, and authored Markdown or documentation assets were not deleted as cleanup.
 - [ ] No broad restore or checkout command discarded authored documentation changes.
 

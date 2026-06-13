@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 
@@ -27,6 +28,14 @@ internal static class DocfxValidator
     private static readonly string[] IgnoredDirectorySegments = ["bin", "obj", "_site", ".git", ".vs", ".vscode", ".idea", "node_modules"];
     private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ProcessStreamDrainTimeout = TimeSpan.FromSeconds(5);
+
+    // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
+    // each external process is tagged with the permission that authorizes it, and the set of
+    // allowed permissions is configured from the parsed options before any process runs.
+    private static readonly object ProcessGuardLock = new();
+    private static readonly Dictionary<string, int> ProcessCounts =
+        new(StringComparer.OrdinalIgnoreCase) { ["dotnet"] = 0, ["msbuild"] = 0, ["docfx"] = 0, ["gh"] = 0, ["git"] = 0 };
+    private static HashSet<ProcessPermission> _allowedPermissions = new() { ProcessPermission.Git };
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -90,6 +99,15 @@ internal static class DocfxValidator
         var report = new Report { Script = ScriptId };
         var phaseTimer = new Stopwatch();
 
+        var mode = options.BuildApiModel ? ValidationMode.BuildBackedApiModel : ValidationMode.FastMarkdown;
+        report.Summary.ValidationMode = mode == ValidationMode.BuildBackedApiModel
+            ? "build-backed-api-model"
+            : "fast-markdown";
+
+        // Configure the process guard from options BEFORE anything can shell out. In the default
+        // fast path this leaves dotnet/msbuild/docfx/gh entirely disallowed.
+        ConfigureProcessGuard(options);
+
         // 1. Resolve repository root.
         string repoRoot;
         try
@@ -118,8 +136,11 @@ internal static class DocfxValidator
 
         report.DocfxPath = docfxPath;
         var docfxWorkspace = Path.GetDirectoryName(docfxPath)!;
+        phaseTimer.Restart();
         options.Framework ??= ResolveDefaultFramework(docfxPath, report);
-        CleanupGeneratedMetadata(repoRoot, docfxPath, docfxWorkspace, options, report);
+        WritePhase(options, report, "docfx config", phaseTimer.Elapsed);
+
+        // No-build layout validation: confirm the overwrite directory split without compiling.
         ValidateApiOverwriteLayout(repoRoot, docfxPath, docfxWorkspace, report);
 
         // 3. Verify AGENTS.md contains the managed block.
@@ -130,7 +151,7 @@ internal static class DocfxValidator
                 "AGENTS.md does not contain the dotnet-docfx-digest managed block. Run scripts/agents.cs first."));
         }
 
-        // Optional changed-only scoping.
+        // Optional changed-only scoping (git only — read-only, allowed on the fast path).
         HashSet<string>? changedFiles = null;
         if (options.ChangedOnly)
         {
@@ -145,11 +166,10 @@ internal static class DocfxValidator
         // Cache: compute once for the full validation run so callers do not repeatedly scan the repo root.
         var hasStrongNameKey = HasRootStrongNameKey(repoRoot);
 
-        // 4. Discover DocFX metadata projects BEFORE building so the build is scoped to only
-        //    the projects included in the documentation boundary.
+        // 4. Discover DocFX metadata projects from the active docfx.json (no build required).
         phaseTimer.Restart();
         var projects = DiscoverProjects(docfxPath, docfxWorkspace, report);
-        WritePhase(options, "project discovery", phaseTimer.Elapsed);
+        WritePhase(options, report, "project discovery", phaseTimer.Elapsed);
         if (projects.Count == 0)
         {
             return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Project discovery failed.");
@@ -164,61 +184,97 @@ internal static class DocfxValidator
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(id => id, StringComparer.OrdinalIgnoreCase));
 
-        // 5. Restore and build only the projects referenced by the active docfx.json.
-        //    This avoids building the full solution when it contains unrelated projects.
+        // Discover and cache DocFX Markdown inputs + overwrite sections once.
         phaseTimer.Restart();
-        var (buildOk, buildOutput) = BuildDocfxProjects(libraryProjects, repoRoot, options.Configuration, hasStrongNameKey);
-        WritePhase(options, "repository build", phaseTimer.Elapsed);
-        if (!buildOk)
+        var markdownFiles = DiscoverMarkdown(repoRoot, docfxPath, docfxWorkspace, report);
+        var workspace = new ValidationWorkspace
         {
-            report.Errors.Add(new Diagnostic("BUILD_FAILED", null, null,
-                $"dotnet build failed (configuration {options.Configuration}).\n{Trim(buildOutput)}"));
-            return Emit(options, report, ExitCode.BuildFailed, "Build failed.");
+            RepoRoot = repoRoot,
+            DocfxPath = docfxPath,
+            DocfxWorkspace = docfxWorkspace,
+            Projects = projects,
+            LibraryProjects = libraryProjects,
+            MarkdownFiles = markdownFiles,
+            MarkdownTextByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            OverwriteSections = new List<OverwriteSection>()
+        };
+        foreach (var md in markdownFiles)
+        {
+            var text = workspace.ReadMarkdown(md);
+            workspace.OverwriteSections.AddRange(ExtractOverwriteSections(md, text));
         }
 
-        // 6. Discover public API, namespaces and extension methods from compiled metadata.
+        WritePhase(options, report, "markdown discovery", phaseTimer.Elapsed,
+            $"{markdownFiles.Count} file(s)");
+
+        // 5. Build the API model. The default fast path never builds: it reads existing DocFX
+        //    YAML metadata when present, otherwise falls back to a conservative source scan.
+        //    --build-api-model opts into reflection-backed discovery from compiled assemblies.
         phaseTimer.Restart();
         ApiModel api;
-        try
+        if (mode == ValidationMode.BuildBackedApiModel)
         {
-            api = DiscoverApi(libraryProjects, options.Configuration, options.Framework, report);
-        }
-        catch (Exception ex)
-        {
-            report.Errors.Add(new Diagnostic("PUBLIC_API_DISCOVERY_FAILED", null, null,
-                $"Public API discovery failed: {ex.Message}"));
-            return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Public API discovery failed.");
-        }
+            var (buildOk, buildOutput) = BuildDocfxProjects(libraryProjects, repoRoot, options.Configuration, hasStrongNameKey);
+            if (!buildOk)
+            {
+                report.Errors.Add(new Diagnostic("BUILD_FAILED", null, null,
+                    $"dotnet build failed (configuration {options.Configuration}).\n{Trim(buildOutput)}"));
+                return Emit(options, report, ExitCode.BuildFailed, "Build failed.");
+            }
 
-        WritePhase(options, "api discovery", phaseTimer.Elapsed);
-        if (api.Namespaces.Count == 0)
+            try
+            {
+                api = DiscoverApi(libraryProjects, options.Configuration, options.Framework, report);
+            }
+            catch (Exception ex)
+            {
+                report.Errors.Add(new Diagnostic("PUBLIC_API_DISCOVERY_FAILED", null, null,
+                    $"Public API discovery failed: {ex.Message}"));
+                return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Public API discovery failed.");
+            }
+
+            report.Summary.ApiModelSource = "build-backed";
+            WritePhase(options, report, "api model", phaseTimer.Elapsed, "build-backed");
+
+            if (api.Namespaces.Count == 0)
+            {
+                report.Errors.Add(new Diagnostic("PUBLIC_API_DISCOVERY_FAILED", null, null,
+                    "No public API could be discovered from the compiled library assemblies. Ensure the repository builds and exposes public types."));
+                return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Public API discovery failed.");
+            }
+        }
+        else
         {
-            report.Errors.Add(new Diagnostic("PUBLIC_API_DISCOVERY_FAILED", null, null,
-                "No public API could be discovered from the compiled library assemblies. Ensure the repository builds and exposes public types."));
-            return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Public API discovery failed.");
+            api = BuildNoBuildApiModel(workspace, report, out var apiSource);
+            report.Summary.ApiModelSource = apiSource == ApiModelSource.DocfxYaml ? "docfx-yaml" : "source-scan";
+            WritePhase(options, report, "api model", phaseTimer.Elapsed, report.Summary.ApiModelSource);
+
+            if (api.Namespaces.Count == 0)
+            {
+                // Conservative: do not fail the whole run just because no-build discovery found
+                // nothing. Markdown/overwrite/encoding/layout checks above still apply.
+                report.Warnings.Add(new Diagnostic("API_MODEL_EMPTY", null, null,
+                    "No public API was discovered without building. Markdown, encoding, and overwrite-layout checks still ran. Use --build-api-model for reflection-backed namespace and required-example validation."));
+            }
         }
 
         report.Summary.PublicNamespaces = api.Namespaces.Count;
         report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
         report.Summary.ExtensionMethods = api.Namespaces.Sum(n => n.ExtensionMethods.Count);
 
-        // 7. Discover DocFX Markdown files from the DocFX build inputs.
+        // 6. Validate documentation file encoding (mojibake, missing BOM).
         phaseTimer.Restart();
-        var markdownFiles = DiscoverMarkdown(repoRoot, docfxPath, docfxWorkspace, report);
-        WritePhase(options, "markdown discovery", phaseTimer.Elapsed);
-
-        // 7.5. Validate documentation file encoding (mojibake, missing BOM).
         ValidateDocumentationEncoding(repoRoot, markdownFiles, report);
+        WritePhase(options, report, "encoding validation", phaseTimer.Elapsed);
 
         // Build a filename-keyed index to replace the O(N*M) FirstOrDefault scan per namespace.
         var namespacePageIndex = markdownFiles
             .GroupBy(f => Path.GetFileNameWithoutExtension(f), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-        // Pre-extract all overwrite sections once — reused by both namespace and required-example validation.
-        var allOverwriteSections = markdownFiles.SelectMany(ExtractOverwriteSections).ToList();
+        var allOverwriteSections = workspace.OverwriteSections;
 
-        // 8. Validate namespace overview pages, extension tables and availability.
+        // 7. Validate namespace overview pages, extension tables and availability.
         phaseTimer.Restart();
         foreach (var ns in api.Namespaces.OrderBy(n => n.Name, StringComparer.Ordinal))
         {
@@ -235,21 +291,25 @@ internal static class DocfxValidator
                 continue;
             }
 
-            ValidateNamespacePage(repoRoot, page, ns, report);
+            ValidateNamespacePage(repoRoot, page, workspace.ReadMarkdown(page), ns, report);
             report.Summary.NamespacePagesValidated++;
         }
 
-        WritePhase(options, "namespace validation", phaseTimer.Elapsed);
+        WritePhase(options, report, "namespace validation", phaseTimer.Elapsed);
 
-        // 9. Verify mandatory examples exist before compiling the examples that were found.
+        // 8. Verify mandatory examples exist before compiling the examples that were found.
         phaseTimer.Restart();
         ValidateRequiredExamples(repoRoot, docfxWorkspace, allOverwriteSections, api, options, changedFiles, report);
-        WritePhase(options, "required example validation", phaseTimer.Elapsed);
+        WritePhase(options, report, "required example validation", phaseTimer.Elapsed);
 
-        // 10. Extract and compile C# documentation samples with bounded parallelism.
+        // 9. Extract and compile C# documentation samples (opt-in: the only path that compiles).
         if (options.ValidateSamples)
         {
-            ValidateSamples(repoRoot, markdownFiles, libraryProjects, options, changedFiles, hasStrongNameKey, report);
+            ValidateSamples(workspace, options, changedFiles, hasStrongNameKey, report);
+        }
+        else
+        {
+            WriteSkippedPhase(options, report, "sample validation", "pass --validate-samples to compile");
         }
 
         // Optional DocFX build verification happens in a temp copy so generated output never lands in the working tree.
@@ -257,7 +317,7 @@ internal static class DocfxValidator
         {
             phaseTimer.Restart();
             VerifyDocfxBuild(repoRoot, docfxPath, hasStrongNameKey, report);
-            WritePhase(options, "docfx build verification", phaseTimer.Elapsed);
+            WritePhase(options, report, "docfx build verification", phaseTimer.Elapsed);
         }
 
         // Optional GitHub example search to embed real usage snippets in the repair plan.
@@ -265,7 +325,16 @@ internal static class DocfxValidator
         {
             phaseTimer.Restart();
             SearchGitHubForExamples(report.PackageIds, report);
-            WritePhase(options, "github example search", phaseTimer.Elapsed);
+            WritePhase(options, report, "github example search", phaseTimer.Elapsed);
+        }
+
+        // 10. Optional generated-metadata cleanup. Opt-in only, and only after the API model has
+        //     been built so we never delete YAML the fast path may have relied on.
+        if (options.CleanGeneratedMetadata)
+        {
+            phaseTimer.Restart();
+            CleanupGeneratedMetadata(repoRoot, docfxPath, docfxWorkspace, options, report);
+            WritePhase(options, report, "generated metadata cleanup", phaseTimer.Elapsed);
         }
 
         // 11. Produce report and return a deterministic exit code.
@@ -1042,7 +1111,8 @@ internal static class DocfxValidator
             var environment = hasStrongNameKey
                 ? null
                 : new Dictionary<string, string> { ["SkipSignAssembly"] = "true" };
-            var result = RunProcess(docfxExecutable, $"\"{tempDocfxPath}\"", tempRoot, environment);
+            var result = RunProcess(docfxExecutable, $"\"{tempDocfxPath}\"", tempRoot, environment,
+                ProcessPermission.DocfxBuild);
             if (result.ExitCode != 0)
             {
                 report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
@@ -1207,8 +1277,10 @@ internal static class DocfxValidator
 
     /// <summary>
     /// Restores and builds only the library projects referenced by the active docfx.json.
-    /// Restore runs once against the solution (when present) or each project individually.
-    /// Build runs per-project with <c>--no-restore</c> to avoid redundant NuGet evaluation.
+    /// A single temporary <c>.slnx</c> graph build is preferred so the whole documented
+    /// dependency graph is restored and compiled in one pass instead of N per-project builds,
+    /// and the unrelated remainder of a large product solution is never built. Only reached
+    /// when the caller passes <c>--build-api-model</c>.
     /// </summary>
     private static (bool Ok, string Output) BuildDocfxProjects(
         List<ProjectInfo> libraryProjects, string repoRoot, string configuration, bool hasStrongNameKey)
@@ -1220,49 +1292,50 @@ internal static class DocfxValidator
 
         var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
 
-        // Prefer restoring the whole solution so the dependency graph for all documented
-        // projects is resolved in one pass; fall back to per-project restores when no
-        // solution exists.
-        var solutionFile = Directory.GetFiles(repoRoot, "*.slnx")
-            .Concat(Directory.GetFiles(repoRoot, "*.sln"))
-            .FirstOrDefault();
-
-        if (solutionFile is not null)
+        // Build the documented projects through a temporary .slnx so MSBuild restores and
+        // compiles the documented dependency graph in a single pass. This keeps the build
+        // scoped to docfx.json inputs and avoids building the entire product solution.
+        var tempSolution = Path.Combine(Path.GetTempPath(), "docfx-digest-build-" + Guid.NewGuid().ToString("N") + ".slnx");
+        try
         {
-            var restoreResult = RunProcess("dotnet",
-                $"restore \"{solutionFile}\" --nologo{signingProperty}", repoRoot);
-            if (restoreResult.ExitCode != 0)
-            {
-                return (false, restoreResult.StdOut + restoreResult.StdErr);
-            }
-        }
-        else
-        {
+            var sln = new StringBuilder();
+            sln.AppendLine("<Solution>");
             foreach (var proj in libraryProjects)
             {
-                var restoreResult = RunProcess("dotnet",
-                    $"restore \"{proj.Path}\" --nologo{signingProperty}", repoRoot);
-                if (restoreResult.ExitCode != 0)
-                {
-                    return (false, restoreResult.StdOut + restoreResult.StdErr);
-                }
+                sln.AppendLine($"  <Project Path=\"{proj.Path}\" />");
             }
-        }
 
-        // Build each documented project individually with --no-restore.
-        var buildOutput = new StringBuilder();
-        foreach (var proj in libraryProjects)
-        {
+            sln.AppendLine("</Solution>");
+            File.WriteAllText(tempSolution, sln.ToString(), new UTF8Encoding(false));
+
             var result = RunProcess("dotnet",
-                $"build \"{proj.Path}\" -c {configuration} --no-restore --nologo{signingProperty}", repoRoot);
-            buildOutput.Append(result.StdOut).Append(result.StdErr);
+                $"build \"{tempSolution}\" -c {configuration} --nologo{signingProperty}", repoRoot,
+                permission: ProcessPermission.BuildApiModel);
             if (result.ExitCode != 0)
             {
-                return (false, buildOutput.ToString());
+                return (false, result.StdOut + result.StdErr);
+            }
+
+            return (true, result.StdOut + result.StdErr);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (false, $"Unable to prepare a scoped build solution: {ex.Message}");
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempSolution))
+                {
+                    File.Delete(tempSolution);
+                }
+            }
+            catch
+            {
+                // best effort
             }
         }
-
-        return (true, buildOutput.ToString());
     }
 
     private static bool HasRootStrongNameKey(string repoRoot)
@@ -1643,6 +1716,815 @@ internal static class DocfxValidator
             .ToList();
 
         return new ApiModel(namespaces.Values.ToList(), requiredExampleTargets);
+    }
+
+    // ----------------------------------------------------------------------
+    // No-build API model (YAML metadata + source scanner)
+    // ----------------------------------------------------------------------
+
+    private static readonly string[] YamlTypeKinds = ["Class", "Struct", "Interface", "Enum", "Delegate"];
+
+    /// <summary>
+    /// Builds the API model without compiling. Prefers existing DocFX ManagedReference YAML under
+    /// the configured metadata destinations; falls back to a conservative source scan of the
+    /// projects referenced by <c>docfx.json</c>. Never builds, restores, or deletes YAML.
+    /// </summary>
+    private static ApiModel BuildNoBuildApiModel(ValidationWorkspace ws, Report report, out ApiModelSource source)
+    {
+        var yaml = DiscoverApiFromYaml(ws, report);
+        if (yaml is not null && yaml.Namespaces.Count > 0)
+        {
+            source = ApiModelSource.DocfxYaml;
+            return yaml;
+        }
+
+        source = ApiModelSource.SourceScan;
+        report.Warnings.Add(new Diagnostic("API_MODEL_SOURCE_SCANNER_LIMITED", null, null,
+            "Fast source-based API discovery is conservative and may miss generic, nested, or conditionally compiled members. Run with --build-api-model for reflection-backed validation."));
+        return DiscoverApiFromSource(ws, report);
+    }
+
+    private static ApiModel? DiscoverApiFromYaml(ValidationWorkspace ws, Report report)
+    {
+        var yamlFiles = new List<string>();
+        foreach (var dest in ResolveMetadataDestinations(ws.DocfxPath, ws.DocfxWorkspace, report)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(dest))
+            {
+                continue;
+            }
+
+            foreach (var file in EnumerateFiles(dest, "*.yml"))
+            {
+                if (string.Equals(Path.GetFileName(file), "toc.yml", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                yamlFiles.Add(file);
+            }
+        }
+
+        if (yamlFiles.Count == 0)
+        {
+            return null;
+        }
+
+        var namespaces = new Dictionary<string, NamespaceInfo>(StringComparer.Ordinal);
+        var staticClassExtensionCounts = new Dictionary<string, (string Namespace, string DisplayName, int Count)>(StringComparer.Ordinal);
+        var allItems = new List<YamlApiItem>();
+        foreach (var file in yamlFiles.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
+            allItems.AddRange(ParseManagedReferenceItems(file));
+        }
+
+        var typeContextByUid = new Dictionary<string, (string Namespace, bool IsStatic)>(StringComparer.Ordinal);
+        foreach (var item in allItems)
+        {
+            if (item.Type is null || !YamlTypeKinds.Contains(item.Type, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var nsName = !string.IsNullOrEmpty(item.Namespace) ? item.Namespace! : NamespaceFromUid(item.Uid);
+            if (string.IsNullOrEmpty(nsName))
+            {
+                continue;
+            }
+
+            var ns = GetOrAddNamespace(namespaces, nsName);
+            var isStatic = Regex.IsMatch(item.Syntax, @"\bstatic\b");
+            typeContextByUid[item.Uid] = (nsName, isStatic);
+
+            if (isStatic && string.Equals(item.Type, "Class", StringComparison.OrdinalIgnoreCase))
+            {
+                staticClassExtensionCounts.TryAdd(item.Uid, (nsName, SimpleNameFromUid(item.Uid), 0));
+            }
+            else if (IsExampleRequiredKind(item.Type, item.Syntax))
+            {
+                AddTypeTarget(ns, item.Uid, nsName, SimpleNameFromUid(item.Uid));
+            }
+        }
+
+        foreach (var item in allItems)
+        {
+            if (!string.Equals(item.Type, "Method", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!TryParseExtensionSignature(item.Syntax, out var extendedType))
+            {
+                continue;
+            }
+
+            var declaringUid = !string.IsNullOrEmpty(item.Parent) ? item.Parent! : DeclaringTypeUidFromMethodUid(item.Uid);
+            if (string.IsNullOrEmpty(declaringUid))
+            {
+                continue;
+            }
+
+            var nsName = typeContextByUid.TryGetValue(declaringUid, out var ctx) && !string.IsNullOrEmpty(ctx.Namespace)
+                ? ctx.Namespace
+                : (!string.IsNullOrEmpty(item.Namespace) ? item.Namespace! : NamespaceFromUid(declaringUid));
+            if (string.IsNullOrEmpty(nsName))
+            {
+                continue;
+            }
+
+            var ns = GetOrAddNamespace(namespaces, nsName);
+            var methodName = MethodNameFromUid(item.Uid);
+            var declaringClass = SimpleNameFromUid(declaringUid);
+            AddExtensionMethod(ns, methodName, extendedType, declaringClass);
+            AddExtensionTarget(ns, item.Uid, nsName, methodName, declaringUid);
+
+            if (staticClassExtensionCounts.TryGetValue(declaringUid, out var sc))
+            {
+                staticClassExtensionCounts[declaringUid] = (sc.Namespace, sc.DisplayName, sc.Count + 1);
+            }
+        }
+
+        // Static extension containers (static classes that declare extension methods) are
+        // themselves documentation targets that require a type-level example, mirroring the
+        // reflection-backed model.
+        foreach (var (uid, info) in staticClassExtensionCounts)
+        {
+            if (info.Count > 0 && namespaces.TryGetValue(info.Namespace, out var ns))
+            {
+                AddTypeTarget(ns, uid, info.Namespace, info.DisplayName);
+            }
+        }
+
+        if (namespaces.Count == 0)
+        {
+            return null;
+        }
+
+        var requiredExampleTargets = namespaces.Values
+            .SelectMany(ns => ns.RequiredExampleTargets)
+            .OrderBy(t => t.Uid, StringComparer.Ordinal)
+            .ToList();
+
+        return new ApiModel(namespaces.Values.ToList(), requiredExampleTargets);
+    }
+
+    private static ApiModel DiscoverApiFromSource(ValidationWorkspace ws, Report report)
+    {
+        var namespaces = new Dictionary<string, NamespaceInfo>(StringComparer.Ordinal);
+        var staticExtensionContainers = new Dictionary<string, (string Namespace, string DisplayName, int Count)>(StringComparer.Ordinal);
+
+        foreach (var project in ws.LibraryProjects)
+        {
+            foreach (var file in EnumerateProjectSourceFiles(project))
+            {
+                string text;
+                try
+                {
+                    text = File.ReadAllText(file);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                ScanSourceFile(text, namespaces, staticExtensionContainers, ws, project);
+            }
+        }
+
+        foreach (var (key, info) in staticExtensionContainers)
+        {
+            if (info.Count > 0 && namespaces.TryGetValue(info.Namespace, out var ns))
+            {
+                AddTypeTarget(ns, key, info.Namespace, info.DisplayName);
+            }
+        }
+
+        foreach (var ns in namespaces.Values.Where(n => n.HasCSharp14ExtensionBlocks))
+        {
+            report.Warnings.Add(new Diagnostic("DOCFX_EXTENSION_BLOCK_UNSUPPORTED", null, ns.Name,
+                $"Namespace {ns.Name} contains C# 14 extension-block types. DocFX (issue #11010) does not currently generate correct API metadata for extension blocks, so generated UIDs for those members may be missing or synthetic. Classic static extension methods with 'this' parameters remain fully supported. Do not exclude these APIs or invent special rules; continue generating docs for all discoverable public APIs and document the limitation in the overwrite file when needed."));
+        }
+
+        var requiredExampleTargets = namespaces.Values
+            .SelectMany(ns => ns.RequiredExampleTargets)
+            .OrderBy(t => t.Uid, StringComparer.Ordinal)
+            .ToList();
+
+        return new ApiModel(namespaces.Values.ToList(), requiredExampleTargets);
+    }
+
+    private static void ScanSourceFile(
+        string text,
+        Dictionary<string, NamespaceInfo> namespaces,
+        Dictionary<string, (string Namespace, string DisplayName, int Count)> staticExtensionContainers,
+        ValidationWorkspace ws,
+        ProjectInfo project)
+    {
+        var lines = text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
+        var cleaned = StripCommentsAndStrings(lines);
+
+        string? currentNamespace = null;
+        var namespaceBodyDepth = 0;
+        var depth = 0;
+        string? currentTopLevelStaticClass = null;
+        var currentTopLevelStaticClassDepth = -1;
+        var currentStaticClassEntered = false;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var clean = cleaned[i];
+
+            var nsMatch = Regex.Match(clean, @"^\s*namespace\s+(?<ns>[\w.]+)\s*(?<brace>\{)?\s*;?\s*$");
+            if (nsMatch.Success)
+            {
+                currentNamespace = nsMatch.Groups["ns"].Value;
+                RegisterNamespaceProject(ws, currentNamespace, project);
+                GetOrAddNamespace(namespaces, currentNamespace);
+                namespaceBodyDepth = nsMatch.Groups["brace"].Success ? depth + 1 : depth;
+                depth += CountChar(clean, '{') - CountChar(clean, '}');
+                continue;
+            }
+
+            if (currentNamespace is not null)
+            {
+                var isTopLevel = depth == namespaceBodyDepth;
+
+                if (isTopLevel && Regex.IsMatch(clean, @"\bextension\s*\("))
+                {
+                    GetOrAddNamespace(namespaces, currentNamespace).HasCSharp14ExtensionBlocks = true;
+                }
+
+                var typeMatch = Regex.Match(clean,
+                    @"(?<mods>(?:public|abstract|sealed|static|partial|readonly|unsafe|ref|\s)*)\b(?<kind>class|struct|interface|enum|record)\b(?:\s+(?<recstruct>struct|class))?\s+(?<name>\w+)(?<generic><[^>]*>)?");
+                if (isTopLevel && typeMatch.Success && Regex.IsMatch(typeMatch.Groups["mods"].Value, @"\bpublic\b"))
+                {
+                    var ns = GetOrAddNamespace(namespaces, currentNamespace);
+                    var name = typeMatch.Groups["name"].Value;
+                    var arity = CountGenericArity(typeMatch.Groups["generic"].Value);
+                    var uid = currentNamespace + "." + name + (arity > 0 ? "`" + arity : string.Empty);
+                    var mods = typeMatch.Groups["mods"].Value;
+                    var kind = typeMatch.Groups["kind"].Value;
+                    var isStatic = Regex.IsMatch(mods, @"\bstatic\b");
+
+                    if (isStatic && string.Equals(kind, "class", StringComparison.Ordinal))
+                    {
+                        currentTopLevelStaticClass = uid;
+                        currentTopLevelStaticClassDepth = depth;
+                        currentStaticClassEntered = false;
+                        staticExtensionContainers.TryAdd(uid, (currentNamespace, name, 0));
+                    }
+                    else if (IsExampleRequiredSourceKind(kind, mods))
+                    {
+                        AddTypeTarget(ns, uid, currentNamespace, name);
+                    }
+                }
+
+                // Classic extension methods inside the current top-level static class.
+                if (currentTopLevelStaticClass is not null)
+                {
+                    var extMatch = Regex.Match(clean,
+                        @"\bpublic\s+static\s+[^\n;{=]*?\b(?<name>\w+)\s*(?:<[^>]*>)?\s*\(\s*(?:\[[^\]]*\]\s*)*this\s+(?<ext>[\w.]+(?:<[^>]{0,120}>)?)");
+                    if (extMatch.Success)
+                    {
+                        var ns = GetOrAddNamespace(namespaces, currentNamespace);
+                        var methodName = extMatch.Groups["name"].Value;
+                        var extendedType = SimpleNameFromTypeRef(extMatch.Groups["ext"].Value);
+                        AddExtensionMethod(ns, methodName, extendedType, SimpleNameFromUid(currentTopLevelStaticClass));
+                        AddExtensionTarget(ns, currentTopLevelStaticClass + "." + methodName, currentNamespace, methodName, currentTopLevelStaticClass);
+                        if (staticExtensionContainers.TryGetValue(currentTopLevelStaticClass, out var sc))
+                        {
+                            staticExtensionContainers[currentTopLevelStaticClass] = (sc.Namespace, sc.DisplayName, sc.Count + 1);
+                        }
+                    }
+                }
+            }
+
+            depth += CountChar(clean, '{') - CountChar(clean, '}');
+            if (currentTopLevelStaticClass is not null)
+            {
+                if (depth > currentTopLevelStaticClassDepth)
+                {
+                    currentStaticClassEntered = true;
+                }
+                else if (currentStaticClassEntered && depth <= currentTopLevelStaticClassDepth)
+                {
+                    currentTopLevelStaticClass = null;
+                    currentTopLevelStaticClassDepth = -1;
+                    currentStaticClassEntered = false;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateProjectSourceFiles(ProjectInfo project)
+    {
+        var projectDir = Path.GetDirectoryName(project.Path);
+        if (string.IsNullOrEmpty(projectDir) || !Directory.Exists(projectDir))
+        {
+            yield break;
+        }
+
+        foreach (var file in EnumerateFiles(projectDir, "*.cs"))
+        {
+            var name = Path.GetFileName(file);
+            if (name.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith(".Designer.cs", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("GlobalUsings.cs", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            yield return file;
+        }
+    }
+
+    private static void EnsureNamespaceProjectMap(ValidationWorkspace ws)
+    {
+        if (ws.NamespaceProjects.Count > 0)
+        {
+            return;
+        }
+
+        foreach (var project in ws.LibraryProjects)
+        {
+            foreach (var file in EnumerateProjectSourceFiles(project))
+            {
+                string text;
+                try
+                {
+                    text = File.ReadAllText(file);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (Match m in Regex.Matches(text, @"(?m)^\s*namespace\s+(?<ns>[\w.]+)"))
+                {
+                    RegisterNamespaceProject(ws, m.Groups["ns"].Value, project);
+                }
+            }
+        }
+    }
+
+    private static void RegisterNamespaceProject(ValidationWorkspace ws, string ns, ProjectInfo project)
+    {
+        if (string.IsNullOrEmpty(ns))
+        {
+            return;
+        }
+
+        if (!ws.NamespaceProjects.TryGetValue(ns, out var list))
+        {
+            list = new List<ProjectInfo>();
+            ws.NamespaceProjects[ns] = list;
+        }
+
+        if (!list.Any(p => PathsEqual(p.Path, project.Path)))
+        {
+            list.Add(project);
+        }
+    }
+
+    private static NamespaceInfo GetOrAddNamespace(Dictionary<string, NamespaceInfo> namespaces, string name)
+    {
+        if (!namespaces.TryGetValue(name, out var info))
+        {
+            info = new NamespaceInfo(name);
+            namespaces[name] = info;
+        }
+
+        return info;
+    }
+
+    private static void AddTypeTarget(NamespaceInfo ns, string uid, string nsName, string displayName)
+    {
+        var target = new ApiTargetInfo(uid, nsName, ApiTargetKind.Type, displayName);
+        if (!ns.RequiredExampleTargets.Contains(target))
+        {
+            ns.RequiredExampleTargets.Add(target);
+        }
+    }
+
+    private static void AddExtensionTarget(NamespaceInfo ns, string uid, string nsName, string displayName, string declaringTypeUid)
+    {
+        var target = new ApiTargetInfo(uid, nsName, ApiTargetKind.ExtensionMethod, displayName, declaringTypeUid);
+        if (!ns.RequiredExampleTargets.Contains(target))
+        {
+            ns.RequiredExampleTargets.Add(target);
+        }
+    }
+
+    private static void AddExtensionMethod(NamespaceInfo ns, string methodName, string extendedType, string declaringClass)
+    {
+        var info = new ExtensionMethodInfo(methodName, extendedType, declaringClass);
+        if (!ns.ExtensionMethods.Contains(info))
+        {
+            ns.ExtensionMethods.Add(info);
+        }
+    }
+
+    private static bool IsExampleRequiredKind(string yamlType, string syntax)
+    {
+        if (string.Equals(yamlType, "Interface", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(syntax, @"\bstatic\b"))
+        {
+            // Static containers are added separately only when they declare extension methods.
+            return false;
+        }
+
+        if (Regex.IsMatch(syntax, @"\babstract\b"))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsExampleRequiredSourceKind(string kind, string mods)
+    {
+        if (string.Equals(kind, "interface", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(mods, @"\bstatic\b") || Regex.IsMatch(mods, @"\babstract\b"))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseExtensionSignature(string syntax, out string extendedType)
+    {
+        extendedType = string.Empty;
+        if (!Regex.IsMatch(syntax, @"\bstatic\b"))
+        {
+            return false;
+        }
+
+        var m = Regex.Match(syntax, @"\(\s*(?:\[[^\]]*\]\s*)*this\s+(?<ext>[\w.]+(?:<[^>]{0,120}>)?)");
+        if (!m.Success)
+        {
+            return false;
+        }
+
+        extendedType = SimpleNameFromTypeRef(m.Groups["ext"].Value);
+        return true;
+    }
+
+    private static string SimpleNameFromTypeRef(string typeRef)
+    {
+        var trimmed = typeRef.Trim();
+        var generic = trimmed.IndexOf('<');
+        if (generic >= 0)
+        {
+            trimmed = trimmed[..generic];
+        }
+
+        var lastDot = trimmed.LastIndexOf('.');
+        if (lastDot >= 0)
+        {
+            trimmed = trimmed[(lastDot + 1)..];
+        }
+
+        var tick = trimmed.IndexOf('`');
+        return tick >= 0 ? trimmed[..tick] : trimmed;
+    }
+
+    private static string SimpleNameFromUid(string uid)
+    {
+        var beforeGeneric = uid;
+        var tick = beforeGeneric.IndexOf('`');
+        if (tick >= 0)
+        {
+            beforeGeneric = beforeGeneric[..tick];
+        }
+
+        var lastDot = beforeGeneric.LastIndexOf('.');
+        return lastDot >= 0 ? beforeGeneric[(lastDot + 1)..] : beforeGeneric;
+    }
+
+    private static string NamespaceFromUid(string uid)
+    {
+        var lastDot = uid.LastIndexOf('.');
+        return lastDot > 0 ? uid[..lastDot] : string.Empty;
+    }
+
+    private static string MethodNameFromUid(string methodUid)
+    {
+        var paren = methodUid.IndexOf('(');
+        var head = paren >= 0 ? methodUid[..paren] : methodUid;
+        return SimpleNameFromUid(head);
+    }
+
+    private static string DeclaringTypeUidFromMethodUid(string methodUid)
+    {
+        var paren = methodUid.IndexOf('(');
+        var head = paren >= 0 ? methodUid[..paren] : methodUid;
+        var lastDot = head.LastIndexOf('.');
+        return lastDot > 0 ? head[..lastDot] : string.Empty;
+    }
+
+    private static int CountGenericArity(string generic)
+    {
+        if (string.IsNullOrEmpty(generic))
+        {
+            return 0;
+        }
+
+        var inner = generic.Trim();
+        if (inner.StartsWith('<') && inner.EndsWith('>'))
+        {
+            inner = inner[1..^1];
+        }
+
+        if (string.IsNullOrWhiteSpace(inner))
+        {
+            return 0;
+        }
+
+        var depth = 0;
+        var count = 1;
+        foreach (var c in inner)
+        {
+            if (c == '<')
+            {
+                depth++;
+            }
+            else if (c == '>')
+            {
+                depth--;
+            }
+            else if (c == ',' && depth == 0)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int CountChar(string text, char c)
+    {
+        var count = 0;
+        foreach (var ch in text)
+        {
+            if (ch == c)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Returns a copy of <paramref name="lines"/> with line comments, block comments, and string
+    /// and character literals blanked so brace counting and declaration matching ignore braces or
+    /// keywords that appear inside comments or strings. Conservative, not a full C# lexer.
+    /// </summary>
+    private static string[] StripCommentsAndStrings(string[] lines)
+    {
+        var result = new string[lines.Length];
+        var inBlockComment = false;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var sb = new StringBuilder(line.Length);
+            for (var j = 0; j < line.Length; j++)
+            {
+                var c = line[j];
+                if (inBlockComment)
+                {
+                    if (c == '*' && j + 1 < line.Length && line[j + 1] == '/')
+                    {
+                        inBlockComment = false;
+                        j++;
+                    }
+
+                    continue;
+                }
+
+                if (c == '/' && j + 1 < line.Length && line[j + 1] == '/')
+                {
+                    break;
+                }
+
+                if (c == '/' && j + 1 < line.Length && line[j + 1] == '*')
+                {
+                    inBlockComment = true;
+                    j++;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    j = SkipStringLiteral(line, j);
+                    sb.Append("\"\"");
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    j = SkipCharLiteral(line, j);
+                    sb.Append("' '");
+                    continue;
+                }
+
+                sb.Append(c);
+            }
+
+            result[i] = sb.ToString();
+        }
+
+        return result;
+    }
+
+    private static int SkipStringLiteral(string line, int start)
+    {
+        for (var j = start + 1; j < line.Length; j++)
+        {
+            if (line[j] == '\\')
+            {
+                j++;
+                continue;
+            }
+
+            if (line[j] == '"')
+            {
+                return j;
+            }
+        }
+
+        return line.Length - 1;
+    }
+
+    private static int SkipCharLiteral(string line, int start)
+    {
+        for (var j = start + 1; j < line.Length; j++)
+        {
+            if (line[j] == '\\')
+            {
+                j++;
+                continue;
+            }
+
+            if (line[j] == '\'')
+            {
+                return j;
+            }
+        }
+
+        return line.Length - 1;
+    }
+
+    private sealed record YamlApiItem(string Uid, string? Type, string? Namespace, string? Name, string? Parent, string Syntax);
+
+    private static List<YamlApiItem> ParseManagedReferenceItems(string yamlFile)
+    {
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(yamlFile);
+        }
+        catch
+        {
+            return new List<YamlApiItem>();
+        }
+
+        var items = new List<YamlApiItem>();
+        var inItems = false;
+        string? uid = null, type = null, ns = null, name = null, parent = null, syntax = null;
+
+        void Flush()
+        {
+            if (uid is not null)
+            {
+                items.Add(new YamlApiItem(uid, type, ns, name, parent, syntax ?? string.Empty));
+            }
+
+            uid = type = ns = name = parent = syntax = null;
+        }
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (!inItems)
+            {
+                if (line.StartsWith("items:", StringComparison.Ordinal))
+                {
+                    inItems = true;
+                }
+
+                continue;
+            }
+
+            if (line.Length > 0 && line[0] != ' ' && line[0] != '-' && line[0] != '#')
+            {
+                // references: / shouldSkipMarkup: etc. — end of the items section.
+                break;
+            }
+
+            var itemStart = Regex.Match(line, @"^- uid:\s*(.+?)\s*$");
+            if (itemStart.Success)
+            {
+                Flush();
+                uid = StripYamlScalar(itemStart.Groups[1].Value);
+                continue;
+            }
+
+            if (uid is null)
+            {
+                continue;
+            }
+
+            var prop = Regex.Match(line, @"^  (?<key>[\w.]+):\s?(?<val>.*)$");
+            if (prop.Success)
+            {
+                var key = prop.Groups["key"].Value;
+                var val = prop.Groups["val"].Value;
+                switch (key)
+                {
+                    case "type":
+                        type ??= StripYamlScalar(val.Trim());
+                        break;
+                    case "namespace":
+                        ns = StripYamlScalar(val.Trim());
+                        break;
+                    case "name":
+                        name ??= StripYamlScalar(val.Trim());
+                        break;
+                    case "parent":
+                        parent = StripYamlScalar(val.Trim());
+                        break;
+                }
+
+                continue;
+            }
+
+            var content = Regex.Match(line, @"^    content:\s?(?<val>.*)$");
+            if (content.Success && syntax is null)
+            {
+                var val = content.Groups["val"].Value.Trim();
+                if (val.Length == 0 || val is ">" or ">-" or ">+" or "|" or "|-" or "|+")
+                {
+                    var sb = new StringBuilder();
+                    var j = i + 1;
+                    while (j < lines.Length)
+                    {
+                        var bl = lines[j];
+                        if (bl.Trim().Length == 0)
+                        {
+                            j++;
+                            continue;
+                        }
+
+                        var indent = bl.Length - bl.TrimStart().Length;
+                        if (indent <= 4)
+                        {
+                            break;
+                        }
+
+                        if (sb.Length > 0)
+                        {
+                            sb.Append(' ');
+                        }
+
+                        sb.Append(bl.Trim());
+                        j++;
+                    }
+
+                    syntax = sb.ToString();
+                    i = j - 1;
+                }
+                else
+                {
+                    syntax = StripYamlScalar(val);
+                }
+            }
+        }
+
+        Flush();
+        return items;
+    }
+
+    private static string StripYamlScalar(string value)
+    {
+        var v = value.Trim();
+        if (v.Length >= 2 && ((v[0] == '"' && v[^1] == '"') || (v[0] == '\'' && v[^1] == '\'')))
+        {
+            v = v[1..^1];
+        }
+
+        return v;
     }
 
     private static List<string> DistinctResolverPaths(IEnumerable<string> paths)
@@ -2250,17 +3132,12 @@ internal static class DocfxValidator
     // Namespace page validation
     // ----------------------------------------------------------------------
 
-    private static void ValidateNamespacePage(string repoRoot, string page, NamespaceInfo ns, Report report)
+    private static void ValidateNamespacePage(string repoRoot, string page, string text, NamespaceInfo ns, Report report)
     {
         var rel = Rel(repoRoot, page);
-        string text;
-        try
+        if (string.IsNullOrEmpty(text))
         {
-            text = File.ReadAllText(page);
-        }
-        catch (Exception ex)
-        {
-            report.Errors.Add(new Diagnostic("NAMESPACE_PAGE_MISSING", rel, ns.Name, $"Unable to read namespace page: {ex.Message}"));
+            report.Errors.Add(new Diagnostic("NAMESPACE_PAGE_MISSING", rel, ns.Name, "Unable to read namespace page."));
             return;
         }
 
@@ -2605,25 +3482,28 @@ internal static class DocfxValidator
     // Sample validation
     // ----------------------------------------------------------------------
 
-    private static void ValidateSamples(string repoRoot, List<string> markdownFiles, List<ProjectInfo> libraryProjects,
-        Options options, HashSet<string>? changedFiles, bool hasStrongNameKey, Report report)
+    private static void ValidateSamples(ValidationWorkspace ws, Options options, HashSet<string>? changedFiles,
+        bool hasStrongNameKey, Report report)
     {
-        // 1. Extract all C# samples from Markdown files.
+        var repoRoot = ws.RepoRoot;
+
+        // 1. Extract all C# samples from cached Markdown text.
         var phaseTimer = Stopwatch.StartNew();
         var samples = new List<SampleFence>();
-        foreach (var md in markdownFiles)
+        foreach (var md in ws.MarkdownFiles)
         {
             if (options.ChangedOnly && changedFiles is not null && !changedFiles.Contains(Path.GetFullPath(md)))
             {
                 continue;
             }
 
-            samples.AddRange(ExtractFences(md));
+            samples.AddRange(ExtractFences(md, ws.ReadMarkdown(md)));
         }
 
-        WritePhase(options, "sample extraction", phaseTimer.Elapsed);
+        WritePhase(options, report, "sample extraction", phaseTimer.Elapsed, $"{samples.Count} fence(s)");
         if (samples.Count == 0)
         {
+            WriteSkippedPhase(options, report, "sample validation", "no C# samples found");
             return;
         }
 
@@ -2667,56 +3547,79 @@ internal static class DocfxValidator
 
         if (toCompile.Count == 0)
         {
+            WriteSkippedPhase(options, report, "sample validation", "no compilable samples");
             return;
         }
 
-        // 3. Create reusable sample-validation worker pool and compile with bounded parallelism.
-        //    Workers use ProjectReference for all documented library projects so the full
-        //    compile-time dependency closure (NuGet packages, transitive references, framework
-        //    assemblies exposed through public signatures) is available without manual DLL enumeration.
+        // 3. Resolve a scoped project/package reference set per sample, then group samples that
+        //    share a reference set. Each group compiles against ONLY the documented project(s)
+        //    that own the sample's namespace (and their transitive references resolved by MSBuild),
+        //    never every documented library project. Samples whose owner cannot be resolved fall
+        //    back to the full documented project set, which forms a single shared group.
+        EnsureNamespaceProjectMap(ws);
+        var framework = options.Framework ?? "net10.0";
+        var packageMode = string.Equals(options.SampleReferenceMode, "package", StringComparison.OrdinalIgnoreCase);
+
+        var groups = new Dictionary<string, List<(SampleFence Sample, int OriginalIndex)>>(StringComparer.Ordinal);
+        var groupRefs = new Dictionary<string, SampleReferenceSet>(StringComparer.Ordinal);
+        foreach (var entry in toCompile)
+        {
+            var kind = IsProgramCsExample(entry.Sample.Code) ? "app" : "lib";
+            var refSet = ResolveSampleReferenceSet(entry.Sample, ws, kind, packageMode);
+            var key = $"{kind}::{(refSet.IsPackageMode ? "pkg" : "proj")}::{string.Join(";", refSet.Items)}";
+            if (!groups.TryGetValue(key, out var list))
+            {
+                list = new List<(SampleFence, int)>();
+                groups[key] = list;
+                groupRefs[key] = refSet;
+            }
+
+            list.Add(entry);
+        }
+
         var tempRoot = Path.Combine(Path.GetTempPath(), "docfx-digest-samples-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
         try
         {
             var parallelism = GetSampleValidationParallelism(options);
-            var workerCount = Math.Min(parallelism, toCompile.Count);
+            var workerCount = Math.Min(parallelism, groups.Count);
             WritePhaseStart(options, "sample validation", workerCount, toCompile.Count);
             phaseTimer.Restart();
 
-            // Create and restore each worker once.
-            var workers = new SampleWorkerInfo[workerCount];
-            for (int w = 0; w < workerCount; w++)
-            {
-                workers[w] = CreateSampleWorker(
-                    tempRoot, w + 1, libraryProjects,
-                    options.Framework ?? "net10.0", options.Configuration, repoRoot, hasStrongNameKey, report);
-            }
-
-            // Assign samples to workers in round-robin order. Each worker processes its
-            // stripe sequentially, so no synchronization is needed within a worker.
             // Results are stored in a pre-sized indexed array to guarantee deterministic
-            // diagnostic ordering regardless of worker completion order.
+            // diagnostic ordering regardless of group completion order.
             var results = new SampleCompileResult?[samples.Count];
-            var workerTasks = Enumerable.Range(0, workerCount)
-                .Select(workerIdx =>
+            var orderedGroups = groups.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            using var throttler = new SemaphoreSlim(Math.Max(1, parallelism));
+            var tasks = new List<Task>();
+            for (var g = 0; g < orderedGroups.Count; g++)
+            {
+                var key = orderedGroups[g];
+                var groupNumber = g + 1;
+                throttler.Wait();
+                tasks.Add(Task.Run(() =>
                 {
-                    var mySamples = toCompile.Where((_, si) => si % workerCount == workerIdx).ToList();
-                    var myWorker = workers[workerIdx];
-                    return Task.Run(() =>
+                    try
                     {
-                        foreach (var (sample, originalIndex) in mySamples)
+                        var worker = CreateSampleGroupWorker(tempRoot, groupNumber, groupRefs[key], framework, hasStrongNameKey, report);
+                        foreach (var (sample, originalIndex) in groups[key])
                         {
-                            var (ok, diags, exitCode) = CompileWithWorker(myWorker, sample, options.Configuration, hasStrongNameKey);
+                            var (ok, diags, exitCode) = CompileSampleInGroup(worker, sample, options.Configuration, hasStrongNameKey);
                             results[originalIndex] = new SampleCompileResult(ok, diags, exitCode);
                         }
-                    });
-                })
-                .ToArray();
+                    }
+                    finally
+                    {
+                        throttler.Release();
+                    }
+                }));
+            }
 
-            Task.WaitAll(workerTasks);
-            WritePhase(options, "sample validation", phaseTimer.Elapsed);
+            Task.WaitAll(tasks.ToArray());
+            WritePhase(options, report, "sample validation", phaseTimer.Elapsed,
+                $"{groups.Count} group(s), {toCompile.Count} sample(s)");
 
-            // 5. Merge results in original sample order for deterministic diagnostics.
+            // 4. Merge results in original sample order for deterministic diagnostics.
             for (int i = 0; i < samples.Count; i++)
             {
                 var result = results[i];
@@ -2743,6 +3646,110 @@ internal static class DocfxValidator
         }
     }
 
+    /// <summary>
+    /// Resolves the minimal set of documented project (or package) references a sample needs by
+    /// mapping the sample's owning namespace to the project(s) that declare it. Falls back to the
+    /// full documented project set only when the owner cannot be determined.
+    /// </summary>
+    private static SampleReferenceSet ResolveSampleReferenceSet(SampleFence sample, ValidationWorkspace ws, string kind, bool packageMode)
+    {
+        var owners = ResolveOwningProjects(sample, ws);
+        if (owners.Count == 0)
+        {
+            owners = ws.LibraryProjects;
+        }
+
+        owners = owners
+            .GroupBy(p => Path.GetFullPath(p.Path), StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderBy(p => Path.GetFullPath(p.Path), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (packageMode)
+        {
+            var packageRefs = new List<(string Id, string Version)>();
+            var projectRefs = new List<ProjectInfo>();
+            foreach (var owner in owners)
+            {
+                if (!string.IsNullOrWhiteSpace(owner.PackageId))
+                {
+                    packageRefs.Add((owner.PackageId!, "*"));
+                }
+                else
+                {
+                    projectRefs.Add(owner);
+                }
+            }
+
+            var items = packageRefs.Select(p => $"pkg:{p.Id}@{p.Version}")
+                .Concat(projectRefs.Select(p => $"proj:{Path.GetFullPath(p.Path)}"))
+                .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return new SampleReferenceSet(kind, true, items, projectRefs, packageRefs);
+        }
+
+        var projectItems = owners.Select(p => Path.GetFullPath(p.Path))
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return new SampleReferenceSet(kind, false, projectItems, owners, new List<(string, string)>());
+    }
+
+    private static List<ProjectInfo> ResolveOwningProjects(SampleFence sample, ValidationWorkspace ws)
+    {
+        var ns = ResolveSampleNamespace(sample, ws);
+        if (ns is not null && ws.NamespaceProjects.TryGetValue(ns, out var projects) && projects.Count > 0)
+        {
+            return projects.ToList();
+        }
+
+        return new List<ProjectInfo>();
+    }
+
+    private static string? ResolveSampleNamespace(SampleFence sample, ValidationWorkspace ws)
+    {
+        // Prefer the overwrite uid(s) authored in the sample's file.
+        foreach (var section in ws.OverwriteSections.Where(s => PathsEqual(s.File, sample.File)))
+        {
+            if (ws.NamespaceProjects.ContainsKey(section.Uid))
+            {
+                return section.Uid;
+            }
+
+            var prefix = LongestNamespacePrefix(section.Uid, ws);
+            if (prefix is not null)
+            {
+                return prefix;
+            }
+        }
+
+        // Fall back to the file stem (namespace pages are named after the namespace).
+        var stem = Path.GetFileNameWithoutExtension(sample.File);
+        if (ws.NamespaceProjects.ContainsKey(stem))
+        {
+            return stem;
+        }
+
+        return LongestNamespacePrefix(stem, ws);
+    }
+
+    private static string? LongestNamespacePrefix(string uid, ValidationWorkspace ws)
+    {
+        string? best = null;
+        foreach (var ns in ws.NamespaceProjects.Keys)
+        {
+            if (string.Equals(uid, ns, StringComparison.Ordinal) ||
+                uid.StartsWith(ns + ".", StringComparison.Ordinal))
+            {
+                if (best is null || ns.Length > best.Length)
+                {
+                    best = ns;
+                }
+            }
+        }
+
+        return best;
+    }
+
     private static int GetSampleValidationParallelism(Options options)
     {
         var processorCount = Math.Max(1, Environment.ProcessorCount);
@@ -2766,131 +3773,101 @@ internal static class DocfxValidator
     }
 
     /// <summary>
-    /// Creates a reusable sample-validation worker under <paramref name="tempRoot"/> and
-    /// performs a one-time restore so all subsequent sample builds can use <c>--no-restore</c>.
+    /// Creates a single-kind (lib or app) sample worker for a dependency group under
+    /// <paramref name="tempRoot"/>, referencing only the resolved scoped project/package set,
+    /// and restores it once so subsequent sample builds in the group can use <c>--no-restore</c>.
     /// </summary>
-    private static SampleWorkerInfo CreateSampleWorker(
-        string tempRoot, int workerNumber,
-        List<ProjectInfo> libraryProjects,
-        string framework, string configuration,
-        string repoRoot, bool hasStrongNameKey, Report report)
+    private static SampleGroupWorker CreateSampleGroupWorker(
+        string tempRoot, int groupNumber, SampleReferenceSet refSet,
+        string framework, bool hasStrongNameKey, Report report)
     {
-        var workerDir = Path.Combine(tempRoot, "docfx-sample-workers", $"worker-{workerNumber:D4}");
-        var libDir = Path.Combine(workerDir, "lib");
-        var appDir = Path.Combine(workerDir, "app");
-        Directory.CreateDirectory(libDir);
-        Directory.CreateDirectory(appDir);
+        var isApp = string.Equals(refSet.Kind, "app", StringComparison.Ordinal);
+        var workerDir = Path.Combine(tempRoot, "docfx-sample-workers", $"group-{groupNumber:D4}");
+        Directory.CreateDirectory(workerDir);
 
-        // Class-library project — for class-based samples (namespace + type declaration).
-        var libProjPath = Path.Combine(libDir, "DocfxSampleLib.csproj");
-        File.WriteAllText(libProjPath, GenerateSampleLibProject(libraryProjects, framework),
-            new UTF8Encoding(false));
-        // Compilable placeholder; overwritten per sample.
-        File.WriteAllText(Path.Combine(libDir, "Sample.cs"),
-            "namespace DocfxSamplePlaceholder { internal static class _Placeholder { } }",
+        var projPath = Path.Combine(workerDir, isApp ? "DocfxSampleApp.csproj" : "DocfxSampleLib.csproj");
+        File.WriteAllText(projPath, GenerateSampleGroupProject(refSet, framework, isApp), new UTF8Encoding(false));
+
+        var sourceName = isApp ? "Program.cs" : "Sample.cs";
+        File.WriteAllText(Path.Combine(workerDir, sourceName),
+            isApp ? "// placeholder" : "namespace DocfxSamplePlaceholder { internal static class _Placeholder { } }",
             new UTF8Encoding(false));
 
-        // Console-app project — for Program.cs / top-level-statement samples.
-        var appProjPath = Path.Combine(appDir, "DocfxSampleApp.csproj");
-        File.WriteAllText(appProjPath, GenerateSampleAppProject(libraryProjects, framework),
-            new UTF8Encoding(false));
-        // Compilable placeholder; overwritten per sample.
-        File.WriteAllText(Path.Combine(appDir, "Program.cs"), "// placeholder", new UTF8Encoding(false));
-
-        // Restore once so --no-restore works for all subsequent sample builds.
         var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
-        var libRestoreOk = RunProcess("dotnet",
-            $"restore \"{libProjPath}\" --nologo{signingProperty}", libDir).ExitCode == 0;
-        var appRestoreOk = RunProcess("dotnet",
-            $"restore \"{appProjPath}\" --nologo{signingProperty}", appDir).ExitCode == 0;
+        var restoreOk = RunProcess("dotnet",
+            $"restore \"{projPath}\" --nologo{signingProperty}", workerDir,
+            permission: ProcessPermission.SampleCompile).ExitCode == 0;
 
-        if (!libRestoreOk || !appRestoreOk)
+        if (!restoreOk)
         {
             report.Warnings.Add(new Diagnostic("SAMPLE_WORKER_RESTORE_FAILED", workerDir, null,
-                $"Sample validation worker {workerNumber} restore failed; affected samples will build without --no-restore and may be slower."));
+                $"Sample validation group {groupNumber} restore failed; affected samples will build without --no-restore and may be slower."));
         }
 
-        return new SampleWorkerInfo(libDir, appDir, libProjPath, appProjPath, libRestoreOk, appRestoreOk);
+        return new SampleGroupWorker(workerDir, projPath, isApp, restoreOk);
     }
 
-    private static string GenerateSampleLibProject(List<ProjectInfo> libraryProjects, string framework)
+    private static string GenerateSampleGroupProject(SampleReferenceSet refSet, string framework, bool isApp)
     {
         var sb = new StringBuilder();
         sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
         sb.AppendLine("  <PropertyGroup>");
         sb.AppendLine($"    <TargetFramework>{framework}</TargetFramework>");
-        sb.AppendLine("    <OutputType>Library</OutputType>");
+        sb.AppendLine(isApp ? "    <OutputType>Exe</OutputType>" : "    <OutputType>Library</OutputType>");
         sb.AppendLine("    <Nullable>enable</Nullable>");
         sb.AppendLine("    <LangVersion>latest</LangVersion>");
-        sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
+        sb.AppendLine(isApp ? "    <PublishAot>false</PublishAot>" : "    <ImplicitUsings>disable</ImplicitUsings>");
         sb.AppendLine("  </PropertyGroup>");
-        AppendProjectReferences(sb, libraryProjects);
+
+        if (refSet.ProjectReferences.Count > 0 || refSet.PackageReferences.Count > 0)
+        {
+            sb.AppendLine("  <ItemGroup>");
+            foreach (var proj in refSet.ProjectReferences)
+            {
+                sb.AppendLine($"    <ProjectReference Include=\"{proj.Path}\" />");
+            }
+
+            foreach (var (id, version) in refSet.PackageReferences)
+            {
+                sb.AppendLine($"    <PackageReference Include=\"{id}\" Version=\"{version}\" />");
+            }
+
+            sb.AppendLine("  </ItemGroup>");
+        }
+
         sb.AppendLine("</Project>");
         return sb.ToString();
     }
 
-    private static string GenerateSampleAppProject(List<ProjectInfo> libraryProjects, string framework)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
-        sb.AppendLine("  <PropertyGroup>");
-        sb.AppendLine($"    <TargetFramework>{framework}</TargetFramework>");
-        sb.AppendLine("    <OutputType>Exe</OutputType>");
-        sb.AppendLine("    <Nullable>enable</Nullable>");
-        sb.AppendLine("    <LangVersion>latest</LangVersion>");
-        sb.AppendLine("    <PublishAot>false</PublishAot>");
-        sb.AppendLine("  </PropertyGroup>");
-        AppendProjectReferences(sb, libraryProjects);
-        sb.AppendLine("</Project>");
-        return sb.ToString();
-    }
-
-    private static void AppendProjectReferences(StringBuilder sb, List<ProjectInfo> libraryProjects)
-    {
-        if (libraryProjects.Count == 0)
-        {
-            return;
-        }
-
-        sb.AppendLine("  <ItemGroup>");
-        foreach (var proj in libraryProjects)
-        {
-            sb.AppendLine($"    <ProjectReference Include=\"{proj.Path}\" />");
-        }
-
-        sb.AppendLine("  </ItemGroup>");
-    }
-
-    private static (bool Ok, string Diagnostics, int ExitCode) CompileWithWorker(
-        SampleWorkerInfo worker, SampleFence sample, string configuration, bool hasStrongNameKey)
+    private static (bool Ok, string Diagnostics, int ExitCode) CompileSampleInGroup(
+        SampleGroupWorker worker, SampleFence sample, string configuration, bool hasStrongNameKey)
     {
         var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
-
-        if (IsProgramCsExample(sample.Code))
-        {
-            // Top-level statement sample: write to Program.cs and build the app project.
-            var noRestoreFlag = worker.AppRestoreSucceeded ? " --no-restore" : string.Empty;
-            File.WriteAllText(Path.Combine(worker.AppDirectory, "Program.cs"), sample.Code, new UTF8Encoding(false));
-            var result = RunProcess("dotnet",
-                $"build \"{worker.AppProjectPath}\" -c {configuration}{noRestoreFlag} --nologo{signingProperty}",
-                worker.AppDirectory);
-            return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
-        }
-
-        // Class-based sample: write to Sample.cs and build the library project.
-        var libNoRestoreFlag = worker.LibRestoreSucceeded ? " --no-restore" : string.Empty;
-        File.WriteAllText(Path.Combine(worker.LibDirectory, "Sample.cs"), sample.Code, new UTF8Encoding(false));
-        var libResult = RunProcess("dotnet",
-            $"build \"{worker.LibProjectPath}\" -c {configuration}{libNoRestoreFlag} --nologo{signingProperty}",
-            worker.LibDirectory);
-        return (libResult.ExitCode == 0, libResult.StdOut + libResult.StdErr, libResult.ExitCode);
+        var noRestoreFlag = worker.RestoreOk ? " --no-restore" : string.Empty;
+        var sourceName = worker.IsApp ? "Program.cs" : "Sample.cs";
+        File.WriteAllText(Path.Combine(worker.Directory, sourceName), sample.Code, new UTF8Encoding(false));
+        var result = RunProcess("dotnet",
+            $"build \"{worker.ProjectPath}\" -c {configuration}{noRestoreFlag} --nologo{signingProperty}",
+            worker.Directory, permission: ProcessPermission.SampleCompile);
+        return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
     }
 
-    private static void WritePhase(Options options, string name, TimeSpan elapsed)
+    private static void WritePhase(Options options, Report report, string name, TimeSpan elapsed, string? detail = null)
     {
+        report.Summary.Phases.Add(new PhaseTiming(name, Math.Round(elapsed.TotalSeconds, 2), detail));
         if (!options.Json)
         {
-            Console.WriteLine($"  [phase] {name}: {elapsed.TotalSeconds:F2}s");
+            var suffix = string.IsNullOrEmpty(detail) ? string.Empty : $" {detail}";
+            Console.WriteLine($"  [phase] {name}: {elapsed.TotalSeconds:F2}s{suffix}");
+        }
+    }
+
+    private static void WriteSkippedPhase(Options options, Report report, string name, string reason)
+    {
+        report.Summary.Phases.Add(new PhaseTiming(name, 0, reason));
+        if (!options.Json)
+        {
+            Console.WriteLine($"  [phase] {name}: skipped ({reason})");
         }
     }
 
@@ -2904,7 +3881,6 @@ internal static class DocfxValidator
 
     private static List<SampleFence> ExtractFences(string mdFile)
     {
-        var fences = new List<SampleFence>();
         string[] lines;
         try
         {
@@ -2912,9 +3888,21 @@ internal static class DocfxValidator
         }
         catch
         {
-            return fences;
+            return new List<SampleFence>();
         }
 
+        return ExtractFencesFromLines(mdFile, lines);
+    }
+
+    private static List<SampleFence> ExtractFences(string mdFile, string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
+        return ExtractFencesFromLines(mdFile, lines);
+    }
+
+    private static List<SampleFence> ExtractFencesFromLines(string mdFile, string[] lines)
+    {
+        var fences = new List<SampleFence>();
         int fenceIndex = 0;
         for (int i = 0; i < lines.Length; i++)
         {
@@ -2948,13 +3936,23 @@ internal static class DocfxValidator
 
     private static List<OverwriteSection> ExtractOverwriteSections(string mdFile)
     {
-        var sections = new List<OverwriteSection>();
         string text;
         try
         {
             text = File.ReadAllText(mdFile);
         }
         catch
+        {
+            return new List<OverwriteSection>();
+        }
+
+        return ExtractOverwriteSections(mdFile, text);
+    }
+
+    private static List<OverwriteSection> ExtractOverwriteSections(string mdFile, string text)
+    {
+        var sections = new List<OverwriteSection>();
+        if (string.IsNullOrEmpty(text))
         {
             return sections;
         }
@@ -3155,13 +4153,13 @@ internal static class DocfxValidator
 
     private static HashSet<string>? GetChangedFiles(string repoRoot, Report report)
     {
-        var result = RunProcess("git", "rev-parse --verify HEAD", repoRoot);
+        var result = RunProcess("git", "rev-parse --verify HEAD", repoRoot, permission: ProcessPermission.Git);
         if (result.ExitCode != 0)
         {
             return null;
         }
 
-        var diff = RunProcess("git", "diff --name-only --diff-filter=ACMRTUXB HEAD", repoRoot);
+        var diff = RunProcess("git", "diff --name-only --diff-filter=ACMRTUXB HEAD", repoRoot, permission: ProcessPermission.Git);
         if (diff.ExitCode != 0)
         {
             return null;
@@ -3175,7 +4173,7 @@ internal static class DocfxValidator
 
         // Include untracked files so --changed-only still validates samples in new
         // documentation files that have not been staged yet.
-        var untracked = RunProcess("git", "ls-files --others --exclude-standard", repoRoot);
+        var untracked = RunProcess("git", "ls-files --others --exclude-standard", repoRoot, permission: ProcessPermission.Git);
         if (untracked.ExitCode == 0)
         {
             foreach (var line in untracked.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -3211,7 +4209,8 @@ internal static class DocfxValidator
             var result = RunProcess(
                 "gh",
                 $"search code \"{packageId}\" --language C# --limit 5 --json path,repository",
-                Directory.GetCurrentDirectory());
+                Directory.GetCurrentDirectory(),
+                permission: ProcessPermission.GitHubSearch);
 
             if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.StdOut))
             {
@@ -3302,9 +4301,83 @@ internal static class DocfxValidator
     // Process + output helpers
     // ----------------------------------------------------------------------
 
-    private static ProcessResult RunProcess(string fileName, string arguments, string workingDirectory,
-        IReadOnlyDictionary<string, string>? environment = null)
+    private static void ConfigureProcessGuard(Options options)
     {
+        var allowed = new HashSet<ProcessPermission> { ProcessPermission.Git };
+        if (options.BuildApiModel)
+        {
+            allowed.Add(ProcessPermission.BuildApiModel);
+        }
+
+        if (options.ValidateSamples)
+        {
+            allowed.Add(ProcessPermission.SampleCompile);
+        }
+
+        if (options.VerifyDocfxBuild)
+        {
+            allowed.Add(ProcessPermission.DocfxBuild);
+        }
+
+        if (options.SearchExamples)
+        {
+            allowed.Add(ProcessPermission.GitHubSearch);
+        }
+
+        lock (ProcessGuardLock)
+        {
+            _allowedPermissions = allowed;
+            foreach (var key in ProcessCounts.Keys.ToList())
+            {
+                ProcessCounts[key] = 0;
+            }
+        }
+    }
+
+    private static Dictionary<string, int> SnapshotProcessCounts()
+    {
+        lock (ProcessGuardLock)
+        {
+            return new Dictionary<string, int>(ProcessCounts, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static string NormalizeProcessKey(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        return string.IsNullOrWhiteSpace(name) ? fileName : name.ToLowerInvariant();
+    }
+
+    private static string DescribePermissionOption(ProcessPermission permission) => permission switch
+    {
+        ProcessPermission.BuildApiModel => "--build-api-model",
+        ProcessPermission.SampleCompile => "--validate-samples",
+        ProcessPermission.DocfxBuild => "--verify-docfx-build",
+        ProcessPermission.GitHubSearch => "--search-examples",
+        _ => "an explicit build option"
+    };
+
+    private static ProcessResult RunProcess(string fileName, string arguments, string workingDirectory,
+        IReadOnlyDictionary<string, string>? environment = null,
+        ProcessPermission permission = ProcessPermission.NoBuild)
+    {
+        // Process guard: count every external process and refuse to launch build/doc/network
+        // tooling unless the active options explicitly authorize the corresponding permission.
+        // This keeps the default fast path honest — it can never silently shell out to a build.
+        lock (ProcessGuardLock)
+        {
+            var key = NormalizeProcessKey(fileName);
+            ProcessCounts[key] = ProcessCounts.TryGetValue(key, out var current) ? current + 1 : 1;
+
+            if (!_allowedPermissions.Contains(permission))
+            {
+                throw new InvalidOperationException(
+                    $"Process '{fileName}' was blocked by the no-build guard (permission '{permission}'). " +
+                    $"The fast Markdown/API-overwrite validation path must not run dotnet, msbuild, docfx, or gh. " +
+                    $"Enable the matching option ({DescribePermissionOption(permission)}) to allow it.");
+            }
+        }
+
         var psi = new ProcessStartInfo
         {
             FileName = fileName,
@@ -3407,6 +4480,18 @@ internal static class DocfxValidator
         report.Summary.Errors = report.Errors.Count;
         report.Summary.Warnings = report.Warnings.Count;
 
+        // Capture the process tally on every exit path so the result always proves whether the
+        // fast path actually shelled out to dotnet/msbuild/docfx/gh.
+        var processCounts = SnapshotProcessCounts();
+        report.Summary.Processes = new Dictionary<string, int>
+        {
+            ["dotnet"] = processCounts.GetValueOrDefault("dotnet"),
+            ["msbuild"] = processCounts.GetValueOrDefault("msbuild"),
+            ["docfx"] = processCounts.GetValueOrDefault("docfx"),
+            ["gh"] = processCounts.GetValueOrDefault("gh"),
+            ["git"] = processCounts.GetValueOrDefault("git")
+        };
+
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
@@ -3425,12 +4510,17 @@ internal static class DocfxValidator
             }
 
             Console.WriteLine(
-                $"  Summary: namespaces={report.Summary.PublicNamespaces}, pages={report.Summary.NamespacePagesValidated}, " +
+                $"  Summary: mode={report.Summary.ValidationMode}, apiModel={report.Summary.ApiModelSource ?? "n/a"}, " +
+                $"namespaces={report.Summary.PublicNamespaces}, pages={report.Summary.NamespacePagesValidated}, " +
                 $"requiredExampleTargets={report.Summary.RequiredExampleTargets}, requiredExamples={report.Summary.RequiredExamples}, " +
                 $"extMethods={report.Summary.ExtensionMethods}, samplesCompiled={report.Summary.SamplesCompiled}, " +
                 $"samplesSkipped={report.Summary.SamplesSkipped}, generatedMetadataRemoved={report.Summary.GeneratedMetadataFilesRemoved}, " +
                 $"generatedOutputDirectoriesRemoved={report.Summary.GeneratedOutputDirectoriesRemoved}, " +
                 $"docfxBuildsVerified={report.Summary.DocfxBuildsVerified}, errors={report.Summary.Errors}, warnings={report.Summary.Warnings}");
+
+            Console.WriteLine(
+                $"  [processes] dotnet={report.Summary.Processes["dotnet"]} msbuild={report.Summary.Processes["msbuild"]} " +
+                $"docfx={report.Summary.Processes["docfx"]} gh={report.Summary.Processes["gh"]}");
         }
 
         return (int)code;
@@ -3716,6 +4806,15 @@ internal static class DocfxValidator
                 case "--search-examples":
                     options.SearchExamples = true;
                     break;
+                case "--build-api-model":
+                case "--strict-api-discovery":
+                    options.BuildApiModel = true;
+                    break;
+                case "--sample-reference-mode":
+                    if (!Next(args, ref i, out var srm)) { error = "--sample-reference-mode requires 'project' or 'package'."; return false; }
+                    if (!IsValidSampleReferenceMode(srm)) { error = "--sample-reference-mode must be 'project' or 'package'."; return false; }
+                    options.SampleReferenceMode = srm.ToLowerInvariant();
+                    break;
                 case "--sample-parallelism":
                     if (!Next(args, ref i, out var sp)) { error = "--sample-parallelism requires a count."; return false; }
                     if (!int.TryParse(sp, out var spv) || spv < 1) { error = "--sample-parallelism must be a positive integer."; return false; }
@@ -3736,6 +4835,12 @@ internal static class DocfxValidator
                     if (TrySplit(arg, "--configuration", out var v3)) { options.Configuration = v3; break; }
                     if (TrySplit(arg, "--framework", out var v4)) { options.Framework = v4; break; }
                     if (TrySplit(arg, "--repair-plan", out var v5)) { options.RepairPlanPath = v5; break; }
+                    if (TrySplit(arg, "--sample-reference-mode", out var v7))
+                    {
+                        if (!IsValidSampleReferenceMode(v7)) { error = "--sample-reference-mode must be 'project' or 'package'."; return false; }
+                        options.SampleReferenceMode = v7.ToLowerInvariant();
+                        break;
+                    }
                     if (TrySplit(arg, "--sample-parallelism", out var v6) &&
                         int.TryParse(v6, out var spvInline) && spvInline >= 1)
                     {
@@ -3750,6 +4855,10 @@ internal static class DocfxValidator
 
         return true;
     }
+
+    private static bool IsValidSampleReferenceMode(string value) =>
+        string.Equals(value, "project", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "package", StringComparison.OrdinalIgnoreCase);
 
     private static bool Next(string[] args, ref int i, out string value)
     {
@@ -3782,28 +4891,48 @@ internal static class DocfxValidator
             $"""
             {ScriptId} - validate DocFX documentation for .NET public APIs.
 
+            By default this performs FAST, no-build validation of Markdown, prose, and DocFX
+            API-overwrite layout. The default path never runs dotnet, msbuild, docfx, or gh; it
+            reads existing DocFX YAML metadata when present and otherwise scans source for a
+            conservative API model. Compilation and network access are strictly opt-in.
+
             Usage:
               dotnet run --file docfx.cs -- [options]
+
+            Modes (opt-in, each enables exactly one class of external process):
+              (default)                Fast Markdown/overwrite/API-overwrite validation. No build.
+              --validate-samples       Compile generated C# documentation samples (dotnet). The only
+                                      default-supported path that compiles samples. Each sample group
+                                      references only the documented project(s) that own its namespace.
+              --build-api-model        Reflection-backed API discovery from compiled assemblies. Builds
+                                      only the documented project graph (dotnet). Alias: --strict-api-discovery.
+              --verify-docfx-build     Run DocFX against a temp copy of the repository (docfx).
+              --search-examples        Run GitHub code search per documented package (gh). Use with --repair-plan.
 
             Options:
               --repo-root <path>       Repository root. Default: current directory.
               --docfx <path>           Path to docfx.json. Default: .docfx/docfx.json under repo root.
-              --configuration <name>   Build configuration. Default: Release.
+              --configuration <name>   Build configuration (only used by build/sample paths). Default: Release.
               --framework <tfm>        Optional target framework to validate against.
-              --validate-samples       Compile C# samples. Default: enabled.
-              --no-validate-samples    Skip C# sample compilation.
-              --sample-parallelism <n> Number of parallel sample-validation workers (1-8). Default: 2.
-                                       Override with env var DOCFX_DIGEST_SAMPLE_PARALLELISM.
-              --changed-only           Validate only files changed according to git.
-              --verify-docfx-build     Run DocFX against a temp copy of the repository so generated output stays outside the working tree.
+              --validate-samples       Compile C# samples (opt-in). Default: disabled.
+              --no-validate-samples    Explicitly disable sample compilation (already the default).
+              --sample-reference-mode <project|package>
+                                      Sample reference resolution. project (default) references the owning
+                                      documented project(s); package references NuGet package ids where available.
+              --sample-parallelism <n> Number of parallel sample-validation groups (1-8). Default: 2.
+                                      Override with env var DOCFX_DIGEST_SAMPLE_PARALLELISM.
+              --build-api-model        Reflection-backed API discovery (opt-in). Default: no-build discovery.
+              --changed-only           Validate only files changed according to git (git is read-only and allowed).
+              --verify-docfx-build     Run DocFX against a temp copy of the repository (opt-in).
               --repair-plan <path>     Write a deterministic Markdown repair plan from validation diagnostics.
               --search-examples        Run GitHub code search for each documented package and embed real usage snippets in the
-                                       repair plan. Requires the gh CLI to be authenticated. Use together with --repair-plan.
+                                      repair plan. Requires the gh CLI to be authenticated. Use together with --repair-plan.
               --clean-generated-metadata
-                                      Remove DocFX-generated *.yml and manifest files under metadata.dest. Default: enabled.
+                                      Remove DocFX-generated *.yml and manifest files under metadata.dest (opt-in).
+                                      Runs only after the API model is built, so it never deletes YAML the fast path used.
               --no-clean-generated-metadata
-                                      Leave DocFX-generated metadata files untouched.
-              --json                   Emit a machine-readable JSON summary.
+                                      Leave DocFX-generated metadata files untouched (already the default).
+              --json                   Emit a machine-readable JSON summary (includes processes + phase timings).
               --help                   Print this usage.
 
             Exit codes:
@@ -3812,9 +4941,9 @@ internal static class DocfxValidator
               2  Invalid arguments.
               3  Repository root does not exist.
               4  DocFX configuration file not found.
-              5  Build failed.
-              6  Public API discovery failed.
-              7  Sample compilation failed.
+              5  Build failed (only reachable with --build-api-model).
+              6  Public API discovery failed (only reachable with --build-api-model).
+              7  Sample compilation failed (only reachable with --validate-samples).
               8  Unexpected internal error.
             """);
     }
@@ -3839,14 +4968,16 @@ internal static class DocfxValidator
         public string Configuration { get; set; } = "Release";
         public string? Framework { get; set; }
         public string? RepairPlanPath { get; set; }
-        public bool ValidateSamples { get; set; } = true;
+        public bool ValidateSamples { get; set; }
         public bool ChangedOnly { get; set; }
         public bool VerifyDocfxBuild { get; set; }
         public bool SearchExamples { get; set; }
-        public bool CleanGeneratedMetadata { get; set; } = true;
+        public bool BuildApiModel { get; set; }
+        public bool CleanGeneratedMetadata { get; set; }
         public bool Json { get; set; }
         public bool Help { get; set; }
         public int? SampleParallelism { get; set; }
+        public string SampleReferenceMode { get; set; } = "project";
     }
 
     private sealed record ProjectInfo(string Path, string AssemblyName, List<string> TargetFrameworks, bool IsTest, string? PackageId = null);
@@ -3861,6 +4992,29 @@ internal static class DocfxValidator
         ExtensionMethod
     }
 
+    private enum ProcessPermission
+    {
+        NoBuild,
+        Git,
+        BuildApiModel,
+        SampleCompile,
+        DocfxBuild,
+        GitHubSearch
+    }
+
+    private enum ValidationMode
+    {
+        FastMarkdown,
+        BuildBackedApiModel
+    }
+
+    private enum ApiModelSource
+    {
+        DocfxYaml,
+        SourceScan,
+        BuildBacked
+    }
+
     private sealed class NamespaceInfo(string name)
     {
         public string Name { get; } = name;
@@ -3871,19 +5025,61 @@ internal static class DocfxValidator
 
     private sealed record ApiModel(List<NamespaceInfo> Namespaces, List<ApiTargetInfo> RequiredExampleTargets);
 
+    /// <summary>
+    /// Per-run cache of repository and documentation inputs. Built once so callers never
+    /// re-parse <c>docfx.json</c>, re-enumerate Markdown, re-read Markdown, re-extract overwrite
+    /// sections, or re-scan project files. The namespace-to-project map is filled by whichever
+    /// API-model discovery runs and is used to scope sample compilation.
+    /// </summary>
+    private sealed class ValidationWorkspace
+    {
+        public required string RepoRoot { get; init; }
+        public required string DocfxPath { get; init; }
+        public required string DocfxWorkspace { get; init; }
+        public required List<ProjectInfo> Projects { get; init; }
+        public required List<ProjectInfo> LibraryProjects { get; init; }
+        public required List<string> MarkdownFiles { get; init; }
+        public required Dictionary<string, string> MarkdownTextByPath { get; init; }
+        public required List<OverwriteSection> OverwriteSections { get; init; }
+        public Dictionary<string, List<ProjectInfo>> NamespaceProjects { get; } =
+            new(StringComparer.Ordinal);
+
+        public string ReadMarkdown(string path)
+        {
+            var full = Path.GetFullPath(path);
+            if (MarkdownTextByPath.TryGetValue(full, out var cached))
+            {
+                return cached;
+            }
+
+            try
+            {
+                cached = File.ReadAllText(full);
+            }
+            catch
+            {
+                cached = string.Empty;
+            }
+
+            MarkdownTextByPath[full] = cached;
+            return cached;
+        }
+    }
+
     private sealed record SampleFence(string File, int FenceIndex, int StartLine, string Code);
 
     private sealed record OverwriteSection(string File, string Uid, string Body, bool MappedToExample = false);
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
 
-    private sealed record SampleWorkerInfo(
-        string LibDirectory,
-        string AppDirectory,
-        string LibProjectPath,
-        string AppProjectPath,
-        bool LibRestoreSucceeded,
-        bool AppRestoreSucceeded);
+    private sealed record SampleGroupWorker(string Directory, string ProjectPath, bool IsApp, bool RestoreOk);
+
+    private sealed record SampleReferenceSet(
+        string Kind,
+        bool IsPackageMode,
+        List<string> Items,
+        List<ProjectInfo> ProjectReferences,
+        List<(string Id, string Version)> PackageReferences);
 
     private sealed record SampleCompileResult(bool Ok, string Diagnostics, int ExitCode);
 }
@@ -3906,6 +5102,8 @@ internal sealed class Diagnostic
 
 internal sealed class Summary
 {
+    public string? ValidationMode { get; set; }
+    public string? ApiModelSource { get; set; }
     public int PublicNamespaces { get; set; }
     public int NamespacePagesValidated { get; set; }
     public int RequiredExampleTargets { get; set; }
@@ -3918,6 +5116,22 @@ internal sealed class Summary
     public int DocfxBuildsVerified { get; set; }
     public int Errors { get; set; }
     public int Warnings { get; set; }
+    public Dictionary<string, int> Processes { get; set; } = new();
+    public List<PhaseTiming> Phases { get; set; } = new();
+}
+
+internal sealed class PhaseTiming
+{
+    public PhaseTiming(string name, double seconds, string? detail = null)
+    {
+        Name = name;
+        Seconds = seconds;
+        Detail = detail;
+    }
+
+    [JsonPropertyName("name")] public string Name { get; }
+    [JsonPropertyName("seconds")] public double Seconds { get; }
+    [JsonPropertyName("detail")] public string? Detail { get; }
 }
 
 internal sealed class Report

@@ -14,14 +14,22 @@ Create and maintain developer-friendly DocFX documentation digests for .NET publ
 
 - This skill is autonomous by default. If the user invokes it without naming a namespace, type, member, or changed API, treat the request as a repo-wide DocFX audit and repair task instead of asking what to document first.
 - Resolve bundled scripts from the loaded `dotnet-docfx-digest` skill directory first. If that install path is unavailable and the target repository contains the repo-managed source copy, fall back to `skills/dotnet-docfx-digest/scripts/*.cs`. Do not claim the scripts are unavailable until both locations have been checked.
-- Before claiming completion, run:
+- `docfx.cs` is fast by default: a plain run validates Markdown, prose, DocFX overwrite layout, namespace pages, extension tables, and required examples **without building, restoring, or running DocFX/gh**. Use it freely during iteration — it discovers the public API from existing DocFX YAML metadata or a conservative source scan, and ends with a `[processes] dotnet=0 msbuild=0 docfx=0 gh=0` summary. Compilation and network access are opt-in.
+- Iterate quickly with the fast path, reading diagnostics as the next work queue:
+
+```bash
+dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --json
+```
+
+- Before claiming completion, run `agents.cs`, then a thorough build-backed verification that compiles samples, uses reflection-backed API discovery, and verifies the DocFX build:
 
 ```bash
 dotnet run --file <resolved-skill-dir>/scripts/agents.cs -- --repo-root <repo-root>
-dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --verify-docfx-build
+dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --build-api-model --validate-samples --verify-docfx-build
 ```
 
-- After edits, run `docfx.cs --json` and treat any remaining diagnostics as the next work queue, not as final notes. For noisy audits, write and read a deterministic `--repair-plan`:
+- `--build-api-model` makes API discovery reflection-precise (the fast source-scan path is conservative and may under-report), `--validate-samples` compiles every C# documentation sample, and `--verify-docfx-build` confirms the DocFX build succeeds. Treat `API_MODEL_SOURCE_SCANNER_LIMITED` in a fast run as a reminder to run the build-backed verification before completion, not as a failure.
+- For noisy audits, write and read a deterministic `--repair-plan` (works on the fast path; add `--search-examples` to embed real GitHub usage):
 
 ```bash
 dotnet run --file docfx.cs -- --repo-root <repo-root> --json --repair-plan /tmp/docfx-repair-plan.md --search-examples
@@ -38,11 +46,11 @@ The repair plan includes a "GitHub Example Sources" section with pre-computed `g
 
 Do not stop at namespace pages, extension-member tables, or a first-pass documentation edit.
 
-1. Run `docfx.cs --json` after edits and read the remaining diagnostics.
-2. If diagnostics include `EXAMPLE_MISSING`, missing namespace pages, stale extension-member tables, sample compile failures, missing availability, or overwrite inclusion problems, treat them as blocking follow-up work.
+1. Run `docfx.cs --json` (fast, no-build) after edits and read the remaining diagnostics.
+2. If diagnostics include `EXAMPLE_MISSING`, missing namespace pages, stale extension-member tables, missing availability, or overwrite inclusion problems, treat them as blocking follow-up work.
 3. For each missing public concrete-type example, create or update a type-targeting overwrite file under `.docfx/api/types/`.
 4. For each missing extension-method example, document it on the declaring extension class page or the namespace page, and explicitly demonstrate the method call.
-5. Rerun the validator until the required diagnostics are gone, or stop and report the exact blocker, command, exit code, and remaining diagnostic codes.
+5. Rerun the fast validator until the required diagnostics are gone, then run the build-backed completion verification (`docfx.cs --build-api-model --validate-samples --verify-docfx-build`) to surface `SAMPLE_COMPILE_FAILED` and reflection-precise API gaps; resolve those too, or stop and report the exact blocker, command, exit code, and remaining diagnostic codes.
 
 Namespace pages and `Extension Members` tables complement type-page examples; they do not replace them. Both namespace pages (`api/namespaces/`) and type pages (`api/types/`) are required deliverables. Generating only one is incomplete work.
 
@@ -258,7 +266,7 @@ When the user names a changed API or namespace:
 3. Inspect the changed public API, affected namespaces, availability inputs, tests, samples, and current overwrite files.
 4. Update XML comments, namespace pages, extension-member tables, examples, and availability notes as required.
 5. Build an example inventory for required public concrete types and extension methods.
-6. Preserve manual edits, inspect `git diff`, run `dotnet build`, run `dotnet test`, run the Completion Repair Loop, then run `docfx.cs --verify-docfx-build`.
+6. Preserve manual edits, inspect `git diff`, run `dotnet build`, run `dotnet test`, run the Completion Repair Loop, then run the build-backed completion verification (`docfx.cs --build-api-model --validate-samples --verify-docfx-build`).
 
 When the user does not name a specific target:
 
@@ -267,7 +275,7 @@ When the user does not name a specific target:
 3. Inspect DocFX configuration, overwrite files, tests, samples, and current documentation state.
 4. Run `docfx.cs --json`, and for multi-diagnostic output rerun with `--repair-plan` and use that plan as the work queue.
 5. Repair missing namespace pages, extension-member tables, examples, overwrite layout, summaries, and availability notes that can be derived from evidence.
-6. Preserve manual edits, inspect `git diff`, run `dotnet build`, run `dotnet test`, run the Completion Repair Loop, then run `docfx.cs --verify-docfx-build`.
+6. Preserve manual edits, inspect `git diff`, run `dotnet build`, run `dotnet test`, run the Completion Repair Loop, then run the build-backed completion verification (`docfx.cs --build-api-model --validate-samples --verify-docfx-build`).
 
 Read `references/workflow.md` before creating new namespace pages, writing type or extension examples, preparing the final verification checklist, or shaping the completion response.
 
