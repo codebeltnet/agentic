@@ -3561,7 +3561,7 @@ internal static class DocfxValidator
         var packageMode = string.Equals(options.SampleReferenceMode, "package", StringComparison.OrdinalIgnoreCase);
 
         var groups = new Dictionary<string, List<(SampleFence Sample, int OriginalIndex)>>(StringComparer.Ordinal);
-        var groupRefs = new Dictionary<string, SampleReferenceSet>(StringComparer.Ordinal);
+        var sampleRefs = new Dictionary<int, SampleReferenceSet>();
         foreach (var entry in toCompile)
         {
             var kind = IsProgramCsExample(entry.Sample.Code) ? "app" : "lib";
@@ -3571,10 +3571,10 @@ internal static class DocfxValidator
             {
                 list = new List<(SampleFence, int)>();
                 groups[key] = list;
-                groupRefs[key] = refSet;
             }
 
             list.Add(entry);
+            sampleRefs[entry.OriginalIndex] = refSet;
         }
 
         var tempRoot = Path.Combine(Path.GetTempPath(), "docfx-digest-samples-" + Guid.NewGuid().ToString("N"));
@@ -3582,42 +3582,34 @@ internal static class DocfxValidator
         try
         {
             var parallelism = GetSampleValidationParallelism(options);
-            var workerCount = Math.Min(parallelism, groups.Count);
+            var workerCount = Math.Min(parallelism, toCompile.Count);
             WritePhaseStart(options, "sample validation", workerCount, toCompile.Count);
             phaseTimer.Restart();
 
             // Results are stored in a pre-sized indexed array to guarantee deterministic
-            // diagnostic ordering regardless of group completion order.
+            // diagnostic ordering regardless of MSBuild project completion order.
             var results = new SampleCompileResult?[samples.Count];
-            var orderedGroups = groups.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
-            using var throttler = new SemaphoreSlim(Math.Max(1, parallelism));
-            var tasks = new List<Task>();
-            for (var g = 0; g < orderedGroups.Count; g++)
+            var workers = new List<SampleWorker>(toCompile.Count);
+            for (var i = 0; i < toCompile.Count; i++)
             {
-                var key = orderedGroups[g];
-                var groupNumber = g + 1;
-                throttler.Wait();
-                tasks.Add(Task.Run(() =>
-                {
-                    try
-                    {
-                        var worker = CreateSampleGroupWorker(tempRoot, groupNumber, groupRefs[key], framework, hasStrongNameKey, report);
-                        foreach (var (sample, originalIndex) in groups[key])
-                        {
-                            var (ok, diags, exitCode) = CompileSampleInGroup(worker, sample, options.Configuration, hasStrongNameKey);
-                            results[originalIndex] = new SampleCompileResult(ok, diags, exitCode);
-                        }
-                    }
-                    finally
-                    {
-                        throttler.Release();
-                    }
-                }));
+                var (sample, originalIndex) = toCompile[i];
+                workers.Add(CreateSampleWorker(tempRoot, i + 1, originalIndex, sample,
+                    sampleRefs[originalIndex], framework));
             }
 
-            Task.WaitAll(tasks.ToArray());
+            var batchResult = CompileSampleBatch(tempRoot, workers, options.Configuration,
+                parallelism, hasStrongNameKey);
+            foreach (var worker in workers)
+            {
+                var outputAssembly = Path.Combine(worker.Directory, "bin", options.Configuration,
+                    framework, worker.AssemblyName + ".dll");
+                var ok = batchResult.ExitCode == 0 || File.Exists(outputAssembly);
+                var diagnostics = ok ? string.Empty : ExtractSampleDiagnostics(batchResult, worker);
+                results[worker.OriginalIndex] = new SampleCompileResult(ok, diagnostics, batchResult.ExitCode);
+            }
+
             WritePhase(options, report, "sample validation", phaseTimer.Elapsed,
-                $"{groups.Count} group(s), {toCompile.Count} sample(s)");
+                $"1 batch, {groups.Count} reference set(s), {toCompile.Count} sample(s), max {parallelism} worker(s)");
 
             // 4. Merge results in original sample order for deterministic diagnostics.
             for (int i = 0; i < samples.Count; i++)
@@ -3773,41 +3765,30 @@ internal static class DocfxValidator
     }
 
     /// <summary>
-    /// Creates a single-kind (lib or app) sample worker for a dependency group under
-    /// <paramref name="tempRoot"/>, referencing only the resolved scoped project/package set,
-    /// and restores it once so subsequent sample builds in the group can use <c>--no-restore</c>.
+    /// Creates an isolated sample project under <paramref name="tempRoot"/> that references only
+    /// the resolved scoped project/package set. All sample projects are later restored and built
+    /// together through one temporary solution graph.
     /// </summary>
-    private static SampleGroupWorker CreateSampleGroupWorker(
-        string tempRoot, int groupNumber, SampleReferenceSet refSet,
-        string framework, bool hasStrongNameKey, Report report)
+    private static SampleWorker CreateSampleWorker(
+        string tempRoot, int sampleNumber, int originalIndex, SampleFence sample,
+        SampleReferenceSet refSet, string framework)
     {
         var isApp = string.Equals(refSet.Kind, "app", StringComparison.Ordinal);
-        var workerDir = Path.Combine(tempRoot, "docfx-sample-workers", $"group-{groupNumber:D4}");
+        var assemblyName = $"DocfxSample{sampleNumber:D4}";
+        var workerDir = Path.Combine(tempRoot, "docfx-sample-workers", assemblyName);
         Directory.CreateDirectory(workerDir);
 
-        var projPath = Path.Combine(workerDir, isApp ? "DocfxSampleApp.csproj" : "DocfxSampleLib.csproj");
-        File.WriteAllText(projPath, GenerateSampleGroupProject(refSet, framework, isApp), new UTF8Encoding(false));
+        var projPath = Path.Combine(workerDir, assemblyName + ".csproj");
+        File.WriteAllText(projPath, GenerateSampleProject(refSet, framework, isApp), new UTF8Encoding(false));
 
         var sourceName = isApp ? "Program.cs" : "Sample.cs";
-        File.WriteAllText(Path.Combine(workerDir, sourceName),
-            isApp ? "// placeholder" : "namespace DocfxSamplePlaceholder { internal static class _Placeholder { } }",
-            new UTF8Encoding(false));
+        var sourcePath = Path.Combine(workerDir, sourceName);
+        File.WriteAllText(sourcePath, sample.Code, new UTF8Encoding(false));
 
-        var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
-        var restoreOk = RunProcess("dotnet",
-            $"restore \"{projPath}\" --nologo{signingProperty}", workerDir,
-            permission: ProcessPermission.SampleCompile).ExitCode == 0;
-
-        if (!restoreOk)
-        {
-            report.Warnings.Add(new Diagnostic("SAMPLE_WORKER_RESTORE_FAILED", workerDir, null,
-                $"Sample validation group {groupNumber} restore failed; affected samples will build without --no-restore and may be slower."));
-        }
-
-        return new SampleGroupWorker(workerDir, projPath, isApp, restoreOk);
+        return new SampleWorker(originalIndex, workerDir, projPath, sourcePath, assemblyName);
     }
 
-    private static string GenerateSampleGroupProject(SampleReferenceSet refSet, string framework, bool isApp)
+    private static string GenerateSampleProject(SampleReferenceSet refSet, string framework, bool isApp)
     {
         var sb = new StringBuilder();
         sb.AppendLine("""<Project Sdk="Microsoft.NET.Sdk">""");
@@ -3839,17 +3820,40 @@ internal static class DocfxValidator
         return sb.ToString();
     }
 
-    private static (bool Ok, string Diagnostics, int ExitCode) CompileSampleInGroup(
-        SampleGroupWorker worker, SampleFence sample, string configuration, bool hasStrongNameKey)
+    private static ProcessResult CompileSampleBatch(
+        string tempRoot, List<SampleWorker> workers, string configuration, int parallelism,
+        bool hasStrongNameKey)
     {
+        var solutionPath = Path.Combine(tempRoot, "DocfxSamples.slnx");
+        var solution = new StringBuilder();
+        solution.AppendLine("<Solution>");
+        foreach (var worker in workers)
+        {
+            solution.AppendLine($"  <Project Path=\"{worker.ProjectPath}\" />");
+        }
+
+        solution.AppendLine("</Solution>");
+        File.WriteAllText(solutionPath, solution.ToString(), new UTF8Encoding(false));
+
         var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
-        var noRestoreFlag = worker.RestoreOk ? " --no-restore" : string.Empty;
-        var sourceName = worker.IsApp ? "Program.cs" : "Sample.cs";
-        File.WriteAllText(Path.Combine(worker.Directory, sourceName), sample.Code, new UTF8Encoding(false));
-        var result = RunProcess("dotnet",
-            $"build \"{worker.ProjectPath}\" -c {configuration}{noRestoreFlag} --nologo{signingProperty}",
-            worker.Directory, permission: ProcessPermission.SampleCompile);
-        return (result.ExitCode == 0, result.StdOut + result.StdErr, result.ExitCode);
+        return RunProcess("dotnet",
+            $"build \"{solutionPath}\" -c {configuration} --nologo -m:{parallelism}{signingProperty}",
+            tempRoot, permission: ProcessPermission.SampleCompile);
+    }
+
+    private static string ExtractSampleDiagnostics(ProcessResult result, SampleWorker worker)
+    {
+        var output = result.StdOut + result.StdErr;
+        var relevant = output
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains(worker.ProjectPath, StringComparison.OrdinalIgnoreCase) ||
+                           line.Contains(worker.SourcePath, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return relevant.Count > 0 ? string.Join(Environment.NewLine, relevant) : output;
     }
 
     private static void WritePhase(Options options, Report report, string name, TimeSpan elapsed, string? detail = null)
@@ -4902,8 +4906,8 @@ internal static class DocfxValidator
             Modes (opt-in, each enables exactly one class of external process):
               (default)                Fast Markdown/overwrite/API-overwrite validation. No build.
               --validate-samples       Compile generated C# documentation samples (dotnet). The only
-                                      default-supported path that compiles samples. Each sample group
-                                      references only the documented project(s) that own its namespace.
+                                      default-supported path that compiles samples. Each sample has an
+                                      isolated project; one batched solution build compiles them all.
               --build-api-model        Reflection-backed API discovery from compiled assemblies. Builds
                                       only the documented project graph (dotnet). Alias: --strict-api-discovery.
               --verify-docfx-build     Run DocFX against a temp copy of the repository (docfx).
@@ -4919,7 +4923,7 @@ internal static class DocfxValidator
               --sample-reference-mode <project|package>
                                       Sample reference resolution. project (default) references the owning
                                       documented project(s); package references NuGet package ids where available.
-              --sample-parallelism <n> Number of parallel sample-validation groups (1-8). Default: 2.
+              --sample-parallelism <n> Maximum MSBuild nodes for the batched sample build (1-8). Default: 2.
                                       Override with env var DOCFX_DIGEST_SAMPLE_PARALLELISM.
               --build-api-model        Reflection-backed API discovery (opt-in). Default: no-build discovery.
               --changed-only           Validate only files changed according to git (git is read-only and allowed).
@@ -5072,7 +5076,12 @@ internal static class DocfxValidator
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
 
-    private sealed record SampleGroupWorker(string Directory, string ProjectPath, bool IsApp, bool RestoreOk);
+    private sealed record SampleWorker(
+        int OriginalIndex,
+        string Directory,
+        string ProjectPath,
+        string SourcePath,
+        string AssemblyName);
 
     private sealed record SampleReferenceSet(
         string Kind,

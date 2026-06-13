@@ -636,6 +636,19 @@
         "Keeps every changed csharp example structurally valid and compile-verified through `docfx.cs`",
         "Updates the example inventory with UID, required file, source evidence, chosen scenario, and final status"
       ]
+    },
+    {
+      "id": 52,
+      "prompt": "Run `scripts/docfx.cs --validate-samples --json` on a repository with at least 20 C# documentation fences spread across three dependency sets. Confirm that every sample remains compilation-isolated, but validation no longer launches one restore and one build per sample.",
+      "expected_output": "The validator creates one temporary project per sample, adds all sample projects to one temporary `.slnx`, and performs one bounded-parallel graph build. JSON reports all compile-passing samples, `summary.processes.dotnet` is 1 for sample-only validation, and the sample-validation phase detail reports one batch plus the sample and reference-set counts. A failing sample still produces SAMPLE_COMPILE_FAILED for its original Markdown file and fence without contaminating other sample results.",
+      "expectations": [
+        "Creates a separate temporary project for every compilable C# documentation fence",
+        "Builds all temporary sample projects through one `.slnx` graph build instead of one dotnet build per sample",
+        "Uses `--sample-parallelism` or `DOCFX_DIGEST_SAMPLE_PARALLELISM` as the bounded MSBuild maximum node count",
+        "Reports `summary.processes.dotnet` as 1 when `--validate-samples` is the only build-backed option",
+        "Preserves per-sample SAMPLE_COMPILE_FAILED diagnostics with the original Markdown file and fence index",
+        "Reports sample-validation phase detail containing `1 batch` and the sample count"
+      ]
     }
   ]
 }

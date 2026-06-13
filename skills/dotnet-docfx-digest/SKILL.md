@@ -28,7 +28,7 @@ dotnet run --file <resolved-skill-dir>/scripts/agents.cs -- --repo-root <repo-ro
 dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --build-api-model --validate-samples --verify-docfx-build
 ```
 
-- `--build-api-model` makes API discovery reflection-precise (the fast source-scan path is conservative and may under-report), `--validate-samples` compiles every C# documentation sample, and `--verify-docfx-build` confirms the DocFX build succeeds. Treat `API_MODEL_SOURCE_SCANNER_LIMITED` in a fast run as a reminder to run the build-backed verification before completion, not as a failure.
+- `--build-api-model` makes API discovery reflection-precise (the fast source-scan path is conservative and may under-report), `--validate-samples` compiles every C# documentation sample through isolated projects in one temporary `.slnx` graph build with bounded MSBuild parallelism, and `--verify-docfx-build` confirms the DocFX build succeeds. Treat `API_MODEL_SOURCE_SCANNER_LIMITED` in a fast run as a reminder to run the build-backed verification before completion, not as a failure.
 - For noisy audits, write and read a deterministic `--repair-plan` (works on the fast path; add `--search-examples` to embed real GitHub usage):
 
 ```bash
