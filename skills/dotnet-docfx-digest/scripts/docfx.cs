@@ -24,9 +24,11 @@ internal static class DocfxValidator
     private const string ExtensionAttributeFullName = "System.Runtime.CompilerServices.ExtensionAttribute";
     private const string SkipMarker = "dotnet-docfx-digest:skip-compile";
     private const int DefaultSampleValidationParallelism = 2;
+    private const int DefaultProcessTimeoutMinutes = 30;
+    private const long HighCapacityMemoryThresholdBytes = 32L * 1024 * 1024 * 1024;
 
     private static readonly string[] IgnoredDirectorySegments = ["bin", "obj", "_site", ".git", ".vs", ".vscode", ".idea", "node_modules"];
-    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(10);
+    private static TimeSpan _processTimeout = TimeSpan.FromMinutes(DefaultProcessTimeoutMinutes);
     private static readonly TimeSpan ProcessStreamDrainTimeout = TimeSpan.FromSeconds(5);
 
     // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
@@ -103,6 +105,18 @@ internal static class DocfxValidator
         report.Summary.ValidationMode = mode == ValidationMode.BuildBackedApiModel
             ? "build-backed-api-model"
             : "fast-markdown";
+        var execution = ResolveExecutionSettings(options);
+        _processTimeout = TimeSpan.FromMinutes(execution.ProcessTimeoutMinutes);
+        report.Summary.Execution = new ExecutionSummary
+        {
+            Profile = execution.Profile,
+            LogicalProcessors = execution.LogicalProcessors,
+            AvailableMemoryBytes = execution.AvailableMemoryBytes,
+            BuildParallelism = execution.BuildParallelism,
+            SampleParallelism = execution.SampleParallelism,
+            ProcessTimeoutMinutes = execution.ProcessTimeoutMinutes,
+            ConcurrentDocfxVerification = execution.ConcurrentDocfxVerification
+        };
 
         // Configure the process guard from options BEFORE anything can shell out. In the default
         // fast path this leaves dotnet/msbuild/docfx/gh entirely disallowed.
@@ -207,6 +221,19 @@ internal static class DocfxValidator
         WritePhase(options, report, "markdown discovery", phaseTimer.Elapsed,
             $"{markdownFiles.Count} file(s)");
 
+        CancellationTokenSource? concurrentDocfxCancellation = null;
+        Task<DocfxVerificationResult>? concurrentDocfxTask = null;
+        if (options.VerifyDocfxBuild && execution.ConcurrentDocfxVerification)
+        {
+            concurrentDocfxCancellation = new CancellationTokenSource();
+            var cancellationToken = concurrentDocfxCancellation.Token;
+            concurrentDocfxTask = Task.Run(
+                () => VerifyDocfxBuild(repoRoot, docfxPath, hasStrongNameKey, cancellationToken),
+                cancellationToken);
+        }
+
+        try
+        {
         // 5. Build the API model. The default fast path never builds: it reads existing DocFX
         //    YAML metadata when present, otherwise falls back to a conservative source scan.
         //    --build-api-model opts into reflection-backed discovery from compiled assemblies.
@@ -214,9 +241,11 @@ internal static class DocfxValidator
         ApiModel api;
         if (mode == ValidationMode.BuildBackedApiModel)
         {
-            var (buildOk, buildOutput) = BuildDocfxProjects(libraryProjects, repoRoot, options.Configuration, hasStrongNameKey);
+            var (buildOk, buildOutput) = BuildDocfxProjects(libraryProjects, repoRoot, options.Configuration,
+                hasStrongNameKey, execution.BuildParallelism);
             if (!buildOk)
             {
+                CancelConcurrentDocfxVerification(concurrentDocfxTask, concurrentDocfxCancellation);
                 report.Errors.Add(new Diagnostic("BUILD_FAILED", null, null,
                     $"dotnet build failed (configuration {options.Configuration}).\n{Trim(buildOutput)}"));
                 return Emit(options, report, ExitCode.BuildFailed, "Build failed.");
@@ -228,6 +257,7 @@ internal static class DocfxValidator
             }
             catch (Exception ex)
             {
+                CancelConcurrentDocfxVerification(concurrentDocfxTask, concurrentDocfxCancellation);
                 report.Errors.Add(new Diagnostic("PUBLIC_API_DISCOVERY_FAILED", null, null,
                     $"Public API discovery failed: {ex.Message}"));
                 return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Public API discovery failed.");
@@ -238,6 +268,7 @@ internal static class DocfxValidator
 
             if (api.Namespaces.Count == 0)
             {
+                CancelConcurrentDocfxVerification(concurrentDocfxTask, concurrentDocfxCancellation);
                 report.Errors.Add(new Diagnostic("PUBLIC_API_DISCOVERY_FAILED", null, null,
                     "No public API could be discovered from the compiled library assemblies. Ensure the repository builds and exposes public types."));
                 return Emit(options, report, ExitCode.PublicApiDiscoveryFailed, "Public API discovery failed.");
@@ -262,7 +293,7 @@ internal static class DocfxValidator
         report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
         report.Summary.ExtensionMethods = api.Namespaces.Sum(n => n.ExtensionMethods.Count);
 
-        // 6. Validate documentation file encoding (mojibake, missing BOM).
+        // 6. Validate documentation file encoding corruption (mojibake).
         phaseTimer.Restart();
         ValidateDocumentationEncoding(repoRoot, markdownFiles, report);
         WritePhase(options, report, "encoding validation", phaseTimer.Elapsed);
@@ -305,7 +336,7 @@ internal static class DocfxValidator
         // 9. Extract and compile C# documentation samples (opt-in: the only path that compiles).
         if (options.ValidateSamples)
         {
-            ValidateSamples(workspace, options, changedFiles, hasStrongNameKey, report);
+            ValidateSamples(workspace, options, changedFiles, hasStrongNameKey, execution.SampleParallelism, report);
         }
         else
         {
@@ -315,9 +346,13 @@ internal static class DocfxValidator
         // Optional DocFX build verification happens in a temp copy so generated output never lands in the working tree.
         if (options.VerifyDocfxBuild)
         {
-            phaseTimer.Restart();
-            VerifyDocfxBuild(repoRoot, docfxPath, hasStrongNameKey, report);
-            WritePhase(options, report, "docfx build verification", phaseTimer.Elapsed);
+            var result = concurrentDocfxTask is null
+                ? VerifyDocfxBuild(repoRoot, docfxPath, hasStrongNameKey, CancellationToken.None)
+                : concurrentDocfxTask.GetAwaiter().GetResult();
+            MergeDocfxVerification(result, docfxPath, report);
+            WritePhase(options, report, "docfx build verification", result.Elapsed,
+                concurrentDocfxTask is null ? "sequential" : "concurrent lane");
+            concurrentDocfxCancellation?.Dispose();
         }
 
         // Optional GitHub example search to embed real usage snippets in the repair plan.
@@ -356,6 +391,12 @@ internal static class DocfxValidator
         }
 
         return Emit(options, report, ExitCode.Success, "Validation passed.");
+        }
+        catch
+        {
+            CancelConcurrentDocfxVerification(concurrentDocfxTask, concurrentDocfxCancellation);
+            throw;
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -1092,44 +1133,95 @@ internal static class DocfxValidator
         }
     }
 
-    private static void VerifyDocfxBuild(string repoRoot, string docfxPath, bool hasStrongNameKey, Report report)
+    private static DocfxVerificationResult VerifyDocfxBuild(
+        string repoRoot, string docfxPath, bool hasStrongNameKey, CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         var docfxExecutable = ResolveDocfxExecutable();
         if (docfxExecutable is null)
         {
-            report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
-                "Unable to find the DocFX CLI on PATH. Install the docfx .NET tool or make docfx.exe available on PATH."));
-            return;
+            return new DocfxVerificationResult(false,
+                "Unable to find the DocFX CLI on PATH. Install the docfx .NET tool or make docfx.exe available on PATH.",
+                stopwatch.Elapsed);
         }
 
         var tempRoot = Path.Combine(Path.GetTempPath(), "docfx-digest-build-" + Guid.NewGuid().ToString("N"));
         try
         {
-            CopyDirectory(repoRoot, tempRoot);
+            CopyDirectory(repoRoot, tempRoot, cancellationToken);
             var relativeDocfxPath = Path.GetRelativePath(repoRoot, docfxPath);
             var tempDocfxPath = Path.Combine(tempRoot, relativeDocfxPath);
             var environment = hasStrongNameKey
                 ? null
                 : new Dictionary<string, string> { ["SkipSignAssembly"] = "true" };
             var result = RunProcess(docfxExecutable, $"\"{tempDocfxPath}\"", tempRoot, environment,
-                ProcessPermission.DocfxBuild);
+                ProcessPermission.DocfxBuild, cancellationToken);
             if (result.ExitCode != 0)
             {
-                report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
-                    $"DocFX build failed in a temp workspace (exit {result.ExitCode}).\n{Trim(result.StdOut + result.StdErr)}"));
-                return;
+                return new DocfxVerificationResult(false,
+                    $"DocFX build failed in a temp workspace (exit {result.ExitCode}).\n{Trim(result.StdOut + result.StdErr)}",
+                    stopwatch.Elapsed, result.ExitCode == -2);
             }
 
-            report.Summary.DocfxBuildsVerified++;
+            return new DocfxVerificationResult(true, null, stopwatch.Elapsed);
+        }
+        catch (OperationCanceledException)
+        {
+            return new DocfxVerificationResult(false, "DocFX build verification was cancelled.", stopwatch.Elapsed, true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
-                $"Unable to verify DocFX build in a temp workspace: {ex.Message}"));
+            return new DocfxVerificationResult(false,
+                $"Unable to verify DocFX build in a temp workspace: {ex.Message}", stopwatch.Elapsed);
         }
         finally
         {
             TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void MergeDocfxVerification(DocfxVerificationResult result, string docfxPath, Report report)
+    {
+        if (result.Success)
+        {
+            report.Summary.DocfxBuildsVerified++;
+            return;
+        }
+
+        if (!result.Cancelled)
+        {
+            report.Errors.Add(new Diagnostic("DOCFX_BUILD_FAILED", docfxPath, null,
+                result.Error ?? "DocFX build verification failed."));
+        }
+    }
+
+    private static void CancelConcurrentDocfxVerification(
+        Task<DocfxVerificationResult>? task, CancellationTokenSource? cancellation)
+    {
+        if (task is null || cancellation is null)
+        {
+            return;
+        }
+
+        try
+        {
+            cancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+        try
+        {
+            task.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when the primary validation lane fails before final verification can complete.
+        }
+        finally
+        {
+            cancellation.Dispose();
         }
     }
 
@@ -1170,12 +1262,15 @@ internal static class DocfxValidator
         return null;
     }
 
-    private static void CopyDirectory(string sourceDirectory, string destinationDirectory)
+    private static void CopyDirectory(
+        string sourceDirectory, string destinationDirectory, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(destinationDirectory);
 
         foreach (var file in Directory.GetFiles(sourceDirectory))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             File.Copy(file, Path.Combine(destinationDirectory, Path.GetFileName(file)), overwrite: true);
         }
 
@@ -1187,7 +1282,7 @@ internal static class DocfxValidator
                 continue;
             }
 
-            CopyDirectory(directory, Path.Combine(destinationDirectory, name));
+            CopyDirectory(directory, Path.Combine(destinationDirectory, name), cancellationToken);
         }
     }
 
@@ -1241,14 +1336,6 @@ internal static class DocfxValidator
                     $"[System.IO.File]::WriteAllBytes($path, ...). Never use Get-Content + [System.Text.Encoding]::UTF8.GetBytes()."));
             }
 
-            // Warn about missing UTF-8 BOM on DocFX API overwrite files.
-            var hasBom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
-            if (!hasBom && IsDocfxApiOverwritePath(file))
-            {
-                report.Warnings.Add(new Diagnostic("ENCODING_BOM_MISSING", rel, null,
-                    "DocFX API overwrite file is missing a UTF-8 BOM. Codebelt DocFX files use UTF-8 with BOM. " +
-                    "Add BOM without re-encoding: [System.IO.File]::WriteAllBytes($path, [byte[]](0xEF,0xBB,0xBF) + [System.IO.File]::ReadAllBytes($path))"));
-            }
         }
     }
 
@@ -1269,12 +1356,6 @@ internal static class DocfxValidator
         return false;
     }
 
-    private static bool IsDocfxApiOverwritePath(string filePath)
-    {
-        return filePath.Contains(Path.DirectorySeparatorChar + "api" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-               filePath.Contains(Path.AltDirectorySeparatorChar + "api" + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-    }
-
     /// <summary>
     /// Restores and builds only the library projects referenced by the active docfx.json.
     /// A single temporary <c>.slnx</c> graph build is preferred so the whole documented
@@ -1283,7 +1364,8 @@ internal static class DocfxValidator
     /// when the caller passes <c>--build-api-model</c>.
     /// </summary>
     private static (bool Ok, string Output) BuildDocfxProjects(
-        List<ProjectInfo> libraryProjects, string repoRoot, string configuration, bool hasStrongNameKey)
+        List<ProjectInfo> libraryProjects, string repoRoot, string configuration, bool hasStrongNameKey,
+        int parallelism)
     {
         if (libraryProjects.Count == 0)
         {
@@ -1309,7 +1391,7 @@ internal static class DocfxValidator
             File.WriteAllText(tempSolution, sln.ToString(), new UTF8Encoding(false));
 
             var result = RunProcess("dotnet",
-                $"build \"{tempSolution}\" -c {configuration} --nologo{signingProperty}", repoRoot,
+                $"build \"{tempSolution}\" -c {configuration} --nologo -m:{parallelism}{signingProperty}", repoRoot,
                 permission: ProcessPermission.BuildApiModel);
             if (result.ExitCode != 0)
             {
@@ -3483,7 +3565,7 @@ internal static class DocfxValidator
     // ----------------------------------------------------------------------
 
     private static void ValidateSamples(ValidationWorkspace ws, Options options, HashSet<string>? changedFiles,
-        bool hasStrongNameKey, Report report)
+        bool hasStrongNameKey, int defaultParallelism, Report report)
     {
         var repoRoot = ws.RepoRoot;
 
@@ -3581,7 +3663,7 @@ internal static class DocfxValidator
         Directory.CreateDirectory(tempRoot);
         try
         {
-            var parallelism = GetSampleValidationParallelism(options);
+            var parallelism = GetSampleValidationParallelism(options, defaultParallelism);
             var workerCount = Math.Min(parallelism, toCompile.Count);
             WritePhaseStart(options, "sample validation", workerCount, toCompile.Count);
             phaseTimer.Restart();
@@ -3742,11 +3824,10 @@ internal static class DocfxValidator
         return best;
     }
 
-    private static int GetSampleValidationParallelism(Options options)
+    private static int GetSampleValidationParallelism(Options options, int defaultParallelism)
     {
         var processorCount = Math.Max(1, Environment.ProcessorCount);
-        const int MaxSupportedParallelism = 8;
-        var defaultParallelism = Math.Min(DefaultSampleValidationParallelism, processorCount);
+        const int MaxSupportedParallelism = 16;
 
         // CLI argument takes precedence over the environment variable.
         if (options.SampleParallelism.HasValue)
@@ -4305,6 +4386,64 @@ internal static class DocfxValidator
     // Process + output helpers
     // ----------------------------------------------------------------------
 
+    private static ExecutionSettings ResolveExecutionSettings(Options options)
+    {
+        var logicalProcessors = Math.Max(1, Environment.ProcessorCount);
+        var availableMemoryBytes = Math.Max(0, GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
+        var detectedHighCapacity = logicalProcessors > 8 && availableMemoryBytes > HighCapacityMemoryThresholdBytes;
+
+        var requestedProfile = options.ExecutionProfile ??
+                               Environment.GetEnvironmentVariable("DOCFX_DIGEST_EXECUTION_PROFILE") ??
+                               "auto";
+        var highCapacity = requestedProfile.ToLowerInvariant() switch
+        {
+            "high-capacity" => true,
+            "conservative" => false,
+            _ => detectedHighCapacity
+        };
+
+        var adaptiveParallelism = highCapacity
+            ? Math.Clamp(logicalProcessors / 2, 4, 16)
+            : Math.Min(DefaultSampleValidationParallelism, logicalProcessors);
+        var buildParallelism = ResolveParallelism(options.BuildParallelism,
+            "DOCFX_DIGEST_BUILD_PARALLELISM", adaptiveParallelism, logicalProcessors, 16);
+        var sampleParallelism = ResolveParallelism(options.SampleParallelism,
+            "DOCFX_DIGEST_SAMPLE_PARALLELISM", adaptiveParallelism, logicalProcessors, 16);
+        var timeoutMinutes = ResolvePositiveInteger(options.ProcessTimeoutMinutes,
+            "DOCFX_DIGEST_PROCESS_TIMEOUT_MINUTES", DefaultProcessTimeoutMinutes, 1, 180);
+
+        return new ExecutionSettings(
+            highCapacity ? "high-capacity" : "conservative",
+            logicalProcessors,
+            availableMemoryBytes,
+            buildParallelism,
+            sampleParallelism,
+            timeoutMinutes,
+            highCapacity && options.VerifyDocfxBuild);
+    }
+
+    private static int ResolveParallelism(
+        int? optionValue, string environmentVariable, int fallback, int processorCount, int maximum)
+    {
+        var requested = optionValue ?? ParsePositiveInteger(Environment.GetEnvironmentVariable(environmentVariable));
+        return Math.Clamp(requested ?? fallback, 1, Math.Min(processorCount, maximum));
+    }
+
+    private static int ResolvePositiveInteger(
+        int? optionValue, string environmentVariable, int fallback, int minimum, int maximum)
+    {
+        var requested = optionValue ?? ParsePositiveInteger(Environment.GetEnvironmentVariable(environmentVariable));
+        return Math.Clamp(requested ?? fallback, minimum, maximum);
+    }
+
+    private static int? ParsePositiveInteger(string? value)
+    {
+        return int.TryParse(value, System.Globalization.NumberStyles.Integer,
+                   System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0
+            ? parsed
+            : null;
+    }
+
     private static void ConfigureProcessGuard(Options options)
     {
         var allowed = new HashSet<ProcessPermission> { ProcessPermission.Git };
@@ -4363,7 +4502,8 @@ internal static class DocfxValidator
 
     private static ProcessResult RunProcess(string fileName, string arguments, string workingDirectory,
         IReadOnlyDictionary<string, string>? environment = null,
-        ProcessPermission permission = ProcessPermission.NoBuild)
+        ProcessPermission permission = ProcessPermission.NoBuild,
+        CancellationToken cancellationToken = default)
     {
         // Process guard: count every external process and refuse to launch build/doc/network
         // tooling unless the active options explicitly authorize the corresponding permission.
@@ -4411,22 +4551,24 @@ internal static class DocfxValidator
 
             var stdoutTask = Task.Run(() => process.StandardOutput.ReadToEnd());
             var stderrTask = Task.Run(() => process.StandardError.ReadToEnd());
-            if (!process.WaitForExit(ProcessTimeout))
+            using var timeout = new CancellationTokenSource(_processTimeout);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+            try
             {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch
-                {
-                    // ignore
-                }
-
+                process.WaitForExitAsync(linked.Token).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                TryKillProcess(process);
                 process.WaitForExit(ProcessStreamDrainTimeout);
                 Task.WaitAll([stdoutTask, stderrTask], ProcessStreamDrainTimeout);
                 var stdout = stdoutTask.IsCompletedSuccessfully ? stdoutTask.Result : string.Empty;
                 var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : string.Empty;
-                return new ProcessResult(-1, stdout, stderr + $"\nProcess '{fileName}' timed out after {ProcessTimeout.TotalMinutes} minutes.");
+                var reason = cancellationToken.IsCancellationRequested
+                    ? "was cancelled"
+                    : $"timed out after {_processTimeout.TotalMinutes:0.##} minutes";
+                return new ProcessResult(cancellationToken.IsCancellationRequested ? -2 : -1,
+                    stdout, stderr + $"\nProcess '{fileName}' {reason}.");
             }
 
             Task.WaitAll([stdoutTask, stderrTask]);
@@ -4435,6 +4577,18 @@ internal static class DocfxValidator
         catch (Exception ex)
         {
             return new ProcessResult(-1, string.Empty, $"Failed to run '{fileName} {arguments}': {ex.Message}");
+        }
+    }
+
+    private static void TryKillProcess(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // best effort
         }
     }
 
@@ -4479,10 +4633,37 @@ internal static class DocfxValidator
             report.Status = code == ExitCode.Success ? "passed" : "failed";
         }
 
-        WriteRepairPlanIfRequested(options, report);
-
         report.Summary.Errors = report.Errors.Count;
         report.Summary.Warnings = report.Warnings.Count;
+        report.Summary.RemainingGates = new List<string>();
+        if (!options.BuildApiModel)
+        {
+            report.Summary.RemainingGates.Add("--build-api-model");
+        }
+
+        if (!options.ValidateSamples)
+        {
+            report.Summary.RemainingGates.Add("--validate-samples");
+        }
+
+        if (!options.VerifyDocfxBuild)
+        {
+            report.Summary.RemainingGates.Add("--verify-docfx-build");
+        }
+
+        report.Summary.CanClaimCompletion = code == ExitCode.Success &&
+                                            report.Errors.Count == 0 &&
+                                            report.Summary.RemainingGates.Count == 0;
+        report.Summary.CompletionState = report.Summary.CanClaimCompletion
+            ? "complete"
+            : report.Errors.Count > 0 ? "incomplete" : "verification-required";
+        report.Summary.RemainingWorkItems = report.Errors.Count + report.Summary.RemainingGates.Count;
+        report.Summary.RemainingDiagnosticsByCode = report.Errors
+            .GroupBy(error => error.Code, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+
+        WriteRepairPlanIfRequested(options, report);
 
         // Capture the process tally on every exit path so the result always proves whether the
         // fast path actually shelled out to dotnet/msbuild/docfx/gh.
@@ -4514,7 +4695,9 @@ internal static class DocfxValidator
             }
 
             Console.WriteLine(
-                $"  Summary: mode={report.Summary.ValidationMode}, apiModel={report.Summary.ApiModelSource ?? "n/a"}, " +
+                $"  Summary: completion={report.Summary.CompletionState}, canClaimCompletion={report.Summary.CanClaimCompletion.ToString().ToLowerInvariant()}, " +
+                $"remainingWorkItems={report.Summary.RemainingWorkItems}, remainingGates={string.Join(',', report.Summary.RemainingGates)}, " +
+                $"mode={report.Summary.ValidationMode}, apiModel={report.Summary.ApiModelSource ?? "n/a"}, " +
                 $"namespaces={report.Summary.PublicNamespaces}, pages={report.Summary.NamespacePagesValidated}, " +
                 $"requiredExampleTargets={report.Summary.RequiredExampleTargets}, requiredExamples={report.Summary.RequiredExamples}, " +
                 $"extMethods={report.Summary.ExtensionMethods}, samplesCompiled={report.Summary.SamplesCompiled}, " +
@@ -4523,8 +4706,22 @@ internal static class DocfxValidator
                 $"docfxBuildsVerified={report.Summary.DocfxBuildsVerified}, errors={report.Summary.Errors}, warnings={report.Summary.Warnings}");
 
             Console.WriteLine(
+                $"  [execution] profile={report.Summary.Execution.Profile} processors={report.Summary.Execution.LogicalProcessors} " +
+                $"memoryGiB={report.Summary.Execution.AvailableMemoryBytes / (1024d * 1024 * 1024):F1} " +
+                $"buildWorkers={report.Summary.Execution.BuildParallelism} sampleWorkers={report.Summary.Execution.SampleParallelism} " +
+                $"timeoutMinutes={report.Summary.Execution.ProcessTimeoutMinutes} " +
+                $"concurrentDocfx={report.Summary.Execution.ConcurrentDocfxVerification.ToString().ToLowerInvariant()}");
+
+            Console.WriteLine(
                 $"  [processes] dotnet={report.Summary.Processes["dotnet"]} msbuild={report.Summary.Processes["msbuild"]} " +
                 $"docfx={report.Summary.Processes["docfx"]} gh={report.Summary.Processes["gh"]}");
+
+            if (!report.Summary.CanClaimCompletion)
+            {
+                Console.WriteLine(
+                    "  [completion] INCOMPLETE: treat every remaining diagnostic as repair work. " +
+                    "Diagnostic age or volume is not a blocker and does not justify stopping after a partial digest.");
+            }
         }
 
         return (int)code;
@@ -4577,6 +4774,18 @@ internal static class DocfxValidator
 
         sb.AppendLine($"Status: `{report.Status ?? "unknown"}`");
         sb.AppendLine();
+        sb.AppendLine("## Completion Contract");
+        sb.AppendLine();
+        sb.AppendLine($"- Completion state: `{report.Summary.CompletionState ?? "unknown"}`");
+        sb.AppendLine($"- Can claim completion: `{report.Summary.CanClaimCompletion.ToString().ToLowerInvariant()}`");
+        sb.AppendLine($"- Remaining work items: {report.Summary.RemainingWorkItems}");
+        sb.AppendLine($"- Remaining final-verification gates: {(report.Summary.RemainingGates.Count == 0 ? "none" : string.Join(", ", report.Summary.RemainingGates.Select(gate => $"`{gate}`")))}");
+        sb.AppendLine($"- Execution profile: `{report.Summary.Execution.Profile}` ({report.Summary.Execution.LogicalProcessors} processors, {report.Summary.Execution.AvailableMemoryBytes / (1024d * 1024 * 1024):F1} GiB available, build workers {report.Summary.Execution.BuildParallelism}, sample workers {report.Summary.Execution.SampleParallelism}, timeout {report.Summary.Execution.ProcessTimeoutMinutes} minutes, concurrent DocFX `{report.Summary.Execution.ConcurrentDocfxVerification.ToString().ToLowerInvariant()}`)");
+        sb.AppendLine("- Every error below is an active repair item. Its age, pre-existing status, or the number of similar diagnostics does not make it a blocker or move it out of scope for a repo-wide digest.");
+        sb.AppendLine("- Do not stop after repairing only a sample of namespaces, types, extension sections, or examples. Rerun the validator and continue until `canClaimCompletion` is `true`.");
+        sb.AppendLine("- An unrelated build or test failure may be reported separately, but it does not end documentation repair unless it prevents the validator or required evidence inspection from running.");
+        sb.AppendLine("- Stop incomplete only when the user pauses the task or an external condition still prevents progress after concrete repair attempts. Report the exact command, exit code, blocker, and remaining diagnostic counts; never describe that state as complete.");
+        sb.AppendLine();
         sb.AppendLine("## Summary");
         sb.AppendLine();
         sb.AppendLine($"- Public namespaces: {report.Summary.PublicNamespaces}");
@@ -4598,8 +4807,8 @@ internal static class DocfxValidator
         sb.AppendLine("- Treat `Extension Members` tables as incomplete until required examples exist.");
         sb.AppendLine("- Repair related namespace pages together; do not update only the first page that exposes a shared issue.");
         sb.AppendLine("- After edits, inspect `git diff` for the touched documentation paths before final verification.");
-        sb.AppendLine("- If examples cannot be sourced or compiled, report the limitation instead of claiming completion.");
-        sb.AppendLine("- Rerun validation with `--verify-docfx-build` before claiming completion.");
+        sb.AppendLine("- If an example does not compile, inspect the API shape, project references, tests, and package evidence and repair it; a compile diagnostic is work, not a reason to skip the rest of the queue.");
+        sb.AppendLine("- Rerun build-backed validation with `--build-api-model --validate-samples --verify-docfx-build` before claiming completion.");
         sb.AppendLine();
 
         AppendDiagnostics(sb, "Repository Guidance", report.Errors.Where(e => e.Code is "AGENTS_BLOCK_MISSING"));
@@ -4625,12 +4834,13 @@ internal static class DocfxValidator
         sb.AppendLine();
         sb.AppendLine("- [ ] `agents.cs` has run successfully when `AGENTS_BLOCK_MISSING` appears.");
         sb.AppendLine("- [ ] `ENCODING_CORRUPTION` files restored from git or rewritten using byte-level operations.");
-        sb.AppendLine("- [ ] Every namespace diagnostic above has been resolved or intentionally excluded with evidence.");
+        sb.AppendLine("- [ ] Every namespace and extension diagnostic above has been resolved; zero remain in the final report.");
         sb.AppendLine("- [ ] GitHub example sources consulted before writing any new example (see 'GitHub Example Sources' section).");
         sb.AppendLine("- [ ] Every `EXAMPLE_MISSING` diagnostic above maps to a concrete example location.");
         sb.AppendLine("- [ ] Changed C# examples pass structural validation (namespace + type declaration, or labelled `// Program.cs`).");
         sb.AppendLine("- [ ] Changed C# examples compile as a class library project referencing the documented assemblies.");
         sb.AppendLine("- [ ] Authored Markdown files still exist after generated-artifact cleanup.");
+        sb.AppendLine("- [ ] Final JSON reports `canClaimCompletion: true`, `remainingWorkItems: 0`, no remaining gates, and no remaining diagnostic counts.");
         sb.AppendLine("- [ ] Final validation command and exit code are reported.");
 
         return sb.ToString();
@@ -4824,6 +5034,21 @@ internal static class DocfxValidator
                     if (!int.TryParse(sp, out var spv) || spv < 1) { error = "--sample-parallelism must be a positive integer."; return false; }
                     options.SampleParallelism = spv;
                     break;
+                case "--build-parallelism":
+                    if (!Next(args, ref i, out var bp)) { error = "--build-parallelism requires a count."; return false; }
+                    if (!int.TryParse(bp, out var bpv) || bpv < 1) { error = "--build-parallelism must be a positive integer."; return false; }
+                    options.BuildParallelism = bpv;
+                    break;
+                case "--process-timeout-minutes":
+                    if (!Next(args, ref i, out var pt)) { error = "--process-timeout-minutes requires a count."; return false; }
+                    if (!int.TryParse(pt, out var ptv) || ptv < 1 || ptv > 180) { error = "--process-timeout-minutes must be between 1 and 180."; return false; }
+                    options.ProcessTimeoutMinutes = ptv;
+                    break;
+                case "--execution-profile":
+                    if (!Next(args, ref i, out var ep)) { error = "--execution-profile requires auto, conservative, or high-capacity."; return false; }
+                    if (!IsValidExecutionProfile(ep)) { error = "--execution-profile must be auto, conservative, or high-capacity."; return false; }
+                    options.ExecutionProfile = ep.ToLowerInvariant();
+                    break;
                 case "--clean-generated-metadata":
                     options.CleanGeneratedMetadata = true;
                     break;
@@ -4851,6 +5076,23 @@ internal static class DocfxValidator
                         options.SampleParallelism = spvInline;
                         break;
                     }
+                    if (TrySplit(arg, "--build-parallelism", out var v8) &&
+                        int.TryParse(v8, out var bpvInline) && bpvInline >= 1)
+                    {
+                        options.BuildParallelism = bpvInline;
+                        break;
+                    }
+                    if (TrySplit(arg, "--process-timeout-minutes", out var v9) &&
+                        int.TryParse(v9, out var ptvInline) && ptvInline is >= 1 and <= 180)
+                    {
+                        options.ProcessTimeoutMinutes = ptvInline;
+                        break;
+                    }
+                    if (TrySplit(arg, "--execution-profile", out var v10) && IsValidExecutionProfile(v10))
+                    {
+                        options.ExecutionProfile = v10.ToLowerInvariant();
+                        break;
+                    }
 
                     error = $"Unknown argument: {arg}";
                     return false;
@@ -4863,6 +5105,11 @@ internal static class DocfxValidator
     private static bool IsValidSampleReferenceMode(string value) =>
         string.Equals(value, "project", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(value, "package", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsValidExecutionProfile(string value) =>
+        string.Equals(value, "auto", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "conservative", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "high-capacity", StringComparison.OrdinalIgnoreCase);
 
     private static bool Next(string[] args, ref int i, out string value)
     {
@@ -4923,8 +5170,20 @@ internal static class DocfxValidator
               --sample-reference-mode <project|package>
                                       Sample reference resolution. project (default) references the owning
                                       documented project(s); package references NuGet package ids where available.
-              --sample-parallelism <n> Maximum MSBuild nodes for the batched sample build (1-8). Default: 2.
+              --sample-parallelism <n> Maximum MSBuild nodes for the batched sample build (1-16).
+                                      Default: adaptive (2 conservative; up to half the available processors,
+                                      capped at 16, on high-capacity machines).
                                       Override with env var DOCFX_DIGEST_SAMPLE_PARALLELISM.
+              --build-parallelism <n> Maximum MSBuild nodes for the documented project build (1-16).
+                                      Override with env var DOCFX_DIGEST_BUILD_PARALLELISM.
+              --execution-profile <auto|conservative|high-capacity>
+                                      auto (default) selects high-capacity above 8 available logical processors
+                                      and 32 GiB available memory; high-capacity overlaps DocFX verification with
+                                      API/sample work and favors resource use over wall-clock time.
+                                      Override with env var DOCFX_DIGEST_EXECUTION_PROFILE.
+              --process-timeout-minutes <n>
+                                      Child-process timeout from 1-180 minutes. Default: 30.
+                                      Override with env var DOCFX_DIGEST_PROCESS_TIMEOUT_MINUTES.
               --build-api-model        Reflection-backed API discovery (opt-in). Default: no-build discovery.
               --changed-only           Validate only files changed according to git (git is read-only and allowed).
               --verify-docfx-build     Run DocFX against a temp copy of the repository (opt-in).
@@ -4981,6 +5240,9 @@ internal static class DocfxValidator
         public bool Json { get; set; }
         public bool Help { get; set; }
         public int? SampleParallelism { get; set; }
+        public int? BuildParallelism { get; set; }
+        public int? ProcessTimeoutMinutes { get; set; }
+        public string? ExecutionProfile { get; set; }
         public string SampleReferenceMode { get; set; } = "project";
     }
 
@@ -5076,6 +5338,18 @@ internal static class DocfxValidator
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
 
+    private sealed record DocfxVerificationResult(
+        bool Success, string? Error, TimeSpan Elapsed, bool Cancelled = false);
+
+    private sealed record ExecutionSettings(
+        string Profile,
+        int LogicalProcessors,
+        long AvailableMemoryBytes,
+        int BuildParallelism,
+        int SampleParallelism,
+        int ProcessTimeoutMinutes,
+        bool ConcurrentDocfxVerification);
+
     private sealed record SampleWorker(
         int OriginalIndex,
         string Directory,
@@ -5111,6 +5385,12 @@ internal sealed class Diagnostic
 
 internal sealed class Summary
 {
+    public string? CompletionState { get; set; }
+    public bool CanClaimCompletion { get; set; }
+    public int RemainingWorkItems { get; set; }
+    public Dictionary<string, int> RemainingDiagnosticsByCode { get; set; } = new();
+    public List<string> RemainingGates { get; set; } = new();
+    public ExecutionSummary Execution { get; set; } = new();
     public string? ValidationMode { get; set; }
     public string? ApiModelSource { get; set; }
     public int PublicNamespaces { get; set; }
@@ -5127,6 +5407,17 @@ internal sealed class Summary
     public int Warnings { get; set; }
     public Dictionary<string, int> Processes { get; set; } = new();
     public List<PhaseTiming> Phases { get; set; } = new();
+}
+
+internal sealed class ExecutionSummary
+{
+    public string Profile { get; set; } = "conservative";
+    public int LogicalProcessors { get; set; }
+    public long AvailableMemoryBytes { get; set; }
+    public int BuildParallelism { get; set; }
+    public int SampleParallelism { get; set; }
+    public int ProcessTimeoutMinutes { get; set; }
+    public bool ConcurrentDocfxVerification { get; set; }
 }
 
 internal sealed class PhaseTiming
