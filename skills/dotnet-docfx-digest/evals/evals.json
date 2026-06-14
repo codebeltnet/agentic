@@ -733,6 +733,160 @@
         "Avoids reflection, metadata-only examples, generic wrappers, duplicate UID mappings, and invented API members",
         "Runs semantic validation and sample compilation before claiming completion"
       ]
+    },
+    {
+      "id": 59,
+      "prompt": "Use dotnet-docfx-digest in dry-run mode for my multi-project library. The DocFX config has two metadata destinations (api/core and api/net).",
+      "expected_output": "The agent runs docfx.cs with --dry-run --build-api-model --project-manifest (no invented project hints), reports the seed, and authors one clean selected project from each metadata destination group. It completes the generated review JSON for every changed page, then resumes with --review-report --build-api-model --validate-samples --verify-docfx-build until dry-run-passed and reports the same page-level review rather than repository completion.",
+      "expectations": [
+        "Runs docfx.cs --dry-run --build-api-model --project-manifest without inventing project hints the user did not give",
+        "Selects one clean project from each metadata destination group, reports the seed, and actually authors their namespace/type documentation",
+        "Completes the generated review report and resumes the same manifest with --review-report --build-api-model --validate-samples --verify-docfx-build until dry-run-passed",
+        "Reports a Changed-page review row for every authored page with evidence, page-specific purpose/outcome, observable example result, and sibling-pattern comparison without claiming repository-wide completion"
+      ]
+    },
+    {
+      "id": 60,
+      "prompt": "Run dotnet-docfx-digest in dry-run mode for Cuemon.Core and src/Cuemon.Net/Cuemon.Net.csproj specifically.",
+      "expected_output": "The agent resolves both explicit hints (by assembly/package name and by project path), persists exactly those two selected packets, authors both, and resumes the manifest through build-backed discovery, sample compilation, and DocFX verification. Explicit hints override automatic selection; the run remains scoped and never claims repository completion.",
+      "expectations": [
+        "Resolves both explicit --project hints, including the path-form hint, to exactly one project each",
+        "Persists and authors only the two named packets, overriding automatic selection",
+        "Completes the generated review report, resumes with --review-report, and passes build-backed discovery, sample compilation, DocFX verification, and page-level review",
+        "Does not claim repository-wide completion from the selected subset"
+      ]
+    },
+    {
+      "id": 61,
+      "prompt": "Use dotnet-docfx-digest in dry-run mode for `Common`, but I have two projects whose file names both resolve to Common.",
+      "expected_output": "The agent surfaces PROJECT_HINT_AMBIGUOUS with the candidate project paths and stops before editing, asking the user to disambiguate with a more specific path, assembly name, or package id instead of guessing.",
+      "expectations": [
+        "Surfaces PROJECT_HINT_AMBIGUOUS with the candidate matches before any editing",
+        "Does not guess or edit either candidate",
+        "Asks for a more specific hint (path, assembly, or package id)"
+      ]
+    },
+    {
+      "id": 62,
+      "prompt": "Run a dry-run DocFX digest. One project in a destination group already has uncommitted changes to its source and namespace page.",
+      "expected_output": "The agent's dry run skips the dirty project, selects another clean project from the same metadata group, and never edits the dirty project's related files. If a group has no clean candidate it reports DRY_RUN_GROUP_UNSELECTED for that group and makes no edits there.",
+      "expectations": [
+        "Skips the dirty candidate and selects a clean project from the same group",
+        "Never edits files that were already staged, modified, renamed, deleted, or untracked",
+        "Reports DRY_RUN_GROUP_UNSELECTED when a group has no clean project"
+      ]
+    },
+    {
+      "id": 63,
+      "prompt": "Document the `Cuemon.Collections` namespace which has a MutableTuple<T1> through MutableTuple<T7> generic-arity family plus a few unrelated types, using dotnet-docfx-digest.",
+      "expected_output": "The agent declares a narrow family exemption in .docfx/family-exemptions.json for the MutableTuple arity series with rationale generic-arity, writes one strong anchor example for MutableTuple<T1>, and a namespace page that names the anchor and explains how arity distinguishes the siblings. Covered siblings get purpose-first prose but not redundant standalone examples. Unrelated types still get their own examples.",
+      "expectations": [
+        "Declares a family exemption only for the coherent arity series, not the unrelated types",
+        "Provides one validated anchor example and deep namespace guidance that names the anchor and explains sibling selection",
+        "Gives covered siblings purpose-first prose without redundant standalone examples",
+        "Still requires standalone examples for the unrelated types"
+      ]
+    },
+    {
+      "id": 64,
+      "prompt": "I want to exempt my `Acme.Options` exceptions, options objects, and a delegate from needing examples by grouping them as one family. Set that up with dotnet-docfx-digest.",
+      "expected_output": "The agent refuses to create a blanket family exemption for unrelated difficult types. It explains that category alone (exceptions, options, delegates, records, data carriers) never qualifies, that a family must be a coherent generic-arity/inherited/overload/type-parameter series, and that such a declaration would fail validation with FAMILY_EXEMPTION_INVALID. It documents the types with real examples instead.",
+      "expectations": [
+        "Refuses the blanket exemption and explains category alone does not qualify",
+        "Notes the declaration would fail FAMILY_EXEMPTION_INVALID validation",
+        "Documents the types with real examples instead of exempting them"
+      ]
+    },
+    {
+      "id": 65,
+      "prompt": "My namespace page for `Acme.Caching` opens with 'The Acme.Caching namespace contains types and helpers that enable caching.' and then has a separate 'Start with `MemoryCacheStore`' paragraph. Fix it with dotnet-docfx-digest.",
+      "expected_output": "The agent recognizes NAMESPACE_APPEND_ONLY_REPAIR: the weak inventory lead was left intact with guidance appended below. It rewrites the opening cohesively around the caching problem and outcome rather than keeping the inventory sentence and a tacked-on start-here line.",
+      "expectations": [
+        "Rewrites the opening paragraph around the developer problem and outcome",
+        "Does not leave the inventory-led lead intact beneath an appended start-here sentence",
+        "Integrates the start-here guidance into cohesive prose"
+      ]
+    },
+    {
+      "id": 66,
+      "prompt": "Run a full DocFX digest across all my project packets, but stop and tell me if a packet produces low-quality output.",
+      "expected_output": "The agent processes packets one at a time, runs the scoped semantic and sample gates per packet, and stops the entire run immediately when a packet fails its quality gates or produces mechanical output (holder/forwarding/repeated templates). It reports which packet failed and why rather than continuing to author later packets.",
+      "expectations": [
+        "Processes packets one at a time with scoped quality gates",
+        "Stops the whole run immediately on the first failing packet",
+        "Does not continue authoring later packets after mechanical output is detected"
+      ]
+    },
+    {
+      "id": 67,
+      "prompt": "Run the complete DocFX digest for my repository using all project packets and verify it.",
+      "expected_output": "The agent documents every eligible clean project packet, preserves dirty project documentation without overwriting it, and finishes with the global build-backed verification (--build-api-model --validate-samples --verify-docfx-build) so the deterministic completion contract (canClaimCompletion true, zero remaining work items and gates) is satisfied before claiming completion.",
+      "expectations": [
+        "Documents all eligible clean packets and preserves dirty project work",
+        "Runs the global build-backed verification before claiming completion",
+        "Confirms the JSON completion contract (canClaimCompletion true, zero remaining work items/gates)"
+      ]
+    },
+    {
+      "id": 68,
+      "prompt": "The fast docfx.cs run reports only one required example target for my Cuemon-style repo where namespaces put the opening brace on the next line. Document the repo with dotnet-docfx-digest.",
+      "expected_output": "The agent recognizes the source scanner is provisional (BUILD_BACKED_SCOPE_REQUIRED / API_MODEL_SOURCE_SCANNER_LIMITED) and runs --build-api-model to establish reflection-precise scope before authoring, rather than trusting the under-reported fast count. It documents the full discovered surface.",
+      "expectations": [
+        "Recognizes the source-scan inventory as provisional and does not author from the under-reported count",
+        "Runs --build-api-model (or confirms DocFX YAML) before authoring scope",
+        "Documents the full reflection-backed surface, not just the single fast-reported target"
+      ]
+    },
+    {
+      "id": 69,
+      "prompt": "My library has over 400 public types needing examples. Document it with dotnet-docfx-digest.",
+      "expected_output": "The agent sees QUALITY_RISK_REVIEW_REQUIRED (standalone targets above 100) and does not start a bulk authoring pass. It limits the first pass to one project packet or 20 targets, manually reviews those changed pages, and asks for explicit approval before continuing the full run. It treats a dry run as the preferred pilot for the large surface.",
+      "expectations": [
+        "Detects the high-risk queue and stops for a bounded pilot instead of bulk authoring",
+        "Limits the first pass to one packet or about 20 targets and reviews the actual changed pages",
+        "Requests explicit approval before continuing the full run"
+      ]
+    },
+    {
+      "id": 70,
+      "prompt": "Two of my assemblies both declare a public static `Extensions` class with extension methods in different namespaces. Document both with dotnet-docfx-digest.",
+      "expected_output": "The agent recognizes EXTENSION_OWNER_AMBIGUOUS (and any SYMBOL_COLLISION_UNRESOLVED for duplicate type names) and resolves ownership by assembly/project. It prefers receiver extension syntax in examples and targets the uniquely owned overwrite UID so each documented method is unambiguous.",
+      "expectations": [
+        "Identifies the cross-assembly extension-container collision by owning assembly/project",
+        "Prefers receiver extension syntax over static-container qualification when names collide",
+        "Targets the uniquely owned overwrite UID for each method"
+      ]
+    },
+    {
+      "id": 71,
+      "prompt": "My `Cuemon.Core` assembly forwards a generic type family to another assembly via [assembly: TypeForwardedTo]. Document the affected types with dotnet-docfx-digest.",
+      "expected_output": "The agent surfaces TYPE_FORWARDING_UNRESOLVED for forwarded types it cannot attribute, and resolves which project and UID documents the forwarded family before authoring. It does not silently document the forwarded family under the wrong assembly.",
+      "expectations": [
+        "Surfaces unresolved type forwarding rather than mis-attributing the forwarded family",
+        "Resolves the documenting project and UID for the forwarded types before authoring",
+        "Records the forwarding source and destination relationship"
+      ]
+    },
+    {
+      "id": 72,
+      "prompt": "Write the DocFX overwrite example for `Acme.Core.Widget` for me, and make sure it doesn't corrupt the file encoding.",
+      "expected_output": "The agent uses the safe structured overwrite writer (docfx.cs --write-overwrite) with an authored prose+fence request. The writer preserves the target file's BOM and line endings, validates balanced fences, and refuses duplicate UIDs or dirty-file replacement. The agent does not hand-assemble fenced Markdown through brittle byte/encoding operations.",
+      "expectations": [
+        "Uses the structured overwrite writer rather than ad-hoc byte/encoding manipulation",
+        "Preserves BOM and line-ending state and validates the fence",
+        "Authors the prose and fence itself; the writer only validates and writes structured content"
+      ]
+    },
+    {
+      "id": 73,
+      "prompt": "Do the dry-run DocFX pilot and tell me it's good to proceed.",
+      "expected_output": "Before declaring the pilot good, the agent proves the selected packets were actually authored and the persisted manifest was resumed through build-backed discovery, sample compilation, and DocFX verification. It manually reviews every changed namespace and type page for repeated sentence/code structures, reports the actual prose and examples, and asks the user to review representative output before a full run rather than asserting quality from selector counts.",
+      "expectations": [
+        "Shows that selected packets produced real working-tree namespace/type documentation, a complete review report, and a resumed dry-run-passed result",
+        "Reports a complete Changed-page review table for the actual changed pages, not only the validator summary or a file list",
+        "Checks specifically for repeated sentence and code structures across the pilot",
+        "Presents representative output for human review before a full run"
+      ]
     }
   ]
 }

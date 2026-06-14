@@ -94,7 +94,83 @@ For the final command, let `auto` choose the execution profile unless the user r
 
 Keep `stderr` visible during the final command. API build, sample compilation, and DocFX verification print a start event, 10-second heartbeats, and a final success/failure event there. Use the phase, PID, elapsed time, last-output age, and current output line to decide whether work is progressing or a child appears stale. Capturing `stdout` for `--json` is safe because progress never enters the JSON stream.
 
-## Namespace page template
+## Project-scoped packets and representative dry runs
+
+A repository-sized authoring queue degrades quality as the target count grows. Process documentation in bounded **project packets** instead, where each packet is one resolved `.csproj` with its metadata group, owned and shared namespaces, public API targets, existing overwrite files, related dirty paths, and scoped diagnostics. Discover packets with `docfx.cs --json` (the `scope.packets` array) or persist them with `docfx.cs --project-manifest <path>`.
+
+Full and dry runs use **identical** evidence, authoring instructions, semantic-quality gates, and sample compilation. The only difference is which packets are selected.
+
+### Build-backed scope is a prerequisite for authoring
+
+The conservative source scanner is for fast Markdown iteration, not authoritative scope. When `summary.apiModelSource` is `source-scan`, scope is `provisional` and the validator emits `BUILD_BACKED_SCOPE_REQUIRED`. Before authoring a full run or a selected dry-run packet, establish reflection-precise scope with `--build-api-model` (or generate DocFX managed-reference YAML). Treat a material fast/build-backed discrepancy as a blocker, not a rounding error.
+
+### Quality-risk pilot stop
+
+Before editing, read `qualityRisk` in the JSON. A run is high-risk when standalone targets exceed 100, extension targets exceed 100, the missing-to-existing example ratio exceeds 10:1, or any symbol-ownership collision remains. In high-risk mode the validator emits `QUALITY_RISK_REVIEW_REQUIRED`: limit the first authoring pass to one project packet or 20 newly authored targets, run the scoped semantic and compilation gates, produce a review inventory of every changed namespace and type page, and obtain explicit user approval before continuing. A dry run is the preferred pilot for very large repositories. Only pass `--allow-high-risk` as an explicit, reviewed decision.
+
+### Working-tree dry run
+
+Dry run is a limited real run that writes useful documentation directly to the working tree. The validator selects and verifies; the agent performs the evidence-based authoring between those invocations:
+
+1. The user may name projects: "Use dotnet-docfx-digest in dry-run mode for Cuemon.Core and src/Cuemon.Net/Cuemon.Net.csproj." Explicit hints override automatic selection and resolve against project path, file name, assembly name, or package id. An unknown hint raises `PROJECT_HINT_NOT_FOUND`; an ambiguous one raises `PROJECT_HINT_AMBIGUOUS`. Resolve both before editing.
+2. With no hints ("Use dotnet-docfx-digest in dry-run mode."), the validator selects one **clean** project from every metadata destination group through a reported, reproducible seed. Do not ask for project hints when none were supplied.
+3. Related files that were already staged, modified, renamed, deleted, or untracked before the run are never edited. A dirty first candidate is skipped for the next clean one; a group with no clean candidate is reported as `DRY_RUN_GROUP_UNSELECTED`.
+4. Before editing, run `docfx.cs --repo-root <root> --dry-run --build-api-model --project-manifest <temp-manifest> --json` plus any supplied `--project` hints. Treat `scope.selectedProjects` and the persisted baseline as the complete write boundary. The command creates `<temp-manifest-name>.review.json` beside the manifest.
+5. Author every selected packet with the same evidence and quality standard as a full run. Do not stop after selection or manifest generation. Read every changed namespace and type page after authoring, compare normalized prose and code patterns across the whole pilot, and complete every entry in the generated review JSON: `evidence`, page-specific `purpose`, `observableOutcome` (use `namespace guidance` only for namespace pages), and `patternComparison`. Also prepare the same information as a `Changed-page review` table for the final response. A file list or clean validator summary is not this review.
+6. Resume the exact baseline with `docfx.cs --repo-root <root> --resume-project-manifest <temp-manifest> --review-report <temp-review> --build-api-model --validate-samples --verify-docfx-build --json`. This validates files created by the current run without reclassifying them as pre-existing dirty work. Missing, placeholder, or incomplete review entries raise `REVIEW_REPORT_MISSING`, `REVIEW_REPORT_INVALID`, or `REVIEW_REPORT_INCOMPLETE`; an invalid or stale manifest fails closed and selects no fallback projects.
+7. Continue repairing the selected packets until the resumed command reports `dry-run-passed`, zero remaining gates, compiled samples, and a verified DocFX build. Any error or omitted final gate is `dry-run-failed`.
+8. Dry run never claims the repository digest is complete. Report selected projects, seed, the complete changed-page review table, representative prose/examples, reproduction command, and resume command for human approval before a full run.
+
+Use `--dry-run [--seed <n>]` for automatic selection, `--dry-run --project <hint> [--project <hint> ...]` for explicit selection, and always pair the initial `--project-manifest` invocation with the final `--resume-project-manifest` invocation. Use `--project <hint>` without `--dry-run` only for a scoped non-random validation; it still cannot claim repository completion.
+
+### Packet authoring loop
+
+Process one packet at a time so the packet is the active context and write-ownership boundary. When the host supports fresh workers, assign each packet to a fresh worker with only packet-local evidence. For each packet: read the manifest and scoped diagnostics, read related Markdown before editing, read exact source/test/sample/package evidence, build an evidence ledger mapping each decision to a source path, classify targets into standalone-example or family-covered obligations, author namespace prose and overwrites, run the scoped semantic and sample gates, and review the diff. Stop the entire run immediately if a packet fails its quality gates — do not continue to later packets after mechanical output is detected.
+
+### Symbol ownership
+
+Duplicate simple type names across assemblies (`SYMBOL_COLLISION_UNRESOLVED`), forwarded type families that cannot be attributed (`TYPE_FORWARDING_UNRESOLVED`), and extension containers that cross project boundaries (`EXTENSION_OWNER_AMBIGUOUS`) require assembly/project-qualified resolution. Prefer receiver extension syntax over static-container qualification when container names collide, and target the uniquely owned overwrite UID.
+
+### Family exemptions
+
+A heavily generic, inherited, overloaded, or arity-based type series may replace redundant standalone examples with one anchor example plus deep namespace guidance. Declare exemptions explicitly in `.docfx/family-exemptions.json`:
+
+```json
+{
+  "families": [
+    {
+      "familyId": "tuple-arity",
+      "namespaceUid": "Cuemon.Collections",
+      "anchorUid": "Cuemon.Collections.MutableTuple`1",
+      "anchorExampleFile": ".docfx/api/types/Cuemon.Collections.MutableTuple`1.md",
+      "rationale": "generic-arity",
+      "coveredUids": ["Cuemon.Collections.MutableTuple`2", "Cuemon.Collections.MutableTuple`3"]
+    }
+  ]
+}
+```
+
+`rationale` must be one of `generic-arity`, `inherited-specialization`, `overload-series`, or `type-parameter-series`. The validator removes covered siblings from standalone-example obligations only after the declaration validates: all UIDs must exist, share the declared namespace, and avoid duplicate or circular coverage. A family is rejected (`FAMILY_EXEMPTION_INVALID`) when it groups unrelated or out-of-namespace types — category alone never exempts options, exceptions, delegates, records, or data carriers. The anchor must have a real behavioral example (`FAMILY_ANCHOR_EXAMPLE_MISSING` otherwise), and the namespace page must name the anchor and explain how consumers choose among siblings (`FAMILY_NAMESPACE_GUIDANCE_MISSING` otherwise). Every sibling still needs accurate purpose-first prose that relates it to the anchor.
+
+### Safe overwrite writer
+
+For repeatable overwrite creation, hand authored content to the structured writer instead of improvising fenced Markdown with ad-hoc scripts: write a request file with `file`, `uid`, `mapping` (`example`/`summary`/`remarks`), `prose`, and `fence`, then run `docfx.cs --write-overwrite <request.json>`. The writer validates YAML, rejects duplicate UIDs and unbalanced fences, preserves the file's BOM and line endings, refuses to replace a pre-existing dirty file, and prints a change preview. It never generates prose, selects members, or synthesizes examples — that remains your evidence-grounded editorial work.
+
+### Evidence-grounded scenario patterns
+
+These are search directions, not templates to emit verbatim. Confirm every pattern against packet-local source, tests, samples, or package documentation before writing, and reject generic `Workflow`, `Current`, `Consumer`, and mass-forwarding shells when they are not real concepts in the package:
+
+- **Options configuration** — bind or build an options object, then show the operation that consumes it.
+- **Middleware / DI registration** — register the service on a builder, then show the request or resolution it enables.
+- **Authentication header construction** — build the credential/header, then attach it to a request.
+- **MVC filters / results** — apply the filter or return the result, then show the observable response.
+- **Stream processing / compression** — wrap or transform a stream, then read or write the transformed bytes.
+- **Formatter setup** — configure the formatter, then serialize or deserialize a payload.
+- **Delegate / factory pipelines** — register the factory, then invoke it to produce a configured instance.
+
+Each chosen scenario must still produce, configure, transform, register, send, store, or validate something a real caller observes.
+
+
 
 Use this template when creating a new namespace overview page:
 

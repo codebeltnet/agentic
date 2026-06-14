@@ -59,6 +59,32 @@ Do **not** use `summary: *content` for type example files. That replaces only th
 
 DocFX applies overwrite models by `uid`. If the same `uid` appears more than once in one overwrite file, later sections in that same file override earlier sections. Across different overwrite files, ordering is not deterministic, so keep competing sections for the same `uid` together or consolidate them.
 
+## Safe structured overwrite writer
+
+For repeatable overwrite creation, prefer `docfx.cs --write-overwrite <request.json>` over hand-assembling fenced Markdown with ad-hoc scripts. The request is JSON with `file`, `uid`, `mapping` (`example`, `summary`, or `remarks`), optional `prose`, and optional `fence`. The writer validates the YAML and balanced fences, refuses duplicate UIDs in the same file (`OVERWRITE_UID_DUPLICATE`), refuses unbalanced fences (`OVERWRITE_FENCE_UNBALANCED`), refuses to replace a file that already had uncommitted changes (`OVERWRITE_DIRTY_REFUSED`), preserves the target file's existing BOM and line endings, and prints a change preview. It writes only structured content you already authored — it never generates prose, selects members, or synthesizes examples. Normal surgical edits may still use your editor; the writer exists for repeatable, encoding-safe overwrite creation.
+
+## Family exemptions
+
+A coherent type series whose members differ primarily by generic arity, inherited specialization, overload shape, or repeated type-parameter combinations may replace redundant per-type examples with one anchor example plus deep namespace guidance. Declare these explicitly in `.docfx/family-exemptions.json` so the policy is reviewable and validator-checkable:
+
+```json
+{
+  "families": [
+    {
+      "familyId": "tuple-arity",
+      "namespaceUid": "Cuemon.Collections",
+      "anchorUid": "Cuemon.Collections.MutableTuple`1",
+      "anchorExampleFile": ".docfx/api/types/Cuemon.Collections.MutableTuple`1.md",
+      "rationale": "generic-arity",
+      "coveredUids": ["Cuemon.Collections.MutableTuple`2", "Cuemon.Collections.MutableTuple`3"]
+    }
+  ]
+}
+```
+
+`rationale` must be one of `generic-arity`, `inherited-specialization`, `overload-series`, or `type-parameter-series`. The validator removes covered siblings from standalone-example obligations only after every UID resolves to a public type target in the declared namespace, with no duplicate or circular coverage (`FAMILY_EXEMPTION_INVALID` otherwise). The anchor must carry a real behavioral example (`FAMILY_ANCHOR_EXAMPLE_MISSING` otherwise), the namespace page must name the anchor and explain how consumers choose among siblings (`FAMILY_NAMESPACE_GUIDANCE_MISSING` otherwise), and every sibling still needs accurate purpose-first prose. Category alone never exempts options, exceptions, delegates, records, or data carriers; they are evaluated on their actual API role.
+
+
 Overwrite models should follow the target model shape. Existing properties can be replaced or merged depending on the DocFX model rules; properties not already present can be added. For managed reference docs, common useful overwrite targets include `summary`, `remarks`, `example`, `exceptions`, `see`, `seealso`, and parameter descriptions under `syntax`. The official managed reference model lists `example` as an overwriteable property, so usage examples can be added through overwrite sections when generated metadata lacks them.
 
 The `build.overwrite` entry in `docfx.json` tells DocFX which conceptual Markdown files contain overwrite sections. All relative paths in `docfx.json` are resolved relative to the directory containing `docfx.json`, not necessarily the repository root.
