@@ -1115,6 +1115,14 @@ Add-ValidationResult -Results $results -Name 'DocFX digest rejects metadata scaf
     }
 }
 
+Add-ValidationResult -Results $results -Name 'DocFX digest project-scoped packets, dry run, families, and overwrite writer behave deterministically' -Action {
+    $scopeTest = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-project-scoped.ps1'
+    & $scopeTest
+    if ($LASTEXITCODE -ne 0) {
+        throw "DocFX project-scoped regression failed with exit code $LASTEXITCODE."
+    }
+}
+
 $passed = @($results | Where-Object { $_.Status -eq 'PASS' }).Count
 $failed = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
 $label = if ([string]::IsNullOrWhiteSpace($Ref)) { 'WORKTREE' } else { $Ref }
