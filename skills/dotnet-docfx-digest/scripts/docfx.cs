@@ -3249,11 +3249,37 @@ internal static class DocfxValidator
                 "Namespace page front matter is missing a 'summary' key (expected 'summary: *content')."));
         }
 
-        // fly-in paragraph
-        if (!HasFlyIn(body))
+        // Concept-led namespace prose. A namespace inventory is useful reference material, but it
+        // is not a developer-facing overview unless it explains when to use the surface and where
+        // a newcomer should begin.
+        var proseParagraphs = ExtractNamespaceProseParagraphs(body);
+        if (proseParagraphs.Count == 0)
         {
             report.Errors.Add(new Diagnostic("NAMESPACE_FLYIN_MISSING", rel, ns.Name,
                 "Namespace page has no human-written fly-in paragraph, or contains only placeholder text."));
+        }
+        else
+        {
+            var firstParagraph = proseParagraphs[0];
+            var prose = string.Join(" ", proseParagraphs.Take(3));
+            if (IsInventoryOnlyNamespaceProse(firstParagraph))
+            {
+                report.Errors.Add(new Diagnostic("NAMESPACE_PROSE_INVENTORY_ONLY", rel, ns.Name,
+                    "The namespace overview only inventories types or extension methods. Rewrite the opening around the developer problem it solves, the outcome it enables, and when a consumer should use it."));
+            }
+
+            if (!HasNamespaceUsageGuidance(prose))
+            {
+                report.Errors.Add(new Diagnostic("NAMESPACE_USAGE_GUIDANCE_MISSING", rel, ns.Name,
+                    "The namespace overview does not explain when or why a developer should use this API surface. Add concrete usage guidance grounded in source, tests, or package documentation."));
+            }
+
+            var surfaceSize = ns.RequiredExampleTargets.Count + ns.ExtensionMethods.Count;
+            if (surfaceSize > 1 && !HasNamespaceStartHereGuidance(prose))
+            {
+                report.Errors.Add(new Diagnostic("NAMESPACE_START_HERE_MISSING", rel, ns.Name,
+                    "The namespace exposes multiple public entry points but does not direct a newcomer to a useful starting type or method. Name the API to start with and distinguish the nearby alternatives."));
+            }
         }
 
         // availability
@@ -3341,36 +3367,85 @@ internal static class DocfxValidator
         }
     }
 
-    private static bool HasFlyIn(string body)
+    private static List<string> ExtractNamespaceProseParagraphs(string body)
     {
-        foreach (var raw in body.Split('\n'))
+        var paragraphs = new List<string>();
+        var current = new List<string>();
+        var inFence = false;
+
+        void Flush()
+        {
+            if (current.Count == 0)
+            {
+                return;
+            }
+
+            var paragraph = string.Join(" ", current).Trim();
+            current.Clear();
+            if (paragraph.Length >= 20 &&
+                !paragraph.Contains("...", StringComparison.Ordinal) &&
+                !paragraph.Contains("TODO", StringComparison.OrdinalIgnoreCase) &&
+                !paragraph.EndsWith("contains types that", StringComparison.OrdinalIgnoreCase))
+            {
+                paragraphs.Add(paragraph);
+            }
+        }
+
+        foreach (var raw in body.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
         {
             var line = raw.Trim();
+            if (line.StartsWith("```", StringComparison.Ordinal))
+            {
+                Flush();
+                inFence = !inFence;
+                continue;
+            }
+
+            if (inFence)
+            {
+                continue;
+            }
+
             if (line.Length == 0)
             {
+                Flush();
                 continue;
             }
 
             if (line.StartsWith('#') || line.StartsWith('|') || line.StartsWith("[!INCLUDE", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("```", StringComparison.Ordinal) || line.StartsWith("---", StringComparison.Ordinal))
+                line.StartsWith("---", StringComparison.Ordinal) || line.StartsWith("<!--", StringComparison.Ordinal) ||
+                line.StartsWith("Availability:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Complements:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Related:", StringComparison.OrdinalIgnoreCase))
             {
+                Flush();
                 continue;
             }
 
-            // Reject template placeholders like "contains types that ..." or bare ellipses / TODO.
-            if (line.Contains("...", StringComparison.Ordinal) || line.Contains("TODO", StringComparison.OrdinalIgnoreCase) ||
-                line.EndsWith("contains types that", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (line.Length >= 20)
-            {
-                return true;
-            }
+            current.Add(line);
         }
 
-        return false;
+        Flush();
+        return paragraphs;
+    }
+
+    private static bool IsInventoryOnlyNamespaceProse(string paragraph)
+    {
+        return Regex.IsMatch(paragraph,
+            @"(?i)^(?:the\s+)?(?:`?[\w.]+`?\s+)?namespace\s+(?:contains|provides|includes|exposes|groups|collects)\b") &&
+               !HasNamespaceUsageGuidance(paragraph);
+    }
+
+    private static bool HasNamespaceUsageGuidance(string prose)
+    {
+        return Regex.IsMatch(prose,
+            @"(?i)\b(?:use(?:ful)?\b|when\b|choose\b|prefer\b|reach for\b|designed for\b|suited for\b|helps?\b|enables?\b|lets?\s+you\b|so that\b|without having to\b)");
+    }
+
+    private static bool HasNamespaceStartHereGuidance(string prose)
+    {
+        return Regex.IsMatch(prose,
+            @"(?i)\b(?:start with|begin with|entry point|first reach for|reach for|choose|prefer|use\s+`?[A-Z][A-Za-z0-9_]*(?:<[^>]+>)?`?\s+(?:to|when|for|as))\b");
     }
 
     private static bool HasAvailability(string body)
@@ -3390,6 +3465,22 @@ internal static class DocfxValidator
     private static void ValidateRequiredExamples(string repoRoot, string docfxWorkspace, IReadOnlyList<OverwriteSection> sections, ApiModel api,
         Options options, HashSet<string>? changedFiles, Report report)
     {
+        foreach (var duplicate in sections
+                     .Where(section => section.MappedToExample)
+                     .Where(section => !options.ChangedOnly || changedFiles is null ||
+                                       changedFiles.Contains(Path.GetFullPath(section.File)) ||
+                                       changedFiles.Any(IsChangedDocfxConfig))
+                     .GroupBy(section => section.Uid, StringComparer.Ordinal)
+                     .Where(group => group.Count() > 1))
+        {
+            var paths = duplicate.Select(section => Rel(repoRoot, section.File))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            report.Errors.Add(new Diagnostic("EXAMPLE_UID_DUPLICATE", string.Join(", ", paths), NamespaceFromUid(duplicate.Key),
+                $"UID `{duplicate.Key}` is mapped to {duplicate.Count()} example sections. Keep one coherent, scenario-led example for a UID; merge or remove the duplicate `example: *content` sections."));
+        }
+
         foreach (var target in api.RequiredExampleTargets)
         {
             if (options.ChangedOnly && changedFiles is not null &&
@@ -3399,7 +3490,18 @@ internal static class DocfxValidator
             }
 
             var candidates = sections.Where(s => IsExampleCandidate(s, target)).ToList();
-            if (candidates.Any(s => HasExampleForTarget(s, target)))
+            var relatedExtensionMethods = target.Kind == ApiTargetKind.Type
+                ? api.RequiredExampleTargets
+                    .Where(candidate => candidate.Kind == ApiTargetKind.ExtensionMethod &&
+                                        string.Equals(candidate.DeclaringTypeUid, target.Uid, StringComparison.Ordinal))
+                    .Select(candidate => candidate.DisplayName)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList()
+                : new List<string>();
+            var qualityResults = candidates
+                .Select(section => ValidateExampleQuality(section, target, relatedExtensionMethods))
+                .ToList();
+            if (qualityResults.Any(result => result.Valid))
             {
                 report.Summary.RequiredExamples++;
                 continue;
@@ -3413,6 +3515,20 @@ internal static class DocfxValidator
                 : target.DeclaringTypeUid is null
                     ? null
                     : Rel(repoRoot, Path.Combine(docfxWorkspace, "api", "namespaces", $"{target.DeclaringTypeUid}.md"));
+
+            if (qualityResults.Count > 0)
+            {
+                var qualityFailure = qualityResults
+                    .Where(result => !result.Valid && result.Code is not null)
+                    .OrderBy(result => result.Priority)
+                    .FirstOrDefault();
+                if (qualityFailure is not null)
+                {
+                    report.Errors.Add(new Diagnostic(qualityFailure.Code!, expectedPath, target.Namespace,
+                        qualityFailure.Message ?? "The example does not demonstrate the documented API."));
+                    continue;
+                }
+            }
 
             var message = target.Kind == ApiTargetKind.Type
                 ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}` in `{expectedPath}` or another overwrite file under `api/types/` that targets this exact type UID. Namespace overview examples do not satisfy this diagnostic. Keep `api/types/**/*.md` under `build.overwrite`, exclude `api/types/**` from `build.content`, and do not use `api/**/*.md` under either section."
@@ -3517,41 +3633,113 @@ internal static class DocfxValidator
         return false;
     }
 
-    private static bool HasExampleForTarget(OverwriteSection section, ApiTargetInfo target)
+    private static ExampleQualityResult ValidateExampleQuality(
+        OverwriteSection section, ApiTargetInfo target, IReadOnlyList<string> relatedExtensionMethods)
     {
         // MappedToExample (front-matter example: *content or - *content) only requires
         // a bare csharp fence; the heading is added automatically by DocFX.
         // The summary: *content form (MappedToExample=false) still requires the explicit
         // heading to delimit the embedded example within conceptual content.
-        var hasFence = section.MappedToExample
-            ? HasCSharpFence(section.Body)
-            : HasExampleSectionWithCSharpFence(section.Body);
-
-        if (!hasFence)
+        var scope = section.MappedToExample ? section.Body : ExtractExampleSection(section.Body);
+        var codeBlocks = ExtractCSharpCodeBlocks(scope);
+        if (codeBlocks.Count == 0)
         {
-            return false;
+            return new ExampleQualityResult(false, "EXAMPLE_MISSING",
+                $"The overwrite section for `{target.DisplayName}` does not contain a C# fence in its mapped example content.", 50);
         }
 
-        if (target.Kind == ApiTargetKind.ExtensionMethod &&
-            !section.Body.Contains(target.DisplayName, StringComparison.Ordinal))
+        var combinedCode = string.Join(Environment.NewLine, codeBlocks);
+        if (Regex.IsMatch(section.Body,
+                @"(?i)\b(?:the documented type|the documented extension method|documented API at runtime|starting point for the extension surface)\b") ||
+            Regex.IsMatch(combinedCode,
+                @"(?i)\b(?:DocumentedTypeExample|DocumentedExtensionExample|Cuemon\.DocFxExamples)\b") ||
+            Regex.IsMatch(combinedCode,
+                @"(?is)\bclass\s+\w*(?:Documented|Example)\w*\b.*\b(?:string|Type)\s+Describe\s*\(\s*\)"))
         {
-            return false;
+            return new ExampleQualityResult(false, "EXAMPLE_PLACEHOLDER",
+                $"The example for `{target.DisplayName}` contains generic generated scaffolding instead of a consumer scenario. Replace placeholder prose and helper names with a focused example derived from tests, source, or package documentation.", 10);
         }
 
-        return true;
+        var codeWithoutCommentsOrStrings = StripCodeCommentsAndStrings(combinedCode);
+        var hasReflectionLookup = Regex.IsMatch(combinedCode, @"\b(?:Type|Assembly)\.GetType\s*\(") ||
+                                  Regex.IsMatch(combinedCode, @"\.Assembly\.GetType\s*\(");
+
+        if (target.Kind == ApiTargetKind.ExtensionMethod)
+        {
+            if (!HasMethodInvocation(codeWithoutCommentsOrStrings, target.DisplayName))
+            {
+                if (hasReflectionLookup)
+                {
+                    return new ExampleQualityResult(false, "EXAMPLE_REFLECTION_ONLY",
+                        $"The example for `{target.DisplayName}` substitutes reflection metadata lookup for an extension-method call. Show a real receiver and invoke the method in C#.", 20);
+                }
+
+                return new ExampleQualityResult(false, "EXTENSION_EXAMPLE_NOT_INVOKED",
+                    $"The C# example for extension method `{target.DisplayName}` never invokes that method. Mentions in prose, comments, strings, or metadata lookups do not satisfy the example requirement.", 30);
+            }
+
+            return ExampleQualityResult.Success;
+        }
+
+        var usesTargetType = Regex.IsMatch(codeWithoutCommentsOrStrings,
+            $@"\b{Regex.Escape(target.DisplayName)}\b");
+        var invokesRelatedExtension = relatedExtensionMethods.Any(method =>
+            HasMethodInvocation(codeWithoutCommentsOrStrings, method));
+        if (!usesTargetType && !invokesRelatedExtension)
+        {
+            if (hasReflectionLookup)
+            {
+                return new ExampleQualityResult(false, "EXAMPLE_REFLECTION_ONLY",
+                    $"The example for `{target.DisplayName}` substitutes reflection metadata lookup for real API use. Show a real input, construct or call the API, and make the result or next action visible.", 20);
+            }
+
+            return new ExampleQualityResult(false, "EXAMPLE_TARGET_NOT_USED",
+                $"The C# example mapped to `{target.Uid}` does not use `{target.DisplayName}`. Reference or exercise the documented type in code; mentions in prose, comments, strings, `typeof`, `nameof`, or reflection do not count.", 40);
+        }
+
+        var metadataOnly = Regex.Replace(codeWithoutCommentsOrStrings,
+            $@"\b(?:typeof|nameof)\s*\(\s*{Regex.Escape(target.DisplayName)}(?:<[^>]+>)?\s*\)", string.Empty);
+        if (!invokesRelatedExtension && !Regex.IsMatch(metadataOnly, $@"\b{Regex.Escape(target.DisplayName)}\b"))
+        {
+            return new ExampleQualityResult(false, "EXAMPLE_TARGET_NOT_USED",
+                $"The C# example for `{target.DisplayName}` only names the type as metadata. Construct it, call it, configure it, or otherwise demonstrate a consumer-visible operation.", 40);
+        }
+
+        return ExampleQualityResult.Success;
     }
 
-    private static bool HasCSharpFence(string body)
+    private static string StripCodeCommentsAndStrings(string code)
     {
-        return Regex.IsMatch(body, @"(?im)^```\s*(csharp|cs)\s*$");
+        var lines = code.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
+        return string.Join("\n", StripCommentsAndStrings(lines));
     }
 
-    private static bool HasExampleSectionWithCSharpFence(string body)
+    private static bool HasMethodInvocation(string code, string methodName)
+    {
+        return Regex.IsMatch(code,
+            $@"(?:\.|\b){Regex.Escape(methodName)}(?:\s*<[^>\r\n]+>)?\s*\(");
+    }
+
+    private static List<string> ExtractCSharpCodeBlocks(string body)
+    {
+        if (string.IsNullOrEmpty(body))
+        {
+            return new List<string>();
+        }
+
+        var normalized = body.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        return Regex.Matches(normalized,
+                @"(?ms)^```\s*(?:csharp|cs)\s*$\n(?<code>.*?)^```\s*$")
+            .Select(match => match.Groups["code"].Value)
+            .ToList();
+    }
+
+    private static string ExtractExampleSection(string body)
     {
         var match = Regex.Match(body, @"(?im)^#{2,5}\s+Examples?\s*$");
         if (!match.Success)
         {
-            return false;
+            return string.Empty;
         }
 
         var section = body[match.Index..];
@@ -3561,7 +3749,7 @@ internal static class DocfxValidator
             section = section[..(match.Length + nextHeading.Index)];
         }
 
-        return Regex.IsMatch(section, @"(?im)^```\s*(csharp|cs)\s*$");
+        return section;
     }
 
     // ----------------------------------------------------------------------
@@ -4935,8 +5123,8 @@ internal static class DocfxValidator
             e.Code.StartsWith("ENCODING_", StringComparison.Ordinal)));
         AppendDiagnostics(sb, "Namespace And Extension Table Repairs", report.Errors.Where(e =>
             e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) ||
-            e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal)));
-        AppendRequiredExampleDiagnostics(sb, report.Errors.Where(e => e.Code is "EXAMPLE_MISSING"), report.PackageIds);
+            e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) && !IsExampleQualityDiagnostic(e)));
+        AppendRequiredExampleDiagnostics(sb, report.Errors.Where(IsExampleQualityDiagnostic), report.PackageIds);
         AppendGitHubExampleSources(sb, report.PackageIds, report.ExampleSearchSnippets);
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
             e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_STRUCTURE_INVALID"));
@@ -4945,7 +5133,7 @@ internal static class DocfxValidator
             !e.Code.StartsWith("ENCODING_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
-            e.Code is not "EXAMPLE_MISSING" &&
+            !IsExampleQualityDiagnostic(e) &&
             e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_STRUCTURE_INVALID"));
         AppendDiagnostics(sb, "Warnings", report.Warnings);
 
@@ -4955,7 +5143,7 @@ internal static class DocfxValidator
         sb.AppendLine("- [ ] `ENCODING_CORRUPTION` files restored from git or rewritten using byte-level operations.");
         sb.AppendLine("- [ ] Every namespace and extension diagnostic above has been resolved; zero remain in the final report.");
         sb.AppendLine("- [ ] GitHub example sources consulted before writing any new example (see 'GitHub Example Sources' section).");
-        sb.AppendLine("- [ ] Every `EXAMPLE_MISSING` diagnostic above maps to a concrete example location.");
+        sb.AppendLine("- [ ] Every missing, duplicate, placeholder, reflection-only, target-use, and extension-invocation example diagnostic above has been resolved.");
         sb.AppendLine("- [ ] Changed C# examples pass structural validation (namespace + type declaration, or labelled `// Program.cs`).");
         sb.AppendLine("- [ ] Changed C# examples compile as a class library project referencing the documented assemblies.");
         sb.AppendLine("- [ ] Authored Markdown files still exist after generated-artifact cleanup.");
@@ -5070,13 +5258,27 @@ internal static class DocfxValidator
             var ns = EscapeTable(diagnostic.Namespace ?? "(repository)");
             var path = EscapeTable(string.IsNullOrWhiteSpace(diagnostic.Path) ? "(method UID, declaring type UID, or namespace page)" : diagnostic.Path);
             var message = EscapeTable(diagnostic.Message);
-            var action = diagnostic.Message.Contains("Public non-abstraction type", StringComparison.Ordinal)
-                ? "Search GitHub (see below), verify public API surface, create or update the type-targeting overwrite file under `api/types/`, keep `api/types/**/*.md` under `build.overwrite` only, add a compiling Examples section, then rerun validation."
-                : "Search GitHub (see below), verify public API surface, add a compiling Examples section on the declaring extension class or namespace page that explicitly calls the extension method, then rerun validation.";
-            sb.AppendLine($"| {ns} | `{path}` | `EXAMPLE_MISSING` | {EscapeTable(action)} {message} |");
+            var action = diagnostic.Code switch
+            {
+                "EXAMPLE_UID_DUPLICATE" => "Merge the duplicate mappings into one coherent example section for the UID, then rerun validation.",
+                "EXAMPLE_PLACEHOLDER" or "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" =>
+                    "Inspect exact test, package README, sample, XML-comment, or source evidence; replace the scaffold with a consumer task that uses the target in C# and exposes a result or next action.",
+                "EXTENSION_EXAMPLE_NOT_INVOKED" =>
+                    "Replace prose-only or metadata-only coverage with a C# scenario that invokes the extension method on a valid receiver.",
+                _ when diagnostic.Message.Contains("Public non-abstraction type", StringComparison.Ordinal) =>
+                    "Search GitHub (see below), verify public API surface, create or update the type-targeting overwrite file under `api/types/`, keep `api/types/**/*.md` under `build.overwrite` only, add a compiling Examples section, then rerun validation.",
+                _ => "Search GitHub (see below), verify public API surface, add a compiling Examples section on the declaring extension class or namespace page that explicitly calls the extension method, then rerun validation."
+            };
+            sb.AppendLine($"| {ns} | `{path}` | `{diagnostic.Code}` | {EscapeTable(action)} {message} |");
         }
 
         sb.AppendLine();
+    }
+
+    private static bool IsExampleQualityDiagnostic(Diagnostic diagnostic)
+    {
+        return diagnostic.Code is "EXAMPLE_MISSING" or "EXAMPLE_UID_DUPLICATE" or "EXAMPLE_PLACEHOLDER" or
+            "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or "EXTENSION_EXAMPLE_NOT_INVOKED";
     }
 
     private static string EscapeTable(string value)
@@ -5454,6 +5656,11 @@ internal static class DocfxValidator
     private sealed record SampleFence(string File, int FenceIndex, int StartLine, string Code);
 
     private sealed record OverwriteSection(string File, string Uid, string Body, bool MappedToExample = false);
+
+    private sealed record ExampleQualityResult(bool Valid, string? Code, string? Message, int Priority)
+    {
+        public static ExampleQualityResult Success { get; } = new(true, null, null, int.MaxValue);
+    }
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
 
