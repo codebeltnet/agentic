@@ -30,6 +30,7 @@ internal static class DocfxValidator
     private static readonly string[] IgnoredDirectorySegments = ["bin", "obj", "_site", ".git", ".vs", ".vscode", ".idea", "node_modules"];
     private static TimeSpan _processTimeout = TimeSpan.FromMinutes(DefaultProcessTimeoutMinutes);
     private static readonly TimeSpan ProcessStreamDrainTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ProcessHeartbeatInterval = TimeSpan.FromSeconds(10);
 
     // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
     // each external process is tagged with the permission that authorizes it, and the set of
@@ -1155,7 +1156,8 @@ internal static class DocfxValidator
                 ? null
                 : new Dictionary<string, string> { ["SkipSignAssembly"] = "true" };
             var result = RunProcess(docfxExecutable, $"\"{tempDocfxPath}\"", tempRoot, environment,
-                ProcessPermission.DocfxBuild, cancellationToken);
+                ProcessPermission.DocfxBuild, cancellationToken,
+                new ProcessProgress("DocFX build", "isolated temp workspace"));
             if (result.ExitCode != 0)
             {
                 return new DocfxVerificationResult(false,
@@ -1392,7 +1394,9 @@ internal static class DocfxValidator
 
             var result = RunProcess("dotnet",
                 $"build \"{tempSolution}\" -c {configuration} --nologo -m:{parallelism}{signingProperty}", repoRoot,
-                permission: ProcessPermission.BuildApiModel);
+                permission: ProcessPermission.BuildApiModel,
+                progress: new ProcessProgress("API build",
+                    $"{libraryProjects.Count} project(s), {parallelism} runner(s)"));
             if (result.ExitCode != 0)
             {
                 return (false, result.StdOut + result.StdErr);
@@ -3919,7 +3923,9 @@ internal static class DocfxValidator
         var signingProperty = hasStrongNameKey ? string.Empty : " -p:SkipSignAssembly=true";
         return RunProcess("dotnet",
             $"build \"{solutionPath}\" -c {configuration} --nologo -m:{parallelism}{signingProperty}",
-            tempRoot, permission: ProcessPermission.SampleCompile);
+            tempRoot, permission: ProcessPermission.SampleCompile,
+            progress: new ProcessProgress("sample compilation",
+                $"{workers.Count} sample project(s), {parallelism} runner(s)"));
     }
 
     private static string ExtractSampleDiagnostics(ProcessResult result, SampleWorker worker)
@@ -4503,7 +4509,8 @@ internal static class DocfxValidator
     private static ProcessResult RunProcess(string fileName, string arguments, string workingDirectory,
         IReadOnlyDictionary<string, string>? environment = null,
         ProcessPermission permission = ProcessPermission.NoBuild,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ProcessProgress? progress = null)
     {
         // Process guard: count every external process and refuse to launch build/doc/network
         // tooling unless the active options explicitly authorize the corresponding permission.
@@ -4549,8 +4556,22 @@ internal static class DocfxValidator
                 return new ProcessResult(-1, string.Empty, $"Failed to start process '{fileName}'.");
             }
 
-            var stdoutTask = Task.Run(() => process.StandardOutput.ReadToEnd());
-            var stderrTask = Task.Run(() => process.StandardError.ReadToEnd());
+            var stopwatch = Stopwatch.StartNew();
+            var progressState = new ProcessProgressState();
+            var stdout = new StringBuilder();
+            var stderr = new StringBuilder();
+            var stdoutTask = PumpProcessOutputAsync(process.StandardOutput, stdout, progressState);
+            var stderrTask = PumpProcessOutputAsync(process.StandardError, stderr, progressState);
+            using var heartbeatCancellation = new CancellationTokenSource();
+            var heartbeatTask = progress is null
+                ? Task.CompletedTask
+                : ReportProcessProgressAsync(process, progress, stopwatch, progressState, heartbeatCancellation.Token);
+
+            if (progress is not null)
+            {
+                WriteProcessProgress("pending", progress, process.Id, stopwatch.Elapsed, TimeSpan.Zero, null);
+            }
+
             using var timeout = new CancellationTokenSource(_processTimeout);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
             try
@@ -4562,22 +4583,120 @@ internal static class DocfxValidator
                 TryKillProcess(process);
                 process.WaitForExit(ProcessStreamDrainTimeout);
                 Task.WaitAll([stdoutTask, stderrTask], ProcessStreamDrainTimeout);
-                var stdout = stdoutTask.IsCompletedSuccessfully ? stdoutTask.Result : string.Empty;
-                var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : string.Empty;
                 var reason = cancellationToken.IsCancellationRequested
                     ? "was cancelled"
                     : $"timed out after {_processTimeout.TotalMinutes:0.##} minutes";
+
+                if (progress is not null)
+                {
+                    WriteProcessProgress("failed", progress, process.Id, stopwatch.Elapsed,
+                        progressState.TimeSinceLastOutput, reason);
+                }
+
+                var stdoutText = stdoutTask.IsCompletedSuccessfully ? stdout.ToString() : string.Empty;
+                var stderrText = stderrTask.IsCompletedSuccessfully ? stderr.ToString() : string.Empty;
                 return new ProcessResult(cancellationToken.IsCancellationRequested ? -2 : -1,
-                    stdout, stderr + $"\nProcess '{fileName}' {reason}.");
+                    stdoutText, stderrText + $"\nProcess '{fileName}' {reason}.");
+            }
+            finally
+            {
+                heartbeatCancellation.Cancel();
+                try
+                {
+                    heartbeatTask.GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected when the process completes between heartbeat intervals.
+                }
             }
 
             Task.WaitAll([stdoutTask, stderrTask]);
-            return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result);
+            if (progress is not null)
+            {
+                WriteProcessProgress(process.ExitCode == 0 ? "completed" : "failed", progress, process.Id,
+                    stopwatch.Elapsed, progressState.TimeSinceLastOutput,
+                    process.ExitCode == 0 ? null : $"exit {process.ExitCode}");
+            }
+
+            return new ProcessResult(process.ExitCode, stdout.ToString(), stderr.ToString());
         }
         catch (Exception ex)
         {
             return new ProcessResult(-1, string.Empty, $"Failed to run '{fileName} {arguments}': {ex.Message}");
         }
+    }
+
+    private static async Task PumpProcessOutputAsync(
+        StreamReader reader, StringBuilder output, ProcessProgressState progressState)
+    {
+        while (await reader.ReadLineAsync() is { } line)
+        {
+            output.AppendLine(line);
+            progressState.Record(line);
+        }
+    }
+
+    private static async Task ReportProcessProgressAsync(
+        Process process,
+        ProcessProgress progress,
+        Stopwatch stopwatch,
+        ProcessProgressState progressState,
+        CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            await Task.Delay(ProcessHeartbeatInterval, cancellationToken);
+            var snapshot = progressState.Snapshot();
+            WriteProcessProgress("working", progress, process.Id, stopwatch.Elapsed,
+                snapshot.TimeSinceLastOutput, snapshot.LastOutputLine);
+        }
+    }
+
+    private static void WriteProcessProgress(
+        string state,
+        ProcessProgress progress,
+        int processId,
+        TimeSpan elapsed,
+        TimeSpan timeSinceLastOutput,
+        string? status)
+    {
+        var marker = state switch
+        {
+            "completed" => ColorizeProgressMarker("[\u2713]", "32"),
+            "failed" => ColorizeProgressMarker("[x]", "31"),
+            "working" => ColorizeProgressMarker("[ ]", "33"),
+            _ => "[ ]"
+        };
+        var idle = state == "pending"
+            ? string.Empty
+            : $" | last output {FormatElapsed(timeSinceLastOutput)} ago";
+        var current = string.IsNullOrWhiteSpace(status)
+            ? string.Empty
+            : $" | current: {SanitizeProgressText(status)}";
+
+        Console.Error.WriteLine(
+            $"  {marker} {progress.Phase} | {progress.Detail} | pid {processId} | elapsed {FormatElapsed(elapsed)}{idle}{current}");
+    }
+
+    private static string ColorizeProgressMarker(string marker, string ansiColor)
+    {
+        return Console.IsErrorRedirected ? marker : $"\u001b[{ansiColor}m{marker}\u001b[0m";
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        return elapsed.TotalHours >= 1
+            ? elapsed.ToString(@"hh\:mm\:ss", System.Globalization.CultureInfo.InvariantCulture)
+            : elapsed.ToString(@"mm\:ss", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static string SanitizeProgressText(string text)
+    {
+        var withoutAnsi = Regex.Replace(text, @"\x1B\[[0-?]*[ -/]*[@-~]", string.Empty);
+        var sanitized = Regex.Replace(withoutAnsi.Trim(), @"\s+", " ");
+        const int maxLength = 180;
+        return sanitized.Length <= maxLength ? sanitized : sanitized[..maxLength] + "...";
     }
 
     private static void TryKillProcess(Process process)
@@ -5337,6 +5456,39 @@ internal static class DocfxValidator
     private sealed record OverwriteSection(string File, string Uid, string Body, bool MappedToExample = false);
 
     private sealed record ProcessResult(int ExitCode, string StdOut, string StdErr);
+
+    private sealed record ProcessProgress(string Phase, string Detail);
+
+    private sealed class ProcessProgressState
+    {
+        private readonly object _lock = new();
+        private long _lastOutputTimestamp = Stopwatch.GetTimestamp();
+        private string? _lastOutputLine;
+
+        public TimeSpan TimeSinceLastOutput => Stopwatch.GetElapsedTime(Volatile.Read(ref _lastOutputTimestamp));
+
+        public void Record(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                return;
+            }
+
+            lock (_lock)
+            {
+                _lastOutputLine = line;
+                Volatile.Write(ref _lastOutputTimestamp, Stopwatch.GetTimestamp());
+            }
+        }
+
+        public (TimeSpan TimeSinceLastOutput, string? LastOutputLine) Snapshot()
+        {
+            lock (_lock)
+            {
+                return (Stopwatch.GetElapsedTime(_lastOutputTimestamp), _lastOutputLine);
+            }
+        }
+    }
 
     private sealed record DocfxVerificationResult(
         bool Success, string? Error, TimeSpan Elapsed, bool Cancelled = false);
