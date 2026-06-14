@@ -705,6 +705,34 @@
         "Uses a green check marker for interactive success while keeping redirected output readable without requiring ANSI color support",
         "Does not use terminal cursor rewriting or an in-place table that becomes unreadable in CI logs"
       ]
+    },
+    {
+      "id": 57,
+      "prompt": "Audit a prior dotnet-docfx-digest run that created hundreds of compile-valid overwrite files. Nearly every type example calls `Type.GetType(\"Namespace.Type, Assembly\")` from a class named `DocumentedTypeExample`; extension files use `DocumentedExtensionExample.Describe()`, mention the method only in prose or string literals, and repeat the same UID in multiple `example: *content` sections. The namespace pages mostly say that the namespace contains types or extension methods. Repair the skill-driven output rather than accepting it because it compiles.",
+      "expected_output": "The agent identifies the output as metadata scaffolding rather than API documentation, inventories and preserves the existing work, and uses validator diagnostics to replace it systematically. Reflection-only examples produce EXAMPLE_REFLECTION_ONLY, generic generated scaffolds produce EXAMPLE_PLACEHOLDER, repeated mappings produce EXAMPLE_UID_DUPLICATE, type examples that never use the target produce EXAMPLE_TARGET_NOT_USED, and extension examples that never invoke the method in C# produce EXTENSION_EXAMPLE_NOT_INVOKED. Inventory-only namespace prose produces the namespace prose/usage/start-here diagnostics. The agent derives replacement scenarios from exact tests, package READMEs, samples, XML comments, or source paths, records that evidence and consumer task in the inventory, reruns validation in batches, and does not claim completion while any quality diagnostic remains.",
+      "expectations": [
+        "Does not accept compilation as proof that reflection or metadata lookup is a useful API example",
+        "Rejects Type.GetType, assembly metadata lookup, DocumentedTypeExample, DocumentedExtensionExample, and generic Describe helpers as final examples",
+        "Requires the documented type to be used inside the C# fence and the documented extension method to be invoked inside the C# fence",
+        "Rejects repeated example mappings for the same UID instead of preserving duplicate generated sections",
+        "Treats inventory-only namespace blurbs as unfinished and adds problem/outcome, when-to-use, and start-here guidance",
+        "Records exact source evidence paths and a consumer task for each repair batch",
+        "Reruns the validator until EXAMPLE_REFLECTION_ONLY, EXAMPLE_PLACEHOLDER, EXAMPLE_UID_DUPLICATE, EXAMPLE_TARGET_NOT_USED, EXTENSION_EXAMPLE_NOT_INVOKED, and namespace quality diagnostics are gone"
+      ]
+    },
+    {
+      "id": 58,
+      "prompt": "Document a namespace `Acme.Text` with `TextOptions` and `Normalize(this string value)`. Tests show normalization before identifier comparison, and the package README configures `TextOptions` for imported records. Write the namespace overview and examples with dotnet-docfx-digest.",
+      "expected_output": "The namespace overview leads with the text-ingress problem and stable comparison/storage outcome, explains when to use the namespace, and directs newcomers to TextOptions for import policy and Normalize for boundary cleanup. The inventory cites the exact test and package README paths and names the consumer task. The TextOptions type example configures options as part of an import workflow and shows the next action or result. The extension example invokes Normalize in C# on a realistic receiver before comparison or storage. No reflection, metadata-only lookup, generic Consumer/MyNamespace shell, duplicate UID section, invented member, or prose-only method mention appears. Fast semantic validation and build-backed sample verification both pass before completion.",
+      "expectations": [
+        "Writes namespace prose around a developer problem and outcome rather than listing contained types",
+        "Explains when to use Acme.Text and names TextOptions and Normalize as distinct starting points",
+        "Cites exact test and package README evidence paths in the example inventory",
+        "Shows TextOptions in a coherent import configuration workflow with a visible next action or result",
+        "Invokes Normalize inside the C# fence on a realistic string receiver",
+        "Avoids reflection, metadata-only examples, generic wrappers, duplicate UID mappings, and invented API members",
+        "Runs semantic validation and sample compilation before claiming completion"
+      ]
     }
   ]
 }

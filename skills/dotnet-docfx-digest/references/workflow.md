@@ -12,7 +12,7 @@ Build a small example inventory from validator output and source evidence before
 | Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | Package README, ApplicationHostFactoryTest | Host a test server and create a client | Missing |
 ```
 
-Do not mark an item complete until the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles under `docfx.cs --validate-samples` (or has a justified skip marker), and `docfx.cs --json` no longer reports the relevant missing-example diagnostic.
+Do not mark an item complete until the evidence cell names concrete repository paths, the scenario states a consumer task, the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles under `docfx.cs --validate-samples` (or has a justified skip marker), and `docfx.cs --json` no longer reports any missing, placeholder, reflection-only, target-use, invocation, or duplicate-UID diagnostic.
 
 ## Scenario example design
 
@@ -25,6 +25,8 @@ Before writing a type or extension-method example, choose the smallest real task
 5. Pick a scenario that connects the documented type to the package workflow. A good sample can include multiple related public types, a small local helper type, dependency-injection setup, host setup, options configuration, file/path setup, or result inspection when that is what a real caller would do.
 6. Remove test-only structure, raw assertions, mocks, fixture base classes, and unused locals. Keep meaningful setup and result inspection.
 7. Prefer domain-specific names such as `BenchmarkRunner`, `WorkspaceUsage`, or `HttpRetryExample` over `Consumer` and `MyNamespace` when the package domain is clear.
+8. Reject metadata-only substitutes before writing: `Type.GetType`, assembly lookup, `typeof`/`nameof` as the only operation, generic `Describe()` helpers, and repeated UID sections do not demonstrate a consumer task.
+9. Confirm the C# fence itself uses the documented type or invokes the documented extension method. Mentions outside the fence do not count.
 
 A scenario example is still concise. It should show one coherent task, not a tour of every member. If a compile-valid scenario cannot be produced from evidence, omit the example with the documented omission comment rather than inventing a plausible workflow.
 
@@ -41,7 +43,7 @@ Use this path when the user names a changed API or namespace.
 7. Run `docfx.cs --json --repair-plan /tmp/docfx-repair-plan.md --search-examples` and read the repair plan. The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs; use those results as evidence before writing examples.
 8. Convert test usage into consumer-oriented examples when relevant.
 9. Update XML documentation comments where purpose-first summaries are needed.
-10. Update or create namespace overview pages with conceptual orientation and start-here cues.
+10. Update or create namespace overview pages whose opening names the developer problem and outcome, followed by concrete when-to-use and start-here guidance.
 11. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
 12. Update `Extension Members` tables when public extension methods are involved. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column — the validator now rejects corrupted or missing emoji with `EXTENSION_TABLE_ENCODING`.
 13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods.
@@ -69,7 +71,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 8. Check for `ENCODING_CORRUPTION` or `EXTENSION_TABLE_ENCODING` diagnostics first; restore affected files from git before doing any further editing.
 9. Determine every namespace containing public API and whether each namespace exposes public extension methods.
 10. Determine every public non-abstraction type and every public extension method that requires an example.
-11. Create or update missing namespace overview pages with purpose-first fly-ins and start-here guidance.
+11. Create or update missing namespace overview pages with a problem/outcome opening, concrete when-to-use guidance, and a named starting API. Inventory-only prose is unfinished.
 12. Audit related namespace pages together so fixes are consistent across the public API family.
 13. Add or repair `Extension Members` tables for namespaces with public extension methods. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column.
 14. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
@@ -128,19 +130,18 @@ uid: X.Y.Z.MyType
 example:
 - *content
 ---
-The following example shows how to use `MyType` as part of a real consuming workflow.
+The following schematic shows the overwrite shape only. Replace it with a source-backed consumer task; do not copy the generic names into product documentation.
 
 ```csharp
 using X.Y.Z;
 
 namespace MyProject.Workflows;
 
-public class WidgetWorkflow
+public class WidgetFactory
 {
-    public void Run()
+    public MyType Create()
     {
-        var value = new MyType();
-        Console.WriteLine(value);
+        return new MyType();
     }
 }
 ```
@@ -158,20 +159,18 @@ uid: X.Y.Z.MyExtensions
 example:
 - *content
 ---
-The following example shows how to call `NormalizeLineEndings` on a string.
+The following example normalizes text before persisting it, making the operation and its next step visible.
 
 ```csharp
 using X.Y.Z;
 
-namespace MyNamespace;
+namespace TextImport;
 
-public class Consumer
+public class ImportedNote
 {
-    public void Run()
+    public string PrepareForStorage(string text)
     {
-        string text = "first\r\nsecond";
-        string normalized = text.NormalizeLineEndings();
-        Console.WriteLine(normalized);
+        return text.NormalizeLineEndings();
     }
 }
 ```
@@ -205,10 +204,13 @@ Before completing documentation work, verify:
 - [ ] Public non-abstraction types have at least one type-page example.
 - [ ] Public extension methods have at least one explicit example, not only a table entry.
 - [ ] Package IDs and package-level usage evidence were inspected before type/member-only sample synthesis.
+- [ ] Every inventory row names exact evidence paths and a consumer task; generated metadata and the target overwrite file are not the sole evidence.
 - [ ] The example inventory maps each required public type and extension method to its example file, UID, source evidence, and chosen scenario.
 - [ ] Examples show a coherent consumer workflow, use related public types when helpful, and avoid placeholder-only `Consumer`/`MyNamespace` shells when a domain name is available.
+- [ ] No example is reflection-only, metadata-only, duplicated by UID, or built from `DocumentedTypeExample`, `DocumentedExtensionExample`, or generic `Describe()` scaffolding.
+- [ ] The C# fence itself uses the documented type or invokes the documented extension method; prose, comments, and strings are not counted as usage.
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`. Namespace pages are under `api/namespaces/` and type pages are under `api/types/`.
-- [ ] The Completion Repair Loop was run after edits, and the final report has zero `EXAMPLE_MISSING`, namespace, extension, availability, overwrite-layout, sample, and DocFX-build diagnostics.
+- [ ] The Completion Repair Loop was run after edits, and the final report has zero missing/low-quality example, namespace-prose, extension, availability, overwrite-layout, sample, and DocFX-build diagnostics.
 - [ ] Examples are realistic, copy/paste-ready, and compile unless a justified skip marker is present.
 - [ ] Generated C# examples include a file-scoped namespace and a type declaration (class, struct, or record), or are explicitly labelled `// Program.cs`.
 - [ ] No generated C# example uses top-level statements without a `// Program.cs` label.

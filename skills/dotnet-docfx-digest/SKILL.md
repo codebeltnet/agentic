@@ -41,6 +41,8 @@ The repair plan includes a "GitHub Example Sources" section with pre-computed `g
 - `EXTENSION_TABLE_ENCODING` means the ⬇️ emoji (U+2B07) is missing or corrupted in an Extension Members table data row. Use the literal `⬇️` character, not HTML entities or text substitutes.
 - If either script cannot run, report the exact command, exit code, and failure output. Do not claim repository guidance or documentation was verified unless the scripts actually ran successfully.
 - Treat validator errors as the repo-wide repair queue, not as evidence that the repository is "blocked." A diagnostic being old, pre-existing, numerous, or outside the first files edited does not remove it from scope. A run with 1,228 `EXAMPLE_MISSING` findings means 1,228 documentation items remain; repairing one type page is a partial result, not a digest.
+- Passing compilation is necessary but not sufficient. `EXAMPLE_PLACEHOLDER`, `EXAMPLE_REFLECTION_ONLY`, `EXAMPLE_TARGET_NOT_USED`, `EXTENSION_EXAMPLE_NOT_INVOKED`, and `EXAMPLE_UID_DUPLICATE` are blocking quality failures. Never satisfy the inventory with `Type.GetType`, assembly metadata inspection, `DocumentedTypeExample`, `DocumentedExtensionExample`, generic `Describe()` helpers, repeated UID sections, or prose that merely names the target.
+- Namespace prose must be decision-useful. `NAMESPACE_PROSE_INVENTORY_ONLY`, `NAMESPACE_USAGE_GUIDANCE_MISSING`, and `NAMESPACE_START_HERE_MISSING` mean the page still needs a problem/outcome opening, concrete "when to use" guidance, and a named starting API when the namespace has multiple entry points.
 - Use the JSON completion contract as the final authority: completion requires `summary.canClaimCompletion` to be `true`, `summary.remainingWorkItems` to be `0`, `summary.remainingGates` and `summary.remainingDiagnosticsByCode` to be empty, and the build-backed command to succeed. A clean fast run reports `completionState: verification-required`; it is an iteration checkpoint, not completion. Never describe `status: failed`, `completionState: incomplete`, or `completionState: verification-required` as completed work.
 - Continue documentation repair when `dotnet test` fails for an unrelated environmental dependency such as an unavailable database. Report that test failure separately. It is a blocker only if it prevents the documentation validator, source inspection, or required sample compilation from running.
 - Valid BOM-less UTF-8 is compliant. The validator must not emit `ENCODING_BOM_MISSING` (that diagnostic is intentionally unsupported), and an audit must not add/remove BOMs or normalize line endings solely for consistency. BOM presence has no documentation value; preserve the file's existing state and continue detecting actual `ENCODING_CORRUPTION` and `EXTENSION_TABLE_ENCODING` damage.
@@ -56,7 +58,7 @@ The repair plan includes a "GitHub Example Sources" section with pre-computed `g
 Do not stop at namespace pages, extension-member tables, or a first-pass documentation edit.
 
 1. Run `docfx.cs --json` (fast, no-build) after edits and read the remaining diagnostics.
-2. If diagnostics include `EXAMPLE_MISSING`, missing namespace pages, stale extension-member tables, missing availability, or overwrite inclusion problems, treat them as blocking follow-up work.
+2. Treat every missing, placeholder, reflection-only, target-use, extension-invocation, duplicate-UID, namespace-prose, extension-table, availability, and overwrite-layout diagnostic as blocking follow-up work.
 3. For each missing public concrete-type example, create or update a type-targeting overwrite file under `.docfx/api/types/`.
 4. For each missing extension-method example, document it on the declaring extension class page or the namespace page, and explicitly demonstrate the method call.
 5. Rerun the fast validator until the required diagnostics are gone, then run the build-backed completion verification (`docfx.cs --build-api-model --validate-samples --verify-docfx-build`) to surface `SAMPLE_COMPILE_FAILED` and reflection-precise API gaps; resolve those too and rerun until the JSON completion contract is clean.
@@ -156,6 +158,8 @@ Prefer scenario examples over isolated constructor or method-call snippets. A st
 
 Before writing examples for a package, identify the package ID or IDs from packable project metadata, `.nuget/*/README.md`, package release notes, `Directory.Packages.props`, or `PackageReference` usage. Search local repository evidence by package ID first, then by namespace/type/member name. When internet or GitHub search is available and the user has not forbidden it, search for the exact package ID and exclude the target repository or treat self-repo hits as lower-priority evidence. Package-ID searches often find real `Program.cs`, `PackageReference`, README, and package-documentation usage that type-name searches miss.
 
+For each repair batch, maintain an evidence ledger in the example inventory: record the exact test, package README, sample, XML comment, or source path inspected and the consumer task derived from it. Do not mark a scenario ready when its evidence cell contains only a type name, generated metadata, or the overwrite file being repaired.
+
 **Tests are evidence, not output.** Do not add `ShowUsage`, `Usage`, `Example`, or documentation-only methods to test files. Use tests to understand the documented type's behavior, then transform that knowledge into consumer-facing DocFX overwrite examples.
 
 Every generated `csharp` code block is a complete, copy/paste-ready compilation unit. The default is always a compilable unit (option 1). Only use intentionally incomplete excerpts (option 2) when explicitly requested by the user, and label them clearly.
@@ -169,6 +173,9 @@ Every generated `csharp` code block is a complete, copy/paste-ready compilation 
 - Does **not** invent placeholder services, interfaces, classes, methods, or overloads that are not defined inside the same code block.
 - Does **not** derive from an abstract or generic base type without supplying the correct concrete type arguments.
 - Does **not** call members that do not exist on the resolved public API surface.
+- Uses the documented type or invokes the documented extension method inside the C# fence. A target name in prose, comments, or string literals does not count.
+- Shows a consumer-visible operation, result, configuration, or next action. Reflection-only discovery and metadata inspection do not count as usage.
+- Contains one coherent example mapping per UID. Merge related calls into one scenario instead of repeating `example: *content` sections for the same UID.
 - Compiles in a minimal class library verification project referencing the documented assemblies.
 
 Prefer examples derived from existing unit, functional, or integration tests as behavioral evidence, then from package-level usage evidence, samples, README content, and real consumer usage, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw test assertions, mocks, or fixture setup.
@@ -221,6 +228,8 @@ Derive examples from these sources, in order:
 
 Final examples must be consumer-facing, realistic, and compile. They must read like production calling code or Microsoft Learn-style task examples, not test scaffolding, placeholder `Consumer` shells, or one-line smoke tests. Avoid unused locals, `MyNamespace` when a domain-specific namespace is obvious, fake "sample" values that obscure the workflow, and examples that instantiate the documented type without showing the result or next step a real caller cares about.
 
+Compilation-valid metadata scaffolds are still failures. Never generate a family of examples that differs only by UID while calling `Type.GetType`, returning `Type.FullName`, or wrapping the lookup in `DocumentedTypeExample`, `DocumentedExtensionExample`, or `Describe()`. These patterns conceal missing product knowledge instead of teaching the API.
+
 **Reflection and API-shape requirements:**
 
 Resolve constructors, generic arity, abstractness, constraints, and public members before writing examples:
@@ -242,6 +251,8 @@ The reason is mandatory. Package requirements, "full example needs X", "shows th
 ## Namespace and Summary Style
 
 Namespace overview pages must explain what problem the namespace solves, when to use it, and where a newcomer should start. Avoid inventory-only blurbs such as “contains types and extension methods for...”
+
+The opening paragraph should name the developer problem and outcome. The next paragraph should identify a concrete starting type or method and distinguish nearby alternatives. Do not use a type inventory as a substitute for this guidance; tables and generated API lists already provide inventory.
 
 Type and member summaries should explain the API’s job in consumer terms. Prefer purpose-first summaries for entry points, builders, factories, options, and extension methods. Avoid empty labels such as “represents options” or “adds services” unless the rest of the sentence explains the actual outcome enabled.
 
