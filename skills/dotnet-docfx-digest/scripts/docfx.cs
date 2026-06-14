@@ -78,6 +78,12 @@ internal static class DocfxValidator
 
         try
         {
+            if (options.WriteOverwriteRequestPath is not null)
+            {
+                ConfigureProcessGuard(options);
+                return WriteOverwriteCommand(options);
+            }
+
             return Validate(options);
         }
         catch (Exception ex)
@@ -183,7 +189,7 @@ internal static class DocfxValidator
 
         // 4. Discover DocFX metadata projects from the active docfx.json (no build required).
         phaseTimer.Restart();
-        var projects = DiscoverProjects(docfxPath, docfxWorkspace, report);
+        var projects = DiscoverProjects(docfxPath, docfxWorkspace, report, out var metadataGroups);
         WritePhase(options, report, "project discovery", phaseTimer.Elapsed);
         if (projects.Count == 0)
         {
@@ -240,6 +246,7 @@ internal static class DocfxValidator
         //    --build-api-model opts into reflection-backed discovery from compiled assemblies.
         phaseTimer.Restart();
         ApiModel api;
+        ApiModelSource apiModelSource;
         if (mode == ValidationMode.BuildBackedApiModel)
         {
             var (buildOk, buildOutput) = BuildDocfxProjects(libraryProjects, repoRoot, options.Configuration,
@@ -265,6 +272,7 @@ internal static class DocfxValidator
             }
 
             report.Summary.ApiModelSource = "build-backed";
+            apiModelSource = ApiModelSource.BuildBacked;
             WritePhase(options, report, "api model", phaseTimer.Elapsed, "build-backed");
 
             if (api.Namespaces.Count == 0)
@@ -278,6 +286,7 @@ internal static class DocfxValidator
         else
         {
             api = BuildNoBuildApiModel(workspace, report, out var apiSource);
+            apiModelSource = apiSource;
             report.Summary.ApiModelSource = apiSource == ApiModelSource.DocfxYaml ? "docfx-yaml" : "source-scan";
             WritePhase(options, report, "api model", phaseTimer.Elapsed, report.Summary.ApiModelSource);
 
@@ -306,10 +315,47 @@ internal static class DocfxValidator
 
         var allOverwriteSections = workspace.OverwriteSections;
 
+        // 6b. Project-scoped discovery: git state, packets, family exemptions, symbol ownership,
+        //     and scope selection (full / explicit hints / seeded dry-run) before validation so the
+        //     namespace and required-example checks can be scoped to the selected packets.
+        phaseTimer.Restart();
+        EnsureNamespaceProjectMap(workspace);
+        var gitState = GetGitState(repoRoot);
+        var resumeScope = options.ResumeProjectManifestPath is null
+            ? null
+            : LoadResumeProjectManifest(options.ResumeProjectManifestPath, repoRoot, report);
+        var packets = BuildProjectPackets(workspace, api, gitState, metadataGroups, repoRoot, docfxWorkspace,
+            resumeScope?.InitialDirtyPaths);
+        var families = LoadAndValidateFamilyExemptions(repoRoot, docfxWorkspace, api, workspace, namespacePageIndex, report);
+        ApplyFamilyExemptions(api, families);
+        report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
+        ValidateSymbolOwnership(api, workspace, packets, report, out var symbolCollisions, out var typeForwarded, out var extensionAmbiguous);
+        var scope = ResolveScope(options, packets, metadataGroups, apiModelSource, repoRoot, report, resumeScope);
+        report.Summary.RunMode = scope.Mode;
+        report.Summary.Seed = scope.Seed;
+        report.Summary.ScopeState = scope.ScopeState;
+        WritePhase(options, report, "project scope", phaseTimer.Elapsed,
+            $"{scope.Mode}; {packets.Count(p => p.Selected)}/{packets.Count} packet(s)");
+
+        // Append-only packet selection status on stderr keeps the single-document JSON stdout clean
+        // while still giving a live view of which project packet is active (Phase 11 heartbeats).
+        var selectedPackets = packets.Where(p => p.Selected).ToList();
+        for (var pi = 0; pi < selectedPackets.Count; pi++)
+        {
+            var pkt = selectedPackets[pi];
+            Console.Error.WriteLine($"[ ] project {pi + 1}/{selectedPackets.Count} | {pkt.Project.AssemblyName} | scope={scope.Mode} | {pkt.Targets.Count} target(s){(pkt.SharedNamespaces.Count > 0 ? $" | shared:{string.Join(",", pkt.SharedNamespaces)}" : string.Empty)}");
+        }
+
         // 7. Validate namespace overview pages, extension tables and availability.
         phaseTimer.Restart();
+        var proseFingerprints = new List<(string Namespace, string Path, string Fingerprint)>();
         foreach (var ns in api.Namespaces.OrderBy(n => n.Name, StringComparer.Ordinal))
         {
+            if (!scope.IncludesNamespace(ns.Name))
+            {
+                continue;
+            }
+
             namespacePageIndex.TryGetValue(ns.Name, out var page);
             if (page is null)
             {
@@ -323,15 +369,17 @@ internal static class DocfxValidator
                 continue;
             }
 
-            ValidateNamespacePage(repoRoot, page, workspace.ReadMarkdown(page), ns, report);
+            ValidateNamespacePage(repoRoot, page, workspace.ReadMarkdown(page), ns, report, proseFingerprints);
             report.Summary.NamespacePagesValidated++;
         }
+
+        ValidateNamespaceProseRepetition(proseFingerprints, report);
 
         WritePhase(options, report, "namespace validation", phaseTimer.Elapsed);
 
         // 8. Verify mandatory examples exist before compiling the examples that were found.
         phaseTimer.Restart();
-        ValidateRequiredExamples(repoRoot, docfxWorkspace, allOverwriteSections, api, options, changedFiles, report);
+        ValidateRequiredExamples(repoRoot, docfxWorkspace, allOverwriteSections, api, options, changedFiles, scope, workspace.NamespaceProjects, report);
         WritePhase(options, report, "required example validation", phaseTimer.Elapsed);
 
         // 9. Extract and compile C# documentation samples (opt-in: the only path that compiles).
@@ -374,6 +422,29 @@ internal static class DocfxValidator
         }
 
         // 11. Produce report and return a deterministic exit code.
+        if (options.ResumeProjectManifestPath is not null)
+        {
+            ValidateChangedPageReview(options.ReviewReportPath, repoRoot, packets, gitState, report);
+        }
+
+        var qualityRisk = EvaluateQualityRisk(options, api, packets, report.Summary.RequiredExamples,
+            symbolCollisions, typeForwarded, extensionAmbiguous, scope, report);
+        report.QualityRisk = qualityRisk;
+        report.Scope = BuildScopeReport(scope, packets, metadataGroups, gitState, families, repoRoot, report);
+        if (options.ProjectManifestPath is not null)
+        {
+            try
+            {
+                WriteProjectManifest(options.ProjectManifestPath, repoRoot, docfxPath, report.Scope, qualityRisk,
+                    report.Summary.ApiModelSource ?? "unknown", report);
+            }
+            catch (Exception ex)
+            {
+                report.Warnings.Add(new Diagnostic("PROJECT_MANIFEST_WRITE_FAILED", options.ProjectManifestPath, null,
+                    $"Unable to write the project manifest: {ex.Message}"));
+            }
+        }
+
         bool hasSampleError = report.Errors.Any(e => e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_STRUCTURE_INVALID");
         bool hasOtherError = report.Errors.Any(e => e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_STRUCTURE_INVALID");
 
@@ -1449,7 +1520,12 @@ internal static class DocfxValidator
     /// for deterministic ordering.
     /// </summary>
     private static List<ProjectInfo> DiscoverProjects(string docfxPath, string docfxWorkspace, Report report)
+        => DiscoverProjects(docfxPath, docfxWorkspace, report, out _);
+
+    private static List<ProjectInfo> DiscoverProjects(string docfxPath, string docfxWorkspace, Report report,
+        out List<MetadataGroupInfo> groups)
     {
+        groups = new List<MetadataGroupInfo>();
         JsonDocument doc;
         try
         {
@@ -1468,6 +1544,7 @@ internal static class DocfxValidator
 
         var resolvedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var resolvedProjects = new List<(string NormalizedPath, ProjectInfo Project)>();
+        var groupsByDest = new Dictionary<string, MetadataGroupInfo>(StringComparer.OrdinalIgnoreCase);
 
         using (doc)
         {
@@ -1479,11 +1556,38 @@ internal static class DocfxValidator
                 return new List<ProjectInfo>();
             }
 
+            var metadataIndex = -1;
             foreach (var entry in EnumerateMetadataEntries(metadata))
             {
+                metadataIndex++;
                 if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("src", out var srcArray))
                 {
                     continue;
+                }
+
+                // A metadata destination ("dest", default "api") defines a sampling group. Every
+                // src.files mapping feeding that destination belongs to it; distinct destinations
+                // are never collapsed into one ownership-free list.
+                var dest = entry.TryGetProperty("dest", out var destEl) && destEl.ValueKind == JsonValueKind.String &&
+                           !string.IsNullOrWhiteSpace(destEl.GetString())
+                    ? NormalizeDocfxPath(destEl.GetString()!.Trim())
+                    : "api";
+                if (!groupsByDest.TryGetValue(dest, out var group))
+                {
+                    group = new MetadataGroupInfo(dest, metadataIndex, dest);
+                    groupsByDest[dest] = group;
+                    groups.Add(group);
+                }
+
+                if (entry.TryGetProperty("properties", out var props) && props.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var prop in props.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.String)
+                        {
+                            group.Properties[prop.Name] = prop.Value.GetString() ?? string.Empty;
+                        }
+                    }
                 }
 
                 foreach (var srcEntry in EnumerateDocfxFileMappingEntries(srcArray))
@@ -1524,6 +1628,11 @@ internal static class DocfxValidator
                         {
                             resolvedProjects.Add((normalizedPath, ReadProject(normalizedPath)));
                         }
+
+                        if (!group.ProjectPaths.Contains(normalizedPath, StringComparer.OrdinalIgnoreCase))
+                        {
+                            group.ProjectPaths.Add(normalizedPath);
+                        }
                     }
                 }
             }
@@ -1538,6 +1647,13 @@ internal static class DocfxValidator
                 "docfx.json metadata configuration are intentionally excluded."));
             return new List<ProjectInfo>();
         }
+
+        foreach (var group in groups)
+        {
+            group.ProjectPaths.Sort((a, b) => string.Compare(NormalizeDocfxPath(a), NormalizeDocfxPath(b), StringComparison.OrdinalIgnoreCase));
+        }
+
+        groups.Sort((a, b) => string.Compare(a.Dest, b.Dest, StringComparison.OrdinalIgnoreCase));
 
         // Sort by normalised path for deterministic, idempotent ordering.
         return resolvedProjects
@@ -1974,7 +2090,7 @@ internal static class DocfxValidator
                     continue;
                 }
 
-                ScanSourceFile(text, namespaces, staticExtensionContainers, ws, project);
+                ScanSourceFile(text, namespaces, staticExtensionContainers, ws, project, report);
             }
         }
 
@@ -2005,13 +2121,15 @@ internal static class DocfxValidator
         Dictionary<string, NamespaceInfo> namespaces,
         Dictionary<string, (string Namespace, string DisplayName, int Count)> staticExtensionContainers,
         ValidationWorkspace ws,
-        ProjectInfo project)
+        ProjectInfo project,
+        Report report)
     {
         var lines = text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
         var cleaned = StripCommentsAndStrings(lines);
 
         string? currentNamespace = null;
         var namespaceBodyDepth = 0;
+        var pendingNamespaceBrace = false;
         var depth = 0;
         string? currentTopLevelStaticClass = null;
         var currentTopLevelStaticClassDepth = -1;
@@ -2021,13 +2139,49 @@ internal static class DocfxValidator
         {
             var clean = cleaned[i];
 
-            var nsMatch = Regex.Match(clean, @"^\s*namespace\s+(?<ns>[\w.]+)\s*(?<brace>\{)?\s*;?\s*$");
+            var nsMatch = Regex.Match(clean, @"^\s*namespace\s+(?<ns>[\w.]+)\s*(?<brace>\{)?\s*(?<semi>;)?\s*$");
             if (nsMatch.Success)
             {
                 currentNamespace = nsMatch.Groups["ns"].Value;
                 RegisterNamespaceProject(ws, currentNamespace, project);
                 GetOrAddNamespace(namespaces, currentNamespace);
-                namespaceBodyDepth = nsMatch.Groups["brace"].Success ? depth + 1 : depth;
+                if (nsMatch.Groups["brace"].Success)
+                {
+                    // Block namespace whose opening brace is on the declaration line.
+                    namespaceBodyDepth = depth + 1;
+                    pendingNamespaceBrace = false;
+                }
+                else if (nsMatch.Groups["semi"].Success)
+                {
+                    // File-scoped namespace: the body shares the current brace depth.
+                    namespaceBodyDepth = depth;
+                    pendingNamespaceBrace = false;
+                }
+                else
+                {
+                    // Block namespace whose opening brace appears on a later line. Defer the
+                    // body-depth decision until that brace is seen so the common Cuemon style
+                    //     namespace Foo
+                    //     {
+                    // is not silently under-reported (the brace pushes real depth past a
+                    // prematurely fixed namespaceBodyDepth, hiding every top-level type).
+                    pendingNamespaceBrace = true;
+                }
+
+                depth += CountChar(clean, '{') - CountChar(clean, '}');
+                continue;
+            }
+
+            if (pendingNamespaceBrace)
+            {
+                // Only trivia (comments, blank lines) is legal between a block namespace
+                // declaration and its opening brace, so the first '{' opens the body.
+                if (clean.IndexOf('{') >= 0)
+                {
+                    namespaceBodyDepth = depth + 1;
+                    pendingNamespaceBrace = false;
+                }
+
                 depth += CountChar(clean, '{') - CountChar(clean, '}');
                 continue;
             }
@@ -2100,6 +2254,14 @@ internal static class DocfxValidator
                     currentStaticClassEntered = false;
                 }
             }
+        }
+
+        if (pendingNamespaceBrace && currentNamespace is not null)
+        {
+            // A block namespace declaration was never paired with an opening brace. Surface this
+            // rather than silently under-reporting the file's public types.
+            report.Warnings.Add(new Diagnostic("API_MODEL_SOURCE_SCANNER_INCOMPLETE", null, currentNamespace,
+                $"Source scanner could not pair the block namespace declaration '{currentNamespace}' with an opening brace, so its public types may be under-reported. Confirm the documentation scope with a build-backed audit before authoring."));
         }
     }
 
@@ -3218,7 +3380,8 @@ internal static class DocfxValidator
     // Namespace page validation
     // ----------------------------------------------------------------------
 
-    private static void ValidateNamespacePage(string repoRoot, string page, string text, NamespaceInfo ns, Report report)
+    private static void ValidateNamespacePage(string repoRoot, string page, string text, NamespaceInfo ns, Report report,
+        List<(string Namespace, string Path, string Fingerprint)>? proseFingerprints = null)
     {
         var rel = Rel(repoRoot, page);
         if (string.IsNullOrEmpty(text))
@@ -3261,11 +3424,23 @@ internal static class DocfxValidator
         else
         {
             var firstParagraph = proseParagraphs[0];
+            var laterParagraphs = proseParagraphs.Skip(1).ToList();
             var prose = string.Join(" ", proseParagraphs.Take(3));
             if (IsInventoryOnlyNamespaceProse(firstParagraph))
             {
                 report.Errors.Add(new Diagnostic("NAMESPACE_PROSE_INVENTORY_ONLY", rel, ns.Name,
                     "The namespace overview only inventories types or extension methods. Rewrite the opening around the developer problem it solves, the outcome it enables, and when a consumer should use it."));
+            }
+
+            // Append-only repair: a weak inventory-led opening was left intact while the real usage
+            // or start-here guidance was tacked on in a later paragraph. The opening must be rewritten
+            // around the developer problem rather than patched beneath, even when the lead contains a
+            // generic verb such as "enable" or "provide".
+            if (IsInventoryLedOpening(firstParagraph) && !HasNamespaceProblemFraming(firstParagraph) &&
+                laterParagraphs.Any(p => HasNamespaceUsageGuidance(p) || HasNamespaceStartHereGuidance(p)))
+            {
+                report.Errors.Add(new Diagnostic("NAMESPACE_APPEND_ONLY_REPAIR", rel, ns.Name,
+                    "The opening paragraph still leads with a type inventory while usage or start-here guidance is appended in a later paragraph. Rewrite the opening cohesively around the developer problem and outcome instead of leaving the weak lead intact beneath an appended sentence."));
             }
 
             if (!HasNamespaceUsageGuidance(prose))
@@ -3279,6 +3454,17 @@ internal static class DocfxValidator
             {
                 report.Errors.Add(new Diagnostic("NAMESPACE_START_HERE_MISSING", rel, ns.Name,
                     "The namespace exposes multiple public entry points but does not direct a newcomer to a useful starting type or method. Name the API to start with and distinguish the nearby alternatives."));
+            }
+
+            var skeleton = NormalizeProseSkeleton(prose);
+            if (proseFingerprints is not null && skeleton.Length >= 40)
+            {
+                proseFingerprints.Add((ns.Name, rel, "lexical:" + skeleton));
+                var rhetoricalSkeleton = NormalizeNamespaceRhetoricalSkeleton(prose);
+                if (rhetoricalSkeleton is not null)
+                {
+                    proseFingerprints.Add((ns.Name, rel, "rhetorical:" + rhetoricalSkeleton));
+                }
             }
         }
 
@@ -3436,6 +3622,110 @@ internal static class DocfxValidator
                !HasNamespaceUsageGuidance(paragraph);
     }
 
+    // An inventory-led opening begins by listing what the surface holds ("contains types",
+    // "provides helpers", "the X namespace exposes ..."). This is independent of generic guidance
+    // verbs, so it still matches a lead that ends with "... to enable Y".
+    private static bool IsInventoryLedOpening(string paragraph)
+    {
+        var firstSentence = Regex.Match(paragraph, @"^(.*?[.!?])(?:\s|$)").Groups[1].Value;
+        if (string.IsNullOrEmpty(firstSentence))
+        {
+            firstSentence = paragraph;
+        }
+
+        return Regex.IsMatch(firstSentence,
+            @"(?i)^(?:the\s+)?(?:`?[\w.]+`?\s+)?namespace\s+(?:contains|provides|includes|exposes|groups|collects|offers|defines|holds)\b") ||
+               Regex.IsMatch(firstSentence,
+            @"(?i)\b(?:contains|provides|includes|exposes|groups|collects|offers|defines|holds)\s+(?:a\s+(?:set|collection|number|group)\s+of\s+)?(?:the\s+)?(?:types|classes|helpers?|members?|utilities|extension\s+methods|functionality|apis?|abstractions?)\b");
+    }
+
+    // Problem framing means the opening explains the developer problem or outcome rather than the
+    // surface contents: it leads with the reader's task ("use X when ...", "to ... without ...").
+    private static bool HasNamespaceProblemFraming(string paragraph)
+    {
+        var firstSentence = Regex.Match(paragraph, @"^(.*?[.!?])(?:\s|$)").Groups[1].Value;
+        if (string.IsNullOrEmpty(firstSentence))
+        {
+            firstSentence = paragraph;
+        }
+
+        return !IsInventoryLedOpening(firstSentence) &&
+               Regex.IsMatch(firstSentence,
+                   @"(?i)\b(?:use\b|when\b|need\b|want\b|choose\b|prefer\b|reach for\b|so that\b|without having to\b|without\b|to\s+\w+\s+(?:a|an|the|your))\b");
+    }
+
+    // Collapses namespace prose to a sentence skeleton: inline code, identifiers, namespace names
+    // and numbers become placeholders so two pages that share a mechanical template (only type names
+    // substituted) normalize to the same value.
+    private static string NormalizeProseSkeleton(string prose)
+    {
+        var text = Regex.Replace(prose, @"`[^`]*`", " CODE ");
+        text = Regex.Replace(text, @"\b[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)+\b", " QNAME ");
+        text = Regex.Replace(text, @"\b[A-Z][A-Za-z0-9_]{2,}\b", " NAME ");
+        text = Regex.Replace(text, @"\d+(?:\.\d+)?", " NUM ");
+        text = text.ToLowerInvariant();
+        text = Regex.Replace(text, @"[^a-z ]", " ");
+        text = Regex.Replace(text, @"\s+", " ").Trim();
+        return text;
+    }
+
+    // Detects the specific mass-authoring cadence that survived the broader lexical fingerprint:
+    // "The X namespace helps you ..." followed by "Use it when ..." and "Start with Y ...".
+    // The content words may differ completely, but repeating this three-part rhetorical frame across
+    // even two unrelated namespaces reads as substituted boilerplate. Ordinary shared guidance such
+    // as a standalone "Use X when ..." sentence does not produce this signature.
+    private static string? NormalizeNamespaceRhetoricalSkeleton(string prose)
+    {
+        var text = Regex.Replace(prose, @"`[^`]*`", " CODE ");
+        text = Regex.Replace(text, @"\s+", " ").Trim();
+        var hasStartThen = Regex.IsMatch(text,
+            @"(?i)(?:^|[.!?]\s+)(?:start|begin)\s+with\s+CODE\b[^.!?]{0,220}\bthen\b");
+        if (hasStartThen)
+        {
+            return "start-code-then-navigation";
+        }
+
+        var hasNamespaceHelpsLead = Regex.IsMatch(text,
+            @"(?i)^(?:the\s+)?(?:CODE|[\w.]+)\s+namespace\s+helps\s+you\b");
+        var hasUseItWhen = Regex.IsMatch(text, @"(?i)(?:^|[.!?]\s+)use\s+it\s+when\b");
+        var hasConditionalStart = Regex.IsMatch(text,
+            @"(?i)(?:^|[.!?]\s+)(?:start|begin)\s+with\s+CODE\b|(?:^|[.!?]\s+)if\s+you\b[^.!?]{0,160}\b(?:start|begin)\s+with\s+CODE\b");
+        if (hasNamespaceHelpsLead && hasUseItWhen && hasConditionalStart)
+        {
+            return "namespace-helps-you|use-it-when|conditional-start-code";
+        }
+
+        var hasUseNamespaceWhenLead = Regex.IsMatch(text,
+            @"(?i)^use\s+the\s+CODE\s+namespace\s+when\b");
+        var hasNamespaceOutcomeSentence = Regex.IsMatch(text,
+            @"(?i)[.!?]\s+the\s+namespace\s+(?:helps|keeps|lets|enables|separates|centralizes)\b");
+        var hasChooseNamespaceWhen = Regex.IsMatch(text,
+            @"(?i)(?:^|[.!?]\s+)choose\s+this\s+namespace\s+when\b");
+        return hasUseNamespaceWhenLead && hasNamespaceOutcomeSentence && hasStartThen && hasChooseNamespaceWhen
+            ? "use-namespace-when|namespace-outcome|start-then|choose-namespace-when"
+            : null;
+    }
+
+    private static void ValidateNamespaceProseRepetition(
+        List<(string Namespace, string Path, string Fingerprint)> proseFingerprints, Report report)
+    {
+        foreach (var group in proseFingerprints
+                     .GroupBy(entry => entry.Fingerprint, StringComparer.Ordinal)
+                     .Where(group => group.Select(entry => entry.Namespace).Distinct(StringComparer.Ordinal).Count() >=
+                         (group.Key.StartsWith("rhetorical:", StringComparison.Ordinal) ? 2 : 3)))
+        {
+            var namespaces = group.Select(entry => entry.Namespace)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+            foreach (var entry in group.GroupBy(e => e.Path, StringComparer.OrdinalIgnoreCase).Select(g => g.First()))
+            {
+                report.Errors.Add(new Diagnostic("NAMESPACE_PROSE_TEMPLATE_REPETITION", entry.Path, entry.Namespace,
+                    $"This namespace overview shares a normalized {(group.Key.StartsWith("rhetorical:", StringComparison.Ordinal) ? "rhetorical frame" : "prose skeleton")} with {namespaces.Count - 1} other namespace page(s) ({string.Join(", ", namespaces.Where(n => !string.Equals(n, entry.Namespace, StringComparison.Ordinal)))}). Write each opening from the namespace's own purpose instead of a substituted template."));
+            }
+        }
+    }
+
     private static bool HasNamespaceUsageGuidance(string prose)
     {
         return Regex.IsMatch(prose,
@@ -3463,7 +3753,7 @@ internal static class DocfxValidator
     // ----------------------------------------------------------------------
 
     private static void ValidateRequiredExamples(string repoRoot, string docfxWorkspace, IReadOnlyList<OverwriteSection> sections, ApiModel api,
-        Options options, HashSet<string>? changedFiles, Report report)
+        Options options, HashSet<string>? changedFiles, ScopePlan scope, Dictionary<string, List<ProjectInfo>> namespaceOwners, Report report)
     {
         foreach (var duplicate in sections
                      .Where(section => section.MappedToExample)
@@ -3481,8 +3771,15 @@ internal static class DocfxValidator
                 $"UID `{duplicate.Key}` is mapped to {duplicate.Count()} example sections. Keep one coherent, scenario-led example for a UID; merge or remove the duplicate `example: *content` sections."));
         }
 
+        var exampleFingerprints = new List<(string Uid, string Path, string Fingerprint)>();
+
         foreach (var target in api.RequiredExampleTargets)
         {
+            if (!scope.IncludesNamespace(target.Namespace))
+            {
+                continue;
+            }
+
             if (options.ChangedOnly && changedFiles is not null &&
                 !ShouldValidateRequiredExampleTarget(target, changedFiles))
             {
@@ -3501,9 +3798,19 @@ internal static class DocfxValidator
             var qualityResults = candidates
                 .Select(section => ValidateExampleQuality(section, target, relatedExtensionMethods))
                 .ToList();
-            if (qualityResults.Any(result => result.Valid))
+            var validIndex = qualityResults.FindIndex(result => result.Valid);
+            if (validIndex >= 0)
             {
                 report.Summary.RequiredExamples++;
+                var validSection = candidates[validIndex];
+                var fingerprint = NormalizeExampleStructure(validSection.MappedToExample
+                    ? validSection.Body
+                    : ExtractExampleSection(validSection.Body));
+                if (fingerprint.Length >= 40)
+                {
+                    exampleFingerprints.Add((target.Uid, Rel(repoRoot, validSection.File), fingerprint));
+                }
+
                 continue;
             }
 
@@ -3532,11 +3839,112 @@ internal static class DocfxValidator
 
             var message = target.Kind == ApiTargetKind.Type
                 ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}` in `{expectedPath}` or another overwrite file under `api/types/` that targets this exact type UID. Namespace overview examples do not satisfy this diagnostic. Keep `api/types/**/*.md` under `build.overwrite`, exclude `api/types/**` from `build.content`, and do not use `api/**/*.md` under either section."
-                : $"Public extension method `{target.DisplayName}` requires a DocFX overwrite example. Add an Examples section with a C# code fence to the declaring extension class uid `{expectedUid}` or the namespace page `{target.Namespace}` by default. The example must explicitly call `{target.DisplayName}`. Do not create URL-encoded or hash-like method UID filenames; use a method UID section only when the exact generated UID is verified and can live in a readable overwrite file.";
+                : $"Public extension method `{target.DisplayName}` (declaring type `{target.DeclaringTypeUid ?? "(unknown)"}`, owner {DescribeOwner(target.Namespace, namespaceOwners)}) requires a DocFX overwrite example. Add an Examples section with a C# code fence to the declaring extension class uid `{expectedUid}` or the namespace page `{target.Namespace}` by default. The example must explicitly call `{target.DisplayName}`{(namespaceOwners.TryGetValue(target.Namespace, out var owns) && owns.Count(o => !o.IsTest) > 1 ? " — prefer receiver extension syntax because the container name is shared across assemblies" : string.Empty)}. Candidate overwrite sections inspected: {DescribeExtensionCandidates(candidates, qualityResults, repoRoot)}. Do not create URL-encoded or hash-like method UID filenames; use a method UID section only when the exact generated UID is verified and can live in a readable overwrite file.";
 
             report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", expectedPath, target.Namespace, message));
         }
+
+        // Cross-file template repetition: examples that normalize to the same structural skeleton
+        // across several unrelated targets are mechanical fills, not authored scenarios. A
+        // conservative threshold (three or more distinct UIDs) avoids rejecting a coherent family
+        // or conventional one-line setup that legitimately recurs.
+        foreach (var group in exampleFingerprints
+                     .GroupBy(entry => entry.Fingerprint, StringComparer.Ordinal)
+                     .Where(group => group.Select(entry => entry.Uid).Distinct(StringComparer.Ordinal).Count() >= 3))
+        {
+            var paths = group.Select(entry => entry.Path)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var uids = group.Select(entry => entry.Uid)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(uid => uid, StringComparer.Ordinal)
+                .ToList();
+            report.Errors.Add(new Diagnostic("EXAMPLE_TEMPLATE_REPETITION", string.Join(", ", paths), NamespaceFromUid(uids[0]),
+                $"{uids.Count} unrelated examples ({string.Join(", ", uids)}) share one normalized code template and differ only by identifiers or literals. Author distinct scenarios that reflect each type's real behavior instead of reusing a single skeleton."));
+        }
     }
+
+    private static string DescribeOwner(string ns, Dictionary<string, List<ProjectInfo>> namespaceOwners)
+    {
+        if (!namespaceOwners.TryGetValue(ns, out var owners) || owners.Count == 0)
+        {
+            return "(unresolved)";
+        }
+
+        return string.Join(", ", owners.Where(o => !o.IsTest).Select(o => o.AssemblyName)
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string DescribeExtensionCandidates(List<OverwriteSection> candidates, List<ExampleQualityResult> results, string repoRoot)
+    {
+        if (candidates.Count == 0)
+        {
+            return "none found (no overwrite section targets the declaring type UID or namespace page)";
+        }
+
+        var parts = new List<string>();
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var stage = results[i].Code switch
+            {
+                "EXAMPLE_MISSING" => "no C# fence",
+                "EXTENSION_EXAMPLE_NOT_INVOKED" => "fence present but method never invoked",
+                "EXAMPLE_REFLECTION_ONLY" => "reflection/metadata lookup instead of a call",
+                null => "valid",
+                _ => results[i].Code!
+            };
+            parts.Add($"`{Rel(repoRoot, candidates[i].File)}` ({stage})");
+        }
+
+        return string.Join("; ", parts);
+    }
+
+    // Normalizes example code to a structural skeleton: comments and string contents are removed,
+    // numeric literals and non-keyword identifiers are collapsed to placeholders, and whitespace is
+    // dropped. Two examples that differ only by type or identifier names produce identical skeletons.
+    private static string NormalizeExampleStructure(string body)
+    {
+        var code = string.Join("\n", ExtractCSharpCodeBlocks(body));
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return string.Empty;
+        }
+
+        code = StripCodeCommentsAndStrings(code);
+        var sb = new StringBuilder(code.Length);
+        foreach (Match token in Regex.Matches(code, @"[A-Za-z_]\w*|\d+(?:\.\d+)?|[^\sA-Za-z0-9_]"))
+        {
+            var value = token.Value;
+            if (Regex.IsMatch(value, @"^[A-Za-z_]\w*$"))
+            {
+                sb.Append(CSharpStructuralKeywords.Contains(value) ? value : "ID");
+            }
+            else if (Regex.IsMatch(value, @"^\d"))
+            {
+                sb.Append('0');
+            }
+            else
+            {
+                sb.Append(value);
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static readonly HashSet<string> CSharpStructuralKeywords = new(StringComparer.Ordinal)
+    {
+        "abstract", "as", "async", "await", "base", "bool", "break", "byte", "case", "catch", "char",
+        "checked", "class", "const", "continue", "decimal", "default", "delegate", "do", "double",
+        "else", "enum", "event", "explicit", "extern", "false", "finally", "fixed", "float", "for",
+        "foreach", "goto", "if", "implicit", "in", "int", "interface", "internal", "is", "lock", "long",
+        "namespace", "new", "null", "object", "operator", "out", "override", "params", "private",
+        "protected", "public", "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof",
+        "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true", "try", "typeof",
+        "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "var", "virtual", "void", "volatile",
+        "while", "yield", "record", "init", "nameof", "when", "with", "global",
+    };
 
     private static bool ShouldValidateNamespacePage(string page, HashSet<string> changedFiles)
     {
@@ -3705,7 +4113,85 @@ internal static class DocfxValidator
                 $"The C# example for `{target.DisplayName}` only names the type as metadata. Construct it, call it, configure it, or otherwise demonstrate a consumer-visible operation.", 40);
         }
 
+        // The target is referenced beyond metadata; now reject scaffolds that mention it without
+        // demonstrating a real consumer scenario. These are the dominant Cuemon filler patterns.
+        if (!invokesRelatedExtension)
+        {
+            if (IsDefaultTargetHolder(codeWithoutCommentsOrStrings, target.DisplayName))
+            {
+                return new ExampleQualityResult(false, "EXAMPLE_DEFAULT_PLACEHOLDER",
+                    $"The example for `{target.DisplayName}` only parks the type in a `default!`/`null!` holder property or field instead of constructing and using it. Replace the placeholder with a scenario that builds the type and produces an observable result or next action.", 8);
+            }
+
+            if (IsForwardingScaffold(codeWithoutCommentsOrStrings))
+            {
+                return new ExampleQualityResult(false, "EXAMPLE_FORWARDING_SCAFFOLD",
+                    $"The example for `{target.DisplayName}` is dominated by one-line pass-through members that only re-expose documented API without a scenario. Show a consumer task with an operation and a visible result instead of a mechanical forwarding wrapper.", 12);
+            }
+
+            if (!HasObservableOutcome(codeWithoutCommentsOrStrings))
+            {
+                return new ExampleQualityResult(false, "EXAMPLE_NO_OBSERVABLE_OUTCOME",
+                    $"The example for `{target.DisplayName}` only holds, returns, or constructs the type without an observable outcome. Configure it, invoke a member, pass it to an API, or otherwise produce a result a reader can see.", 14);
+            }
+        }
+
         return ExampleQualityResult.Success;
+    }
+
+    // A target-typed property/field whose initializer is `default`, `default!`, or `null!` only
+    // names the type. Treat it as a placeholder unless the example also constructs the type, which
+    // would indicate a legitimate field that a later operation consumes.
+    private static bool IsDefaultTargetHolder(string code, string target)
+    {
+        var holder = Regex.IsMatch(code,
+            $@"(?<![\w.]){Regex.Escape(target)}(?:<[^>]*>)?\s+[A-Za-z_]\w*\s*(?:\{{[^{{}}]*\}}\s*)?=\s*(?:default\s*!?|null\s*!)\s*;");
+        if (!holder)
+        {
+            return false;
+        }
+
+        var constructsTarget = Regex.IsMatch(code, $@"\bnew\s+{Regex.Escape(target)}\b") ||
+                               Regex.IsMatch(code, $@"\bnew\s*\(\s*\)\s*;?\s*$");
+        return !constructsTarget;
+    }
+
+    // Mass forwarding shells re-expose documented members through several one-line, expression-bodied
+    // pass-throughs (`Name(args) => other.Member(args);`) and contain no other behavior. A single
+    // forwarder is the normal shape of an extension example, so this only fires when forwarders
+    // dominate and no statement body, local, initializer, or output demonstrates a scenario.
+    private static bool IsForwardingScaffold(string code)
+    {
+        var forwarders = Regex.Matches(code,
+            @"\b[A-Za-z_]\w*\s*\([^()]*\)\s*=>\s*[^;{}]*\b[A-Za-z_]\w*\s*(?:\.[A-Za-z_]\w*)*\s*(?:\([^;]*\))?\s*;")
+            .Count;
+        if (forwarders < 2)
+        {
+            return false;
+        }
+
+        var hasStatementBody = Regex.IsMatch(code, @"\)\s*\{[^{}]*;[^{}]*\}");
+        var hasLocal = Regex.IsMatch(code, @"(?<![\w.])(?:var|return)\s+") &&
+                       !Regex.IsMatch(code, @"=>\s*[^;{}]*\breturn\b");
+        var hasInitializer = Regex.IsMatch(code, @"\{\s*[@A-Za-z_]\w*\s*=");
+        var hasOutput = Regex.IsMatch(code, @"\b(?:Console|Debug|Trace)\s*\.");
+        if (forwarders >= 3)
+        {
+            return !hasStatementBody && !hasInitializer && !hasOutput;
+        }
+
+        return !hasStatementBody && !hasLocal && !hasInitializer && !hasOutput;
+    }
+
+    // An observable outcome is a member invocation, an object/collection initializer that configures
+    // state, an awaited operation, or visible output. Examples that merely construct, hold, or return
+    // the target without any of these do not teach what the API does.
+    private static bool HasObservableOutcome(string code)
+    {
+        return Regex.IsMatch(code, @"(?<![\w.])(?!new\b)[A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*\s*\(") ||
+               Regex.IsMatch(code, @"\{\s*[@A-Za-z_]\w*\s*=") ||
+               Regex.IsMatch(code, @"\bawait\b") ||
+               Regex.IsMatch(code, @"\b(?:Console|Debug|Trace)\s*\.");
     }
 
     private static string StripCodeCommentsAndStrings(string code)
@@ -4465,8 +4951,1282 @@ internal static class DocfxValidator
     }
 
     // ----------------------------------------------------------------------
-    // GitHub example search
+    // Project-scoped discovery: git state, packets, scope selection, families,
+    // symbol ownership, quality risk, manifest, and the safe overwrite writer.
     // ----------------------------------------------------------------------
+
+    private static GitState GetGitState(string repoRoot)
+    {
+        var head = RunProcess("git", "rev-parse --verify HEAD", repoRoot, permission: ProcessPermission.Git);
+        var state = new GitState { Available = head.ExitCode == 0 };
+
+        string Abs(string rel) => Path.GetFullPath(Path.Combine(repoRoot, rel.Trim()));
+
+        void AddLines(string args, HashSet<string> target)
+        {
+            var r = RunProcess("git", args, repoRoot, permission: ProcessPermission.Git);
+            if (r.ExitCode != 0)
+            {
+                return;
+            }
+
+            foreach (var line in r.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                target.Add(Abs(line));
+            }
+        }
+
+        if (state.Available)
+        {
+            AddLines("diff --name-only --cached --diff-filter=ACM", state.Staged);
+            AddLines("diff --name-only --diff-filter=ACM", state.Unstaged);
+            AddLines("diff --name-only --cached --diff-filter=D", state.Deleted);
+            AddLines("diff --name-only --diff-filter=D", state.Deleted);
+
+            var renames = RunProcess("git", "diff --cached --name-status --diff-filter=R", repoRoot, permission: ProcessPermission.Git);
+            if (renames.ExitCode == 0)
+            {
+                foreach (var line in renames.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    var parts = line.Split('\t', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    for (var k = 1; k < parts.Length; k++)
+                    {
+                        state.Renamed.Add(Abs(parts[k]));
+                    }
+                }
+            }
+        }
+
+        // Untracked files are visible even when there is no HEAD yet.
+        var untracked = RunProcess("git", "ls-files --others --exclude-standard", repoRoot, permission: ProcessPermission.Git);
+        if (untracked.ExitCode == 0)
+        {
+            foreach (var line in untracked.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                state.Untracked.Add(Abs(line));
+            }
+        }
+
+        return state;
+    }
+
+    private static List<ProjectPacket> BuildProjectPackets(ValidationWorkspace ws, ApiModel api, GitState gitState,
+        List<MetadataGroupInfo> groups, string repoRoot, string docfxWorkspace,
+        HashSet<string>? protectedDirtyPaths = null)
+    {
+        EnsureNamespaceProjectMap(ws);
+
+        var projectNamespaces = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var sharedNamespaces = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (ns, owners) in ws.NamespaceProjects)
+        {
+            var libOwners = owners.Where(o => !o.IsTest).ToList();
+            if (libOwners.Count > 1)
+            {
+                sharedNamespaces.Add(ns);
+            }
+
+            foreach (var owner in libOwners)
+            {
+                var key = Path.GetFullPath(owner.Path);
+                if (!projectNamespaces.TryGetValue(key, out var list))
+                {
+                    list = new List<string>();
+                    projectNamespaces[key] = list;
+                }
+
+                if (!list.Contains(ns, StringComparer.Ordinal))
+                {
+                    list.Add(ns);
+                }
+            }
+        }
+
+        var targetsByNs = api.RequiredExampleTargets
+            .GroupBy(t => t.Namespace, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+        // A resumed authoring session protects only paths that were dirty when its manifest was
+        // created. Files authored after that baseline must remain selectable for scoped
+        // verification; otherwise the validator would mistake its own dry-run output for
+        // pre-existing user work and make completion impossible.
+        var dirty = protectedDirtyPaths is null
+            ? new HashSet<string>(gitState.AllDirty, StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(protectedDirtyPaths, StringComparer.OrdinalIgnoreCase);
+
+        var packets = new List<ProjectPacket>();
+        foreach (var project in ws.LibraryProjects.OrderBy(p => NormalizeDocfxPath(p.Path), StringComparer.OrdinalIgnoreCase))
+        {
+            var key = Path.GetFullPath(project.Path);
+            var packet = new ProjectPacket { Project = project, NormalizedPath = key };
+
+            foreach (var group in groups)
+            {
+                if (group.ProjectPaths.Any(p => PathsEqual(p, key)))
+                {
+                    packet.MetadataGroupIds.Add(group.Id);
+                }
+            }
+
+            var ownedUids = new HashSet<string>(StringComparer.Ordinal);
+            if (projectNamespaces.TryGetValue(key, out var nss))
+            {
+                foreach (var ns in nss.OrderBy(n => n, StringComparer.Ordinal))
+                {
+                    packet.Namespaces.Add(ns);
+                    ownedUids.Add(ns);
+                    if (sharedNamespaces.Contains(ns))
+                    {
+                        packet.SharedNamespaces.Add(ns);
+                    }
+
+                    if (targetsByNs.TryGetValue(ns, out var ts))
+                    {
+                        foreach (var t in ts)
+                        {
+                            packet.Targets.Add(t);
+                            ownedUids.Add(t.Uid);
+                            if (t.DeclaringTypeUid is not null)
+                            {
+                                ownedUids.Add(t.DeclaringTypeUid);
+                            }
+                        }
+                    }
+                }
+            }
+
+            foreach (var section in ws.OverwriteSections)
+            {
+                if (ownedUids.Contains(section.Uid) || packet.Namespaces.Contains(NamespaceFromUid(section.Uid), StringComparer.Ordinal))
+                {
+                    var rel = Rel(repoRoot, section.File);
+                    if (!packet.OverwritePaths.Contains(rel, StringComparer.OrdinalIgnoreCase))
+                    {
+                        packet.OverwritePaths.Add(rel);
+                    }
+                }
+            }
+
+            packet.OverwritePaths.Sort(StringComparer.OrdinalIgnoreCase);
+
+            var related = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in EnumerateProjectSourceFiles(project))
+            {
+                related.Add(Path.GetFullPath(file));
+            }
+
+            foreach (var ns in packet.Namespaces)
+            {
+                related.Add(Path.GetFullPath(Path.Combine(docfxWorkspace, "api", "namespaces", ns + ".md")));
+            }
+
+            foreach (var target in packet.Targets.Where(t => t.Kind == ApiTargetKind.Type))
+            {
+                related.Add(Path.GetFullPath(Path.Combine(docfxWorkspace, "api", "types", target.Uid + ".md")));
+            }
+
+            foreach (var rel in packet.OverwritePaths)
+            {
+                related.Add(Path.GetFullPath(Path.Combine(repoRoot, rel)));
+            }
+
+            foreach (var path in related)
+            {
+                if (dirty.Contains(path))
+                {
+                    packet.DirtyRelatedPaths.Add(Rel(repoRoot, path));
+                }
+            }
+
+            packet.DirtyRelatedPaths.Sort(StringComparer.OrdinalIgnoreCase);
+            packets.Add(packet);
+        }
+
+        return packets;
+    }
+
+    private static bool HintMatches(ProjectPacket packet, string hint)
+    {
+        var h = hint.Trim();
+        if (string.IsNullOrEmpty(h))
+        {
+            return false;
+        }
+
+        if (string.Equals(packet.Project.AssemblyName, h, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(packet.Project.PackageId, h, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Path.GetFileNameWithoutExtension(packet.NormalizedPath), h, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var nh = NormalizeDocfxPath(h);
+        var np = NormalizeDocfxPath(packet.NormalizedPath);
+        return string.Equals(np, nh, StringComparison.OrdinalIgnoreCase) ||
+               np.EndsWith("/" + nh, StringComparison.OrdinalIgnoreCase) ||
+               np.EndsWith(nh, StringComparison.OrdinalIgnoreCase) && nh.Contains('/');
+    }
+
+    private static List<ProjectPacket> SeededShuffle(List<ProjectPacket> source, Random rng)
+    {
+        var list = new List<ProjectPacket>(source);
+        for (var i = list.Count - 1; i > 0; i--)
+        {
+            var j = rng.Next(i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+
+        return list;
+    }
+
+    private static long GenerateSeed() => Random.Shared.NextInt64(1, long.MaxValue);
+
+    private static ResumeProjectScope? LoadResumeProjectManifest(string path, string repoRoot, Report report)
+    {
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path, repoRoot);
+        }
+        catch (Exception ex)
+        {
+            report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_INVALID", path, null,
+                $"Unable to resolve the project manifest path: {ex.Message}"));
+            return null;
+        }
+
+        if (!File.Exists(full))
+        {
+            report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_INVALID", Rel(repoRoot, full), null,
+                "The project manifest does not exist."));
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(full), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("schemaVersion", out var schema) || schema.GetInt32() is not (1 or 2) ||
+                !root.TryGetProperty("packets", out var packets) || packets.ValueKind != JsonValueKind.Array)
+            {
+                report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_INVALID", Rel(repoRoot, full), null,
+                    "The project manifest must use schemaVersion 1 or 2 and contain a packets array."));
+                return null;
+            }
+
+            var result = new ResumeProjectScope();
+            if (root.TryGetProperty("runMode", out var mode) && mode.ValueKind == JsonValueKind.String)
+            {
+                result.Mode = mode.GetString() is "dry-run" ? "dry-run" : "scoped";
+            }
+
+            if (root.TryGetProperty("seed", out var seed) && seed.ValueKind == JsonValueKind.Number && seed.TryGetInt64(out var seedValue))
+            {
+                result.Seed = seedValue;
+            }
+
+            foreach (var packet in packets.EnumerateArray())
+            {
+                if (!packet.TryGetProperty("selected", out var selected) || selected.ValueKind != JsonValueKind.True ||
+                    !packet.TryGetProperty("project", out var project) || project.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var projectPath = project.GetString();
+                if (!string.IsNullOrWhiteSpace(projectPath))
+                {
+                    var selectedPath = Path.GetFullPath(projectPath, repoRoot);
+                    if (!IsInsideDirectory(selectedPath, repoRoot))
+                    {
+                        report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_INVALID", Rel(repoRoot, full), null,
+                            $"Selected project path '{projectPath}' resolves outside the repository root."));
+                        return null;
+                    }
+
+                    result.SelectedProjectPaths.Add(selectedPath);
+                }
+            }
+
+            if (root.TryGetProperty("dirty", out var dirty) && dirty.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var propertyName in new[] { "staged", "unstaged", "renamed", "deleted", "untracked" })
+                {
+                    if (!dirty.TryGetProperty(propertyName, out var paths) || paths.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    foreach (var item in paths.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
+                        {
+                            var dirtyPath = Path.GetFullPath(item.GetString()!, repoRoot);
+                            if (!IsInsideDirectory(dirtyPath, repoRoot))
+                            {
+                                report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_INVALID", Rel(repoRoot, full), null,
+                                    $"Dirty baseline path '{item.GetString()}' resolves outside the repository root."));
+                                return null;
+                            }
+
+                            result.InitialDirtyPaths.Add(dirtyPath);
+                        }
+                    }
+                }
+            }
+
+            if (result.SelectedProjectPaths.Count == 0)
+            {
+                report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_INVALID", Rel(repoRoot, full), null,
+                    "The project manifest contains no selected project packets to resume."));
+                return null;
+            }
+
+            report.ResumedProjectManifestPath = Rel(repoRoot, full);
+            return result;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or ArgumentException or NotSupportedException)
+        {
+            report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_INVALID", Rel(repoRoot, full), null,
+                $"Unable to read the project manifest: {ex.Message}"));
+            return null;
+        }
+    }
+
+    private static ScopePlan ResolveScope(Options options, List<ProjectPacket> packets, List<MetadataGroupInfo> groups,
+        ApiModelSource apiSource, string repoRoot, Report report, ResumeProjectScope? resumeScope)
+    {
+        var plan = new ScopePlan();
+        var authoringIntent = options.DryRun || options.ProjectHints.Count > 0 || options.ProjectManifestPath is not null ||
+                              options.ResumeProjectManifestPath is not null;
+        var authoritative = apiSource != ApiModelSource.SourceScan;
+        plan.ScopeState = authoritative ? "authoritative" : "provisional";
+
+        if (authoringIntent && !authoritative)
+        {
+            report.Warnings.Add(new Diagnostic("BUILD_BACKED_SCOPE_REQUIRED", null, null,
+                "Authoring scope was requested but the API model came from the conservative source scanner. Run --build-api-model (or generate DocFX managed-reference YAML) before authoring; the current packet inventory is provisional and may under-report public types."));
+        }
+
+        if (options.ResumeProjectManifestPath is not null && resumeScope is null)
+        {
+            // Loading a requested baseline failed. Keep the scope empty so an invalid or stale
+            // manifest can never silently broaden into a repository-wide authoring run.
+            plan.Mode = "scoped";
+            plan.ScopeRestricted = true;
+        }
+        else if (resumeScope is not null)
+        {
+            plan.Mode = resumeScope.Mode;
+            plan.Seed = resumeScope.Seed;
+            plan.ScopeRestricted = true;
+            foreach (var projectPath in resumeScope.SelectedProjectPaths)
+            {
+                var packet = packets.FirstOrDefault(p => PathsEqual(p.NormalizedPath, projectPath));
+                if (packet is null)
+                {
+                    report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_PROJECT_MISSING", Rel(repoRoot, projectPath), null,
+                        "The resumed project manifest selects a project that is no longer present in the active DocFX metadata graph. Regenerate the manifest before continuing."));
+                    continue;
+                }
+
+                if (packet.Dirty)
+                {
+                    report.Errors.Add(new Diagnostic("PROJECT_MANIFEST_DIRTY_CONFLICT", Rel(repoRoot, packet.NormalizedPath), null,
+                        $"The resumed project was already dirty when the manifest baseline was created and remains protected: {string.Join(", ", packet.DirtyRelatedPaths)}."));
+                    continue;
+                }
+
+                packet.Selected = true;
+                plan.SelectedProjectPaths.Add(packet.NormalizedPath);
+            }
+        }
+        else if (options.ProjectHints.Count > 0)
+        {
+            plan.Mode = options.DryRun ? "dry-run" : "scoped";
+            plan.ScopeRestricted = true;
+            foreach (var hint in options.ProjectHints)
+            {
+                var matches = packets.Where(p => HintMatches(p, hint)).ToList();
+                if (matches.Count == 0)
+                {
+                    report.Errors.Add(new Diagnostic("PROJECT_HINT_NOT_FOUND", null, null,
+                        $"Project hint '{hint}' did not match any documented project. Candidates: {string.Join(", ", packets.Select(p => p.Project.AssemblyName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))}."));
+                    continue;
+                }
+
+                if (matches.Count > 1)
+                {
+                    report.Errors.Add(new Diagnostic("PROJECT_HINT_AMBIGUOUS", null, null,
+                        $"Project hint '{hint}' matched {matches.Count} projects: {string.Join(", ", matches.Select(m => Rel(repoRoot, m.NormalizedPath)))}. Use a more specific path, assembly name, or package id."));
+                    continue;
+                }
+
+                var packet = matches[0];
+                if (packet.Dirty)
+                {
+                    report.Warnings.Add(new Diagnostic("PROJECT_DIRTY_SKIPPED", Rel(repoRoot, packet.NormalizedPath), null,
+                        $"Explicitly selected project '{packet.Project.AssemblyName}' has pre-existing changes to related files and was not selected for editing: {string.Join(", ", packet.DirtyRelatedPaths)}. Resolve or deliberately continue in a later run."));
+                    continue;
+                }
+
+                packet.Selected = true;
+                plan.SelectedProjectPaths.Add(packet.NormalizedPath);
+            }
+        }
+        else if (options.DryRun)
+        {
+            plan.Mode = "dry-run";
+            plan.ScopeRestricted = true;
+            var seed = options.Seed ?? GenerateSeed();
+            plan.Seed = seed;
+            var rng = new Random(unchecked((int)(seed ^ (seed >> 32))));
+            foreach (var group in groups.OrderBy(g => g.Id, StringComparer.Ordinal))
+            {
+                var candidates = packets
+                    .Where(p => p.MetadataGroupIds.Contains(group.Id, StringComparer.Ordinal))
+                    .OrderBy(p => NormalizeDocfxPath(p.NormalizedPath), StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (candidates.Count == 0)
+                {
+                    continue;
+                }
+
+                var clean = SeededShuffle(candidates, rng).FirstOrDefault(p => !p.Dirty);
+                if (clean is null)
+                {
+                    report.Warnings.Add(new Diagnostic("DRY_RUN_GROUP_UNSELECTED", null, group.Id,
+                        $"Metadata destination group '{group.Id}' has no clean project to sample; every candidate has pre-existing related changes. No documentation was selected for this group."));
+                    continue;
+                }
+
+                clean.Selected = true;
+                plan.SelectedProjectPaths.Add(clean.NormalizedPath);
+            }
+        }
+        else
+        {
+            plan.Mode = "full";
+            foreach (var packet in packets)
+            {
+                packet.Selected = true;
+                plan.SelectedProjectPaths.Add(packet.NormalizedPath);
+            }
+        }
+
+        foreach (var packet in packets.Where(p => p.Selected))
+        {
+            foreach (var ns in packet.Namespaces)
+            {
+                plan.SelectedNamespaces.Add(ns);
+            }
+        }
+
+        return plan;
+    }
+
+    // Family exemptions: an explicit, reviewable manifest under .docfx/family-exemptions.json.
+    private static List<FamilyExemption> LoadAndValidateFamilyExemptions(string repoRoot, string docfxWorkspace,
+        ApiModel api, ValidationWorkspace ws, Dictionary<string, string> namespacePages, Report report)
+    {
+        var path = Path.Combine(docfxWorkspace, "family-exemptions.json");
+        var result = new List<FamilyExemption>();
+        if (!File.Exists(path))
+        {
+            return result;
+        }
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), null,
+                $"Unable to parse the family exemption manifest: {ex.Message}"));
+            return result;
+        }
+
+        var knownTypeUids = new HashSet<string>(
+            api.RequiredExampleTargets.Where(t => t.Kind == ApiTargetKind.Type).Select(t => t.Uid),
+            StringComparer.Ordinal);
+        var validRationales = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "generic-arity", "inherited-specialization", "overload-series", "type-parameter-series"
+        };
+        var coverageSeen = new Dictionary<string, string>(StringComparer.Ordinal);
+        var anchorsSeen = new HashSet<string>(StringComparer.Ordinal);
+
+        using (doc)
+        {
+            if (!doc.RootElement.TryGetProperty("families", out var families) || families.ValueKind != JsonValueKind.Array)
+            {
+                report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), null,
+                    "The family exemption manifest must contain a 'families' array."));
+                return result;
+            }
+
+            foreach (var fam in families.EnumerateArray())
+            {
+                var familyId = ReadJsonString(fam, "familyId");
+                var namespaceUid = ReadJsonString(fam, "namespaceUid");
+                var anchorUid = ReadJsonString(fam, "anchorUid");
+                var rationale = ReadJsonString(fam, "rationale");
+                var anchorExampleFile = ReadJsonString(fam, "anchorExampleFile");
+                var covered = new List<string>();
+                if (fam.TryGetProperty("coveredUids", out var cu) && cu.ValueKind == JsonValueKind.Array)
+                {
+                    covered.AddRange(cu.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!));
+                }
+
+                var exemption = new FamilyExemption(familyId ?? string.Empty, namespaceUid ?? string.Empty,
+                    anchorUid ?? string.Empty, covered, rationale ?? string.Empty, anchorExampleFile);
+
+                if (string.IsNullOrWhiteSpace(familyId) || string.IsNullOrWhiteSpace(namespaceUid) ||
+                    string.IsNullOrWhiteSpace(anchorUid) || covered.Count == 0)
+                {
+                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
+                        $"Family '{familyId}' must declare familyId, namespaceUid, anchorUid, and at least one coveredUid."));
+                    result.Add(exemption);
+                    continue;
+                }
+
+                if (!validRationales.Contains(rationale ?? string.Empty))
+                {
+                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
+                        $"Family '{familyId}' has rationale '{rationale}'. Use one of: generic-arity, inherited-specialization, overload-series, type-parameter-series. Category alone never exempts unrelated difficult types."));
+                    result.Add(exemption);
+                    continue;
+                }
+
+                var allUids = new List<string> { anchorUid! };
+                allUids.AddRange(covered);
+                var unknown = allUids.Where(u => !knownTypeUids.Contains(u)).ToList();
+                if (unknown.Count > 0)
+                {
+                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
+                        $"Family '{familyId}' references UIDs that are not public documentation type targets: {string.Join(", ", unknown)}."));
+                    result.Add(exemption);
+                    continue;
+                }
+
+                var outsideNamespace = allUids.Where(u => !string.Equals(NamespaceFromUid(u), namespaceUid, StringComparison.Ordinal)).ToList();
+                if (outsideNamespace.Count > 0)
+                {
+                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
+                        $"Family '{familyId}' groups UIDs outside the declared namespace '{namespaceUid}': {string.Join(", ", outsideNamespace)}. A family must share one coherent namespace."));
+                    result.Add(exemption);
+                    continue;
+                }
+
+                if (anchorsSeen.Contains(anchorUid!) || covered.Contains(anchorUid!))
+                {
+                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
+                        $"Family '{familyId}' has an overlapping or circular anchor '{anchorUid}'."));
+                    result.Add(exemption);
+                    continue;
+                }
+
+                var duplicateCoverage = allUids.Where(u => coverageSeen.ContainsKey(u)).ToList();
+                if (duplicateCoverage.Count > 0)
+                {
+                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
+                        $"Family '{familyId}' duplicates coverage already claimed by another family: {string.Join(", ", duplicateCoverage.Select(u => $"{u} (in {coverageSeen[u]})"))}."));
+                    result.Add(exemption);
+                    continue;
+                }
+
+                // Structurally valid declaration. Now require an anchor example and namespace guidance.
+                var anchorHasExample = AnchorHasValidExample(anchorUid!, ws, api);
+                if (!anchorHasExample)
+                {
+                    report.Errors.Add(new Diagnostic("FAMILY_ANCHOR_EXAMPLE_MISSING", Rel(repoRoot, path), namespaceUid,
+                        $"Family '{familyId}' anchor '{anchorUid}' has no valid, behavioral example. The anchor must demonstrate the shared workflow before siblings can be exempted from standalone examples."));
+                }
+
+                if (!NamespaceExplainsFamily(namespaceUid!, anchorUid!, namespacePages, ws))
+                {
+                    report.Errors.Add(new Diagnostic("FAMILY_NAMESPACE_GUIDANCE_MISSING", Rel(repoRoot, path), namespaceUid,
+                        $"Family '{familyId}' requires the namespace page '{namespaceUid}' to name the anchor '{SimpleNameFromUid(anchorUid!)}' and explain how consumers choose among the siblings."));
+                }
+
+                exemption.Valid = anchorHasExample && NamespaceExplainsFamily(namespaceUid!, anchorUid!, namespacePages, ws);
+                anchorsSeen.Add(anchorUid!);
+                foreach (var u in allUids)
+                {
+                    coverageSeen[u] = familyId!;
+                }
+
+                result.Add(exemption);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool AnchorHasValidExample(string anchorUid, ValidationWorkspace ws, ApiModel api)
+    {
+        var target = api.RequiredExampleTargets.FirstOrDefault(t => string.Equals(t.Uid, anchorUid, StringComparison.Ordinal));
+        if (target is null)
+        {
+            return false;
+        }
+
+        var candidates = ws.OverwriteSections.Where(s => IsExampleCandidate(s, target)).ToList();
+        return candidates.Any(section => ValidateExampleQuality(section, target, new List<string>()).Valid);
+    }
+
+    private static bool NamespaceExplainsFamily(string namespaceUid, string anchorUid,
+        Dictionary<string, string> namespacePages, ValidationWorkspace ws)
+    {
+        if (!namespacePages.TryGetValue(namespaceUid, out var page))
+        {
+            return false;
+        }
+
+        var text = ws.ReadMarkdown(page);
+        var (_, body) = SplitFrontMatter(text);
+        var anchorName = SimpleNameFromUid(anchorUid);
+        var namesAnchor = body.Contains(anchorName, StringComparison.Ordinal);
+        var explainsSelection = Regex.IsMatch(body,
+            @"(?i)\b(?:choose|select|pick|which|differ|arity|overload|type parameter|specialization|when you need|use\s+\w+\s+when)\b");
+        return namesAnchor && explainsSelection;
+    }
+
+    private static void ApplyFamilyExemptions(ApiModel api, List<FamilyExemption> families)
+    {
+        var covered = new HashSet<string>(
+            families.Where(f => f.Valid).SelectMany(f => f.CoveredUids),
+            StringComparer.Ordinal);
+        if (covered.Count == 0)
+        {
+            return;
+        }
+
+        api.RequiredExampleTargets.RemoveAll(t => t.Kind == ApiTargetKind.Type && covered.Contains(t.Uid));
+        foreach (var ns in api.Namespaces)
+        {
+            ns.RequiredExampleTargets.RemoveAll(t => t.Kind == ApiTargetKind.Type && covered.Contains(t.Uid));
+        }
+    }
+
+    private static string? ReadJsonString(JsonElement element, string name)
+        => element.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    // Symbol ownership: duplicate simple type names across owning projects, type forwarding that
+    // cannot be attributed, and extension containers that cross project boundaries.
+    private static void ValidateSymbolOwnership(ApiModel api, ValidationWorkspace ws, List<ProjectPacket> packets,
+        Report report, out int collisions, out int forwarded, out int extensionAmbiguous)
+    {
+        collisions = 0;
+        forwarded = 0;
+        extensionAmbiguous = 0;
+
+        var ownerByNamespace = ws.NamespaceProjects;
+        string OwnersOf(string ns) => ownerByNamespace.TryGetValue(ns, out var list)
+            ? string.Join(", ", list.Where(o => !o.IsTest).Select(o => o.AssemblyName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            : "(unknown)";
+
+        // Duplicate simple type names whose owning projects differ.
+        foreach (var group in api.RequiredExampleTargets
+                     .Where(t => t.Kind == ApiTargetKind.Type)
+                     .GroupBy(t => SimpleNameFromUid(t.Uid), StringComparer.Ordinal))
+        {
+            var distinctUids = group.Select(t => t.Uid).Distinct(StringComparer.Ordinal).ToList();
+            if (distinctUids.Count < 2)
+            {
+                continue;
+            }
+
+            var owners = group
+                .SelectMany(t => ownerByNamespace.TryGetValue(t.Namespace, out var l) ? l.Where(o => !o.IsTest) : Enumerable.Empty<ProjectInfo>())
+                .Select(o => Path.GetFullPath(o.Path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (owners.Count >= 2)
+            {
+                collisions++;
+                report.Warnings.Add(new Diagnostic("SYMBOL_COLLISION_UNRESOLVED", null, group.First().Namespace,
+                    $"Simple type name '{group.Key}' is documented in multiple assemblies/namespaces ({string.Join("; ", distinctUids.Select(u => $"{u} [{OwnersOf(NamespaceFromUid(u))}]"))}). Qualify examples and overwrite UIDs by owning assembly/project so coverage is not ambiguous."));
+            }
+        }
+
+        // Type forwarding declared in source that cannot be attributed to a documented owner.
+        foreach (var project in ws.LibraryProjects)
+        {
+            foreach (var file in EnumerateProjectSourceFiles(project))
+            {
+                string text;
+                try
+                {
+                    text = File.ReadAllText(file);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (Match m in Regex.Matches(text, @"\[\s*assembly\s*:\s*TypeForwardedTo\s*\(\s*typeof\s*\(\s*(?<type>[\w.<>, ]+?)\s*\)\s*\)\s*\]"))
+                {
+                    var forwardedType = m.Groups["type"].Value.Trim();
+                    var simple = forwardedType.Contains('.') ? forwardedType[(forwardedType.LastIndexOf('.') + 1)..] : forwardedType;
+                    simple = simple.Split('<')[0];
+                    var documented = api.RequiredExampleTargets.Any(t => string.Equals(SimpleNameFromUid(t.Uid), simple, StringComparison.Ordinal));
+                    if (!documented)
+                    {
+                        forwarded++;
+                        report.Warnings.Add(new Diagnostic("TYPE_FORWARDING_UNRESOLVED", Rel(ws.RepoRoot, file), null,
+                            $"Type '{forwardedType}' is forwarded from '{project.AssemblyName}' but cannot be matched to a documented type target. Resolve which project and UID documents the forwarded family before authoring."));
+                    }
+                }
+            }
+        }
+
+        // Extension containers whose simple name appears in more than one namespace/project.
+        foreach (var group in api.Namespaces
+                     .SelectMany(ns => ns.ExtensionMethods.Select(e => (ns.Name, e.DeclaringClass)))
+                     .GroupBy(x => x.DeclaringClass, StringComparer.Ordinal))
+        {
+            var namespaces = group.Select(x => x.Name).Distinct(StringComparer.Ordinal).ToList();
+            if (namespaces.Count < 2)
+            {
+                continue;
+            }
+
+            var owners = namespaces
+                .SelectMany(ns => ownerByNamespace.TryGetValue(ns, out var l) ? l.Where(o => !o.IsTest) : Enumerable.Empty<ProjectInfo>())
+                .Select(o => Path.GetFullPath(o.Path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (owners.Count >= 2)
+            {
+                extensionAmbiguous++;
+                report.Warnings.Add(new Diagnostic("EXTENSION_OWNER_AMBIGUOUS", null, namespaces[0],
+                    $"Extension container '{group.Key}' is declared in multiple namespaces/assemblies ({string.Join(", ", namespaces.Select(ns => $"{ns} [{OwnersOf(ns)}]"))}). Prefer receiver extension syntax and a uniquely owned overwrite UID so the example targets the right declaring type."));
+            }
+        }
+    }
+
+    private static QualityRiskReport EvaluateQualityRisk(Options options, ApiModel api, List<ProjectPacket> packets,
+        int existingValidExamples, int collisions, int forwarded, int extensionAmbiguous, ScopePlan scope, Report report)
+    {
+        var standaloneThreshold = options.RiskStandaloneThreshold ?? 100;
+        var extensionThreshold = options.RiskExtensionThreshold ?? 100;
+        var ratioThreshold = options.RiskMissingRatioThreshold ?? 10.0;
+
+        var standalone = api.RequiredExampleTargets.Count(t => t.Kind == ApiTargetKind.Type);
+        var extension = api.RequiredExampleTargets.Count(t => t.Kind == ApiTargetKind.ExtensionMethod);
+        var missing = Math.Max(0, standalone + extension - existingValidExamples);
+        var ratio = missing / (double)Math.Max(1, existingValidExamples);
+        var shared = packets.SelectMany(p => p.SharedNamespaces).Distinct(StringComparer.Ordinal).Count();
+
+        var risk = new QualityRiskReport
+        {
+            StandaloneTargets = standalone,
+            ExtensionTargets = extension,
+            ExistingValidExamples = existingValidExamples,
+            MissingToExistingRatio = Math.Round(ratio, 2),
+            SymbolCollisions = collisions,
+            TypeForwardedTargets = forwarded,
+            SharedNamespaces = shared,
+            UnresolvedExtensionOwners = extensionAmbiguous,
+            StandaloneThreshold = standaloneThreshold,
+            ExtensionThreshold = extensionThreshold,
+            RatioThreshold = ratioThreshold,
+            PilotTargetCap = 20
+        };
+
+        if (standalone > standaloneThreshold)
+        {
+            risk.TriggeredThresholds.Add($"standalone-targets {standalone} > {standaloneThreshold}");
+        }
+
+        if (extension > extensionThreshold)
+        {
+            risk.TriggeredThresholds.Add($"extension-targets {extension} > {extensionThreshold}");
+        }
+
+        if (ratio > ratioThreshold)
+        {
+            risk.TriggeredThresholds.Add($"missing-to-existing {risk.MissingToExistingRatio} > {ratioThreshold}");
+        }
+
+        if (collisions > 0 || extensionAmbiguous > 0)
+        {
+            risk.TriggeredThresholds.Add($"unresolved symbol ownership ({collisions} collisions, {extensionAmbiguous} extension owners)");
+        }
+
+        risk.HighRisk = risk.TriggeredThresholds.Count > 0;
+        risk.RecommendedScope = packets.Count > 1
+            ? "Run a dry-run pilot (--dry-run) or a single --project packet before authoring the full surface."
+            : "Limit the first authoring pass to a 20-target pilot, then review before continuing.";
+
+        var authoringIntent = options.DryRun || options.ProjectHints.Count > 0 || options.ProjectManifestPath is not null ||
+                              options.ResumeProjectManifestPath is not null || options.BuildApiModel;
+        if (risk.HighRisk && authoringIntent && !options.AllowHighRisk)
+        {
+            report.Warnings.Add(new Diagnostic("QUALITY_RISK_REVIEW_REQUIRED", null, null,
+                $"High-risk authoring queue: {string.Join("; ", risk.TriggeredThresholds)}. Stop after the first project packet or {risk.PilotTargetCap} newly authored targets and obtain explicit review before continuing. {risk.RecommendedScope} Pass --allow-high-risk only as an explicit, reviewed decision."));
+        }
+
+        return risk;
+    }
+
+    private static ScopeReport BuildScopeReport(ScopePlan scope, List<ProjectPacket> packets,
+        List<MetadataGroupInfo> groups, GitState gitState, List<FamilyExemption> families, string repoRoot, Report report)
+    {
+        string RelPath(string abs) => Rel(repoRoot, abs);
+
+        var diagnosticsByNamespace = report.Errors
+            .Where(e => e.Namespace is not null)
+            .GroupBy(e => e.Namespace!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+
+        var scopeReport = new ScopeReport
+        {
+            Mode = scope.Mode,
+            Seed = scope.Seed,
+            ScopeState = scope.ScopeState,
+            SelectedProjects = packets.Where(p => p.Selected).Select(p => RelPath(p.NormalizedPath)).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList()
+        };
+
+        foreach (var group in groups)
+        {
+            var selected = packets.FirstOrDefault(p => p.Selected && p.MetadataGroupIds.Contains(group.Id, StringComparer.Ordinal));
+            scopeReport.MetadataGroups.Add(new MetadataGroupReport
+            {
+                Id = group.Id,
+                MetadataIndex = group.MetadataIndex,
+                Dest = group.Dest,
+                Projects = group.ProjectPaths.Select(RelPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList(),
+                SelectedProject = selected is null ? null : RelPath(selected.NormalizedPath)
+            });
+        }
+
+        foreach (var packet in packets)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var ns in packet.Namespaces)
+            {
+                if (diagnosticsByNamespace.TryGetValue(ns, out var diags))
+                {
+                    foreach (var d in diags)
+                    {
+                        counts[d.Code] = counts.GetValueOrDefault(d.Code) + 1;
+                    }
+                }
+            }
+
+            scopeReport.Packets.Add(new PacketReport
+            {
+                Project = RelPath(packet.NormalizedPath),
+                AssemblyName = packet.Project.AssemblyName,
+                PackageId = packet.Project.PackageId,
+                MetadataGroups = packet.MetadataGroupIds.OrderBy(g => g, StringComparer.Ordinal).ToList(),
+                Namespaces = packet.Namespaces.OrderBy(n => n, StringComparer.Ordinal).ToList(),
+                SharedNamespaces = packet.SharedNamespaces.OrderBy(n => n, StringComparer.Ordinal).ToList(),
+                TypeTargets = packet.Targets.Count(t => t.Kind == ApiTargetKind.Type),
+                ExtensionTargets = packet.Targets.Count(t => t.Kind == ApiTargetKind.ExtensionMethod),
+                OverwritePaths = packet.OverwritePaths,
+                ReviewPaths = packet.Namespaces
+                    .Select(ns => RelPath(Path.Combine(Path.GetDirectoryName(report.DocfxPath!)!, "api", "namespaces", ns + ".md")))
+                    .Concat(packet.Targets.Where(t => t.Kind == ApiTargetKind.Type)
+                        .Select(t => RelPath(Path.Combine(Path.GetDirectoryName(report.DocfxPath!)!, "api", "types", t.Uid + ".md"))))
+                    .Concat(packet.OverwritePaths)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                DirtyRelatedPaths = packet.DirtyRelatedPaths,
+                Dirty = packet.Dirty,
+                Selected = packet.Selected,
+                DiagnosticCounts = counts
+            });
+        }
+
+        foreach (var skipped in packets.Where(p => !p.Selected))
+        {
+            scopeReport.SkippedProjects.Add(new SkippedProjectReport
+            {
+                Project = RelPath(skipped.NormalizedPath),
+                Reason = skipped.Dirty ? "dirty-related-paths" : (scope.Mode == "full" ? "n/a" : "not-selected"),
+                ConflictingPaths = skipped.DirtyRelatedPaths
+            });
+        }
+
+        foreach (var family in families)
+        {
+            scopeReport.FamilyExemptions.Add(new FamilyExemptionReport
+            {
+                FamilyId = family.FamilyId,
+                NamespaceUid = family.NamespaceUid,
+                AnchorUid = family.AnchorUid,
+                CoveredUids = family.CoveredUids,
+                Rationale = family.Rationale,
+                Valid = family.Valid
+            });
+        }
+
+        scopeReport.Dirty = new GitStateReport
+        {
+            Available = gitState.Available,
+            Staged = gitState.Staged.Select(RelPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList(),
+            Unstaged = gitState.Unstaged.Select(RelPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList(),
+            Renamed = gitState.Renamed.Select(RelPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList(),
+            Deleted = gitState.Deleted.Select(RelPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList(),
+            Untracked = gitState.Untracked.Select(RelPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList()
+        };
+
+        if (scope.Mode == "dry-run")
+        {
+            var projectArgs = string.Join(" ", scopeReport.SelectedProjects.Select(p => $"--project {p}"));
+            scopeReport.ReproduceCommand = scope.Seed is not null
+                ? $"docfx.cs --repo-root <root> --dry-run --seed {scope.Seed}"
+                : $"docfx.cs --repo-root <root> --dry-run {projectArgs}".TrimEnd();
+        }
+
+        return scopeReport;
+    }
+
+    private static void WriteProjectManifest(string path, string repoRoot, string docfxPath, ScopeReport scope,
+        QualityRiskReport risk, string apiModelSource, Report report)
+    {
+        var manifest = new
+        {
+            schemaVersion = 2,
+            repoRoot = ".",
+            docfxPath = Rel(repoRoot, docfxPath),
+            apiModelSource,
+            runMode = scope.Mode,
+            seed = scope.Seed,
+            scopeState = scope.ScopeState,
+            metadataGroups = scope.MetadataGroups,
+            packets = scope.Packets,
+            dirty = scope.Dirty,
+            familyExemptions = scope.FamilyExemptions,
+            qualityRisk = risk
+        };
+
+        var json = JsonSerializer.Serialize(manifest, JsonOptions);
+        var full = Path.GetFullPath(path, repoRoot);
+        var dir = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        File.WriteAllText(full, json, new UTF8Encoding(false));
+        report.ProjectManifestPath = Rel(repoRoot, full);
+        var reviewFull = Path.Combine(Path.GetDirectoryName(full) ?? repoRoot,
+            Path.GetFileNameWithoutExtension(full) + ".review.json");
+        if (!File.Exists(reviewFull))
+        {
+            var reviewTemplate = new
+            {
+                schemaVersion = 1,
+                pages = scope.Packets
+                    .Where(packet => packet.Selected)
+                    .SelectMany(packet => packet.ReviewPaths)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(reviewPath => reviewPath, StringComparer.OrdinalIgnoreCase)
+                    .Select(reviewPath => new
+                    {
+                        path = reviewPath,
+                        evidence = string.Empty,
+                        purpose = string.Empty,
+                        observableOutcome = string.Empty,
+                        patternComparison = string.Empty
+                    })
+            };
+            File.WriteAllText(reviewFull, JsonSerializer.Serialize(reviewTemplate, JsonOptions), new UTF8Encoding(false));
+        }
+
+        report.ReviewReportPath = Rel(repoRoot, reviewFull);
+        scope.ResumeCommand =
+            $"docfx.cs --repo-root <root> --resume-project-manifest \"{full}\" --review-report \"{reviewFull}\" --build-api-model --validate-samples --verify-docfx-build --json";
+    }
+
+    private static void ValidateChangedPageReview(string? path, string repoRoot, List<ProjectPacket> packets,
+        GitState gitState, Report report)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            report.Errors.Add(new Diagnostic("REVIEW_REPORT_MISSING", null, null,
+                "Resumed project authoring requires --review-report <path>. Complete the template emitted beside the project manifest so every changed page is reviewed before scoped completion."));
+            return;
+        }
+
+        var full = Path.GetFullPath(path, repoRoot);
+        if (!File.Exists(full))
+        {
+            report.Errors.Add(new Diagnostic("REVIEW_REPORT_MISSING", Rel(repoRoot, full), null,
+                "The changed-page review report does not exist."));
+            return;
+        }
+
+        var expected = packets.Where(packet => packet.Selected)
+            .SelectMany(packet => packet.Namespaces.Select(ns => Path.Combine(Path.GetDirectoryName(report.DocfxPath!)!, "api", "namespaces", ns + ".md"))
+                .Concat(packet.Targets.Where(t => t.Kind == ApiTargetKind.Type)
+                    .Select(t => Path.Combine(Path.GetDirectoryName(report.DocfxPath!)!, "api", "types", t.Uid + ".md")))
+                .Concat(packet.OverwritePaths.Select(rel => Path.Combine(repoRoot, rel))))
+            .Select(Path.GetFullPath)
+            .Where(candidate => File.Exists(candidate) && gitState.AllDirty.Contains(candidate))
+            .Select(candidate => Rel(repoRoot, candidate))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(candidate => candidate, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(full), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+            if (!doc.RootElement.TryGetProperty("schemaVersion", out var schema) || schema.GetInt32() != 1 ||
+                !doc.RootElement.TryGetProperty("pages", out var pages) || pages.ValueKind != JsonValueKind.Array)
+            {
+                report.Errors.Add(new Diagnostic("REVIEW_REPORT_INVALID", Rel(repoRoot, full), null,
+                    "The review report must use schemaVersion 1 and contain a pages array."));
+                return;
+            }
+
+            var reviewed = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var page in pages.EnumerateArray())
+            {
+                var reviewPath = ReadJsonString(page, "path");
+                if (!string.IsNullOrWhiteSpace(reviewPath))
+                {
+                    reviewed[NormalizeDocfxPath(reviewPath)] = page;
+                }
+            }
+
+            foreach (var expectedPath in expected)
+            {
+                if (!reviewed.TryGetValue(NormalizeDocfxPath(expectedPath), out var page))
+                {
+                    report.Errors.Add(new Diagnostic("REVIEW_REPORT_INCOMPLETE", expectedPath, null,
+                        "The changed page is missing from the review report."));
+                    continue;
+                }
+
+                var fields = new[]
+                {
+                    (Name: "evidence", Minimum: 5),
+                    (Name: "purpose", Minimum: 20),
+                    (Name: "observableOutcome", Minimum: 10),
+                    (Name: "patternComparison", Minimum: 20)
+                };
+                foreach (var field in fields)
+                {
+                    var value = ReadJsonString(page, field.Name);
+                    if (string.IsNullOrWhiteSpace(value) || value.Trim().Length < field.Minimum ||
+                        Regex.IsMatch(value, @"(?i)^(?:todo|tbd|n/?a|none|same as above|looks good)[.!]?$"))
+                    {
+                        report.Errors.Add(new Diagnostic("REVIEW_REPORT_INCOMPLETE", expectedPath, null,
+                            $"Review field '{field.Name}' must contain page-specific evidence or analysis (minimum {field.Minimum} characters)."));
+                    }
+                }
+            }
+
+            report.ReviewReportPath = Rel(repoRoot, full);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException)
+        {
+            report.Errors.Add(new Diagnostic("REVIEW_REPORT_INVALID", Rel(repoRoot, full), null,
+                $"Unable to read the changed-page review report: {ex.Message}"));
+        }
+    }
+
+    // Safe structured overwrite writer: accepts an authored UID, mapping kind, prose, and C# fence,
+    // validates them, preserves BOM/line-endings, and refuses to clobber dirty paths it does not own.
+    private static int WriteOverwriteCommand(Options options)
+    {
+        var report = new Report { Script = ScriptId };
+        string requestPath;
+        try
+        {
+            requestPath = Path.GetFullPath(options.WriteOverwriteRequestPath!);
+        }
+        catch (Exception ex)
+        {
+            return EmitOverwrite(options, report, ExitCode.InvalidArguments, $"Invalid request path: {ex.Message}");
+        }
+
+        if (!File.Exists(requestPath))
+        {
+            report.Errors.Add(new Diagnostic("OVERWRITE_REQUEST_MISSING", requestPath, null, "The overwrite request JSON file does not exist."));
+            return EmitOverwrite(options, report, ExitCode.InvalidArguments, "Request file missing.");
+        }
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(File.ReadAllText(requestPath), new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip });
+        }
+        catch (Exception ex)
+        {
+            report.Errors.Add(new Diagnostic("OVERWRITE_REQUEST_INVALID", requestPath, null, $"Unable to parse the overwrite request: {ex.Message}"));
+            return EmitOverwrite(options, report, ExitCode.InvalidArguments, "Request invalid.");
+        }
+
+        string? file, uid, mapping, prose, fence;
+        using (doc)
+        {
+            file = ReadJsonString(doc.RootElement, "file");
+            uid = ReadJsonString(doc.RootElement, "uid");
+            mapping = ReadJsonString(doc.RootElement, "mapping") ?? "example";
+            prose = ReadJsonString(doc.RootElement, "prose");
+            fence = ReadJsonString(doc.RootElement, "fence");
+        }
+
+        if (string.IsNullOrWhiteSpace(file) || string.IsNullOrWhiteSpace(uid))
+        {
+            report.Errors.Add(new Diagnostic("OVERWRITE_REQUEST_INVALID", requestPath, null, "The request must specify 'file' and 'uid'."));
+            return EmitOverwrite(options, report, ExitCode.InvalidArguments, "Request invalid.");
+        }
+
+        if (mapping is not ("example" or "summary" or "remarks"))
+        {
+            report.Errors.Add(new Diagnostic("OVERWRITE_REQUEST_INVALID", requestPath, uid, "mapping must be 'example', 'summary', or 'remarks'."));
+            return EmitOverwrite(options, report, ExitCode.InvalidArguments, "Request invalid.");
+        }
+
+        if (!string.IsNullOrEmpty(fence) && CountOccurrences(fence, "```") % 2 != 0)
+        {
+            report.Errors.Add(new Diagnostic("OVERWRITE_FENCE_UNBALANCED", uid, uid, "The supplied C# fence content has unbalanced ``` fences."));
+            return EmitOverwrite(options, report, ExitCode.ValidationFailed, "Unbalanced fence.");
+        }
+
+        var repoRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(options.RepoRoot) ? "." : options.RepoRoot);
+        var fullFile = Path.GetFullPath(file!, repoRoot);
+        var existedBefore = File.Exists(fullFile);
+
+        // Dirty-path protection: refuse to *replace* a file that already had uncommitted changes.
+        // Creating a brand-new overwrite file is always allowed.
+        var gitState = GetGitState(repoRoot);
+        if (existedBefore && gitState.AllDirty.Any(p => PathsEqual(p, fullFile)))
+        {
+            report.Errors.Add(new Diagnostic("OVERWRITE_DIRTY_REFUSED", Rel(repoRoot, fullFile), uid,
+                "Refusing to overwrite a file that has pre-existing uncommitted changes. Resolve or stage it deliberately first."));
+            return EmitOverwrite(options, report, ExitCode.ValidationFailed, "Dirty path refused.");
+        }
+
+        // Duplicate UID guard within the same file.
+        var existing = existedBefore ? File.ReadAllText(fullFile) : string.Empty;
+        if (!string.IsNullOrEmpty(existing) && Regex.Matches(existing, $@"(?m)^\s*uid\s*:\s*{Regex.Escape(uid!)}\s*$").Count > 0)
+        {
+            report.Errors.Add(new Diagnostic("OVERWRITE_UID_DUPLICATE", Rel(repoRoot, fullFile), uid,
+                $"UID '{uid}' already has an overwrite section in this file. Edit it in place instead of appending a duplicate."));
+            return EmitOverwrite(options, report, ExitCode.ValidationFailed, "Duplicate UID.");
+        }
+
+        var hasBom = existing.Length > 0 && File.ReadAllBytes(fullFile).Length >= 3 &&
+                     File.ReadAllBytes(fullFile)[0] == 0xEF;
+        var newline = existing.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+
+        var sb = new StringBuilder();
+        if (existing.Length > 0 && !existing.EndsWith("\n", StringComparison.Ordinal))
+        {
+            sb.Append(newline);
+        }
+
+        sb.Append("---").Append(newline);
+        sb.Append("uid: ").Append(uid).Append(newline);
+        sb.Append(mapping).Append(": *content").Append(newline);
+        sb.Append("---").Append(newline);
+        if (!string.IsNullOrWhiteSpace(prose))
+        {
+            sb.Append(prose!.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", newline, StringComparison.Ordinal)).Append(newline).Append(newline);
+        }
+
+        if (!string.IsNullOrWhiteSpace(fence))
+        {
+            sb.Append(fence!.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", newline, StringComparison.Ordinal));
+            if (!fence.EndsWith("\n", StringComparison.Ordinal))
+            {
+                sb.Append(newline);
+            }
+        }
+
+        var addition = sb.ToString();
+        var finalText = existing + addition;
+
+        var dir = Path.GetDirectoryName(fullFile);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        var encoding = new UTF8Encoding(hasBom);
+        File.WriteAllText(fullFile, finalText, encoding);
+
+        report.Status = "passed";
+        report.Summary.CompletionState = "overwrite-written";
+        report.Summary.CanClaimCompletion = false;
+        if (options.Json)
+        {
+            var preview = new
+            {
+                script = ScriptId,
+                status = "passed",
+                file = Rel(repoRoot, fullFile),
+                uid,
+                mapping,
+                bomPreserved = hasBom,
+                lineEnding = newline == "\r\n" ? "crlf" : "lf",
+                bytesWritten = encoding.GetByteCount(finalText),
+                preview = addition
+            };
+            Console.WriteLine(JsonSerializer.Serialize(preview, JsonOptions));
+        }
+        else
+        {
+            Console.WriteLine($"{ScriptId}: wrote {mapping} overwrite for {uid} into {Rel(repoRoot, fullFile)} (bom={hasBom}, eol={(newline == "\r\n" ? "crlf" : "lf")}).");
+        }
+
+        return (int)ExitCode.Success;
+    }
+
+    private static int EmitOverwrite(Options options, Report report, ExitCode code, string message)
+    {
+        report.Status = code == ExitCode.Success ? "passed" : "failed";
+        if (options.Json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(report, JsonOptions));
+        }
+        else
+        {
+            Console.Error.WriteLine($"{ScriptId}: {message}");
+            foreach (var error in report.Errors)
+            {
+                Console.Error.WriteLine($"  ERROR  [{error.Code}] {error.Message}");
+            }
+        }
+
+        return (int)code;
+    }
+
+    private static int CountOccurrences(string text, string token)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(token, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += token.Length;
+        }
+
+        return count;
+    }
 
     private static void SearchGitHubForExamples(List<string> packageIds, Report report)
     {
@@ -4964,6 +6724,20 @@ internal static class DocfxValidator
         report.Summary.CompletionState = report.Summary.CanClaimCompletion
             ? "complete"
             : report.Errors.Count > 0 ? "incomplete" : "verification-required";
+
+        // A dry run or an explicitly scoped run never claims repository-wide completion; it reports
+        // only the state of the selected scope so a passing subset is not mistaken for a full digest.
+        if (report.Summary.RunMode is "dry-run" or "scoped")
+        {
+            report.Summary.CanClaimCompletion = false;
+            var prefix = report.Summary.RunMode;
+            report.Summary.CompletionState = code == ExitCode.Success &&
+                                             report.Errors.Count == 0 &&
+                                             report.Summary.RemainingGates.Count == 0
+                ? $"{prefix}-passed"
+                : $"{prefix}-failed";
+        }
+
         report.Summary.RemainingWorkItems = report.Errors.Count + report.Summary.RemainingGates.Count;
         report.Summary.RemainingDiagnosticsByCode = report.Errors
             .GroupBy(error => error.Code, StringComparer.Ordinal)
@@ -5261,8 +7035,11 @@ internal static class DocfxValidator
             var action = diagnostic.Code switch
             {
                 "EXAMPLE_UID_DUPLICATE" => "Merge the duplicate mappings into one coherent example section for the UID, then rerun validation.",
-                "EXAMPLE_PLACEHOLDER" or "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" =>
-                    "Inspect exact test, package README, sample, XML-comment, or source evidence; replace the scaffold with a consumer task that uses the target in C# and exposes a result or next action.",
+                "EXAMPLE_PLACEHOLDER" or "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or
+                "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" =>
+                    "Inspect exact test, package README, sample, XML-comment, or source evidence; replace the scaffold with a consumer task that constructs or invokes the target in C# and exposes a result or next action.",
+                "EXAMPLE_TEMPLATE_REPETITION" =>
+                    "Rewrite each implicated example around the distinct behavior of its own type; do not reuse one normalized skeleton across unrelated targets.",
                 "EXTENSION_EXAMPLE_NOT_INVOKED" =>
                     "Replace prose-only or metadata-only coverage with a C# scenario that invokes the extension method on a valid receiver.",
                 _ when diagnostic.Message.Contains("Public non-abstraction type", StringComparison.Ordinal) =>
@@ -5278,7 +7055,9 @@ internal static class DocfxValidator
     private static bool IsExampleQualityDiagnostic(Diagnostic diagnostic)
     {
         return diagnostic.Code is "EXAMPLE_MISSING" or "EXAMPLE_UID_DUPLICATE" or "EXAMPLE_PLACEHOLDER" or
-            "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or "EXTENSION_EXAMPLE_NOT_INVOKED";
+            "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or "EXTENSION_EXAMPLE_NOT_INVOKED" or
+            "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
+            "EXAMPLE_TEMPLATE_REPETITION";
     }
 
     private static string EscapeTable(string value)
@@ -5376,6 +7155,52 @@ internal static class DocfxValidator
                 case "--no-clean-generated-metadata":
                     options.CleanGeneratedMetadata = false;
                     break;
+                case "--project":
+                    if (!Next(args, ref i, out var ph)) { error = "--project requires a project hint."; return false; }
+                    options.ProjectHints.Add(ph);
+                    break;
+                case "--dry-run":
+                    options.DryRun = true;
+                    break;
+                case "--seed":
+                    if (!Next(args, ref i, out var sd)) { error = "--seed requires an integer."; return false; }
+                    if (!long.TryParse(sd, out var sdv)) { error = "--seed must be an integer."; return false; }
+                    options.Seed = sdv;
+                    break;
+                case "--project-manifest":
+                    if (!Next(args, ref i, out var pm)) { error = "--project-manifest requires a path."; return false; }
+                    options.ProjectManifestPath = pm;
+                    break;
+                case "--resume-project-manifest":
+                    if (!Next(args, ref i, out var rpm)) { error = "--resume-project-manifest requires a path."; return false; }
+                    options.ResumeProjectManifestPath = rpm;
+                    break;
+                case "--review-report":
+                    if (!Next(args, ref i, out var rrp)) { error = "--review-report requires a path."; return false; }
+                    options.ReviewReportPath = rrp;
+                    break;
+                case "--write-overwrite":
+                    if (!Next(args, ref i, out var wo)) { error = "--write-overwrite requires a request JSON path."; return false; }
+                    options.WriteOverwriteRequestPath = wo;
+                    break;
+                case "--allow-high-risk":
+                    options.AllowHighRisk = true;
+                    break;
+                case "--risk-standalone-threshold":
+                    if (!Next(args, ref i, out var rst)) { error = "--risk-standalone-threshold requires a count."; return false; }
+                    if (!int.TryParse(rst, out var rstv) || rstv < 0) { error = "--risk-standalone-threshold must be a non-negative integer."; return false; }
+                    options.RiskStandaloneThreshold = rstv;
+                    break;
+                case "--risk-extension-threshold":
+                    if (!Next(args, ref i, out var ret)) { error = "--risk-extension-threshold requires a count."; return false; }
+                    if (!int.TryParse(ret, out var retv) || retv < 0) { error = "--risk-extension-threshold must be a non-negative integer."; return false; }
+                    options.RiskExtensionThreshold = retv;
+                    break;
+                case "--risk-missing-ratio-threshold":
+                    if (!Next(args, ref i, out var rmr)) { error = "--risk-missing-ratio-threshold requires a number."; return false; }
+                    if (!double.TryParse(rmr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var rmrv) || rmrv < 0) { error = "--risk-missing-ratio-threshold must be a non-negative number."; return false; }
+                    options.RiskMissingRatioThreshold = rmrv;
+                    break;
                 case "--json":
                     options.Json = true;
                     break;
@@ -5412,6 +7237,52 @@ internal static class DocfxValidator
                     if (TrySplit(arg, "--execution-profile", out var v10) && IsValidExecutionProfile(v10))
                     {
                         options.ExecutionProfile = v10.ToLowerInvariant();
+                        break;
+                    }
+                    if (TrySplit(arg, "--project", out var v11) && !string.IsNullOrWhiteSpace(v11))
+                    {
+                        options.ProjectHints.Add(v11);
+                        break;
+                    }
+                    if (TrySplit(arg, "--seed", out var v12) && long.TryParse(v12, out var seedInline))
+                    {
+                        options.Seed = seedInline;
+                        break;
+                    }
+                    if (TrySplit(arg, "--project-manifest", out var v13) && !string.IsNullOrWhiteSpace(v13))
+                    {
+                        options.ProjectManifestPath = v13;
+                        break;
+                    }
+                    if (TrySplit(arg, "--resume-project-manifest", out var v18) && !string.IsNullOrWhiteSpace(v18))
+                    {
+                        options.ResumeProjectManifestPath = v18;
+                        break;
+                    }
+                    if (TrySplit(arg, "--review-report", out var v19) && !string.IsNullOrWhiteSpace(v19))
+                    {
+                        options.ReviewReportPath = v19;
+                        break;
+                    }
+                    if (TrySplit(arg, "--write-overwrite", out var v14) && !string.IsNullOrWhiteSpace(v14))
+                    {
+                        options.WriteOverwriteRequestPath = v14;
+                        break;
+                    }
+                    if (TrySplit(arg, "--risk-standalone-threshold", out var v15) && int.TryParse(v15, out var rstInline) && rstInline >= 0)
+                    {
+                        options.RiskStandaloneThreshold = rstInline;
+                        break;
+                    }
+                    if (TrySplit(arg, "--risk-extension-threshold", out var v16) && int.TryParse(v16, out var retInline) && retInline >= 0)
+                    {
+                        options.RiskExtensionThreshold = retInline;
+                        break;
+                    }
+                    if (TrySplit(arg, "--risk-missing-ratio-threshold", out var v17) &&
+                        double.TryParse(v17, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var rmrInline) && rmrInline >= 0)
+                    {
+                        options.RiskMissingRatioThreshold = rmrInline;
                         break;
                     }
 
@@ -5516,6 +7387,33 @@ internal static class DocfxValidator
                                       Runs only after the API model is built, so it never deletes YAML the fast path used.
               --no-clean-generated-metadata
                                       Leave DocFX-generated metadata files untouched (already the default).
+
+            Project-scoped authoring:
+              --project <hint>         Repeatable. Document only the matching project packet(s). A hint
+                                      resolves against project path, file name, assembly name, or package id
+                                      and must match exactly one project. Scoped runs never claim repo completion.
+              --dry-run                Representative run: select one clean project from each metadata
+                                      destination group (or all explicit --project packets). Persist the initial
+                                      baseline with --project-manifest, author the selected packets, then resume it.
+              --seed <integer>         Seed the dry-run selection so it is reproducible. A seed is generated and
+                                      reported when omitted.
+              --project-manifest <path>
+                                      Write a deterministic BOM-less project packet manifest (groups, packets,
+                                      ownership, initial dirty paths, family exemptions, quality risk) and continue.
+              --resume-project-manifest <path>
+                                      Resume the exact selected packets and initial dirty-file baseline from a
+                                      prior manifest. Use this after authoring so newly created dry-run files are
+                                      validated without treating them as pre-existing user work.
+              --review-report <path>  Required with --resume-project-manifest. Complete the generated sibling
+                                      *.review.json file with page-specific evidence, purpose/outcome, observable
+                                      result, and cross-page pattern comparison before scoped completion.
+              --write-overwrite <path> Safe structured overwrite writer. Reads a JSON request with
+                                      file/uid/mapping/prose/fence fields, validates it, preserves BOM/line
+                                      endings, refuses to replace dirty or duplicate-UID files, and exits.
+              --allow-high-risk        Explicitly proceed past the quality-risk pilot stop (a reviewed decision).
+              --risk-standalone-threshold <n>     Standalone-example target threshold (default 100).
+              --risk-extension-threshold <n>      Extension-method target threshold (default 100).
+              --risk-missing-ratio-threshold <x>  Missing-to-existing example ratio threshold (default 10).
               --json                   Emit a machine-readable JSON summary (includes processes + phase timings).
               --help                   Print this usage.
 
@@ -5565,9 +7463,84 @@ internal static class DocfxValidator
         public int? ProcessTimeoutMinutes { get; set; }
         public string? ExecutionProfile { get; set; }
         public string SampleReferenceMode { get; set; } = "project";
+        public List<string> ProjectHints { get; } = new();
+        public bool DryRun { get; set; }
+        public long? Seed { get; set; }
+        public string? ProjectManifestPath { get; set; }
+        public string? ResumeProjectManifestPath { get; set; }
+        public string? ReviewReportPath { get; set; }
+        public string? WriteOverwriteRequestPath { get; set; }
+        public bool AllowHighRisk { get; set; }
+        public int? RiskStandaloneThreshold { get; set; }
+        public int? RiskExtensionThreshold { get; set; }
+        public double? RiskMissingRatioThreshold { get; set; }
     }
 
     private sealed record ProjectInfo(string Path, string AssemblyName, List<string> TargetFrameworks, bool IsTest, string? PackageId = null);
+
+    private sealed record MetadataGroupInfo(string Id, int MetadataIndex, string Dest)
+    {
+        public Dictionary<string, string> Properties { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<string> ProjectPaths { get; } = new();
+    }
+
+    private sealed class GitState
+    {
+        public bool Available { get; init; }
+        public HashSet<string> Staged { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> Unstaged { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> Renamed { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> Deleted { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> Untracked { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public IEnumerable<string> AllDirty =>
+            Staged.Concat(Unstaged).Concat(Renamed).Concat(Deleted).Concat(Untracked)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed class ProjectPacket
+    {
+        public required ProjectInfo Project { get; init; }
+        public required string NormalizedPath { get; init; }
+        public List<string> MetadataGroupIds { get; } = new();
+        public List<string> Namespaces { get; } = new();
+        public List<string> SharedNamespaces { get; } = new();
+        public List<ApiTargetInfo> Targets { get; } = new();
+        public List<string> OverwritePaths { get; } = new();
+        public List<string> DirtyRelatedPaths { get; } = new();
+        public bool Selected { get; set; }
+        public bool Dirty => DirtyRelatedPaths.Count > 0;
+    }
+
+    private sealed record FamilyExemption(
+        string FamilyId,
+        string NamespaceUid,
+        string AnchorUid,
+        List<string> CoveredUids,
+        string Rationale,
+        string? AnchorExampleFile)
+    {
+        public bool Valid { get; set; }
+    }
+
+    private sealed class ScopePlan
+    {
+        public string Mode { get; set; } = "full";
+        public long? Seed { get; set; }
+        public string ScopeState { get; set; } = "authoritative";
+        public HashSet<string> SelectedProjectPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> SelectedNamespaces { get; } = new(StringComparer.Ordinal);
+        public bool ScopeRestricted { get; set; }
+        public bool IncludesNamespace(string ns) => !ScopeRestricted || SelectedNamespaces.Contains(ns);
+    }
+
+    private sealed class ResumeProjectScope
+    {
+        public string Mode { get; set; } = "dry-run";
+        public long? Seed { get; set; }
+        public HashSet<string> SelectedProjectPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> InitialDirtyPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
 
     private sealed record ExtensionMethodInfo(string MethodName, string ExtendedType, string DeclaringClass);
 
@@ -5752,6 +7725,9 @@ internal sealed class Summary
     public ExecutionSummary Execution { get; set; } = new();
     public string? ValidationMode { get; set; }
     public string? ApiModelSource { get; set; }
+    public string RunMode { get; set; } = "full";
+    public string? ScopeState { get; set; }
+    public long? Seed { get; set; }
     public int PublicNamespaces { get; set; }
     public int NamespacePagesValidated { get; set; }
     public int RequiredExampleTargets { get; set; }
@@ -5799,10 +7775,103 @@ internal sealed class Report
     public string RepoRoot { get; set; } = string.Empty;
     public string? DocfxPath { get; set; }
     public string? RepairPlanPath { get; set; }
+    public string? ProjectManifestPath { get; set; }
+    public string? ResumedProjectManifestPath { get; set; }
+    public string? ReviewReportPath { get; set; }
     public string? Status { get; set; }
     public Summary Summary { get; set; } = new();
+    public ScopeReport? Scope { get; set; }
+    public QualityRiskReport? QualityRisk { get; set; }
     public List<Diagnostic> Errors { get; set; } = new();
     public List<Diagnostic> Warnings { get; set; } = new();
     public List<string> PackageIds { get; set; } = new();
     public List<string> ExampleSearchSnippets { get; set; } = new();
+}
+
+internal sealed class ScopeReport
+{
+    public string Mode { get; set; } = "full";
+    public long? Seed { get; set; }
+    public string? ScopeState { get; set; }
+    public List<MetadataGroupReport> MetadataGroups { get; set; } = new();
+    public List<string> SelectedProjects { get; set; } = new();
+    public List<SkippedProjectReport> SkippedProjects { get; set; } = new();
+    public List<PacketReport> Packets { get; set; } = new();
+    public GitStateReport Dirty { get; set; } = new();
+    public List<FamilyExemptionReport> FamilyExemptions { get; set; } = new();
+    public string? ReproduceCommand { get; set; }
+    public string? ResumeCommand { get; set; }
+}
+
+internal sealed class MetadataGroupReport
+{
+    public string Id { get; set; } = string.Empty;
+    public int MetadataIndex { get; set; }
+    public string Dest { get; set; } = string.Empty;
+    public List<string> Projects { get; set; } = new();
+    public string? SelectedProject { get; set; }
+}
+
+internal sealed class SkippedProjectReport
+{
+    public string Project { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+    public List<string> ConflictingPaths { get; set; } = new();
+}
+
+internal sealed class PacketReport
+{
+    public string Project { get; set; } = string.Empty;
+    public string AssemblyName { get; set; } = string.Empty;
+    public string? PackageId { get; set; }
+    public List<string> MetadataGroups { get; set; } = new();
+    public List<string> Namespaces { get; set; } = new();
+    public List<string> SharedNamespaces { get; set; } = new();
+    public int TypeTargets { get; set; }
+    public int ExtensionTargets { get; set; }
+    public List<string> OverwritePaths { get; set; } = new();
+    public List<string> ReviewPaths { get; set; } = new();
+    public List<string> DirtyRelatedPaths { get; set; } = new();
+    public bool Dirty { get; set; }
+    public bool Selected { get; set; }
+    public Dictionary<string, int> DiagnosticCounts { get; set; } = new();
+}
+
+internal sealed class GitStateReport
+{
+    public bool Available { get; set; }
+    public List<string> Staged { get; set; } = new();
+    public List<string> Unstaged { get; set; } = new();
+    public List<string> Renamed { get; set; } = new();
+    public List<string> Deleted { get; set; } = new();
+    public List<string> Untracked { get; set; } = new();
+}
+
+internal sealed class FamilyExemptionReport
+{
+    public string FamilyId { get; set; } = string.Empty;
+    public string NamespaceUid { get; set; } = string.Empty;
+    public string AnchorUid { get; set; } = string.Empty;
+    public List<string> CoveredUids { get; set; } = new();
+    public string Rationale { get; set; } = string.Empty;
+    public bool Valid { get; set; }
+}
+
+internal sealed class QualityRiskReport
+{
+    public bool HighRisk { get; set; }
+    public int StandaloneTargets { get; set; }
+    public int ExtensionTargets { get; set; }
+    public int ExistingValidExamples { get; set; }
+    public double MissingToExistingRatio { get; set; }
+    public int SymbolCollisions { get; set; }
+    public int TypeForwardedTargets { get; set; }
+    public int SharedNamespaces { get; set; }
+    public int UnresolvedExtensionOwners { get; set; }
+    public List<string> TriggeredThresholds { get; set; } = new();
+    public int StandaloneThreshold { get; set; }
+    public int ExtensionThreshold { get; set; }
+    public double RatioThreshold { get; set; }
+    public int PilotTargetCap { get; set; }
+    public string? RecommendedScope { get; set; }
 }
