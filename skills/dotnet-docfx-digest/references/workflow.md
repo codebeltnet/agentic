@@ -90,6 +90,8 @@ When resuming a partial repo-wide audit, begin by inventorying all tracked and u
 
 For the final command, let `auto` choose the execution profile unless the user requests a specific resource policy. High-capacity machines run the isolated DocFX verification lane concurrently with API/sample work; conservative machines remain sequential. Give the outer command a timeout at least five minutes above the validator's child-process timeout (35 minutes with the default 30-minute setting) so timeout diagnostics can be returned normally.
 
+Keep `stderr` visible during the final command. API build, sample compilation, and DocFX verification print a start event, 10-second heartbeats, and a final success/failure event there. Use the phase, PID, elapsed time, last-output age, and current output line to decide whether work is progressing or a child appears stale. Capturing `stdout` for `--json` is safe because progress never enters the JSON stream.
+
 ## Namespace page template
 
 Use this template when creating a new namespace overview page:

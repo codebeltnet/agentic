@@ -691,6 +691,20 @@
         "Reports profile, processors, memory, worker counts, timeout, concurrency choice, process counts, and phase timings in JSON",
         "Allows explicit conservative/high-capacity, worker-count, and timeout overrides through CLI or environment variables"
       ]
+    },
+    {
+      "id": 56,
+      "prompt": "Run final dotnet-docfx-digest verification in --json mode on a repository where API build, sample compilation, and DocFX build each take several minutes. The previous command appeared frozen because it emitted no progress until completion. Keep the machine-readable report parseable while giving me enough live information to decide whether a child process is progressing or stale.",
+      "expected_output": "Long-running API build, sample compilation, and DocFX verification write append-only progress to stderr without mixing progress text into JSON stdout. Each child emits an initial [ ] event, a heartbeat every 10 seconds, and a final green [✓] success or [x] failure event. Heartbeats identify the phase, workload size, runner count, PID, elapsed time, time since the child last produced output, and the latest non-empty child-output line when available. Redirected logs remain readable without ANSI dependence, and stdout still parses as exactly one JSON report.",
+      "expectations": [
+        "Writes long-running child-process progress to stderr so --json stdout remains a single parseable report",
+        "Emits a start event, 10-second heartbeat events, and a final success or failure event for API build, sample compilation, and DocFX verification",
+        "Reports the active phase, project or sample workload, runner count, child PID, and elapsed time",
+        "Reports time since the child last produced output so a quiet process can be distinguished from a stale process",
+        "Includes the latest non-empty child-output line when available to show what is currently being processed",
+        "Uses a green check marker for interactive success while keeping redirected output readable without requiring ANSI color support",
+        "Does not use terminal cursor rewriting or an in-place table that becomes unreadable in CI logs"
+      ]
     }
   ]
 }
