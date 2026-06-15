@@ -104,11 +104,31 @@ Full and dry runs use **identical** evidence, authoring instructions, semantic-q
 
 The conservative source scanner is for fast Markdown iteration, not authoritative scope. When `summary.apiModelSource` is `source-scan`, scope is `provisional` and the validator emits `BUILD_BACKED_SCOPE_REQUIRED`. Before authoring a full run or a selected dry-run packet, establish reflection-precise scope with `--build-api-model` (or generate DocFX managed-reference YAML). Treat a material fast/build-backed discrepancy as a blocker, not a rounding error.
 
+A fast `--project-manifest` result that yields unnamed packets, `projects: []`, or `metadataGroup: unknown` is not a usable plan for large example queues. That is still provisional source-scan scope. Immediately rerun packet discovery with `--build-api-model --project-manifest <temp-path>` (or use generated DocFX YAML) before planning example authoring, then continue from the reflection-backed packet set.
+
 ### Scope stability
 
 Target counts, diagnostic volume, ownership complexity, context pressure, and model usage limits never change the requested scope. A full run remains full regardless of queue size. Use project packets to keep authoring context bounded, continue through independent packets when one packet needs more debugging, and return to every unresolved diagnostic before final verification. Use dry-run only when the user explicitly requests a dry run, representative subset, or quality pilot.
 
 Reruns often replace a coarse queue with a more specific one: for example, `EXTENSION_SECTION_MISSING` may shrink only for `EXTENSION_METHOD_MISSING` to appear once the tables exist, or namespace repairs may surface the next layer of `EXAMPLE_MISSING` work. Treat that handoff as expected progress. Do not stop to summarize partial progress, ask whether to continue, or offer a "focus this area vs. just verify" menu while repairable diagnostics remain.
+
+An example-only queue is still incomplete. When `EXAMPLE_MISSING` is the only remaining diagnostic family — even 1,086 of them — the correct next step is more example authoring, not a completion report, checkpoint, final verification pass, dry-run suggestion, or user choice menu. Internal worries like "this is massive", "this will take multiple sessions", or "this may exceed context limits" are not user-facing stop conditions; solve them with packets and keep going.
+
+### EXAMPLE_MISSING micro-loop
+
+When the queue is dominated by `EXAMPLE_MISSING`, shrink your mental scope to the next concrete target instead of the total count.
+
+1. Take the next `EXAMPLE_MISSING` diagnostic from the repair plan or current fast-validator output.
+2. Read that target's public API surface and one relevant test, sample, or usage source.
+3. Write one consumer-facing example to the correct type-targeted overwrite file.
+4. Rerun the fast validator.
+5. Repeat for the next 3-5 examples, or whatever fits safely in the current turn.
+
+A "batch" does not need to be an architecturally complete namespace, packet, or package. A batch is any set of examples you can finish confidently before rerunning validation. Completeness emerges from iteration.
+
+If packet discovery stays weak even after `--build-api-model`, fall back to sequential repair in repair-plan order or alphabetical namespace order. Clear the next namespace's remaining examples (or the next 3-5 examples in it), rerun, and continue. A tool limitation is not a decision point.
+
+Final verification with `--build-api-model --validate-samples --verify-docfx-build` is reserved for the moment you intend to claim completion. While `remainingWorkItems > 0` or any diagnostics remain, stay on the fast `docfx.cs --json` loop and keep authoring.
 
 ### Working-tree dry run
 
