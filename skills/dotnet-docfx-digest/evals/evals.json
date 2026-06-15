@@ -914,6 +914,20 @@
         "Uses packeted batches plus fast reruns to repair incomplete extension tables and the remaining example inventory",
         "Runs the final build-backed command with `--build-api-model --validate-samples --verify-docfx-build` and does not claim completion until summary.canClaimCompletion is true with no remaining work items, gates, or diagnostics"
       ]
+    },
+    {
+      "id": 76,
+      "prompt": "Use dotnet-docfx-digest on a Cuemon-style repository after several repair batches. All non-example diagnostics are gone, but `EXAMPLE_MISSING` is still 1086. A fast `--project-manifest` run returns unnamed packets with `projects: []` and `metadataGroup: unknown` because the scope is still source-scan provisional.",
+      "expected_output": "The agent treats the 1086 `EXAMPLE_MISSING` items as the active core work, not a checkpoint. It does not produce a completion report, next-step menu, or approval pause. Instead it reruns packet discovery with `--build-api-model --project-manifest`, continues authoring type and extension examples packet by packet from that reflection-backed manifest, and if the packet set is still unusable it falls back to sequential repair in repair-plan or namespace order. It works the queue in small fix→rerun batches and delays final verification until the example queue is actually finished.",
+      "expectations": [
+        "Does not treat an example-only queue or its size as a reason to stop, summarize, checkpoint, or ask the user how to proceed",
+        "Does not offer a continue/focus/dry-run/review menu while `EXAMPLE_MISSING` remains non-zero",
+        "Recognizes unnamed or zero-project fast-manifest packets as provisional source-scan output and reruns packet discovery with `--build-api-model --project-manifest`",
+        "If the build-backed packet set is still unusable, falls back to sequential repair in repair-plan or namespace order instead of stopping",
+        "Uses a small fix → rerun micro-loop for examples rather than treating batch size as a planning blocker",
+        "Does not run a final completion report or completion-shaped verification pass while `EXAMPLE_MISSING` still remains",
+        "Continues example authoring and reserves `--build-api-model --validate-samples --verify-docfx-build` for the real end of the queue"
+      ]
     }
   ]
 }
