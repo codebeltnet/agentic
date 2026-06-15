@@ -87,6 +87,8 @@ When renaming a skill, update **all four** locations — the repo folder, the lo
 
 A sync mismatch means one side runs a stale version, which leads to confusing eval results and wasted iterations.
 
+After the source copy passes its deterministic tests, SHA-256 identity across the repo and all three local installs is sufficient installation verification. Do not rerun the same deterministic suites from a hash-identical installed copy; that duplicates time, compute, and token use without adding evidence. Run an installed-copy test only when install-path resolution, loader behavior, permissions, or an actual hash mismatch is the subject of the test.
+
 After changing any repo-managed skill, sync the touched files across the repo copy, `~/.claude/skills/<name>/`, `~/.agents/skills/<name>/`, and `~/.gemini/antigravity/skills/<name>/` before considering the task done.
 
 ## Skill Directory Structure
