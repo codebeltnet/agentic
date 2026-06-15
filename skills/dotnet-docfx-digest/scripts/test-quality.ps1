@@ -67,6 +67,14 @@ function Assert-NoDiagnostic {
     }
 }
 
+function Assert-Warning {
+    param([object]$Report, [string]$Code)
+
+    if (-not @($Report.warnings | Where-Object code -eq $Code)) {
+        throw "Expected warning '$Code' was not reported."
+    }
+}
+
 function New-DocfxJson {
     param([string[]]$ProjectFiles)
 
@@ -831,6 +839,103 @@ Availability: `Beta`
 } finally {
     if (Test-Path $prose) {
         Remove-Item -Path $prose -Recurse -Force
+    }
+}
+
+# ----------------------------------------------------------------------
+# Scenario: fast DocFX-YAML discovery must collapse C# 14 synthetic extension-block
+# containers back to the authored outer static class instead of requiring a standalone
+# `<G>$...` overwrite file.
+# ----------------------------------------------------------------------
+$yamlExtensionBlocks = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-yaml-extension-blocks-' + [guid]::NewGuid().ToString('N'))
+try {
+    $arrow = "$([char]0x2B07)$([char]0xFE0F)"
+    Write-Utf8File (Join-Path $yamlExtensionBlocks 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $yamlExtensionBlocks 'src/Acme.Core.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $yamlExtensionBlocks 'src/Extensions.cs') @'
+namespace Acme.Core;
+
+public static class EndpointExtensions
+{
+}
+'@
+    Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Core.csproj'))
+    Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/api/Acme.Core.EndpointExtensions.yml') @'
+items:
+- uid: Acme.Core.EndpointExtensions
+  parent: Acme.Core
+  type: Class
+  namespace: Acme.Core
+  name: EndpointExtensions
+  syntax:
+    content: public static class EndpointExtensions
+- uid: Acme.Core.EndpointExtensions.<G>$AB12CD34
+  parent: Acme.Core.EndpointExtensions
+  type: Class
+  namespace: Acme.Core
+  name: <G>$AB12CD34
+  syntax:
+    content: public sealed class <G>$AB12CD34
+- uid: Acme.Core.EndpointExtensions.<G>$AB12CD34.Normalize(System.String)
+  parent: Acme.Core.EndpointExtensions.<G>$AB12CD34
+  type: Method
+  namespace: Acme.Core
+  name: Normalize
+  syntax:
+    content: public static string Normalize(this string value)
+'@
+    Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/api/namespaces/Acme.Core.md') @"
+---
+uid: Acme.Core
+summary: *content
+---
+Use `EndpointExtensions` when text should be normalized at an ingress boundary before validation or comparison.
+
+Start with `EndpointExtensions` when callers want one explicit `Normalize` call directly on the incoming string.
+
+Availability: `Acme.Core`
+
+## Extension Members
+
+|Type|Ext|Methods|
+|---|---|---|
+|String|$arrow|`Normalize`|
+"@
+    Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/api/types/Acme.Core.EndpointExtensions.md') @'
+---
+uid: Acme.Core.EndpointExtensions
+example: *content
+---
+```csharp
+using Acme.Core;
+
+namespace Samples;
+
+public static class BoundaryInput
+{
+    public static string Normalize(string value) => value.Normalize();
+}
+```
+'@
+
+    $yamlExtensionReport = Invoke-Validator -Workspace $yamlExtensionBlocks
+    if ($yamlExtensionReport.summary.apiModelSource -ne 'docfx-yaml') {
+        throw "Expected docfx-yaml discovery for the synthetic extension-block fixture, got '$($yamlExtensionReport.summary.apiModelSource)'."
+    }
+
+    Assert-Warning -Report $yamlExtensionReport -Code 'DOCFX_EXTENSION_BLOCK_UNSUPPORTED'
+    Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXAMPLE_MISSING'
+    Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXAMPLE_TARGET_NOT_USED'
+    Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXTENSION_EXAMPLE_NOT_INVOKED'
+
+    Write-Host 'DocFX YAML extension-block regression passed.'
+} finally {
+    if (Test-Path $yamlExtensionBlocks) {
+        Remove-Item -Path $yamlExtensionBlocks -Recurse -Force
     }
 }
 

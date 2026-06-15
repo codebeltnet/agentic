@@ -1900,14 +1900,7 @@ internal static class DocfxValidator
             }
         }
 
-        // Emit a warning for namespaces that contain C# 14 extension blocks: DocFX issue #11010
-        // means those blocks do not yet generate correct API metadata. Extension methods declared
-        // with the classic `this` pattern are unaffected and remain supported.
-        foreach (var ns in namespaces.Values.Where(n => n.HasCSharp14ExtensionBlocks))
-        {
-            report.Warnings.Add(new Diagnostic("DOCFX_EXTENSION_BLOCK_UNSUPPORTED", null, ns.Name,
-                $"Namespace {ns.Name} contains C# 14 extension-block types. DocFX (issue #11010) does not currently generate correct API metadata for extension blocks, so generated UIDs for those members may be missing or synthetic. Classic static extension methods with 'this' parameters remain fully supported. Do not exclude these APIs or invent special rules; continue generating docs for all discoverable public APIs and document the limitation in the overwrite file when needed."));
-        }
+        AddExtensionBlockWarnings(namespaces.Values, report);
 
         var requiredExampleTargets = namespaces.Values
             .SelectMany(ns => ns.RequiredExampleTargets)
@@ -1978,6 +1971,11 @@ internal static class DocfxValidator
             allItems.AddRange(ParseManagedReferenceItems(file));
         }
 
+        var yamlTypeItemsByUid = allItems
+            .Where(item => item.Type is not null && YamlTypeKinds.Contains(item.Type, StringComparer.OrdinalIgnoreCase))
+            .GroupBy(item => item.Uid, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+
         var typeContextByUid = new Dictionary<string, (string Namespace, bool IsStatic)>(StringComparer.Ordinal);
         foreach (var item in allItems)
         {
@@ -1993,6 +1991,12 @@ internal static class DocfxValidator
             }
 
             var ns = GetOrAddNamespace(namespaces, nsName);
+            if (TryGetCSharp14ExtensionBlockOwnerUid(item.Uid, yamlTypeItemsByUid, out _))
+            {
+                ns.HasCSharp14ExtensionBlocks = true;
+                continue;
+            }
+
             var isStatic = Regex.IsMatch(item.Syntax, @"\bstatic\b");
             typeContextByUid[item.Uid] = (nsName, isStatic);
 
@@ -2024,6 +2028,12 @@ internal static class DocfxValidator
                 continue;
             }
 
+            var hasSyntheticExtensionBlockOwner = TryGetCSharp14ExtensionBlockOwnerUid(declaringUid, yamlTypeItemsByUid, out var authoredDeclaringUid);
+            if (hasSyntheticExtensionBlockOwner)
+            {
+                declaringUid = authoredDeclaringUid;
+            }
+
             var nsName = typeContextByUid.TryGetValue(declaringUid, out var ctx) && !string.IsNullOrEmpty(ctx.Namespace)
                 ? ctx.Namespace
                 : (!string.IsNullOrEmpty(item.Namespace) ? item.Namespace! : NamespaceFromUid(declaringUid));
@@ -2033,6 +2043,11 @@ internal static class DocfxValidator
             }
 
             var ns = GetOrAddNamespace(namespaces, nsName);
+            if (hasSyntheticExtensionBlockOwner)
+            {
+                ns.HasCSharp14ExtensionBlocks = true;
+            }
+
             var declaringClass = SimpleNameFromUid(declaringUid);
             AddExtensionMethod(ns, methodName, methodDisplayName, extendedType, declaringClass);
             AddExtensionTarget(ns, item.Uid, nsName, methodDisplayName, declaringUid);
@@ -2053,6 +2068,8 @@ internal static class DocfxValidator
                 AddTypeTarget(ns, uid, info.Namespace, info.DisplayName);
             }
         }
+
+        AddExtensionBlockWarnings(namespaces.Values, report);
 
         if (namespaces.Count == 0)
         {
@@ -2098,11 +2115,7 @@ internal static class DocfxValidator
             }
         }
 
-        foreach (var ns in namespaces.Values.Where(n => n.HasCSharp14ExtensionBlocks))
-        {
-            report.Warnings.Add(new Diagnostic("DOCFX_EXTENSION_BLOCK_UNSUPPORTED", null, ns.Name,
-                $"Namespace {ns.Name} contains C# 14 extension-block types. DocFX (issue #11010) does not currently generate correct API metadata for extension blocks, so generated UIDs for those members may be missing or synthetic. Classic static extension methods with 'this' parameters remain fully supported. Do not exclude these APIs or invent special rules; continue generating docs for all discoverable public APIs and document the limitation in the overwrite file when needed."));
-        }
+        AddExtensionBlockWarnings(namespaces.Values, report);
 
         var requiredExampleTargets = namespaces.Values
             .SelectMany(ns => ns.RequiredExampleTargets)
@@ -2337,6 +2350,15 @@ internal static class DocfxValidator
         }
 
         return info;
+    }
+
+    private static void AddExtensionBlockWarnings(IEnumerable<NamespaceInfo> namespaces, Report report)
+    {
+        foreach (var ns in namespaces.Where(n => n.HasCSharp14ExtensionBlocks))
+        {
+            report.Warnings.Add(new Diagnostic("DOCFX_EXTENSION_BLOCK_UNSUPPORTED", null, ns.Name,
+                $"Namespace {ns.Name} contains C# 14 extension-block types. DocFX (issue #11010) does not currently generate correct API metadata for extension blocks, so generated UIDs for those members may be missing or synthetic. Classic static extension methods with 'this' parameters remain fully supported. Do not exclude these APIs or invent special rules; continue generating docs for all discoverable public APIs and document the limitation in the overwrite file when needed."));
+        }
     }
 
     private static void AddTypeTarget(NamespaceInfo ns, string uid, string nsName, string displayName)
@@ -2593,6 +2615,28 @@ internal static class DocfxValidator
         var head = paren >= 0 ? methodUid[..paren] : methodUid;
         var lastDot = head.LastIndexOf('.');
         return lastDot > 0 ? head[..lastDot] : string.Empty;
+    }
+
+    private static bool TryGetCSharp14ExtensionBlockOwnerUid(string uid, IReadOnlyDictionary<string, YamlApiItem> yamlTypeItemsByUid, out string ownerUid)
+    {
+        ownerUid = string.Empty;
+
+        var markerIndex = uid.IndexOf(".<G>$", StringComparison.Ordinal);
+        if (markerIndex <= 0)
+        {
+            return false;
+        }
+
+        var candidateOwnerUid = uid[..markerIndex];
+        if (!yamlTypeItemsByUid.TryGetValue(candidateOwnerUid, out var ownerItem) ||
+            !string.Equals(ownerItem.Type, "Class", StringComparison.OrdinalIgnoreCase) ||
+            !Regex.IsMatch(ownerItem.Syntax, @"\bstatic\b"))
+        {
+            return false;
+        }
+
+        ownerUid = candidateOwnerUid;
+        return true;
     }
 
     private static int CountGenericArity(string generic)
@@ -4174,7 +4218,8 @@ internal static class DocfxValidator
                 ? Rel(repoRoot, Path.Combine(docfxWorkspace, "api", "types", $"{target.Uid}.md"))
                 : target.DeclaringTypeUid is null
                     ? null
-                    : Rel(repoRoot, Path.Combine(docfxWorkspace, "api", "namespaces", $"{target.DeclaringTypeUid}.md"));
+                    : Rel(repoRoot, Path.Combine(docfxWorkspace, "api", "types", $"{target.DeclaringTypeUid}.md"));
+            var expectedPathText = expectedPath is null ? "a readable overwrite file under `api/types/`" : $"`{expectedPath}`";
 
             if (qualityResults.Count > 0)
             {
@@ -4192,7 +4237,7 @@ internal static class DocfxValidator
 
             var message = target.Kind == ApiTargetKind.Type
                 ? $"Public non-abstraction type `{target.DisplayName}` requires a type-page DocFX overwrite example. Add an Examples section with a C# code fence to uid `{target.Uid}` in `{expectedPath}` or another overwrite file under `api/types/` that targets this exact type UID. Namespace overview examples do not satisfy this diagnostic. Keep `api/types/**/*.md` under `build.overwrite`, exclude `api/types/**` from `build.content`, and do not use `api/**/*.md` under either section."
-                : $"Public extension method `{target.DisplayName}` (declaring type `{target.DeclaringTypeUid ?? "(unknown)"}`, owner {DescribeOwner(target.Namespace, namespaceOwners)}) requires a DocFX overwrite example. Add an Examples section with a C# code fence to the declaring extension class uid `{expectedUid}` or the namespace page `{target.Namespace}` by default. The example must explicitly call `{target.DisplayName}`{(namespaceOwners.TryGetValue(target.Namespace, out var owns) && owns.Count(o => !o.IsTest) > 1 ? " — prefer receiver extension syntax because the container name is shared across assemblies" : string.Empty)}. Candidate overwrite sections inspected: {DescribeExtensionCandidates(candidates, qualityResults, repoRoot)}. Do not create URL-encoded or hash-like method UID filenames; use a method UID section only when the exact generated UID is verified and can live in a readable overwrite file.";
+                : $"Public extension method `{target.DisplayName}` (declaring type `{target.DeclaringTypeUid ?? "(unknown)"}`, owner {DescribeOwner(target.Namespace, namespaceOwners)}) requires a DocFX overwrite example. Add an Examples section with a C# code fence to the declaring extension class uid `{expectedUid}` in {expectedPathText} or another readable overwrite file under `api/types/` that targets that class UID. The example must explicitly call `{target.DisplayName}`{(namespaceOwners.TryGetValue(target.Namespace, out var owns) && owns.Count(o => !o.IsTest) > 1 ? " — prefer receiver extension syntax because the container name is shared across assemblies" : string.Empty)}. Candidate overwrite sections inspected: {DescribeExtensionCandidates(candidates, qualityResults, repoRoot)}. Do not create URL-encoded or hash-like method UID filenames; use a method UID section only when the exact generated UID is verified and can live in a readable overwrite file.";
 
             report.Errors.Add(new Diagnostic("EXAMPLE_MISSING", expectedPath, target.Namespace, message));
         }
