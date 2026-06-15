@@ -65,7 +65,7 @@
     {
       "id": 6,
       "prompt": "Use dotnet-docfx-digest on this repository.",
-      "expected_output": "Agent treats the request as a repo-wide DocFX documentation audit instead of asking what to document first. It runs scripts/agents.cs, inspects AGENTS.md, docfx.json, source projects, public API, tests, samples, overwrite files, namespace pages, and availability includes, runs scripts/docfx.cs to collect deterministic findings and writes a deterministic `--assessment-queue` for noisy diagnostics, uses that assessment work queue as the work queue, runs with --verify-docfx-build before completion, repairs missing complementary DocFX documentation that can be derived from source evidence, reads the DocFX overwrite reference when creating or repairing overwrite files, and asks for clarification only if discovery exposes a correctness-affecting choice.",
+      "expected_output": "Agent treats the request as a repo-wide DocFX documentation audit instead of asking what to document first. It treats the bare/direct skill invocation as autonomous non-human execution, runs scripts/agents.cs, inspects AGENTS.md, docfx.json, source projects, public API, tests, samples, overwrite files, namespace pages, and availability includes, runs scripts/docfx.cs to collect deterministic findings and writes a deterministic `--assessment-queue` for noisy diagnostics, uses that assessment work queue as the work queue, runs with --verify-docfx-build before completion, repairs missing complementary DocFX documentation that can be derived from source evidence, reads the DocFX overwrite reference when creating or repairing overwrite files, and asks for clarification only if discovery exposes a correctness-affecting choice.",
       "expectations": [
         "Does not start by asking the user which API or namespace to document",
         "Runs scripts/agents.cs to ensure the repository AGENTS.md contains the managed DocFX maintenance block",
@@ -74,6 +74,7 @@
         "For multi-diagnostic output, writes and reads a deterministic `--assessment-queue` and uses it as the work queue before editing",
         "Creates or updates missing namespace overview pages, Extension Members tables, examples, and availability notes that can be derived from evidence",
         "Reads references/docfx-overwrite-files.md before creating or repairing DocFX overwrite files",
+        "Treats the bare/direct skill invocation as autonomous and does not ask for a continue/review menu while repairable diagnostics remain",
         "Asks a concise clarifying question only after inspection finds a correctness-affecting unresolved choice"
       ]
     },
@@ -262,6 +263,18 @@
         "Adds both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` in docfx.json",
         "Excludes both `api/namespaces/**` and `api/types/**` from `build.content` in docfx.json",
         "Does not treat namespace generation and type generation as mutually exclusive"
+      ]
+    },
+    {
+      "id": 20.1,
+      "prompt": "Use dotnet-docfx-digest on a repository that has no live DocFX workspace at the root, but does contain scaffold template files such as `skills/dotnet-new-lib-slnx/assets/library/.docfx/docfx.json` with placeholder metadata globs like `{PROJECT_NAME}/**.csproj`.",
+      "expected_output": "Agent does not mistake the scaffold template DocFX config for the repository's active documentation workspace. It runs the installed scripts against the real repository root, ignores fallback `docfx.json` candidates whose metadata resolves no projects, reports that no usable DocFX configuration exists for the root repository, and does not surface `PROJECT_DISCOVERY_FAILED` from the template asset as if it were the live repo config.",
+      "expectations": [
+        "Does not treat scaffold or template `docfx.json` files under skill assets as the active repository DocFX workspace when their metadata globs resolve no projects",
+        "Reports the missing live DocFX workspace as a no-usable-config finding rather than a template-driven project-discovery failure",
+        "Avoids surfacing `PROJECT_DISCOVERY_FAILED` for placeholder template globs like `{PROJECT_NAME}/**.csproj` when no explicit `--docfx` path was requested",
+        "Still honors an explicit `--docfx` path if the user points at a specific template or test fixture intentionally",
+        "Runs `scripts/agents.cs` against the repository root before reporting the validator result"
       ]
     },
     {
@@ -920,12 +933,12 @@
     {
       "id": 76,
       "prompt": "Use dotnet-docfx-digest on a Cuemon-style repository after several repair batches. All non-example diagnostics are gone, but `EXAMPLE_MISSING` is still 1086. A fast `--project-manifest` run returns unnamed packets with `projects: []` and `metadataGroup: unknown` because the scope is still source-scan provisional.",
-      "expected_output": "The agent treats the 1086 `EXAMPLE_MISSING` items as the active core work, not a checkpoint. It does not produce a completion report, next-step menu, or approval pause. Instead it reruns packet discovery with `--build-api-model --project-manifest`, continues authoring type and extension examples packet by packet from that reflection-backed manifest, and if the packet set is still unusable it falls back to sequential repair in assessment work queue or namespace order. It works the queue in small fix→rerun batches and delays final verification until the example queue is actually finished.",
+      "expected_output": "The agent treats the 1086 `EXAMPLE_MISSING` items as the active core work, not a checkpoint. It does not produce a completion report, next-step menu, or approval pause. Instead it reruns packet discovery with `--build-api-model --project-manifest`, continues authoring type and extension examples packet by packet from that reflection-backed manifest, and if the packet set is still unusable it falls back to sequential repair in assessment work queue or namespace-first order. It works the queue in small fix→rerun batches and delays final verification until the example queue is actually finished.",
       "expectations": [
         "Does not treat an example-only queue or its size as a reason to stop, summarize, checkpoint, or ask the user how to proceed",
         "Does not offer a continue/focus/dry-run/review menu while `EXAMPLE_MISSING` remains non-zero",
         "Recognizes unnamed or zero-project fast-manifest packets as provisional source-scan output and reruns packet discovery with `--build-api-model --project-manifest`",
-        "If the build-backed packet set is still unusable, falls back to sequential repair in assessment work queue or namespace order instead of stopping",
+        "If the build-backed packet set is still unusable, falls back to sequential repair in assessment work queue or namespace-first order instead of stopping",
         "Uses a small fix → rerun micro-loop for examples rather than treating batch size as a planning blocker",
         "Does not run a final completion report or completion-shaped verification pass while `EXAMPLE_MISSING` still remains",
         "Continues example authoring and reserves `--build-api-model --validate-samples --verify-docfx-build` for the real end of the queue"
@@ -945,14 +958,43 @@
     {
       "id": 78,
       "prompt": "Use dotnet-docfx-digest on a repo-wide Cuemon-style audit. After your first repair pass, the next fast `docfx.cs --json` rerun still reports `summary.canClaimCompletion=false`, `summary.remainingWorkItems=1583`, `EXAMPLE_MISSING=1122`, `EXTENSION_METHOD_MISSING=157`, and `EXTENSION_METHOD_SIGNATURE_MISSING=22`. `EXTENSION_SECTION_MISSING` dropped sharply, so the validator can now see deeper table problems. Continue autonomously.",
-      "expected_output": "The agent treats the run as incomplete, does not emit a \"What's fixed / Remaining work / Next steps\" checkpoint, interprets the newly surfaced diagnostics as expected progress, establishes a reflection-backed packet manifest with `--build-api-model --project-manifest` before more large-scale example authoring if bounded packets are not already active, prioritizes `EXAMPLE_MISSING` and related example-quality work ahead of prose-only cleanup once structural namespace/extension prerequisites exist, and keeps repairing until the completion contract is clean or a true external blocker is reported with the exact command and exit code.",
+      "expected_output": "The agent treats the run as incomplete, does not emit a \"What's fixed / Remaining work / Next steps\" checkpoint, interprets the newly surfaced diagnostics as expected progress, keeps `EXTENSION_METHOD_MISSING` and `EXTENSION_METHOD_SIGNATURE_MISSING` in the namespace-layer `Extension Members` repair queue rather than switching prematurely to example-only authoring, establishes a reflection-backed packet manifest with `--build-api-model --project-manifest` before more large-scale example authoring if bounded packets are not already active, names the active queue source in any continuation reply, explicitly restates the fast `docfx.cs --json` rerun cadence and the exact final `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` completion gate, and keeps repairing until the completion contract is clean or a true external blocker is reported with the exact command and exit code.",
       "expectations": [
         "Does not stop with a progress table, file-count summary, remaining-work dashboard, or next-step list while `summary.remainingWorkItems` is still greater than zero",
         "Treats newly surfaced specific diagnostics after fixing coarse ones as expected progress rather than regression",
+        "Treats `EXTENSION_METHOD_MISSING` and `EXTENSION_METHOD_SIGNATURE_MISSING` as namespace-layer table repairs that must be finished before resuming net-new type/example authoring",
         "Runs or plans `scripts/docfx.cs --build-api-model --project-manifest <path>` before continuing large-scale example authoring when bounded packets are not already available",
         "Uses the resulting packet manifest or a sequential namespace/assessment queue as the active work queue instead of asking whether to focus a subset or just verify",
-        "Prioritizes `EXAMPLE_MISSING` and related example-quality diagnostics ahead of prose-only `NAMESPACE_PROSE_*` repairs once structural prerequisites are in place",
+        "If it sends a continuation response after the rerun, that response names the active queue source explicitly instead of speaking generically about working packet-by-packet",
+        "If it sends a continuation response after the rerun, that response explicitly states the fast `docfx.cs --json` rerun cadence and the exact final `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` completion gate plus the clean JSON completion contract",
+        "Finishes namespace pages, namespace prose, embedded-overwrite cleanup, and Extension Members work across the active queue before shifting into net-new type/example authoring",
         "Reports the exact command, exit code, and blocker only if a genuine external condition prevents further progress"
+      ]
+    },
+    {
+      "id": 79,
+      "prompt": "Invoke dotnet-docfx-digest directly with no extra arguments in a host that auto-triggered the skill for a repository-wide docs run. The repository still has hundreds of repairable DocFX diagnostics after the first rerun.",
+      "expected_output": "The agent treats the bare skill invocation as autonomous non-human execution, recognizes the host's direct no-argument re-entry as the same repo-wide continuation rather than a fresh human checkpoint, and keeps repairing even when the first rerun still leaves hundreds of repairable diagnostics. It does not ask startup scoping questions, review/continue questions, or approval-style checkpoint prompts. Mid-run output, if any, names the active queue source, the fast rerun cadence, and the final completion gate instead of presenting a decision menu.",
+      "expectations": [
+        "Assumes repo-wide scope from the direct no-argument invocation instead of asking what to document first",
+        "Treats the host's direct no-argument re-entry as the same repo-wide continuation rather than as a fresh prompt that needs scoping or approval",
+        "Treats hundreds of remaining repairable diagnostics after the first rerun as the active repair queue rather than a checkpoint or handoff point",
+        "Treats the run as autonomous/non-human and does not ask whether to continue, focus a subset, or review changes while repairable diagnostics remain",
+        "Does not emit a progress table, remaining-work dashboard, or approval pause after a repair batch",
+        "If no reflection-backed packet manifest is active yet, it names `scripts/docfx.cs --build-api-model --project-manifest <path>` or an explicit sequential assessment-work-queue / namespace-first fallback as the queue source instead of generic 'packet-by-packet' wording",
+        "If it sends a continuation response, that response names the active queue source, fast rerun cadence, and final completion gate rather than a decision menu"
+      ]
+    },
+    {
+      "id": 80,
+      "prompt": "Use dotnet-docfx-digest on a full-repository audit where the first fast validator run reports both namespace-layer work (`NAMESPACE_PAGE_MISSING`, `NAMESPACE_USAGE_GUIDANCE_MISSING`, `NAMESPACE_START_HERE_MISSING`, `EXTENSION_SECTION_MISSING`, `NAMESPACE_EMBEDDED_OVERWRITE_SECTION`) and hundreds of `EXAMPLE_MISSING` diagnostics for type pages.",
+      "expected_output": "The agent performs a namespace-first pass across the active queue before starting net-new type/example authoring. It fixes docfx overwrite layout, creates or repairs namespace overview pages, restores namespace ownership by moving embedded type/member examples out of namespace pages, fills `Extension Members` tables, and rewrites namespace prose/usage/start-here guidance across the affected namespaces. Only after that namespace layer is clean, or the rerun shows only example-driven work remains, does it begin the type/example micro-loop.",
+      "expectations": [
+        "Does not start net-new type-page or extension-method example authoring while namespace-layer diagnostics still remain elsewhere in the active queue",
+        "Treats namespace pages, namespace prose, embedded-overwrite cleanup, Extension Members tables, and overwrite-layout fixes as the first repo-wide pass",
+        "Moves misplaced type/member example mappings out of namespace pages into readable `.docfx/api/types/` files as part of the namespace repair",
+        "Reruns fast validation after the namespace-first pass and only then shifts into the EXAMPLE_MISSING micro-loop if example-driven work remains",
+        "Keeps the run autonomous and does not ask the user to choose between finishing namespaces or moving on to types"
       ]
     }
   ]
