@@ -25,7 +25,7 @@ The `X.Y.Z` namespace contains types that ...
 
 If `*content` is not used, DocFX assigns the Markdown body to the `conceptual` property. **Do not rely on this default for managed reference (API) pages.** When `conceptual` is set on a managed reference page, some DocFX templates suppress the auto-generated member tables (constructors, methods, properties), leaving only the custom content visible. Always use an explicit property mapping.
 
-For **type-page and extension-method examples**, use the `example` array property instead of `summary`:
+For **type-page and extension-method examples**, use the `example` array property instead of `summary` on a type-targeted overwrite file, usually the declaring extension class page under `.docfx/api/types/`:
 
 ```markdown
 ---
@@ -59,6 +59,8 @@ Do **not** use `summary: *content` for type example files. That replaces only th
 
 DocFX applies overwrite models by `uid`. If the same `uid` appears more than once in one overwrite file, later sections in that same file override earlier sections. Across different overwrite files, ordering is not deterministic, so keep competing sections for the same `uid` together or consolidate them.
 
+Namespace overview files are a deliberate exception to "multiple sections can work." Keep `.docfx/api/namespaces/{Namespace}.md` single-UID and namespace-scoped. Do not append secondary `uid:` / `example:` mappings there, even for extension methods; move those examples to readable type-targeted files under `.docfx/api/types/`, typically the declaring extension class page.
+
 ## Safe structured overwrite writer
 
 For repeatable overwrite creation, prefer `docfx.cs --write-overwrite <request.json>` over hand-assembling fenced Markdown with ad-hoc scripts. The request is JSON with `file`, `uid`, `mapping` (`example`, `summary`, or `remarks`), optional `prose`, and optional `fence`. The writer validates the YAML and balanced fences, refuses duplicate UIDs in the same file (`OVERWRITE_UID_DUPLICATE`), refuses unbalanced fences (`OVERWRITE_FENCE_UNBALANCED`), refuses to replace a file that already had uncommitted changes (`OVERWRITE_DIRTY_REFUSED`), preserves the target file's existing BOM and line endings, and prints a change preview. It writes only structured content you already authored — it never generates prose, selects members, or synthesizes examples. Normal surgical edits may still use your editor; the writer exists for repeatable, encoding-safe overwrite creation.
@@ -91,14 +93,14 @@ The `build.overwrite` entry in `docfx.json` tells DocFX which conceptual Markdow
 
 When a repository has no obvious overwrite location, inspect `docfx.json` first. Look at `build.content`, `build.overwrite`, `metadata.dest`, include paths, and existing Markdown layout before deciding where a new namespace page belongs.
 
-If a public non-abstraction type lacks an example, create a matching type-UID overwrite section in a separate per-type Markdown file by default, and make sure that file is included by `build.overwrite` so the example appears on the generated type API page. In Codebelt repositories, keep type overwrite files under `.docfx/api/types/{TypeUid}.md`, such as `.docfx/api/types/X.Y.Z.Class1.md`, and namespace overview pages under `.docfx/api/namespaces/{Namespace}.md`. File location does not decide whether the page is a namespace page or a type page; the YAML front matter `uid` does. Keep both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, exclude both `api/namespaces/**` and `api/types/**` from `build.content`, and do not use `api/**/*.md` under either section. If authored overwrite Markdown already exists directly under `.docfx/api/*.md`, move it into either `api/namespaces/` (for namespace UIDs) or `api/types/` (for type UIDs) without deleting the content. Namespace overview pages and `Extension Members` tables complement examples; they do not replace type-page examples.
+If a public non-abstraction type lacks an example, create a matching type-UID overwrite section in a separate per-type Markdown file by default, and make sure that file is included by `build.overwrite` so the example appears on the generated type API page. Extension-method examples follow the same type-targeted pattern by default: keep them on the declaring extension class page or another readable file under `.docfx/api/types/`, not inside the namespace overview file. In Codebelt repositories, keep type overwrite files under `.docfx/api/types/{TypeUid}.md`, such as `.docfx/api/types/X.Y.Z.Class1.md`, and namespace overview pages under `.docfx/api/namespaces/{Namespace}.md`. File location does not decide whether the page is a namespace page or a type page; the YAML front matter `uid` does. Keep both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, exclude both `api/namespaces/**` and `api/types/**` from `build.content`, and do not use `api/**/*.md` under either section. If authored overwrite Markdown already exists directly under `.docfx/api/*.md`, move it into either `api/namespaces/` (for namespace UIDs) or `api/types/` (for type UIDs) without deleting the content. Namespace overview pages and `Extension Members` tables complement examples; they do not replace type-page examples.
 
 ## Practical Rules
 
 - Run `agents.cs` before finishing so root `AGENTS.md` receives persistent DocFX maintenance guidance.
 - Use overwrite files to complement generated API metadata, not to hide incorrect XML documentation.
 - Correct bad XML comments at source when the generated summary is wrong.
-- Use namespace overview pages for namespace fly-ins and extension-member tables.
+- Use namespace overview pages only for namespace fly-ins and extension-member tables; keep type/member overwrite mappings out of them.
 - Keep examples and remarks close to the API item or namespace they explain.
 - Create per-type overwrite files for missing concrete-type examples even when the repository currently has only namespace overview files.
 - Keep namespace overview Markdown under `.docfx/api/namespaces/` and type overwrite Markdown under `.docfx/api/types/`. Move legacy `.docfx/api/*.md` files into the appropriate subdirectory: namespace UIDs go to `api/namespaces/`, type UIDs go to `api/types/`.

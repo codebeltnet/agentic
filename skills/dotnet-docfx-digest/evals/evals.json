@@ -28,10 +28,12 @@
     {
       "id": 3,
       "prompt": "Add a usage example to the `Acme.Text` namespace page for the `Greeter` class. Base it on the existing unit test `GreeterTest.Greet_WithName_ReturnsGreeting`.",
-      "expected_output": "Agent converts the Arrange/Act/Assert test into a real-life consumer-oriented, buildable example without raw assertions, and verifies it compiles with scripts/docfx.cs.",
+      "expected_output": "Agent preserves the `Acme.Text` namespace page as a namespace-scoped overview, converts the Arrange/Act/Assert test into a real-life consumer-oriented, buildable example on the `Greeter` type page under `.docfx/api/types/` (or an equivalent type-targeted overwrite file), and verifies it compiles with scripts/docfx.cs.",
       "expectations": [
         "Derives the example from the referenced test rather than inventing behavior",
         "Converts the Arrange/Act/Assert structure into developer-oriented usage instead of pasting raw assertions",
+        "Does not append a secondary `uid:` / `example:` block to the namespace page after `Extension Members` or other namespace guidance",
+        "Places the `Greeter` example on a type-targeted overwrite file under `.docfx/api/types/` rather than on the namespace overview file",
         "Produces a minimal, deterministic, copy/paste-ready C# example with a real using directive for Acme.Text",
         "Avoids pseudo-code, ellipses, and hidden helpers in the sample",
         "Verifies the sample compiles via scripts/docfx.cs or an equivalent build command"
@@ -84,7 +86,7 @@
         "Creates or moves readable type-targeting DocFX overwrite files under `.docfx/api/types/` for public non-abstraction type examples",
         "Keeps `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` only and excludes `api/namespaces/**` and `api/types/**` from `build.content`",
         "Places a public ApplicationHostFactory example on the ApplicationHostFactory type page/overwrite section rather than only on the namespace page",
-        "Creates or updates overwrite content for public extension method examples, or places the example on the extension class or namespace page while explicitly demonstrating the method",
+        "Creates or updates overwrite content for public extension method examples on the declaring extension class page or another readable type-targeted file under `.docfx/api/types/` while explicitly demonstrating the method",
         "Uses generated DocFX UIDs or verified metadata instead of inventing overwrite UIDs",
         "Runs the Completion Repair Loop after edits by rerunning scripts/docfx.cs --json, fixing remaining EXAMPLE_MISSING and overwrite-layout diagnostics, and updating the example inventory before claiming completion",
         "Uses --verify-docfx-build for final DocFX build verification",
@@ -177,10 +179,10 @@
     {
       "id": 14,
       "prompt": "Use dotnet-docfx-digest on a Carter-style repository where `EndpointConventionBuilderExtensions` has generic extension methods whose generated DocFX method UIDs look like `Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.<G>$6D0D8037DBBD61D10816ECA5F93B896F`. The previous run created `.docfx/api/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.%3CG%3E%246D0D8037DBBD61D10816ECA5F93B896F.md`, added `// dotnet-docfx-digest:skip-compile - Full example requires Cuemon.Extensions.AspNetCore.Text.Yaml package`, and left the namespace page as a thin table. Repair the docs.",
-      "expected_output": "Agent removes or avoids the encoded/hash-like method UID filename, places extension-method examples in a readable declaring-class overwrite file such as `.docfx/api/namespaces/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.md` or the namespace page, does not use a package-requirement skip marker as a compile escape hatch, either makes the sample compile or reports a precise deterministic blocker, and restores the namespace page as a curated overview with developer-friendly purpose, type-family context, extension-method groups, availability, and pointers to detailed examples.",
+      "expected_output": "Agent removes or avoids the encoded/hash-like method UID filename, places extension-method examples in a readable declaring-class overwrite file such as `.docfx/api/types/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.md`, does not use a package-requirement skip marker as a compile escape hatch, either makes the sample compile or reports a precise deterministic blocker, and restores the namespace page as a curated overview with developer-friendly purpose, type-family context, extension-method groups, availability, and pointers to detailed examples.",
       "expectations": [
         "Does not create or keep URL-encoded/hash-like method UID filenames for generic extension methods such as `%3CG%3E%24...`",
-        "Uses a readable declaring extension class overwrite file or namespace page for extension-method examples",
+        "Uses a readable declaring extension class overwrite file under `.docfx/api/types/` for extension-method examples",
         "Ensures the example explicitly calls the documented extension method",
         "Does not use `// dotnet-docfx-digest:skip-compile - Full example requires ... package` as the final state",
         "Documents any required package or setup outside the code fence when relevant",
@@ -238,13 +240,13 @@
     {
       "id": 19,
       "prompt": "Run dotnet-docfx-digest with `--changed-only` after I edited a C# 14 extension-block file in the `Codebelt.Extensions.Carter` namespace: `public static class EndpointConventionBuilderExtensions { extension(IEndpointConventionBuilder builder) { public IEndpointConventionBuilder Produces<TResponse>(int statusCode = StatusCodes.Status200OK, params string[] contentTypes) { ... } } }`. The previous run created `.docfx/api/namespaces/EndpointConventionBuilderExtensions.Produces-extensions.md` whose YAML `uid` is `Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.<G>$6D0D8037DBBD61D10816ECA5F93B896F`, and the namespace page still needs a real extension-method example.",
-      "expected_output": "Agent treats the compiler-generated `<G>$...` container as an implementation artifact of the outer `EndpointConventionBuilderExtensions` type, so the repair path stays on readable declaring-class or namespace overwrite pages. `--changed-only` still notices the edited extension-block source file, surfaces the missing example work, and avoids treating the synthetic nested type as a standalone documented API target.",
+      "expected_output": "Agent treats the compiler-generated `<G>$...` container as an implementation artifact of the outer `EndpointConventionBuilderExtensions` type, so the repair path stays on readable declaring-class overwrite pages under `.docfx/api/types/`. `--changed-only` still notices the edited extension-block source file, surfaces the missing example work, and avoids treating the synthetic nested type as a standalone documented API target.",
       "expectations": [
         "Collapses compiler-generated extension-block containers such as `<G>$...` back to the authored outer static class when choosing extension-method example targets",
         "Does not treat the synthetic nested extension-block type as a required public type example target",
-        "Keeps the required example location on a readable declaring-class overwrite page or the namespace page instead of a synthetic method/type UID file",
+        "Keeps the required example location on a readable declaring-class overwrite page under `.docfx/api/types/` instead of a synthetic method/type UID file",
         "Under `--changed-only`, recognizes the edited extension-block source file as touching the `Produces` extension method even though the method declaration no longer uses `this` syntax",
-        "Still reports missing extension-method examples until a readable declaring-class or namespace overwrite file explicitly calls `Produces`"
+        "Still reports missing extension-method examples until a readable declaring-class overwrite file explicitly calls `Produces`"
       ]
     },
     {
@@ -338,11 +340,11 @@
     {
       "id": 27,
       "prompt": "Run dotnet-docfx-digest on a repository. Confirm that the validator does not depend on DocFX-generated hash filenames like `*.md.G-*` or URL-encoded method UID filenames as source truth.",
-      "expected_output": "Agent discovers required example targets from compiled assembly metadata, not from DocFX-generated hash filenames. It reports `EXAMPLE_MISSING` when no overwrite file under `api/types/` or the namespace page has an example for the required UID. Hash-named files that may exist from a previous run do not satisfy the example requirement.",
+      "expected_output": "Agent discovers required example targets from compiled assembly metadata, not from DocFX-generated hash filenames. It reports `EXAMPLE_MISSING` when no overwrite file under `api/types/` has an example for the required UID. Hash-named files that may exist from a previous run do not satisfy the example requirement.",
       "expectations": [
         "Discovers required example targets from compiled assembly reflection, not from DocFX hash filenames",
         "Does not use `*.md.G-*` files as evidence that an example exists",
-        "Reports `EXAMPLE_MISSING` even if a hash-named file exists but the correct UID is not in an overwrite file under `api/types/` or the namespace page",
+        "Reports `EXAMPLE_MISSING` even if a hash-named file exists but the correct UID is not in an overwrite file under `api/types/`",
         "Does not create hash-named overwrite files as repair actions"
       ]
     },
@@ -886,6 +888,18 @@
         "Reports a complete Changed-page review table for the actual changed pages, not only the validator summary or a file list",
         "Checks specifically for repeated sentence and code structures across the pilot",
         "Presents representative output for human review before a full run"
+      ]
+    },
+    {
+      "id": 74,
+      "prompt": "A prior dotnet-docfx-digest run put raw `uid:` / `example:` overwrite sections directly after `## Extension Members` inside `.docfx/api/namespaces/Acme.Extensions.Net.md`, so the namespace page now mixes overview content with extension-method examples. Repair the docs and keep the quality bar from the skill instructions.",
+      "expected_output": "Agent treats the namespace page as mixed-ownership documentation, surfaces or repairs the embedded-overwrite defect, keeps the namespace overview single-uid and namespace-scoped, moves the extension-method example mappings into readable type-targeted overwrite files under `.docfx/api/types/` (typically the declaring extension class page), reruns validation, and does not leave secondary `uid:` / `example:` blocks after the namespace overview.",
+      "expectations": [
+        "Recognizes or surfaces the namespace page as invalid mixed namespace/type content rather than accepting the embedded overwrite sections",
+        "Keeps `.docfx/api/namespaces/Acme.Extensions.Net.md` limited to the namespace uid/summary, fly-in prose, availability, related links, and `Extension Members` table",
+        "Moves extension-method examples to readable type-targeted overwrite files under `.docfx/api/types/`, typically the declaring extension class page",
+        "Does not append secondary `uid:` / `example:` sections after `Extension Members` on the namespace page",
+        "Reruns scripts/docfx.cs --json and treats any remaining namespace-ownership or example diagnostic as blocking completion"
       ]
     }
   ]

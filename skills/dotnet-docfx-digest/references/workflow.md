@@ -194,6 +194,8 @@ If you're trying to ..., start with `PrimaryType` or `PrimaryExtensions`.
 
 Remove the `Extension Members` section when the namespace has no public extension methods. Adjust the include path to match the actual file location.
 
+Namespace overview files stay single-UID and stop after the fly-in, availability, related links, and optional `Extension Members` table. Do not append secondary `uid:` / `example:` mappings there; put extension-method examples on the declaring extension class page or another readable type-targeted file under `.docfx/api/types/`.
+
 ## Type example shape
 
 > **DocFX overwrite Markdown only.** This shape is for writing DocFX overwrite content. Do not create tests from it. Tests are evidence, not output — use tests to understand behavior, then transform that knowledge into consumer-facing examples.
@@ -263,7 +265,7 @@ Bad examples:
 - `EndpointConventionBuilderExtensions.-G-6D0D8037DBBD61D10816ECA5F93B896F.md`
 - `EndpointConventionBuilderExtensions.%3CT%3E...md`
 
-Keep the filename readable, place the example in the declaring extension class file or the namespace page, and let the YAML `uid` determine what model receives the content.
+Keep the filename readable, place the example in the declaring extension class file or another readable file under `.docfx/api/types/`, and let the YAML `uid` determine what model receives the content. Do not append member-level overwrite sections to the namespace page.
 
 ## Verification checklist
 
