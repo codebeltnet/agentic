@@ -104,6 +104,54 @@ $projectCsproj = @'
 '@
 
 try {
+    $templateOnlyWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-template-only-' + [guid]::NewGuid().ToString('N'))
+    try {
+        Write-Utf8File (Join-Path $templateOnlyWorkspace 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+        Write-Utf8File (Join-Path $templateOnlyWorkspace 'src/Utility/Utility.csproj') $projectCsproj
+        Write-Utf8File (Join-Path $templateOnlyWorkspace 'src/Utility/Utility.cs') @'
+namespace Acme.Utility;
+
+public sealed class Tool
+{
+    public int Attempts { get; set; }
+}
+'@
+        Write-Utf8File (Join-Path $templateOnlyWorkspace 'skills/dotnet-new-lib-slnx/assets/library/.docfx/docfx.json') @'
+{
+  "metadata": [{
+    "src": [{ "src": "../src", "files": ["{PROJECT_NAME}/**.csproj"] }],
+    "dest": "api",
+    "properties": { "TargetFramework": "{DOCFX_TARGET_FRAMEWORK}" }
+  }],
+  "build": {
+    "content": [{ "files": ["*.md"] }],
+    "overwrite": [{ "files": ["api/namespaces/**/*.md", "api/types/**/*.md"] }],
+    "dest": "_site"
+  }
+}
+'@
+
+        $templateOnly = Invoke-Validator -Workspace $templateOnlyWorkspace
+        Assert-Diagnostic -Report $templateOnly -Code 'DOCFX_CONFIG_MISSING'
+        Assert-NoDiagnostic -Report $templateOnly -Code 'PROJECT_DISCOVERY_FAILED'
+        $templateOnlyDocfxPath = if ($templateOnly.PSObject.Properties.Match('docfxPath').Count -gt 0) {
+            $templateOnly.docfxPath
+        } else {
+            $null
+        }
+        if ($templateOnlyDocfxPath) {
+            throw "Template-only fixture should not resolve a docfxPath, but returned '$templateOnlyDocfxPath'."
+        }
+    } finally {
+        if (Test-Path $templateOnlyWorkspace) {
+            Remove-Item $templateOnlyWorkspace -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     $arrow = "$([char]0x2B07)$([char]0xFE0F)"
     Write-Utf8File (Join-Path $workspace 'AGENTS.md') @'
 <!-- dotnet-docfx-digest:start -->

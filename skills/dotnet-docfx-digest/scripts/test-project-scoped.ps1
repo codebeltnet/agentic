@@ -84,6 +84,8 @@ function Initialize-GitRepo {
     Push-Location $Workspace
     try {
         & git init -q 2>$null | Out-Null
+        & git config core.autocrlf false 2>$null | Out-Null
+        & git config core.safecrlf false 2>$null | Out-Null
         & git -c user.email=t@e.com -c user.name=t add -A 2>$null | Out-Null
         & git -c user.email=t@e.com -c user.name=t commit -q -m base 2>$null | Out-Null
     } finally { Pop-Location }

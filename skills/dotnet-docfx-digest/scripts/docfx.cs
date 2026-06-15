@@ -492,12 +492,6 @@ internal static class DocfxValidator
             return atRoot;
         }
 
-        // Fall back to the first docfx.json found anywhere under the repo (excluding build output).
-        foreach (var file in EnumerateFiles(repoRoot, "docfx.json"))
-        {
-            return file;
-        }
-
         return null;
     }
 
