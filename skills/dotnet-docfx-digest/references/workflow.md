@@ -104,9 +104,9 @@ Full and dry runs use **identical** evidence, authoring instructions, semantic-q
 
 The conservative source scanner is for fast Markdown iteration, not authoritative scope. When `summary.apiModelSource` is `source-scan`, scope is `provisional` and the validator emits `BUILD_BACKED_SCOPE_REQUIRED`. Before authoring a full run or a selected dry-run packet, establish reflection-precise scope with `--build-api-model` (or generate DocFX managed-reference YAML). Treat a material fast/build-backed discrepancy as a blocker, not a rounding error.
 
-### Quality-risk pilot stop
+### Scope stability
 
-Before editing, read `qualityRisk` in the JSON. A run is high-risk when standalone targets exceed 100, extension targets exceed 100, the missing-to-existing example ratio exceeds 10:1, or any symbol-ownership collision remains. In high-risk mode the validator emits `QUALITY_RISK_REVIEW_REQUIRED`: limit the first authoring pass to one project packet or 20 newly authored targets, run the scoped semantic and compilation gates, produce a review inventory of every changed namespace and type page, and obtain explicit user approval before continuing. A dry run is the preferred pilot for very large repositories. Only pass `--allow-high-risk` as an explicit, reviewed decision.
+Target counts, diagnostic volume, ownership complexity, context pressure, and model usage limits never change the requested scope. A full run remains full regardless of queue size. Use project packets to keep authoring context bounded, continue through independent packets when one packet needs more debugging, and return to every unresolved diagnostic before final verification. Use dry-run only when the user explicitly requests a dry run, representative subset, or quality pilot.
 
 ### Working-tree dry run
 
@@ -125,7 +125,7 @@ Use `--dry-run [--seed <n>]` for automatic selection, `--dry-run --project <hint
 
 ### Packet authoring loop
 
-Process one packet at a time so the packet is the active context and write-ownership boundary. When the host supports fresh workers, assign each packet to a fresh worker with only packet-local evidence. For each packet: read the manifest and scoped diagnostics, read related Markdown before editing, read exact source/test/sample/package evidence, build an evidence ledger mapping each decision to a source path, classify targets into standalone-example or family-covered obligations, author namespace prose and overwrites, run the scoped semantic and sample gates, and review the diff. Stop the entire run immediately if a packet fails its quality gates — do not continue to later packets after mechanical output is detected.
+Process one packet at a time so the packet is the active context and write-ownership boundary. When the host supports fresh workers, assign each packet to a fresh worker with only packet-local evidence. For each packet: read the manifest and scoped diagnostics, read related Markdown before editing, read exact source/test/sample/package evidence, build an evidence ledger mapping each decision to a source path, classify targets into standalone-example or family-covered obligations, author namespace prose and overwrites, run the scoped semantic and sample gates, and review the diff. Repair mechanical output immediately. If a packet retains a difficult diagnostic after concrete debugging attempts, record its exact UID/path set and continue independent packets; return to the failed packet before global verification. Do not end a full run while any repairable diagnostic remains.
 
 ### Symbol ownership
 

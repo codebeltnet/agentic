@@ -809,12 +809,12 @@
     },
     {
       "id": 66,
-      "prompt": "Run a full DocFX digest across all my project packets, but stop and tell me if a packet produces low-quality output.",
-      "expected_output": "The agent processes packets one at a time, runs the scoped semantic and sample gates per packet, and stops the entire run immediately when a packet fails its quality gates or produces mechanical output (holder/forwarding/repeated templates). It reports which packet failed and why rather than continuing to author later packets.",
+      "prompt": "Run a full DocFX digest across all my project packets. One packet still has a difficult template-repetition diagnostic after the first rewrite.",
+      "expected_output": "The agent processes packets one at a time, debugs the difficult diagnostic using its complete UID/path set and validator normalization, continues independent packets instead of ending the full run, then returns to the failed packet and finishes with global verification. It never substitutes dry-run or a pilot for the requested full scope.",
       "expectations": [
         "Processes packets one at a time with scoped quality gates",
-        "Stops the whole run immediately on the first failing packet",
-        "Does not continue authoring later packets after mechanical output is detected"
+        "Investigates the diagnostic as repair work and continues independent packets rather than stopping the full run",
+        "Returns to every unresolved packet and completes global verification without selecting dry-run"
       ]
     },
     {
@@ -840,11 +840,11 @@
     {
       "id": 69,
       "prompt": "My library has over 400 public types needing examples. Document it with dotnet-docfx-digest.",
-      "expected_output": "The agent sees QUALITY_RISK_REVIEW_REQUIRED (standalone targets above 100) and does not start a bulk authoring pass. It limits the first pass to one project packet or 20 targets, manually reviews those changed pages, and asks for explicit approval before continuing the full run. It treats a dry run as the preferred pilot for the large surface.",
+      "expected_output": "The agent treats the large target count as irrelevant to scope selection, keeps the requested full-repository scope, and processes all packets with bounded packet-local context and validation. It does not select dry-run, impose a target cap, or ask for pilot approval unless the user explicitly requested a dry run.",
       "expectations": [
-        "Detects the high-risk queue and stops for a bounded pilot instead of bulk authoring",
-        "Limits the first pass to one packet or about 20 targets and reviews the actual changed pages",
-        "Requests explicit approval before continuing the full run"
+        "Keeps full-repository scope despite the large queue",
+        "Does not select dry-run or impose a one-packet/20-target pilot cap",
+        "Continues through all packets and runs global completion verification without an approval pause"
       ]
     },
     {
