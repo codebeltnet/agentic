@@ -198,7 +198,7 @@ internal static class DocfxValidator
 
         var libraryProjects = projects.Where(p => !p.IsTest).ToList();
 
-        // Store package IDs for use in the repair plan GitHub search section.
+        // Store package IDs for use in the assessment work queue GitHub search section.
         report.PackageIds.AddRange(
             libraryProjects
                 .Select(p => p.PackageId ?? p.AssemblyName)
@@ -404,7 +404,7 @@ internal static class DocfxValidator
             concurrentDocfxCancellation?.Dispose();
         }
 
-        // Optional GitHub example search to embed real usage snippets in the repair plan.
+        // Optional GitHub example search to embed real usage snippets in the assessment work queue.
         if (options.SearchExamples && report.PackageIds.Count > 0)
         {
             phaseTimer.Restart();
@@ -6707,7 +6707,7 @@ internal static class DocfxValidator
             .OrderBy(group => group.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
-        WriteRepairPlanIfRequested(options, report);
+        WriteAssessmentQueueIfRequested(options, report);
 
         // Capture the process tally on every exit path so the result always proves whether the
         // fast path actually shelled out to dotnet/msbuild/docfx/gh.
@@ -6778,9 +6778,9 @@ internal static class DocfxValidator
         return $"{path}{location}{d.Message}";
     }
 
-    private static void WriteRepairPlanIfRequested(Options options, Report report)
+    private static void WriteAssessmentQueueIfRequested(Options options, Report report)
     {
-        if (string.IsNullOrWhiteSpace(options.RepairPlanPath))
+        if (string.IsNullOrWhiteSpace(options.AssessmentQueuePath))
         {
             return;
         }
@@ -6788,27 +6788,27 @@ internal static class DocfxValidator
         try
         {
             var basePath = Directory.Exists(report.RepoRoot) ? report.RepoRoot : Directory.GetCurrentDirectory();
-            var planPath = Path.GetFullPath(options.RepairPlanPath, basePath);
+            var planPath = Path.GetFullPath(options.AssessmentQueuePath, basePath);
             var directory = Path.GetDirectoryName(planPath);
             if (!string.IsNullOrWhiteSpace(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
-            File.WriteAllText(planPath, BuildRepairPlan(report), new UTF8Encoding(false));
-            report.RepairPlanPath = planPath;
+            File.WriteAllText(planPath, BuildAssessmentQueue(report), new UTF8Encoding(false));
+            report.AssessmentQueuePath = planPath;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            report.Warnings.Add(new Diagnostic("REPAIR_PLAN_WRITE_FAILED", options.RepairPlanPath, null,
-                $"Unable to write repair plan: {ex.Message}"));
+            report.Warnings.Add(new Diagnostic("ASSESSMENT_QUEUE_WRITE_FAILED", options.AssessmentQueuePath, null,
+                $"Unable to write assessment work queue: {ex.Message}"));
         }
     }
 
-    private static string BuildRepairPlan(Report report)
+    private static string BuildAssessmentQueue(Report report)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# DocFX Repair Plan");
+        sb.AppendLine("# DocFX Assessment Work Queue");
         sb.AppendLine();
         sb.AppendLine($"Repository: `{report.RepoRoot}`");
         if (!string.IsNullOrWhiteSpace(report.DocfxPath))
@@ -7076,9 +7076,9 @@ internal static class DocfxValidator
                 case "--verify-docfx-build":
                     options.VerifyDocfxBuild = true;
                     break;
-                case "--repair-plan":
-                    if (!Next(args, ref i, out var rp)) { error = "--repair-plan requires a path."; return false; }
-                    options.RepairPlanPath = rp;
+                case "--assessment-queue":
+                    if (!Next(args, ref i, out var rp)) { error = "--assessment-queue requires a path."; return false; }
+                    options.AssessmentQueuePath = rp;
                     break;
                 case "--search-examples":
                     options.SearchExamples = true;
@@ -7154,7 +7154,7 @@ internal static class DocfxValidator
                     if (TrySplit(arg, "--docfx", out var v2)) { options.DocfxPath = v2; break; }
                     if (TrySplit(arg, "--configuration", out var v3)) { options.Configuration = v3; break; }
                     if (TrySplit(arg, "--framework", out var v4)) { options.Framework = v4; break; }
-                    if (TrySplit(arg, "--repair-plan", out var v5)) { options.RepairPlanPath = v5; break; }
+                    if (TrySplit(arg, "--assessment-queue", out var v5a)) { options.AssessmentQueuePath = v5a; break; }
                     if (TrySplit(arg, "--sample-reference-mode", out var v7))
                     {
                         if (!IsValidSampleReferenceMode(v7)) { error = "--sample-reference-mode must be 'project' or 'package'."; return false; }
@@ -7278,7 +7278,7 @@ internal static class DocfxValidator
               --build-api-model        Reflection-backed API discovery from compiled assemblies. Builds
                                       only the documented project graph (dotnet). Alias: --strict-api-discovery.
               --verify-docfx-build     Run DocFX against a temp copy of the repository (docfx).
-              --search-examples        Run GitHub code search per documented package (gh). Use with --repair-plan.
+              --search-examples        Run GitHub code search per documented package (gh). Use with --assessment-queue.
 
             Options:
               --repo-root <path>       Repository root. Default: current directory.
@@ -7307,9 +7307,10 @@ internal static class DocfxValidator
               --build-api-model        Reflection-backed API discovery (opt-in). Default: no-build discovery.
               --changed-only           Validate only files changed according to git (git is read-only and allowed).
               --verify-docfx-build     Run DocFX against a temp copy of the repository (opt-in).
-              --repair-plan <path>     Write a deterministic Markdown repair plan from validation diagnostics.
+              --assessment-queue <path>
+                                      Write a deterministic Markdown assessment work queue from validation diagnostics.
               --search-examples        Run GitHub code search for each documented package and embed real usage snippets in the
-                                      repair plan. Requires the gh CLI to be authenticated. Use together with --repair-plan.
+                                      assessment work queue. Requires the gh CLI to be authenticated. Use together with --assessment-queue.
               --clean-generated-metadata
                                       Remove DocFX-generated *.yml and manifest files under metadata.dest (opt-in).
                                       Runs only after the API model is built, so it never deletes YAML the fast path used.
@@ -7373,7 +7374,7 @@ internal static class DocfxValidator
         public string? DocfxPath { get; set; }
         public string Configuration { get; set; } = "Release";
         public string? Framework { get; set; }
-        public string? RepairPlanPath { get; set; }
+        public string? AssessmentQueuePath { get; set; }
         public bool ValidateSamples { get; set; }
         public bool ChangedOnly { get; set; }
         public bool VerifyDocfxBuild { get; set; }
@@ -7694,7 +7695,7 @@ internal sealed class Report
     public string Script { get; set; } = string.Empty;
     public string RepoRoot { get; set; } = string.Empty;
     public string? DocfxPath { get; set; }
-    public string? RepairPlanPath { get; set; }
+    public string? AssessmentQueuePath { get; set; }
     public string? ProjectManifestPath { get; set; }
     public string? ResumedProjectManifestPath { get; set; }
     public string? ReviewReportPath { get; set; }

@@ -40,7 +40,7 @@ Use this path when the user names a changed API or namespace.
 4. Determine whether public extension methods are involved.
 5. Inspect `.docfx/docfx.json` or the repository-specific DocFX config.
 6. Locate existing overwrite files, namespace pages, availability includes, tests, and samples.
-7. Run `docfx.cs --json --repair-plan /tmp/docfx-repair-plan.md --search-examples` and read the repair plan. The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs; use those results as evidence before writing examples.
+7. Run `docfx.cs --json --assessment-queue /tmp/docfx-assessment-queue.md --search-examples` and read the assessment work queue. The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs; use those results as evidence before writing examples.
 8. Convert test usage into consumer-oriented examples when relevant.
 9. Update XML documentation comments where purpose-first summaries are needed.
 10. Update or create namespace overview pages whose opening names the developer problem and outcome, followed by concrete when-to-use and start-here guidance.
@@ -66,7 +66,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 3. Read repository guidance, especially root `AGENTS.md`.
 4. Inspect `.docfx/docfx.json` or the repository-specific DocFX config.
 5. Read `references/docfx-overwrite-files.md`.
-6. Run `docfx.cs --json --repair-plan /tmp/docfx-repair-plan.md --search-examples` and read the repair plan. The plan is the authoritative work queue. The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs for each documented package — run or open these searches before writing any new example.
+6. Run `docfx.cs --json --assessment-queue /tmp/docfx-assessment-queue.md --search-examples` and read the assessment work queue. That queue is the authoritative work queue. The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs for each documented package — run or open these searches before writing any new example.
 7. If the validator fails before producing documentation diagnostics, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
 8. Check for `ENCODING_CORRUPTION` or `EXTENSION_TABLE_ENCODING` diagnostics first; restore affected files from git before doing any further editing.
 9. Determine every namespace containing public API and whether each namespace exposes public extension methods.
@@ -88,7 +88,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 25. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
 26. Report verification results and any remaining deterministic findings.
 
-When resuming a partial repo-wide audit, begin by inventorying all tracked and untracked documentation changes and preserving them as in-flight work. Regenerate the deterministic repair plan and example inventory, use both as the authoritative queue, and work in batches with a fast validator rerun after every batch. The exact final command is `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`; descriptive references to those activities do not replace running the flags together.
+When resuming a partial repo-wide audit, begin by inventorying all tracked and untracked documentation changes and preserving them as in-flight work. Regenerate the deterministic assessment work queue and example inventory, use both as the authoritative queue, and work in batches with a fast validator rerun after every batch. The exact final command is `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`; descriptive references to those activities do not replace running the flags together.
 
 For the final command, let `auto` choose the execution profile unless the user requests a specific resource policy. High-capacity machines run the isolated DocFX verification lane concurrently with API/sample work; conservative machines remain sequential. Give the outer command a timeout at least five minutes above the validator's child-process timeout (35 minutes with the default 30-minute setting) so timeout diagnostics can be returned normally.
 
@@ -118,7 +118,7 @@ An example-only queue is still incomplete. When `EXAMPLE_MISSING` is the only re
 
 When the queue is dominated by `EXAMPLE_MISSING`, shrink your mental scope to the next concrete target instead of the total count.
 
-1. Take the next `EXAMPLE_MISSING` diagnostic from the repair plan or current fast-validator output.
+1. Take the next `EXAMPLE_MISSING` diagnostic from the assessment work queue or current fast-validator output.
 2. Read that target's public API surface and one relevant test, sample, or usage source.
 3. Write one consumer-facing example to the correct type-targeted overwrite file.
 4. Rerun the fast validator.
@@ -126,7 +126,7 @@ When the queue is dominated by `EXAMPLE_MISSING`, shrink your mental scope to th
 
 A "batch" does not need to be an architecturally complete namespace, packet, or package. A batch is any set of examples you can finish confidently before rerunning validation. Completeness emerges from iteration.
 
-If packet discovery stays weak even after `--build-api-model`, fall back to sequential repair in repair-plan order or alphabetical namespace order. Clear the next namespace's remaining examples (or the next 3-5 examples in it), rerun, and continue. A tool limitation is not a decision point.
+If packet discovery stays weak even after `--build-api-model`, fall back to sequential repair in assessment work queue order or alphabetical namespace order. Clear the next namespace's remaining examples (or the next 3-5 examples in it), rerun, and continue. A tool limitation is not a decision point.
 
 Final verification with `--build-api-model --validate-samples --verify-docfx-build` is reserved for the moment you intend to claim completion. While `remainingWorkItems > 0` or any diagnostics remain, stay on the fast `docfx.cs --json` loop and keep authoring.
 
@@ -296,7 +296,7 @@ Before completing documentation work, verify:
 - [ ] `agents.cs` ran successfully.
 - [ ] `AGENTS.md` contains the managed DocFX maintenance block.
 - [ ] Initial `git status --short` was inspected and existing documentation changes were treated as user work.
-- [ ] For multi-diagnostic audits, `docfx.cs --repair-plan` was written, read, and used as the work queue.
+- [ ] For multi-diagnostic audits, `docfx.cs --assessment-queue` was written, read, and used as the work queue.
 - [ ] Only public API is documented.
 - [ ] Every namespace with public API has a namespace overview page.
 - [ ] Related namespace pages in the same public API family were inspected and updated consistently, or intentionally left unchanged with a reason.

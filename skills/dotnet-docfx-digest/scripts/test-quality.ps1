@@ -24,7 +24,10 @@ function Write-Utf8File {
 }
 
 function Invoke-Validator {
-    param([string]$Workspace = $workspace)
+    param(
+        [string]$Workspace = $workspace,
+        [string[]]$ExtraArgs = @()
+    )
 
     # Run the native validator with ErrorActionPreference relaxed so its non-zero exit and stderr
     # packet heartbeats are never promoted to a terminating PowerShell error (explicit `throw`
@@ -33,7 +36,7 @@ function Invoke-Validator {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & dotnet run --file $ValidatorPath -- --repo-root $Workspace --json 2>$null
+        $output = & dotnet run --file $ValidatorPath -- --repo-root $Workspace --json @ExtraArgs 2>$null
     } finally {
         $ErrorActionPreference = $prev
     }
@@ -259,6 +262,22 @@ public static class IdentifierInput
 }
 ```
 '@
+
+    $assessmentQueue = Join-Path ([System.IO.Path]::GetTempPath()) ('docfx-assessment-queue-' + [guid]::NewGuid().ToString('N') + '.md')
+    try {
+        $assessmentQueueReport = Invoke-Validator -ExtraArgs @('--assessment-queue', $assessmentQueue)
+        if (-not (Test-Path $assessmentQueue)) {
+            throw 'The --assessment-queue flag did not write a Markdown queue file.'
+        }
+        $queueText = [System.IO.File]::ReadAllText($assessmentQueue)
+        if ($queueText -notmatch '^# DocFX Assessment Work Queue') {
+            throw 'The assessment work queue heading was not written as expected.'
+        }
+    } finally {
+        if (Test-Path $assessmentQueue) {
+            Remove-Item -Path $assessmentQueue -Force
+        }
+    }
 
     $good = Invoke-Validator
     $qualityCodes = @(

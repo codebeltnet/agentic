@@ -65,13 +65,13 @@
     {
       "id": 6,
       "prompt": "Use dotnet-docfx-digest on this repository.",
-      "expected_output": "Agent treats the request as a repo-wide DocFX documentation audit instead of asking what to document first. It runs scripts/agents.cs, inspects AGENTS.md, docfx.json, source projects, public API, tests, samples, overwrite files, namespace pages, and availability includes, runs scripts/docfx.cs to collect deterministic findings and writes a deterministic --repair-plan for noisy diagnostics, uses that repair plan as the work queue, runs with --verify-docfx-build before completion, repairs missing complementary DocFX documentation that can be derived from source evidence, reads the DocFX overwrite reference when creating or repairing overwrite files, and asks for clarification only if discovery exposes a correctness-affecting choice.",
+      "expected_output": "Agent treats the request as a repo-wide DocFX documentation audit instead of asking what to document first. It runs scripts/agents.cs, inspects AGENTS.md, docfx.json, source projects, public API, tests, samples, overwrite files, namespace pages, and availability includes, runs scripts/docfx.cs to collect deterministic findings and writes a deterministic `--assessment-queue` for noisy diagnostics, uses that assessment work queue as the work queue, runs with --verify-docfx-build before completion, repairs missing complementary DocFX documentation that can be derived from source evidence, reads the DocFX overwrite reference when creating or repairing overwrite files, and asks for clarification only if discovery exposes a correctness-affecting choice.",
       "expectations": [
         "Does not start by asking the user which API or namespace to document",
         "Runs scripts/agents.cs to ensure the repository AGENTS.md contains the managed DocFX maintenance block",
         "Inspects docfx.json and existing DocFX overwrite, namespace, include, source, test, and sample evidence before editing",
         "Runs scripts/docfx.cs, preferably with --json when collecting repo-wide findings, and uses --verify-docfx-build before completion so generated output stays outside the working tree",
-        "For multi-diagnostic output, writes and reads a deterministic --repair-plan and uses it as the work queue before editing",
+        "For multi-diagnostic output, writes and reads a deterministic `--assessment-queue` and uses it as the work queue before editing",
         "Creates or updates missing namespace overview pages, Extension Members tables, examples, and availability notes that can be derived from evidence",
         "Reads references/docfx-overwrite-files.md before creating or repairing DocFX overwrite files",
         "Asks a concise clarifying question only after inspection finds a correctness-affecting unresolved choice"
@@ -123,12 +123,12 @@
     {
       "id": 10,
       "prompt": "Use dotnet-docfx-digest on the Codebelt.Bootstrapper docs after a bad previous run left `Codebelt.Bootstrapper.Console.md`, `Codebelt.Bootstrapper.md`, `Codebelt.Bootstrapper.Web.md`, and `Codebelt.Bootstrapper.Worker.md` checked out. The last agent restored or undid some of those files, only edited `Codebelt.Bootstrapper.md`, and added no required examples.",
-      "expected_output": "Agent does not run broad restore or checkout commands. It captures git status and diffs first, runs scripts/docfx.cs with --json and --repair-plan, reads the repair plan, audits all four Bootstrapper namespace pages as a related family, fixes Extension Members sections consistently, creates or repairs required examples for public non-abstraction types and public extension methods instead of stopping at tables, builds an example inventory mapping each required API to an example file and UID, preserves already checked-out Markdown edits, runs build/test/DocFX verification, and reports any remaining deterministic diagnostics.",
+      "expected_output": "Agent does not run broad restore or checkout commands. It captures git status and diffs first, runs scripts/docfx.cs with --json and --assessment-queue, reads the assessment work queue, audits all four Bootstrapper namespace pages as a related family, fixes Extension Members sections consistently, creates or repairs required examples for public non-abstraction types and public extension methods instead of stopping at tables, builds an example inventory mapping each required API to an example file and UID, preserves already checked-out Markdown edits, runs build/test/DocFX verification, and reports any remaining deterministic diagnostics.",
       "expectations": [
         "Captures git status and diffs before modifying or recovering checked-out Markdown files",
         "Does not use broad git restore, checkout, reset, or whole-directory recovery commands",
         "Stops and reports existing uncommitted documentation changes if they cannot be preserved safely",
-        "Runs scripts/docfx.cs with --json and --repair-plan, then reads the generated repair plan before editing",
+        "Runs scripts/docfx.cs with --json and --assessment-queue, then reads the generated assessment work queue before editing",
         "Audits `Codebelt.Bootstrapper.Console.md`, `Codebelt.Bootstrapper.md`, `Codebelt.Bootstrapper.Web.md`, and `Codebelt.Bootstrapper.Worker.md` together instead of updating only one file",
         "Uses `Extension Members` headings where extension methods are present",
         "Adds required examples for public non-abstraction types and public extension methods, not only namespace fly-ins or extension tables",
@@ -655,13 +655,13 @@
     {
       "id": 53,
       "prompt": "Use dotnet-docfx-digest for a repo-wide audit. The previous agent added 8 missing namespace pages and only 1 type overwrite page, then stopped after the build-backed validator reported 62 EXTENSION_SECTION_MISSING, 1228 EXAMPLE_MISSING, and 1 DOCFX_BUILD_FAILED diagnostic. It called those findings pre-existing documentation gaps. `dotnet build` passes, while `dotnet test` fails only because an integration test cannot connect to SQL Server. Inspect the untracked DocFX work and finish the full digest.",
-      "expected_output": "The agent identifies the existing work as a partial digest, preserves it, and treats all 1291 validator errors as the active repo-wide repair queue rather than as pre-existing blockers. It uses the repair plan and example inventory to continue across every affected namespace, extension section, concrete type, and extension method. The unrelated SQL Server test failure is reported separately and does not end documentation work. The agent reruns fast validation during repair and treats a clean fast result as verification-required, then runs the build-backed command at the end. It does not claim completion until JSON reports summary.canClaimCompletion=true, summary.remainingWorkItems=0, empty summary.remainingGates and summary.remainingDiagnosticsByCode collections, and the build-backed command exits 0.",
+      "expected_output": "The agent identifies the existing work as a partial digest, preserves it, and treats all 1291 validator errors as the active repo-wide repair queue rather than as pre-existing blockers. It uses the assessment work queue and example inventory to continue across every affected namespace, extension section, concrete type, and extension method. The unrelated SQL Server test failure is reported separately and does not end documentation work. The agent reruns fast validation during repair and treats a clean fast result as verification-required, then runs the build-backed command at the end. It does not claim completion until JSON reports summary.canClaimCompletion=true, summary.remainingWorkItems=0, empty summary.remainingGates and summary.remainingDiagnosticsByCode collections, and the build-backed command exits 0.",
       "expectations": [
         "Inspects and preserves the 8 untracked namespace pages, 1 untracked type page, and other existing documentation edits instead of discarding or overwriting them wholesale",
         "Explicitly identifies the prior output as partial because 62 extension-section, 1228 example, and 1 DocFX-build diagnostics remain",
         "Does not describe pre-existing diagnostics, diagnostic volume, or the size of the work queue as a blocker",
         "Does not stop with a progress summary or ask the user whether to continue while repairable diagnostics remain",
-        "Uses the deterministic repair plan and complete validator queue to continue repairing every missing extension section and example across the affected documentation surfaces",
+        "Uses the deterministic assessment work queue and complete validator queue to continue repairing every missing extension section and example across the affected documentation surfaces",
         "Reports the SQL Server integration-test failure separately and continues DocFX repair because the failure does not prevent documentation validation or source inspection",
         "Reruns the fast validator after batches of edits instead of stopping after the first namespace or type subset",
         "Treats fast validation as an iteration checkpoint and still requires the final build-backed command before completion",
@@ -918,12 +918,12 @@
     {
       "id": 76,
       "prompt": "Use dotnet-docfx-digest on a Cuemon-style repository after several repair batches. All non-example diagnostics are gone, but `EXAMPLE_MISSING` is still 1086. A fast `--project-manifest` run returns unnamed packets with `projects: []` and `metadataGroup: unknown` because the scope is still source-scan provisional.",
-      "expected_output": "The agent treats the 1086 `EXAMPLE_MISSING` items as the active core work, not a checkpoint. It does not produce a completion report, next-step menu, or approval pause. Instead it reruns packet discovery with `--build-api-model --project-manifest`, continues authoring type and extension examples packet by packet from that reflection-backed manifest, and if the packet set is still unusable it falls back to sequential repair in repair-plan or namespace order. It works the queue in small fix→rerun batches and delays final verification until the example queue is actually finished.",
+      "expected_output": "The agent treats the 1086 `EXAMPLE_MISSING` items as the active core work, not a checkpoint. It does not produce a completion report, next-step menu, or approval pause. Instead it reruns packet discovery with `--build-api-model --project-manifest`, continues authoring type and extension examples packet by packet from that reflection-backed manifest, and if the packet set is still unusable it falls back to sequential repair in assessment work queue or namespace order. It works the queue in small fix→rerun batches and delays final verification until the example queue is actually finished.",
       "expectations": [
         "Does not treat an example-only queue or its size as a reason to stop, summarize, checkpoint, or ask the user how to proceed",
         "Does not offer a continue/focus/dry-run/review menu while `EXAMPLE_MISSING` remains non-zero",
         "Recognizes unnamed or zero-project fast-manifest packets as provisional source-scan output and reruns packet discovery with `--build-api-model --project-manifest`",
-        "If the build-backed packet set is still unusable, falls back to sequential repair in repair-plan or namespace order instead of stopping",
+        "If the build-backed packet set is still unusable, falls back to sequential repair in assessment work queue or namespace order instead of stopping",
         "Uses a small fix → rerun micro-loop for examples rather than treating batch size as a planning blocker",
         "Does not run a final completion report or completion-shaped verification pass while `EXAMPLE_MISSING` still remains",
         "Continues example authoring and reserves `--build-api-model --validate-samples --verify-docfx-build` for the real end of the queue"

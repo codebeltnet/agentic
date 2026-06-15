@@ -29,13 +29,13 @@ dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-roo
 ```
 
 - `--build-api-model` makes API discovery reflection-precise (the fast source-scan path is conservative and may under-report), `--validate-samples` compiles every C# documentation sample through isolated projects in one temporary `.slnx` graph build with bounded MSBuild parallelism, and `--verify-docfx-build` confirms the DocFX build succeeds. Treat `API_MODEL_SOURCE_SCANNER_LIMITED` in a fast run as a reminder to run the build-backed verification before completion, not as a failure.
-- For noisy audits, write and read a deterministic `--repair-plan` (works on the fast path; add `--search-examples` to embed real GitHub usage):
+- For noisy audits, write and read a deterministic assessment work queue with `--assessment-queue`. This works on the fast path; add `--search-examples` to embed real GitHub usage:
 
 ```bash
-dotnet run --file docfx.cs -- --repo-root <repo-root> --json --repair-plan /tmp/docfx-repair-plan.md --search-examples
+dotnet run --file docfx.cs -- --repo-root <repo-root> --json --assessment-queue /tmp/docfx-assessment-queue.md --search-examples
 ```
 
-The repair plan includes a "GitHub Example Sources" section with pre-computed `gh search code` commands and GitHub search URLs for each documented package. Read that section before writing any new example — do not write examples from memory or invention when real source evidence is available. If `--search-examples` is provided and `gh` is authenticated, actual search results are embedded; otherwise, the search commands are ready to run.
+The assessment work queue includes a "GitHub Example Sources" section with pre-computed `gh search code` commands and GitHub search URLs for each documented package. Read that section before writing any new example — do not write examples from memory or invention when real source evidence is available. If `--search-examples` is provided and `gh` is authenticated, actual search results are embedded; otherwise, the search commands are ready to run.
 
 - `ENCODING_CORRUPTION` in the JSON output means a documentation file has double-encoded UTF-8 (mojibake). Restore with `git checkout HEAD -- <file>` if the committed version was correct, or use the edit tool or byte-level operations to rewrite the file safely. Never pipe content through `Get-Content` + `Set-Content` or `[System.Text.Encoding]::UTF8.GetBytes()` on documentation files that contain multi-byte characters or emoji.
 - `EXTENSION_TABLE_ENCODING` means the ⬇️ emoji (U+2B07) is missing or corrupted in an Extension Members table data row. Use the literal `⬇️` character, not HTML entities or text substitutes.
@@ -59,7 +59,7 @@ The repair plan includes a "GitHub Example Sources" section with pre-computed `g
 - Read `references/workflow.md` when you need the detailed targeted/audit workflows, namespace and example templates, the verification checklist, or the completion response shape.
 - Prefer bounded project packets over one repository-sized authoring context. Discover packets with `docfx.cs --json` (`scope.packets`) or persist them with `--project-manifest <path>`; process one packet at a time while keeping the user's requested scope unchanged. Repair packet-local diagnostics before moving on when practical. If one diagnostic remains difficult after concrete attempts, record it, continue independent packets, and return to it; never turn one repairable packet failure into a reason to stop a full-repository run. Establish reflection-precise scope with `--build-api-model` before authoring — when `summary.scopeState` is `provisional` and `BUILD_BACKED_SCOPE_REQUIRED` fires, the source-scan inventory must not authorize a full authoring run.
 - If a fast `--project-manifest` or `scope.packets` result contains unnamed packets, zero projects, or `metadataGroup: unknown`, that is a provisional source-scan artifact. Immediately rerun packet discovery with `--build-api-model --project-manifest <temp-path>` (or use generated DocFX YAML) and continue from the reflection-backed packet set. Do not treat weak fast-packet metadata as a blocker or as justification to stop.
-- If build-backed packet discovery still fails or remains unusable, fall back to sequential repair instead of stopping. Use the repair-plan order or sort the remaining `EXAMPLE_MISSING` diagnostics by namespace, clear the first namespace (or the next 3-5 examples in it), rerun the fast validator, then continue to the next namespace.
+- If build-backed packet discovery still fails or remains unusable, fall back to sequential repair instead of stopping. Use the assessment work queue order or sort the remaining `EXAMPLE_MISSING` diagnostics by namespace, clear the first namespace (or the next 3-5 examples in it), rerun the fast validator, then continue to the next namespace.
 - Repository size, target count, diagnostic volume, context pressure, and model usage limits never change the user's requested scope. An explicit or default repo-wide run continues across every packet until the global completion contract is clean.
 - Context limits, queue size, and estimates like "this would take multiple sessions" are internal execution concerns, not user-facing stop conditions. Break the work into packets and keep going until the completion contract is clean unless the user explicitly pauses or a real external blocker prevents further progress.
 - Final build-backed verification (`--build-api-model --validate-samples --verify-docfx-build`) is for claiming completion, not for blocking incremental progress. While `summary.remainingWorkItems` is greater than zero or any diagnostics remain, stay on the fast `docfx.cs --json` loop and keep authoring.
@@ -78,7 +78,7 @@ Do not stop at namespace pages, extension-member tables, or a first-pass documen
 5. Treat the next `EXAMPLE_MISSING` diagnostic as the current task. Read the target's public API surface and one relevant test or usage source, write a consumer-facing example to the correct type-targeted overwrite file, rerun the fast validator, then move to the next diagnostic.
 6. A batch can be as small as 3-5 examples, or whatever fits in the current turn. It does not need to be an architecturally complete namespace or packet; completeness emerges from fix → rerun → fix → rerun repetition.
 7. When only `EXAMPLE_MISSING` remains, that is still the main digest work, not a checkpoint. Keep authoring type and extension examples packet by packet; do not replace the queue with a completion summary, progress report, user choice menu, or final verification pass.
-8. If packet discovery from the fast source-scan yields unnamed or zero-project packets, rerun `--build-api-model --project-manifest <temp-path>` before continuing example authoring. If the build-backed packet set is still unusable, fall back to sequential repair in repair-plan or namespace order instead of stopping.
+8. If packet discovery from the fast source-scan yields unnamed or zero-project packets, rerun `--build-api-model --project-manifest <temp-path>` before continuing example authoring. If the build-backed packet set is still unusable, fall back to sequential repair in assessment work queue or namespace order instead of stopping.
 9. Rerun the fast validator until the required diagnostics are gone, then run the build-backed completion verification (`docfx.cs --build-api-model --validate-samples --verify-docfx-build`) to surface `SAMPLE_COMPILE_FAILED` and reflection-precise API gaps; resolve those too and rerun until the JSON completion contract is clean.
 10. Do not convert repairable diagnostics into a blocker report. A stubborn diagnostic is a debugging task: inspect the complete implicated UID/path set, validator normalization, source evidence, and related examples; fix either the content or a proven validator defect, then rerun. Continue unrelated packets while investigating when doing so preserves quality. Stop incomplete only when the user pauses the task or a genuine external condition prevents further execution; report the exact command, exit code, and blocker without claiming completion.
 
@@ -89,10 +89,10 @@ Namespace pages and `Extension Members` tables complement type-page examples; th
 When continuing after another agent stopped with diagnostics remaining:
 
 1. Inspect `git status --short --untracked-files=all`, enumerate the stated counts and paths, and preserve every existing tracked and untracked documentation edit, not only the newly created namespace/type files. Do not collapse a concrete inventory such as “8 namespace pages and 1 type page” into a generic promise to preserve work.
-2. Rerun the fast validator with `--json --repair-plan <temp-path>` and read the generated plan.
-3. Use the repair plan and example inventory as the active queue across all affected namespaces, type pages, extension classes, and extension methods.
+2. Rerun the fast validator with `--json --assessment-queue <temp-path>` and read the generated queue.
+3. Use the assessment work queue and example inventory as the active queue across all affected namespaces, type pages, extension classes, and extension methods.
 4. If only `EXAMPLE_MISSING` remains, keep going. That queue is not a stopping point. When packet ownership is unclear from the fast run, write a reflection-backed manifest with `--build-api-model --project-manifest <temp-path>` and use that manifest as the example-authoring queue instead of presenting a checkpoint or options.
-5. If the build-backed packet set is still unusable, fall back to sequential example repair in repair-plan or namespace order. Clear the next 3-5 examples, rerun, then continue.
+5. If the build-backed packet set is still unusable, fall back to sequential example repair in assessment work queue or namespace order. Clear the next 3-5 examples, rerun, then continue.
 6. Repair manageable batches, then rerun the fast validator after each batch so the queue measurably shrinks; do not stop after a representative subset.
 7. Run the exact final command `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` only when you are ready to claim completion, and continue until the completion contract is clean.
 8. If a rerun replaces one diagnostic family with a more specific follow-on family, keep going. Do not convert that newly exposed queue into a progress summary or a request for approval to continue.
@@ -320,7 +320,7 @@ When the user does not name a specific target:
 1. Run `agents.cs`.
 2. Run the safety gates and inspect repository guidance.
 3. Inspect DocFX configuration, overwrite files, tests, samples, and current documentation state.
-4. Run `docfx.cs --json`, and for multi-diagnostic output rerun with `--repair-plan` and use that plan as the work queue.
+4. Run `docfx.cs --json`, and for multi-diagnostic output rerun with `--assessment-queue` and use that queue as the work queue.
 5. Repair missing namespace pages, extension-member tables, examples, overwrite layout, summaries, and availability notes that can be derived from evidence.
 6. Preserve manual edits, inspect `git diff`, run `dotnet build`, run `dotnet test`, run the Completion Repair Loop, then run the build-backed completion verification (`docfx.cs --build-api-model --validate-samples --verify-docfx-build`).
 
