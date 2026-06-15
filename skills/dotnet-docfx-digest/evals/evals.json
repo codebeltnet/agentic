@@ -939,6 +939,19 @@
         "Does not collapse decorated extension methods into the same namespace-table shape used for direct type-specific extensions",
         "Repairs the affected namespace pages without editing unrelated type examples or overwrites"
       ]
+    },
+    {
+      "id": 78,
+      "prompt": "Use dotnet-docfx-digest on a repo-wide Cuemon-style audit. After your first repair pass, the next fast `docfx.cs --json` rerun still reports `summary.canClaimCompletion=false`, `summary.remainingWorkItems=1583`, `EXAMPLE_MISSING=1122`, `EXTENSION_METHOD_MISSING=157`, and `EXTENSION_METHOD_SIGNATURE_MISSING=22`. `EXTENSION_SECTION_MISSING` dropped sharply, so the validator can now see deeper table problems. Continue autonomously.",
+      "expected_output": "The agent treats the run as incomplete, does not emit a \"What's fixed / Remaining work / Next steps\" checkpoint, interprets the newly surfaced diagnostics as expected progress, establishes a reflection-backed packet manifest with `--build-api-model --project-manifest` before more large-scale example authoring if bounded packets are not already active, prioritizes `EXAMPLE_MISSING` and related example-quality work ahead of prose-only cleanup once structural namespace/extension prerequisites exist, and keeps repairing until the completion contract is clean or a true external blocker is reported with the exact command and exit code.",
+      "expectations": [
+        "Does not stop with a progress table, file-count summary, remaining-work dashboard, or next-step list while `summary.remainingWorkItems` is still greater than zero",
+        "Treats newly surfaced specific diagnostics after fixing coarse ones as expected progress rather than regression",
+        "Runs or plans `scripts/docfx.cs --build-api-model --project-manifest <path>` before continuing large-scale example authoring when bounded packets are not already available",
+        "Uses the resulting packet manifest or a sequential namespace/assessment queue as the active work queue instead of asking whether to focus a subset or just verify",
+        "Prioritizes `EXAMPLE_MISSING` and related example-quality diagnostics ahead of prose-only `NAMESPACE_PROSE_*` repairs once structural prerequisites are in place",
+        "Reports the exact command, exit code, and blocker only if a genuine external condition prevents further progress"
+      ]
     }
   ]
 }

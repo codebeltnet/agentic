@@ -67,28 +67,33 @@ Use this path when the user invokes the skill without naming a specific API or n
 4. Inspect `.docfx/docfx.json` or the repository-specific DocFX config.
 5. Read `references/docfx-overwrite-files.md`.
 6. Run `docfx.cs --json --assessment-queue /tmp/docfx-assessment-queue.md --search-examples` and read the assessment work queue. That queue is the authoritative work queue. The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs for each documented package — run or open these searches before writing any new example.
-7. If the validator fails before producing documentation diagnostics, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
-8. Check for `ENCODING_CORRUPTION` or `EXTENSION_TABLE_ENCODING` diagnostics first; restore affected files from git before doing any further editing.
-9. Determine every namespace containing public API and whether each namespace exposes public extension methods.
-10. Determine every public non-abstraction type and every public extension method that requires an example.
-11. Create or update missing namespace overview pages with a problem/outcome opening, concrete when-to-use guidance, and a named starting API. Inventory-only prose is unfinished.
-12. Audit related namespace pages together so fixes are consistent across the public API family.
-13. Add or repair `Extension Members` tables for namespaces with public extension methods. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column.
-14. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
-15. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
-16. Ensure `docfx.json` includes both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, excludes both `api/namespaces/**` and `api/types/**` from `build.content`, and moves legacy authored `.docfx/api/*.md` files into either `api/namespaces/` (namespace pages) or `api/types/` (type pages).
-17. Create explicit examples for public extension methods that still have none.
-18. Build or refresh the example inventory.
-19. Preserve manual edits and correct stale contradictions instead of replacing whole files.
-20. Run `git diff` for touched documentation paths and confirm the diff is intentional.
-21. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-22. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-23. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing every remaining diagnostic, and updating the example inventory until `summary.canClaimCompletion` is `true`. A large queue is still the task, not a reason to stop.
-24. Run the build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` so samples compile, API discovery is reflection-precise, and DocFX builds in a temp copy.
-25. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
-26. Report verification results and any remaining deterministic findings.
+7. For repo-wide or other full authoring runs, run `docfx.cs --build-api-model --project-manifest <temp-path> --json` before writing new examples or overwrite rewrites, then use the reflection-backed packets as the bounded work queue. If build-backed packet discovery is still unusable, fall back to sequential assessment-work-queue or namespace order instead of authoring from the raw global count alone.
+8. In any continuation response after a rerun, explicitly name that active queue source. If the reflection-backed manifest is not yet confirmed, the next step must say so and name `--build-api-model --project-manifest <temp-path>` directly; do not just say "work packet-by-packet."
+9. In that same continuation response, restate the fast rerun cadence (`docfx.cs --json` after each small batch), the exact endgame command `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`, and the clean completion contract (`summary.canClaimCompletion = true`, `summary.remainingWorkItems = 0`, empty `summary.remainingGates`, empty `summary.remainingDiagnosticsByCode`). Do not shorten this to generic "verify later" prose, even in a brief reply.
+10. If the validator fails before producing documentation diagnostics, inspect source projects, DocFX config, existing overwrite files, generated metadata when available, tests, and samples manually.
+11. Check for `ENCODING_CORRUPTION` or `EXTENSION_TABLE_ENCODING` diagnostics first; restore affected files from git before doing any further editing.
+12. Determine every namespace containing public API and whether each namespace exposes public extension methods.
+13. Determine every public non-abstraction type and every public extension method that requires an example.
+14. Create or update missing namespace overview pages with a problem/outcome opening, concrete when-to-use guidance, and a named starting API. Inventory-only prose is unfinished.
+15. Audit related namespace pages together so fixes are consistent across the public API family.
+16. Add or repair `Extension Members` tables for namespaces with public extension methods. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column.
+17. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
+18. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
+19. Ensure `docfx.json` includes both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, excludes both `api/namespaces/**` and `api/types/**` from `build.content`, and moves legacy authored `.docfx/api/*.md` files into either `api/namespaces/` (namespace pages) or `api/types/` (type pages).
+20. Create explicit examples for public extension methods that still have none.
+21. Once the current packet has the structural namespace/table prerequisites it needs, prioritize `EXAMPLE_MISSING` and example-quality repairs ahead of prose-only `NAMESPACE_PROSE_*` cleanup. Do not detour into prose/template polish while packet-local examples are still missing unless the prose change is required by the same example.
+22. Build or refresh the example inventory.
+23. Preserve manual edits and correct stale contradictions instead of replacing whole files.
+24. Run `git diff` for touched documentation paths and confirm the diff is intentional.
+25. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
+26. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
+27. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing every remaining diagnostic, and updating the example inventory until `summary.canClaimCompletion` is `true`. A large queue is still the task, not a reason to stop.
+28. Keep the exact endgame command explicit in continuation responses: `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`, plus the clean completion contract. Do not replace it with generic "verify later" language.
+29. Run the build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` so samples compile, API discovery is reflection-precise, and DocFX builds in a temp copy.
+30. Inspect `git status` and confirm no disposable generated DocFX output remained in the working tree.
+31. Only after `summary.canClaimCompletion` is `true`, `summary.remainingWorkItems` is `0`, `summary.remainingGates` is empty, and `summary.remainingDiagnosticsByCode` is empty, report completion. If a genuine external blocker stops the run first, report the exact command, exit code, blocker, and that the digest remains incomplete.
 
-When resuming a partial repo-wide audit, begin by inventorying all tracked and untracked documentation changes and preserving them as in-flight work. Regenerate the deterministic assessment work queue and example inventory, use both as the authoritative queue, and work in batches with a fast validator rerun after every batch. The exact final command is `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`; descriptive references to those activities do not replace running the flags together.
+When resuming a partial repo-wide audit, begin by inventorying all tracked and untracked documentation changes and preserving them as in-flight work. Regenerate the deterministic assessment work queue and example inventory, refresh or create a reflection-backed project manifest for bounded packets, and use those artifacts as the authoritative queue. In the next response after each rerun, explicitly name whether the active queue is that manifest or the sequential assessment-work-queue / namespace fallback, restate the fast rerun cadence, and restate the exact final command plus clean completion contract. Work in small internal batches with a fast validator rerun after every batch, but do not treat a batch boundary as a reporting boundary. The exact final command is `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`; descriptive references to those activities do not replace running the flags together.
 
 For the final command, let `auto` choose the execution profile unless the user requests a specific resource policy. High-capacity machines run the isolated DocFX verification lane concurrently with API/sample work; conservative machines remain sequential. Give the outer command a timeout at least five minutes above the validator's child-process timeout (35 minutes with the default 30-minute setting) so timeout diagnostics can be returned normally.
 
@@ -102,7 +107,7 @@ Full and dry runs use **identical** evidence, authoring instructions, semantic-q
 
 ### Build-backed scope is a prerequisite for authoring
 
-The conservative source scanner is for fast Markdown iteration, not authoritative scope. When `summary.apiModelSource` is `source-scan`, scope is `provisional` and the validator emits `BUILD_BACKED_SCOPE_REQUIRED`. Before authoring a full run or a selected dry-run packet, establish reflection-precise scope with `--build-api-model` (or generate DocFX managed-reference YAML). Treat a material fast/build-backed discrepancy as a blocker, not a rounding error.
+The conservative source scanner is for fast Markdown iteration, not authoritative scope. When `summary.apiModelSource` is `source-scan`, scope is `provisional` and the validator emits `BUILD_BACKED_SCOPE_REQUIRED`. Before authoring a full run or a selected dry-run packet, establish reflection-precise scope with `--build-api-model` (or generate DocFX managed-reference YAML). In a repo-wide audit, do this before the first new example or overwrite rewrite, not after a partial fast-path cleanup. Treat a material fast/build-backed discrepancy as a blocker, not a rounding error.
 
 A fast `--project-manifest` result that yields unnamed packets, `projects: []`, or `metadataGroup: unknown` is not a usable plan for large example queues. That is still provisional source-scan scope. Immediately rerun packet discovery with `--build-api-model --project-manifest <temp-path>` (or use generated DocFX YAML) before planning example authoring, then continue from the reflection-backed packet set.
 
@@ -122,9 +127,11 @@ When the queue is dominated by `EXAMPLE_MISSING`, shrink your mental scope to th
 2. Read that target's public API surface and one relevant test, sample, or usage source.
 3. Write one consumer-facing example to the correct type-targeted overwrite file.
 4. Rerun the fast validator.
-5. Repeat for the next 3-5 examples, or whatever fits safely in the current turn.
+5. Repeat for the next 3-5 examples, rerun the fast validator, and continue immediately while diagnostics remain.
 
-A "batch" does not need to be an architecturally complete namespace, packet, or package. A batch is any set of examples you can finish confidently before rerunning validation. Completeness emerges from iteration.
+A "batch" does not need to be an architecturally complete namespace, packet, or package. A batch is any set of examples you can finish confidently before rerunning validation. Completeness emerges from iteration. Batch size is a validator-rerun cadence, not a checkpoint or reporting boundary.
+
+While `remainingWorkItems > 0` or `canClaimCompletion` is false, do not emit before/after tables, file-count summaries, "remaining work" dashboards, or "Next Steps" lists. Keep repairing, or report a genuine external blocker with the exact command and exit code. When you do describe the next repair step, name the active queue source, the fast rerun cadence, the exact endgame command, and the clean completion contract rather than referring to them abstractly.
 
 If packet discovery stays weak even after `--build-api-model`, fall back to sequential repair in assessment work queue order or alphabetical namespace order. Clear the next namespace's remaining examples (or the next 3-5 examples in it), rerun, and continue. A tool limitation is not a decision point.
 
@@ -330,6 +337,8 @@ Before completing documentation work, verify:
 
 ## Completion response
 
+Use this section only after the completion contract is clean, or when a genuine external blocker has halted further progress after concrete attempts.
+
 When reporting completion, include:
 
 - public APIs documented
@@ -343,6 +352,6 @@ When reporting completion, include:
 - verification commands run
 - any verification failures or skipped checks
 
-Do not claim documentation was verified unless the relevant command actually ran successfully.
+Do not claim documentation was verified unless the relevant command actually ran successfully, and do not emit a completion-shaped report while `summary.remainingWorkItems > 0`, `summary.canClaimCompletion` is false, or `completionState` is still `incomplete` or `verification-required`.
 
 If work must stop incomplete, distinguish a true external blocker from repair work. Pre-existing documentation gaps, large diagnostic counts, sample compile failures, and `DOCFX_BUILD_FAILED` output caused by the documentation/configuration being repaired are active work items. Only a user pause or an external condition that still prevents progress after concrete attempts justifies stopping, and that response must say the digest remains incomplete.
