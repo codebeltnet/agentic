@@ -2013,7 +2013,7 @@ internal static class DocfxValidator
                 continue;
             }
 
-            if (!TryParseExtensionSignature(item.Syntax, out var extendedType))
+            if (!TryParseExtensionSignature(item.Syntax, out var extendedType, out var methodName, out var methodDisplayName))
             {
                 continue;
             }
@@ -2033,10 +2033,9 @@ internal static class DocfxValidator
             }
 
             var ns = GetOrAddNamespace(namespaces, nsName);
-            var methodName = MethodNameFromUid(item.Uid);
             var declaringClass = SimpleNameFromUid(declaringUid);
-            AddExtensionMethod(ns, methodName, extendedType, declaringClass);
-            AddExtensionTarget(ns, item.Uid, nsName, methodName, declaringUid);
+            AddExtensionMethod(ns, methodName, methodDisplayName, extendedType, declaringClass);
+            AddExtensionTarget(ns, item.Uid, nsName, methodDisplayName, declaringUid);
 
             if (staticClassExtensionCounts.TryGetValue(declaringUid, out var sc))
             {
@@ -2220,15 +2219,11 @@ internal static class DocfxValidator
                 // Classic extension methods inside the current top-level static class.
                 if (currentTopLevelStaticClass is not null)
                 {
-                    var extMatch = Regex.Match(clean,
-                        @"\bpublic\s+static\s+[^\n;{=]*?\b(?<name>\w+)\s*(?:<[^>]*>)?\s*\(\s*(?:\[[^\]]*\]\s*)*this\s+(?<ext>[\w.]+(?:<[^>]{0,120}>)?)");
-                    if (extMatch.Success)
+                    if (TryParseExtensionSignature(clean, out var extendedType, out var methodName, out var methodDisplayName))
                     {
                         var ns = GetOrAddNamespace(namespaces, currentNamespace);
-                        var methodName = extMatch.Groups["name"].Value;
-                        var extendedType = SimpleNameFromTypeRef(extMatch.Groups["ext"].Value);
-                        AddExtensionMethod(ns, methodName, extendedType, SimpleNameFromUid(currentTopLevelStaticClass));
-                        AddExtensionTarget(ns, currentTopLevelStaticClass + "." + methodName, currentNamespace, methodName, currentTopLevelStaticClass);
+                        AddExtensionMethod(ns, methodName, methodDisplayName, extendedType, SimpleNameFromUid(currentTopLevelStaticClass));
+                        AddExtensionTarget(ns, currentTopLevelStaticClass + "." + methodName, currentNamespace, methodDisplayName, currentTopLevelStaticClass);
                         if (staticExtensionContainers.TryGetValue(currentTopLevelStaticClass, out var sc))
                         {
                             staticExtensionContainers[currentTopLevelStaticClass] = (sc.Namespace, sc.DisplayName, sc.Count + 1);
@@ -2362,9 +2357,9 @@ internal static class DocfxValidator
         }
     }
 
-    private static void AddExtensionMethod(NamespaceInfo ns, string methodName, string extendedType, string declaringClass)
+    private static void AddExtensionMethod(NamespaceInfo ns, string methodName, string methodDisplayName, string extendedType, string declaringClass)
     {
-        var info = new ExtensionMethodInfo(methodName, extendedType, declaringClass);
+        var info = new ExtensionMethodInfo(methodName, methodDisplayName, extendedType, declaringClass);
         if (!ns.ExtensionMethods.Contains(info))
         {
             ns.ExtensionMethods.Add(info);
@@ -2407,33 +2402,129 @@ internal static class DocfxValidator
         return true;
     }
 
-    private static bool TryParseExtensionSignature(string syntax, out string extendedType)
+    private static bool TryParseExtensionSignature(string syntax, out string extendedType, out string methodName, out string methodDisplayName)
     {
         extendedType = string.Empty;
+        methodName = string.Empty;
+        methodDisplayName = string.Empty;
         if (!Regex.IsMatch(syntax, @"\bstatic\b"))
         {
             return false;
         }
 
-        var m = Regex.Match(syntax, @"\(\s*(?:\[[^\]]*\]\s*)*this\s+(?<ext>[\w.]+(?:<[^>]{0,120}>)?)");
+        var m = Regex.Match(syntax,
+            @"\bstatic\b[^\r\n{;=]*?\b(?<name>\w+)\s*(?<generic><[^>(]*>)?\s*\(\s*(?:\[[^\]]*\]\s*)*this\s+(?<ext>.+?)\s+\w+\s*(?:,|\))");
         if (!m.Success)
         {
             return false;
         }
 
-        extendedType = SimpleNameFromTypeRef(m.Groups["ext"].Value);
+        methodName = m.Groups["name"].Value;
+        methodDisplayName = ComposeMethodDisplayName(methodName, m.Groups["generic"].Value);
+        extendedType = SimplifyTypeReference(m.Groups["ext"].Value);
         return true;
     }
 
-    private static string SimpleNameFromTypeRef(string typeRef)
+    private static string ComposeMethodDisplayName(string methodName, string genericPart)
     {
-        var trimmed = typeRef.Trim();
-        var generic = trimmed.IndexOf('<');
-        if (generic >= 0)
+        var normalizedGenericPart = NormalizeGenericArgumentList(genericPart);
+        return normalizedGenericPart.Length == 0 ? methodName : methodName + normalizedGenericPart;
+    }
+
+    private static string NormalizeGenericArgumentList(string genericPart)
+    {
+        var trimmed = genericPart.Trim();
+        if (trimmed.Length == 0)
         {
-            trimmed = trimmed[..generic];
+            return string.Empty;
         }
 
+        if (!trimmed.StartsWith('<') || !trimmed.EndsWith('>'))
+        {
+            return trimmed;
+        }
+
+        var inner = trimmed[1..^1].Trim();
+        if (inner.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var parts = SplitTopLevelCommaSeparated(inner)
+            .Select(part => part.Trim())
+            .Where(part => part.Length > 0)
+            .ToList();
+        return parts.Count == 0 ? string.Empty : "<" + string.Join(", ", parts) + ">";
+    }
+
+    private static List<string> SplitTopLevelCommaSeparated(string text)
+    {
+        var parts = new List<string>();
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '<')
+            {
+                depth++;
+            }
+            else if (c == '>')
+            {
+                depth--;
+            }
+            else if (c == ',' && depth == 0)
+            {
+                parts.Add(text[start..i]);
+                start = i + 1;
+            }
+        }
+
+        parts.Add(text[start..]);
+        return parts;
+    }
+
+    private static string SimplifyTypeReference(string typeRef)
+    {
+        var trimmed = typeRef.Trim();
+        trimmed = Regex.Replace(trimmed, @"^(?:ref|in|out|scoped|params|readonly)\s+", string.Empty);
+        trimmed = trimmed.Replace("global::", string.Empty, StringComparison.Ordinal);
+
+        var arraySuffix = string.Empty;
+        while (trimmed.EndsWith("[]", StringComparison.Ordinal))
+        {
+            arraySuffix += "[]";
+            trimmed = trimmed[..^2].TrimEnd();
+        }
+
+        var nullableSuffix = string.Empty;
+        if (trimmed.EndsWith("?", StringComparison.Ordinal))
+        {
+            nullableSuffix = "?";
+            trimmed = trimmed[..^1].TrimEnd();
+        }
+
+        var genericStart = trimmed.IndexOf('<');
+        if (genericStart >= 0)
+        {
+            var genericEnd = trimmed.LastIndexOf('>');
+            if (genericEnd > genericStart)
+            {
+                var baseName = SimplifyTypeName(trimmed[..genericStart]);
+                var inner = trimmed[(genericStart + 1)..genericEnd];
+                var args = SplitTopLevelCommaSeparated(inner)
+                    .Select(arg => SimplifyTypeReference(arg))
+                    .ToList();
+                return $"{baseName}<{string.Join(", ", args)}>{nullableSuffix}{arraySuffix}";
+            }
+        }
+
+        return SimplifyTypeName(trimmed) + nullableSuffix + arraySuffix;
+    }
+
+    private static string SimplifyTypeName(string typeName)
+    {
+        var trimmed = typeName.Trim();
         var lastDot = trimmed.LastIndexOf('.');
         if (lastDot >= 0)
         {
@@ -2441,7 +2532,33 @@ internal static class DocfxValidator
         }
 
         var tick = trimmed.IndexOf('`');
-        return tick >= 0 ? trimmed[..tick] : trimmed;
+        if (tick >= 0)
+        {
+            trimmed = trimmed[..tick];
+        }
+
+        return trimmed switch
+        {
+            "bool" => "Boolean",
+            "byte" => "Byte",
+            "sbyte" => "SByte",
+            "short" => "Int16",
+            "ushort" => "UInt16",
+            "int" => "Int32",
+            "uint" => "UInt32",
+            "long" => "Int64",
+            "ulong" => "UInt64",
+            "nint" => "IntPtr",
+            "nuint" => "UIntPtr",
+            "char" => "Char",
+            "string" => "String",
+            "object" => "Object",
+            "decimal" => "Decimal",
+            "float" => "Single",
+            "double" => "Double",
+            "void" => "Void",
+            _ => trimmed
+        };
     }
 
     private static string SimpleNameFromUid(string uid)
@@ -3133,7 +3250,7 @@ internal static class DocfxValidator
                 continue;
             }
 
-            var methodTarget = new ApiTargetInfo(MethodUid(typeUid, method), ns.Name, ApiTargetKind.ExtensionMethod, method.Name, typeUid);
+            var methodTarget = new ApiTargetInfo(MethodUid(typeUid, method), ns.Name, ApiTargetKind.ExtensionMethod, MethodDisplayName(method), typeUid);
             if (!ns.RequiredExampleTargets.Contains(methodTarget))
             {
                 ns.RequiredExampleTargets.Add(methodTarget);
@@ -3179,8 +3296,8 @@ internal static class DocfxValidator
                 continue;
             }
 
-            var extendedType = SimpleTypeName(parameters[0].ParameterType);
-            var extensionInfo = new ExtensionMethodInfo(method.Name, extendedType, declaringClass);
+            var extendedType = ExtensionReceiverDisplayName(parameters[0].ParameterType);
+            var extensionInfo = new ExtensionMethodInfo(method.Name, MethodDisplayName(method), extendedType, declaringClass);
             if (!ns.ExtensionMethods.Contains(extensionInfo))
             {
                 ns.ExtensionMethods.Add(extensionInfo);
@@ -3316,8 +3433,11 @@ internal static class DocfxValidator
     {
         var parameters = method.GetParameters()
             .Select(p => TypeUid(p.ParameterType) ?? SimpleTypeName(p.ParameterType));
+        var genericArity = method.IsGenericMethodDefinition || method.IsGenericMethod
+            ? "``" + method.GetGenericArguments().Length
+            : string.Empty;
 
-        return typeUid + "." + method.Name + "(" + string.Join(",", parameters) + ")";
+        return typeUid + "." + method.Name + genericArity + "(" + string.Join(",", parameters) + ")";
     }
 
     private static string SimpleTypeName(Type type)
@@ -3325,6 +3445,44 @@ internal static class DocfxValidator
         var name = type.Name;
         var tick = name.IndexOf('`');
         return tick >= 0 ? name[..tick] : name;
+    }
+
+    private static string ExtensionReceiverDisplayName(Type type)
+    {
+        if (type.IsByRef)
+        {
+            type = type.GetElementType()!;
+        }
+
+        if (type.IsArray)
+        {
+            return ExtensionReceiverDisplayName(type.GetElementType()!) + "[]";
+        }
+
+        if (type.IsGenericParameter)
+        {
+            return type.Name;
+        }
+
+        var name = SimpleTypeName(type);
+        if (!type.IsGenericType)
+        {
+            return name;
+        }
+
+        var args = type.GetGenericArguments().Select(ExtensionReceiverDisplayName);
+        return name + "<" + string.Join(", ", args) + ">";
+    }
+
+    private static string MethodDisplayName(MethodInfo method)
+    {
+        if (!method.IsGenericMethodDefinition && !method.IsGenericMethod)
+        {
+            return method.Name;
+        }
+
+        return ComposeMethodDisplayName(method.Name,
+            "<" + string.Join(", ", method.GetGenericArguments().Select(argument => argument.Name)) + ">");
     }
 
     private static string? FindAssembly(ProjectInfo project, string configuration, string? framework)
@@ -3561,17 +3719,178 @@ internal static class DocfxValidator
             return;
         }
 
-        // Every discovered extension method name must appear (backticked) in the section.
-        foreach (var group in ns.ExtensionMethods.GroupBy(m => m.MethodName, StringComparer.Ordinal))
+        var tableRows = ParseExtensionTableRows(section);
+        var rowsByType = tableRows
+            .GroupBy(row => NormalizeTypeDisplay(row.TypeDisplay), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+
+        foreach (var expectedTypeGroup in ns.ExtensionMethods.GroupBy(method => NormalizeTypeDisplay(method.ExtendedType), StringComparer.Ordinal))
         {
-            var methodName = group.Key;
-            var pattern = "`" + Regex.Escape(methodName);
-            if (!Regex.IsMatch(section, pattern + @"[`(]"))
+            var expectedMethods = expectedTypeGroup.ToList();
+            var expectedTypeDisplay = expectedMethods[0].ExtendedType;
+            if (!rowsByType.TryGetValue(expectedTypeGroup.Key, out var matchingRows))
             {
-                report.Errors.Add(new Diagnostic("EXTENSION_METHOD_MISSING", rel, ns.Name,
-                    $"Extension method `{methodName}` (extending {group.First().ExtendedType}) is not listed in the 'Extension Members' table for namespace {ns.Name}."));
+                if (TryUnwrapDecoratorDisplay(expectedTypeDisplay, out var wrappedTypeDisplay) &&
+                    rowsByType.TryGetValue(NormalizeTypeDisplay(wrappedTypeDisplay), out var collapsedRows))
+                {
+                    var overlapping = expectedMethods
+                        .Where(expected => collapsedRows.Any(row =>
+                            row.Methods.Any(actual => string.Equals(MethodBaseName(actual), expected.MethodName, StringComparison.Ordinal))))
+                        .ToList();
+                    if (overlapping.Count > 0)
+                    {
+                        var actualRows = collapsedRows
+                            .Select(row => $"`{row.TypeDisplay}`")
+                            .Distinct(StringComparer.Ordinal)
+                            .ToList();
+                        var affectedMethods = overlapping
+                            .Select(method => $"`{method.DisplayName}`")
+                            .Distinct(StringComparer.Ordinal)
+                            .Take(6)
+                            .ToList();
+                        var remaining = overlapping
+                            .Select(method => method.DisplayName)
+                            .Distinct(StringComparer.Ordinal)
+                            .Count() - affectedMethods.Count;
+                        var suffix = remaining > 0 ? $" and {remaining} more" : string.Empty;
+                        report.Errors.Add(new Diagnostic("EXTENSION_RECEIVER_MISMATCH", rel, ns.Name,
+                            $"Extension members that extend `{expectedTypeDisplay}` are listed under {string.Join(", ", actualRows)} in the 'Extension Members' table for namespace {ns.Name}. Keep the actual decorated receiver signature in the Type column instead of collapsing it to the wrapped type. Affected methods: {string.Join(", ", affectedMethods)}{suffix}."));
+                    }
+                }
+
+                foreach (var expected in expectedMethods)
+                {
+                    if (HasGenericMethodSignature(expected.DisplayName) &&
+                        SectionContainsMethodBase(section, expected.MethodName) &&
+                        !SectionContainsMethodDisplay(section, expected.DisplayName))
+                    {
+                        report.Errors.Add(new Diagnostic("EXTENSION_METHOD_SIGNATURE_MISSING", rel, ns.Name,
+                            $"Extension method `{expected.DisplayName}` (extending {expected.ExtendedType}) is listed without its generic signature in the 'Extension Members' table for namespace {ns.Name}. Preserve method type parameters in the Methods column, for example `{expected.DisplayName}` instead of bare `{expected.MethodName}`."));
+                        continue;
+                    }
+
+                    if (!SectionContainsMethodBase(section, expected.MethodName))
+                    {
+                        report.Errors.Add(new Diagnostic("EXTENSION_METHOD_MISSING", rel, ns.Name,
+                            $"Extension method `{expected.DisplayName}` (extending {expected.ExtendedType}) is not listed in the 'Extension Members' table for namespace {ns.Name}."));
+                    }
+                }
+
+                continue;
+            }
+
+            foreach (var expected in expectedMethods)
+            {
+                if (matchingRows.Any(row =>
+                        row.Methods.Any(actual =>
+                            string.Equals(NormalizeMethodDisplay(actual), NormalizeMethodDisplay(expected.DisplayName), StringComparison.Ordinal))))
+                {
+                    continue;
+                }
+
+                if (HasGenericMethodSignature(expected.DisplayName) &&
+                    matchingRows.Any(row =>
+                        row.Methods.Any(actual => string.Equals(MethodBaseName(actual), expected.MethodName, StringComparison.Ordinal))))
+                {
+                    report.Errors.Add(new Diagnostic("EXTENSION_METHOD_SIGNATURE_MISSING", rel, ns.Name,
+                        $"Extension method `{expected.DisplayName}` (extending {expected.ExtendedType}) is listed without its generic signature in the 'Extension Members' table for namespace {ns.Name}. Preserve method type parameters in the Methods column, for example `{expected.DisplayName}` instead of bare `{expected.MethodName}`."));
+                    continue;
+                }
+
+                if (!SectionContainsMethodBase(section, expected.MethodName))
+                {
+                    report.Errors.Add(new Diagnostic("EXTENSION_METHOD_MISSING", rel, ns.Name,
+                        $"Extension method `{expected.DisplayName}` (extending {expected.ExtendedType}) is not listed in the 'Extension Members' table for namespace {ns.Name}."));
+                }
             }
         }
+    }
+
+    private static List<ExtensionTableRow> ParseExtensionTableRows(string section)
+    {
+        var rows = new List<ExtensionTableRow>();
+        foreach (Match row in Regex.Matches(section, @"^\|([^|\r\n]+)\|([^|\r\n]+)\|([^|\r\n]+)\|", RegexOptions.Multiline))
+        {
+            var typeCell = row.Groups[1].Value.Trim();
+            var extCell = row.Groups[2].Value.Trim();
+            var methodCell = row.Groups[3].Value.Trim();
+            if (Regex.IsMatch(typeCell, @"^[\-: ]+$") ||
+                extCell.Equals("Ext", StringComparison.OrdinalIgnoreCase) ||
+                Regex.IsMatch(extCell, @"^[\-: ]+$"))
+            {
+                continue;
+            }
+
+            var methods = Regex.Matches(methodCell, @"`(?<name>[^`]+)`")
+                .Cast<Match>()
+                .Select(match => match.Groups["name"].Value.Trim())
+                .Where(name => name.Length > 0)
+                .ToList();
+            if (methods.Count == 0)
+            {
+                methods = methodCell.Split(',')
+                    .Select(part => part.Trim())
+                    .Where(part => part.Length > 0)
+                    .ToList();
+            }
+
+            rows.Add(new ExtensionTableRow(typeCell, methods));
+        }
+
+        return rows;
+    }
+
+    private static bool HasGenericMethodSignature(string methodDisplayName)
+    {
+        return methodDisplayName.IndexOf('<') >= 0;
+    }
+
+    private static bool SectionContainsMethodBase(string section, string methodName)
+    {
+        return Regex.IsMatch(section, "`" + Regex.Escape(methodName) + @"[`(]");
+    }
+
+    private static bool SectionContainsMethodDisplay(string section, string methodDisplayName)
+    {
+        return Regex.IsMatch(section, "`" + Regex.Escape(methodDisplayName) + @"`");
+    }
+
+    private static string NormalizeTypeDisplay(string typeDisplay)
+    {
+        return Regex.Replace(SimplifyTypeReference(typeDisplay), @"\s+", string.Empty);
+    }
+
+    private static string NormalizeMethodDisplay(string methodDisplayName)
+    {
+        var trimmed = methodDisplayName.Trim();
+        var genericStart = trimmed.IndexOf('<');
+        if (genericStart < 0)
+        {
+            return MethodBaseName(trimmed);
+        }
+
+        return MethodBaseName(trimmed) + NormalizeGenericArgumentList(trimmed[genericStart..]);
+    }
+
+    private static string MethodBaseName(string methodDisplayName)
+    {
+        var trimmed = methodDisplayName.Trim();
+        var genericStart = trimmed.IndexOf('<');
+        return genericStart >= 0 ? trimmed[..genericStart].Trim() : trimmed;
+    }
+
+    private static bool TryUnwrapDecoratorDisplay(string typeDisplay, out string wrappedTypeDisplay)
+    {
+        const string prefix = "IDecorator<";
+        wrappedTypeDisplay = string.Empty;
+        var trimmed = typeDisplay.Trim();
+        if (!trimmed.StartsWith(prefix, StringComparison.Ordinal) || !trimmed.EndsWith(">", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        wrappedTypeDisplay = trimmed[prefix.Length..^1].Trim();
+        return wrappedTypeDisplay.Length > 0;
     }
 
     private static List<string> ExtractNamespaceProseParagraphs(string body)
@@ -4057,9 +4376,10 @@ internal static class DocfxValidator
                 $@"(?m)\b(?:class|struct|interface|enum|delegate|record(?:\s+class|\s+struct)?)\s+{Regex.Escape(target.DisplayName)}\b");
         }
 
-        return Regex.IsMatch(sourceText, $@"(?s)\b{Regex.Escape(target.DisplayName)}\s*\([^)]*\bthis\b") ||
+        var methodName = MethodBaseName(target.DisplayName);
+        return Regex.IsMatch(sourceText, $@"(?s)\b{Regex.Escape(methodName)}(?:\s*<[^>\r\n]+>)?\s*\([^)]*\bthis\b") ||
                Regex.IsMatch(sourceText,
-                   $@"(?s)\bextension\s*\([^)]*\)\s*\{{.*?\b{Regex.Escape(target.DisplayName)}(?:\s*<[^>\r\n]+>)?\s*\(");
+                   $@"(?s)\bextension\s*\([^)]*\)\s*\{{.*?\b{Regex.Escape(methodName)}(?:\s*<[^>\r\n]+>)?\s*\(");
     }
 
     private static bool IsExampleCandidate(OverwriteSection section, ApiTargetInfo target)
@@ -4239,6 +4559,7 @@ internal static class DocfxValidator
 
     private static bool HasMethodInvocation(string code, string methodName)
     {
+        methodName = MethodBaseName(methodName);
         return Regex.IsMatch(code,
             $@"(?:\.|\b){Regex.Escape(methodName)}(?:\s*<[^>\r\n]+>)?\s*\(");
     }
@@ -7463,7 +7784,9 @@ internal static class DocfxValidator
         public HashSet<string> InitialDirtyPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
-    private sealed record ExtensionMethodInfo(string MethodName, string ExtendedType, string DeclaringClass);
+    private sealed record ExtensionMethodInfo(string MethodName, string DisplayName, string ExtendedType, string DeclaringClass);
+
+    private sealed record ExtensionTableRow(string TypeDisplay, List<string> Methods);
 
     private sealed record ApiTargetInfo(string Uid, string Namespace, ApiTargetKind Kind, string DisplayName, string? DeclaringTypeUid = null);
 

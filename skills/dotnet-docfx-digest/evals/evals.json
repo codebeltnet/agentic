@@ -928,6 +928,17 @@
         "Does not run a final completion report or completion-shaped verification pass while `EXAMPLE_MISSING` still remains",
         "Continues example authoring and reserves `--build-api-model --validate-samples --verify-docfx-build` for the real end of the queue"
       ]
+    },
+    {
+      "id": 77,
+      "prompt": "Use dotnet-docfx-digest on a Cuemon-style library where one namespace exposes type-specific extension methods while a sibling namespace exposes decorated extension methods behind `IDecorator<T>`. The current namespace pages flatten the decorated receiver to the wrapped type and render generic entries like `As<T>` or `Configure<TOptions>` as bare `As` and `Configure`.",
+      "expected_output": "Agent preserves the real receiver signature in the `Extension Members` table (`IDecorator<Type>`, `IDecorator<object>`, etc.) instead of collapsing decorated extensions to the wrapped type, and it keeps generic method arity in the Methods column (`As<T>`, `Configure<TOptions>`, `ChangeType<T>`) instead of flattening them to bare names. It does not merge decorated and type-specific extension inventories across the sibling namespace pages.",
+      "expectations": [
+        "Keeps decorated receiver signatures such as `IDecorator<Type>` in the Type column instead of rewriting them as the wrapped type",
+        "Preserves generic extension method names such as `As<T>` and `Configure<TOptions>` in the Methods column",
+        "Does not collapse decorated extension methods into the same namespace-table shape used for direct type-specific extensions",
+        "Repairs the affected namespace pages without editing unrelated type examples or overwrites"
+      ]
     }
   ]
 }

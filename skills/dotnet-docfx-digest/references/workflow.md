@@ -45,7 +45,7 @@ Use this path when the user names a changed API or namespace.
 9. Update XML documentation comments where purpose-first summaries are needed.
 10. Update or create namespace overview pages whose opening names the developer problem and outcome, followed by concrete when-to-use and start-here guidance.
 11. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
-12. Update `Extension Members` tables when public extension methods are involved. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column — the validator now rejects corrupted or missing emoji with `EXTENSION_TABLE_ENCODING`.
+12. Update `Extension Members` tables when public extension methods are involved. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column — the validator now rejects corrupted or missing emoji with `EXTENSION_TABLE_ENCODING`. Keep the real receiver signature in the Type column (`IDecorator<Type>`, `IEnumerable<T>`, etc.) and preserve generic method arity in the Methods column (`As<T>`, `Configure<TOptions>`, `Parse<T>`).
 13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods.
 14. Build or refresh the example inventory.
 15. Preserve manual edits and correct stale contradictions instead of replacing whole files.
@@ -215,6 +215,8 @@ If you're trying to ..., start with `PrimaryType` or `PrimaryExtensions`.
 ```
 
 Remove the `Extension Members` section when the namespace has no public extension methods. Adjust the include path to match the actual file location.
+
+Do not unwrap decorated receivers or flatten generic method names in this table. Keep signatures such as `IDecorator<Type>` and `As<T>` intact instead of rewriting them as `Type` or bare `As`.
 
 Namespace overview files stay single-UID and stop after the fly-in, availability, related links, and optional `Extension Members` table. Do not append secondary `uid:` / `example:` mappings there; put extension-method examples on the declaring extension class page or another readable type-targeted file under `.docfx/api/types/`.
 

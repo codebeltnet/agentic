@@ -500,6 +500,116 @@ public static class Use$name
 }
 
 # ----------------------------------------------------------------------
+# Scenario: decorated extension receivers and generic method names must stay intact
+# in Extension Members tables.
+# ----------------------------------------------------------------------
+$decoratedExtensions = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-decorated-extension-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $decoratedExtensions 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $decoratedExtensions 'src/Acme.Core.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $decoratedExtensions 'src/Decorators.cs') @'
+namespace Acme.Core;
+
+public interface IDecorator<T>
+{
+    T Inner { get; }
+}
+
+public static class TypeDecoratorExtensions
+{
+    public static string AsName<T>(this IDecorator<Type> decorator) => typeof(T).Name + ":" + decorator.Inner.Name;
+
+    public static string AsName(this IDecorator<Type> decorator) => decorator.Inner.Name;
+}
+'@
+    Write-Utf8File (Join-Path $decoratedExtensions '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Core.csproj'))
+    Write-Utf8File (Join-Path $decoratedExtensions '.docfx/api/namespaces/Acme.Core.md') @'
+---
+uid: Acme.Core
+summary: *content
+---
+Use `TypeDecoratorExtensions` when you need to keep type-focused helper calls available behind a decorator abstraction instead of exposing them as direct `Type` extension methods.
+
+Start with `TypeDecoratorExtensions` when a pipeline already works with `IDecorator<Type>` values and still needs readable type names.
+
+Availability: `Acme.Core`
+
+## Extension Members
+
+|Type|Ext|Methods|
+|---|---|---|
+|Type|⬇️|`AsName`, `AsName`|
+'@
+    Write-Utf8File (Join-Path $decoratedExtensions '.docfx/api/types/Acme.Core.TypeDecoratorExtensions.md') @'
+---
+uid: Acme.Core.TypeDecoratorExtensions
+example: *content
+---
+```csharp
+using System;
+using Acme.Core;
+
+namespace Samples;
+
+public sealed class InlineTypeDecorator : IDecorator<Type>
+{
+    public InlineTypeDecorator(Type inner) => Inner = inner;
+
+    public Type Inner { get; }
+}
+
+public static class DecoratedTypeExample
+{
+    public static void Print()
+    {
+        IDecorator<Type> decorator = new InlineTypeDecorator(typeof(Guid));
+
+        Console.WriteLine(decorator.AsName());
+        Console.WriteLine(decorator.AsName<string>());
+    }
+}
+```
+'@
+
+    $decoratedBad = Invoke-Validator -Workspace $decoratedExtensions
+    Assert-Diagnostic -Report $decoratedBad -Code 'EXTENSION_RECEIVER_MISMATCH'
+    Assert-Diagnostic -Report $decoratedBad -Code 'EXTENSION_METHOD_SIGNATURE_MISSING'
+
+    Write-Utf8File (Join-Path $decoratedExtensions '.docfx/api/namespaces/Acme.Core.md') @'
+---
+uid: Acme.Core
+summary: *content
+---
+Use `TypeDecoratorExtensions` when you need to keep type-focused helper calls available behind a decorator abstraction instead of exposing them as direct `Type` extension methods.
+
+Start with `TypeDecoratorExtensions` when a pipeline already works with `IDecorator<Type>` values and still needs readable type names.
+
+Availability: `Acme.Core`
+
+## Extension Members
+
+|Type|Ext|Methods|
+|---|---|---|
+|IDecorator<Type>|⬇️|`AsName<T>`, `AsName`|
+'@
+
+    $decoratedGood = Invoke-Validator -Workspace $decoratedExtensions
+    Assert-NoDiagnostic -Report $decoratedGood -Code 'EXTENSION_RECEIVER_MISMATCH'
+    Assert-NoDiagnostic -Report $decoratedGood -Code 'EXTENSION_METHOD_SIGNATURE_MISSING'
+    Assert-NoDiagnostic -Report $decoratedGood -Code 'EXAMPLE_MISSING'
+
+    Write-Host 'DocFX decorated extension signature regression passed.'
+} finally {
+    if (Test-Path $decoratedExtensions) {
+        Remove-Item -Path $decoratedExtensions -Recurse -Force
+    }
+}
+
+# ----------------------------------------------------------------------
 # Scenario: one authored extension-container example may satisfy several extension targets.
 # The section is one authored scenario and must not be counted once per covered method.
 # ----------------------------------------------------------------------
