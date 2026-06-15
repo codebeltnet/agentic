@@ -660,6 +660,7 @@
         "Inspects and preserves the 8 untracked namespace pages, 1 untracked type page, and other existing documentation edits instead of discarding or overwriting them wholesale",
         "Explicitly identifies the prior output as partial because 62 extension-section, 1228 example, and 1 DocFX-build diagnostics remain",
         "Does not describe pre-existing diagnostics, diagnostic volume, or the size of the work queue as a blocker",
+        "Does not stop with a progress summary or ask the user whether to continue while repairable diagnostics remain",
         "Uses the deterministic repair plan and complete validator queue to continue repairing every missing extension section and example across the affected documentation surfaces",
         "Reports the SQL Server integration-test failure separately and continues DocFX repair because the failure does not prevent documentation validation or source inspection",
         "Reruns the fast validator after batches of edits instead of stopping after the first namespace or type subset",
@@ -900,6 +901,18 @@
         "Moves extension-method examples to readable type-targeted overwrite files under `.docfx/api/types/`, typically the declaring extension class page",
         "Does not append secondary `uid:` / `example:` sections after `Extension Members` on the namespace page",
         "Reruns scripts/docfx.cs --json and treats any remaining namespace-ownership or example diagnostic as blocking completion"
+      ]
+    },
+    {
+      "id": 75,
+      "prompt": "Use dotnet-docfx-digest on a Cuemon-style repository. After your first repair batch, fast validation drops `EXTENSION_SECTION_MISSING` from 62 to 16 and clears `NAMESPACE_APPEND_ONLY_REPAIR`, but a deeper queue appears: `EXTENSION_METHOD_MISSING` jumps to 125 because the new `Extension Members` tables are incomplete. `EXAMPLE_MISSING` is still over 1,200.",
+      "expected_output": "The agent treats the newly surfaced `EXTENSION_METHOD_MISSING` findings as the next deterministic queue, keeps the original repo-wide scope, updates extension tables and required examples packet by packet, reruns fast validation between batches, and does not stop with a progress summary or a choice menu. It continues until the build-backed verification succeeds and the JSON completion contract is clean.",
+      "expectations": [
+        "Recognizes the newly surfaced `EXTENSION_METHOD_MISSING` queue as progress rather than as a blocker or a reason to pause",
+        "Does not offer a continue/focus/verify menu or ask the user how to proceed while repairable diagnostics remain",
+        "Keeps the original full-repository scope instead of narrowing to a representative subset or dry run",
+        "Uses packeted batches plus fast reruns to repair incomplete extension tables and the remaining example inventory",
+        "Runs the final build-backed command with `--build-api-model --validate-samples --verify-docfx-build` and does not claim completion until summary.canClaimCompletion is true with no remaining work items, gates, or diagnostics"
       ]
     }
   ]
