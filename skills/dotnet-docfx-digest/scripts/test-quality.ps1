@@ -481,6 +481,83 @@ public static class Use$name
 }
 
 # ----------------------------------------------------------------------
+# Scenario: one authored extension-container example may satisfy several extension targets.
+# The section is one authored scenario and must not be counted once per covered method.
+# ----------------------------------------------------------------------
+$sharedExtension = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-shared-extension-' + [guid]::NewGuid().ToString('N'))
+try {
+    $arrow = "$([char]0x2B07)$([char]0xFE0F)"
+    Write-Utf8File (Join-Path $sharedExtension 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $sharedExtension 'src/Acme.Extensions.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $sharedExtension 'src/Extensions.cs') @'
+namespace Acme.Extensions;
+
+public static class TextExtensions
+{
+    public static string Trimmed(this string value) => value.Trim();
+    public static string Uppercase(this string value) => value.ToUpperInvariant();
+    public static int WordCount(this string value) => value.Split(' ', System.StringSplitOptions.RemoveEmptyEntries).Length;
+}
+'@
+    Write-Utf8File (Join-Path $sharedExtension '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Extensions.csproj'))
+    Write-Utf8File (Join-Path $sharedExtension '.docfx/api/namespaces/Acme.Extensions.md') @"
+---
+uid: Acme.Extensions
+summary: *content
+---
+Choose these text operations when input needs small, explicit transformations before display or comparison. `TextExtensions` keeps each operation available directly on the source string.
+
+## Extension Members
+
+|Type|Ext|Methods|
+|---|---|---|
+|String|$arrow|``Trimmed``, ``Uppercase``, ``WordCount``|
+
+Availability: ``Acme.Extensions``
+"@
+    Write-Utf8File (Join-Path $sharedExtension '.docfx/api/types/Acme.Extensions.TextExtensions.md') @'
+---
+uid: Acme.Extensions.TextExtensions
+example: *content
+---
+This example prepares a user-entered title and reports the resulting word count.
+
+```csharp
+using System;
+using Acme.Extensions;
+
+namespace Samples;
+
+public static class TextPreparationExample
+{
+    public static void PrintPreparedTitle()
+    {
+        const string input = "  release notes  ";
+        var prepared = input.Trimmed().Uppercase();
+
+        Console.WriteLine(prepared);
+        Console.WriteLine(prepared.WordCount());
+    }
+}
+```
+'@
+
+    $sharedReport = Invoke-Validator -Workspace $sharedExtension
+    Assert-NoDiagnostic -Report $sharedReport -Code 'EXAMPLE_TEMPLATE_REPETITION'
+    Assert-NoDiagnostic -Report $sharedReport -Code 'EXAMPLE_MISSING'
+
+    Write-Host 'DocFX shared extension example fingerprint regression passed.'
+} finally {
+    if (Test-Path $sharedExtension) {
+        Remove-Item -Path $sharedExtension -Recurse -Force
+    }
+}
+
+# ----------------------------------------------------------------------
 # Scenario: mechanical namespace prose repeated across unrelated pages.
 # Three namespaces that share one normalized prose skeleton must fail. Two unrelated pages using
 # the distinctive "namespace helps you / Use it when / Start with" cadence must also fail even

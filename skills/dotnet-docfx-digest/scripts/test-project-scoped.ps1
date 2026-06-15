@@ -359,7 +359,7 @@ Availability: `Fam.Tuples`
 }
 
 # ----------------------------------------------------------------------
-Run-Scenario 'Quality-risk thresholds trigger a pilot-review warning' {
+Run-Scenario 'Normal target volume never changes full-run scope' {
     param($ws)
     Write-Utf8File (Join-Path $ws 'AGENTS.md') $agents
     Write-Utf8File (Join-Path $ws 'src/Risk/Risk.csproj') $csproj
@@ -368,10 +368,10 @@ Run-Scenario 'Quality-risk thresholds trigger a pilot-review warning' {
     Write-Utf8File (Join-Path $ws '.docfx/docfx.json') (New-Docfx @(@{ Dest = 'api'; Files = @('src/Risk/Risk.csproj') }))
     Initialize-GitRepo $ws
 
-    $r = Invoke-Validator $ws @('--dry-run', '--seed', '1', '--risk-standalone-threshold', '3')
-    Assert-Diagnostic -Report $r -Code 'QUALITY_RISK_REVIEW_REQUIRED' -Where 'warnings'
-    if (-not $r.qualityRisk.highRisk) { throw 'qualityRisk.highRisk should be true' }
-    if ($r.qualityRisk.standaloneTargets -lt 6) { throw "standaloneTargets=$($r.qualityRisk.standaloneTargets)" }
+    $r = Invoke-Validator $ws
+    if ($r.PSObject.Properties.Name -contains 'qualityRisk') { throw 'qualityRisk metadata must not be emitted' }
+    if ($r.summary.runMode -ne 'full') { throw "runMode=$($r.summary.runMode); normal execution must remain full" }
+    if (@($r.scope.selectedProjects).Count -ne 1) { throw "selectedProjects=$(@($r.scope.selectedProjects).Count); full scope should include the project" }
 }
 
 # ----------------------------------------------------------------------

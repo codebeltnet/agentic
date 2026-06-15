@@ -329,7 +329,7 @@ internal static class DocfxValidator
         var families = LoadAndValidateFamilyExemptions(repoRoot, docfxWorkspace, api, workspace, namespacePageIndex, report);
         ApplyFamilyExemptions(api, families);
         report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
-        ValidateSymbolOwnership(api, workspace, packets, report, out var symbolCollisions, out var typeForwarded, out var extensionAmbiguous);
+        ValidateSymbolOwnership(api, workspace, report);
         var scope = ResolveScope(options, packets, metadataGroups, apiModelSource, repoRoot, report, resumeScope);
         report.Summary.RunMode = scope.Mode;
         report.Summary.Seed = scope.Seed;
@@ -427,15 +427,12 @@ internal static class DocfxValidator
             ValidateChangedPageReview(options.ReviewReportPath, repoRoot, packets, gitState, report);
         }
 
-        var qualityRisk = EvaluateQualityRisk(options, api, packets, report.Summary.RequiredExamples,
-            symbolCollisions, typeForwarded, extensionAmbiguous, scope, report);
-        report.QualityRisk = qualityRisk;
         report.Scope = BuildScopeReport(scope, packets, metadataGroups, gitState, families, repoRoot, report);
         if (options.ProjectManifestPath is not null)
         {
             try
             {
-                WriteProjectManifest(options.ProjectManifestPath, repoRoot, docfxPath, report.Scope, qualityRisk,
+                WriteProjectManifest(options.ProjectManifestPath, repoRoot, docfxPath, report.Scope,
                     report.Summary.ApiModelSource ?? "unknown", report);
             }
             catch (Exception ex)
@@ -3771,7 +3768,7 @@ internal static class DocfxValidator
                 $"UID `{duplicate.Key}` is mapped to {duplicate.Count()} example sections. Keep one coherent, scenario-led example for a UID; merge or remove the duplicate `example: *content` sections."));
         }
 
-        var exampleFingerprints = new List<(string Uid, string Path, string Fingerprint)>();
+        var exampleFingerprints = new List<(string SectionUid, string Path, string Fingerprint)>();
 
         foreach (var target in api.RequiredExampleTargets)
         {
@@ -3808,7 +3805,14 @@ internal static class DocfxValidator
                     : ExtractExampleSection(validSection.Body));
                 if (fingerprint.Length >= 40)
                 {
-                    exampleFingerprints.Add((target.Uid, Rel(repoRoot, validSection.File), fingerprint));
+                    var path = Rel(repoRoot, validSection.File);
+                    if (!exampleFingerprints.Any(entry =>
+                            string.Equals(entry.SectionUid, validSection.Uid, StringComparison.Ordinal) &&
+                            string.Equals(entry.Path, path, StringComparison.OrdinalIgnoreCase) &&
+                            string.Equals(entry.Fingerprint, fingerprint, StringComparison.Ordinal)))
+                    {
+                        exampleFingerprints.Add((validSection.Uid, path, fingerprint));
+                    }
                 }
 
                 continue;
@@ -3850,13 +3854,16 @@ internal static class DocfxValidator
         // or conventional one-line setup that legitimately recurs.
         foreach (var group in exampleFingerprints
                      .GroupBy(entry => entry.Fingerprint, StringComparer.Ordinal)
-                     .Where(group => group.Select(entry => entry.Uid).Distinct(StringComparer.Ordinal).Count() >= 3))
+                     .Where(group => group
+                         .Select(entry => (entry.SectionUid, entry.Path))
+                         .Distinct()
+                         .Count() >= 3))
         {
             var paths = group.Select(entry => entry.Path)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var uids = group.Select(entry => entry.Uid)
+            var uids = group.Select(entry => entry.SectionUid)
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(uid => uid, StringComparer.Ordinal)
                 .ToList();
@@ -4952,7 +4959,7 @@ internal static class DocfxValidator
 
     // ----------------------------------------------------------------------
     // Project-scoped discovery: git state, packets, scope selection, families,
-    // symbol ownership, quality risk, manifest, and the safe overwrite writer.
+    // symbol ownership, manifest, and the safe overwrite writer.
     // ----------------------------------------------------------------------
 
     private static GitState GetGitState(string repoRoot)
@@ -5624,13 +5631,8 @@ internal static class DocfxValidator
 
     // Symbol ownership: duplicate simple type names across owning projects, type forwarding that
     // cannot be attributed, and extension containers that cross project boundaries.
-    private static void ValidateSymbolOwnership(ApiModel api, ValidationWorkspace ws, List<ProjectPacket> packets,
-        Report report, out int collisions, out int forwarded, out int extensionAmbiguous)
+    private static void ValidateSymbolOwnership(ApiModel api, ValidationWorkspace ws, Report report)
     {
-        collisions = 0;
-        forwarded = 0;
-        extensionAmbiguous = 0;
-
         var ownerByNamespace = ws.NamespaceProjects;
         string OwnersOf(string ns) => ownerByNamespace.TryGetValue(ns, out var list)
             ? string.Join(", ", list.Where(o => !o.IsTest).Select(o => o.AssemblyName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
@@ -5654,7 +5656,6 @@ internal static class DocfxValidator
                 .ToList();
             if (owners.Count >= 2)
             {
-                collisions++;
                 report.Warnings.Add(new Diagnostic("SYMBOL_COLLISION_UNRESOLVED", null, group.First().Namespace,
                     $"Simple type name '{group.Key}' is documented in multiple assemblies/namespaces ({string.Join("; ", distinctUids.Select(u => $"{u} [{OwnersOf(NamespaceFromUid(u))}]"))}). Qualify examples and overwrite UIDs by owning assembly/project so coverage is not ambiguous."));
             }
@@ -5683,7 +5684,6 @@ internal static class DocfxValidator
                     var documented = api.RequiredExampleTargets.Any(t => string.Equals(SimpleNameFromUid(t.Uid), simple, StringComparison.Ordinal));
                     if (!documented)
                     {
-                        forwarded++;
                         report.Warnings.Add(new Diagnostic("TYPE_FORWARDING_UNRESOLVED", Rel(ws.RepoRoot, file), null,
                             $"Type '{forwardedType}' is forwarded from '{project.AssemblyName}' but cannot be matched to a documented type target. Resolve which project and UID documents the forwarded family before authoring."));
                     }
@@ -5709,76 +5709,10 @@ internal static class DocfxValidator
                 .ToList();
             if (owners.Count >= 2)
             {
-                extensionAmbiguous++;
                 report.Warnings.Add(new Diagnostic("EXTENSION_OWNER_AMBIGUOUS", null, namespaces[0],
                     $"Extension container '{group.Key}' is declared in multiple namespaces/assemblies ({string.Join(", ", namespaces.Select(ns => $"{ns} [{OwnersOf(ns)}]"))}). Prefer receiver extension syntax and a uniquely owned overwrite UID so the example targets the right declaring type."));
             }
         }
-    }
-
-    private static QualityRiskReport EvaluateQualityRisk(Options options, ApiModel api, List<ProjectPacket> packets,
-        int existingValidExamples, int collisions, int forwarded, int extensionAmbiguous, ScopePlan scope, Report report)
-    {
-        var standaloneThreshold = options.RiskStandaloneThreshold ?? 100;
-        var extensionThreshold = options.RiskExtensionThreshold ?? 100;
-        var ratioThreshold = options.RiskMissingRatioThreshold ?? 10.0;
-
-        var standalone = api.RequiredExampleTargets.Count(t => t.Kind == ApiTargetKind.Type);
-        var extension = api.RequiredExampleTargets.Count(t => t.Kind == ApiTargetKind.ExtensionMethod);
-        var missing = Math.Max(0, standalone + extension - existingValidExamples);
-        var ratio = missing / (double)Math.Max(1, existingValidExamples);
-        var shared = packets.SelectMany(p => p.SharedNamespaces).Distinct(StringComparer.Ordinal).Count();
-
-        var risk = new QualityRiskReport
-        {
-            StandaloneTargets = standalone,
-            ExtensionTargets = extension,
-            ExistingValidExamples = existingValidExamples,
-            MissingToExistingRatio = Math.Round(ratio, 2),
-            SymbolCollisions = collisions,
-            TypeForwardedTargets = forwarded,
-            SharedNamespaces = shared,
-            UnresolvedExtensionOwners = extensionAmbiguous,
-            StandaloneThreshold = standaloneThreshold,
-            ExtensionThreshold = extensionThreshold,
-            RatioThreshold = ratioThreshold,
-            PilotTargetCap = 20
-        };
-
-        if (standalone > standaloneThreshold)
-        {
-            risk.TriggeredThresholds.Add($"standalone-targets {standalone} > {standaloneThreshold}");
-        }
-
-        if (extension > extensionThreshold)
-        {
-            risk.TriggeredThresholds.Add($"extension-targets {extension} > {extensionThreshold}");
-        }
-
-        if (ratio > ratioThreshold)
-        {
-            risk.TriggeredThresholds.Add($"missing-to-existing {risk.MissingToExistingRatio} > {ratioThreshold}");
-        }
-
-        if (collisions > 0 || extensionAmbiguous > 0)
-        {
-            risk.TriggeredThresholds.Add($"unresolved symbol ownership ({collisions} collisions, {extensionAmbiguous} extension owners)");
-        }
-
-        risk.HighRisk = risk.TriggeredThresholds.Count > 0;
-        risk.RecommendedScope = packets.Count > 1
-            ? "Run a dry-run pilot (--dry-run) or a single --project packet before authoring the full surface."
-            : "Limit the first authoring pass to a 20-target pilot, then review before continuing.";
-
-        var authoringIntent = options.DryRun || options.ProjectHints.Count > 0 || options.ProjectManifestPath is not null ||
-                              options.ResumeProjectManifestPath is not null || options.BuildApiModel;
-        if (risk.HighRisk && authoringIntent && !options.AllowHighRisk)
-        {
-            report.Warnings.Add(new Diagnostic("QUALITY_RISK_REVIEW_REQUIRED", null, null,
-                $"High-risk authoring queue: {string.Join("; ", risk.TriggeredThresholds)}. Stop after the first project packet or {risk.PilotTargetCap} newly authored targets and obtain explicit review before continuing. {risk.RecommendedScope} Pass --allow-high-risk only as an explicit, reviewed decision."));
-        }
-
-        return risk;
     }
 
     private static ScopeReport BuildScopeReport(ScopePlan scope, List<ProjectPacket> packets,
@@ -5897,7 +5831,7 @@ internal static class DocfxValidator
     }
 
     private static void WriteProjectManifest(string path, string repoRoot, string docfxPath, ScopeReport scope,
-        QualityRiskReport risk, string apiModelSource, Report report)
+        string apiModelSource, Report report)
     {
         var manifest = new
         {
@@ -5911,8 +5845,7 @@ internal static class DocfxValidator
             metadataGroups = scope.MetadataGroups,
             packets = scope.Packets,
             dirty = scope.Dirty,
-            familyExemptions = scope.FamilyExemptions,
-            qualityRisk = risk
+            familyExemptions = scope.FamilyExemptions
         };
 
         var json = JsonSerializer.Serialize(manifest, JsonOptions);
@@ -7183,24 +7116,6 @@ internal static class DocfxValidator
                     if (!Next(args, ref i, out var wo)) { error = "--write-overwrite requires a request JSON path."; return false; }
                     options.WriteOverwriteRequestPath = wo;
                     break;
-                case "--allow-high-risk":
-                    options.AllowHighRisk = true;
-                    break;
-                case "--risk-standalone-threshold":
-                    if (!Next(args, ref i, out var rst)) { error = "--risk-standalone-threshold requires a count."; return false; }
-                    if (!int.TryParse(rst, out var rstv) || rstv < 0) { error = "--risk-standalone-threshold must be a non-negative integer."; return false; }
-                    options.RiskStandaloneThreshold = rstv;
-                    break;
-                case "--risk-extension-threshold":
-                    if (!Next(args, ref i, out var ret)) { error = "--risk-extension-threshold requires a count."; return false; }
-                    if (!int.TryParse(ret, out var retv) || retv < 0) { error = "--risk-extension-threshold must be a non-negative integer."; return false; }
-                    options.RiskExtensionThreshold = retv;
-                    break;
-                case "--risk-missing-ratio-threshold":
-                    if (!Next(args, ref i, out var rmr)) { error = "--risk-missing-ratio-threshold requires a number."; return false; }
-                    if (!double.TryParse(rmr, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var rmrv) || rmrv < 0) { error = "--risk-missing-ratio-threshold must be a non-negative number."; return false; }
-                    options.RiskMissingRatioThreshold = rmrv;
-                    break;
                 case "--json":
                     options.Json = true;
                     break;
@@ -7269,23 +7184,6 @@ internal static class DocfxValidator
                         options.WriteOverwriteRequestPath = v14;
                         break;
                     }
-                    if (TrySplit(arg, "--risk-standalone-threshold", out var v15) && int.TryParse(v15, out var rstInline) && rstInline >= 0)
-                    {
-                        options.RiskStandaloneThreshold = rstInline;
-                        break;
-                    }
-                    if (TrySplit(arg, "--risk-extension-threshold", out var v16) && int.TryParse(v16, out var retInline) && retInline >= 0)
-                    {
-                        options.RiskExtensionThreshold = retInline;
-                        break;
-                    }
-                    if (TrySplit(arg, "--risk-missing-ratio-threshold", out var v17) &&
-                        double.TryParse(v17, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var rmrInline) && rmrInline >= 0)
-                    {
-                        options.RiskMissingRatioThreshold = rmrInline;
-                        break;
-                    }
-
                     error = $"Unknown argument: {arg}";
                     return false;
             }
@@ -7399,7 +7297,7 @@ internal static class DocfxValidator
                                       reported when omitted.
               --project-manifest <path>
                                       Write a deterministic BOM-less project packet manifest (groups, packets,
-                                      ownership, initial dirty paths, family exemptions, quality risk) and continue.
+                                      ownership, initial dirty paths, and family exemptions) and continue.
               --resume-project-manifest <path>
                                       Resume the exact selected packets and initial dirty-file baseline from a
                                       prior manifest. Use this after authoring so newly created dry-run files are
@@ -7410,10 +7308,6 @@ internal static class DocfxValidator
               --write-overwrite <path> Safe structured overwrite writer. Reads a JSON request with
                                       file/uid/mapping/prose/fence fields, validates it, preserves BOM/line
                                       endings, refuses to replace dirty or duplicate-UID files, and exits.
-              --allow-high-risk        Explicitly proceed past the quality-risk pilot stop (a reviewed decision).
-              --risk-standalone-threshold <n>     Standalone-example target threshold (default 100).
-              --risk-extension-threshold <n>      Extension-method target threshold (default 100).
-              --risk-missing-ratio-threshold <x>  Missing-to-existing example ratio threshold (default 10).
               --json                   Emit a machine-readable JSON summary (includes processes + phase timings).
               --help                   Print this usage.
 
@@ -7470,10 +7364,6 @@ internal static class DocfxValidator
         public string? ResumeProjectManifestPath { get; set; }
         public string? ReviewReportPath { get; set; }
         public string? WriteOverwriteRequestPath { get; set; }
-        public bool AllowHighRisk { get; set; }
-        public int? RiskStandaloneThreshold { get; set; }
-        public int? RiskExtensionThreshold { get; set; }
-        public double? RiskMissingRatioThreshold { get; set; }
     }
 
     private sealed record ProjectInfo(string Path, string AssemblyName, List<string> TargetFrameworks, bool IsTest, string? PackageId = null);
@@ -7781,7 +7671,6 @@ internal sealed class Report
     public string? Status { get; set; }
     public Summary Summary { get; set; } = new();
     public ScopeReport? Scope { get; set; }
-    public QualityRiskReport? QualityRisk { get; set; }
     public List<Diagnostic> Errors { get; set; } = new();
     public List<Diagnostic> Warnings { get; set; } = new();
     public List<string> PackageIds { get; set; } = new();
@@ -7855,23 +7744,4 @@ internal sealed class FamilyExemptionReport
     public List<string> CoveredUids { get; set; } = new();
     public string Rationale { get; set; } = string.Empty;
     public bool Valid { get; set; }
-}
-
-internal sealed class QualityRiskReport
-{
-    public bool HighRisk { get; set; }
-    public int StandaloneTargets { get; set; }
-    public int ExtensionTargets { get; set; }
-    public int ExistingValidExamples { get; set; }
-    public double MissingToExistingRatio { get; set; }
-    public int SymbolCollisions { get; set; }
-    public int TypeForwardedTargets { get; set; }
-    public int SharedNamespaces { get; set; }
-    public int UnresolvedExtensionOwners { get; set; }
-    public List<string> TriggeredThresholds { get; set; } = new();
-    public int StandaloneThreshold { get; set; }
-    public int ExtensionThreshold { get; set; }
-    public double RatioThreshold { get; set; }
-    public int PilotTargetCap { get; set; }
-    public string? RecommendedScope { get; set; }
 }
