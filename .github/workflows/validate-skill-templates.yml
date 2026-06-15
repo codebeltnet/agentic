@@ -11,6 +11,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install DocFX CLI
+        shell: pwsh
+        run: |
+          if (Get-Command docfx -ErrorAction SilentlyContinue) {
+            dotnet tool update --global docfx
+          } else {
+            dotnet tool install --global docfx
+          }
+          "$HOME/.dotnet/tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          docfx --version
+
       - name: Run validator
         shell: pwsh
         run: pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1
