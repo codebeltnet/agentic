@@ -3388,6 +3388,7 @@ internal static class DocfxValidator
         }
 
         var (frontMatter, body) = SplitFrontMatter(text);
+        var namespaceBody = TrimNamespaceBody(body);
 
         // uid
         var uid = ReadYamlScalar(frontMatter, "uid");
@@ -3409,10 +3410,12 @@ internal static class DocfxValidator
                 "Namespace page front matter is missing a 'summary' key (expected 'summary: *content')."));
         }
 
+        ValidateNamespacePageOwnership(page, rel, text, ns, report);
+
         // Concept-led namespace prose. A namespace inventory is useful reference material, but it
         // is not a developer-facing overview unless it explains when to use the surface and where
         // a newcomer should begin.
-        var proseParagraphs = ExtractNamespaceProseParagraphs(body);
+        var proseParagraphs = ExtractNamespaceProseParagraphs(namespaceBody);
         if (proseParagraphs.Count == 0)
         {
             report.Errors.Add(new Diagnostic("NAMESPACE_FLYIN_MISSING", rel, ns.Name,
@@ -3466,7 +3469,7 @@ internal static class DocfxValidator
         }
 
         // availability
-        if (!HasAvailability(body))
+        if (!HasAvailability(namespaceBody))
         {
             report.Errors.Add(new Diagnostic("AVAILABILITY_MISSING", rel, ns.Name,
                 "Namespace page has no availability information (expected an availability include or explicit 'Availability:' text)."));
@@ -3475,8 +3478,29 @@ internal static class DocfxValidator
         // extension members
         if (ns.ExtensionMethods.Count > 0)
         {
-            ValidateExtensionSection(rel, body, ns, report);
+            ValidateExtensionSection(rel, namespaceBody, ns, report);
         }
+    }
+
+    private static void ValidateNamespacePageOwnership(string page, string rel, string text, NamespaceInfo ns, Report report)
+    {
+        var sections = ExtractOverwriteSections(page, text);
+        if (sections.Count <= 1)
+        {
+            return;
+        }
+
+        var embedded = sections.Skip(1).ToList();
+        var offendingUids = embedded.Select(section => $"`{section.Uid}`")
+            .Distinct(StringComparer.Ordinal)
+            .Take(6)
+            .ToList();
+        var remaining = embedded.Select(section => section.Uid).Distinct(StringComparer.Ordinal).Count() - offendingUids.Count;
+        var suffix = remaining > 0 ? $" and {remaining} more" : string.Empty;
+        report.Errors.Add(new Diagnostic("NAMESPACE_EMBEDDED_OVERWRITE_SECTION", rel, ns.Name,
+            $"Namespace page `{ns.Name}` contains additional overwrite section(s) after the namespace overview ({string.Join(", ", offendingUids)}{suffix}). " +
+            "Keep namespace overview files single-UID and namespace-scoped. Move type/member `uid:` / `example:` mappings to readable files under `api/types/`, " +
+            "typically the declaring extension class page, instead of appending them after `Extension Members`."));
     }
 
     private static void ValidateExtensionSection(string rel, string body, NamespaceInfo ns, Report report)
@@ -3610,6 +3634,12 @@ internal static class DocfxValidator
 
         Flush();
         return paragraphs;
+    }
+
+    private static string TrimNamespaceBody(string body)
+    {
+        var nextOverwrite = Regex.Match(body, @"(?im)^---\s*$\nuid\s*:");
+        return nextOverwrite.Success ? body[..nextOverwrite.Index] : body;
     }
 
     private static bool IsInventoryOnlyNamespaceProse(string paragraph)
@@ -6977,7 +7007,7 @@ internal static class DocfxValidator
                     "Replace prose-only or metadata-only coverage with a C# scenario that invokes the extension method on a valid receiver.",
                 _ when diagnostic.Message.Contains("Public non-abstraction type", StringComparison.Ordinal) =>
                     "Search GitHub (see below), verify public API surface, create or update the type-targeting overwrite file under `api/types/`, keep `api/types/**/*.md` under `build.overwrite` only, add a compiling Examples section, then rerun validation.",
-                _ => "Search GitHub (see below), verify public API surface, add a compiling Examples section on the declaring extension class or namespace page that explicitly calls the extension method, then rerun validation."
+                _ => "Search GitHub (see below), verify public API surface, add a compiling Examples section on the declaring extension class page or another readable overwrite file under `api/types/` that explicitly calls the extension method, then rerun validation."
             };
             sb.AppendLine($"| {ns} | `{path}` | `{diagnostic.Code}` | {EscapeTable(action)} {message} |");
         }
