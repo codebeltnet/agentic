@@ -34,6 +34,20 @@ internal static class DocfxValidator
     private static readonly Regex SyntheticExtensionBlockUidMarkerRegex = new(
         @"(?:^|\.)(?:<G>|\uF03CG\uF03E|%3cG%3e)(?:\$|%24)[0-9A-Fa-f]{8,}",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly HashSet<string> SuspiciousInterimArtifactLiteralNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "progress.md",
+        "nul"
+    };
+    private static readonly Regex[] SuspiciousInterimArtifactNamePatterns =
+    [
+        new(@"^docfx_out\d*\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
+        new(@"^docfx_stdout\d*\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
+        new(@"^docfx_(?:stderr|stdout|err)\d*\.log$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
+        new(@"^output-\d+\.md$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
+        new(@"^.+-fixes\.md$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
+        new(@"^fix_.+\.py$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled)
+    ];
 
     // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
     // each external process is tagged with the permission that authorizes it, and the set of
@@ -324,6 +338,7 @@ internal static class DocfxValidator
         phaseTimer.Restart();
         EnsureNamespaceProjectMap(workspace);
         var gitState = GetGitState(repoRoot);
+        ValidateInterimArtifacts(repoRoot, gitState, report);
         var resumeScope = options.ResumeProjectManifestPath is null
             ? null
             : LoadResumeProjectManifest(options.ResumeProjectManifestPath, repoRoot, report);
@@ -5417,6 +5432,76 @@ internal static class DocfxValidator
         return state;
     }
 
+    private static void ValidateInterimArtifacts(string repoRoot, GitState gitState, Report report)
+    {
+        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var listed = RunProcess("git", "ls-files --cached --others --exclude-standard --full-name", repoRoot,
+            permission: ProcessPermission.Git);
+        if (listed.ExitCode == 0)
+        {
+            foreach (var line in listed.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (line.Contains('/') || line.Contains('\\'))
+                {
+                    continue;
+                }
+
+                candidates.Add(Path.GetFullPath(Path.Combine(repoRoot, line)));
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(repoRoot, "*", SearchOption.TopDirectoryOnly))
+                {
+                    candidates.Add(Path.GetFullPath(file));
+                }
+            }
+            catch (Exception)
+            {
+                // Keep the audit moving even if the host filesystem cannot enumerate a special file
+                // such as a reserved Windows device name. Git-backed discovery above is the primary path.
+            }
+        }
+
+        foreach (var candidate in candidates.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            if (gitState.Deleted.Contains(candidate))
+            {
+                continue;
+            }
+
+            var name = Path.GetFileName(candidate);
+            if (!IsSuspiciousInterimArtifactName(name))
+            {
+                continue;
+            }
+
+            report.Errors.Add(new Diagnostic("INTERIM_ARTIFACT_IN_WORKTREE", Rel(repoRoot, candidate), null,
+                "Interim scratch artifact should not live in the repository working tree. Move it to temp/session storage or delete it before claiming completion."));
+        }
+    }
+
+    private static bool IsSuspiciousInterimArtifactName(string fileName)
+    {
+        if (SuspiciousInterimArtifactLiteralNames.Contains(fileName))
+        {
+            return true;
+        }
+
+        foreach (var pattern in SuspiciousInterimArtifactNamePatterns)
+        {
+            if (pattern.IsMatch(fileName))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static List<ProjectPacket> BuildProjectPackets(ValidationWorkspace ws, ApiModel api, GitState gitState,
         List<MetadataGroupInfo> groups, string repoRoot, string docfxWorkspace,
         HashSet<string>? protectedDirtyPaths = null)
@@ -7218,6 +7303,7 @@ internal static class DocfxValidator
         sb.AppendLine("- Before deleting generated artifacts, list the exact paths and verify they are generated metadata, generated site output, or build artifacts.");
         sb.AppendLine("- Preserve authored `.md` and `.mdoc` files, including files created earlier in the run.");
         sb.AppendLine("- Treat uncommitted documentation changes as user work; stop and report them if they cannot be preserved.");
+        sb.AppendLine("- Keep captured validator output, manifests, queues, progress notes, and one-off helper scripts in temp/session storage instead of the repository.");
         sb.AppendLine("- Treat `Extension Members` tables as incomplete until required examples exist.");
         sb.AppendLine("- Repair related namespace pages together; do not update only the first page that exposes a shared issue.");
         sb.AppendLine("- After edits, inspect `git diff` for the touched documentation paths before final verification.");
@@ -7226,6 +7312,7 @@ internal static class DocfxValidator
         sb.AppendLine();
 
         AppendDiagnostics(sb, "Repository Guidance", report.Errors.Where(e => e.Code is "AGENTS_BLOCK_MISSING"));
+        AppendDiagnostics(sb, "Interim Scratch Cleanup", report.Errors.Where(e => e.Code is "INTERIM_ARTIFACT_IN_WORKTREE"));
         AppendDiagnostics(sb, "Encoding Repairs", report.Errors.Where(e =>
             e.Code.StartsWith("ENCODING_", StringComparison.Ordinal)));
         AppendDiagnostics(sb, "Namespace And Extension Table Repairs", report.Errors.Where(e =>
@@ -7237,6 +7324,7 @@ internal static class DocfxValidator
             e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_STRUCTURE_INVALID"));
         AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
             e.Code is not "AGENTS_BLOCK_MISSING" &&
+            e.Code is not "INTERIM_ARTIFACT_IN_WORKTREE" &&
             !e.Code.StartsWith("ENCODING_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&

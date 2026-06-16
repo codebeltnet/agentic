@@ -152,6 +152,41 @@ public sealed class Tool
         }
     }
 
+    $interimWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-interim-' + [guid]::NewGuid().ToString('N'))
+    try {
+        Write-Utf8File (Join-Path $interimWorkspace 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+        Write-Utf8File (Join-Path $interimWorkspace 'src/Utility/Utility.csproj') $projectCsproj
+        Write-Utf8File (Join-Path $interimWorkspace 'src/Utility/Utility.cs') @'
+namespace Acme.Utility;
+
+public sealed class Tool
+{
+    public int Attempts { get; set; }
+}
+'@
+        Write-Utf8File (Join-Path $interimWorkspace '.docfx/docfx.json') (New-DocfxJson @('src/Utility/Utility.csproj'))
+        Write-Utf8File (Join-Path $interimWorkspace 'progress.md') '# scratch progress'
+        Write-Utf8File (Join-Path $interimWorkspace 'docfx_out.json') '{}'
+
+        $interimReport = Invoke-Validator -Workspace $interimWorkspace
+        Assert-Diagnostic -Report $interimReport -Code 'INTERIM_ARTIFACT_IN_WORKTREE'
+        $interimPaths = @($interimReport.errors | Where-Object code -eq 'INTERIM_ARTIFACT_IN_WORKTREE' | ForEach-Object path)
+        if (-not ($interimPaths -contains 'progress.md')) {
+            throw "Expected progress.md to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+        }
+        if (-not ($interimPaths -contains 'docfx_out.json')) {
+            throw "Expected docfx_out.json to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+        }
+    } finally {
+        if (Test-Path $interimWorkspace) {
+            Remove-Item $interimWorkspace -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     $arrow = "$([char]0x2B07)$([char]0xFE0F)"
     Write-Utf8File (Join-Path $workspace 'AGENTS.md') @'
 <!-- dotnet-docfx-digest:start -->
