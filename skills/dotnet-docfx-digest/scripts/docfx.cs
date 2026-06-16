@@ -31,6 +31,9 @@ internal static class DocfxValidator
     private static TimeSpan _processTimeout = TimeSpan.FromMinutes(DefaultProcessTimeoutMinutes);
     private static readonly TimeSpan ProcessStreamDrainTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ProcessHeartbeatInterval = TimeSpan.FromSeconds(10);
+    private static readonly Regex SyntheticExtensionBlockUidMarkerRegex = new(
+        @"(?:^|\.)(?:<G>|\uF03CG\uF03E|%3cG%3e)(?:\$|%24)[0-9A-Fa-f]{8,}",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
     // each external process is tagged with the permission that authorizes it, and the set of
@@ -585,6 +588,14 @@ internal static class DocfxValidator
         {
             report.Errors.Add(new Diagnostic("API_OVERWRITE_FILE_MISPLACED", file, null,
                 $"Authored API overwrite Markdown must not live directly under `{Rel(repoRoot, apiDirectory)}`. Move namespace overwrite files to `{Rel(repoRoot, namespacesDirectory)}` and type overwrite files to `{Rel(repoRoot, typesDirectory)}`. Preserve YAML front matter and Markdown content. Do not move generated `.yml` metadata files."));
+        }
+
+        foreach (var file in EnumerateFiles(apiDirectory, "*.md")
+                     .Where(path => !string.Equals(Path.GetFileName(path), "toc.md", StringComparison.OrdinalIgnoreCase) &&
+                                    ContainsSyntheticExtensionBlockUidMarker(Path.GetFileNameWithoutExtension(path))))
+        {
+            report.Errors.Add(new Diagnostic("API_OVERWRITE_SYNTHETIC_UID_FILENAME", file, NamespaceFromUid(Path.GetFileNameWithoutExtension(file)),
+                $"Authored API overwrite Markdown must not mirror a compiler-generated C# extension-block UID in `{Rel(repoRoot, file)}`. Move the content to the readable declaring-class overwrite file under `api/types/` and let the YAML `uid` target the generated model when needed."));
         }
     }
 
@@ -2615,7 +2626,7 @@ internal static class DocfxValidator
     {
         ownerUid = string.Empty;
 
-        var markerIndex = uid.IndexOf(".<G>$", StringComparison.Ordinal);
+        var markerIndex = IndexOfSyntheticExtensionBlockUidMarker(uid);
         if (markerIndex <= 0)
         {
             return false;
@@ -2631,6 +2642,17 @@ internal static class DocfxValidator
 
         ownerUid = candidateOwnerUid;
         return true;
+    }
+
+    private static int IndexOfSyntheticExtensionBlockUidMarker(string value)
+    {
+        var match = SyntheticExtensionBlockUidMarkerRegex.Match(value);
+        return match.Success ? match.Index : -1;
+    }
+
+    private static bool ContainsSyntheticExtensionBlockUidMarker(string value)
+    {
+        return SyntheticExtensionBlockUidMarkerRegex.IsMatch(value);
     }
 
     private static int CountGenericArity(string generic)
@@ -3355,28 +3377,16 @@ internal static class DocfxValidator
 
     private static bool IsSyntheticExtensionBlockContainer(Type type)
     {
-        if (!type.IsNested || !type.Name.StartsWith("<", StringComparison.Ordinal) || type.DeclaringType is null)
+        if (!type.IsNested || !ContainsSyntheticExtensionBlockUidMarker(type.Name) || type.DeclaringType is null)
         {
             return false;
         }
 
         var declaringType = type.DeclaringType;
-        if (!declaringType.IsClass || !declaringType.IsAbstract || !declaringType.IsSealed || !IsExternallyVisible(declaringType))
-        {
-            return false;
-        }
-
-        MethodInfo[] methods;
-        try
-        {
-            methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
-        }
-        catch
-        {
-            return false;
-        }
-
-        return methods.Any(HasExtensionAttribute);
+        return declaringType.IsClass &&
+               declaringType.IsAbstract &&
+               declaringType.IsSealed &&
+               IsExternallyVisible(declaringType);
     }
 
     private static bool HasExtensionAttribute(MemberInfo member)

@@ -912,7 +912,11 @@ public static class EndpointExtensions
 }
 '@
     Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Core.csproj'))
-    Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/api/Acme.Core.EndpointExtensions.yml') @'
+    $literalSyntheticName = '<G>$AB12CD34'
+    $literalSyntheticUid = "Acme.Core.EndpointExtensions.$literalSyntheticName"
+    $puaSyntheticName = "$([char]0xF03C)" + 'G' + "$([char]0xF03E)" + '$6D0D8037DBBD61D10816ECA5F93B896F'
+    $puaSyntheticUid = "Acme.Core.EndpointExtensions.$puaSyntheticName"
+    Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/api/Acme.Core.EndpointExtensions.yml') @"
 items:
 - uid: Acme.Core.EndpointExtensions
   parent: Acme.Core
@@ -921,21 +925,35 @@ items:
   name: EndpointExtensions
   syntax:
     content: public static class EndpointExtensions
-- uid: Acme.Core.EndpointExtensions.<G>$AB12CD34
+- uid: $literalSyntheticUid
   parent: Acme.Core.EndpointExtensions
   type: Class
   namespace: Acme.Core
-  name: <G>$AB12CD34
+  name: $literalSyntheticName
   syntax:
-    content: public sealed class <G>$AB12CD34
-- uid: Acme.Core.EndpointExtensions.<G>$AB12CD34.Normalize(System.String)
-  parent: Acme.Core.EndpointExtensions.<G>$AB12CD34
+    content: public sealed class $literalSyntheticName
+- uid: $literalSyntheticUid.Normalize(System.String)
+  parent: $literalSyntheticUid
   type: Method
   namespace: Acme.Core
   name: Normalize
   syntax:
     content: public static string Normalize(this string value)
-'@
+- uid: $puaSyntheticUid
+  parent: Acme.Core.EndpointExtensions
+  type: Class
+  namespace: Acme.Core
+  name: $puaSyntheticName
+  syntax:
+    content: public sealed class $puaSyntheticName
+- uid: $puaSyntheticUid.Normalize(System.String)
+  parent: $puaSyntheticUid
+  type: Method
+  namespace: Acme.Core
+  name: Normalize
+  syntax:
+    content: public static string Normalize(this string value)
+"@
     Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/api/namespaces/Acme.Core.md') @"
 ---
 uid: Acme.Core
@@ -980,10 +998,95 @@ public static class BoundaryInput
     Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXAMPLE_TARGET_NOT_USED'
     Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXTENSION_EXAMPLE_NOT_INVOKED'
 
+    Write-Utf8File (Join-Path $yamlExtensionBlocks ('.docfx/api/types/' + $puaSyntheticUid + '.md')) 'Synthetic extension-block filenames must be rejected.'
+    Set-Variable -Name syntheticFilenameReport -Value (Invoke-Validator -Workspace $yamlExtensionBlocks)
+    Assert-Diagnostic -Report (Get-Variable -Name syntheticFilenameReport -ValueOnly) -Code 'API_OVERWRITE_SYNTHETIC_UID_FILENAME'
+
     Write-Host 'DocFX YAML extension-block regression passed.'
 } finally {
     if (Test-Path $yamlExtensionBlocks) {
         Remove-Item -Path $yamlExtensionBlocks -Recurse -Force
+    }
+}
+
+# ----------------------------------------------------------------------
+# Scenario: build-backed reflection discovery must also collapse C# 14
+# extension-block containers. The generated nested type is not nameable from C#,
+# so it must never become an EXAMPLE_TARGET_NOT_USED work item.
+# ----------------------------------------------------------------------
+Set-Variable -Name reflectionExtensionBlocks -Value (Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-reflection-extension-blocks-' + [guid]::NewGuid().ToString('N')))
+try {
+    $arrow = "$([char]0x2B07)$([char]0xFE0F)"
+    Write-Utf8File (Join-Path $reflectionExtensionBlocks 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $reflectionExtensionBlocks 'src/Acme.Core.csproj') @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+</Project>
+'@
+    Write-Utf8File (Join-Path $reflectionExtensionBlocks 'src/Extensions.cs') @'
+namespace Acme.Core;
+
+public static class EndpointExtensions
+{
+    extension(string value)
+    {
+        public string NormalizeForBoundary() => value.Trim();
+    }
+}
+'@
+    Write-Utf8File (Join-Path $reflectionExtensionBlocks '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Core.csproj'))
+    Write-Utf8File (Join-Path $reflectionExtensionBlocks '.docfx/api/namespaces/Acme.Core.md') @"
+---
+uid: Acme.Core
+summary: *content
+---
+Use `EndpointExtensions` when text should be normalized at an ingress boundary before validation or comparison.
+
+Start with `EndpointExtensions` when callers want one explicit `NormalizeForBoundary` call directly on the incoming string.
+
+Availability: `Acme.Core`
+
+## Extension Members
+
+|Type|Ext|Methods|
+|---|---|---|
+|String|$arrow|`NormalizeForBoundary`|
+"@
+    Write-Utf8File (Join-Path $reflectionExtensionBlocks '.docfx/api/types/Acme.Core.EndpointExtensions.md') @'
+---
+uid: Acme.Core.EndpointExtensions
+example: *content
+---
+```csharp
+using Acme.Core;
+
+namespace Samples;
+
+public static class BoundaryInput
+{
+    public static string Normalize(string value) => value.NormalizeForBoundary();
+}
+```
+'@
+
+    $reflectionExtensionReport = Invoke-Validator -Workspace $reflectionExtensionBlocks -ExtraArgs @('--build-api-model')
+    Assert-Warning -Report $reflectionExtensionReport -Code 'DOCFX_EXTENSION_BLOCK_UNSUPPORTED'
+    Assert-NoDiagnostic -Report $reflectionExtensionReport -Code 'EXAMPLE_MISSING'
+    Assert-NoDiagnostic -Report $reflectionExtensionReport -Code 'EXAMPLE_TARGET_NOT_USED'
+    Assert-NoDiagnostic -Report $reflectionExtensionReport -Code 'EXTENSION_EXAMPLE_NOT_INVOKED'
+
+    Write-Host 'DocFX reflection extension-block regression passed.'
+} finally {
+    $reflectionExtensionBlocksVariable = Get-Variable -Name reflectionExtensionBlocks -ErrorAction SilentlyContinue
+    if ($reflectionExtensionBlocksVariable -and $reflectionExtensionBlocksVariable.Value -and (Test-Path -LiteralPath $reflectionExtensionBlocksVariable.Value)) {
+        Remove-Item -LiteralPath $reflectionExtensionBlocksVariable.Value -Recurse -Force
     }
 }
 
