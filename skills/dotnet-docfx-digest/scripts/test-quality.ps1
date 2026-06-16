@@ -471,6 +471,7 @@ public sealed class Forwarder { public int Value { get; set; } }
 public sealed class RepA { public int Value { get; set; } }
 public sealed class RepB { public int Value { get; set; } }
 public sealed class RepC { public int Value { get; set; } }
+public sealed class ReadySignal { public bool IsReady { get; set; } }
 '@
     Write-Utf8File (Join-Path $quality '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Demo.csproj'))
 
@@ -547,6 +548,29 @@ public static class ForwarderFacade
 ```
 '@
 
+    # Avoidable fully qualified framework references copied straight from tests.
+    Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.ReadySignal.md') @'
+---
+uid: Acme.Demo.ReadySignal
+example: *content
+---
+```csharp
+namespace Samples;
+
+using Acme.Demo;
+
+public static class UseReadySignal
+{
+    public static System.Threading.Tasks.Task BuildAsync()
+    {
+        var signal = new ReadySignal { IsReady = true };
+        System.Console.WriteLine(signal.IsReady);
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
+}
+```
+'@
+
     # Three structurally identical examples differing only by identifiers.
     foreach ($name in @('RepA', 'RepB', 'RepC')) {
         Write-Utf8File (Join-Path $quality ".docfx/api/types/Acme.Demo.$name.md") @"
@@ -577,11 +601,39 @@ public static class Use$name
         'EXAMPLE_DEFAULT_PLACEHOLDER',
         'EXAMPLE_NO_OBSERVABLE_OUTCOME',
         'EXAMPLE_FORWARDING_SCAFFOLD',
+        'EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE',
         'EXAMPLE_TEMPLATE_REPETITION',
         'NAMESPACE_APPEND_ONLY_REPAIR'
     )) {
         Assert-Diagnostic -Report $badQuality -Code $code
     }
+
+    Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.ReadySignal.md') @'
+---
+uid: Acme.Demo.ReadySignal
+example: *content
+---
+```csharp
+namespace Samples;
+
+using System;
+using System.Threading.Tasks;
+using Acme.Demo;
+
+public static class UseReadySignal
+{
+    public static Task BuildAsync()
+    {
+        var signal = new ReadySignal { IsReady = true };
+        Console.WriteLine(signal.IsReady);
+        return Task.CompletedTask;
+    }
+}
+```
+'@
+
+    $leanQuality = Invoke-Validator -Workspace $quality
+    Assert-NoDiagnostic -Report $leanQuality -Code 'EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE'
 
     Write-Host 'DocFX example quality regression passed.'
 } finally {
@@ -1011,6 +1063,35 @@ Availability: `Acme.Core`
 uid: Acme.Core.EndpointExtensions
 example: *content
 ---
+The `EndpointExtensions` class provides extension methods for `string` through C# 14 extension blocks.
+
+```csharp
+using Acme.Core;
+
+namespace Samples;
+
+public static class BoundaryInput
+{
+    public static string Normalize(string value) => value.Normalize();
+}
+```
+'@
+
+    $yamlExtensionSyntaxReport = Invoke-Validator -Workspace $yamlExtensionBlocks
+    if ($yamlExtensionSyntaxReport.summary.apiModelSource -ne 'docfx-yaml') {
+        throw "Expected docfx-yaml discovery for the synthetic extension-block fixture, got '$($yamlExtensionSyntaxReport.summary.apiModelSource)'."
+    }
+
+    Assert-Warning -Report $yamlExtensionSyntaxReport -Code 'DOCFX_EXTENSION_BLOCK_UNSUPPORTED'
+    Assert-Diagnostic -Report $yamlExtensionSyntaxReport -Code 'EXAMPLE_EXTENSION_CONTAINER_LANGUAGE_FOCUS'
+
+    Write-Utf8File (Join-Path $yamlExtensionBlocks '.docfx/api/types/Acme.Core.EndpointExtensions.md') @'
+---
+uid: Acme.Core.EndpointExtensions
+example: *content
+---
+Use `EndpointExtensions` when incoming text should be normalized at the boundary before validation or comparison.
+
 ```csharp
 using Acme.Core;
 
@@ -1024,11 +1105,8 @@ public static class BoundaryInput
 '@
 
     $yamlExtensionReport = Invoke-Validator -Workspace $yamlExtensionBlocks
-    if ($yamlExtensionReport.summary.apiModelSource -ne 'docfx-yaml') {
-        throw "Expected docfx-yaml discovery for the synthetic extension-block fixture, got '$($yamlExtensionReport.summary.apiModelSource)'."
-    }
-
     Assert-Warning -Report $yamlExtensionReport -Code 'DOCFX_EXTENSION_BLOCK_UNSUPPORTED'
+    Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXAMPLE_EXTENSION_CONTAINER_LANGUAGE_FOCUS'
     Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXAMPLE_MISSING'
     Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXAMPLE_TARGET_NOT_USED'
     Assert-NoDiagnostic -Report $yamlExtensionReport -Code 'EXTENSION_EXAMPLE_NOT_INVOKED'

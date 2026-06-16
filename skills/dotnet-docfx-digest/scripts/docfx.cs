@@ -4507,6 +4507,12 @@ internal static class DocfxValidator
                     $"The C# example for extension method `{target.DisplayName}` never invokes that method. Mentions in prose, comments, strings, or metadata lookups do not satisfy the example requirement.", 30);
             }
 
+            if (TryFindAvoidableFrameworkQualification(codeWithoutCommentsOrStrings, out var frameworkQualifiedReference))
+            {
+                return new ExampleQualityResult(false, "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE",
+                    $"The example for `{target.DisplayName}` uses fully qualified framework reference `{frameworkQualifiedReference}` in executable code. Add the matching `using` directive and keep the call site focused on the documented API unless qualification is genuinely required to disambiguate.", 18);
+            }
+
             return ExampleQualityResult.Success;
         }
 
@@ -4555,6 +4561,22 @@ internal static class DocfxValidator
                 return new ExampleQualityResult(false, "EXAMPLE_NO_OBSERVABLE_OUTCOME",
                     $"The example for `{target.DisplayName}` only holds, returns, or constructs the type without an observable outcome. Configure it, invoke a member, pass it to an API, or otherwise produce a result a reader can see.", 14);
             }
+        }
+
+        if (relatedExtensionMethods.Count > 0)
+        {
+            var leadParagraph = ExtractLeadingNarrativeParagraph(section.Body);
+            if (HasExtensionBlockSyntaxLedProse(leadParagraph))
+            {
+                return new ExampleQualityResult(false, "EXAMPLE_EXTENSION_CONTAINER_LANGUAGE_FOCUS",
+                    $"The overwrite page for `{target.DisplayName}` leads with C# extension-block syntax instead of the caller task and outcome. Rewrite the opening around what the extensions let the receiver do, and keep any DocFX limitation note separate from the lead paragraph.", 16);
+            }
+        }
+
+        if (TryFindAvoidableFrameworkQualification(codeWithoutCommentsOrStrings, out var fullyQualifiedFrameworkReference))
+        {
+            return new ExampleQualityResult(false, "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE",
+                $"The example for `{target.DisplayName}` uses fully qualified framework reference `{fullyQualifiedFrameworkReference}` in executable code. Add the matching `using` directive and keep the call site focused on the documented API unless qualification is genuinely required to disambiguate.", 18);
         }
 
         return ExampleQualityResult.Success;
@@ -4613,6 +4635,70 @@ internal static class DocfxValidator
                Regex.IsMatch(code, @"\{\s*[@A-Za-z_]\w*\s*=") ||
                Regex.IsMatch(code, @"\bawait\b") ||
                Regex.IsMatch(code, @"\b(?:Console|Debug|Trace)\s*\.");
+    }
+
+    private static string? ExtractLeadingNarrativeParagraph(string body)
+    {
+        foreach (var paragraph in body.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n')
+                     .Split("\n\n", StringSplitOptions.None))
+        {
+            var trimmed = paragraph.Trim();
+            if (trimmed.Length == 0)
+            {
+                continue;
+            }
+
+            if (trimmed.StartsWith("[!INCLUDE", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.StartsWith("<!--", StringComparison.Ordinal) ||
+                trimmed.StartsWith('#') ||
+                trimmed.StartsWith("```", StringComparison.Ordinal) ||
+                trimmed.StartsWith('|') ||
+                Regex.IsMatch(trimmed, @"^(?i)(?:Availability|Related)\s*:"))
+            {
+                continue;
+            }
+
+            return Regex.Replace(trimmed, @"\s+", " ");
+        }
+
+        return null;
+    }
+
+    private static bool HasExtensionBlockSyntaxLedProse(string? prose)
+    {
+        if (string.IsNullOrWhiteSpace(prose))
+        {
+            return false;
+        }
+
+        return Regex.IsMatch(prose,
+            @"(?i)\b(?:through|via|using|declared with)\s+(?:C#\s*\d+\s+)?extension blocks?\b") ||
+               Regex.IsMatch(prose, @"(?i)\bC#\s*\d+\s+extension blocks?\b");
+    }
+
+    private static bool TryFindAvoidableFrameworkQualification(string code, out string qualifiedReference)
+    {
+        foreach (var rawLine in code.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0 ||
+                line.StartsWith("using ", StringComparison.Ordinal) ||
+                line.StartsWith("global using ", StringComparison.Ordinal) ||
+                line.StartsWith("namespace ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var match = Regex.Match(line, @"\b(?<qualified>(?:System|Microsoft)(?:\.[A-Za-z_][A-Za-z0-9_]*){2,})\b");
+            if (match.Success)
+            {
+                qualifiedReference = match.Groups["qualified"].Value;
+                return true;
+            }
+        }
+
+        qualifiedReference = string.Empty;
+        return false;
     }
 
     private static string StripCodeCommentsAndStrings(string code)
@@ -7459,6 +7545,10 @@ internal static class DocfxValidator
                 "EXAMPLE_PLACEHOLDER" or "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or
                 "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" =>
                     "Inspect exact test, package README, sample, XML-comment, or source evidence; replace the scaffold with a consumer task that constructs or invokes the target in C# and exposes a result or next action.",
+                "EXAMPLE_EXTENSION_CONTAINER_LANGUAGE_FOCUS" =>
+                    "Rewrite the extension-container opening around the caller task and receiver outcome instead of foregrounding C# extension-block syntax.",
+                "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE" =>
+                    "Replace avoidable `System.*` / `Microsoft.*` fully qualified references with matching `using` directives so the sample stays focused on the documented API.",
                 "EXAMPLE_TEMPLATE_REPETITION" =>
                     "Rewrite each implicated example around the distinct behavior of its own type; do not reuse one normalized skeleton across unrelated targets.",
                 "EXTENSION_EXAMPLE_NOT_INVOKED" =>
@@ -7478,7 +7568,8 @@ internal static class DocfxValidator
         return diagnostic.Code is "EXAMPLE_MISSING" or "EXAMPLE_UID_DUPLICATE" or "EXAMPLE_PLACEHOLDER" or
             "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or "EXTENSION_EXAMPLE_NOT_INVOKED" or
             "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
-            "EXAMPLE_TEMPLATE_REPETITION";
+            "EXAMPLE_TEMPLATE_REPETITION" or "EXAMPLE_EXTENSION_CONTAINER_LANGUAGE_FOCUS" or
+            "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE";
     }
 
     private static string EscapeTable(string value)
