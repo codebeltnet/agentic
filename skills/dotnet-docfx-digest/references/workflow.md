@@ -296,8 +296,9 @@ Bad examples:
 
 - `EndpointConventionBuilderExtensions.-G-6D0D8037DBBD61D10816ECA5F93B896F.md`
 - `EndpointConventionBuilderExtensions.%3CT%3E...md`
+- `EndpointConventionBuilderExtensions.G$6D0D8037DBBD61D10816ECA5F93B896F.md`
 
-Keep the filename readable, place the example in the declaring extension class file or another readable file under `.docfx/api/types/`, and let the YAML `uid` determine what model receives the content. Do not append member-level overwrite sections to the namespace page.
+Keep the filename readable, place the example in the declaring extension class file or another readable file under `.docfx/api/types/`, and let the YAML `uid` determine what model receives the content. Do not append member-level overwrite sections to the namespace page. If a compiler-generated C# extension-block container appears in DocFX YAML or build-backed reflection discovery, collapse it back to the authored outer static class before creating required-example targets; deleting the synthetic file after creation is cleanup, not success.
 
 ## Verification checklist
 
