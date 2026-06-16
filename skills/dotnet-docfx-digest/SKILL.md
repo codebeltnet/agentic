@@ -93,6 +93,16 @@ Read the reflection-backed packets from that manifest or from `scope.packets`. I
 - Use the safe structured overwrite writer (`docfx.cs --write-overwrite <request.json>`) for repeatable overwrite creation: it preserves BOM/line endings, rejects duplicate UIDs and unbalanced fences, and refuses to replace dirty files. It writes only content you authored — it never generates prose or examples.
 - Declare narrow family exemptions in `.docfx/family-exemptions.json` only for coherent generic-arity, inherited, overload, or type-parameter series. The anchor needs a real example and the namespace page must name it and explain sibling selection; category alone never exempts options, exceptions, delegates, records, or data carriers. See `references/workflow.md`.
 
+## Autonomous Persistence (Anti-Fatigue)
+
+Agents often fail this skill by stopping prematurely because they feel "overwhelmed" or "intimidated" by the scale of the task, or because they fall back to conversational habits. You must actively override these failures:
+
+- **Do not be intimidated by scale:** If you see 1,122 `EXAMPLE_MISSING` items, that is your active queue. Do not pause, do not write a summary table to "organize your thoughts", and do not ask the user for permission to continue. Work the next item.
+- **Do not suffer diagnostic expansion fatigue:** When coarse diagnostics (like `EXTENSION_SECTION_MISSING`) drop and more specific ones (like `EXTENSION_METHOD_MISSING`) appear, the queue size may increase. This is expected progress, not a reason to stop, panic, or re-plan. Keep working.
+- **Do not fear context limits:** If you worry about context length, the correct action is to keep working anyway. The system manages context. Trying to "summarize and hand off" wastes tokens and stops progress.
+- **Override conversational habits:** You are an autonomous agent on this task, not a chat assistant. The only valid time to stop and ask a question is if a genuine external blocker (like a missing dependency preventing compilation) halts execution. A large queue is never a blocker.
+- **Subagent timeouts are not stop conditions:** If a subagent times out or goes quiet, do not use that as an excuse to pause the main loop. Switch to direct edits or spawn a new subagent, and keep going.
+
 ## Completion Repair Loop
 
 Do not stop at namespace pages, extension-member tables, or a first-pass documentation edit.
