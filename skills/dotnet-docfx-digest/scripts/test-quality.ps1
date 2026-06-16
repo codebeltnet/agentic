@@ -1123,11 +1123,124 @@ public static class BoundaryInput
 }
 
 # ----------------------------------------------------------------------
-# Scenario: build-backed reflection discovery must also collapse C# 14
-# extension-block containers. The generated nested type is not nameable from C#,
-# so it must never become an EXAMPLE_TARGET_NOT_USED work item.
+# Scenario: result/profiler carrier examples should use the public producer
+# workflow when direct construction depends on internal constructors.
 # ----------------------------------------------------------------------
-Set-Variable -Name reflectionExtensionBlocks -Value (Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-reflection-extension-blocks-' + [guid]::NewGuid().ToString('N')))
+$factoryOrigin = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-factory-origin-' + [guid]::NewGuid().ToString('N'))
+try {
+Write-Utf8File (Join-Path $factoryOrigin 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+Write-Utf8File (Join-Path $factoryOrigin 'src/Acme.Measure.csproj') $projectCsproj
+Write-Utf8File (Join-Path $factoryOrigin 'src/OperationMeasure.cs') @'
+using System;
+using System.Diagnostics;
+
+namespace Acme.Measure;
+
+public class OperationProfiler
+{
+public TimeSpan Elapsed { get; set; }
+}
+
+public sealed class OperationProfiler<TResult> : OperationProfiler
+{
+internal OperationProfiler()
+{
+}
+
+public TResult Result { get; set; } = default!;
+}
+
+public static class OperationMeasure
+{
+public static OperationProfiler<TResult> WithFunc<TResult>(Func<TResult> callback)
+{
+    var stopwatch = Stopwatch.StartNew();
+    var result = callback();
+    stopwatch.Stop();
+    return new OperationProfiler<TResult>()
+    {
+        Result = result,
+        Elapsed = stopwatch.Elapsed
+    };
+}
+}
+'@
+Write-Utf8File (Join-Path $factoryOrigin '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Measure.csproj'))
+
+Write-Utf8File (Join-Path $factoryOrigin '.docfx/api/types/Acme.Measure.OperationProfiler.md') @'
+---
+uid: Acme.Measure.OperationProfiler
+example: *content
+---
+```csharp
+using Acme.Measure;
+
+namespace Samples;
+
+public static class ManualProfilerExample
+{
+public static int Measure()
+{
+    var profiler = new OperationProfiler<int>();
+    profiler.Result = 42;
+    return profiler.Result;
+}
+}
+```
+'@
+
+$badFactoryOrigin = Invoke-Validator -Workspace $factoryOrigin -ExtraArgs @('--build-api-model', '--validate-samples')
+Assert-Diagnostic -Report $badFactoryOrigin -Code 'SAMPLE_COMPILE_FAILED'
+
+Write-Utf8File (Join-Path $factoryOrigin '.docfx/api/types/Acme.Measure.OperationProfiler.md') @'
+---
+uid: Acme.Measure.OperationProfiler
+example: *content
+---
+Use `OperationMeasure` when callers need to time a callback and inspect the returned profiler.
+
+```csharp
+using System.Threading;
+using Acme.Measure;
+
+namespace Samples;
+
+public static class OperationMeasureExample
+{
+public static int Measure()
+{
+    OperationProfiler<int> profiler = OperationMeasure.WithFunc(() =>
+    {
+        Thread.Sleep(10);
+        return 42;
+    });
+
+    return profiler.Result;
+}
+}
+```
+'@
+
+$goodFactoryOrigin = Invoke-Validator -Workspace $factoryOrigin -ExtraArgs @('--build-api-model', '--validate-samples')
+Assert-NoDiagnostic -Report $goodFactoryOrigin -Code 'SAMPLE_COMPILE_FAILED'
+
+Write-Host 'DocFX factory-origin example regression passed.'
+} finally {
+if (Test-Path $factoryOrigin) {
+    Remove-Item -Path $factoryOrigin -Recurse -Force
+}
+}
+
+    # ----------------------------------------------------------------------
+    # Scenario: build-backed reflection discovery must also collapse C# 14
+    # extension-block containers. The generated nested type is not nameable from C#,
+    # so it must never become an EXAMPLE_TARGET_NOT_USED work item.
+    # ----------------------------------------------------------------------
+$reflectionExtensionBlocks = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-reflection-extension-blocks-' + [guid]::NewGuid().ToString('N'))
 try {
     $arrow = "$([char]0x2B07)$([char]0xFE0F)"
     Write-Utf8File (Join-Path $reflectionExtensionBlocks 'AGENTS.md') @'
