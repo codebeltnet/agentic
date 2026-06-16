@@ -41,12 +41,12 @@ Use this path when the user names a changed API or namespace.
 5. Inspect `.docfx/docfx.json` or the repository-specific DocFX config.
 6. Locate existing overwrite files, namespace pages, availability includes, tests, and samples.
 7. Run `docfx.cs --json --assessment-queue <temp-path> --search-examples` and read the assessment work queue. Resolve `<temp-path>` outside the repository working tree (for example, `$env:TEMP\docfx-assessment-queue.md` on Windows or `/tmp/docfx-assessment-queue.md` on Unix). The "GitHub Example Sources" section contains pre-computed `gh search code` commands and URLs; use those results as evidence before writing examples.
-8. Convert test usage into consumer-oriented examples when relevant.
+8. Convert test usage into consumer-oriented examples when relevant, and normalize obvious `System.*` / `Microsoft.*` framework qualifications into matching `using` directives when that keeps the final sample lean.
 9. Update XML documentation comments where purpose-first summaries are needed.
 10. Update or create namespace overview pages whose opening names the developer problem and outcome, followed by concrete when-to-use and start-here guidance.
 11. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
 12. Update `Extension Members` tables when public extension methods are involved. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column — the validator now rejects corrupted or missing emoji with `EXTENSION_TABLE_ENCODING`. Keep the real receiver signature in the Type column (`IDecorator<Type>`, `IEnumerable<T>`, etc.) and preserve generic method arity in the Methods column (`As<T>`, `Configure<TOptions>`, `Parse<T>`).
-13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods.
+13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
 14. Build or refresh the example inventory.
 15. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
 16. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository.
@@ -81,7 +81,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 17. Audit related namespace pages together so fixes are consistent across the public API family.
 18. Add or repair `Extension Members` tables for namespaces with public extension methods. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column. If `EXTENSION_METHOD_MISSING` or `EXTENSION_METHOD_SIGNATURE_MISSING` appears after `EXTENSION_SECTION_MISSING` drops, treat that as the same namespace-layer queue getting more specific: finish table contents and signature fidelity before resuming net-new examples.
 19. Finish the namespace-layer pass across the active queue before net-new type/example authoring: repair namespace prose, availability/start-here guidance, and `NAMESPACE_EMBEDDED_OVERWRITE_SECTION` ownership problems, moving misplaced type/member examples into readable type-targeted files under `.docfx/api/types/` when needed. Rerun the fast validator until namespace-layer diagnostics are gone or only example-driven work remains.
-20. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes.
+20. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
 21. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
 22. Create explicit examples for public extension methods that still have none.
 23. Build or refresh the example inventory.

@@ -244,11 +244,11 @@ Every generated `csharp` code block is a complete, copy/paste-ready compilation 
 - Contains one coherent example mapping per UID. Merge related calls into one scenario instead of repeating `example: *content` sections for the same UID.
 - Compiles in a minimal class library verification project referencing the documented assemblies.
 
-Prefer examples derived from existing unit, functional, or integration tests as behavioral evidence, then from package-level usage evidence, samples, README content, and real consumer usage, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw test assertions, mocks, or fixture setup.
+Prefer examples derived from existing unit, functional, or integration tests as behavioral evidence, then from package-level usage evidence, samples, README content, and real consumer usage, then from a minimal new example based on actual public behavior. Convert Arrange/Act/Assert test structure into consumer-oriented sample code instead of pasting raw test assertions, mocks, or fixture setup. When the best evidence spells obvious framework calls as `System.*` or `Microsoft.*`, add the matching `using` directives in the final sample so the call site stays focused on the documented API unless qualification is genuinely needed to disambiguate.
 
 For public non-abstraction types, put the example on the generated type page by targeting the type UID in DocFX overwrite content. In Codebelt repositories, keep authored type overwrite Markdown under `.docfx/api/types/`, typically as `.docfx/api/types/{TypeUid}.md`.
 
-For public extension methods, place examples on the declaring extension class page or another readable type-targeted overwrite file under `.docfx/api/types/`. The example must explicitly call the method. Namespace overview files stay single-UID; do not append secondary `uid:` / `example:` blocks after `Extension Members`.
+For public extension methods, place examples on the declaring extension class page or another readable type-targeted overwrite file under `.docfx/api/types/`. The example must explicitly call the method. When the declaring page introduces an extension container, explain what the caller can do on the receiver and the outcome it enables; do not spend the lead sentence on whether the methods are declared with `this` parameters or C# extension blocks unless a tooling limitation must be called out explicitly. Namespace overview files stay single-UID; do not append secondary `uid:` / `example:` blocks after `Extension Members`.
 
 Never mirror synthetic method UIDs that contain hashes, encoding, or generated suffixes in filenames. Keep filenames readable and let the YAML `uid` decide what DocFX model the content targets.
 
@@ -292,7 +292,7 @@ Derive examples from these sources, in order:
 8. Synthesized examples only when all of the above confirm the full public API shape and the synthesized sample compiles.
 9. Omit the example entirely if none of the above yields a compile-valid, consumer-facing example.
 
-Final examples must be consumer-facing, realistic, and compile. They must read like production calling code or Microsoft Learn-style task examples, not test scaffolding, placeholder `Consumer` shells, or one-line smoke tests. Avoid unused locals, `MyNamespace` when a domain-specific namespace is obvious, fake "sample" values that obscure the workflow, and examples that instantiate the documented type without showing the result or next step a real caller cares about.
+Final examples must be consumer-facing, realistic, and compile. They must read like production calling code or Microsoft Learn-style task examples, not test scaffolding, placeholder `Consumer` shells, or one-line smoke tests. Avoid unused locals, `MyNamespace` when a domain-specific namespace is obvious, fake "sample" values that obscure the workflow, examples that instantiate the documented type without showing the result or next step a real caller cares about, and avoidable `System.*` / `Microsoft.*` fully qualified framework references when a normal `using` keeps the code lean.
 
 Compilation-valid metadata scaffolds are still failures. Never generate a family of examples that differs only by UID while calling `Type.GetType`, returning `Type.FullName`, or wrapping the lookup in `DocumentedTypeExample`, `DocumentedExtensionExample`, or `Describe()`. These patterns conceal missing product knowledge instead of teaching the API.
 
@@ -320,7 +320,7 @@ Namespace overview pages must explain what problem the namespace solves, when to
 
 The opening paragraph should name the developer problem and outcome. The next paragraph should identify a concrete starting type or method and distinguish nearby alternatives. Do not use a type inventory as a substitute for this guidance; tables and generated API lists already provide inventory.
 
-Type and member summaries should explain the API’s job in consumer terms. Prefer purpose-first summaries for entry points, builders, factories, options, and extension methods. Avoid empty labels such as “represents options” or “adds services” unless the rest of the sentence explains the actual outcome enabled.
+Type and member summaries should explain the API’s job in consumer terms. Prefer purpose-first summaries for entry points, builders, factories, options, and extension methods. When the documented API is an extension container, describe the developer task and the receiver/result in consumer terms rather than foregrounding declaration syntax. Avoid empty labels such as “represents options” or “adds services” unless the rest of the sentence explains the actual outcome enabled.
 
 If one namespace page in a public API family needs repair, inspect sibling namespace pages in that family before finishing and keep them consistent. If you intentionally leave a sibling page unchanged, say why.
 

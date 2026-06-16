@@ -333,7 +333,7 @@
     {
       "id": 25,
       "prompt": "Run dotnet-docfx-digest on a library whose existing generated DocFX YAML metadata under `.docfx/api/*.yml` includes C# 14 synthetic nested types `EndpointExtensions.<G>$AB12CD34` and `EndpointExtensions.G$6D0D8037DBBD61D10816ECA5F93B896F` for extension blocks. The fast no-build validator path is using that YAML metadata for API discovery.",
-      "expected_output": "Agent treats the existing DocFX YAML metadata as a valid detection path for C# 14 extension blocks, emits a `DOCFX_EXTENSION_BLOCK_UNSUPPORTED` warning for the namespace explaining that DocFX issue #11010 means extension block metadata may be missing or synthetic, collapses literal, percent-encoded, and DocFX private-use synthetic containers back to the outer `EndpointExtensions` class for documentation purposes, and keeps extension-method example guidance on readable type-targeted overwrite files such as `.docfx/api/types/EndpointExtensions.md` instead of synthetic `<G>$...`, `G$...`, or namespace-page filenames. It continues documenting all other discoverable public APIs without skipping them or trying to fix DocFX metadata gaps by excluding APIs.",
+      "expected_output": "Agent treats the existing DocFX YAML metadata as a valid detection path for C# 14 extension blocks, emits a `DOCFX_EXTENSION_BLOCK_UNSUPPORTED` warning for the namespace explaining that DocFX issue #11010 means extension block metadata may be missing or synthetic, collapses literal, percent-encoded, and DocFX private-use synthetic containers back to the outer `EndpointExtensions` class for documentation purposes, keeps extension-method example guidance on readable type-targeted overwrite files such as `.docfx/api/types/EndpointExtensions.md` instead of synthetic `<G>$...`, `G$...`, or namespace-page filenames, and writes any consumer-facing `EndpointExtensions` prose around what callers can do with the extension surface rather than saying the methods exist 'through C# 14 extension blocks'. It continues documenting all other discoverable public APIs without skipping them or trying to fix DocFX metadata gaps by excluding APIs.",
       "expectations": [
         "Emits `DOCFX_EXTENSION_BLOCK_UNSUPPORTED` as a warning, not an error, for the affected namespace",
         "Applies the same C# 14 extension-block collapse when the fast path is reading existing DocFX YAML metadata rather than only during build-backed reflection discovery",
@@ -341,6 +341,7 @@
         "Collapses literal, percent-encoded, and DocFX private-use synthetic `<G>$...` nested types to the outer static class for example targeting",
         "Does not create a separate overwrite file for the synthetic nested type",
         "Keeps extension-method example guidance on a readable declaring-class overwrite file under `.docfx/api/types/` instead of a namespace-page or synthetic `<G>$...` filename",
+        "Keeps consumer-facing extension-container prose focused on the caller task and receiver outcome instead of foregrounding C# 14 extension-block syntax",
         "Continues generating namespace and type overwrite files for all other public APIs in the same run",
         "Does not try to fix DocFX issue #11010 by excluding extension methods or inventing special rules"
       ]
@@ -1000,6 +1001,18 @@
         "Moves misplaced type/member example mappings out of namespace pages into readable `.docfx/api/types/` files as part of the namespace repair",
         "Reruns fast validation after the namespace-first pass and only then shifts into the EXAMPLE_MISSING micro-loop if example-driven work remains",
         "Keeps the run autonomous and does not ask the user to choose between finishing namespaces or moving on to types"
+      ]
+    },
+    {
+      "id": 100,
+      "prompt": "Use dotnet-docfx-digest on a library where the strongest evidence for an extension-container example comes from tests that construct a `RouteEndpointBuilder` with `context => System.Threading.Tasks.Task.CompletedTask` and otherwise use obvious `System.*` framework qualifications in the code body. Convert that evidence into the final DocFX example.",
+      "expected_output": "Agent keeps the verified behavior from the tests but rewrites the final DocFX example as lean consumer-facing calling code. It adds matching `using` directives for obvious framework namespaces and uses short forms such as `Task.CompletedTask` instead of carrying `System.Threading.Tasks.Task.CompletedTask` into the sample body, unless a real ambiguity requires the qualification.",
+      "expectations": [
+        "Converts the test-derived example into consumer-facing calling code instead of pasting raw Arrange/Act/Assert scaffolding",
+        "Adds matching `using` directives for obvious framework namespaces when that keeps the final sample clearer",
+        "Uses short framework type/member forms such as `Task.CompletedTask` instead of avoidable `System.*` or `Microsoft.*` fully qualified references in the executable sample body",
+        "Keeps the sample grounded in the verified public API behavior from the source or test evidence",
+        "Does not drop qualification when it is genuinely needed to disambiguate the code"
       ]
     }
   ]
