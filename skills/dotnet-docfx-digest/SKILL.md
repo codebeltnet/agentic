@@ -32,8 +32,10 @@ dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-roo
 - For noisy audits, write and read a deterministic assessment work queue with `--assessment-queue`. This works on the fast path; add `--search-examples` to embed real GitHub usage:
 
 ```bash
-dotnet run --file docfx.cs -- --repo-root <repo-root> --json --assessment-queue /tmp/docfx-assessment-queue.md --search-examples
+dotnet run --file docfx.cs -- --repo-root <repo-root> --json --assessment-queue <temp-path> --search-examples
 ```
+
+Resolve `<temp-path>` outside the target repository working tree (for example, `$env:TEMP\docfx-assessment-queue.md` on Windows or `/tmp/docfx-assessment-queue.md` on Unix).
 
 The assessment work queue includes a "GitHub Example Sources" section with pre-computed `gh search code` commands and GitHub search URLs for each documented package. Read that section before writing any new example — do not write examples from memory or invention when real source evidence is available. If `--search-examples` is provided and `gh` is authenticated, actual search results are embedded; otherwise, the search commands are ready to run.
 - While diagnostics remain, the only valid mid-run behaviors are: keep repairing, or report a genuine external blocker with the exact command, exit code, and failure output. Do not emit progress tables, checkpoint summaries, review pauses, "Would you like me to continue?" prompts, or focus/verify menus just because a batch finished, the queue is large, or the session has been long.
@@ -49,6 +51,9 @@ Read the reflection-backed packets from that manifest or from `scope.packets`. I
 - In every continuation response while diagnostics remain, include an explicit completion-gate sentence that names the final command family and contract, for example: `Completion gate remains docfx.cs --build-api-model --validate-samples --verify-docfx-build --json; do not claim completion until summary.canClaimCompletion = true, summary.remainingWorkItems = 0, summary.remainingGates is empty, and summary.remainingDiagnosticsByCode is empty.` Shorter "verify later" wording is not sufficient.
 - In that same continuation response, explicitly state the fast rerun cadence for the active queue, for example: `After each small batch, rerun fast docfx.cs --json and continue.` Do not rely on implicit phrases like "micro-loop" or "packet-by-packet" alone.
 - A host may re-enter the skill by invoking `dotnet-docfx-digest` directly with no extra arguments after the first rerun. Treat that no-argument re-entry as the same repo-wide continuation, not as a fresh human checkpoint. If hundreds or thousands of repairable diagnostics remain, they are still the active work queue; keep repairing instead of pausing for approval, review, or scope confirmation.
+- Existing Markdown links, `Related:` entries, and historical URL references are documentation evidence. Preserve them during prose rewrites. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
+- Keep interim artifacts out of the target repository. Assessment queues, project manifests, review reports, captured validator output, progress notes, and one-off helper scripts belong in temp or session storage. If `docfx.cs` reports `INTERIM_ARTIFACT_IN_WORKTREE`, treat those files as blocking cleanup work before completion.
+- Namespace/prose-only repairs are latency-sensitive. Prefer direct edits or small sibling batches in the main agent. Use fresh workers only for example-heavy or source-heavy packets. If a prose-focused worker has not produced a concrete diff within about 45 seconds, or it goes quiet after producing its assigned file, inspect the diff, stop delegating that class of work, and continue inline. A quiet or "needs attention" worker is not a stop condition for the overall digest.
 
 - `ENCODING_CORRUPTION` in the JSON output means a documentation file has double-encoded UTF-8 (mojibake). Restore with `git checkout HEAD -- <file>` if the committed version was correct, or use the edit tool or byte-level operations to rewrite the file safely. Never pipe content through `Get-Content` + `Set-Content` or `[System.Text.Encoding]::UTF8.GetBytes()` on documentation files that contain multi-byte characters or emoji.
 - `EXTENSION_TABLE_ENCODING` means the ⬇️ emoji (U+2B07) is missing or corrupted in an Extension Members table data row. Use the literal `⬇️` character, not HTML entities or text substitutes.
@@ -130,6 +135,8 @@ Document only what the code actually exposes. Do not invent APIs, overloads, tar
 
 Manual documentation is authoritative context. Preserve hand-written Markdown and overwrite content unless it is stale or incorrect. Prefer additive edits, but fix contradictions instead of appending conflicting prose.
 
+Preserve working Markdown links, `Related:` references, and historical URL citations unless you verified a direct HTTP 404 at the current destination or have a confirmed replacement URL. Do not drop those references just because you rewrote the surrounding prose.
+
 Namespace pages and type pages have different jobs. Namespace pages orient readers to the problem space and where to start; generated type pages explain concrete public APIs and must carry concrete examples for public non-abstraction types.
 
 Write with an inverted-pyramid structure. Lead with the problem solved, explain when to use the API, give a short “start here” cue when helpful, then add structural detail.
@@ -142,6 +149,7 @@ Before editing documentation:
 2. Treat existing uncommitted documentation changes as user work.
 3. Read each Markdown file before editing it.
 4. Classify any cleanup candidate as generated metadata, generated site output, build artifacts, or authored documentation before deleting anything.
+5. Choose temp or session-storage paths for assessment queues, manifests, review reports, captured validator output, and helper scripts before generating them. Do not place scratch artifacts in the target repository.
 
 Do not use broad `git restore`, `git checkout --`, `git reset`, or whole-directory recovery commands on documentation source directories. If recovery is needed, recover only the specific generated or accidentally removed file after inspecting `git status` and `git diff`.
 
@@ -179,6 +187,8 @@ For Codebelt repositories, the DocFX workspace is `.docfx` and the configuration
 Inspect `docfx.json` before editing so you understand content roots, overwrite file locations, include paths, metadata inputs, and output conventions. When creating or repairing overwrite files, read `references/docfx-overwrite-files.md`. When you need exact CLI arguments, exit codes, JSON diagnostics, or validator behavior for `agents.cs` and `docfx.cs`, read `references/scripts.md`.
 
 Run `agents.cs` against the actual repository root being documented, not a temp workspace or the skill install directory. The script manages a marker-bounded DocFX maintenance block in the repository root `AGENTS.md`; do not hand-edit or duplicate that block.
+
+When examples or workflows say `<temp-path>`, resolve that path outside the repository root (for example, under `$env:TEMP` on Windows or `/tmp` on Unix) so scratch artifacts never pollute the target worktree.
 
 ## Required Documentation Surfaces
 
