@@ -48,7 +48,7 @@ Use this path when the user names a changed API or namespace.
 12. Update `Extension Members` tables when public extension methods are involved. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column — the validator now rejects corrupted or missing emoji with `EXTENSION_TABLE_ENCODING`. Keep the real receiver signature in the Type column (`IDecorator<Type>`, `IEnumerable<T>`, etc.) and preserve generic method arity in the Methods column (`As<T>`, `Configure<TOptions>`, `Parse<T>`).
 13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods.
 14. Build or refresh the example inventory.
-15. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404.
+15. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
 16. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository.
 17. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 18. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
@@ -85,7 +85,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 21. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
 22. Create explicit examples for public extension methods that still have none.
 23. Build or refresh the example inventory.
-24. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404.
+24. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
 25. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository.
 26. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 27. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.

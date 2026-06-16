@@ -145,7 +145,7 @@ Document only what the code actually exposes. Do not invent APIs, overloads, tar
 
 Manual documentation is authoritative context. Preserve hand-written Markdown and overwrite content unless it is stale or incorrect. Prefer additive edits, but fix contradictions instead of appending conflicting prose.
 
-Preserve working Markdown links, `Related:` references, and historical URL citations unless you verified a direct HTTP 404 at the current destination or have a confirmed replacement URL. Do not drop those references just because you rewrote the surrounding prose.
+Preserve working Markdown links, `Related:` references, and historical URL citations unless you verified a direct HTTP 404 at the current destination or have a confirmed replacement URL. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence. Do not drop those references just because you rewrote the surrounding prose.
 
 Namespace pages and type pages have different jobs. Namespace pages orient readers to the problem space and where to start; generated type pages explain concrete public APIs and must carry concrete examples for public non-abstraction types.
 
@@ -196,7 +196,7 @@ For Codebelt repositories, the DocFX workspace is `.docfx` and the configuration
 
 Inspect `docfx.json` before editing so you understand content roots, overwrite file locations, include paths, metadata inputs, and output conventions. When creating or repairing overwrite files, read `references/docfx-overwrite-files.md`. When you need exact CLI arguments, exit codes, JSON diagnostics, or validator behavior for `agents.cs` and `docfx.cs`, read `references/scripts.md`.
 
-Run `agents.cs` against the actual repository root being documented, not a temp workspace or the skill install directory. The script manages a marker-bounded DocFX maintenance block in the repository root `AGENTS.md`; do not hand-edit or duplicate that block.
+Run `agents.cs` against the actual repository root being documented, not a temp workspace or the skill install directory. The script manages a marker-bounded DocFX maintenance block in the repository root `AGENTS.md`; do not hand-edit or duplicate that block. After running the script, explicitly read the repository root `AGENTS.md` to load those documentation rules into your context before proceeding.
 
 When examples or workflows say `<temp-path>`, resolve that path outside the repository root (for example, under `$env:TEMP` on Windows or `/tmp` on Unix) so scratch artifacts never pollute the target worktree.
 
@@ -353,7 +353,7 @@ Use the same fallback for equivalent builds triggered by documentation validatio
 
 When the user names a changed API or namespace:
 
-1. Run `agents.cs`.
+1. Run `agents.cs` and explicitly read the repository root `AGENTS.md` to load current documentation rules.
 2. Run the safety gates and inspect existing documentation edits.
 3. Inspect the changed public API, affected namespaces, availability inputs, tests, samples, and current overwrite files.
 4. Update XML comments, namespace pages, extension-member tables, examples, and availability notes as required.
@@ -362,7 +362,7 @@ When the user names a changed API or namespace:
 
 When the user does not name a specific target:
 
-1. Run `agents.cs`.
+1. Run `agents.cs` and explicitly read the repository root `AGENTS.md` to load current documentation rules.
 2. Run the safety gates and inspect repository guidance.
 3. Inspect DocFX configuration, overwrite files, tests, samples, and current documentation state.
 4. Run `docfx.cs --json`, and for multi-diagnostic output rerun with `--assessment-queue` and use that queue as the work queue.
