@@ -228,6 +228,8 @@ For each repair batch, maintain an evidence ledger in the example inventory: rec
 
 **Tests are evidence, not output.** Do not add `ShowUsage`, `Usage`, `Example`, or documentation-only methods to test files. Use tests to understand the documented type's behavior, then transform that knowledge into consumer-facing DocFX overwrite examples.
 
+Do not assume the right acquisition model. Before writing the example, discover how consumer code actually obtains the documented type from reflection-backed public API shape, docs, tests, samples, or other source-backed evidence. When the type is surfaced by another public method, factory, builder, registration call, or workflow, prefer that discoverable public path over manual construction. Do not mirror internal helper construction (`return new Type { ... }` in implementation code) or manually populate object state just because a constructor exists.
+
 Every generated `csharp` code block is a complete, copy/paste-ready compilation unit. The default is always a compilable unit (option 1). Only use intentionally incomplete excerpts (option 2) when explicitly requested by the user, and label them clearly.
 
 **Complete C# example contract:**
@@ -287,7 +289,7 @@ Derive examples from these sources, in order:
 3. Existing unit, functional, or integration tests that reference the documented type or member — use as behavioral evidence only; do not copy Arrange/Act/Assert structure, test fixtures, mocks, or test helper patterns into the final example unless the public API is specifically about testing.
 4. README, `.nuget/*/README.md`, package documentation, samples, tuning/tooling projects, or existing conceptual docs in the repository.
 5. Real consumer usage found by exact package-ID search, preferring repositories other than the target repository when available; use self-repo hits only as package-authored documentation or sample evidence.
-6. Implementation source, only when the public surface alone is insufficient to construct a valid calling example.
+6. Implementation source, only when the public surface alone is insufficient to construct a valid calling example. Use it to discover public acquisition paths, companion entry points, and lifecycle expectations — not to copy internal helper construction into the final sample.
 7. Official upstream documentation when the library wraps an external framework or library.
 8. Synthesized examples only when all of the above confirm the full public API shape and the synthesized sample compiles.
 9. Omit the example entirely if none of the above yields a compile-valid, consumer-facing example.
@@ -303,6 +305,8 @@ Resolve constructors, generic arity, abstractness, constraints, and public membe
 - Generic types: supply concrete type arguments (e.g., `Repository<Product>`, not `Repository<T>`).
 - Abstract types: do not instantiate directly; derive with a concrete class that supplies all required generic parameters.
 - Extension methods: show a valid receiver type.
+- When public signatures, docs, or tests show that another public API produces or acquires the documented type, demonstrate that discoverable acquisition path instead of inventing a direct-construction path.
+- If the constructor path you found is internal, source-only, or otherwise not callable from consumer code, it is not a valid example entry point. Find a discoverable public acquisition path or omit the example.
 - Do not assume parameterless constructors or methods not present in the reflected API surface.
 - Do not invent members; if a member cannot be confirmed, omit the example.
 

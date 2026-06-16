@@ -199,6 +199,7 @@ These are search directions, not templates to emit verbatim. Confirm every patte
 - **Stream processing / compression** — wrap or transform a stream, then read or write the transformed bytes.
 - **Formatter setup** — configure the formatter, then serialize or deserialize a payload.
 - **Delegate / factory pipelines** — register the factory, then invoke it to produce a configured instance.
+- **Discoverable acquisition paths** — when public signatures, tests, docs, or samples show that another public API returns or acquires the target type, build the example around that path and then inspect or use the returned instance. Do not manually construct the target unless the public evidence shows direct construction is the intended entry point.
 
 Each chosen scenario must still produce, configure, transform, register, send, store, or validate something a real caller observes.
 
@@ -242,7 +243,7 @@ uid: X.Y.Z.MyType
 example:
 - *content
 ---
-The following schematic shows the overwrite shape only. Replace it with a source-backed consumer task; do not copy the generic names into product documentation.
+The following schematic shows the overwrite shape only. Replace it with a source-backed consumer task; do not copy the generic names or the direct-construction shape into product documentation. If public evidence shows that another API usually returns or acquires `MyType`, show that discoverable path instead of `return new MyType()`.
 
 ```csharp
 using X.Y.Z;

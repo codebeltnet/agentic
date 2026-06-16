@@ -1014,6 +1014,18 @@
         "Keeps the sample grounded in the verified public API behavior from the source or test evidence",
         "Does not drop qualification when it is genuinely needed to disambiguate the code"
       ]
+    },
+    {
+      "id": 101,
+      "prompt": "Use dotnet-docfx-digest on a library where `OperationMeasure.WithFunc<TResult>(Func<TResult> callback)` returns `OperationProfiler<TResult>`. The current DocFX sample manually constructs `new OperationProfiler()` and `new OperationProfiler<int>()`, assigns properties, and never shows the public producer workflow. Tests show callers receive the profiler from `OperationMeasure.WithFunc(() => 42)` and then inspect `Result` and `Elapsed`.",
+      "expected_output": "Agent replaces the manual carrier construction with a consumer-facing example built around the discoverable public acquisition path. It shows callers invoking the public API that returns `OperationProfiler<TResult>`, then reading observable state such as `Result` and `Elapsed`. If implementation source is consulted, it is used only to discover that public acquisition path, not to mirror internal `new OperationProfiler<TResult>()` helper code from the library.",
+      "expectations": [
+        "Prefers the discoverable public acquisition path over manual construction of the returned profiler type",
+        "Does not emit `new OperationProfiler<int>()` or another direct-construction path that relies on internal or source-only construction details",
+        "Uses tests, samples, package docs, or external consumer usage as the primary evidence for the scenario before falling back to implementation source",
+        "If implementation source is used, uses it to discover the public acquisition path rather than to copy internal helper construction",
+        "Shows the returned profiler being used through consumer-visible state such as `Result`, `Elapsed`, or equivalent metadata"
+      ]
     }
   ]
 }
