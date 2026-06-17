@@ -75,6 +75,20 @@ function Assert-Warning {
     }
 }
 
+function Initialize-GitRepo {
+    param([string]$Workspace)
+    Push-Location $Workspace
+    try {
+        & git init -q 2>$null | Out-Null
+        & git config core.autocrlf false 2>$null | Out-Null
+        & git config core.safecrlf false 2>$null | Out-Null
+        & git -c user.email=t@e.com -c user.name=t add -A 2>$null | Out-Null
+        & git -c user.email=t@e.com -c user.name=t commit -q -m base 2>$null | Out-Null
+    } finally {
+        Pop-Location
+    }
+}
+
 function New-DocfxJson {
     param([string[]]$ProjectFiles)
 
@@ -169,17 +183,56 @@ public sealed class Tool
 }
 '@
         Write-Utf8File (Join-Path $interimWorkspace '.docfx/docfx.json') (New-DocfxJson @('src/Utility/Utility.csproj'))
-        Write-Utf8File (Join-Path $interimWorkspace 'progress.md') '# scratch progress'
-        Write-Utf8File (Join-Path $interimWorkspace 'docfx_out.json') '{}'
+Initialize-GitRepo $interimWorkspace
+Write-Utf8File (Join-Path $interimWorkspace '.docfx/family-exemptions.json') @'
+{
+  "families": []
+}
+'@
+        Write-Utf8File (Join-Path $interimWorkspace '.docfx/api/namespaces/Acme.Utility.md') @'
+---
+uid: Acme.Utility
+---
+
+Namespace overview.
+'@
+        Write-Utf8File (Join-Path $interimWorkspace '.docfx/api/types/Acme.Utility.Tool.md') @'
+---
+uid: Acme.Utility.Tool
+---
+
+Type overview.
+'@
+        Write-Utf8File (Join-Path $interimWorkspace 'docfx_json_only.json') '{}'
+        Write-Utf8File (Join-Path $interimWorkspace 'docfx_output.txt') 'captured output'
+        Write-Utf8File (Join-Path $interimWorkspace '.docfx/docfx_verify.txt') 'captured verification'
+        Write-Utf8File (Join-Path $interimWorkspace '.docfx/api/types/Acme.Utility.ScratchNotes.md') @'
+---
+uid: Scratch.Temp
+---
+
+Scratch notes.
+'@
 
         $interimReport = Invoke-Validator -Workspace $interimWorkspace
         Assert-Diagnostic -Report $interimReport -Code 'INTERIM_ARTIFACT_IN_WORKTREE'
         $interimPaths = @($interimReport.errors | Where-Object code -eq 'INTERIM_ARTIFACT_IN_WORKTREE' | ForEach-Object path)
-        if (-not ($interimPaths -contains 'progress.md')) {
-            throw "Expected progress.md to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+        if (-not ($interimPaths -contains 'docfx_json_only.json')) {
+            throw "Expected docfx_json_only.json to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
         }
-        if (-not ($interimPaths -contains 'docfx_out.json')) {
-            throw "Expected docfx_out.json to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+        if (-not ($interimPaths -contains 'docfx_output.txt')) {
+            throw "Expected docfx_output.txt to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+        }
+        if (-not ($interimPaths -contains '.docfx/docfx_verify.txt')) {
+            throw "Expected .docfx/docfx_verify.txt to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+        }
+        if (-not ($interimPaths -contains '.docfx/api/types/Acme.Utility.ScratchNotes.md')) {
+            throw "Expected .docfx/api/types/Acme.Utility.ScratchNotes.md to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+        }
+        foreach ($allowed in @('AGENTS.md', '.docfx/docfx.json', '.docfx/family-exemptions.json', '.docfx/api/namespaces/Acme.Utility.md', '.docfx/api/types/Acme.Utility.Tool.md')) {
+            if ($interimPaths -contains $allowed) {
+                throw "Did not expect $allowed to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+            }
         }
     } finally {
         if (Test-Path $interimWorkspace) {

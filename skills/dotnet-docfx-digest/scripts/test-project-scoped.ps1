@@ -447,21 +447,29 @@ Run-Scenario 'Project manifest is written deterministically with packets' {
     Write-Utf8File (Join-Path $ws '.docfx/docfx.json') (New-Docfx @(@{ Dest = 'api'; Files = @('src/Core/Acme.Core.csproj') }))
     Initialize-GitRepo $ws
 
-    $manifest = Join-Path $ws 'manifest.json'
-    $r = Invoke-Validator $ws @('--project-manifest', $manifest)
-    if (-not (Test-Path $manifest)) { throw 'manifest not written' }
-    $m = [System.IO.File]::ReadAllText($manifest) | ConvertFrom-Json
-    if ($m.schemaVersion -ne 2) { throw "schemaVersion=$($m.schemaVersion)" }
-    if ($m.packets.Count -lt 1) { throw 'manifest has no packets' }
-    if (-not ($m.packets[0].namespaces -contains 'Acme.Core')) { throw 'packet missing Acme.Core namespace' }
-    $review = Join-Path $ws 'manifest.review.json'
-    if (-not (Test-Path $review)) { throw 'review-report template not written' }
-    $reviewTemplate = [System.IO.File]::ReadAllText($review) | ConvertFrom-Json
-    if (-not @($reviewTemplate.pages | Where-Object path -eq '.docfx/api/namespaces/Acme.Core.md')) { throw 'review template missing namespace page' }
-    if (-not @($reviewTemplate.pages | Where-Object path -eq '.docfx/api/types/Acme.Core.Widget.md')) { throw 'review template missing type page' }
-    # No BOM.
-    $bytes = [System.IO.File]::ReadAllBytes($manifest)
-    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { throw 'manifest must be BOM-less' }
+    $artifactRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('docfx-project-manifest-' + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+        $manifest = Join-Path $artifactRoot 'manifest.json'
+        $r = Invoke-Validator $ws @('--project-manifest', $manifest)
+        if (-not (Test-Path $manifest)) { throw 'manifest not written' }
+        $m = [System.IO.File]::ReadAllText($manifest) | ConvertFrom-Json
+        if ($m.schemaVersion -ne 2) { throw "schemaVersion=$($m.schemaVersion)" }
+        if ($m.packets.Count -lt 1) { throw 'manifest has no packets' }
+        if (-not ($m.packets[0].namespaces -contains 'Acme.Core')) { throw 'packet missing Acme.Core namespace' }
+        $review = Join-Path $artifactRoot 'manifest.review.json'
+        if (-not (Test-Path $review)) { throw 'review-report template not written' }
+        $reviewTemplate = [System.IO.File]::ReadAllText($review) | ConvertFrom-Json
+        if (-not @($reviewTemplate.pages | Where-Object path -eq '.docfx/api/namespaces/Acme.Core.md')) { throw 'review template missing namespace page' }
+        if (-not @($reviewTemplate.pages | Where-Object path -eq '.docfx/api/types/Acme.Core.Widget.md')) { throw 'review template missing type page' }
+        # No BOM.
+        $bytes = [System.IO.File]::ReadAllBytes($manifest)
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { throw 'manifest must be BOM-less' }
+    } finally {
+        if (Test-Path $artifactRoot) {
+            Remove-Item $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 # ----------------------------------------------------------------------
@@ -481,13 +489,16 @@ namespace Acme.Core
     Write-Utf8File (Join-Path $ws '.docfx/docfx.json') (New-Docfx @(@{ Dest = 'api'; Files = @('src/Core/Acme.Core.csproj') }))
     Initialize-GitRepo $ws
 
-    $manifest = Join-Path $ws '.docfx/dry-run-manifest.json'
-    $initial = Invoke-Validator $ws @('--dry-run', '--seed', '17', '--build-api-model', '--project-manifest', $manifest)
-    if (-not (Test-Path $manifest)) { throw 'initial dry-run manifest was not written' }
-    if ($initial.scope.selectedProjects.Count -ne 1) { throw "selected=$($initial.scope.selectedProjects.Count)" }
-    if (-not $initial.scope.resumeCommand) { throw 'resume command was not reported' }
+    $artifactRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('docfx-dry-run-' + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+        $manifest = Join-Path $artifactRoot 'dry-run-manifest.json'
+        $initial = Invoke-Validator $ws @('--dry-run', '--seed', '17', '--build-api-model', '--project-manifest', $manifest)
+        if (-not (Test-Path $manifest)) { throw 'initial dry-run manifest was not written' }
+        if ($initial.scope.selectedProjects.Count -ne 1) { throw "selected=$($initial.scope.selectedProjects.Count)" }
+        if (-not $initial.scope.resumeCommand) { throw 'resume command was not reported' }
 
-    Write-Utf8File (Join-Path $ws '.docfx/api/namespaces/Acme.Core.md') @'
+        Write-Utf8File (Join-Path $ws '.docfx/api/namespaces/Acme.Core.md') @'
 ---
 uid: Acme.Core
 summary: *content
@@ -520,40 +531,45 @@ public static class WidgetCapacity
 ```
 '@
 
-    $missingReview = Invoke-Validator $ws @('--resume-project-manifest', $manifest)
-    Assert-Diagnostic -Report $missingReview -Code 'REVIEW_REPORT_MISSING'
+        $missingReview = Invoke-Validator $ws @('--resume-project-manifest', $manifest)
+        Assert-Diagnostic -Report $missingReview -Code 'REVIEW_REPORT_MISSING'
 
-    $review = Join-Path $ws '.docfx/dry-run-manifest.review.json'
-    $reviewData = [System.IO.File]::ReadAllText($review) | ConvertFrom-Json
-    foreach ($page in $reviewData.pages) {
-        $page.evidence = if ($page.path -like '*namespaces*') { 'src/Core/Core.cs and README.md' } else { 'src/Core/Core.cs public Widget API' }
-        $page.purpose = if ($page.path -like '*namespaces*') { 'Explains when bounded work-unit capacity belongs to one operation.' } else { 'Shows callers how to configure a bounded work unit before dispatch.' }
-        $page.observableOutcome = if ($page.path -like '*namespaces*') { 'namespace guidance' } else { 'Returns the effective capacity used by batching logic.' }
-        $page.patternComparison = 'Compared with every page in this one-packet pilot; wording and code are specific to Widget capacity.'
+        $review = Join-Path $artifactRoot 'dry-run-manifest.review.json'
+        $reviewData = [System.IO.File]::ReadAllText($review) | ConvertFrom-Json
+        foreach ($page in $reviewData.pages) {
+            $page.evidence = if ($page.path -like '*namespaces*') { 'src/Core/Core.cs and README.md' } else { 'src/Core/Core.cs public Widget API' }
+            $page.purpose = if ($page.path -like '*namespaces*') { 'Explains when bounded work-unit capacity belongs to one operation.' } else { 'Shows callers how to configure a bounded work unit before dispatch.' }
+            $page.observableOutcome = if ($page.path -like '*namespaces*') { 'namespace guidance' } else { 'Returns the effective capacity used by batching logic.' }
+            $page.patternComparison = 'Compared with every page in this one-packet pilot; wording and code are specific to Widget capacity.'
+        }
+        [System.IO.File]::WriteAllText($review, ($reviewData | ConvertTo-Json -Depth 10), $utf8NoBom)
+
+        $final = Invoke-Validator $ws @(
+            '--resume-project-manifest', $manifest,
+            '--review-report', $review,
+            '--build-api-model',
+            '--validate-samples',
+            '--verify-docfx-build')
+
+        if ($final.summary.runMode -ne 'dry-run') { throw "runMode=$($final.summary.runMode)" }
+        if ($final.summary.completionState -ne 'dry-run-passed') {
+            $codes = (@($final.errors | ForEach-Object code) -join ',')
+            $gates = (@($final.summary.remainingGates) -join ',')
+            throw "completion=$($final.summary.completionState); errors=$codes; gates=$gates"
+        }
+        if ($final.summary.samplesCompiled -ne 1) { throw "samplesCompiled=$($final.summary.samplesCompiled)" }
+        if ($final.summary.docfxBuildsVerified -ne 1) { throw "docfxBuildsVerified=$($final.summary.docfxBuildsVerified)" }
+        if ($final.scope.selectedProjects.Count -ne 1) { throw 'resumed packet was not selected' }
+        Assert-NoDiagnostic -Report $final -Code 'PROJECT_DIRTY_SKIPPED'
+        Assert-NoDiagnostic -Report $final -Code 'PROJECT_MANIFEST_DIRTY_CONFLICT'
+        Assert-NoDiagnostic -Report $final -Code 'REVIEW_REPORT_INCOMPLETE'
+        Assert-NoDiagnostic -Report $final -Code 'EXAMPLE_MISSING'
+        Assert-NoDiagnostic -Report $final -Code 'SAMPLE_COMPILE_FAILED'
+    } finally {
+        if (Test-Path $artifactRoot) {
+            Remove-Item $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
-    [System.IO.File]::WriteAllText($review, ($reviewData | ConvertTo-Json -Depth 10), $utf8NoBom)
-
-    $final = Invoke-Validator $ws @(
-        '--resume-project-manifest', $manifest,
-        '--review-report', $review,
-        '--build-api-model',
-        '--validate-samples',
-        '--verify-docfx-build')
-
-    if ($final.summary.runMode -ne 'dry-run') { throw "runMode=$($final.summary.runMode)" }
-    if ($final.summary.completionState -ne 'dry-run-passed') {
-        $codes = (@($final.errors | ForEach-Object code) -join ',')
-        $gates = (@($final.summary.remainingGates) -join ',')
-        throw "completion=$($final.summary.completionState); errors=$codes; gates=$gates"
-    }
-    if ($final.summary.samplesCompiled -ne 1) { throw "samplesCompiled=$($final.summary.samplesCompiled)" }
-    if ($final.summary.docfxBuildsVerified -ne 1) { throw "docfxBuildsVerified=$($final.summary.docfxBuildsVerified)" }
-    if ($final.scope.selectedProjects.Count -ne 1) { throw 'resumed packet was not selected' }
-    Assert-NoDiagnostic -Report $final -Code 'PROJECT_DIRTY_SKIPPED'
-    Assert-NoDiagnostic -Report $final -Code 'PROJECT_MANIFEST_DIRTY_CONFLICT'
-    Assert-NoDiagnostic -Report $final -Code 'REVIEW_REPORT_INCOMPLETE'
-    Assert-NoDiagnostic -Report $final -Code 'EXAMPLE_MISSING'
-    Assert-NoDiagnostic -Report $final -Code 'SAMPLE_COMPILE_FAILED'
 }
 
 # ----------------------------------------------------------------------

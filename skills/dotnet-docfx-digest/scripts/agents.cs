@@ -54,7 +54,7 @@ internal static class AgentsScript
 
         Preserve working Markdown links, `Related:` references, and historical URL citations during prose rewrites. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
 
-        Interim scratch artifacts do not belong in the repository working tree. Store assessment queues, project manifests, review reports, captured validator output, progress notes, and one-off helper scripts in temp or session storage instead. Repo-root files such as `docfx_out*.json`, `docfx_stdout*.json`, `progress.md`, `output-*.md`, `*-fixes.md`, `fix_*.py`, and `nul` are blocking cleanup work, not documentation deliverables.
+        Interim scratch artifacts do not belong in the repository working tree. Store assessment queues, project manifests, review reports, captured validator output, progress notes, and one-off helper scripts in temp or session storage instead. New working-tree files are only legitimate when they are the managed `AGENTS.md` block, the active `docfx.json`, an explicitly justified `.docfx/family-exemptions.json`, or DocFX-authored namespace/type Markdown that maps to a real public namespace or type. Everything else is blocking cleanup work, not a documentation deliverable.
 
         Before completing documentation work, run the relevant verification commands, normally:
 

@@ -34,20 +34,7 @@ internal static class DocfxValidator
     private static readonly Regex SyntheticExtensionBlockUidMarkerRegex = new(
         @"(?:^|\.)(?:<G>|\uF03CG\uF03E|%3cG%3e)(?:\$|%24)[0-9A-Fa-f]{8,}",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
-    private static readonly HashSet<string> SuspiciousInterimArtifactLiteralNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "progress.md",
-        "nul"
-    };
-    private static readonly Regex[] SuspiciousInterimArtifactNamePatterns =
-    [
-        new(@"^docfx_out\d*\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
-        new(@"^docfx_stdout\d*\.json$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
-        new(@"^docfx_(?:stderr|stdout|err)\d*\.log$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
-        new(@"^output-\d+\.md$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
-        new(@"^.+-fixes\.md$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled),
-        new(@"^fix_.+\.py$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled)
-    ];
+    private const string FamilyExemptionsFileName = "family-exemptions.json";
 
     // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
     // each external process is tagged with the permission that authorizes it, and the set of
@@ -338,7 +325,7 @@ internal static class DocfxValidator
         phaseTimer.Restart();
         EnsureNamespaceProjectMap(workspace);
         var gitState = GetGitState(repoRoot);
-        ValidateInterimArtifacts(repoRoot, gitState, report);
+        ValidateInterimArtifacts(repoRoot, docfxPath, docfxWorkspace, workspace, api, gitState, report);
         var resumeScope = options.ResumeProjectManifestPath is null
             ? null
             : LoadResumeProjectManifest(options.ResumeProjectManifestPath, repoRoot, report);
@@ -5486,6 +5473,7 @@ internal static class DocfxValidator
 
         if (state.Available)
         {
+            AddLines("diff --name-only --diff-filter=A HEAD", state.Added);
             AddLines("diff --name-only --cached --diff-filter=ACM", state.Staged);
             AddLines("diff --name-only --diff-filter=ACM", state.Unstaged);
             AddLines("diff --name-only --cached --diff-filter=D", state.Deleted);
@@ -5518,74 +5506,160 @@ internal static class DocfxValidator
         return state;
     }
 
-    private static void ValidateInterimArtifacts(string repoRoot, GitState gitState, Report report)
+    private static void ValidateInterimArtifacts(string repoRoot, string docfxPath, string docfxWorkspace,
+        ValidationWorkspace ws, ApiModel api, GitState gitState, Report report)
     {
-        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var listed = RunProcess("git", "ls-files --cached --others --exclude-standard --full-name", repoRoot,
-            permission: ProcessPermission.Git);
-        if (listed.ExitCode == 0)
-        {
-            foreach (var line in listed.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (line.Contains('/') || line.Contains('\\'))
-                {
-                    continue;
-                }
-
-                candidates.Add(Path.GetFullPath(Path.Combine(repoRoot, line)));
-            }
-        }
-
+        var candidates = gitState.Added
+            .Concat(gitState.Untracked)
+            .Where(candidate => !gitState.Deleted.Contains(candidate))
+            .Where(candidate => IsInterimArtifactScopeCandidate(repoRoot, docfxWorkspace, candidate))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         if (candidates.Count == 0)
         {
-            try
-            {
-                foreach (var file in Directory.EnumerateFiles(repoRoot, "*", SearchOption.TopDirectoryOnly))
-                {
-                    candidates.Add(Path.GetFullPath(file));
-                }
-            }
-            catch (Exception)
-            {
-                // Keep the audit moving even if the host filesystem cannot enumerate a special file
-                // such as a reserved Windows device name. Git-backed discovery above is the primary path.
-            }
+            return;
         }
 
-        foreach (var candidate in candidates.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        var knownNamespaces = new HashSet<string>(
+            api.Namespaces.Select(n => n.Name).Concat(ws.NamespaceProjects.Keys),
+            StringComparer.Ordinal);
+        var knownTypePageStems = new HashSet<string>(
+            api.RequiredExampleTargets
+                .Where(t => t.Kind == ApiTargetKind.Type)
+                .Select(t => t.Uid)
+                .Concat(api.RequiredExampleTargets
+                    .Where(t => t.Kind == ApiTargetKind.ExtensionMethod && !string.IsNullOrWhiteSpace(t.DeclaringTypeUid))
+                    .Select(t => t.DeclaringTypeUid!)),
+            StringComparer.Ordinal);
+        var knownTypeSectionUids = new HashSet<string>(knownTypePageStems, StringComparer.Ordinal);
+        foreach (var uid in api.RequiredExampleTargets
+                     .Where(t => t.Kind == ApiTargetKind.ExtensionMethod)
+                     .Select(t => t.Uid))
         {
-            if (gitState.Deleted.Contains(candidate))
-            {
-                continue;
-            }
+            knownTypeSectionUids.Add(uid);
+        }
 
-            var name = Path.GetFileName(candidate);
-            if (!IsSuspiciousInterimArtifactName(name))
+        foreach (var candidate in candidates)
+        {
+            if (IsKnownInterimArtifactDeliverable(repoRoot, docfxPath, docfxWorkspace, ws, knownNamespaces,
+                    knownTypePageStems, knownTypeSectionUids, candidate))
             {
                 continue;
             }
 
             report.Errors.Add(new Diagnostic("INTERIM_ARTIFACT_IN_WORKTREE", Rel(repoRoot, candidate), null,
-                "Interim scratch artifact should not live in the repository working tree. Move it to temp/session storage or delete it before claiming completion."));
+                "Unexpected new file in the repository working tree. dotnet-docfx-digest deliverables are limited to the managed AGENTS.md block, the active docfx.json, an explicitly justified family-exemptions.json, and DocFX-authored namespace/type Markdown that maps to real public API. Move everything else to temp/session storage or delete it before claiming completion."));
         }
     }
 
-    private static bool IsSuspiciousInterimArtifactName(string fileName)
+    private static bool IsInterimArtifactScopeCandidate(string repoRoot, string docfxWorkspace, string candidate)
     {
-        if (SuspiciousInterimArtifactLiteralNames.Contains(fileName))
+        if (IsRepoRootTopLevelFile(repoRoot, candidate))
         {
             return true;
         }
 
-        foreach (var pattern in SuspiciousInterimArtifactNamePatterns)
+        if (PathsEqual(repoRoot, docfxWorkspace))
         {
-            if (pattern.IsMatch(fileName))
-            {
-                return true;
-            }
+            return IsPathUnderDirectory(candidate, Path.Combine(docfxWorkspace, "api"));
         }
 
-        return false;
+        return IsPathUnderDirectory(candidate, docfxWorkspace);
+    }
+
+    private static bool IsKnownInterimArtifactDeliverable(string repoRoot, string docfxPath, string docfxWorkspace,
+        ValidationWorkspace ws, HashSet<string> knownNamespaces, HashSet<string> knownTypePageStems,
+        HashSet<string> knownTypeSectionUids, string candidate)
+    {
+        if (PathsEqual(candidate, Path.Combine(repoRoot, "AGENTS.md")) ||
+            PathsEqual(candidate, docfxPath) ||
+            PathsEqual(candidate, Path.Combine(docfxWorkspace, FamilyExemptionsFileName)))
+        {
+            return true;
+        }
+
+        return IsKnownNamespaceMarkdown(candidate, docfxWorkspace, ws, knownNamespaces) ||
+               IsKnownTypeMarkdown(candidate, docfxWorkspace, ws, knownTypePageStems, knownTypeSectionUids);
+    }
+
+    private static bool IsKnownNamespaceMarkdown(string candidate, string docfxWorkspace, ValidationWorkspace ws,
+        HashSet<string> knownNamespaces)
+    {
+        if (!candidate.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+            !IsPathUnderDirectory(candidate, Path.Combine(docfxWorkspace, "api", "namespaces")))
+        {
+            return false;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(candidate);
+        if (knownNamespaces.Contains(stem))
+        {
+            return true;
+        }
+
+        return GetOverwriteSectionsForCandidate(ws, candidate)
+            .Any(section => knownNamespaces.Contains(section.Uid));
+    }
+
+    private static bool IsKnownTypeMarkdown(string candidate, string docfxWorkspace, ValidationWorkspace ws,
+        HashSet<string> knownTypePageStems, HashSet<string> knownTypeSectionUids)
+    {
+        if (!candidate.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+            !IsPathUnderDirectory(candidate, Path.Combine(docfxWorkspace, "api", "types")))
+        {
+            return false;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(candidate);
+        if (knownTypePageStems.Contains(stem))
+        {
+            return true;
+        }
+
+        return GetOverwriteSectionsForCandidate(ws, candidate)
+            .Any(section => knownTypeSectionUids.Contains(section.Uid));
+    }
+
+    private static List<OverwriteSection> GetOverwriteSectionsForCandidate(ValidationWorkspace ws, string candidate)
+    {
+        var sections = ws.OverwriteSections
+            .Where(section => PathsEqual(section.File, candidate))
+            .ToList();
+        if (sections.Count > 0 || !File.Exists(candidate))
+        {
+            return sections;
+        }
+
+        try
+        {
+            return ExtractOverwriteSections(candidate);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static bool IsRepoRootTopLevelFile(string repoRoot, string path)
+    {
+        var parent = Path.GetDirectoryName(path);
+        return parent is not null && PathsEqual(parent, repoRoot);
+    }
+
+    private static bool IsPathUnderDirectory(string path, string directory)
+    {
+        try
+        {
+            var relative = Path.GetRelativePath(directory, path);
+            return relative != "." &&
+                   !relative.StartsWith("..", StringComparison.Ordinal) &&
+                   !Path.IsPathRooted(relative);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static List<ProjectPacket> BuildProjectPackets(ValidationWorkspace ws, ApiModel api, GitState gitState,
@@ -6011,7 +6085,7 @@ internal static class DocfxValidator
     private static List<FamilyExemption> LoadAndValidateFamilyExemptions(string repoRoot, string docfxWorkspace,
         ApiModel api, ValidationWorkspace ws, Dictionary<string, string> namespacePages, Report report)
     {
-        var path = Path.Combine(docfxWorkspace, "family-exemptions.json");
+        var path = Path.Combine(docfxWorkspace, FamilyExemptionsFileName);
         var result = new List<FamilyExemption>();
         if (!File.Exists(path))
         {
@@ -7957,6 +8031,7 @@ internal static class DocfxValidator
     private sealed class GitState
     {
         public bool Available { get; init; }
+        public HashSet<string> Added { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> Staged { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> Unstaged { get; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> Renamed { get; } = new(StringComparer.OrdinalIgnoreCase);
