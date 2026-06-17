@@ -65,26 +65,11 @@ Namespace overview files are a deliberate exception to "multiple sections can wo
 
 For repeatable overwrite creation, prefer `docfx.cs --write-overwrite <request.json>` over hand-assembling fenced Markdown with ad-hoc scripts. The request is JSON with `file`, `uid`, `mapping` (`example`, `summary`, or `remarks`), optional `prose`, and optional `fence`. The writer validates the YAML and balanced fences, refuses duplicate UIDs in the same file (`OVERWRITE_UID_DUPLICATE`), refuses unbalanced fences (`OVERWRITE_FENCE_UNBALANCED`), refuses to replace a file that already had uncommitted changes (`OVERWRITE_DIRTY_REFUSED`), preserves the target file's existing BOM and line endings, and prints a change preview. It writes only structured content you already authored — it never generates prose, selects members, or synthesizes examples. Normal surgical edits may still use your editor; the writer exists for repeatable, encoding-safe overwrite creation.
 
-## Family exemptions
+## Generic-arity family skips (auto-detected)
 
-A coherent type series whose members differ primarily by generic arity, inherited specialization, overload shape, or repeated type-parameter combinations may replace redundant per-type examples with one anchor example plus deep namespace guidance. Declare these explicitly in `.docfx/family-exemptions.json` so the policy is reviewable and validator-checkable:
+A generic-arity type series — public types whose UIDs share one base name and differ only by the trailing arity suffix (for example MutableTuple from arity 1 through 20, or TesterFunc from arity 2 through 18) — may replace redundant per-type examples with one anchor example plus deep namespace guidance. `docfx.cs` auto-detects these families from the public API surface; no file is written into the repository to declare or persist them.
 
-```json
-{
-  "families": [
-    {
-      "familyId": "tuple-arity",
-      "namespaceUid": "Cuemon.Collections",
-      "anchorUid": "Cuemon.Collections.MutableTuple`1",
-      "anchorExampleFile": ".docfx/api/types/Cuemon.Collections.MutableTuple`1.md",
-      "rationale": "generic-arity",
-      "coveredUids": ["Cuemon.Collections.MutableTuple`2", "Cuemon.Collections.MutableTuple`3"]
-    }
-  ]
-}
-```
-
-`rationale` must be one of `generic-arity`, `inherited-specialization`, `overload-series`, or `type-parameter-series`. The validator removes covered siblings from standalone-example obligations only after every UID resolves to a public type target in the declared namespace, with no duplicate or circular coverage (`FAMILY_EXEMPTION_INVALID` otherwise). The anchor must carry a real behavioral example (`FAMILY_ANCHOR_EXAMPLE_MISSING` otherwise), the namespace page must name the anchor and explain how consumers choose among siblings (`FAMILY_NAMESPACE_GUIDANCE_MISSING` otherwise), and every sibling still needs accurate purpose-first prose. Category alone never exempts options, exceptions, delegates, records, or data carriers; they are evaluated on their actual API role.
+The lowest-arity type is the anchor and must carry a real, behavioral example (`FAMILY_ANCHOR_EXAMPLE_MISSING` otherwise). The namespace page must name the anchor and explain how consumers choose among the arity siblings (`FAMILY_NAMESPACE_GUIDANCE_MISSING` otherwise). Covered siblings are removed from standalone-example obligations but still need accurate purpose-first prose that relates them to the anchor. Only arity-detectable series are auto-skipped; overload, inherited-specialization, or type-parameter series that do not differ by arity are not skipped and each member keeps its own example obligation.
 
 
 Overwrite models should follow the target model shape. Existing properties can be replaced or merged depending on the DocFX model rules; properties not already present can be added. For managed reference docs, common useful overwrite targets include `summary`, `remarks`, `example`, `exceptions`, `see`, `seealso`, and parameter descriptions under `syntax`. The official managed reference model lists `example` as an overwriteable property, so usage examples can be added through overwrite sections when generated metadata lacks them.

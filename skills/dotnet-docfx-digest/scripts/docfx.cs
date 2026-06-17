@@ -5,6 +5,7 @@
 #:package System.Reflection.MetadataLoadContext@9.0.0
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -34,7 +35,6 @@ internal static class DocfxValidator
     private static readonly Regex SyntheticExtensionBlockUidMarkerRegex = new(
         @"(?:^|\.)(?:<G>|\uF03CG\uF03E|%3cG%3e)(?:\$|%24)[0-9A-Fa-f]{8,}",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
-    private const string FamilyExemptionsFileName = "family-exemptions.json";
 
     // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
     // each external process is tagged with the permission that authorizes it, and the set of
@@ -319,7 +319,7 @@ internal static class DocfxValidator
 
         var allOverwriteSections = workspace.OverwriteSections;
 
-        // 6b. Project-scoped discovery: git state, packets, family exemptions, symbol ownership,
+        // 6b. Project-scoped discovery: git state, packets, skipped generic-arity families, symbol ownership,
         //     and scope selection (full / explicit hints / seeded dry-run) before validation so the
         //     namespace and required-example checks can be scoped to the selected packets.
         phaseTimer.Restart();
@@ -331,8 +331,8 @@ internal static class DocfxValidator
             : LoadResumeProjectManifest(options.ResumeProjectManifestPath, repoRoot, report);
         var packets = BuildProjectPackets(workspace, api, gitState, metadataGroups, repoRoot, docfxWorkspace,
             resumeScope?.InitialDirtyPaths);
-        var families = LoadAndValidateFamilyExemptions(repoRoot, docfxWorkspace, api, workspace, namespacePageIndex, report);
-        ApplyFamilyExemptions(api, families);
+        var families = DetectGenericArityFamilies(repoRoot, docfxWorkspace, api, workspace, namespacePageIndex, report);
+        ApplySkippedFamilies(api, families);
         report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
         ValidateSymbolOwnership(api, workspace, report);
         var scope = ResolveScope(options, packets, metadataGroups, apiModelSource, repoRoot, report, resumeScope);
@@ -5549,7 +5549,7 @@ internal static class DocfxValidator
             }
 
             report.Errors.Add(new Diagnostic("INTERIM_ARTIFACT_IN_WORKTREE", Rel(repoRoot, candidate), null,
-                "Unexpected new file in the repository working tree. dotnet-docfx-digest deliverables are limited to the managed AGENTS.md block, the active docfx.json, an explicitly justified family-exemptions.json, and DocFX-authored namespace/type Markdown that maps to real public API. Move everything else to temp/session storage or delete it before claiming completion."));
+                "Unexpected new file in the repository working tree. dotnet-docfx-digest deliverables are limited to the managed AGENTS.md block, the active docfx.json, and DocFX-authored namespace/type Markdown that maps to real public API. Move everything else to temp/session storage or delete it before claiming completion."));
         }
     }
 
@@ -5573,8 +5573,7 @@ internal static class DocfxValidator
         HashSet<string> knownTypeSectionUids, string candidate)
     {
         if (PathsEqual(candidate, Path.Combine(repoRoot, "AGENTS.md")) ||
-            PathsEqual(candidate, docfxPath) ||
-            PathsEqual(candidate, Path.Combine(docfxWorkspace, FamilyExemptionsFileName)))
+            PathsEqual(candidate, docfxPath))
         {
             return true;
         }
@@ -6081,148 +6080,94 @@ internal static class DocfxValidator
         return plan;
     }
 
-    // Family exemptions: an explicit, reviewable manifest under .docfx/family-exemptions.json.
-    private static List<FamilyExemption> LoadAndValidateFamilyExemptions(string repoRoot, string docfxWorkspace,
+    // Auto-detected generic-arity families: a type series that shares one base name and differs
+    // only by generic arity (Foo`1, Foo`2, ... Foo`N) may replace redundant standalone sibling
+    // examples with one anchor example plus deep namespace guidance. The family is detected from
+    // the public API surface — no manifest file is written into the target repository.
+    private static List<SkippedFamily> DetectGenericArityFamilies(string repoRoot, string docfxWorkspace,
         ApiModel api, ValidationWorkspace ws, Dictionary<string, string> namespacePages, Report report)
     {
-        var path = Path.Combine(docfxWorkspace, FamilyExemptionsFileName);
-        var result = new List<FamilyExemption>();
-        if (!File.Exists(path))
+        var result = new List<SkippedFamily>();
+
+        // Group non-abstraction type targets by their arity-stripped base key. Only types whose
+        // UID carries a trailing `N arity suffix (N >= 1) are candidates; a non-generic type with
+        // the same base name keeps its own standalone-example obligation.
+        var groups = new Dictionary<string, List<ApiTargetInfo>>(StringComparer.Ordinal);
+        foreach (var target in api.RequiredExampleTargets.Where(t => t.Kind == ApiTargetKind.Type))
         {
-            return result;
+            var (baseKey, arity) = SplitAritySuffix(target.Uid);
+            if (arity < 1)
+            {
+                continue;
+            }
+            if (!groups.TryGetValue(baseKey, out var list))
+            {
+                list = new List<ApiTargetInfo>();
+                groups[baseKey] = list;
+            }
+            list.Add(target);
         }
 
-        JsonDocument doc;
-        try
+        foreach (var group in groups.Values)
         {
-            doc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions
+            if (group.Count < 2)
             {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip
+                continue;
+            }
+
+            // Anchor = lowest arity present. Covered siblings = the remaining members.
+            var ordered = group.OrderBy(t => SplitAritySuffix(t.Uid).Arity)
+                .ThenBy(t => t.Uid, StringComparer.Ordinal).ToList();
+            var anchorUid = ordered[0].Uid;
+            var coveredUids = ordered.Skip(1).Select(t => t.Uid).ToList();
+            var namespaceUid = NamespaceFromUid(anchorUid);
+            var familyId = SimpleNameFromUid(anchorUid) + "-arity";
+
+            // The anchor must still carry a real, behavioral example before siblings can be skipped.
+            var anchorPath = Rel(repoRoot, Path.Combine(docfxWorkspace, "api", "types", anchorUid + ".md"));
+            var anchorHasExample = AnchorHasValidExample(anchorUid, ws, api);
+            if (!anchorHasExample)
+            {
+                report.Errors.Add(new Diagnostic("FAMILY_ANCHOR_EXAMPLE_MISSING", anchorPath, namespaceUid,
+                    $"Auto-detected generic-arity family '{familyId}' anchor '{anchorUid}' has no valid, behavioral example. The anchor must demonstrate the shared workflow before siblings can be skipped from standalone examples."));
+            }
+
+            // The namespace page must name the anchor and explain how consumers choose among siblings.
+            string? guidancePath = namespacePages.TryGetValue(namespaceUid, out var page) ? Rel(repoRoot, page) : null;
+            if (!NamespaceExplainsFamily(namespaceUid, anchorUid, namespacePages, ws))
+            {
+                report.Errors.Add(new Diagnostic("FAMILY_NAMESPACE_GUIDANCE_MISSING", guidancePath, namespaceUid,
+                    $"Auto-detected generic-arity family '{familyId}' requires the namespace page '{namespaceUid}' to name the anchor '{SimpleNameFromUid(anchorUid)}' and explain how consumers choose among the arity siblings."));
+            }
+
+            var valid = anchorHasExample && NamespaceExplainsFamily(namespaceUid, anchorUid, namespacePages, ws);
+            result.Add(new SkippedFamily(familyId, namespaceUid, anchorUid, coveredUids, "generic-arity")
+            {
+                Valid = valid
             });
-        }
-        catch (Exception ex) when (ex is IOException or JsonException)
-        {
-            report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), null,
-                $"Unable to parse the family exemption manifest: {ex.Message}"));
-            return result;
-        }
-
-        var knownTypeUids = new HashSet<string>(
-            api.RequiredExampleTargets.Where(t => t.Kind == ApiTargetKind.Type).Select(t => t.Uid),
-            StringComparer.Ordinal);
-        var validRationales = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "generic-arity", "inherited-specialization", "overload-series", "type-parameter-series"
-        };
-        var coverageSeen = new Dictionary<string, string>(StringComparer.Ordinal);
-        var anchorsSeen = new HashSet<string>(StringComparer.Ordinal);
-
-        using (doc)
-        {
-            if (!doc.RootElement.TryGetProperty("families", out var families) || families.ValueKind != JsonValueKind.Array)
-            {
-                report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), null,
-                    "The family exemption manifest must contain a 'families' array."));
-                return result;
-            }
-
-            foreach (var fam in families.EnumerateArray())
-            {
-                var familyId = ReadJsonString(fam, "familyId");
-                var namespaceUid = ReadJsonString(fam, "namespaceUid");
-                var anchorUid = ReadJsonString(fam, "anchorUid");
-                var rationale = ReadJsonString(fam, "rationale");
-                var anchorExampleFile = ReadJsonString(fam, "anchorExampleFile");
-                var covered = new List<string>();
-                if (fam.TryGetProperty("coveredUids", out var cu) && cu.ValueKind == JsonValueKind.Array)
-                {
-                    covered.AddRange(cu.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!));
-                }
-
-                var exemption = new FamilyExemption(familyId ?? string.Empty, namespaceUid ?? string.Empty,
-                    anchorUid ?? string.Empty, covered, rationale ?? string.Empty, anchorExampleFile);
-
-                if (string.IsNullOrWhiteSpace(familyId) || string.IsNullOrWhiteSpace(namespaceUid) ||
-                    string.IsNullOrWhiteSpace(anchorUid) || covered.Count == 0)
-                {
-                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
-                        $"Family '{familyId}' must declare familyId, namespaceUid, anchorUid, and at least one coveredUid."));
-                    result.Add(exemption);
-                    continue;
-                }
-
-                if (!validRationales.Contains(rationale ?? string.Empty))
-                {
-                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
-                        $"Family '{familyId}' has rationale '{rationale}'. Use one of: generic-arity, inherited-specialization, overload-series, type-parameter-series. Category alone never exempts unrelated difficult types."));
-                    result.Add(exemption);
-                    continue;
-                }
-
-                var allUids = new List<string> { anchorUid! };
-                allUids.AddRange(covered);
-                var unknown = allUids.Where(u => !knownTypeUids.Contains(u)).ToList();
-                if (unknown.Count > 0)
-                {
-                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
-                        $"Family '{familyId}' references UIDs that are not public documentation type targets: {string.Join(", ", unknown)}."));
-                    result.Add(exemption);
-                    continue;
-                }
-
-                var outsideNamespace = allUids.Where(u => !string.Equals(NamespaceFromUid(u), namespaceUid, StringComparison.Ordinal)).ToList();
-                if (outsideNamespace.Count > 0)
-                {
-                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
-                        $"Family '{familyId}' groups UIDs outside the declared namespace '{namespaceUid}': {string.Join(", ", outsideNamespace)}. A family must share one coherent namespace."));
-                    result.Add(exemption);
-                    continue;
-                }
-
-                if (anchorsSeen.Contains(anchorUid!) || covered.Contains(anchorUid!))
-                {
-                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
-                        $"Family '{familyId}' has an overlapping or circular anchor '{anchorUid}'."));
-                    result.Add(exemption);
-                    continue;
-                }
-
-                var duplicateCoverage = allUids.Where(u => coverageSeen.ContainsKey(u)).ToList();
-                if (duplicateCoverage.Count > 0)
-                {
-                    report.Errors.Add(new Diagnostic("FAMILY_EXEMPTION_INVALID", Rel(repoRoot, path), namespaceUid,
-                        $"Family '{familyId}' duplicates coverage already claimed by another family: {string.Join(", ", duplicateCoverage.Select(u => $"{u} (in {coverageSeen[u]})"))}."));
-                    result.Add(exemption);
-                    continue;
-                }
-
-                // Structurally valid declaration. Now require an anchor example and namespace guidance.
-                var anchorHasExample = AnchorHasValidExample(anchorUid!, ws, api);
-                if (!anchorHasExample)
-                {
-                    report.Errors.Add(new Diagnostic("FAMILY_ANCHOR_EXAMPLE_MISSING", Rel(repoRoot, path), namespaceUid,
-                        $"Family '{familyId}' anchor '{anchorUid}' has no valid, behavioral example. The anchor must demonstrate the shared workflow before siblings can be exempted from standalone examples."));
-                }
-
-                if (!NamespaceExplainsFamily(namespaceUid!, anchorUid!, namespacePages, ws))
-                {
-                    report.Errors.Add(new Diagnostic("FAMILY_NAMESPACE_GUIDANCE_MISSING", Rel(repoRoot, path), namespaceUid,
-                        $"Family '{familyId}' requires the namespace page '{namespaceUid}' to name the anchor '{SimpleNameFromUid(anchorUid!)}' and explain how consumers choose among the siblings."));
-                }
-
-                exemption.Valid = anchorHasExample && NamespaceExplainsFamily(namespaceUid!, anchorUid!, namespacePages, ws);
-                anchorsSeen.Add(anchorUid!);
-                foreach (var u in allUids)
-                {
-                    coverageSeen[u] = familyId!;
-                }
-
-                result.Add(exemption);
-            }
         }
 
         return result;
+    }
+
+    // Splits a DocFX type UID into its arity-stripped base key and generic arity.
+    // "Cuemon.MutableTuple`1" -> ("Cuemon.MutableTuple", 1). A UID whose trailing backtick is not
+    // followed by digits returns arity 0 and the UID unchanged, so non-generic types never group.
+    private static (string BaseKey, int Arity) SplitAritySuffix(string uid)
+    {
+        var tick = uid.LastIndexOf('`');
+        if (tick < 0)
+        {
+            return (uid, 0);
+        }
+
+        var suffix = uid[(tick + 1)..];
+        if (suffix.Length == 0 || !suffix.All(char.IsDigit))
+        {
+            return (uid, 0);
+        }
+
+        return (uid[..tick], int.Parse(suffix, CultureInfo.InvariantCulture));
     }
 
     private static bool AnchorHasValidExample(string anchorUid, ValidationWorkspace ws, ApiModel api)
@@ -6254,7 +6199,7 @@ internal static class DocfxValidator
         return namesAnchor && explainsSelection;
     }
 
-    private static void ApplyFamilyExemptions(ApiModel api, List<FamilyExemption> families)
+    private static void ApplySkippedFamilies(ApiModel api, List<SkippedFamily> families)
     {
         var covered = new HashSet<string>(
             families.Where(f => f.Valid).SelectMany(f => f.CoveredUids),
@@ -6361,7 +6306,7 @@ internal static class DocfxValidator
     }
 
     private static ScopeReport BuildScopeReport(ScopePlan scope, List<ProjectPacket> packets,
-        List<MetadataGroupInfo> groups, GitState gitState, List<FamilyExemption> families, string repoRoot, Report report)
+        List<MetadataGroupInfo> groups, GitState gitState, List<SkippedFamily> families, string repoRoot, Report report)
     {
         string RelPath(string abs) => Rel(repoRoot, abs);
 
@@ -6443,7 +6388,7 @@ internal static class DocfxValidator
 
         foreach (var family in families)
         {
-            scopeReport.FamilyExemptions.Add(new FamilyExemptionReport
+            scopeReport.SkippedFamilies.Add(new SkippedFamilyReport
             {
                 FamilyId = family.FamilyId,
                 NamespaceUid = family.NamespaceUid,
@@ -6490,7 +6435,7 @@ internal static class DocfxValidator
             metadataGroups = scope.MetadataGroups,
             packets = scope.Packets,
             dirty = scope.Dirty,
-            familyExemptions = scope.FamilyExemptions
+            skippedFamilies = scope.SkippedFamilies
         };
 
         var json = JsonSerializer.Serialize(manifest, JsonOptions);
@@ -8057,13 +8002,12 @@ internal static class DocfxValidator
         public bool Dirty => DirtyRelatedPaths.Count > 0;
     }
 
-    private sealed record FamilyExemption(
+    private sealed record SkippedFamily(
         string FamilyId,
         string NamespaceUid,
         string AnchorUid,
         List<string> CoveredUids,
-        string Rationale,
-        string? AnchorExampleFile)
+        string Rationale)
     {
         public bool Valid { get; set; }
     }
@@ -8344,7 +8288,7 @@ internal sealed class ScopeReport
     public List<SkippedProjectReport> SkippedProjects { get; set; } = new();
     public List<PacketReport> Packets { get; set; } = new();
     public GitStateReport Dirty { get; set; } = new();
-    public List<FamilyExemptionReport> FamilyExemptions { get; set; } = new();
+    public List<SkippedFamilyReport> SkippedFamilies { get; set; } = new();
     public string? ReproduceCommand { get; set; }
     public string? ResumeCommand { get; set; }
 }
@@ -8393,7 +8337,7 @@ internal sealed class GitStateReport
     public List<string> Untracked { get; set; } = new();
 }
 
-internal sealed class FamilyExemptionReport
+internal sealed class SkippedFamilyReport
 {
     public string FamilyId { get; set; } = string.Empty;
     public string NamespaceUid { get; set; } = string.Empty;

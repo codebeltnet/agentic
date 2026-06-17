@@ -229,7 +229,10 @@ Scratch notes.
         if (-not ($interimPaths -contains '.docfx/api/types/Acme.Utility.ScratchNotes.md')) {
             throw "Expected .docfx/api/types/Acme.Utility.ScratchNotes.md to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
         }
-        foreach ($allowed in @('AGENTS.md', '.docfx/docfx.json', '.docfx/family-exemptions.json', '.docfx/api/namespaces/Acme.Utility.md', '.docfx/api/types/Acme.Utility.Tool.md')) {
+        if (-not ($interimPaths -contains '.docfx/family-exemptions.json')) {
+            throw "Expected .docfx/family-exemptions.json to be flagged as an interim artifact because the skill no longer writes a skip manifest into the repository. Paths: $($interimPaths -join ', ')"
+        }
+        foreach ($allowed in @('AGENTS.md', '.docfx/docfx.json', '.docfx/api/namespaces/Acme.Utility.md', '.docfx/api/types/Acme.Utility.Tool.md')) {
             if ($interimPaths -contains $allowed) {
                 throw "Did not expect $allowed to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
             }

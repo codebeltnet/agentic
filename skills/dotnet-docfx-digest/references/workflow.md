@@ -49,7 +49,7 @@ Use this path when the user names a changed API or namespace.
 13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
 14. Build or refresh the example inventory.
 15. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
-16. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository. New working-tree files are only legitimate when they are the managed `AGENTS.md` block, the active `docfx.json`, an explicitly justified `.docfx/family-exemptions.json`, or DocFX-authored namespace/type Markdown that maps to real public API.
+16. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository. New working-tree files are only legitimate when they are the managed `AGENTS.md` block, the active `docfx.json`, or DocFX-authored namespace/type Markdown that maps to real public API. The validator auto-detects generic-arity type families and skips redundant sibling examples from the public API surface alone, so no skip manifest is ever written into the repository.
 17. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 18. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 19. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
@@ -86,7 +86,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 22. Create explicit examples for public extension methods that still have none.
 23. Build or refresh the example inventory.
 24. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
-25. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository. New working-tree files are only legitimate when they are the managed `AGENTS.md` block, the active `docfx.json`, an explicitly justified `.docfx/family-exemptions.json`, or DocFX-authored namespace/type Markdown that maps to real public API.
+25. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository. New working-tree files are only legitimate when they are the managed `AGENTS.md` block, the active `docfx.json`, or DocFX-authored namespace/type Markdown that maps to real public API. The validator auto-detects generic-arity type families and skips redundant sibling examples from the public API surface alone, so no skip manifest is ever written into the repository.
 26. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 27. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 28. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
@@ -163,26 +163,13 @@ Process one packet at a time so the packet is the active context and write-owner
 
 Duplicate simple type names across assemblies (`SYMBOL_COLLISION_UNRESOLVED`), forwarded type families that cannot be attributed (`TYPE_FORWARDING_UNRESOLVED`), and extension containers that cross project boundaries (`EXTENSION_OWNER_AMBIGUOUS`) require assembly/project-qualified resolution. Prefer receiver extension syntax over static-container qualification when container names collide, and target the uniquely owned overwrite UID.
 
-### Family exemptions
+### Generic-arity family skips (auto-detected)
 
-A heavily generic, inherited, overloaded, or arity-based type series may replace redundant standalone examples with one anchor example plus deep namespace guidance. Declare exemptions explicitly in `.docfx/family-exemptions.json`:
+A generic-arity type series — public types whose UIDs share one base name and differ only by the trailing arity suffix (for example MutableTuple from arity 1 through 20, or TesterFunc from arity 2 through 18) — may replace redundant standalone sibling examples with one anchor example plus deep namespace guidance. `docfx.cs` auto-detects these families from the public API surface; no file is written into the repository to declare or persist them.
 
-```json
-{
-  "families": [
-    {
-      "familyId": "tuple-arity",
-      "namespaceUid": "Cuemon.Collections",
-      "anchorUid": "Cuemon.Collections.MutableTuple`1",
-      "anchorExampleFile": ".docfx/api/types/Cuemon.Collections.MutableTuple`1.md",
-      "rationale": "generic-arity",
-      "coveredUids": ["Cuemon.Collections.MutableTuple`2", "Cuemon.Collections.MutableTuple`3"]
-    }
-  ]
-}
-```
+Detection groups non-abstraction type targets by their arity-stripped base key. Only types whose UID carries a trailing backtick-N arity suffix (N >= 1) are candidates; a non-generic type that merely shares the base name keeps its own standalone-example obligation. The lowest-arity member is the anchor; every other member is a covered sibling that is removed from standalone-example obligations while keeping accurate purpose-first prose that relates it to the anchor.
 
-`rationale` must be one of `generic-arity`, `inherited-specialization`, `overload-series`, or `type-parameter-series`. The validator removes covered siblings from standalone-example obligations only after the declaration validates: all UIDs must exist, share the declared namespace, and avoid duplicate or circular coverage. A family is rejected (`FAMILY_EXEMPTION_INVALID`) when it groups unrelated or out-of-namespace types — category alone never exempts options, exceptions, delegates, records, or data carriers. The anchor must have a real behavioral example (`FAMILY_ANCHOR_EXAMPLE_MISSING` otherwise), and the namespace page must name the anchor and explain how consumers choose among siblings (`FAMILY_NAMESPACE_GUIDANCE_MISSING` otherwise). Every sibling still needs accurate purpose-first prose that relates it to the anchor.
+The anchor must carry a real, behavioral example (`FAMILY_ANCHOR_EXAMPLE_MISSING` otherwise), and the namespace page must name the anchor and explain how consumers choose among the arity siblings (`FAMILY_NAMESPACE_GUIDANCE_MISSING` otherwise). The auto-detected families appear in the JSON scope output as `skippedFamilies` (with `familyId`, `namespaceUid`, `anchorUid`, `coveredUids`, `rationale` of `generic-arity`, and `valid`) so the decision is reviewable without leaving an artifact in the repository. Only arity-detectable series are auto-skipped; overload, inherited-specialization, or type-parameter series that do not differ by arity are not skipped and each member keeps its own example obligation.
 
 ### Safe overwrite writer
 

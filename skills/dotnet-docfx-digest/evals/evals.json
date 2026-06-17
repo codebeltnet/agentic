@@ -119,7 +119,7 @@
         "Does not run broad manual cleanup commands that delete DocFX directories by name",
         "Lists cleanup candidates before deletion and classifies them as generated metadata, generated site output, or build artifacts",
         "Treats unexpected new repo-root or DocFX-workspace files that are not known `dotnet-docfx-digest` deliverables as interim artifacts that must be removed or moved out of the repository",
-        "Preserves legitimate deliverables such as `AGENTS.md`, the active `docfx.json`, an explicitly justified `.docfx/family-exemptions.json`, and DocFX-authored namespace/type Markdown that maps to real public API",
+        "Preserves legitimate deliverables such as `AGENTS.md`, the active `docfx.json`, and DocFX-authored namespace/type Markdown that maps to real public API",
         "Limits generated metadata cleanup to DocFX-generated `*.yml`, `.manifest`, and `*.manifest` files under configured metadata destinations",
         "Does not recursively delete a configured build output directory when it contains Markdown, source, project, solution, or DocFX configuration files",
         "Uses `docfx.cs --verify-docfx-build` so the DocFX build runs in a temp copy and generated site output stays out of the working tree",
@@ -804,10 +804,10 @@
     {
       "id": 63,
       "prompt": "Document the `Cuemon.Collections` namespace which has a MutableTuple<T1> through MutableTuple<T7> generic-arity family plus a few unrelated types, using dotnet-docfx-digest.",
-      "expected_output": "The agent declares a narrow family exemption in .docfx/family-exemptions.json for the MutableTuple arity series with rationale generic-arity, writes one strong anchor example for MutableTuple<T1>, and a namespace page that names the anchor and explains how arity distinguishes the siblings. Covered siblings get purpose-first prose but not redundant standalone examples. Unrelated types still get their own examples.",
+      "expected_output": "The agent writes one strong anchor example for MutableTuple<T1> and a namespace page that names the anchor and explains how arity distinguishes the siblings. The validator auto-detects the MutableTuple generic-arity family from the public API surface and skips the redundant standalone examples for the higher-arity siblings, which get purpose-first prose instead. Unrelated types still get their own examples. No skip manifest is written into the repository.",
       "expectations": [
-        "Declares a family exemption only for the coherent arity series, not the unrelated types",
-        "Provides one validated anchor example and deep namespace guidance that names the anchor and explains sibling selection",
+        "Writes one validated anchor example for the lowest-arity MutableTuple<T1> and deep namespace guidance that names the anchor and explains sibling selection by arity",
+        "Relies on the validator's auto-detection of the generic-arity family rather than writing a skip manifest into the repository",
         "Gives covered siblings purpose-first prose without redundant standalone examples",
         "Still requires standalone examples for the unrelated types"
       ]
@@ -815,10 +815,10 @@
     {
       "id": 64,
       "prompt": "I want to exempt my `Acme.Options` exceptions, options objects, and a delegate from needing examples by grouping them as one family. Set that up with dotnet-docfx-digest.",
-      "expected_output": "The agent refuses to create a blanket family exemption for unrelated difficult types. It explains that category alone (exceptions, options, delegates, records, data carriers) never qualifies, that a family must be a coherent generic-arity/inherited/overload/type-parameter series, and that such a declaration would fail validation with FAMILY_EXEMPTION_INVALID. It documents the types with real examples instead.",
+      "expected_output": "The agent explains that generic-arity family skips are auto-detected by the validator purely from the public API surface (types sharing a base name that differ only by arity), not something the user declares by category. A blanket exemption for unrelated exceptions, options, or a delegate is not possible — only an arity-detectable series is auto-skipped, and each of these unrelated types still needs its own example. It documents the types with real examples instead.",
       "expectations": [
-        "Refuses the blanket exemption and explains category alone does not qualify",
-        "Notes the declaration would fail FAMILY_EXEMPTION_INVALID validation",
+        "Explains that family skips are auto-detected by arity from the public API surface, not declarable by category",
+        "Refuses the blanket category exemption and notes only arity-detectable series are auto-skipped",
         "Documents the types with real examples instead of exempting them"
       ]
     },
@@ -1030,11 +1030,12 @@
     },
     {
       "id": 102,
-      "prompt": "Use dotnet-docfx-digest on a repository where the current run created `AGENTS.md`, `.docfx/docfx.json`, `.docfx/family-exemptions.json`, `.docfx/api/namespaces/Acme.Utility.md`, and `.docfx/api/types/Acme.Utility.Tool.md`, but also left behind `docfx_json_only.json`, `docfx_output.txt`, `.docfx/docfx_verify.txt`, and `.docfx/api/types/Acme.Utility.ScratchNotes.md`. Clean up before completion.",
-      "expected_output": "Agent preserves the known `dotnet-docfx-digest` deliverables that map to real repository guidance or public API, removes or relocates the unexpected JSON/TXT/Markdown leftovers into temp or session storage, and does not depend on old scratch-name pattern lists to decide what belongs in the working tree.",
+      "prompt": "Use dotnet-docfx-digest on a repository where the current run created `AGENTS.md`, `.docfx/docfx.json`, `.docfx/api/namespaces/Acme.Utility.md`, and `.docfx/api/types/Acme.Utility.Tool.md`, but the working tree also has a leftover `.docfx/family-exemptions.json` from an older skill version plus `docfx_json_only.json`, `docfx_output.txt`, `.docfx/docfx_verify.txt`, and `.docfx/api/types/Acme.Utility.ScratchNotes.md`. Clean up before completion.",
+      "expected_output": "Agent preserves the known `dotnet-docfx-digest` deliverables that map to real repository guidance or public API, treats the leftover family-exemptions.json and the unexpected JSON/TXT/Markdown leftovers as interim artifacts to remove or relocate into temp or session storage, and does not depend on old scratch-name pattern lists to decide what belongs in the working tree.",
       "expectations": [
-        "Preserves `AGENTS.md`, the active `.docfx/docfx.json`, and an explicitly justified `.docfx/family-exemptions.json` as legitimate deliverables",
+        "Preserves `AGENTS.md` and the active `.docfx/docfx.json` as legitimate deliverables",
         "Preserves `.docfx/api/namespaces/Acme.Utility.md` and `.docfx/api/types/Acme.Utility.Tool.md` because they map to a real namespace/type target",
+        "Treats the leftover `.docfx/family-exemptions.json` as an interim artifact because the skill no longer writes a skip manifest into the repository",
         "Treats `docfx_json_only.json`, `docfx_output.txt`, and `.docfx/docfx_verify.txt` as interim artifacts even though they do not match the older scratch-name examples",
         "Treats `.docfx/api/types/Acme.Utility.ScratchNotes.md` as an interim artifact because it does not map to a real public API target",
         "Moves or deletes the interim artifacts instead of broad-cleaning DocFX directories"

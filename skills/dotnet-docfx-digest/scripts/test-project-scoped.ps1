@@ -229,35 +229,35 @@ Run-Scenario 'Dry-run skips dirty candidate, falls through to clean, and reports
 }
 
 # ----------------------------------------------------------------------
-Run-Scenario 'Valid family exemption removes covered siblings; invalid variants are rejected' {
+Run-Scenario 'Auto-detected generic-arity family skips covered siblings; anchor example and namespace guidance are required' {
     param($ws)
     Write-Utf8File (Join-Path $ws 'AGENTS.md') $agents
     Write-Utf8File (Join-Path $ws 'src/Fam/Fam.csproj') $csproj
     Write-Utf8File (Join-Path $ws 'src/Fam/Fam.cs') @'
 namespace Fam.Tuples
 {
-    public sealed class MutableTuple { public int N { get; set; } }
-    public sealed class MutableTupleTwo { public int N { get; set; } }
-    public sealed class MutableTupleThree { public int N { get; set; } }
+    public sealed class MutableTuple<T1> { public T1 First { get; set; } }
+    public sealed class MutableTuple<T1, T2> { public T1 First { get; set; } public T2 Second { get; set; } }
+    public sealed class MutableTuple<T1, T2, T3> { public T1 First { get; set; } public T2 Second { get; set; } public T3 Third { get; set; } }
     public sealed class Unrelated { public int N { get; set; } }
 }
 '@
     Write-Utf8File (Join-Path $ws '.docfx/docfx.json') (New-Docfx @(@{ Dest = 'api'; Files = @('src/Fam/Fam.csproj') }))
 
-    # Namespace page that names the anchor and explains selection.
+    # Namespace page that names the anchor and explains selection by arity.
     Write-Utf8File (Join-Path $ws '.docfx/api/namespaces/Fam.Tuples.md') @'
 ---
 uid: Fam.Tuples
 summary: *content
 ---
-Use `MutableTuple` when you need a small mutable carrier for positional values. Choose the member by arity: the anchor demonstrates the shared workflow and the higher-arity siblings differ only by how many values they carry.
+Use `MutableTuple<T1>` when you need a small mutable carrier for positional values. Choose the member by arity: the anchor demonstrates the shared workflow and the higher-arity siblings differ only by how many values they carry.
 
 Availability: `Fam.Tuples`
 '@
-    # Anchor has a real example.
-    Write-Utf8File (Join-Path $ws '.docfx/api/types/Fam.Tuples.MutableTuple.md') @'
+    # Anchor (lowest arity) has a real, behavioral example.
+    Write-Utf8File (Join-Path $ws '.docfx/api/types/Fam.Tuples.MutableTuple`1.md') @'
 ---
-uid: Fam.Tuples.MutableTuple
+uid: Fam.Tuples.MutableTuple`1
 example: *content
 ---
 ```csharp
@@ -267,67 +267,50 @@ using Fam.Tuples;
 
 public static class TupleUsage
 {
-    public static MutableTuple Build()
+    public static int FirstValue()
     {
-        var t = new MutableTuple { N = 1 };
-        return t;
+        var t = new MutableTuple<int> { First = 1 };
+        return t.First;
     }
 }
 ```
 '@
-    # Unrelated still needs an example.
-    Write-Utf8File (Join-Path $ws '.docfx/family-exemptions.json') @'
-{
-  "families": [
-    {
-      "familyId": "tuple-arity",
-      "namespaceUid": "Fam.Tuples",
-      "anchorUid": "Fam.Tuples.MutableTuple",
-      "rationale": "generic-arity",
-      "coveredUids": ["Fam.Tuples.MutableTupleTwo", "Fam.Tuples.MutableTupleThree"]
-    }
-  ]
-}
-'@
     Initialize-GitRepo $ws
 
     $r = Invoke-Validator $ws
-    $fam = $r.scope.familyExemptions | Where-Object familyId -eq 'tuple-arity'
-    if (-not $fam) { throw 'family not reported' }
-    if (-not $fam.valid) { throw 'family should be valid' }
+    $fam = $r.scope.skippedFamilies | Where-Object familyId -eq 'MutableTuple-arity'
+    if (-not $fam) { throw 'auto-detected family not reported' }
+    if ($fam.anchorUid -ne 'Fam.Tuples.MutableTuple`1') { throw "unexpected anchor: $($fam.anchorUid)" }
+    if (-not $fam.valid) { throw 'family should be valid when anchor example and namespace guidance are present' }
     # Covered siblings must NOT be required examples anymore.
-    $coveredMissing = @($r.errors | Where-Object { $_.code -eq 'EXAMPLE_MISSING' -and ($_.message -match 'MutableTupleTwo' -or $_.message -match 'MutableTupleThree') })
+    $coveredMissing = @($r.errors | Where-Object { $_.code -eq 'EXAMPLE_MISSING' -and ($_.message -match 'MutableTuple`2' -or $_.message -match 'MutableTuple`3') })
     if ($coveredMissing.Count -gt 0) { throw 'covered siblings were still required' }
-    Assert-NoDiagnostic -Report $r -Code 'FAMILY_EXEMPTION_INVALID'
+    Assert-NoDiagnostic -Report $r -Code 'FAMILY_ANCHOR_EXAMPLE_MISSING'
+    Assert-NoDiagnostic -Report $r -Code 'FAMILY_NAMESPACE_GUIDANCE_MISSING'
+    # The non-generic Unrelated type is not part of the arity family and still needs its own example.
+    $unrelatedMissing = @($r.errors | Where-Object { $_.code -eq 'EXAMPLE_MISSING' -and $_.message -match 'Unrelated' })
+    if ($unrelatedMissing.Count -eq 0) { throw 'Unrelated should still require a standalone example' }
 
-    # Invalid: covers a type outside the namespace / unrelated.
-    Write-Utf8File (Join-Path $ws '.docfx/family-exemptions.json') @'
-{
-  "families": [
-    {
-      "familyId": "bad",
-      "namespaceUid": "Fam.Tuples",
-      "anchorUid": "Fam.Tuples.MutableTuple",
-      "rationale": "generic-arity",
-      "coveredUids": ["Fam.Tuples.DoesNotExist"]
-    }
-  ]
-}
-'@
+    # Guardrail: removing the anchor example makes the family invalid and re-exposes covered siblings.
+    Remove-Item (Join-Path $ws '.docfx/api/types/Fam.Tuples.MutableTuple`1.md') -Force
     $bad = Invoke-Validator $ws
-    Assert-Diagnostic -Report $bad -Code 'FAMILY_EXEMPTION_INVALID'
+    Assert-Diagnostic -Report $bad -Code 'FAMILY_ANCHOR_EXAMPLE_MISSING'
+    $badFam = $bad.scope.skippedFamilies | Where-Object familyId -eq 'MutableTuple-arity'
+    if ($badFam.valid) { throw 'family should be invalid when the anchor example is missing' }
+    $reexposed = @($bad.errors | Where-Object { $_.code -eq 'EXAMPLE_MISSING' -and ($_.message -match 'MutableTuple`2' -or $_.message -match 'MutableTuple`3') })
+    if ($reexposed.Count -eq 0) { throw 'covered siblings should be re-exposed when the family is invalid' }
 }
 
 # ----------------------------------------------------------------------
-Run-Scenario 'Family without anchor example or namespace guidance is flagged' {
+Run-Scenario 'Auto-detected family flags missing anchor example and missing namespace guidance' {
     param($ws)
     Write-Utf8File (Join-Path $ws 'AGENTS.md') $agents
     Write-Utf8File (Join-Path $ws 'src/Fam/Fam.csproj') $csproj
     Write-Utf8File (Join-Path $ws 'src/Fam/Fam.cs') @'
 namespace Fam.Tuples
 {
-    public sealed class MutableTuple { public int N { get; set; } }
-    public sealed class MutableTupleTwo { public int N { get; set; } }
+    public sealed class MutableTuple<T1> { public T1 First { get; set; } }
+    public sealed class MutableTuple<T1, T2> { public T1 First { get; set; } public T2 Second { get; set; } }
 }
 '@
     Write-Utf8File (Join-Path $ws '.docfx/docfx.json') (New-Docfx @(@{ Dest = 'api'; Files = @('src/Fam/Fam.csproj') }))
@@ -341,23 +324,13 @@ This area is available for general use across the package and helps applications
 
 Availability: `Fam.Tuples`
 '@
-    Write-Utf8File (Join-Path $ws '.docfx/family-exemptions.json') @'
-{
-  "families": [
-    {
-      "familyId": "tuple-arity",
-      "namespaceUid": "Fam.Tuples",
-      "anchorUid": "Fam.Tuples.MutableTuple",
-      "rationale": "generic-arity",
-      "coveredUids": ["Fam.Tuples.MutableTupleTwo"]
-    }
-  ]
-}
-'@
     Initialize-GitRepo $ws
     $r = Invoke-Validator $ws
     Assert-Diagnostic -Report $r -Code 'FAMILY_ANCHOR_EXAMPLE_MISSING'
     Assert-Diagnostic -Report $r -Code 'FAMILY_NAMESPACE_GUIDANCE_MISSING'
+    $fam = $r.scope.skippedFamilies | Where-Object familyId -eq 'MutableTuple-arity'
+    if (-not $fam) { throw 'auto-detected family not reported' }
+    if ($fam.valid) { throw 'family should be invalid when anchor example and namespace guidance are missing' }
 }
 
 # ----------------------------------------------------------------------
