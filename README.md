@@ -58,7 +58,7 @@ Use the skill tool to invoke the "<skill-name>" skill.
 
 ## Always-on skills
 
-Depending on the agent runtime, skills installed via `npx skills add` may live in `~/.claude/skills/`, `~/.agents/skills/`, and/or `~/.gemini/antigravity/skills/`. Treat these as personal global skill folders: if you use multiple toolchains, keep repo-authored skills mirrored between them so each agent sees the same version. Either way, installed skills are **automatically loaded in every session** — no manual invocation needed. The agent reads the skill's description and activates it when relevant (e.g. you say "commit this" and the `git-visual-commits` skill kicks in).
+Depending on the agent runtime, skills installed via `npx skills add` may live in `~/.claude/skills/`, `~/.agents/skills/`, and/or `~/.gemini/antigravity-cli/skills/`. Treat these as personal global skill folders: if you use multiple toolchains, keep repo-authored skills mirrored between them so each agent sees the same version. Either way, installed skills are **automatically loaded in every session** — no manual invocation needed. The agent reads the skill's description and activates it when relevant (e.g. you say "commit this" and the `git-visual-commits` skill kicks in).
 
 If you want a bundle of skills always available, just install them all:
 
@@ -87,7 +87,7 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-docfx-diges
 |----------|-------|-------------|
 | `~/.agents/skills/` | All sessions, all projects | Global skills for agents that read the shared `~/.agents` install |
 | `~/.claude/skills/` | All sessions, all projects | Your personal defaults — always on everywhere |
-| `~/.gemini/antigravity/skills/` | All sessions, all projects | Gemini Antigravity skills kept in sync with repo-authored skill copies |
+| `~/.gemini/antigravity-cli/skills/` | All sessions, all projects | Gemini Antigravity skills kept in sync with repo-authored skill copies |
 | `.claude/skills/` (in a repo) | Project-scoped | Shared team conventions for a specific codebase |
 | `.github/skills/` (in a repo) | GitHub Copilot / VS Code | When your team uses Copilot agent mode in the IDE |
 
