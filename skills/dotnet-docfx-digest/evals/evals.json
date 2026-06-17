@@ -113,12 +113,13 @@
     {
       "id": 9,
       "prompt": "Use dotnet-docfx-digest on a Codebelt.Bootstrapper-style repository. During the run you create `.docfx/api/namespaces/Codebelt.Bootstrapper.ProgramRoot.md` and `.docfx/api/namespaces/Codebelt.Bootstrapper.md`, then validation leaves generated DocFX metadata files beside those authored markdown files. Clean up generated artifacts before completion.",
-      "expected_output": "Agent preserves all authored Markdown overwrite and namespace files, including files created earlier in the same run, cleans only known generated DocFX metadata or safe generated site output, removes or relocates repo-root scratch JSON/Markdown/Python artifacts into temp or session storage, does not delete `.docfx/api/namespaces/**/*.md`, does not recursively delete DocFX directories that contain Markdown or source/configuration files, uses `docfx.cs --verify-docfx-build` for temp-workspace verification, classifies any remaining `git status` paths before deletion, and leaves ambiguous cleanup candidates in place with a note instead of deleting them.",
+      "expected_output": "Agent preserves all authored Markdown overwrite and namespace files, including files created earlier in the same run, cleans only known generated DocFX metadata or safe generated site output, removes or relocates unexpected new repo-root or DocFX-workspace files that are not known `dotnet-docfx-digest` deliverables into temp or session storage, does not delete `.docfx/api/namespaces/**/*.md`, does not recursively delete DocFX directories that contain Markdown or source/configuration files, uses `docfx.cs --verify-docfx-build` for temp-workspace verification, classifies any remaining `git status` paths before deletion, and leaves ambiguous cleanup candidates in place with a note instead of deleting them.",
       "expectations": [
         "Treats newly created `.docfx/**/*.md` files as documentation deliverables rather than cleanup targets",
         "Does not run broad manual cleanup commands that delete DocFX directories by name",
         "Lists cleanup candidates before deletion and classifies them as generated metadata, generated site output, or build artifacts",
-        "Treats repo-root scratch files such as `docfx_out*.json`, `docfx_stdout*.json`, `progress.md`, `output-*.md`, `*-fixes.md`, and `fix_*.py` as interim artifacts that must be removed or moved out of the repository",
+        "Treats unexpected new repo-root or DocFX-workspace files that are not known `dotnet-docfx-digest` deliverables as interim artifacts that must be removed or moved out of the repository",
+        "Preserves legitimate deliverables such as `AGENTS.md`, the active `docfx.json`, an explicitly justified `.docfx/family-exemptions.json`, and DocFX-authored namespace/type Markdown that maps to real public API",
         "Limits generated metadata cleanup to DocFX-generated `*.yml`, `.manifest`, and `*.manifest` files under configured metadata destinations",
         "Does not recursively delete a configured build output directory when it contains Markdown, source, project, solution, or DocFX configuration files",
         "Uses `docfx.cs --verify-docfx-build` so the DocFX build runs in a temp copy and generated site output stays out of the working tree",
@@ -1025,6 +1026,18 @@
         "Uses tests, samples, package docs, or external consumer usage as the primary evidence for the scenario before falling back to implementation source",
         "If implementation source is used, uses it to discover the public acquisition path rather than to copy internal helper construction",
         "Shows the returned profiler being used through consumer-visible state such as `Result`, `Elapsed`, or equivalent metadata"
+      ]
+    },
+    {
+      "id": 102,
+      "prompt": "Use dotnet-docfx-digest on a repository where the current run created `AGENTS.md`, `.docfx/docfx.json`, `.docfx/family-exemptions.json`, `.docfx/api/namespaces/Acme.Utility.md`, and `.docfx/api/types/Acme.Utility.Tool.md`, but also left behind `docfx_json_only.json`, `docfx_output.txt`, `.docfx/docfx_verify.txt`, and `.docfx/api/types/Acme.Utility.ScratchNotes.md`. Clean up before completion.",
+      "expected_output": "Agent preserves the known `dotnet-docfx-digest` deliverables that map to real repository guidance or public API, removes or relocates the unexpected JSON/TXT/Markdown leftovers into temp or session storage, and does not depend on old scratch-name pattern lists to decide what belongs in the working tree.",
+      "expectations": [
+        "Preserves `AGENTS.md`, the active `.docfx/docfx.json`, and an explicitly justified `.docfx/family-exemptions.json` as legitimate deliverables",
+        "Preserves `.docfx/api/namespaces/Acme.Utility.md` and `.docfx/api/types/Acme.Utility.Tool.md` because they map to a real namespace/type target",
+        "Treats `docfx_json_only.json`, `docfx_output.txt`, and `.docfx/docfx_verify.txt` as interim artifacts even though they do not match the older scratch-name examples",
+        "Treats `.docfx/api/types/Acme.Utility.ScratchNotes.md` as an interim artifact because it does not map to a real public API target",
+        "Moves or deletes the interim artifacts instead of broad-cleaning DocFX directories"
       ]
     }
   ]

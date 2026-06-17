@@ -49,7 +49,7 @@ Use this path when the user names a changed API or namespace.
 13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
 14. Build or refresh the example inventory.
 15. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
-16. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository.
+16. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository. New working-tree files are only legitimate when they are the managed `AGENTS.md` block, the active `docfx.json`, an explicitly justified `.docfx/family-exemptions.json`, or DocFX-authored namespace/type Markdown that maps to real public API.
 17. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 18. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 19. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
@@ -86,7 +86,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 22. Create explicit examples for public extension methods that still have none.
 23. Build or refresh the example inventory.
 24. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
-25. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository.
+25. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository. New working-tree files are only legitimate when they are the managed `AGENTS.md` block, the active `docfx.json`, an explicitly justified `.docfx/family-exemptions.json`, or DocFX-authored namespace/type Markdown that maps to real public API.
 26. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 27. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 28. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
