@@ -1051,6 +1051,18 @@
         "Does not treat the missed static class as an unavoidable no-build source-scan limitation covered by `API_MODEL_SOURCE_SCANNER_LIMITED`",
         "Still uses the build-backed completion path before final completion"
       ]
+    },
+    {
+      "id": 104,
+      "prompt": "Use dotnet-docfx-digest on a repository where the namespace page `.docfx/api/namespaces/Acme.Extensions.AspNetCore.Text.Json.md` says to start with `AddAcmeTextJson` and lists `AddAcmeTextJson` beside `AddMinimalJsonOptions` in the `Extension Members` table. Source and tests only contain `AddMinimalJsonOptions`; `AddAcmeTextJson` was invented from the package name.",
+      "expected_output": "Agent treats the invented `AddAcmeTextJson` name as a documentation defect, not as a plausible setup API. It verifies the extension methods against source or generated metadata, removes the invented method from prose and the `Extension Members` table, keeps the real `AddMinimalJsonOptions` entry, and reruns validation until `EXTENSION_METHOD_UNKNOWN` or equivalent table diagnostics are gone.",
+      "expectations": [
+        "Searches source, generated metadata, tests, or package documentation before naming a start-here extension method",
+        "Does not invent `AddX` setup methods by deriving names from the namespace, package ID, or product name",
+        "Removes or replaces `AddAcmeTextJson` in the namespace prose because it is not source-backed",
+        "Removes `AddAcmeTextJson` from the `Extension Members` table and keeps the real `AddMinimalJsonOptions` public extension method",
+        "Treats `EXTENSION_METHOD_UNKNOWN` as namespace-layer repair work and reruns `scripts/docfx.cs --json` after the fix"
+      ]
     }
   ]
 }
