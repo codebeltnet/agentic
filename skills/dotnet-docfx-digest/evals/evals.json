@@ -9,7 +9,7 @@
         "Runs the deterministic scripts/agents.cs against the repository before completing",
         "Creates or updates a namespace overview page named Acme.Net.Http.md with DocFX overwrite front matter whose uid matches the namespace",
         "Adds an Extension Members table documenting the extended type (HttpClient), the ⬇️ marker, and the WithRetry method in backticks",
-        "Adds at least one copy/paste-ready, buildable example for the concrete RetryPolicy type",
+        "Adds at least one copy/paste-ready, buildable example for the concrete RetryPolicy type with a short human fly-in before the C# fence",
         "Includes availability information via an include or explicit Availability text",
         "Runs scripts/docfx.cs with --verify-docfx-build to verify before claiming the documentation was verified"
       ]
@@ -34,7 +34,7 @@
         "Converts the Arrange/Act/Assert structure into developer-oriented usage instead of pasting raw assertions",
         "Does not append a secondary `uid:` / `example:` block to the namespace page after `Extension Members` or other namespace guidance",
         "Places the `Greeter` example on a type-targeted overwrite file under `.docfx/api/types/` rather than on the namespace overview file",
-        "Produces a minimal, deterministic, copy/paste-ready C# example with a real using directive for Acme.Text",
+        "Produces a minimal, deterministic, copy/paste-ready C# example with a real using directive for Acme.Text and a short fly-in before the C# fence",
         "Avoids pseudo-code, ellipses, and hidden helpers in the sample",
         "Verifies the sample compiles via scripts/docfx.cs or an equivalent build command"
       ]
@@ -90,7 +90,7 @@
         "Creates or moves readable type-targeting DocFX overwrite files under `.docfx/api/types/` for public non-abstraction type examples",
         "Keeps `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` only and excludes `api/namespaces/**` and `api/types/**` from `build.content`",
         "Places a public ApplicationHostFactory example on the ApplicationHostFactory type page/overwrite section rather than only on the namespace page",
-        "Creates or updates overwrite content for public extension method examples on the declaring extension class page or another readable type-targeted file under `.docfx/api/types/` while explicitly demonstrating the method",
+        "Creates or updates overwrite content for public extension method examples on the declaring extension class page or another readable type-targeted file under `.docfx/api/types/` while explicitly demonstrating the method and introducing the code with a human fly-in",
         "Uses generated DocFX UIDs or verified metadata instead of inventing overwrite UIDs",
         "Runs the Completion Repair Loop after edits by rerunning scripts/docfx.cs --json, fixing remaining EXAMPLE_MISSING and overwrite-layout diagnostics, and updating the example inventory before claiming completion",
         "Uses --verify-docfx-build for final DocFX build verification",
