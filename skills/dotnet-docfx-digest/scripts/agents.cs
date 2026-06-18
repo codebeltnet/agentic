@@ -61,7 +61,7 @@ internal static class AgentsScript
         ```bash
         dotnet build
         dotnet test
-        dotnet run --file skills/dotnet-docfx-digest/scripts/docfx.cs -- --repo-root . --verify-docfx-build
+        dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root . --verify-docfx-build
         ```
 
         Codebelt repositories are normally strong-name signed with a `.snk` file in the repository root on the main author's codespace. Preserve and copy that root `.snk` file when building a temporary copy. If the repository or temp copy has no root `.snk`, run build and test verification with `-p:SkipSignAssembly=true`, for example `dotnet build -p:SkipSignAssembly=true` and `dotnet test -p:SkipSignAssembly=true`.
