@@ -898,6 +898,97 @@ Availability: `Acme.Core`
 }
 
 # ----------------------------------------------------------------------
+# Scenario: Extension Members tables must not list invented extension method
+# names. This guards against plausible but nonexistent setup methods such as
+# AddCuemonTextJson when the public API only exposes AddMinimalJsonOptions.
+# ----------------------------------------------------------------------
+$inventedExtension = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-invented-extension-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $inventedExtension 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $inventedExtension 'src/Acme.AspNetCore.Text.Json.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $inventedExtension 'src/ServiceCollectionExtensions.cs') @'
+namespace Acme.AspNetCore.Text.Json;
+
+public interface IServiceCollection
+{
+}
+
+public static class ServiceCollectionExtensions
+{
+    public static IServiceCollection AddMinimalJsonOptions(this IServiceCollection services) => services;
+}
+'@
+    Write-Utf8File (Join-Path $inventedExtension '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.AspNetCore.Text.Json.csproj'))
+    Write-Utf8File (Join-Path $inventedExtension '.docfx/api/namespaces/Acme.AspNetCore.Text.Json.md') @'
+---
+uid: Acme.AspNetCore.Text.Json
+summary: *content
+---
+Configure JSON options for ASP.NET Core applications with source-backed Cuemon conventions. Start with `AddMinimalJsonOptions` on `IServiceCollection`.
+
+Availability: `Acme.AspNetCore.Text.Json`
+
+## Extension Members
+
+|Type|Ext|Methods|
+|---|---|---|
+|IServiceCollection|⬇️|`AddCuemonTextJson`, `AddMinimalJsonOptions`|
+'@
+    Write-Utf8File (Join-Path $inventedExtension '.docfx/api/types/Acme.AspNetCore.Text.Json.ServiceCollectionExtensions.md') @'
+---
+uid: Acme.AspNetCore.Text.Json.ServiceCollectionExtensions
+example: *content
+---
+```csharp
+using Acme.AspNetCore.Text.Json;
+
+namespace Samples;
+
+public static class MinimalJsonOptionsExample
+{
+    public static IServiceCollection ConfigureJson(IServiceCollection services)
+    {
+        return services.AddMinimalJsonOptions();
+    }
+}
+```
+'@
+
+    $inventedReport = Invoke-Validator -Workspace $inventedExtension
+    Assert-Diagnostic -Report $inventedReport -Code 'EXTENSION_METHOD_UNKNOWN'
+
+    Write-Utf8File (Join-Path $inventedExtension '.docfx/api/namespaces/Acme.AspNetCore.Text.Json.md') @'
+---
+uid: Acme.AspNetCore.Text.Json
+summary: *content
+---
+Configure JSON options for ASP.NET Core applications with source-backed Cuemon conventions. Start with `AddMinimalJsonOptions` on `IServiceCollection`.
+
+Availability: `Acme.AspNetCore.Text.Json`
+
+## Extension Members
+
+|Type|Ext|Methods|
+|---|---|---|
+|IServiceCollection|⬇️|`AddMinimalJsonOptions`|
+'@
+
+    $sourceBackedReport = Invoke-Validator -Workspace $inventedExtension
+    Assert-NoDiagnostic -Report $sourceBackedReport -Code 'EXTENSION_METHOD_UNKNOWN'
+    Assert-NoDiagnostic -Report $sourceBackedReport -Code 'EXTENSION_METHOD_MISSING'
+
+    Write-Host 'DocFX invented extension-member regression passed.'
+} finally {
+    if (Test-Path $inventedExtension) {
+        Remove-Item -Path $inventedExtension -Recurse -Force
+    }
+}
+
+# ----------------------------------------------------------------------
 # Scenario: one authored extension-container example may satisfy several extension targets.
 # The section is one authored scenario and must not be counted once per covered method.
 # ----------------------------------------------------------------------
