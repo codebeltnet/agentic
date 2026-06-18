@@ -2239,6 +2239,24 @@ internal static class DocfxValidator
                     }
                 }
 
+                // Public delegate types are required example targets: a delegate is a public
+                // non-abstraction type, and the source scanner must surface it the same way it
+                // surfaces classes, structs, interfaces, enums, and records. C# syntax:
+                //     public delegate ReturnType Name[<GenericArgs>](parameters);
+                // The return type can be a simple identifier or a generic like IReadOnlyList<T>;
+                // the optional generic argument list supports variance modifiers such as
+                // `in T` / `out T`.
+                var delegateMatch = Regex.Match(clean,
+                    @"\bpublic\s+delegate\s+(?<return>.+?)\s+(?<name>\w+)\s*(?<generic><[^>]+>)?\s*\(");
+                if (isTopLevel && delegateMatch.Success)
+                {
+                    var delegateNs = GetOrAddNamespace(namespaces, currentNamespace);
+                    var delegateName = delegateMatch.Groups["name"].Value;
+                    var delegateArity = CountGenericArity(delegateMatch.Groups["generic"].Value);
+                    var delegateUid = currentNamespace + "." + delegateName + (delegateArity > 0 ? "`" + delegateArity : string.Empty);
+                    AddTypeTarget(delegateNs, delegateUid, currentNamespace, delegateName);
+                }
+
                 // Classic extension methods inside the current top-level static class.
                 if (currentTopLevelStaticClass is not null)
                 {
@@ -2439,13 +2457,17 @@ internal static class DocfxValidator
         extendedType = string.Empty;
         methodName = string.Empty;
         methodDisplayName = string.Empty;
-        if (!Regex.IsMatch(syntax, @"\bstatic\b"))
+        // Require 'public' as the leading visibility modifier so 'private', 'protected', and
+        // 'internal' 'static' helpers with 'this' parameters are not surfaced as extension
+        // methods. Implementation helpers in those visibility tiers are not part of the
+        // documented public API and must not appear as required extension method targets.
+        if (!Regex.IsMatch(syntax, @"\bpublic\s+([\w]+\s+)*?static\b"))
         {
             return false;
         }
 
         var m = Regex.Match(syntax,
-            @"\bstatic\b[^\r\n{;=]*?\b(?<name>\w+)\s*(?<generic><[^>(]*>)?\s*\(\s*(?:\[[^\]]*\]\s*)*this\s+(?<ext>.+?)\s+\w+\s*(?:,|\))");
+            @"\bpublic\s+([\w]+\s+)*?static\b[^\r\n{;=]*?\b(?<name>\w+)\s*(?<generic><[^>(]*>)?\s*\(\s*(?:\[[^\]]*\]\s*)*this\s+(?<ext>.+?)\s+\w+\s*(?:,|\))");
         if (!m.Success)
         {
             return false;
