@@ -354,6 +354,9 @@ internal static class DocfxValidator
         // 7. Validate namespace overview pages, extension tables and availability.
         phaseTimer.Restart();
         var proseFingerprints = new List<(string Namespace, string Path, string Fingerprint)>();
+        var globalExtensionMethodBaseNames = new HashSet<string>(
+            api.Namespaces.SelectMany(n => n.ExtensionMethods).Select(method => method.MethodName),
+            StringComparer.Ordinal);
         foreach (var ns in api.Namespaces.OrderBy(n => n.Name, StringComparer.Ordinal))
         {
             if (!scope.IncludesNamespace(ns.Name))
@@ -374,7 +377,7 @@ internal static class DocfxValidator
                 continue;
             }
 
-            ValidateNamespacePage(repoRoot, page, workspace.ReadMarkdown(page), ns, report, proseFingerprints);
+            ValidateNamespacePage(repoRoot, page, workspace.ReadMarkdown(page), ns, report, proseFingerprints, globalExtensionMethodBaseNames);
             report.Summary.NamespacePagesValidated++;
         }
 
@@ -3611,7 +3614,8 @@ internal static class DocfxValidator
     // ----------------------------------------------------------------------
 
     private static void ValidateNamespacePage(string repoRoot, string page, string text, NamespaceInfo ns, Report report,
-        List<(string Namespace, string Path, string Fingerprint)>? proseFingerprints = null)
+        List<(string Namespace, string Path, string Fingerprint)>? proseFingerprints = null,
+        HashSet<string>? globalExtensionMethodBaseNames = null)
     {
         var rel = Rel(repoRoot, page);
         if (string.IsNullOrEmpty(text))
@@ -3711,7 +3715,7 @@ internal static class DocfxValidator
         // extension members
         if (ns.ExtensionMethods.Count > 0)
         {
-            ValidateExtensionSection(rel, namespaceBody, ns, report);
+            ValidateExtensionSection(rel, namespaceBody, ns, report, globalExtensionMethodBaseNames ?? []);
         }
     }
 
@@ -3736,7 +3740,7 @@ internal static class DocfxValidator
             "typically the declaring extension class page, instead of appending them after `Extension Members`."));
     }
 
-    private static void ValidateExtensionSection(string rel, string body, NamespaceInfo ns, Report report)
+    private static void ValidateExtensionSection(string rel, string body, NamespaceInfo ns, Report report, HashSet<string> globalExtensionMethodBaseNames)
     {
         var sectionMatch = Regex.Match(body, @"(?im)^#{2,4}\s+Extension\s+Members\s*$");
         if (!sectionMatch.Success)
@@ -3798,6 +3802,35 @@ internal static class DocfxValidator
         var rowsByType = tableRows
             .GroupBy(row => NormalizeTypeDisplay(row.TypeDisplay), StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var expectedMethodsByType = ns.ExtensionMethods
+            .GroupBy(method => NormalizeTypeDisplay(method.ExtendedType), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var expectedMethodBaseNames = new HashSet<string>(
+            ns.ExtensionMethods.Select(method => method.MethodName),
+            StringComparer.Ordinal);
+
+        foreach (var row in tableRows)
+        {
+            expectedMethodsByType.TryGetValue(NormalizeTypeDisplay(row.TypeDisplay), out var expectedForType);
+            if (expectedForType is null)
+            {
+                continue;
+            }
+
+            foreach (var actualMethod in row.Methods)
+            {
+                var actualBaseName = MethodBaseName(actualMethod);
+                var matchesExpectedForType = expectedForType.Any(expected =>
+                    string.Equals(NormalizeMethodDisplay(actualMethod), NormalizeMethodDisplay(expected.DisplayName), StringComparison.Ordinal));
+                if (matchesExpectedForType || expectedMethodBaseNames.Contains(actualBaseName) || globalExtensionMethodBaseNames.Contains(actualBaseName))
+                {
+                    continue;
+                }
+
+                report.Errors.Add(new Diagnostic("EXTENSION_METHOD_UNKNOWN", rel, ns.Name,
+                    $"The 'Extension Members' table for namespace {ns.Name} lists `{actualMethod}` under `{row.TypeDisplay}`, but no public extension method with that name exists in the namespace API model. Remove the invented method name or replace it with a source-backed public extension method."));
+            }
+        }
 
         foreach (var expectedTypeGroup in ns.ExtensionMethods.GroupBy(method => NormalizeTypeDisplay(method.ExtendedType), StringComparer.Ordinal))
         {
