@@ -2225,6 +2225,9 @@ internal static class DocfxValidator
 
                     if (isStatic && string.Equals(kind, "class", StringComparison.Ordinal))
                     {
+                        // Public static classes are valid non-abstraction documentation targets
+                        // even when they are not extension containers.
+                        AddTypeTarget(ns, uid, currentNamespace, name);
                         currentTopLevelStaticClass = uid;
                         currentTopLevelStaticClassDepth = depth;
                         currentStaticClassEntered = false;

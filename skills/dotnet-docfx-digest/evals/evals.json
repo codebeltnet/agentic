@@ -1040,6 +1040,17 @@
         "Treats `.docfx/api/types/Acme.Utility.ScratchNotes.md` as an interim artifact because it does not map to a real public API target",
         "Moves or deletes the interim artifacts instead of broad-cleaning DocFX directories"
       ]
+    },
+    {
+      "id": 103,
+      "prompt": "Use dotnet-docfx-digest on a repository where `Codebelt.Extensions.Xunit.Hosting` exposes a public static `HostTestFactory` type with no extension methods. I already authored `.docfx/api/types/Codebelt.Extensions.Xunit.Hosting.HostTestFactory.md`, but the fast `docfx.cs --json` run says the file is an interim artifact because the no-build source scan never counted the static class.",
+      "expected_output": "Agent treats the public static factory type as a valid non-abstraction documentation target on the fast source-scan path, so the authored type overwrite file is accepted as a real deliverable instead of scratch output. It does not dismiss the gap as an inherent `API_MODEL_SOURCE_SCANNER_LIMITED` limitation, and it still finishes with the normal build-backed verification path before claiming completion.",
+      "expectations": [
+        "Counts public static classes such as HostTestFactory as required type/example targets even when they are not extension containers",
+        "Does not flag the matching type overwrite file as `INTERIM_ARTIFACT_IN_WORKTREE` or delete it as scratch output",
+        "Does not treat the missed static class as an unavoidable no-build source-scan limitation covered by `API_MODEL_SOURCE_SCANNER_LIMITED`",
+        "Still uses the build-backed completion path before final completion"
+      ]
     }
   ]
 }

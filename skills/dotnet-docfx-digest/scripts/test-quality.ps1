@@ -507,6 +507,95 @@ namespace Acme.Widgets
 }
 
 # ----------------------------------------------------------------------
+# Scenario: public static factory classes are valid fast source-scan type
+# targets even when they do not declare extension methods. Matching type
+# overwrite files must be accepted as deliverables, not scratch artifacts.
+# ----------------------------------------------------------------------
+$staticFactory = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-static-factory-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $staticFactory 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $staticFactory 'src/Acme.Hosting.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $staticFactory 'src/Hosting.cs') @'
+namespace Acme.Hosting;
+
+public sealed class HostHarness
+{
+    public string Name { get; set; } = string.Empty;
+}
+
+public static class HostTestFactory
+{
+    public static HostHarness Create(string name) => new() { Name = name };
+}
+'@
+    Write-Utf8File (Join-Path $staticFactory '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Hosting.csproj'))
+    Initialize-GitRepo $staticFactory
+    Write-Utf8File (Join-Path $staticFactory '.docfx/api/namespaces/Acme.Hosting.md') @'
+---
+uid: Acme.Hosting
+---
+
+Namespace overview.
+'@
+    Write-Utf8File (Join-Path $staticFactory '.docfx/api/types/Acme.Hosting.HostHarness.md') @'
+---
+uid: Acme.Hosting.HostHarness
+example: *content
+---
+```csharp
+using Acme.Hosting;
+
+namespace Samples;
+
+public static class HostHarnessExample
+{
+    public static string ReadName()
+    {
+        HostHarness harness = HostTestFactory.Create("integration");
+        return harness.Name;
+    }
+}
+```
+'@
+    Write-Utf8File (Join-Path $staticFactory '.docfx/api/types/Acme.Hosting.HostTestFactory.md') @'
+---
+uid: Acme.Hosting.HostTestFactory
+example: *content
+---
+```csharp
+using Acme.Hosting;
+
+namespace Samples;
+
+public static class HostTestFactoryExample
+{
+    public static string CreateName()
+    {
+        HostHarness harness = HostTestFactory.Create("integration");
+        return harness.Name;
+    }
+}
+```
+'@
+
+    $staticFactoryReport = Invoke-Validator -Workspace $staticFactory
+    if ([int]$staticFactoryReport.summary.requiredExampleTargets -ne 2) {
+        throw "Public static factory discovery under-reported targets: expected 2, got $($staticFactoryReport.summary.requiredExampleTargets)."
+    }
+    Assert-NoDiagnostic -Report $staticFactoryReport -Code 'INTERIM_ARTIFACT_IN_WORKTREE'
+
+    Write-Host 'DocFX static factory discovery passed.'
+} finally {
+    if (Test-Path $staticFactory) {
+        Remove-Item -Path $staticFactory -Recurse -Force
+    }
+}
+
+# ----------------------------------------------------------------------
 # Scenario: known-bad example quality patterns observed in the Cuemon run.
 # Each anti-pattern must raise its dedicated diagnostic.
 # ----------------------------------------------------------------------
