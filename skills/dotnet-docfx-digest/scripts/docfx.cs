@@ -4558,6 +4558,12 @@ internal static class DocfxValidator
                     $"The example for `{target.DisplayName}` uses fully qualified framework reference `{frameworkQualifiedReference}` in executable code. Add the matching `using` directive and keep the call site focused on the documented API unless qualification is genuinely required to disambiguate.", 18);
             }
 
+            var extensionNarrative = ValidateExampleNarrative(scope, target, codeBlocks);
+            if (!extensionNarrative.Valid)
+            {
+                return extensionNarrative;
+            }
+
             return ExampleQualityResult.Success;
         }
 
@@ -4622,6 +4628,30 @@ internal static class DocfxValidator
         {
             return new ExampleQualityResult(false, "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE",
                 $"The example for `{target.DisplayName}` uses fully qualified framework reference `{fullyQualifiedFrameworkReference}` in executable code. Add the matching `using` directive and keep the call site focused on the documented API unless qualification is genuinely required to disambiguate.", 18);
+        }
+
+        var narrative = ValidateExampleNarrative(scope, target, codeBlocks);
+        if (!narrative.Valid)
+        {
+            return narrative;
+        }
+
+        return ExampleQualityResult.Success;
+    }
+
+    private static ExampleQualityResult ValidateExampleNarrative(string scope, ApiTargetInfo target, List<string> codeBlocks)
+    {
+        var lead = ExtractExampleLeadParagraph(scope);
+        if (!IsMeaningfulExampleLead(lead))
+        {
+            return new ExampleQualityResult(false, "EXAMPLE_LEAD_MISSING",
+                $"The example for `{target.DisplayName}` starts with code or thin placeholder prose. Add a short human-written fly-in before the C# fence that explains the consumer task and expected outcome.", 22);
+        }
+
+        if (IsAdvancedExample(codeBlocks) && !HasAdvancedExampleContext(lead))
+        {
+            return new ExampleQualityResult(false, "EXAMPLE_ADVANCED_LEAD_MISSING",
+                $"The example for `{target.DisplayName}` is large or multi-part but its fly-in does not explain the setup, prerequisite, or workflow outcome. Add a more in-depth lead paragraph before the C# fence.", 24);
         }
 
         return ExampleQualityResult.Success;
@@ -4707,6 +4737,83 @@ internal static class DocfxValidator
         }
 
         return null;
+    }
+
+    private static string? ExtractExampleLeadParagraph(string scope)
+    {
+        var normalized = scope.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var firstFence = Regex.Match(normalized, @"(?im)^```\s*(?:csharp|cs)\s*$");
+        var beforeFence = firstFence.Success ? normalized[..firstFence.Index] : normalized;
+        return ExtractLeadingNarrativeParagraph(beforeFence);
+    }
+
+    private static bool IsMeaningfulExampleLead(string? prose)
+    {
+        if (string.IsNullOrWhiteSpace(prose))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(prose,
+                @"(?i)\b(?:the documented type|the documented extension method|documented API|example placeholder|todo)\b"))
+        {
+            return false;
+        }
+
+        return CountWords(prose) >= 8;
+    }
+
+    private static bool IsAdvancedExample(List<string> codeBlocks)
+    {
+        if (codeBlocks.Count > 1)
+        {
+            return true;
+        }
+
+        var combined = string.Join(Environment.NewLine, codeBlocks);
+        var nonBlankLines = combined.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n')
+            .Split('\n')
+            .Count(line => line.Trim().Length > 0);
+        if (nonBlankLines >= 35)
+        {
+            return true;
+        }
+
+        var typeDeclarations = Regex.Matches(combined, @"(?m)^\s*(?:public|private|internal)?\s*(?:sealed\s+|static\s+|partial\s+|abstract\s+)*\b(?:class|struct|record)\b").Count;
+        if (typeDeclarations >= 3)
+        {
+            return true;
+        }
+
+        return nonBlankLines >= 20 && Regex.IsMatch(combined,
+            @"(?i)\b(?:Host\.Create|WebApplication|ServiceCollection|ConfigurationBuilder|IServiceCollection|await|async|HttpClient|JsonSerializerOptions)\b");
+    }
+
+    private static bool HasAdvancedExampleContext(string? prose)
+    {
+        if (string.IsNullOrWhiteSpace(prose))
+        {
+            return false;
+        }
+
+        if (CountSentenceLikeSegments(prose) >= 2)
+        {
+            return true;
+        }
+
+        return CountWords(prose) >= 16 &&
+               Regex.IsMatch(prose,
+                   @"(?i)\b(?:when|before|after|because|so that|requires?|configure|register|wire|build|pipeline|workflow|scenario|setup|prerequisite|outcome|result)\b");
+    }
+
+    private static int CountWords(string prose)
+    {
+        return Regex.Matches(prose, @"\b[\p{L}\p{N}][\p{L}\p{N}'-]*\b").Count;
+    }
+
+    private static int CountSentenceLikeSegments(string prose)
+    {
+        return Regex.Matches(prose, @"[.!?](?:\s|$)").Count;
     }
 
     private static bool HasExtensionBlockSyntaxLedProse(string? prose)
@@ -7626,6 +7733,10 @@ internal static class DocfxValidator
                     "Rewrite the extension-container opening around the caller task and receiver outcome instead of foregrounding C# extension-block syntax.",
                 "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE" =>
                     "Replace avoidable `System.*` / `Microsoft.*` fully qualified references with matching `using` directives so the sample stays focused on the documented API.",
+                "EXAMPLE_LEAD_MISSING" =>
+                    "Add a short human-written fly-in before the C# fence that names the consumer task and expected outcome.",
+                "EXAMPLE_ADVANCED_LEAD_MISSING" =>
+                    "Add a more in-depth lead before the C# fence that explains the setup, prerequisite, or workflow outcome for the larger scenario.",
                 "EXAMPLE_TEMPLATE_REPETITION" =>
                     "Rewrite each implicated example around the distinct behavior of its own type; do not reuse one normalized skeleton across unrelated targets.",
                 "EXTENSION_EXAMPLE_NOT_INVOKED" =>
@@ -7646,7 +7757,8 @@ internal static class DocfxValidator
             "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or "EXTENSION_EXAMPLE_NOT_INVOKED" or
             "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
             "EXAMPLE_TEMPLATE_REPETITION" or "EXAMPLE_EXTENSION_CONTAINER_LANGUAGE_FOCUS" or
-            "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE";
+            "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE" or "EXAMPLE_LEAD_MISSING" or
+            "EXAMPLE_ADVANCED_LEAD_MISSING";
     }
 
     private static string EscapeTable(string value)

@@ -617,6 +617,8 @@ public sealed class RepA { public int Value { get; set; } }
 public sealed class RepB { public int Value { get; set; } }
 public sealed class RepC { public int Value { get; set; } }
 public sealed class ReadySignal { public bool IsReady { get; set; } }
+public sealed class Leadless { public int Value { get; set; } public void Apply(int value) => Value = value; }
+public sealed class AdvancedSetup { public int Value { get; set; } public void Apply(int value) => Value = value; }
 '@
     Write-Utf8File (Join-Path $quality '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Demo.csproj'))
 
@@ -716,6 +718,80 @@ public static class UseReadySignal
 ```
 '@
 
+    # Valid code without a human fly-in before the C# fence.
+    Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.Leadless.md') @'
+---
+uid: Acme.Demo.Leadless
+example: *content
+---
+```csharp
+namespace Samples;
+
+using System;
+using Acme.Demo;
+
+public static class UseLeadless
+{
+    public static void Run()
+    {
+        var item = new Leadless();
+        item.Apply(42);
+        Console.WriteLine(item.Value);
+    }
+}
+```
+'@
+
+    # Large setup-shaped sample with a lead that is too shallow for its complexity.
+    Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.AdvancedSetup.md') @'
+---
+uid: Acme.Demo.AdvancedSetup
+example: *content
+---
+The following example shows an advanced processing sample.
+
+```csharp
+namespace Samples;
+
+using System;
+using System.Collections.Generic;
+using Acme.Demo;
+
+public sealed class AdvancedSetupWorkflow
+{
+    private readonly Dictionary<string, int> values = new();
+
+    public void Run()
+    {
+        var setup = new AdvancedSetup();
+        setup.Apply(1);
+        values["first"] = setup.Value;
+
+        setup.Apply(2);
+        values["second"] = setup.Value;
+
+        setup.Apply(3);
+        values["third"] = setup.Value;
+
+        Console.WriteLine(values["first"]);
+        Console.WriteLine(values["second"]);
+        Console.WriteLine(values["third"]);
+    }
+}
+
+public sealed class AdvancedSetupReport
+{
+    public int First { get; set; }
+    public int Second { get; set; }
+}
+
+public sealed class AdvancedSetupResult
+{
+    public int Total { get; set; }
+}
+```
+'@
+
     # Three structurally identical examples differing only by identifiers.
     foreach ($name in @('RepA', 'RepB', 'RepC')) {
         Write-Utf8File (Join-Path $quality ".docfx/api/types/Acme.Demo.$name.md") @"
@@ -723,6 +799,8 @@ public static class UseReadySignal
 uid: Acme.Demo.$name
 example: *content
 ---
+The following example creates a repeatable item and applies one value before returning it.
+
 ``````csharp
 namespace Samples;
 
@@ -747,6 +825,8 @@ public static class Use$name
         'EXAMPLE_NO_OBSERVABLE_OUTCOME',
         'EXAMPLE_FORWARDING_SCAFFOLD',
         'EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE',
+        'EXAMPLE_LEAD_MISSING',
+        'EXAMPLE_ADVANCED_LEAD_MISSING',
         'EXAMPLE_TEMPLATE_REPETITION',
         'NAMESPACE_APPEND_ONLY_REPAIR'
     )) {

@@ -260,6 +260,8 @@ Availability: `Fam.Tuples`
 uid: Fam.Tuples.MutableTuple`1
 example: *content
 ---
+The following example stores one positional value and returns it through the shared tuple workflow.
+
 ```csharp
 namespace Samples;
 
