@@ -46,7 +46,7 @@ Use this path when the user names a changed API or namespace.
 10. Update or create namespace overview pages whose opening names the developer problem and outcome, followed by concrete when-to-use and start-here guidance.
 11. Inspect sibling namespace pages in the same public API family and repair each affected page consistently.
 12. Update `Extension Members` tables when public extension methods are involved. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column — the validator now rejects corrupted or missing emoji with `EXTENSION_TABLE_ENCODING`. Keep the real receiver signature in the Type column (`IDecorator<Type>`, `IEnumerable<T>`, etc.) and preserve generic method arity in the Methods column (`As<T>`, `Configure<TOptions>`, `Parse<T>`).
-13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
+13. Update or create overwrite content, including type-page examples for public non-abstraction types and explicit examples for public extension methods. Put a short human fly-in before every C# fence; when an example is large, multi-block, or setup-heavy, make the lead explain the setup/prerequisite and workflow outcome. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
 14. Build or refresh the example inventory.
 15. Preserve manual edits, working `Related:` links, and historical URL references. Remove or replace a URL only after directly verifying that the current destination returns HTTP 404. Timeouts, 403s, rate limits, DNS failures, and other lookup problems are not removal evidence.
 16. Keep scratch assessment queues, manifests, review reports, captured validator output, progress notes, and helper scripts in temp or session storage instead of the repository. New working-tree files are only legitimate when they are the managed `AGENTS.md` block, the active `docfx.json`, or DocFX-authored namespace/type Markdown that maps to real public API. The validator auto-detects generic-arity type families and skips redundant sibling examples from the public API surface alone, so no skip manifest is ever written into the repository.
@@ -81,7 +81,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 17. Audit related namespace pages together so fixes are consistent across the public API family.
 18. Add or repair `Extension Members` tables for namespaces with public extension methods. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column. If `EXTENSION_METHOD_MISSING` or `EXTENSION_METHOD_SIGNATURE_MISSING` appears after `EXTENSION_SECTION_MISSING` drops, treat that as the same namespace-layer queue getting more specific: finish table contents and signature fidelity before resuming net-new examples.
 19. Finish the namespace-layer pass across the active queue before net-new type/example authoring: repair namespace prose, availability/start-here guidance, and `NAMESPACE_EMBEDDED_OVERWRITE_SECTION` ownership problems, moving misplaced type/member examples into readable type-targeted files under `.docfx/api/types/` when needed. Rerun the fast validator until namespace-layer diagnostics are gone or only example-driven work remains.
-20. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
+20. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes. Put a short human fly-in before every C# fence; when an example is large, multi-block, or setup-heavy, make the lead explain the setup/prerequisite and workflow outcome. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
 21. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
 22. Create explicit examples for public extension methods that still have none.
 23. Build or refresh the example inventory.
@@ -230,7 +230,7 @@ uid: X.Y.Z.MyType
 example:
 - *content
 ---
-The following schematic shows the overwrite shape only. Replace it with a source-backed consumer task; do not copy the generic names or the direct-construction shape into product documentation. If public evidence shows that another API usually returns or acquires `MyType`, show that discoverable path instead of `return new MyType()`.
+The following schematic shows the overwrite shape only. Replace it with a source-backed consumer task and a short fly-in that tells the reader what the code is about to accomplish. If public evidence shows that another API usually returns or acquires `MyType`, show that discoverable path instead of `return new MyType()`.
 
 ```csharp
 using X.Y.Z;
@@ -307,6 +307,7 @@ Before completing documentation work, verify:
 - [ ] Package IDs and package-level usage evidence were inspected before type/member-only sample synthesis.
 - [ ] Every inventory row names exact evidence paths and a consumer task; generated metadata and the target overwrite file are not the sole evidence.
 - [ ] The example inventory maps each required public type and extension method to its example file, UID, source evidence, and chosen scenario.
+- [ ] Every example has a human-written fly-in immediately before the C# fence; advanced examples explain setup, prerequisites, or workflow outcome before the code.
 - [ ] Examples show a coherent consumer workflow, use related public types when helpful, and avoid placeholder-only `Consumer`/`MyNamespace` shells when a domain name is available.
 - [ ] No example is reflection-only, metadata-only, duplicated by UID, or built from `DocumentedTypeExample`, `DocumentedExtensionExample`, or generic `Describe()` scaffolding.
 - [ ] The C# fence itself uses the documented type or invokes the documented extension method; prose, comments, and strings are not counted as usage.
