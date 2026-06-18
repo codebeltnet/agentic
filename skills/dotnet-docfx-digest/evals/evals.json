@@ -1063,6 +1063,18 @@
         "Removes `AddAcmeTextJson` from the `Extension Members` table and keeps the real `AddMinimalJsonOptions` public extension method",
         "Treats `EXTENSION_METHOD_UNKNOWN` as namespace-layer repair work and reruns `scripts/docfx.cs --json` after the fix"
       ]
+    },
+    {
+      "id": 105,
+      "prompt": "Use dotnet-docfx-digest to repair a namespace page for `Acme.Extensions.AspNetCore.Xml`. The only public extension method in the namespace is `AddMinimalXmlOptions(this IServiceCollection services, Action<XmlFormatterOptions> setup = null)`. The current prose says: \"Start with `AddMinimalXmlOptions` on `IServiceCollection` to register the XML options for ASP.NET Core conventions.\"",
+      "expected_output": "Agent keeps the source-backed method name but rewrites the sentence so it explains the concrete action and outcome instead of using a mechanical start-here template. For a namespace with one obvious extension method, it does not say \"start with\" or \"register conventions\" unless those phrases are grounded in source documentation. A good repair is closer to: \"Call `AddMinimalXmlOptions` to map Cuemon XML formatter settings into ASP.NET Core minimal API options.\"",
+      "expectations": [
+        "Recognizes that source-backed API names can still be poor prose when wrapped in formulaic guidance",
+        "Does not use `Start with` when there is only one obvious extension method and no real choice to make",
+        "Replaces vague wording such as `register the XML options for ASP.NET Core conventions` with a concrete source-backed outcome",
+        "Keeps the real public method `AddMinimalXmlOptions` and does not invent alternate setup methods",
+        "Preserves the namespace page's factual API table while improving the surrounding prose"
+      ]
     }
   ]
 }
