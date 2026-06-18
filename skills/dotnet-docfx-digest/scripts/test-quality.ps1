@@ -1457,7 +1457,166 @@ public static class BoundaryInput
 } finally {
     $reflectionExtensionBlocksVariable = Get-Variable -Name reflectionExtensionBlocks -ErrorAction SilentlyContinue
     if ($reflectionExtensionBlocksVariable -and $reflectionExtensionBlocksVariable.Value -and (Test-Path -LiteralPath $reflectionExtensionBlocksVariable.Value)) {
-        Remove-Item -LiteralPath $reflectionExtensionBlocksVariable.Value -Recurse -Force
+        Remove-Item -LiteralPath $reflectionExtensionBlocksVariable.Value -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ----------------------------------------------------------------------
+# Scenario: the conservative source scanner must detect public delegate types
+# as required example targets, including generic delegates with variance
+# modifiers. Without this, DocFX-authored type pages for those delegates
+# are flagged as INTERIM_ARTIFACT_IN_WORKTREE.
+# ----------------------------------------------------------------------
+$delegateDiscovery = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-delegate-discovery-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $delegateDiscovery 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $delegateDiscovery 'src/Acme.Delegates.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $delegateDiscovery 'src/Delegates.cs') @'
+namespace Acme.Delegates;
+
+public delegate string PlainHandler(string input);
+
+public delegate T GenericHandler<T>(T value);
+
+public delegate TSuccess TesterFunc<TResult, out TSuccess>(out TResult result);
+
+public sealed class Counter
+{
+    public int Value { get; set; }
+}
+'@
+    Write-Utf8File (Join-Path $delegateDiscovery '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Delegates.csproj'))
+    Initialize-GitRepo $delegateDiscovery
+    Write-Utf8File (Join-Path $delegateDiscovery '.docfx/api/namespaces/Acme.Delegates.md') @'
+---
+uid: Acme.Delegates
+---
+
+Namespace overview.
+'@
+
+    $delegateReport = Invoke-Validator -Workspace $delegateDiscovery
+    # All three delegates plus Counter should be required targets.
+    if ([int]$delegateReport.summary.requiredExampleTargets -ne 4) {
+        throw "Public delegate discovery under-reported targets: expected 4, got $($delegateReport.summary.requiredExampleTargets)."
+    }
+    Assert-Diagnostic -Report $delegateReport -Code 'EXAMPLE_MISSING'
+
+    # Add type overwrite files for the plain delegate and Counter, then verify
+    # the previously-clean type files are recognized as known deliverables and
+    # do not trigger INTERIM_ARTIFACT_IN_WORKTREE.
+    Write-Utf8File (Join-Path $delegateDiscovery '.docfx/api/types/Acme.Delegates.PlainHandler.md') @'
+---
+uid: Acme.Delegates.PlainHandler
+example: *content
+---
+```csharp
+using Acme.Delegates;
+
+namespace Samples;
+
+public static class PlainHandlerExample
+{
+    public static string Run() => ((PlainHandler)(input => input.ToUpperInvariant()))("hello");
+}
+```
+'@
+    Write-Utf8File (Join-Path $delegateDiscovery '.docfx/api/types/Acme.Delegates.Counter.md') @'
+---
+uid: Acme.Delegates.Counter
+example: *content
+---
+```csharp
+using Acme.Delegates;
+
+namespace Samples;
+
+public static class CounterExample
+{
+    public static int Next() => new Counter { Value = 42 }.Value;
+}
+```
+'@
+
+    $delegateReportAfter = Invoke-Validator -Workspace $delegateDiscovery
+    Assert-NoDiagnostic -Report $delegateReportAfter -Code 'INTERIM_ARTIFACT_IN_WORKTREE'
+    # Only the two generic delegates should still be missing.
+    $stillMissing = @($delegateReportAfter.errors | Where-Object code -eq 'EXAMPLE_MISSING')
+    if ($stillMissing.Count -ne 2) {
+        throw "Expected 2 remaining EXAMPLE_MISSING (GenericHandler, TesterFunc); got $($stillMissing.Count)."
+    }
+
+    Write-Host 'DocFX public delegate discovery regression passed.'
+} finally {
+    if (Test-Path $delegateDiscovery) {
+        Remove-Item $delegateDiscovery -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ----------------------------------------------------------------------
+# Scenario: the conservative source scanner must only surface 'public static'
+# extension methods as required targets. Private, protected, and internal
+# 'static' helpers with 'this' parameters are implementation details, not
+# part of the public API surface.
+# ----------------------------------------------------------------------
+$visibilityFilter = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-visibility-filter-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $visibilityFilter 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $visibilityFilter 'src/Acme.Visibility.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $visibilityFilter 'src/Visibility.cs') @'
+namespace Acme.Visibility;
+
+public static class TextExtensions
+{
+    public static string PublicNormalize(this string value) => value.Trim().ToUpperInvariant();
+
+    private static string PrivateNormalize(this string value) => value.ToLowerInvariant();
+
+    internal static string InternalNormalize(this string value) => value;
+}
+'@
+    Write-Utf8File (Join-Path $visibilityFilter '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Visibility.csproj'))
+    Initialize-GitRepo $visibilityFilter
+    Write-Utf8File (Join-Path $visibilityFilter '.docfx/api/namespaces/Acme.Visibility.md') @'
+---
+uid: Acme.Visibility
+---
+
+Namespace overview.
+'@
+
+    $visibilityReport = Invoke-Validator -Workspace $visibilityFilter
+    # Only TextExtensions (the public static container) plus PublicNormalize
+    # (the single public extension method) should be required targets. The
+    # private/internal 'static' helpers with 'this' parameters are not part
+    # of the public API surface and must be invisible to the validator.
+    if ([int]$visibilityReport.summary.extensionMethods -ne 1) {
+        throw "Public extension method discovery: expected 1, got $($visibilityReport.summary.extensionMethods)."
+    }
+    $missingMessages = @($visibilityReport.errors | Where-Object code -eq 'EXAMPLE_MISSING' | ForEach-Object message)
+    $missingJoined = ($missingMessages -join "`n")
+    if ($missingJoined -notmatch 'PublicNormalize') {
+        throw "Expected EXAMPLE_MISSING for public extension method 'PublicNormalize'. Got: $missingJoined"
+    }
+    if ($missingJoined -match 'PrivateNormalize') {
+        throw "Private extension method 'PrivateNormalize' must not be a required target. Got: $missingJoined"
+    }
+    if ($missingJoined -match 'InternalNormalize') {
+        throw "Internal extension method 'InternalNormalize' must not be a required target. Got: $missingJoined"
+    }
+
+    Write-Host 'DocFX extension visibility filter regression passed.'
+} finally {
+    if (Test-Path $visibilityFilter) {
+        Remove-Item $visibilityFilter -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
