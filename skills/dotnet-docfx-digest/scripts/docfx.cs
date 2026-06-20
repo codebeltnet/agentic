@@ -7551,6 +7551,7 @@ internal static class DocfxValidator
         sb.AppendLine($"- Remaining final-verification gates: {(report.Summary.RemainingGates.Count == 0 ? "none" : string.Join(", ", report.Summary.RemainingGates.Select(gate => $"`{gate}`")))}");
         sb.AppendLine($"- Execution profile: `{report.Summary.Execution.Profile}` ({report.Summary.Execution.LogicalProcessors} processors, {report.Summary.Execution.AvailableMemoryBytes / (1024d * 1024 * 1024):F1} GiB available, build workers {report.Summary.Execution.BuildParallelism}, sample workers {report.Summary.Execution.SampleParallelism}, timeout {report.Summary.Execution.ProcessTimeoutMinutes} minutes, concurrent DocFX `{report.Summary.Execution.ConcurrentDocfxVerification.ToString().ToLowerInvariant()}`)");
         sb.AppendLine("- Every error below is an active repair item. Its age, pre-existing status, or the number of similar diagnostics does not make it a blocker or move it out of scope for a repo-wide digest.");
+        sb.AppendLine("- Do not relabel prose or cleanup errors as quality backlog. `EXAMPLE_LEAD_MISSING`, `EXAMPLE_ADVANCED_LEAD_MISSING`, `FAMILY_ANCHOR_EXAMPLE_MISSING`, `SAMPLE_STRUCTURE_INVALID`, and `INTERIM_ARTIFACT_IN_WORKTREE` are blocking repair items until the completion contract is clean.");
         sb.AppendLine("- Do not stop after repairing only a sample of namespaces, types, extension sections, or examples. Rerun the validator and continue until `canClaimCompletion` is `true`.");
         sb.AppendLine("- An unrelated build or test failure may be reported separately, but it does not end documentation repair unless it prevents the validator or required evidence inspection from running.");
         sb.AppendLine("- Stop incomplete only when the user pauses the task or an external condition still prevents progress after concrete repair attempts. Report the exact command, exit code, blocker, and remaining diagnostic counts; never describe that state as complete.");
@@ -7608,7 +7609,7 @@ internal static class DocfxValidator
         sb.AppendLine("- [ ] `ENCODING_CORRUPTION` files restored from git or rewritten using byte-level operations.");
         sb.AppendLine("- [ ] Every namespace and extension diagnostic above has been resolved; zero remain in the final report.");
         sb.AppendLine("- [ ] GitHub example sources consulted before writing any new example (see 'GitHub Example Sources' section).");
-        sb.AppendLine("- [ ] Every missing, duplicate, placeholder, reflection-only, target-use, and extension-invocation example diagnostic above has been resolved.");
+        sb.AppendLine("- [ ] Every missing, duplicate, placeholder, reflection-only, target-use, lead, advanced-lead, family-anchor, and extension-invocation example diagnostic above has been resolved.");
         sb.AppendLine("- [ ] Changed C# examples pass structural validation (namespace + type declaration, or labelled `// Program.cs`).");
         sb.AppendLine("- [ ] Changed C# examples compile as a class library project referencing the documented assemblies.");
         sb.AppendLine("- [ ] Authored Markdown files still exist after generated-artifact cleanup.");
