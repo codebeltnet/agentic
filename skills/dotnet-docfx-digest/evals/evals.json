@@ -1148,6 +1148,19 @@
         "Repairs the sample or removes the new skip marker instead of treating the inline comment as a completed workaround",
         "Does not rely on omission comments or inline prose comments to suppress the remaining compile failure"
       ]
+    },
+    {
+      "id": 111,
+      "prompt": "Continue a repo-wide dotnet-docfx-digest run after the current validator state says `summary.fullVerificationRan=false`, `summary.canClaimCompletion=false`, `summary.remainingWorkItems=94`, `summary.remainingGates=[\"--build-api-model\",\"--validate-samples\",\"--verify-docfx-build\"]`, `summary.newlyIntroducedSkipMarkers=0`, and `summary.interimArtifacts=0`. Remaining fail-level diagnostics are `EXAMPLE_MISSING=71`, `EXAMPLE_LEAD_MISSING=13`, and `SYMBOL_COLLISION_UNRESOLVED=10`. The previous agent says, \"given context constraints, this is a massive task; the remaining work is better suited for a follow-up, so I will provide a focused summary.\"",
+      "expected_output": "Agent treats context pressure as an invalid stop reason, does not emit a focused/final summary or follow-up handoff, and continues with executable work. It either shrinks to a smaller deterministic remediation batch or regenerates state from deterministic commands such as `docfx.cs --json --assessment-queue <temp-path>` or `docfx.cs --build-api-model --project-manifest <temp-path>` before continuing. It keeps continuation state in supported temp/session artifacts instead of inventing repo-root scratch handoff files. If an evaluation transcript ended at the quoted handoff, that would be `FAIL_CONTEXT_HANDOFF_WITH_REMAINING_WORK`, not a documentation result.",
+      "expectations": [
+        "Rejects context size, session length, task size, repetitive authoring, a stable queue, or \"better suited for a follow-up\" as stop reasons while work remains",
+        "Does not produce a focused summary, audit handoff, completion summary, or next-step menu while `summary.canClaimCompletion` is false and `summary.remainingWorkItems` is greater than zero",
+        "Chooses an executable next action such as the next diagnostic batch, another example/lead batch, ownership/collision repair, a validator rerun, a validator/tooling fix, or a true blocker with exact evidence",
+        "Uses a smaller deterministic batch or regenerates queue state from supported deterministic commands instead of improvising a context handoff",
+        "Keeps continuation artifacts in supported temp/session locations unless the active mode explicitly defines a different artifact",
+        "Reserves the final summary for the clean completion state where full verification ran and the JSON completion contract is satisfied"
+      ]
     }
   ]
 }

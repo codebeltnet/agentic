@@ -49,6 +49,8 @@ The assessment work queue includes a "GitHub Example Sources" section with pre-c
 dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --build-api-model --project-manifest <temp-path> --json
 ```
 
+Resolve `<temp-path>` outside the target repository working tree (for example, `$env:TEMP\dotnet-docfx-digest-project-manifest.json` on Windows or `/tmp/dotnet-docfx-digest-project-manifest.json` on Unix). When you name this command in a continuation response, replace the placeholder with that concrete temp/session path rather than leaving `<temp-path>` unresolved.
+
 Read the reflection-backed packets from that manifest or from `scope.packets`. If build-backed packet discovery still fails or remains unusable, fall back to sequential assessment-work-queue or namespace-first order instead of authoring from the raw global count alone.
 - In any mid-audit continuation after a rerun, name the active queue source explicitly. If a reflection-backed packet manifest has not already been confirmed, the next step must explicitly be `--build-api-model --project-manifest <path>` before more large-scale example authoring. Do not talk generically about "working packet-by-packet" without naming how those packets are obtained.
 - In every continuation response while diagnostics remain, include an explicit completion-gate sentence that names the final command family and contract, for example: `Completion gate remains docfx.cs --build-api-model --validate-samples --verify-docfx-build --json; do not claim completion until summary.fullVerificationRan = true, summary.canClaimCompletion = true, summary.remainingWorkItems = 0, summary.remainingGates is empty, summary.remainingDiagnosticsByCode is empty, summary.newlyIntroducedSkipMarkers = 0, and summary.interimArtifacts = 0.` Shorter "verify later" wording is not sufficient.
@@ -94,7 +96,7 @@ Read the reflection-backed packets from that manifest or from `scope.packets`. I
 - If build-backed packet discovery still fails or remains unusable, fall back to sequential repair instead of stopping. Use the assessment work queue order or namespace-first order: clear namespace-layer diagnostics first, then work the remaining `EXAMPLE_MISSING` diagnostics in namespace order, rerunning the fast validator after each small batch.
 - A rerun that leaves `EXAMPLE_MISSING` high while surfacing `EXTENSION_METHOD_MISSING` or `EXTENSION_METHOD_SIGNATURE_MISSING` is still in the namespace-first phase, not the example-only phase. Finish those table repairs first, rerun fast validation, and only then return to the example micro-loop.
 - Repository size, target count, diagnostic volume, context pressure, and model usage limits never change the user's requested scope. An explicit or default repo-wide run continues across every packet until the global completion contract is clean.
-- Context limits, queue size, and estimates like "this would take multiple sessions" are internal execution concerns, not user-facing stop conditions. Break the work into packets and keep going until the completion contract is clean unless the user explicitly pauses or a real external blocker prevents further progress.
+- Context pressure, queue size, and estimates like "this would take multiple sessions" are internal execution concerns, not user-facing stop conditions. Shrink to a smaller deterministic batch, regenerate queue state from `--assessment-queue` / `--project-manifest` / active dry-run artifacts when needed, and keep going until the completion contract is clean unless the user explicitly pauses or a real external blocker prevents further progress.
 - Final build-backed verification (`--build-api-model --validate-samples --verify-docfx-build`) is for claiming completion, not for blocking incremental progress. While `summary.remainingWorkItems` is greater than zero or any diagnostics remain, stay on the fast `docfx.cs --json` loop and keep authoring.
 - Dry run is a voluntary mode used only when the user explicitly asks for `dry-run`, a representative sample, or a quality pilot. Never infer it from repository size, diagnostic count, context pressure, or model usage limits. It is a real run scoped to a representative subset, with identical evidence, authoring, quality, and compilation gates. Start it with `--dry-run --build-api-model --project-manifest <temp-path>`; this also emits a sibling `<name>.review.json` template. Author every selected packet, read every changed page, complete every review entry with evidence, page-specific purpose/outcome, observable result, and sibling prose/code comparison, then finish with `--resume-project-manifest <temp-path> --review-report <review-path> --build-api-model --validate-samples --verify-docfx-build`. The baseline protects pre-existing dirty work while allowing current-run files to verify. No-hint dry runs select one clean project per metadata destination group via a seed; explicit names override selection. Report `dry-run-passed` only after every gate passes, and include the completed `Changed-page review` table in the response; a validator summary is not a manual review. Never claim repository completion. Do not ask for hints when none were supplied.
 - Use the safe structured overwrite writer (`docfx.cs --write-overwrite <request.json>`) for repeatable overwrite creation: it preserves BOM/line endings, rejects duplicate UIDs and unbalanced fences, and refuses to replace dirty files. It writes only content you authored — it never generates prose or examples.
@@ -109,9 +111,34 @@ Agents often fail this skill by stopping prematurely because they feel "overwhel
 - **Do not downgrade ownership diagnostics:** `SYMBOL_COLLISION_UNRESOLVED` and `EXTENSION_OWNER_AMBIGUOUS` are clearable errors, not informational facts about duplicate names. Add exact-UID example mappings and receiver-style calls until they clear; do not stop merely because every other diagnostic is gone.
 - **Do not leave cleanup to the user:** `INTERIM_ARTIFACT_IN_WORKTREE` means the working tree contains files that must be classified and cleaned before completion. Do that work inline unless deleting a path would risk user-authored documentation.
 - **Do not suffer diagnostic expansion fatigue:** When coarse diagnostics (like `EXTENSION_SECTION_MISSING`) drop and more specific ones (like `EXTENSION_METHOD_MISSING`) appear, the queue size may increase. This is expected progress, not a reason to stop, panic, or re-plan. Keep working.
-- **Do not fear context limits:** If you worry about context length, the correct action is to keep working anyway. The system manages context. Trying to "summarize and hand off" wastes tokens and stops progress.
+- **Do not turn context pressure into a handoff:** If you worry about context length, shrink to a smaller deterministic batch, rerun the fast validator, or regenerate the assessment queue / project manifest and continue. Do not summarize remaining work or defer it to a follow-up while diagnostics remain.
 - **Override conversational habits:** You are an autonomous agent on this task, not a chat assistant. The only valid time to stop and ask a question is if a genuine external blocker (like a missing dependency preventing compilation) halts execution. A large queue is never a blocker.
 - **Subagent timeouts are not stop conditions:** If a subagent times out or goes quiet, do not use that as an excuse to pause the main loop. Switch to direct edits or spawn a new subagent, and keep going.
+- **Do not invent context excuses:** Phrases such as "given context constraints", "best done in a follow-up", "remaining work requires authoring", "this is a massive task", and "I will provide a focused summary" are not valid reasons to stop while the completion contract is dirty.
+
+## Context Exhaustion Protocol
+
+Context pressure is not a completion condition.
+
+If the session feels constrained while fail-level diagnostics remain, do one of the following instead of handing off:
+
+1. continue with a smaller deterministic batch
+2. regenerate required state from deterministic commands such as `docfx.cs --json --assessment-queue <temp-path>`, `docfx.cs --build-api-model --project-manifest <temp-path>`, or the active dry-run manifest/review pair; when you mention one of these commands in a continuation response, resolve the temp/session path concretely instead of leaving `<temp-path>` as a placeholder
+3. use an explicitly supported continuation artifact for the active mode only when that mode defines one; otherwise keep queue state in temp or session storage instead of inventing repo-root scratch notes
+4. report a true tooling failure with the exact command, exit code, and output
+
+Do not justify stopping with phrases such as "given context constraints", "best done in a follow-up", "remaining work requires authoring", "this is a massive task", or "I will provide a focused summary".
+
+If `summary.remainingWorkItems > 0`, the next action must be executable work, not a handoff. Valid next actions are:
+
+1. inspect source for the next diagnostic batch
+2. author examples or leads for the next diagnostic batch
+3. fix ownership or collision diagnostics
+4. rerun validation
+5. fix validation/compiler failures
+6. report a true blocker
+
+Final summaries are allowed only when `summary.canClaimCompletion` is `true` and the full completion contract is clean.
 
 ## No Premature Handoff
 
@@ -123,11 +150,19 @@ If `summary.remainingWorkItems > 0`, the next action must be one of four things 
 
 A progress summary is allowed only as a short status update before continuing work. It must not be framed as a final report, completion report, audit result, or handoff unless a true blocker exists.
 
+Final summaries are allowed only when `summary.completionState == "complete"`, `summary.canClaimCompletion == true`, `summary.remainingWorkItems == 0`, `summary.remainingGates` is empty, `summary.remainingDiagnosticsByCode` is empty, `summary.newlyIntroducedSkipMarkers == 0`, and `summary.interimArtifacts == 0`.
+
 ## Premature Handoff Detection
 
 Treat `FAIL_PREMATURE_HANDOFF_SUMMARY` as an execution-protocol failure when an agent attempts to end the run while `summary.canClaimCompletion` is false, `summary.remainingWorkItems` is greater than zero, `summary.remainingGates` is not empty, fail-level diagnostics remain, `summary.fullVerificationRan` is false, or unapproved skips/interim artifacts remain.
 
 The remediation is not to edit files about the failure. The remediation is to continue the autonomous loop: select the next diagnostic batch, apply fixes, rerun fast validation, repeat until the completion contract is satisfied, run full verification, and only then produce the final report.
+
+## Context Handoff Detection
+
+Treat `FAIL_CONTEXT_HANDOFF_WITH_REMAINING_WORK` as an execution-protocol failure when an agent ends the run while `summary.remainingWorkItems > 0`, fail-level diagnostics remain, required gates remain, `summary.fullVerificationRan` is false, `summary.newlyIntroducedSkipMarkers` is non-zero, or `summary.interimArtifacts` is non-zero, and the stated reason is context size, session length, task size, repetitive authoring, a stable queue, or that the remaining work is better suited for a follow-up.
+
+The remediation is to continue the execution loop with a smaller deterministic batch.
 
 ## Skip Marker Policy
 
