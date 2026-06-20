@@ -24,6 +24,7 @@ internal static class DocfxValidator
     private const string EndMarker = "<!-- dotnet-docfx-digest:end -->";
     private const string ExtensionAttributeFullName = "System.Runtime.CompilerServices.ExtensionAttribute";
     private const string SkipMarker = "dotnet-docfx-digest:skip-compile";
+    private const string SkipAllowlistFileName = "skip-compile-allowlist.json";
     private const int DefaultSampleValidationParallelism = 2;
     private const int DefaultProcessTimeoutMinutes = 30;
     private const long HighCapacityMemoryThresholdBytes = 32L * 1024 * 1024 * 1024;
@@ -221,13 +222,16 @@ internal static class DocfxValidator
             LibraryProjects = libraryProjects,
             MarkdownFiles = markdownFiles,
             MarkdownTextByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-            OverwriteSections = new List<OverwriteSection>()
+            OverwriteSections = new List<OverwriteSection>(),
+            SkipAllowlistEntries = new List<ApprovedSkipEntry>()
         };
         foreach (var md in markdownFiles)
         {
             var text = workspace.ReadMarkdown(md);
             workspace.OverwriteSections.AddRange(ExtractOverwriteSections(md, text));
         }
+
+        workspace.SkipAllowlistEntries.AddRange(LoadApprovedSkipEntries(repoRoot, docfxWorkspace, report));
 
         WritePhase(options, report, "markdown discovery", phaseTimer.Elapsed,
             $"{markdownFiles.Count} file(s)");
@@ -4936,22 +4940,56 @@ internal static class DocfxValidator
             var skip = FindSkip(sample.Code);
             if (skip.Found)
             {
+                var owner = ResolveSampleOwner(ws, sample);
+                var existedBeforeRun = SkipMarkerExistedBeforeRun(ws, sample, owner, skip);
+                var approvedEntry = FindApprovedSkipEntry(ws, sample, owner, skip);
+                report.SkipMarkers.Add(new SkipMarkerReport
+                {
+                    DiagnosticCode = approvedEntry is not null ? approvedEntry.DiagnosticCode : "SAMPLE_COMPILE_FAILED",
+                    FilePath = Rel(repoRoot, sample.File),
+                    Uid = owner.Uid,
+                    Symbol = owner.Symbol,
+                    MarkerText = skip.Text,
+                    Reason = skip.Reason,
+                    Approved = approvedEntry is not null,
+                    ExistedBeforeRun = existedBeforeRun,
+                    Approval = approvedEntry?.Approval,
+                    Lifetime = approvedEntry?.Lifetime
+                });
+
+                if (!existedBeforeRun)
+                {
+                    report.Summary.NewlyIntroducedSkipMarkers++;
+                    report.Errors.Add(new Diagnostic("FAIL_NEW_SKIP_MARKER_INTRODUCED", Rel(repoRoot, sample.File), null,
+                        $"C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) introduced a new skip marker during the current run. UID/symbol: '{owner.DisplayName}'. Marker: '{skip.Text}'. Reason: '{skip.Reason}'. existedBeforeRun=false. New skip markers are fail-level diagnostics and do not permit a completion claim.",
+                        owner.Uid, owner.Symbol));
+                }
+
                 if (string.IsNullOrWhiteSpace(skip.Reason))
                 {
                     report.Errors.Add(new Diagnostic("SAMPLE_SKIP_REASON_MISSING", Rel(repoRoot, sample.File), null,
-                        $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses the skip-compile marker without a mandatory reason."));
+                        $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses the skip-compile marker without a mandatory reason. UID/symbol: '{owner.DisplayName}'. Marker: '{skip.Text}'. existedBeforeRun={existedBeforeRun.ToString().ToLowerInvariant()}.",
+                        owner.Uid, owner.Symbol));
                 }
                 else if (IsInsufficientSkipReason(skip.Reason))
                 {
                     report.Errors.Add(new Diagnostic("SAMPLE_SKIP_REASON_INSUFFICIENT", Rel(repoRoot, sample.File), null,
-                        $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses a weak skip-compile reason: '{skip.Reason}'. Package requirements, framework-pattern explanations, or full-example notes are documentation work, not a compile opt-out. Make the sample compile, document the package requirement outside the code fence, or use a deterministic blocker such as an external service or host environment that the sample compiler cannot provide."));
+                        $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses a weak skip-compile reason: '{skip.Reason}'. UID/symbol: '{owner.DisplayName}'. Marker: '{skip.Text}'. existedBeforeRun={existedBeforeRun.ToString().ToLowerInvariant()}. Package requirements, framework-pattern explanations, or full-example notes are documentation work, not a compile opt-out. Make the sample compile, document the package requirement outside the code fence, or use a deterministic blocker such as an external service or host environment that the sample compiler cannot provide.",
+                        owner.Uid, owner.Symbol));
                 }
-                else
+                else if (approvedEntry is null)
                 {
-                    report.Summary.SamplesSkipped++;
+                    report.Summary.UnapprovedSkipMarkers++;
+                    report.Errors.Add(new Diagnostic("SAMPLE_SKIP_NOT_ALLOWLISTED", Rel(repoRoot, sample.File), null,
+                        $"A C# sample at fence #{sample.FenceIndex} (line {sample.StartLine}) uses the skip-compile marker without a matching pre-approved allowlist entry in '{SkipAllowlistFileName}'. UID/symbol: '{owner.DisplayName}'. Marker: '{skip.Text}'. Reason: '{skip.Reason}'. existedBeforeRun={existedBeforeRun.ToString().ToLowerInvariant()}. Unapproved or newly introduced skip markers do not suppress compilation; the sample must still compile or fail deterministically.",
+                        owner.Uid, owner.Symbol));
                 }
-
-                continue;
+                else if (existedBeforeRun)
+                {
+                    report.Summary.PreExistingApprovedSkipMarkers++;
+                    report.Summary.SamplesSkipped++;
+                    continue;
+                }
             }
 
             var structureError = ValidateSampleStructure(sample.Code);
@@ -5402,10 +5440,31 @@ internal static class DocfxValidator
 
             var bodyEnd = i + 1 < matches.Count ? matches[i + 1].Index : normalized.Length;
             var body = bodyEnd > bodyStart ? normalized[bodyStart..bodyEnd] : string.Empty;
-            sections.Add(new OverwriteSection(mdFile, uid, body, IsMappedToExample(yaml)));
+            var bodyStartLine = GetLineNumberForIndex(normalized, bodyStart);
+            var bodyEndLine = Math.Max(bodyStartLine, GetLineNumberForIndex(normalized, Math.Max(bodyStart, bodyEnd - 1)));
+            sections.Add(new OverwriteSection(mdFile, uid, body, IsMappedToExample(yaml), bodyStartLine, bodyEndLine));
         }
 
         return sections;
+    }
+
+    private static int GetLineNumberForIndex(string text, int index)
+    {
+        if (index <= 0)
+        {
+            return 1;
+        }
+
+        var line = 1;
+        for (var i = 0; i < index && i < text.Length; i++)
+        {
+            if (text[i] == '\n')
+            {
+                line++;
+            }
+        }
+
+        return line;
     }
 
     private static bool IsMappedToExample(string yaml)
@@ -5493,10 +5552,12 @@ internal static class DocfxValidator
         return false;
     }
 
-    private static (bool Found, string Reason) FindSkip(string code)
+    private static SkipMarkerInfo FindSkip(string code)
     {
-        foreach (var line in code.Split('\n'))
+        var lines = code.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
         {
+            var line = lines[i];
             var idx = line.IndexOf(SkipMarker, StringComparison.Ordinal);
             if (idx < 0)
             {
@@ -5509,10 +5570,10 @@ internal static class DocfxValidator
                 after = after[1..].Trim();
             }
 
-            return (true, after);
+            return new SkipMarkerInfo(true, line.Trim(), after, i + 1);
         }
 
-        return (false, string.Empty);
+        return new SkipMarkerInfo(false, string.Empty, string.Empty, 0);
     }
 
     private static bool IsInsufficientSkipReason(string reason)
@@ -5570,6 +5631,228 @@ internal static class DocfxValidator
         }
 
         return false;
+    }
+
+    private static SampleOwnerInfo ResolveSampleOwner(ValidationWorkspace ws, SampleFence sample)
+    {
+        var sections = ws.OverwriteSections
+            .Where(section => PathsEqual(section.File, sample.File))
+            .OrderBy(section => section.BodyStartLine)
+            .ToList();
+        return ResolveSampleOwner(sections, sample);
+    }
+
+    private static SampleOwnerInfo ResolveSampleOwner(List<OverwriteSection> sections, SampleFence sample)
+    {
+        var owner = sections.FirstOrDefault(section =>
+                        sample.StartLine >= section.BodyStartLine &&
+                        sample.StartLine <= section.BodyEndLine) ??
+                    sections.FirstOrDefault();
+
+        var uid = owner?.Uid;
+        var symbol = !string.IsNullOrWhiteSpace(uid)
+            ? uid
+            : ExtractPrimarySymbol(sample.Code) ?? Path.GetFileNameWithoutExtension(sample.File);
+
+        return new SampleOwnerInfo(uid, symbol);
+    }
+
+    private static string? ExtractPrimarySymbol(string code)
+    {
+        var match = Regex.Match(code, @"\b(class|struct|record|interface|enum)\s+(?<name>\w+)");
+        return match.Success ? match.Groups["name"].Value : null;
+    }
+
+    private static ApprovedSkipEntry? FindApprovedSkipEntry(ValidationWorkspace ws, SampleFence sample, SampleOwnerInfo owner,
+        SkipMarkerInfo skip)
+    {
+        return ws.SkipAllowlistEntries.FirstOrDefault(entry =>
+            string.Equals(entry.DiagnosticCode, "SAMPLE_COMPILE_FAILED", StringComparison.OrdinalIgnoreCase) &&
+            PathsEqual(entry.FullFilePath, sample.File) &&
+            (entry.Uid is null || string.Equals(entry.Uid, owner.Uid, StringComparison.Ordinal)) &&
+            (entry.Symbol is null || string.Equals(entry.Symbol, owner.Symbol, StringComparison.Ordinal)) &&
+            string.Equals(NormalizeSkipReason(entry.Reason), NormalizeSkipReason(skip.Reason), StringComparison.Ordinal));
+    }
+
+    private static string NormalizeSkipReason(string reason)
+    {
+        return Regex.Replace(reason.Trim(), @"\s+", " ");
+    }
+
+    private static bool SkipMarkerExistedBeforeRun(ValidationWorkspace ws, SampleFence sample, SampleOwnerInfo owner,
+        SkipMarkerInfo skip)
+    {
+        var baselineMarkers = GetBaselineSkipMarkers(ws, sample.File);
+        if (baselineMarkers.Count == 0)
+        {
+            return false;
+        }
+
+        var normalizedReason = NormalizeSkipReason(skip.Reason);
+        return baselineMarkers.Any(marker =>
+            marker.FenceIndex == sample.FenceIndex &&
+            string.Equals(marker.MarkerText, skip.Text, StringComparison.Ordinal) &&
+            string.Equals(marker.Reason, normalizedReason, StringComparison.Ordinal) &&
+            (owner.Uid is null || marker.Uid is null || string.Equals(marker.Uid, owner.Uid, StringComparison.Ordinal))) ||
+               baselineMarkers.Any(marker =>
+                   string.Equals(marker.MarkerText, skip.Text, StringComparison.Ordinal) &&
+                   string.Equals(marker.Reason, normalizedReason, StringComparison.Ordinal) &&
+                   (owner.Uid is null || marker.Uid is null || string.Equals(marker.Uid, owner.Uid, StringComparison.Ordinal)));
+    }
+
+    private static List<BaselineSkipMarker> GetBaselineSkipMarkers(ValidationWorkspace ws, string file)
+    {
+        var fullPath = Path.GetFullPath(file);
+        if (ws.BaselineSkipMarkersByFile.TryGetValue(fullPath, out var cached))
+        {
+            return cached;
+        }
+
+        var relativePath = Path.GetRelativePath(ws.RepoRoot, fullPath).Replace('\\', '/');
+        var baseline = RunProcess("git", $"show \"HEAD:{relativePath}\"", ws.RepoRoot, permission: ProcessPermission.Git);
+        if (baseline.ExitCode != 0 || string.IsNullOrWhiteSpace(baseline.StdOut))
+        {
+            cached = new List<BaselineSkipMarker>();
+            ws.BaselineSkipMarkersByFile[fullPath] = cached;
+            return cached;
+        }
+
+        var sections = ExtractOverwriteSections(fullPath, baseline.StdOut);
+        cached = ExtractFences(fullPath, baseline.StdOut)
+            .Select(fence =>
+            {
+                var marker = FindSkip(fence.Code);
+                if (!marker.Found)
+                {
+                    return null;
+                }
+
+                var owner = ResolveSampleOwner(sections, fence);
+                return new BaselineSkipMarker(fence.FenceIndex, marker.Text, NormalizeSkipReason(marker.Reason), owner.Uid, owner.Symbol);
+            })
+            .Where(marker => marker is not null)
+            .Cast<BaselineSkipMarker>()
+            .ToList();
+
+        ws.BaselineSkipMarkersByFile[fullPath] = cached;
+        return cached;
+    }
+
+    private static List<ApprovedSkipEntry> LoadApprovedSkipEntries(string repoRoot, string docfxWorkspace, Report report)
+    {
+        var path = Path.Combine(docfxWorkspace, SkipAllowlistFileName);
+        report.SkipAllowlistPath = File.Exists(path) ? Rel(repoRoot, path) : null;
+        if (!File.Exists(path))
+        {
+            return new List<ApprovedSkipEntry>();
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                !doc.RootElement.TryGetProperty("entries", out var entriesElement) ||
+                entriesElement.ValueKind != JsonValueKind.Array)
+            {
+                report.Errors.Add(new Diagnostic("SKIP_ALLOWLIST_INVALID", Rel(repoRoot, path), null,
+                    $"'{SkipAllowlistFileName}' must be a JSON object with an 'entries' array."));
+                return new List<ApprovedSkipEntry>();
+            }
+
+            var entries = new List<ApprovedSkipEntry>();
+            foreach (var entryElement in entriesElement.EnumerateArray())
+            {
+                if (!TryReadAllowlistEntry(repoRoot, path, entryElement, out var entry, out var error))
+                {
+                    report.Errors.Add(new Diagnostic("SKIP_ALLOWLIST_INVALID", Rel(repoRoot, path), null, error ?? "Invalid allowlist entry."));
+                    continue;
+                }
+
+                entries.Add(entry!);
+            }
+
+            return entries;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            report.Errors.Add(new Diagnostic("SKIP_ALLOWLIST_INVALID", Rel(repoRoot, path), null,
+                $"Unable to parse '{SkipAllowlistFileName}': {ex.Message}"));
+            return new List<ApprovedSkipEntry>();
+        }
+    }
+
+    private static bool TryReadAllowlistEntry(string repoRoot, string allowlistPath, JsonElement entryElement,
+        out ApprovedSkipEntry? entry, out string? error)
+    {
+        entry = null;
+        error = null;
+        if (entryElement.ValueKind != JsonValueKind.Object)
+        {
+            error = $"Entries in '{SkipAllowlistFileName}' must be JSON objects.";
+            return false;
+        }
+
+        var diagnosticCode = ReadRequiredJsonString(entryElement, "diagnosticCode");
+        var filePath = ReadRequiredJsonString(entryElement, "filePath");
+        var uid = ReadOptionalJsonString(entryElement, "uid");
+        var symbol = ReadOptionalJsonString(entryElement, "symbol");
+        var reason = ReadRequiredJsonString(entryElement, "reason");
+        var approval = ReadRequiredJsonString(entryElement, "approval");
+        var lifetime = ReadRequiredJsonString(entryElement, "lifetime");
+
+        if (string.IsNullOrWhiteSpace(diagnosticCode) ||
+            string.IsNullOrWhiteSpace(filePath) ||
+            string.IsNullOrWhiteSpace(reason) ||
+            string.IsNullOrWhiteSpace(approval) ||
+            string.IsNullOrWhiteSpace(lifetime))
+        {
+            error = $"Each '{SkipAllowlistFileName}' entry must include diagnosticCode, filePath, reason, approval, and lifetime.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(uid) && string.IsNullOrWhiteSpace(symbol))
+        {
+            error = $"Each '{SkipAllowlistFileName}' entry must include either uid or symbol.";
+            return false;
+        }
+
+        if (!string.Equals(lifetime, "temporary", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(lifetime, "permanent", StringComparison.OrdinalIgnoreCase))
+        {
+            error = $"'{SkipAllowlistFileName}' entry lifetime must be 'temporary' or 'permanent'.";
+            return false;
+        }
+
+        var fullFilePath = Path.GetFullPath(Path.Combine(repoRoot, filePath));
+        entry = new ApprovedSkipEntry(
+            diagnosticCode,
+            filePath,
+            fullFilePath,
+            string.IsNullOrWhiteSpace(uid) ? null : uid,
+            string.IsNullOrWhiteSpace(symbol) ? null : symbol,
+            reason,
+            approval,
+            lifetime.ToLowerInvariant());
+        return true;
+    }
+
+    private static string? ReadOptionalJsonString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+    }
+
+    private static string ReadRequiredJsonString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString() ?? string.Empty
+            : string.Empty;
     }
 
     // ----------------------------------------------------------------------
@@ -5738,7 +6021,8 @@ internal static class DocfxValidator
         HashSet<string> knownTypeSectionUids, string candidate)
     {
         if (PathsEqual(candidate, Path.Combine(repoRoot, "AGENTS.md")) ||
-            PathsEqual(candidate, docfxPath))
+            PathsEqual(candidate, docfxPath) ||
+            PathsEqual(candidate, Path.Combine(docfxWorkspace, SkipAllowlistFileName)))
         {
             return true;
         }
@@ -7467,6 +7751,7 @@ internal static class DocfxValidator
 
         report.Summary.Errors = report.Errors.Count;
         report.Summary.Warnings = report.Warnings.Count;
+        report.Summary.FullVerificationRan = options.BuildApiModel && options.ValidateSamples && options.VerifyDocfxBuild;
         report.Summary.RemainingGates = new List<string>();
         if (!options.BuildApiModel)
         {
@@ -7508,6 +7793,11 @@ internal static class DocfxValidator
             .GroupBy(error => error.Code, StringComparer.Ordinal)
             .OrderBy(group => group.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        report.Summary.WarningDiagnosticsByCode = report.Warnings
+            .GroupBy(warning => warning.Code, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        report.Summary.InterimArtifacts = report.Summary.RemainingDiagnosticsByCode.GetValueOrDefault("INTERIM_ARTIFACT_IN_WORKTREE");
 
         WriteAssessmentQueueIfRequested(options, report);
 
@@ -7547,7 +7837,10 @@ internal static class DocfxValidator
                 $"namespaces={report.Summary.PublicNamespaces}, pages={report.Summary.NamespacePagesValidated}, " +
                 $"requiredExampleTargets={report.Summary.RequiredExampleTargets}, requiredExamples={report.Summary.RequiredExamples}, " +
                 $"extMethods={report.Summary.ExtensionMethods}, samplesCompiled={report.Summary.SamplesCompiled}, " +
-                $"samplesSkipped={report.Summary.SamplesSkipped}, generatedMetadataRemoved={report.Summary.GeneratedMetadataFilesRemoved}, " +
+                $"samplesSkipped={report.Summary.SamplesSkipped}, preApprovedSkips={report.Summary.PreExistingApprovedSkipMarkers}, " +
+                $"newSkipMarkers={report.Summary.NewlyIntroducedSkipMarkers}, unapprovedSkips={report.Summary.UnapprovedSkipMarkers}, " +
+                $"interimArtifacts={report.Summary.InterimArtifacts}, fullVerificationRan={report.Summary.FullVerificationRan.ToString().ToLowerInvariant()}, " +
+                $"generatedMetadataRemoved={report.Summary.GeneratedMetadataFilesRemoved}, " +
                 $"generatedOutputDirectoriesRemoved={report.Summary.GeneratedOutputDirectoriesRemoved}, " +
                 $"docfxBuildsVerified={report.Summary.DocfxBuildsVerified}, errors={report.Summary.Errors}, warnings={report.Summary.Warnings}");
 
@@ -7576,8 +7869,10 @@ internal static class DocfxValidator
     private static string Describe(Diagnostic d)
     {
         var location = d.Namespace is not null ? $"({d.Namespace}) " : string.Empty;
+        var uid = d.Uid is not null ? $"[uid: {d.Uid}] " : string.Empty;
+        var symbol = d.Symbol is not null && d.Uid is null ? $"[symbol: {d.Symbol}] " : string.Empty;
         var path = d.Path is not null ? $"{d.Path}: " : string.Empty;
-        return $"{path}{location}{d.Message}";
+        return $"{path}{location}{uid}{symbol}{d.Message}";
     }
 
     private static void WriteAssessmentQueueIfRequested(Options options, Report report)
@@ -7626,10 +7921,23 @@ internal static class DocfxValidator
         sb.AppendLine($"- Can claim completion: `{report.Summary.CanClaimCompletion.ToString().ToLowerInvariant()}`");
         sb.AppendLine($"- Remaining work items: {report.Summary.RemainingWorkItems}");
         sb.AppendLine($"- Remaining final-verification gates: {(report.Summary.RemainingGates.Count == 0 ? "none" : string.Join(", ", report.Summary.RemainingGates.Select(gate => $"`{gate}`")))}");
+        sb.AppendLine($"- Full verification ran: `{report.Summary.FullVerificationRan.ToString().ToLowerInvariant()}`");
+        sb.AppendLine($"- Pre-existing approved skip markers: {report.Summary.PreExistingApprovedSkipMarkers}");
+        sb.AppendLine($"- Newly introduced skip markers: {report.Summary.NewlyIntroducedSkipMarkers}");
+        sb.AppendLine($"- Unapproved skip markers: {report.Summary.UnapprovedSkipMarkers}");
+        sb.AppendLine($"- Interim artifacts: {report.Summary.InterimArtifacts}");
+        if (!string.IsNullOrWhiteSpace(report.SkipAllowlistPath))
+        {
+            sb.AppendLine($"- Skip allowlist: `{report.SkipAllowlistPath}`");
+        }
         sb.AppendLine($"- Execution profile: `{report.Summary.Execution.Profile}` ({report.Summary.Execution.LogicalProcessors} processors, {report.Summary.Execution.AvailableMemoryBytes / (1024d * 1024 * 1024):F1} GiB available, build workers {report.Summary.Execution.BuildParallelism}, sample workers {report.Summary.Execution.SampleParallelism}, timeout {report.Summary.Execution.ProcessTimeoutMinutes} minutes, concurrent DocFX `{report.Summary.Execution.ConcurrentDocfxVerification.ToString().ToLowerInvariant()}`)");
         sb.AppendLine("- Every error below is an active repair item. Its age, pre-existing status, or the number of similar diagnostics does not make it a blocker or move it out of scope for a repo-wide digest.");
         sb.AppendLine("- Do not relabel prose, cleanup, or unresolved ownership errors as quality backlog. `EXAMPLE_LEAD_MISSING`, `EXAMPLE_ADVANCED_LEAD_MISSING`, `FAMILY_ANCHOR_EXAMPLE_MISSING`, `SAMPLE_STRUCTURE_INVALID`, `INTERIM_ARTIFACT_IN_WORKTREE`, `SYMBOL_COLLISION_UNRESOLVED`, and `EXTENSION_OWNER_AMBIGUOUS` are blocking repair items until the completion contract is clean.");
         sb.AppendLine("- Do not stop after repairing only a sample of namespaces, types, extension sections, or examples. Rerun the validator and continue until `canClaimCompletion` is `true`.");
+        sb.AppendLine("- No premature handoff: while `canClaimCompletion` is `false`, `remainingWorkItems` is greater than `0`, `remainingGates` is non-empty, fail-level diagnostics remain, full verification has not run, newly introduced skip markers are non-zero, or interim artifacts are non-zero, do not emit a final report, handoff, audit result, or completion-shaped summary.");
+        sb.AppendLine("- Invalid stop reasons include large queues, many changed/generated files, an active queue, remaining prose/examples, missing full verification, repetitive next steps, or a run taking longer than expected. Those are repair-loop inputs, not blockers.");
+        sb.AppendLine("- While `remainingWorkItems` is greater than `0`, the next action must be another remediation batch, a required validator rerun, a validator/tooling fix, or a true blocker with the exact command, exit code, and failure output.");
+        sb.AppendLine("- Skip markers are waivers, not fixes. Only pre-existing approved entries from the deterministic skip allowlist count as real waivers; newly introduced or unapproved skip markers stay in the fail-level queue and do not suppress compilation.");
         sb.AppendLine("- An unrelated build or test failure may be reported separately, but it does not end documentation repair unless it prevents the validator or required evidence inspection from running.");
         sb.AppendLine("- Stop incomplete only when the user pauses the task or an external condition still prevents progress after concrete repair attempts. Report the exact command, exit code, blocker, and remaining diagnostic counts; never describe that state as complete.");
         sb.AppendLine();
@@ -7641,6 +7949,7 @@ internal static class DocfxValidator
         sb.AppendLine($"- Required examples found: {report.Summary.RequiredExamples}");
         sb.AppendLine($"- Extension methods: {report.Summary.ExtensionMethods}");
         sb.AppendLine($"- Samples compiled: {report.Summary.SamplesCompiled}");
+        sb.AppendLine($"- Samples skipped by pre-existing approved waivers: {report.Summary.SamplesSkipped}");
         sb.AppendLine($"- DocFX builds verified: {report.Summary.DocfxBuildsVerified}");
         sb.AppendLine($"- Errors: {report.Errors.Count}");
         sb.AppendLine($"- Warnings: {report.Warnings.Count}");
@@ -7673,7 +7982,7 @@ internal static class DocfxValidator
         AppendRequiredExampleDiagnostics(sb, report.Errors.Where(IsExampleQualityDiagnostic), report.PackageIds);
         AppendGitHubExampleSources(sb, report.PackageIds, report.ExampleSearchSnippets);
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
-            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_STRUCTURE_INVALID"));
+            e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_SKIP_NOT_ALLOWLISTED" or "FAIL_NEW_SKIP_MARKER_INTRODUCED" or "SAMPLE_STRUCTURE_INVALID" or "SKIP_ALLOWLIST_INVALID"));
         AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
             e.Code is not "AGENTS_BLOCK_MISSING" &&
             e.Code is not "INTERIM_ARTIFACT_IN_WORKTREE" &&
@@ -7682,7 +7991,7 @@ internal static class DocfxValidator
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
             e.Code is not "SYMBOL_COLLISION_UNRESOLVED" &&
             !IsExampleQualityDiagnostic(e) &&
-            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_STRUCTURE_INVALID"));
+            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_SKIP_NOT_ALLOWLISTED" and not "FAIL_NEW_SKIP_MARKER_INTRODUCED" and not "SAMPLE_STRUCTURE_INVALID" and not "SKIP_ALLOWLIST_INVALID"));
         AppendDiagnostics(sb, "Warnings", report.Warnings);
 
         sb.AppendLine("## Completion Checklist");
@@ -7693,9 +8002,10 @@ internal static class DocfxValidator
         sb.AppendLine("- [ ] GitHub example sources consulted before writing any new example (see 'GitHub Example Sources' section).");
         sb.AppendLine("- [ ] Every missing, duplicate, placeholder, reflection-only, target-use, lead, advanced-lead, family-anchor, and extension-invocation example diagnostic above has been resolved.");
         sb.AppendLine("- [ ] Changed C# examples pass structural validation (namespace + type declaration, or labelled `// Program.cs`).");
-        sb.AppendLine("- [ ] Changed C# examples compile as a class library project referencing the documented assemblies.");
+        sb.AppendLine("- [ ] Every sample that is not a pre-existing approved allowlist waiver compiles successfully.");
+        sb.AppendLine("- [ ] Any remaining skip markers are pre-existing approved allowlist entries in `skip-compile-allowlist.json`; zero newly introduced or unapproved skip markers remain.");
         sb.AppendLine("- [ ] Authored Markdown files still exist after generated-artifact cleanup.");
-        sb.AppendLine("- [ ] Final JSON reports `canClaimCompletion: true`, `remainingWorkItems: 0`, no remaining gates, and no remaining diagnostic counts.");
+        sb.AppendLine("- [ ] Final JSON reports `fullVerificationRan: true`, `canClaimCompletion: true`, `remainingWorkItems: 0`, no remaining gates, no remaining fail-level diagnostic counts, `newlyIntroducedSkipMarkers: 0`, and `interimArtifacts: 0`.");
         sb.AppendLine("- [ ] Final validation command and exit code are reported.");
 
         return sb.ToString();
@@ -8348,8 +8658,11 @@ internal static class DocfxValidator
         public required List<string> MarkdownFiles { get; init; }
         public required Dictionary<string, string> MarkdownTextByPath { get; init; }
         public required List<OverwriteSection> OverwriteSections { get; init; }
+        public required List<ApprovedSkipEntry> SkipAllowlistEntries { get; init; }
         public Dictionary<string, List<ProjectInfo>> NamespaceProjects { get; } =
             new(StringComparer.Ordinal);
+        public Dictionary<string, List<BaselineSkipMarker>> BaselineSkipMarkersByFile { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
 
         public string ReadMarkdown(string path)
         {
@@ -8375,7 +8688,32 @@ internal static class DocfxValidator
 
     private sealed record SampleFence(string File, int FenceIndex, int StartLine, string Code);
 
-    private sealed record OverwriteSection(string File, string Uid, string Body, bool MappedToExample = false);
+    private sealed record OverwriteSection(
+        string File,
+        string Uid,
+        string Body,
+        bool MappedToExample = false,
+        int BodyStartLine = 0,
+        int BodyEndLine = 0);
+
+    private sealed record SkipMarkerInfo(bool Found, string Text, string Reason, int LineOffset);
+
+    private sealed record SampleOwnerInfo(string? Uid, string Symbol)
+    {
+        public string DisplayName => Uid ?? Symbol;
+    }
+
+    private sealed record ApprovedSkipEntry(
+        string DiagnosticCode,
+        string FilePath,
+        string FullFilePath,
+        string? Uid,
+        string? Symbol,
+        string Reason,
+        string Approval,
+        string Lifetime);
+
+    private sealed record BaselineSkipMarker(int FenceIndex, string MarkerText, string Reason, string? Uid, string Symbol);
 
     private sealed record ExampleQualityResult(bool Valid, string? Code, string? Message, int Priority)
     {
@@ -8448,26 +8786,32 @@ internal static class DocfxValidator
 
 internal sealed class Diagnostic
 {
-    public Diagnostic(string code, string? path, string? @namespace, string message)
+    public Diagnostic(string code, string? path, string? @namespace, string message, string? uid = null, string? symbol = null)
     {
         Code = code;
         Path = path;
         Namespace = @namespace;
         Message = message;
+        Uid = uid;
+        Symbol = symbol;
     }
 
     [JsonPropertyName("code")] public string Code { get; }
     [JsonPropertyName("path")] public string? Path { get; }
     [JsonPropertyName("namespace")] public string? Namespace { get; }
     [JsonPropertyName("message")] public string Message { get; }
+    [JsonPropertyName("uid")] public string? Uid { get; }
+    [JsonPropertyName("symbol")] public string? Symbol { get; }
 }
 
 internal sealed class Summary
 {
     public string? CompletionState { get; set; }
     public bool CanClaimCompletion { get; set; }
+    public bool FullVerificationRan { get; set; }
     public int RemainingWorkItems { get; set; }
     public Dictionary<string, int> RemainingDiagnosticsByCode { get; set; } = new();
+    public Dictionary<string, int> WarningDiagnosticsByCode { get; set; } = new();
     public List<string> RemainingGates { get; set; } = new();
     public ExecutionSummary Execution { get; set; } = new();
     public string? ValidationMode { get; set; }
@@ -8482,6 +8826,10 @@ internal sealed class Summary
     public int ExtensionMethods { get; set; }
     public int SamplesCompiled { get; set; }
     public int SamplesSkipped { get; set; }
+    public int PreExistingApprovedSkipMarkers { get; set; }
+    public int NewlyIntroducedSkipMarkers { get; set; }
+    public int UnapprovedSkipMarkers { get; set; }
+    public int InterimArtifacts { get; set; }
     public int GeneratedMetadataFilesRemoved { get; set; }
     public int GeneratedOutputDirectoriesRemoved { get; set; }
     public int DocfxBuildsVerified { get; set; }
@@ -8521,6 +8869,7 @@ internal sealed class Report
     public string Script { get; set; } = string.Empty;
     public string RepoRoot { get; set; } = string.Empty;
     public string? DocfxPath { get; set; }
+    public string? SkipAllowlistPath { get; set; }
     public string? AssessmentQueuePath { get; set; }
     public string? ProjectManifestPath { get; set; }
     public string? ResumedProjectManifestPath { get; set; }
@@ -8530,8 +8879,23 @@ internal sealed class Report
     public ScopeReport? Scope { get; set; }
     public List<Diagnostic> Errors { get; set; } = new();
     public List<Diagnostic> Warnings { get; set; } = new();
+    public List<SkipMarkerReport> SkipMarkers { get; set; } = new();
     public List<string> PackageIds { get; set; } = new();
     public List<string> ExampleSearchSnippets { get; set; } = new();
+}
+
+internal sealed class SkipMarkerReport
+{
+    public string DiagnosticCode { get; set; } = "SAMPLE_COMPILE_FAILED";
+    public string FilePath { get; set; } = string.Empty;
+    public string? Uid { get; set; }
+    public string? Symbol { get; set; }
+    public string MarkerText { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+    public bool Approved { get; set; }
+    public bool ExistedBeforeRun { get; set; }
+    public string? Approval { get; set; }
+    public string? Lifetime { get; set; }
 }
 
 internal sealed class ScopeReport

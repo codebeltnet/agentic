@@ -189,7 +189,21 @@ Write-Utf8File (Join-Path $interimWorkspace '.docfx/family-exemptions.json') @'
   "families": []
 }
 '@
-        Write-Utf8File (Join-Path $interimWorkspace '.docfx/api/namespaces/Acme.Utility.md') @'
+Write-Utf8File (Join-Path $interimWorkspace '.docfx/skip-compile-allowlist.json') @'
+{
+  "entries": [
+    {
+      "diagnosticCode": "SAMPLE_COMPILE_FAILED",
+      "filePath": ".docfx/api/types/Acme.Utility.Tool.md",
+      "uid": "Acme.Utility.Tool",
+      "reason": "requires a provisioned SQL Server schema managed outside the isolated sample compiler",
+      "approval": "2026-06-20 issue #1234",
+      "lifetime": "temporary"
+    }
+  ]
+}
+'@
+Write-Utf8File (Join-Path $interimWorkspace '.docfx/api/namespaces/Acme.Utility.md') @'
 ---
 uid: Acme.Utility
 ---
@@ -237,9 +251,209 @@ Scratch notes.
                 throw "Did not expect $allowed to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
             }
         }
+        if ($interimPaths -contains '.docfx/skip-compile-allowlist.json') {
+            throw "Did not expect .docfx/skip-compile-allowlist.json to be flagged as an interim artifact. Paths: $($interimPaths -join ', ')"
+        }
     } finally {
         if (Test-Path $interimWorkspace) {
             Remove-Item $interimWorkspace -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $approvedSkipWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-approved-skip-' + [guid]::NewGuid().ToString('N'))
+    try {
+        Write-Utf8File (Join-Path $approvedSkipWorkspace 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+        Write-Utf8File (Join-Path $approvedSkipWorkspace 'src/Utility/Utility.csproj') $projectCsproj
+        Write-Utf8File (Join-Path $approvedSkipWorkspace 'src/Utility/Utility.cs') @'
+namespace Acme.Utility;
+
+public sealed class Tool
+{
+    public int Attempts { get; set; }
+}
+'@
+        Write-Utf8File (Join-Path $approvedSkipWorkspace '.docfx/docfx.json') (New-DocfxJson @('src/Utility/Utility.csproj'))
+        Write-Utf8File (Join-Path $approvedSkipWorkspace '.docfx/api/namespaces/Acme.Utility.md') @'
+---
+uid: Acme.Utility
+summary: *content
+---
+Use `Tool` when a caller needs to carry retry-attempt metadata through a small workflow.
+
+Start with `Tool` to hold the attempt count before passing it to another operation.
+
+Availability: `Acme.Utility`
+'@
+        Write-Utf8File (Join-Path $approvedSkipWorkspace '.docfx/api/types/Acme.Utility.Tool.md') @'
+---
+uid: Acme.Utility.Tool
+example: *content
+---
+The following example records retry attempts before handing them to a database helper that is intentionally unavailable to the isolated sample compiler.
+
+```csharp
+// dotnet-docfx-digest:skip-compile - requires a provisioned SQL Server schema managed outside the isolated sample compiler
+using Acme.Utility;
+
+namespace Acme.Utility.Samples;
+
+public sealed class ToolConsumer
+{
+    public int Execute()
+    {
+        var tool = new Tool { Attempts = 3 };
+        return ExternalDatabase.RecordAttempt(tool.Attempts);
+    }
+}
+```
+'@
+        Write-Utf8File (Join-Path $approvedSkipWorkspace '.docfx/skip-compile-allowlist.json') @'
+{
+  "entries": [
+    {
+      "diagnosticCode": "SAMPLE_COMPILE_FAILED",
+      "filePath": ".docfx/api/types/Acme.Utility.Tool.md",
+      "uid": "Acme.Utility.Tool",
+      "reason": "requires a provisioned SQL Server schema managed outside the isolated sample compiler",
+      "approval": "2026-06-20 issue #1234",
+      "lifetime": "temporary"
+    }
+  ]
+}
+'@
+        Initialize-GitRepo $approvedSkipWorkspace
+
+        $approvedSkip = Invoke-Validator -Workspace $approvedSkipWorkspace -ExtraArgs @('--validate-samples')
+        Assert-NoDiagnostic -Report $approvedSkip -Code 'FAIL_NEW_SKIP_MARKER_INTRODUCED'
+        Assert-NoDiagnostic -Report $approvedSkip -Code 'SAMPLE_SKIP_NOT_ALLOWLISTED'
+        Assert-NoDiagnostic -Report $approvedSkip -Code 'SAMPLE_COMPILE_FAILED'
+        if ($approvedSkip.summary.samplesSkipped -ne 1) {
+            throw "Expected one approved skipped sample; got $($approvedSkip.summary.samplesSkipped)."
+        }
+        if ($approvedSkip.summary.preExistingApprovedSkipMarkers -ne 1) {
+            throw "Expected one pre-existing approved skip marker; got $($approvedSkip.summary.preExistingApprovedSkipMarkers)."
+        }
+        if ($approvedSkip.summary.newlyIntroducedSkipMarkers -ne 0) {
+            throw "Expected zero newly introduced skip markers; got $($approvedSkip.summary.newlyIntroducedSkipMarkers)."
+        }
+        if (-not @($approvedSkip.skipMarkers | Where-Object { $_.approved -and $_.existedBeforeRun -and $_.uid -eq 'Acme.Utility.Tool' })) {
+            throw 'Expected the approved skip marker to be reported with approved=true and existedBeforeRun=true.'
+        }
+    } finally {
+        if (Test-Path $approvedSkipWorkspace) {
+            Remove-Item $approvedSkipWorkspace -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $newSkipWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-new-skip-' + [guid]::NewGuid().ToString('N'))
+    try {
+        Write-Utf8File (Join-Path $newSkipWorkspace 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+        Write-Utf8File (Join-Path $newSkipWorkspace 'src/Utility/Utility.csproj') $projectCsproj
+        Write-Utf8File (Join-Path $newSkipWorkspace 'src/Utility/Utility.cs') @'
+namespace Acme.Utility;
+
+public sealed class Tool
+{
+    public int Attempts { get; set; }
+}
+'@
+        Write-Utf8File (Join-Path $newSkipWorkspace '.docfx/docfx.json') (New-DocfxJson @('src/Utility/Utility.csproj'))
+        Write-Utf8File (Join-Path $newSkipWorkspace '.docfx/api/namespaces/Acme.Utility.md') @'
+---
+uid: Acme.Utility
+summary: *content
+---
+Use `Tool` when a caller needs to carry retry-attempt metadata through a small workflow.
+
+Start with `Tool` to hold the attempt count before passing it to another operation.
+
+Availability: `Acme.Utility`
+'@
+        Write-Utf8File (Join-Path $newSkipWorkspace '.docfx/api/types/Acme.Utility.Tool.md') @'
+---
+uid: Acme.Utility.Tool
+example: *content
+---
+The following example records retry attempts before handing them to a database helper that is intentionally unavailable to the isolated sample compiler.
+
+```csharp
+using Acme.Utility;
+
+namespace Acme.Utility.Samples;
+
+public sealed class ToolConsumer
+{
+    public int Execute()
+    {
+        var tool = new Tool { Attempts = 3 };
+        return ExternalDatabase.RecordAttempt(tool.Attempts);
+    }
+}
+```
+'@
+        Initialize-GitRepo $newSkipWorkspace
+        Write-Utf8File (Join-Path $newSkipWorkspace '.docfx/api/types/Acme.Utility.Tool.md') @'
+---
+uid: Acme.Utility.Tool
+example: *content
+---
+The following example records retry attempts before handing them to a database helper that is intentionally unavailable to the isolated sample compiler.
+
+```csharp
+// dotnet-docfx-digest:skip-compile - requires a provisioned SQL Server schema managed outside the isolated sample compiler
+using Acme.Utility;
+
+namespace Acme.Utility.Samples;
+
+public sealed class ToolConsumer
+{
+    public int Execute()
+    {
+        var tool = new Tool { Attempts = 3 };
+        return ExternalDatabase.RecordAttempt(tool.Attempts);
+    }
+}
+```
+'@
+        Write-Utf8File (Join-Path $newSkipWorkspace '.docfx/skip-compile-allowlist.json') @'
+{
+  "entries": [
+    {
+      "diagnosticCode": "SAMPLE_COMPILE_FAILED",
+      "filePath": ".docfx/api/types/Acme.Utility.Tool.md",
+      "uid": "Acme.Utility.Tool",
+      "reason": "requires a provisioned SQL Server schema managed outside the isolated sample compiler",
+      "approval": "2026-06-20 issue #1234",
+      "lifetime": "temporary"
+    }
+  ]
+}
+'@
+
+        $newSkip = Invoke-Validator -Workspace $newSkipWorkspace -ExtraArgs @('--validate-samples')
+        Assert-Diagnostic -Report $newSkip -Code 'FAIL_NEW_SKIP_MARKER_INTRODUCED'
+        Assert-Diagnostic -Report $newSkip -Code 'SAMPLE_COMPILE_FAILED'
+        Assert-NoDiagnostic -Report $newSkip -Code 'SAMPLE_SKIP_NOT_ALLOWLISTED'
+        if ($newSkip.summary.samplesSkipped -ne 0) {
+            throw "Expected zero skipped samples for a newly introduced skip marker; got $($newSkip.summary.samplesSkipped)."
+        }
+        if ($newSkip.summary.newlyIntroducedSkipMarkers -ne 1) {
+            throw "Expected one newly introduced skip marker; got $($newSkip.summary.newlyIntroducedSkipMarkers)."
+        }
+        if (-not @($newSkip.skipMarkers | Where-Object { $_.approved -and -not $_.existedBeforeRun -and $_.uid -eq 'Acme.Utility.Tool' })) {
+            throw 'Expected the new skip marker to be reported with approved=true and existedBeforeRun=false.'
+        }
+    } finally {
+        if (Test-Path $newSkipWorkspace) {
+            Remove-Item $newSkipWorkspace -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
