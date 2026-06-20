@@ -1,0 +1,1166 @@
+{
+  "skill_name": "dotnet-docfx-digest",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just added a new public class `RetryPolicy` and a public extension method `WithRetry(this HttpClient client, int attempts)` to my .NET library in the `Acme.Net.Http` namespace. Please update the DocFX documentation for this change.",
+      "expected_output": "Agent runs scripts/agents.cs to seed AGENTS.md, creates/updates the Acme.Net.Http namespace overview page with uid front matter, a fly-in, availability, and an Extension Members table listing the extended type with the WithRetry method, adds a buildable example for RetryPolicy, and runs scripts/docfx.cs with --verify-docfx-build to verify without leaving generated DocFX output in the working tree.",
+      "expectations": [
+        "Runs the deterministic scripts/agents.cs against the repository before completing",
+        "Creates or updates a namespace overview page named Acme.Net.Http.md with DocFX overwrite front matter whose uid matches the namespace",
+        "Adds an Extension Members table documenting the extended type (HttpClient), the ⬇️ marker, and the WithRetry method in backticks",
+        "Adds at least one copy/paste-ready, buildable example for the concrete RetryPolicy type with a short human fly-in before the C# fence",
+        "Includes availability information via an include or explicit Availability text",
+        "Runs scripts/docfx.cs with --verify-docfx-build to verify before claiming the documentation was verified"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Document the new `internal` helper class `BufferPool` and the `private` method `Rent` I added under `Acme.Buffers`. There is no other public type in that namespace yet.",
+      "expected_output": "Agent declines to create documentation for internal/private members and does not create a namespace overview page for a namespace that contains no public API, explaining the public-API-only rule.",
+      "expectations": [
+        "Does not create documentation pages or overwrite files for internal or private members",
+        "Does not create a namespace overview page for Acme.Buffers because it contains no public API",
+        "Explains that only public API is documented and points to the public-API rule",
+        "Does not fabricate public API that does not exist"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Add a usage example to the `Acme.Text` namespace page for the `Greeter` class. Base it on the existing unit test `GreeterTest.Greet_WithName_ReturnsGreeting`.",
+      "expected_output": "Agent preserves the `Acme.Text` namespace page as a namespace-scoped overview, converts the Arrange/Act/Assert test into a real-life consumer-oriented, buildable example on the `Greeter` type page under `.docfx/api/types/` (or an equivalent type-targeted overwrite file), and verifies it compiles with scripts/docfx.cs.",
+      "expectations": [
+        "Derives the example from the referenced test rather than inventing behavior",
+        "Converts the Arrange/Act/Assert structure into developer-oriented usage instead of pasting raw assertions",
+        "Does not append a secondary `uid:` / `example:` block to the namespace page after `Extension Members` or other namespace guidance",
+        "Places the `Greeter` example on a type-targeted overwrite file under `.docfx/api/types/` rather than on the namespace overview file",
+        "Produces a minimal, deterministic, copy/paste-ready C# example with a real using directive for Acme.Text and a short fly-in before the C# fence",
+        "Avoids pseudo-code, ellipses, and hidden helpers in the sample",
+        "Verifies the sample compiles via scripts/docfx.cs or an equivalent build command"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Run the DocFX documentation validator on this repository and tell me whether the docs are in good shape.",
+      "expected_output": "Agent runs scripts/docfx.cs with --verify-docfx-build (and scripts/agents.cs if needed), reports the exact command, exit code, and the deterministic JSON/console findings, and does not claim verification without running the script.",
+      "expectations": [
+        "Runs scripts/docfx.cs against the repository root with --verify-docfx-build so DocFX runs in a temp workspace",
+        "Reports the exact command run and its exit code",
+        "Surfaces the deterministic findings (errors/warnings with their codes) rather than guessing",
+        "Does not claim the documentation was verified unless the script actually ran successfully"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "The `Acme.Text` namespace page already has a hand-written introduction and a couple of links I care about. I changed the `Shout` extension method to also trim whitespace. Update the docs but keep my wording.",
+      "expected_output": "Agent preserves the manual introduction and links, keeps working URL references unless a removed or replaced link was verified as HTTP 404, updates only the stale parts relevant to the behavior change, keeps the Extension Members table accurate, and avoids wholesale file replacement.",
+      "expectations": [
+        "Preserves the existing hand-written introduction and links instead of replacing the whole file",
+        "Preserves working URL references and related links unless a removed or replaced link was justified by a verified HTTP 404",
+        "Updates only the stale portions affected by the behavior change",
+        "Keeps the Extension Members table accurate for the Shout method",
+        "Does not leave contradictory descriptions of the Shout behavior",
+        "Re-verifies any changed sample compiles"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Use dotnet-docfx-digest on this repository.",
+      "expected_output": "Agent treats the request as a repo-wide DocFX documentation audit instead of asking what to document first. It treats the bare/direct skill invocation as autonomous non-human execution, runs scripts/agents.cs, inspects AGENTS.md, docfx.json, source projects, public API, tests, samples, overwrite files, namespace pages, and availability includes, runs scripts/docfx.cs to collect deterministic findings and writes a deterministic `--assessment-queue` for noisy diagnostics into temp or session storage, uses that assessment work queue as the work queue, runs with --verify-docfx-build before completion, repairs missing complementary DocFX documentation that can be derived from source evidence, reads the DocFX overwrite reference when creating or repairing overwrite files, and asks for clarification only if discovery exposes a correctness-affecting choice.",
+      "expectations": [
+        "Does not start by asking the user which API or namespace to document",
+        "Runs scripts/agents.cs to ensure the repository AGENTS.md contains the managed DocFX maintenance block",
+        "Inspects docfx.json and existing DocFX overwrite, namespace, include, source, test, and sample evidence before editing",
+        "Runs scripts/docfx.cs, preferably with --json when collecting repo-wide findings, and uses --verify-docfx-build before completion so generated output stays outside the working tree",
+        "For multi-diagnostic output, writes and reads a deterministic `--assessment-queue` and uses it as the work queue before editing",
+        "Keeps assessment queues, manifests, captured validator output, progress notes, and helper scripts outside the repository working tree",
+        "Creates or updates missing namespace overview pages, Extension Members tables, examples, and availability notes that can be derived from evidence",
+        "Reads references/docfx-overwrite-files.md before creating or repairing DocFX overwrite files",
+        "Treats the bare/direct skill invocation as autonomous and does not ask for a continue/review menu while repairable diagnostics remain",
+        "Does not create repo-root scratch artifacts such as `progress.md`, `output-*.md`, `docfx_out*.json`, or `fix_*.py` as part of the audit",
+        "Asks a concise clarifying question only after inspection finds a correctness-affecting unresolved choice"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Use dotnet-docfx-digest on a .NET library whose namespace pages and Extension Members tables are present, but public non-abstraction types such as `ApplicationHostFactory` and public extension methods have no examples. The DocFX config already points `build.overwrite` at `.docfx/api/namespaces/**/*.md`, but some earlier authored overwrite Markdown still lives directly under `.docfx/api/*.md`.",
+      "expected_output": "Agent does not stop after confirming namespace pages and extension tables. It audits public non-abstraction types and public extension methods for examples, creates or moves readable overwrite files under `.docfx/api/types/` for missing concrete-type examples, keeps `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` only, keeps `api/namespaces/**` and `api/types/**` excluded from `build.content`, puts type examples on the generated type page/overwrite section rather than the namespace UID page, uses generated UIDs rather than guessing, derives buildable examples from tests or actual public API behavior, runs the Completion Repair Loop by rerunning scripts/docfx.cs --json after edits, fixes remaining EXAMPLE_MISSING or overwrite-layout diagnostics instead of listing them as final notes, and uses --verify-docfx-build before completion so DocFX output is generated in temp space.",
+      "expectations": [
+        "Treats namespace overview pages and Extension Members tables as insufficient when examples are missing",
+        "Creates or moves readable type-targeting DocFX overwrite files under `.docfx/api/types/` for public non-abstraction type examples",
+        "Keeps `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` only and excludes `api/namespaces/**` and `api/types/**` from `build.content`",
+        "Places a public ApplicationHostFactory example on the ApplicationHostFactory type page/overwrite section rather than only on the namespace page",
+        "Creates or updates overwrite content for public extension method examples on the declaring extension class page or another readable type-targeted file under `.docfx/api/types/` while explicitly demonstrating the method and introducing the code with a human fly-in",
+        "Uses generated DocFX UIDs or verified metadata instead of inventing overwrite UIDs",
+        "Runs the Completion Repair Loop after edits by rerunning scripts/docfx.cs --json, fixing remaining EXAMPLE_MISSING and overwrite-layout diagnostics, and updating the example inventory before claiming completion",
+        "Uses --verify-docfx-build for final DocFX build verification",
+        "Compiles changed C# examples or reports the exact verification failure"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Run dotnet-docfx-digest validation with `--changed-only` after I added a new public concrete type `Acme.Http.RetryPolicy` and a public extension method `WithRetry(this HttpClient client, int attempts)`. I also created a brand-new untracked overwrite file `.docfx/api/namespaces/Acme.Http.RetryPolicy.md`, but its C# example still does not compile and I have not run `git add` yet.",
+      "expected_output": "Agent runs scripts/docfx.cs with --changed-only and still validates the new untracked overwrite file instead of skipping it because git has not started tracking it yet. It surfaces SAMPLE_COMPILE_FAILED for the broken C# sample, still scopes the check to the changed APIs and related DocFX inputs, and uses --verify-docfx-build before claiming the docs are verified.",
+      "expectations": [
+        "Runs scripts/docfx.cs with --changed-only when collecting incremental findings",
+        "Includes the new untracked `.docfx/api/namespaces/Acme.Http.RetryPolicy.md` file in the changed-file scope even though it has not been staged or committed",
+        "Surfaces SAMPLE_COMPILE_FAILED for the broken sample in the untracked overwrite file instead of silently skipping it",
+        "Does not silently skip changed-only sample validation just because git returned only tracked changes in `git diff`",
+        "Scopes the example and sample validation to changed APIs or related DocFX inputs rather than re-reporting the whole repository by default",
+        "Uses --verify-docfx-build before claiming final verification"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Use dotnet-docfx-digest on a Codebelt.Bootstrapper-style repository. During the run you create `.docfx/api/namespaces/Codebelt.Bootstrapper.ProgramRoot.md` and `.docfx/api/namespaces/Codebelt.Bootstrapper.md`, then validation leaves generated DocFX metadata files beside those authored markdown files. Clean up generated artifacts before completion.",
+      "expected_output": "Agent preserves all authored Markdown overwrite and namespace files, including files created earlier in the same run, cleans only known generated DocFX metadata or safe generated site output, removes or relocates unexpected new repo-root or DocFX-workspace files that are not known `dotnet-docfx-digest` deliverables into temp or session storage, does not delete `.docfx/api/namespaces/**/*.md`, does not recursively delete DocFX directories that contain Markdown or source/configuration files, uses `docfx.cs --verify-docfx-build` for temp-workspace verification, classifies any remaining `git status` paths before deletion, and leaves ambiguous cleanup candidates in place with a note instead of deleting them.",
+      "expectations": [
+        "Treats newly created `.docfx/**/*.md` files as documentation deliverables rather than cleanup targets",
+        "Does not run broad manual cleanup commands that delete DocFX directories by name",
+        "Lists cleanup candidates before deletion and classifies them as generated metadata, generated site output, or build artifacts",
+        "Treats unexpected new repo-root or DocFX-workspace files that are not known `dotnet-docfx-digest` deliverables as interim artifacts that must be removed or moved out of the repository",
+        "Preserves legitimate deliverables such as `AGENTS.md`, the active `docfx.json`, and DocFX-authored namespace/type Markdown that maps to real public API",
+        "Limits generated metadata cleanup to DocFX-generated `*.yml`, `.manifest`, and `*.manifest` files under configured metadata destinations",
+        "Does not recursively delete a configured build output directory when it contains Markdown, source, project, solution, or DocFX configuration files",
+        "Uses `docfx.cs --verify-docfx-build` so the DocFX build runs in a temp copy and generated site output stays out of the working tree",
+        "Reports any ambiguous leftover paths instead of deleting authored documentation"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Use dotnet-docfx-digest on the Codebelt.Bootstrapper docs after a bad previous run left `Codebelt.Bootstrapper.Console.md`, `Codebelt.Bootstrapper.md`, `Codebelt.Bootstrapper.Web.md`, and `Codebelt.Bootstrapper.Worker.md` checked out. The last agent restored or undid some of those files, only edited `Codebelt.Bootstrapper.md`, and added no required examples.",
+      "expected_output": "Agent does not run broad restore or checkout commands. It captures git status and diffs first, runs scripts/docfx.cs with --json and --assessment-queue, reads the assessment work queue, audits all four Bootstrapper namespace pages as a related family, fixes Extension Members sections consistently, creates or repairs required examples for public non-abstraction types and public extension methods instead of stopping at tables, builds an example inventory mapping each required API to an example file and UID, preserves already checked-out Markdown edits, keeps scratch progress notes and helper artifacts out of the repository, runs build/test/DocFX verification, and reports any remaining deterministic diagnostics.",
+      "expectations": [
+        "Captures git status and diffs before modifying or recovering checked-out Markdown files",
+        "Does not use broad git restore, checkout, reset, or whole-directory recovery commands",
+        "Stops and reports existing uncommitted documentation changes if they cannot be preserved safely",
+        "Runs scripts/docfx.cs with --json and --assessment-queue, then reads the generated assessment work queue before editing",
+        "Audits `Codebelt.Bootstrapper.Console.md`, `Codebelt.Bootstrapper.md`, `Codebelt.Bootstrapper.Web.md`, and `Codebelt.Bootstrapper.Worker.md` together instead of updating only one file",
+        "Uses `Extension Members` headings where extension methods are present",
+        "Adds required examples for public non-abstraction types and public extension methods, not only namespace fly-ins or extension tables",
+        "Builds and reports an example inventory mapping each required API to its example file and UID",
+        "Runs git diff for touched documentation paths after edits and before final verification",
+        "Does not stop after a partial namespace or prose pass just to leave a progress note or helper script in the repository root",
+        "Preserves authored Markdown and reports any remaining validation diagnostics instead of claiming completion"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Use dotnet-docfx-digest on a .NET repository that does not contain a `skills/dotnet-docfx-digest/` folder. The skill is installed globally, and the target repository root is the current working directory.",
+      "expected_output": "Agent resolves agents.cs and docfx.cs from the loaded installed dotnet-docfx-digest skill directory instead of assuming the target repository vendors the skill source. It runs agents.cs first with an explicit --repo-root pointing at the target repository, verifies AGENTS.md was created or updated by the script, then runs docfx.cs against the same repository root. If either script path cannot be resolved, it reports every checked location plus the exact command failure instead of claiming the scripts are unavailable.",
+      "expectations": [
+        "Checks the loaded installed skill directory for scripts/agents.cs and scripts/docfx.cs before concluding the scripts are missing",
+        "Does not require the target repository to contain skills/dotnet-docfx-digest/scripts/*.cs",
+        "Passes the target repository path explicitly with --repo-root instead of relying on the skill install directory or a temp workspace as the repository root",
+        "Runs agents.cs before documentation validation so AGENTS.md receives the managed DocFX maintenance block",
+        "Reports the exact command, exit code, output, and checked script locations if script resolution or execution fails"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Use dotnet-docfx-digest on a Codebelt library repository that is strong-name signed but this checkout does not have the author's root `.snk` file. Update the docs and run verification.",
+      "expected_output": "Agent preserves or copies the root `.snk` file when it exists, but because this checkout has no root `.snk`, it runs build and test verification with `-p:SkipSignAssembly=true`. The deterministic docfx.cs validator also uses the skip-sign fallback for its repository build, sample compilation builds, and temp-workspace DocFX verification instead of reporting signing-key failures as documentation failures.",
+      "expectations": [
+        "Checks whether the Codebelt repository root contains a `.snk` file before choosing verification commands",
+        "Uses `dotnet build -p:SkipSignAssembly=true` when no root `.snk` is present",
+        "Uses `dotnet test -p:SkipSignAssembly=true` when no root `.snk` is present",
+        "Preserves and copies a root `.snk` file into temp workspaces when one exists instead of disabling signing unnecessarily",
+        "Does not treat a missing local signing key as a documentation validation failure",
+        "Reports the skip-sign fallback in the verification summary when it was used"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "A previous run of dotnet-docfx-digest enhanced only `.docfx/api/namespaces/Codebelt.Extensions.Xunit.Hosting.md` and added examples there, but the validator still reports `EXAMPLE_MISSING` for the public concrete type `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory`. Fix the documentation gap and explain why namespace examples were insufficient.",
+      "expected_output": "Agent treats the remaining EXAMPLE_MISSING diagnostic as an unfinished work item, creates or updates `.docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` with DocFX front matter for uid `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory`, adds a buildable ApplicationHostFactory example derived from source or tests, keeps both `.docfx/api/namespaces/**/*.md` and `.docfx/api/types/**/*.md` under `build.overwrite`, reruns scripts/docfx.cs --json until the diagnostic is gone, and explains that namespace examples and Extension Members tables complement but do not replace examples on generated type pages.",
+      "expectations": [
+        "Does not treat the namespace page examples as sufficient for the ApplicationHostFactory concrete type",
+        "Creates or updates the type-targeting overwrite file `.docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md` or an equivalent file that targets the exact ApplicationHostFactory UID",
+        "Uses DocFX front matter with uid `Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory` for the type example section",
+        "Adds a realistic, copy/paste-ready C# example for ApplicationHostFactory based on actual source, tests, or public behavior",
+        "Keeps `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` and does not widen to `api/**/*.md`",
+        "Reruns scripts/docfx.cs --json after the edit and treats any remaining EXAMPLE_MISSING diagnostic as blocking completion",
+        "Explains that namespace overview examples and Extension Members tables are complementary surfaces, not substitutes for type-page examples"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "Use dotnet-docfx-digest on a Carter-style repository where `EndpointConventionBuilderExtensions` has generic extension methods whose generated DocFX method UIDs look like `Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.<G>$6D0D8037DBBD61D10816ECA5F93B896F`. The previous run created `.docfx/api/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.%3CG%3E%246D0D8037DBBD61D10816ECA5F93B896F.md`, added `// dotnet-docfx-digest:skip-compile - Full example requires Cuemon.Extensions.AspNetCore.Text.Yaml package`, and left the namespace page as a thin table. Repair the docs.",
+      "expected_output": "Agent removes or avoids the encoded/hash-like method UID filename, places extension-method examples in a readable declaring-class overwrite file such as `.docfx/api/types/Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.md`, does not use a package-requirement skip marker as a compile escape hatch, either makes the sample compile or reports a precise deterministic blocker, and restores the namespace page as a curated overview with developer-friendly purpose, type-family context, extension-method groups, availability, and pointers to detailed examples.",
+      "expectations": [
+        "Does not create or keep URL-encoded/hash-like method UID filenames for generic extension methods such as `%3CG%3E%24...`",
+        "Uses a readable declaring extension class overwrite file under `.docfx/api/types/` for extension-method examples",
+        "Ensures the example explicitly calls the documented extension method",
+        "Does not use `// dotnet-docfx-digest:skip-compile - Full example requires ... package` as the final state",
+        "Documents any required package or setup outside the code fence when relevant",
+        "Keeps or improves the namespace page as a curated overview rather than reducing it to a generic sentence and table",
+        "Reruns scripts/docfx.cs --json and treats `SAMPLE_SKIP_REASON_INSUFFICIENT`, `SAMPLE_COMPILE_FAILED`, and `EXAMPLE_MISSING` as blocking diagnostics"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Run dotnet-docfx-digest validation on a .NET repository where `docfx.json` lives at the repository root. The DocFX config includes only `.docfx/api/namespaces/**/*.md` in `build.overwrite`, but the repository also has `README.md` and `CHANGELOG.md` files with YAML front matter UIDs that happen to match public API targets.",
+      "expected_output": "Agent relies on scripts/docfx.cs resolving Markdown from configured DocFX `build.content` and `build.overwrite` inputs instead of treating every repository Markdown file as overwrite content. Unrelated root Markdown files do not satisfy required example checks, so missing per-type or extension examples still surface as `EXAMPLE_MISSING` diagnostics.",
+      "expectations": [
+        "Does not treat the repository root as the Markdown scan scope merely because `docfx.json` is at the root",
+        "Uses configured DocFX Markdown inputs such as `.docfx/api/namespaces/**/*.md` as the overwrite discovery scope",
+        "Does not allow README.md or CHANGELOG.md front matter to satisfy required examples unless those files are included by DocFX config",
+        "Still reports `EXAMPLE_MISSING` for public API targets whose configured overwrite files lack examples"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Run dotnet-docfx-digest validation with `--changed-only` after I changed only `docfx.json` to exclude `api/namespaces/**` from `build.content` and keep `api/namespaces/**/*.md` under `build.overwrite`. Existing namespace pages still contain stale Extension Members content, but the namespace page files themselves are not changed.",
+      "expected_output": "Agent runs scripts/docfx.cs with `--changed-only` and still revalidates namespace pages when `docfx.json` changes, because DocFX config changes can change which overwrite files and namespace pages participate in the documentation build. Stale namespace-page diagnostics are surfaced instead of being silently skipped.",
+      "expectations": [
+        "Treats a changed `docfx.json` as a reason to rerun namespace-page validation under `--changed-only`",
+        "Does not require the namespace Markdown file itself to be in the changed file set when DocFX config changed",
+        "Still surfaces stale namespace-page and Extension Members diagnostics after a DocFX overwrite-layout change",
+        "Keeps required-example validation aligned with the same changed `docfx.json` trigger"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Fix the DocFX overwrite setup in a Codebelt-style repository where `.docfx/docfx.json` currently uses `api/**/*.md` under both `build.content` and `build.overwrite`, and authored overwrite Markdown files like `.docfx/api/Codebelt.Extensions.Swashbuckle.AspNetCore.ConfigureSwaggerGenOptions.md` still sit directly under `.docfx/api/`. Move the authored overwrite Markdown into the correct overwrite subdirectory based on its `uid` front matter, preserve the YAML front matter and example content, keep generated `.yml` metadata in place, and verify that `docfx build --exportRawModel` still treats the API page as managed reference rather than conceptual-only.",
+      "expected_output": "Agent rewrites `docfx.json` so both `api/namespaces/**/*.md` and `api/types/**/*.md` are treated as overwrite-only content, excludes both `api/namespaces/**` and `api/types/**` from `build.content`, moves authored type overwrite Markdown such as `ConfigureSwaggerGenOptions.md` from `.docfx/api/*.md` into `.docfx/api/types/` without dropping content, preserves generated `.yml` files, reruns verification, and confirms the raw model remains a managed API page with overwrite content merged into it rather than collapsing to `{ \"type\": \"Conceptual\" }`.",
+      "expectations": [
+        "Moves authored type overwrite Markdown files from `.docfx/api/*.md` into `.docfx/api/types/` when the uid front matter targets a type",
+        "Preserves YAML front matter, UID targeting, and Markdown example content while moving the files",
+        "Keeps generated `.yml` metadata files in place",
+        "Ensures both `api/namespaces/**/*.md` and `api/types/**/*.md` appear only under `build.overwrite` and that `build.content` excludes both `api/namespaces/**` and `api/types/**`",
+        "Does not use `api/**/*.md` under `build.content` or `build.overwrite`",
+        "Verifies the affected API page remains managed reference output with merged overwrite content instead of conceptual-only raw model output"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "The `Acme.OpenApi.ModelContextProtocol` namespace page currently says `Contains types and extension methods for MCP integration.` The public type `McpServerOptions` says `Represents options for the server.` The extension method `AddMcpServer(this IServiceCollection services)` says `Adds MCP server services.` Use dotnet-docfx-digest to rewrite the documentation so a developer new to this domain immediately understands what each API is for.",
+      "expected_output": "Agent rewrites the namespace overview and affected API summaries with conceptual orientation instead of structural inventory. The namespace fly-in leads with the problem solved, when to use the namespace, and a start-here cue such as AddMcpServer. The type and member summaries explain the role and likely use of the API in consumer terms, while keeping every claim grounded in the real public API and still following the normal script-and-verification workflow.",
+      "expectations": [
+        "Rewrites the namespace overview so it leads with the problem or outcome the namespace enables instead of only saying what it contains",
+        "Explains when a developer would use the namespace and includes a newcomer-oriented start-here cue that points to a representative type or entry-point member",
+        "Rewrites type or member summaries so they explain the API's role and likely use instead of generic structural labels such as `Represents options` or `Adds services`",
+        "Keeps the summaries grounded in actual public API behavior rather than inventing capabilities or marketing language",
+        "Applies the same conceptual-orientation pattern consistently across the namespace page and the touched API summaries"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Run dotnet-docfx-digest with `--changed-only` after I edited a C# 14 extension-block file in the `Codebelt.Extensions.Carter` namespace: `public static class EndpointConventionBuilderExtensions { extension(IEndpointConventionBuilder builder) { public IEndpointConventionBuilder Produces<TResponse>(int statusCode = StatusCodes.Status200OK, params string[] contentTypes) { ... } } }`. The previous run created `.docfx/api/namespaces/EndpointConventionBuilderExtensions.Produces-extensions.md` whose YAML `uid` is `Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.<G>$6D0D8037DBBD61D10816ECA5F93B896F`, and another run tried to satisfy `EXAMPLE_TARGET_NOT_USED` on `Codebelt.Extensions.Carter.EndpointConventionBuilderExtensions.G$6D0D8037DBBD61D10816ECA5F93B896F` even though that compiler-generated type cannot be named from C# source. The namespace page still needs a real extension-method example.",
+      "expected_output": "Agent treats literal, percent-encoded, and DocFX private-use `<G>$...` compiler-generated containers as implementation artifacts of the outer `EndpointConventionBuilderExtensions` type, so the repair path stays on readable declaring-class overwrite pages under `.docfx/api/types/`. `--changed-only` still notices the edited extension-block source file, surfaces the missing example work, and avoids treating the synthetic nested type as a standalone documented API target or trying family exemptions/reflection-only examples for it.",
+      "expectations": [
+        "Collapses compiler-generated extension-block containers such as `<G>$...` back to the authored outer static class when choosing extension-method example targets",
+        "Does not treat the synthetic nested extension-block type as a required public type example target or `EXAMPLE_TARGET_NOT_USED` repair target",
+        "Keeps the required example location on a readable declaring-class overwrite page under `.docfx/api/types/` instead of a synthetic method/type UID file",
+        "Under `--changed-only`, recognizes the edited extension-block source file as touching the `Produces` extension method even though the method declaration no longer uses `this` syntax",
+        "Still reports missing extension-method examples until a readable declaring-class overwrite file explicitly calls `Produces`"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Use dotnet-docfx-digest on a .NET library where the namespace `Acme.Core` contains a plain class `Options`, an enum `LogLevel`, a public struct `Range`, a public record `Result`, and a generic class `Repository<T>`. The library also has a static extension class `StringExtensions` with generic method `Parse<T>(this string input)`. The namespace currently has no DocFX documentation at all.",
+      "expected_output": "Agent generates both a namespace overview page at `.docfx/api/namespaces/Acme.Core.md` and type-targeting overwrite files at `.docfx/api/types/Acme.Core.Options.md`, `.docfx/api/types/Acme.Core.LogLevel.md`, `.docfx/api/types/Acme.Core.Range.md`, `.docfx/api/types/Acme.Core.Result.md`, `.docfx/api/types/Acme.Core.Repository.md`, and `.docfx/api/types/Acme.Core.StringExtensions.md` in the same run. The generic `Repository<T>` and generic extension method `Parse<T>` are included as valid documentation targets. Both `api/namespaces/**/*.md` and `api/types/**/*.md` are added under `build.overwrite`, and both directories are excluded from `build.content`.",
+      "expectations": [
+        "Generates the namespace overview page at `.docfx/api/namespaces/Acme.Core.md` with a uid front matter matching the namespace",
+        "Generates type overwrite files under `.docfx/api/types/` for every public non-abstraction type including Options, LogLevel, Range, Result, and Repository",
+        "Includes the generic class `Repository<T>` as a valid documentation target and does not skip it",
+        "Generates a type overwrite file for `StringExtensions` as a static extension container",
+        "Includes the generic extension method `Parse<T>` in the Extension Members table on the namespace page",
+        "Adds both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite` in docfx.json",
+        "Excludes both `api/namespaces/**` and `api/types/**` from `build.content` in docfx.json",
+        "Does not treat namespace generation and type generation as mutually exclusive"
+      ]
+    },
+    {
+      "id": 20.1,
+      "prompt": "Use dotnet-docfx-digest on a repository that has no live DocFX workspace at the root, but does contain scaffold template files such as `skills/dotnet-new-lib-slnx/assets/library/.docfx/docfx.json` with placeholder metadata globs like `{PROJECT_NAME}/**.csproj`.",
+      "expected_output": "Agent does not mistake the scaffold template DocFX config for the repository's active documentation workspace. It runs the installed scripts against the real repository root, ignores fallback `docfx.json` candidates whose metadata resolves no projects, reports that no usable DocFX configuration exists for the root repository, and does not surface `PROJECT_DISCOVERY_FAILED` from the template asset as if it were the live repo config.",
+      "expectations": [
+        "Does not treat scaffold or template `docfx.json` files under skill assets as the active repository DocFX workspace when their metadata globs resolve no projects",
+        "Reports the missing live DocFX workspace as a no-usable-config finding rather than a template-driven project-discovery failure",
+        "Avoids surfacing `PROJECT_DISCOVERY_FAILED` for placeholder template globs like `{PROJECT_NAME}/**.csproj` when no explicit `--docfx` path was requested",
+        "Still honors an explicit `--docfx` path if the user points at a specific template or test fixture intentionally",
+        "Runs `scripts/agents.cs` against the repository root before reporting the validator result"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "Use dotnet-docfx-digest on a .NET library containing a public abstract base class `ValidatorBase` and a public interface `IValidator<T>`. The same namespace also has a concrete class `EmailValidator` that extends `ValidatorBase` and a static class `ValidatorExtensions` with extension methods.",
+      "expected_output": "Agent excludes `ValidatorBase` and `IValidator<T>` from required example targets because they are an abstract base class and an interface respectively. It does include `EmailValidator` and `ValidatorExtensions` as documentation targets. The type overwrite files are created only for `EmailValidator` and `ValidatorExtensions` under `.docfx/api/types/`.",
+      "expectations": [
+        "Does not create a required example target for `ValidatorBase` because it is an abstract base class",
+        "Does not create a required example target for `IValidator<T>` because it is an interface",
+        "Creates a required example target for the concrete class `EmailValidator`",
+        "Creates a required example target for `ValidatorExtensions` as a static extension container",
+        "Places type overwrite files under `.docfx/api/types/` only for included types"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Use dotnet-docfx-digest on a library where `docfx.json` currently has only `api/namespaces/**/*.md` under `build.overwrite` and only `api/namespaces/**` excluded from `build.content`. This is the first run for this repository.",
+      "expected_output": "Agent updates `docfx.json` on the first run to add `api/types/**/*.md` under `build.overwrite` and `api/types/**` to the `build.content` exclusions. It also creates the namespace overwrite pages and type overwrite pages in the same run. Running the skill a second time produces no further changes to `docfx.json`.",
+      "expectations": [
+        "Updates `docfx.json` to include `api/types/**/*.md` under `build.overwrite`",
+        "Updates `docfx.json` to exclude `api/types/**` from `build.content`",
+        "Creates namespace pages under `.docfx/api/namespaces/` and type pages under `.docfx/api/types/` in the same run",
+        "A second run does not change `docfx.json` again because it is already compliant",
+        "Does not use `api/**/*.md` as a catch-all pattern"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "Use dotnet-docfx-digest on a library where a previous run created type overwrite files under `.docfx/api/namespaces/Acme.Core.MyType.md` (the old single-directory convention). The new convention places type overwrite files under `.docfx/api/types/`. Migrate the repository to the new convention.",
+      "expected_output": "Agent moves the type overwrite file from `.docfx/api/namespaces/Acme.Core.MyType.md` to `.docfx/api/types/Acme.Core.MyType.md`, preserves the YAML front matter and example content, updates `docfx.json` to include both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`, and excludes `api/types/**` from `build.content`. The namespace page `Acme.Core.md` remains in `api/namespaces/`.",
+      "expectations": [
+        "Moves type overwrite files from `api/namespaces/` to `api/types/` when they contain a type UID rather than a namespace UID",
+        "Keeps namespace overview pages under `api/namespaces/`",
+        "Preserves YAML front matter and Markdown content when moving files",
+        "Updates `docfx.json` to have both namespace and type globs under `build.overwrite`",
+        "Verifies that the validator no longer reports `API_OVERWRITE_CONFIG_INVALID` after the migration"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Use dotnet-docfx-digest on a library that exposes a static class `HttpClientExtensions` with generic extension methods `AddPolicy<TPolicy>(this IHttpClientBuilder builder)` and `UseTimeout<T>(this HttpClient client, TimeSpan timeout)`. The previous run skipped these because they were incorrectly filtered out as generic types.",
+      "expected_output": "Agent includes both generic extension methods in the Extension Members table and requires examples for both. It does not skip `HttpClientExtensions` or its methods because the declaring type is generic or the methods are generic. The type overwrite file for `HttpClientExtensions` is created under `.docfx/api/types/`.",
+      "expectations": [
+        "Does not skip `HttpClientExtensions` because it is a static class (abstract sealed in IL)",
+        "Includes `AddPolicy<TPolicy>` and `UseTimeout<T>` in the Extension Members table",
+        "Creates a type overwrite file for `HttpClientExtensions` under `.docfx/api/types/`",
+        "Generates `EXAMPLE_MISSING` for the extension methods until examples are provided",
+        "Does not depend on a `IsGenericType` filter to exclude valid API targets"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "Run dotnet-docfx-digest on a library whose existing generated DocFX YAML metadata under `.docfx/api/*.yml` includes C# 14 synthetic nested types `EndpointExtensions.<G>$AB12CD34` and `EndpointExtensions.G$6D0D8037DBBD61D10816ECA5F93B896F` for extension blocks. The fast no-build validator path is using that YAML metadata for API discovery.",
+      "expected_output": "Agent treats the existing DocFX YAML metadata as a valid detection path for C# 14 extension blocks, emits a `DOCFX_EXTENSION_BLOCK_UNSUPPORTED` warning for the namespace explaining that DocFX issue #11010 means extension block metadata may be missing or synthetic, collapses literal, percent-encoded, and DocFX private-use synthetic containers back to the outer `EndpointExtensions` class for documentation purposes, keeps extension-method example guidance on readable type-targeted overwrite files such as `.docfx/api/types/EndpointExtensions.md` instead of synthetic `<G>$...`, `G$...`, or namespace-page filenames, and writes any consumer-facing `EndpointExtensions` prose around what callers can do with the extension surface rather than saying the methods exist 'through C# 14 extension blocks'. It continues documenting all other discoverable public APIs without skipping them or trying to fix DocFX metadata gaps by excluding APIs.",
+      "expectations": [
+        "Emits `DOCFX_EXTENSION_BLOCK_UNSUPPORTED` as a warning, not an error, for the affected namespace",
+        "Applies the same C# 14 extension-block collapse when the fast path is reading existing DocFX YAML metadata rather than only during build-backed reflection discovery",
+        "Does not stop or skip other API targets because of the C# 14 extension block detection",
+        "Collapses literal, percent-encoded, and DocFX private-use synthetic `<G>$...` nested types to the outer static class for example targeting",
+        "Does not create a separate overwrite file for the synthetic nested type",
+        "Keeps extension-method example guidance on a readable declaring-class overwrite file under `.docfx/api/types/` instead of a namespace-page or synthetic `<G>$...` filename",
+        "Keeps consumer-facing extension-container prose focused on the caller task and receiver outcome instead of foregrounding C# 14 extension-block syntax",
+        "Continues generating namespace and type overwrite files for all other public APIs in the same run",
+        "Does not try to fix DocFX issue #11010 by excluding extension methods or inventing special rules"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "Run dotnet-docfx-digest twice on a correctly configured repository where all namespace pages, type overwrite files, and docfx.json settings are already present and valid. Confirm idempotency.",
+      "expected_output": "The second run produces no changes to `docfx.json`, no new overwrite files, and the validator exits with status `passed` with zero errors on both runs. The agent reports that the repository is already compliant and does not make spurious edits.",
+      "expectations": [
+        "Second run reports validation passed with zero errors",
+        "Second run makes no changes to `docfx.json`",
+        "Second run creates no new namespace or type overwrite files",
+        "Second run does not report spurious `API_OVERWRITE_CONFIG_INVALID` after `docfx.json` was already updated on the first run",
+        "Agent reports that the documentation is already in a compliant state"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "Run dotnet-docfx-digest on a repository. Confirm that the validator does not depend on DocFX-generated hash filenames like `*.md.G-*` or URL-encoded method UID filenames as source truth.",
+      "expected_output": "Agent discovers required example targets from compiled assembly metadata, not from DocFX-generated hash filenames. It reports `EXAMPLE_MISSING` when no overwrite file under `api/types/` has an example for the required UID. Hash-named files that may exist from a previous run do not satisfy the example requirement.",
+      "expectations": [
+        "Discovers required example targets from compiled assembly reflection, not from DocFX hash filenames",
+        "Does not use `*.md.G-*` files as evidence that an example exists",
+        "Reports `EXAMPLE_MISSING` even if a hash-named file exists but the correct UID is not in an overwrite file under `api/types/`",
+        "Does not create hash-named overwrite files as repair actions"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "Use dotnet-docfx-digest. During the run the skill creates `.docfx/api/namespaces/Acme.Core.md` and `.docfx/api/types/Acme.Core.MyClass.md`. Run agents.cs and confirm AGENTS.md is created or updated with the new managed block content that mentions both namespace and type overwrite files.",
+      "expected_output": "agents.cs creates or updates AGENTS.md with a managed block that explicitly states: both namespace overwrite files (`api/namespaces/`) and type overwrite files (`api/types/`) are required; generic public APIs are valid targets; extension members are rendered under `Extension Members`; and `docfx.json` must include both `api/namespaces/**/*.md` and `api/types/**/*.md` under `build.overwrite`.",
+      "expectations": [
+        "AGENTS.md is created or updated by agents.cs before documentation validation",
+        "The managed block states that both namespace pages and type pages are required deliverables",
+        "The managed block states that generic public APIs are valid documentation targets",
+        "The managed block states that extension members are rendered under the heading `Extension Members`",
+        "The managed block states that `build.overwrite` must include both `api/namespaces/**/*.md` and `api/types/**/*.md`",
+        "The managed block states that type overwrite files live under `.docfx/api/types/`"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "Run dotnet-docfx-digest on a repository where `docfx.json` has `metadata[].src[].files = [\"src/Acme.Core/*.csproj\", \"src/Acme.Abstractions/*.csproj\"]` but a third project `src/Acme.Benchmarks/Acme.Benchmarks.csproj` also exists under `src/`. Confirm that `Acme.Benchmarks` is never reflected over or documented.",
+      "expected_output": "The validator reads the active `docfx.json` metadata configuration and builds the project list exclusively from the `metadata[].src[].files` patterns. `Acme.Benchmarks` is not included in the project list because it is not matched by any `metadata[].src` pattern in `docfx.json`. No namespace page, type overwrite file, or example is generated for types defined in `Acme.Benchmarks`.",
+      "expectations": [
+        "Builds the candidate project list from docfx.json metadata[].src[].files patterns, not by scanning all src/**/*.csproj",
+        "Does not include Acme.Benchmarks in the project list because it is not referenced by docfx.json",
+        "Does not generate namespace pages, type overwrite files, or examples for types defined in Acme.Benchmarks",
+        "Documents only Acme.Core and Acme.Abstractions as they are explicitly included by docfx.json",
+        "Reports PROJECT_DISCOVERY_FAILED with the docfx.json path if no projects are resolved"
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "Run dotnet-docfx-digest on a repository where `docfx.json` has two separate `metadata` entries: the first entry includes `src/Acme.Core/*.csproj` and the second entry includes `src/Acme.Extensions/*.csproj`. Both entries use `metadata[].src[].src = \"../\"` to resolve paths relative to the `.docfx/` directory.",
+      "expected_output": "The validator resolves projects from both metadata entries and merges the results into a single de-duplicated, sorted project list. Namespaces from both `Acme.Core` and `Acme.Extensions` assemblies appear in the public API surface. Both namespace pages and required type overwrite files are generated for all public non-abstraction types in both assemblies.",
+      "expectations": [
+        "Reads and processes all metadata entries in docfx.json, not only the first one",
+        "Resolves projects from each metadata entry's src[] configuration independently",
+        "Merges projects from all metadata entries into a single de-duplicated list",
+        "Discovers public API from both Acme.Core and Acme.Extensions assemblies",
+        "Generates namespace pages and type overwrite files for public APIs in both assemblies"
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "Run dotnet-docfx-digest on a repository where `docfx.json` lives under `.docfx/` and its metadata section uses `\"src\": \"../\"` to point at the repository root, with `\"files\": [\"src/**.csproj\"]`. Confirm that project paths are resolved relative to the `.docfx/` directory and not relative to the process working directory.",
+      "expected_output": "The validator resolves the `src` base directory for each metadata entry relative to the `docfx.json` file location, not relative to the process CWD. When `docfx.json` is at `.docfx/docfx.json` and `metadata[].src[].src = \"../\"`, the effective base resolves to the repository root, and `files = [\"src/**.csproj\"]` discovers projects under `<repo-root>/src/`. All resolved project paths are full, normalised absolute paths.",
+      "expectations": [
+        "Resolves metadata[].src[].src paths relative to the docfx.json file location",
+        "Does not resolve paths relative to the process working directory",
+        "Correctly derives the repository root when src = \"../\" and docfx.json is at .docfx/docfx.json",
+        "Discovers .csproj files under the resolved base directory using the files glob patterns",
+        "Returns normalised absolute paths for all resolved projects"
+      ]
+    },
+    {
+      "id": 32,
+      "prompt": "Run dotnet-docfx-digest on a repository where `docfx.json` includes `src/**.csproj` in `metadata[].src[].files` but also has `metadata[].src[].exclude = [\"src/Acme.Tests/**\", \"src/Acme.Samples/**\"]`. Projects `Acme.Tests` and `Acme.Samples` exist under `src/` and would otherwise be matched. Confirm they are excluded from the documentation surface.",
+      "expected_output": "The validator honours the `exclude` patterns in each `metadata[].src` entry and removes `Acme.Tests` and `Acme.Samples` from the resolved project list. No namespace pages, type overwrite files, or examples are generated for types in those assemblies. The project list matches only the assemblies that pass both the include and exclude filter.",
+      "expectations": [
+        "Applies metadata[].src[].exclude patterns to filter out matching .csproj files",
+        "Does not include Acme.Tests in the project list because it is matched by the exclude pattern",
+        "Does not include Acme.Samples in the project list because it is matched by the exclude pattern",
+        "Does not generate documentation for types in excluded projects",
+        "Reports PROJECT_DISCOVERY_FAILED when all projects are excluded and no projects remain"
+      ]
+    },
+    {
+      "id": 33,
+      "prompt": "Run dotnet-docfx-digest twice in succession on a repository where `docfx.json` is already correctly configured with `metadata[].src[].files = [\"src/**.csproj\"]` and `metadata[].src[].exclude = [\"src/tools/**\"]`. On the first run, all namespace pages and type overwrite files are generated. Confirm that the second run resolves the same project set and produces no new changes.",
+      "expected_output": "Both runs resolve the same set of projects from `docfx.json`. The second run discovers the same public API surface, validates the same namespace pages and type overwrite files, and reports no new changes, no spurious diagnostics, and no new files created. The resolved project list is identical on both runs because the discovery is based solely on the static `docfx.json` configuration.",
+      "expectations": [
+        "Second run resolves the same project list as the first run",
+        "Second run discovers the same public API namespaces and types",
+        "Second run reports no new namespace or type overwrite files created",
+        "Second run reports validation passed with zero errors when the first run left the repository in a compliant state",
+        "Project discovery is deterministic: the same docfx.json always produces the same project list regardless of run order"
+      ]
+    },
+    {
+      "id": 34,
+      "prompt": "Run dotnet-docfx-digest on a repository whose `docfx.json` metadata section has no `src` key at all in any metadata entry. Confirm that the validator fails with a clear error explaining which `docfx.json` was read and what configuration is missing.",
+      "expected_output": "The validator reads the active `docfx.json`, finds no resolvable projects from the metadata section, and emits a `PROJECT_DISCOVERY_FAILED` diagnostic that includes the full path to `docfx.json` and guidance explaining that `metadata[].src[].files` must reference `.csproj` files. The exit code is non-zero. No fallback scan of `src/**/*.csproj` is attempted.",
+      "expectations": [
+        "Emits PROJECT_DISCOVERY_FAILED with the full path to docfx.json in the diagnostic message",
+        "Explains that metadata[].src[].files must be configured to reference .csproj files",
+        "Returns a non-zero exit code",
+        "Does not fall back to scanning src/**/*.csproj when docfx.json produces no projects",
+        "Does not attempt to document any projects or generate any overwrite files when project discovery fails"
+      ]
+    },
+    {
+      "id": 35,
+      "prompt": "Create a DocFX overwrite file for type `Acme.Widgets.Spinner` using the recommended `example: *content` front-matter form. The body should contain only a bare csharp fence with no `### Examples` heading. Confirm that the validator accepts this as a complete example.",
+      "expected_output": "The agent writes the overwrite file with front matter `example: *content` and a bare csharp fence in the body (no `### Examples` heading). The validator runs and reports zero `EXAMPLE_MISSING` diagnostics for `Acme.Widgets.Spinner`. The agent does not add a heading because the skill instructs that DocFX renders the section header automatically.",
+      "expectations": [
+        "Front matter uses `example: *content` (or the `- *content` list form), not `summary: *content`",
+        "Body contains a csharp or cs fenced code block",
+        "Body does NOT contain a `### Examples` or `## Example` heading",
+        "Validator runs and does not emit EXAMPLE_MISSING for the target type",
+        "Agent explains that DocFX adds the Examples section header automatically so a manual heading is not needed"
+      ]
+    },
+    {
+      "id": 36,
+      "prompt": "Create a DocFX overwrite file for type `Acme.Widgets.Spinner` using the `example:` list form (front matter has `example:` on one line and `- *content` on the next). The body contains only a bare csharp fence. Confirm that the validator accepts this as a complete example.",
+      "expected_output": "The agent writes the overwrite file with a multi-line `example:\\n- *content` front matter block and a bare csharp fence in the body. The validator runs and reports zero `EXAMPLE_MISSING` diagnostics for `Acme.Widgets.Spinner`.",
+      "expectations": [
+        "Front matter uses the list form with `example:` on one line and `- *content` on the next",
+        "Body contains a csharp or cs fenced code block",
+        "Body does NOT contain a `### Examples` or `## Example` heading",
+        "Validator runs and does not emit EXAMPLE_MISSING for the target type",
+        "Agent recognizes both inline and list `example:` forms as equivalent for validation purposes"
+      ]
+    },
+    {
+      "id": 37,
+      "prompt": "Create a DocFX overwrite file for a namespace overview page using `summary: *content` front matter. The body should embed a usage example under a `### Example` heading followed by a csharp fence. Confirm that the validator accepts this as a complete example.",
+      "expected_output": "The agent writes the overwrite file with `summary: *content` front matter and a `### Example` heading with a csharp fence inside the body. The validator runs and does not emit EXAMPLE_MISSING, because the heading-delimited fence satisfies the Form B detection rule.",
+      "expectations": [
+        "Front matter uses `summary: *content`",
+        "Body contains a `### Example` or `## Example` heading followed by a csharp or cs fenced code block",
+        "Validator runs and does not emit EXAMPLE_MISSING for the target",
+        "Agent correctly identifies this as the Form B (summary-anchored conceptual) pattern",
+        "Agent notes that this form is for conceptual content and is not the recommended form for type pages"
+      ]
+    },
+    {
+      "id": 38,
+      "prompt": "A developer created a DocFX overwrite for `Acme.Widgets.Spinner` using `example: *content` front matter but accidentally added a `### Examples` heading before the csharp fence. Confirm that the validator still passes (the redundant heading is tolerated by the validator) and that the prose guidance advises removing it to prevent a duplicate heading on the rendered page.",
+      "expected_output": "The validator runs and does not emit EXAMPLE_MISSING because the csharp fence is present regardless of the redundant heading. The agent flags the redundant heading as producing a duplicate 'Examples' section on the rendered DocFX page and advises removing it, citing the Form A guidance. The validator result is a pass; the rendered-page duplication is a separate documentation quality concern.",
+      "expectations": [
+        "Validator does not emit EXAMPLE_MISSING because a csharp fence is present",
+        "Agent identifies the `### Examples` heading as redundant for Form A (example: *content) overwrites",
+        "Agent explains that DocFX adds the section header automatically, so the manual heading causes a duplicate on the rendered page",
+        "Agent recommends removing the heading to avoid the duplicate-heading rendering defect",
+        "Validator exit code is 0 (or non-EXAMPLE_MISSING failure) — the redundant heading does not itself cause a validation error"
+      ]
+    },
+    {
+      "id": 39,
+      "prompt": "A DocFX overwrite file for `Acme.Widgets.Spinner` uses `example: *content` front matter but the body contains only descriptive prose with no csharp fence at all. Confirm that the validator reports EXAMPLE_MISSING.",
+      "expected_output": "The validator detects that the section has `example: *content` front matter (MappedToExample=true) but no csharp or cs fenced code block in the body. It emits an EXAMPLE_MISSING diagnostic for `Acme.Widgets.Spinner`. The absence of a heading alone does not satisfy the example requirement; a csharp fence is required regardless of the form.",
+      "expectations": [
+        "Validator emits EXAMPLE_MISSING for the target type",
+        "Diagnostic message identifies the expected overwrite path and instructs adding a C# code fence",
+        "Agent recognizes that the YAML anchor alone (example: *content) is not sufficient — a csharp fence must also be present",
+        "Agent does not suggest adding a ### Examples heading as the fix; it correctly identifies the missing fence as the root cause",
+        "Validator returns a non-zero exit code"
+      ]
+    },
+    {
+      "id": 40,
+      "prompt": "A DocFX overwrite file for `Acme.Widgets.Spinner` contains the following csharp fence that uses only top-level statements:\n```csharp\nusing Acme.Widgets;\nvar spinner = new Spinner();\nspinner.Start();\n```\nRun scripts/docfx.cs validation and confirm the validator rejects this example.",
+      "expected_output": "The validator emits SAMPLE_STRUCTURE_INVALID for the top-level statement example because it lacks a namespace declaration and a type declaration. The exit code is non-zero. The diagnostic message instructs adding a file-scoped namespace and a class wrapper, or labelling the example '// Program.cs' if top-level statements are intentional.",
+      "expectations": [
+        "Validator emits SAMPLE_STRUCTURE_INVALID for the csharp fence that uses only top-level statements",
+        "Diagnostic message instructs adding a file-scoped namespace declaration (e.g., 'namespace X.Y;')",
+        "Diagnostic message instructs wrapping usage code in a class declaration",
+        "Validator returns a non-zero exit code",
+        "Validator does not attempt compilation for the structurally invalid example"
+      ]
+    },
+    {
+      "id": 41,
+      "prompt": "A DocFX overwrite file for `Acme.Widgets.Spinner` contains the following csharp fence that is labelled '// Program.cs' and uses top-level statements:\n```csharp\n// Program.cs\nusing Acme.Widgets;\nvar spinner = new Spinner();\nspinner.Start();\n```\nRun scripts/docfx.cs validation and confirm the validator allows this example.",
+      "expected_output": "The validator recognises the '// Program.cs' label and does not emit SAMPLE_STRUCTURE_INVALID. It compiles the example as a file-based app instead. Any compile errors are still reported as SAMPLE_COMPILE_FAILED.",
+      "expectations": [
+        "Validator does not emit SAMPLE_STRUCTURE_INVALID for the example labelled '// Program.cs'",
+        "Validator attempts compilation as a file-based app rather than a class library",
+        "Structural gate is bypassed for the // Program.cs label only",
+        "Compile errors in the labelled example are still reported as SAMPLE_COMPILE_FAILED"
+      ]
+    },
+    {
+      "id": 42,
+      "prompt": "Use dotnet-docfx-digest to generate an example for a public concrete class `Acme.Core.Options`. Confirm the generated example includes a file-scoped namespace, a class declaration, all required using directives, and compiles as a class library.",
+      "expected_output": "The generated csharp code block begins with using directives, then a file-scoped namespace declaration, then a class containing the usage code. The validator compiles it as a class library project referencing the documented assemblies. No SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED diagnostic is emitted.",
+      "expectations": [
+        "Generated example contains a 'using Acme.Core;' directive (or equivalent)",
+        "Generated example contains a file-scoped namespace declaration such as 'namespace AcmeExample;'",
+        "Generated example contains at least one class declaration wrapping the usage code",
+        "Generated example does not use top-level statements",
+        "Validator compiles the example as a class library project and emits no SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED diagnostic"
+      ]
+    },
+    {
+      "id": 43,
+      "prompt": "Use dotnet-docfx-digest to generate an example for a generic public type `Acme.Core.Repository<T>`. Confirm the generated example supplies a concrete type argument and compiles.",
+      "expected_output": "The generated example instantiates Repository with a concrete type argument (e.g., Repository<Product>), not the open generic Repository<T>. The example includes a namespace and class declaration. The validator compiles it without errors.",
+      "expectations": [
+        "Generated example provides a concrete type argument for Repository<T> (e.g., Repository<Product> or Repository<string>)",
+        "Generated example does not reference the open generic form Repository<T> as a concrete instantiation",
+        "Generated example includes a file-scoped namespace and class declaration",
+        "Validator compiles the example and emits no SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED diagnostic"
+      ]
+    },
+    {
+      "id": 44,
+      "prompt": "Use dotnet-docfx-digest on a library that has a public abstract generic base class `ApplicationTest<TEntryPoint, T>`. A previous run generated an example that derives from `ApplicationTest` (missing both generic arguments). Repair the documentation.",
+      "expected_output": "The agent recognises that ApplicationTest<TEntryPoint, T> requires two generic type arguments. It either generates a valid concrete derived class supplying both arguments (e.g., `public class MyAppTest : ApplicationTest<Program, HttpClient>`), or omits the example entirely with an omission comment. The validator does not emit SAMPLE_COMPILE_FAILED after the repair. No example is written that derives from ApplicationTest without generic arguments.",
+      "expectations": [
+        "Removes or repairs the example that derives from ApplicationTest without generic arguments",
+        "If an example is generated, it provides concrete values for both TEntryPoint and T",
+        "If no compile-valid example can be generated for the abstract type, the overwrite file omits the example and contains an omission comment",
+        "Validator emits no SAMPLE_COMPILE_FAILED after the repair",
+        "Agent explains that abstract generic base types require concrete type arguments in all derived-class examples"
+      ]
+    },
+    {
+      "id": 45,
+      "prompt": "Use dotnet-docfx-digest on a library where the public type `Acme.Http.Sender` has a constructor requiring two interface dependencies `ITransport` and `ILogger` that are not publicly constructible. No tests or samples exist for this type. Confirm the skill omits the example rather than inventing plausible but non-compiling code.",
+      "expected_output": "The agent does not generate a csharp code block that invents implementations of ITransport or ILogger that do not exist in the library. Instead, it omits the example for Acme.Http.Sender and adds the deterministic omission comment '<!-- No compile-valid example could be generated for this type. -->' to the overwrite file. It reports the omission as part of the example inventory.",
+      "expectations": [
+        "Does not write a csharp fence that invents ITransport or ILogger implementations not present in the documented API",
+        "Adds the omission comment to the type overwrite file instead of writing an unverified code block",
+        "Reports the omission in the example inventory summary",
+        "Does not emit a csharp fence that would fail SAMPLE_COMPILE_FAILED or SAMPLE_STRUCTURE_INVALID",
+        "Explains that the example was omitted because no compile-valid example could be derived from source evidence"
+      ]
+    },
+    {
+      "id": 46,
+      "prompt": "Run scripts/docfx.cs validation on a repository where an existing overwrite file has a correctly structured csharp example with a namespace and class declaration. Confirm the validator compiles it as a class library project, not as a file-based app.",
+      "expected_output": "The validator detects that the csharp sample has a namespace and class declaration, compiles it as a class library project (SampleVerification.csproj with OutputType=Library) referencing the documented assemblies from docfx.json, and reports SamplesCompiled incremented. No SAMPLE_STRUCTURE_INVALID is emitted.",
+      "expectations": [
+        "Validator does not emit SAMPLE_STRUCTURE_INVALID for the class-based example",
+        "Validator compiles the example as a class library project referencing library assemblies from docfx.json",
+        "Validator does not require a top-level statement or Main method in the example",
+        "Validator reports the sample as compiled (SamplesCompiled incremented in summary)",
+        "Validator does not emit SAMPLE_COMPILE_FAILED when the example is structurally and semantically correct"
+      ]
+    },
+    {
+      "id": 47,
+      "prompt": "Use dotnet-docfx-digest to generate a type example for a static extension class `Acme.Core.StringExtensions` that exposes a generic extension method `Parse<T>(this string input)`. Confirm the generated example shows a valid string receiver, supplies a concrete type argument, includes namespace and class structure, and compiles.",
+      "expected_output": "The generated example calls the extension method on a string receiver with a concrete type argument (e.g., '42'.Parse<int>() or var s = '3.14'; s.Parse<double>()). The example has a file-scoped namespace and a class declaration. The validator compiles it without SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED.",
+      "expectations": [
+        "Generated example calls Parse with a concrete type argument (e.g., Parse<int> or Parse<double>)",
+        "Generated example uses a valid string receiver (string literal or string variable)",
+        "Generated example includes a file-scoped namespace and a class declaration",
+        "Validator emits no SAMPLE_STRUCTURE_INVALID or SAMPLE_COMPILE_FAILED for the example",
+        "Generated example does not use the open generic form Parse<T> without a concrete type binding"
+      ]
+    },
+    {
+      "id": 48,
+      "prompt": "Run dotnet-docfx-digest twice on a repository where the first run generated structurally valid, compile-passing class-based examples. Confirm the second run emits no SAMPLE_STRUCTURE_INVALID, no SAMPLE_COMPILE_FAILED, and makes no changes to existing example overwrite files.",
+      "expected_output": "The second run validates all existing csharp code blocks, finds them structurally valid and compile-passing, and reports SamplesCompiled with zero errors. No overwrite files are modified. The validator exits with status 'passed'.",
+      "expectations": [
+        "Second run emits no SAMPLE_STRUCTURE_INVALID diagnostics",
+        "Second run emits no SAMPLE_COMPILE_FAILED diagnostics",
+        "Second run does not modify existing example overwrite files",
+        "Second run reports validation passed with zero errors",
+        "Example validation is deterministic: the same csharp content produces the same validation result on repeated runs"
+      ]
+    },
+    {
+      "id": 49,
+      "prompt": "Run dotnet-docfx-digest on a library where a documented public class `Acme.Console.AppHost` derives from `Codebelt.Bootstrapper.Console.ConsoleProgram` and its example calls a DI helper `services.AddHostedService<Worker>()` that requires `Microsoft.Extensions.DependencyInjection.Abstractions`. The example does not contain a `dotnet-docfx-digest:skip-compile` marker. Confirm the sample compiles without errors.",
+      "expected_output": "The validator compiles the example without SAMPLE_COMPILE_FAILED. The worker project references the documented library project via ProjectReference, so NuGet restores the full transitive closure including `Codebelt.Bootstrapper.Console` and `Microsoft.Extensions.DependencyInjection.Abstractions`. No skip marker is needed or present.",
+      "expectations": [
+        "Validator compiles the example without SAMPLE_COMPILE_FAILED",
+        "No SAMPLE_SKIP_REASON_INSUFFICIENT or SAMPLE_SKIP_REASON_MISSING is emitted",
+        "Worker project uses ProjectReference so transitive NuGet dependencies such as Microsoft.Extensions.DependencyInjection.Abstractions are available at compile time",
+        "No dotnet-docfx-digest:skip-compile marker is required to compile an example that uses types from transitive NuGet dependencies",
+        "Validator exits with status passed when the only samples are this class-based DI registration example"
+      ]
+    },
+    {
+      "id": 50,
+      "prompt": "Run dotnet-docfx-digest on a repository where one csharp documentation sample contains the comment `// dotnet-docfx-digest:skip-compile - sample worker does not include that assembly`. Confirm the validator reports SAMPLE_SKIP_REASON_INSUFFICIENT.",
+      "expected_output": "The validator detects the skip-compile marker with the reason 'sample worker does not include that assembly' and emits SAMPLE_SKIP_REASON_INSUFFICIENT. The diagnostic message explains that missing assembly references are a validator defect, not a valid blocker. The exit code is non-zero.",
+      "expectations": [
+        "Validator emits SAMPLE_SKIP_REASON_INSUFFICIENT for the fence containing 'sample worker does not include that assembly'",
+        "Diagnostic message explains that missing compile-time assembly references are not a valid skip reason",
+        "Validator returns a non-zero exit code",
+        "No SAMPLE_COMPILE_FAILED is emitted because the sample is rejected at the skip-reason gate, not attempted for compilation",
+        "Diagnostic points to the file and fence index of the offending skip marker"
+      ]
+    },
+    {
+      "id": 51,
+      "prompt": "Use dotnet-docfx-digest on a BenchmarkDotNet-style library that ships NuGet packages `Codebelt.Extensions.BenchmarkDotNet` and `Codebelt.Extensions.BenchmarkDotNet.Console`. The validator reports missing type examples for `BenchmarkWorkspace`, `BenchmarkWorkspaceOptions`, `BenchmarkWorkspaceOptionsExtensions`, `ServiceCollectionExtensions`, `BenchmarkContext`, and `BenchmarkProgram`. Existing generated examples compile but are thin: they use `MyNamespace`, `Consumer`, isolated constructors, and unused locals. Improve the type-specific DocFX samples so they fit real consumer context.",
+      "expected_output": "The agent identifies the package IDs from project/package metadata, searches local evidence by `Codebelt.Extensions.BenchmarkDotNet` and `Codebelt.Extensions.BenchmarkDotNet.Console` before type-only searches, uses package README, tooling/tuning projects, functional tests, and available GitHub/package-ID usage as source evidence, and rewrites type-page examples as compact scenario examples. The examples may include multiple related public types when needed, such as `BenchmarkProgram.Run`, `BenchmarkWorkspaceOptions.Slim`, `ConfigureBenchmarkDotNet`, `BenchmarkContext`, `IBenchmarkWorkspace`, and dependency-injection registration, while remaining compile-valid. The agent avoids placeholder-only `Consumer`/`MyNamespace` shells, unused locals, raw test assertions, and isolated constructor smoke tests, updates the example inventory with source evidence and scenario, then reruns `docfx.cs --json` and `--verify-docfx-build` before claiming completion.",
+      "expectations": [
+        "Determines and searches for the exact package IDs `Codebelt.Extensions.BenchmarkDotNet` and `Codebelt.Extensions.BenchmarkDotNet.Console` before relying on type/member-only searches",
+        "Inspects package-level local evidence such as `.nuget/*/README.md`, README content, tooling runner programs, tuning projects, functional tests, or package documentation pages",
+        "Uses external GitHub/package-ID search when available and treats self-repository hits as lower-priority package-authored evidence rather than independent consumer proof",
+        "Creates scenario examples that explain a real workflow, such as configuring a benchmark runner, registering a workspace through DI, applying BenchmarkDotNet jobs, carrying command-line context, or post-processing artifacts",
+        "Allows a type-page example to include multiple related public types when that is the clearest way to show real usage",
+        "Avoids generic `MyNamespace` and `Consumer` wrappers when a domain-specific namespace or class name is obvious",
+        "Avoids unused locals and examples that only instantiate a type without showing a meaningful next step or result",
+        "Keeps every changed csharp example structurally valid and compile-verified through `docfx.cs`",
+        "Updates the example inventory with UID, required file, source evidence, chosen scenario, and final status"
+      ]
+    },
+    {
+      "id": 52,
+      "prompt": "Run `scripts/docfx.cs --validate-samples --json` on a repository with at least 20 C# documentation fences spread across three dependency sets. Confirm that every sample remains compilation-isolated, but validation no longer launches one restore and one build per sample.",
+      "expected_output": "The validator creates one temporary project per sample, adds all sample projects to one temporary `.slnx`, and performs one bounded-parallel graph build. JSON reports all compile-passing samples, `summary.processes.dotnet` is 1 for sample-only validation, and the sample-validation phase detail reports one batch plus the sample and reference-set counts. A failing sample still produces SAMPLE_COMPILE_FAILED for its original Markdown file and fence without contaminating other sample results.",
+      "expectations": [
+        "Creates a separate temporary project for every compilable C# documentation fence",
+        "Builds all temporary sample projects through one `.slnx` graph build instead of one dotnet build per sample",
+        "Uses `--sample-parallelism` or `DOCFX_DIGEST_SAMPLE_PARALLELISM` as the bounded MSBuild maximum node count",
+        "Reports `summary.processes.dotnet` as 1 when `--validate-samples` is the only build-backed option",
+        "Preserves per-sample SAMPLE_COMPILE_FAILED diagnostics with the original Markdown file and fence index",
+        "Reports sample-validation phase detail containing `1 batch` and the sample count"
+      ]
+    },
+    {
+      "id": 53,
+      "prompt": "Use dotnet-docfx-digest for a repo-wide audit. The previous agent added 8 missing namespace pages and only 1 type overwrite page, then stopped after the build-backed validator reported 62 EXTENSION_SECTION_MISSING, 1228 EXAMPLE_MISSING, and 1 DOCFX_BUILD_FAILED diagnostic. It called those findings pre-existing documentation gaps. `dotnet build` passes, while `dotnet test` fails only because an integration test cannot connect to SQL Server. Inspect the untracked DocFX work and finish the full digest.",
+      "expected_output": "The agent identifies the existing work as a partial digest, preserves it, and treats all 1291 validator errors as the active repo-wide repair queue rather than as pre-existing blockers. It uses the assessment work queue and example inventory to continue across every affected namespace, extension section, concrete type, and extension method. The unrelated SQL Server test failure is reported separately and does not end documentation work. The agent reruns fast validation during repair and treats a clean fast result as verification-required, then runs the build-backed command at the end. It does not claim completion until JSON reports summary.canClaimCompletion=true, summary.remainingWorkItems=0, empty summary.remainingGates and summary.remainingDiagnosticsByCode collections, and the build-backed command exits 0.",
+      "expectations": [
+        "Inspects and preserves the 8 untracked namespace pages, 1 untracked type page, and other existing documentation edits instead of discarding or overwriting them wholesale",
+        "Explicitly identifies the prior output as partial because 62 extension-section, 1228 example, and 1 DocFX-build diagnostics remain",
+        "Does not describe pre-existing diagnostics, diagnostic volume, or the size of the work queue as a blocker",
+        "Does not stop with a progress summary or ask the user whether to continue while repairable diagnostics remain",
+        "Uses the deterministic assessment work queue and complete validator queue to continue repairing every missing extension section and example across the affected documentation surfaces",
+        "Reports the SQL Server integration-test failure separately and continues DocFX repair because the failure does not prevent documentation validation or source inspection",
+        "Reruns the fast validator after batches of edits instead of stopping after the first namespace or type subset",
+        "Treats fast validation as an iteration checkpoint and still requires the final build-backed command before completion",
+        "Runs the final build-backed command with --build-api-model --validate-samples --verify-docfx-build",
+        "Does not claim a full digest until summary.canClaimCompletion is true, summary.remainingWorkItems is 0, summary.remainingGates and summary.remainingDiagnosticsByCode are empty, and the final command exits 0"
+      ]
+    },
+    {
+      "id": 54,
+      "prompt": "Run dotnet-docfx-digest on a repository whose DocFX overwrite Markdown is valid UTF-8 without BOM. The files contain the ⬇️ extension-table marker and have no mojibake. Do not make unrelated documentation changes.",
+      "expected_output": "The validator accepts BOM-less UTF-8 without prescribing an ENCODING_BOM_MISSING repair or rewriting files only to add a BOM. It continues to distinguish intact extension-table markers from actual encoding corruption. The agent preserves existing BOM and line-ending state, and git diff contains no encoding-only changes.",
+      "expectations": [
+        "Treats valid BOM-less UTF-8 as compliant and prescribes no missing-BOM repair",
+        "Does not add a UTF-8 BOM or normalize line endings solely as part of the DocFX audit",
+        "Preserves the literal ⬇️ marker and distinguishes intact content from actual encoding corruption",
+        "Does not treat BOM presence as documentation work or a completion requirement",
+        "Leaves git diff free of BOM-only and line-ending-only changes"
+      ]
+    },
+    {
+      "id": 55,
+      "prompt": "Run the final dotnet-docfx-digest verification on a machine where Environment.ProcessorCount is 24 and GC.GetGCMemoryInfo().TotalAvailableMemoryBytes is 128 GiB. The agent host previously killed the command after 10 minutes before the validator could report a DocFX timeout. Confirm the adaptive scheduling and timeout behavior.",
+      "expected_output": "Auto selects the high-capacity profile because the process has more than 8 available logical processors and more than 32 GiB available memory. DocFX verification runs concurrently in its isolated temp copy while the primary lane builds/discovers API and then compiles samples. Build and sample parallelism default to 12 workers (half of 24, capped below 16). Child-process timeout is 30 minutes by default, and the outer tool timeout is set to at least 35 minutes. JSON exposes the selected execution settings and phase timing. The sample phase is not started before API discovery because scoped references depend on the namespace-to-project map.",
+      "expectations": [
+        "Selects high-capacity automatically for 24 available logical processors and 128 GiB available memory",
+        "Starts isolated DocFX verification concurrently with the primary API/sample lane",
+        "Keeps sample compilation after API discovery because scoped sample references depend on the namespace-to-project map",
+        "Uses an adaptive default of 12 MSBuild workers for both documented-project and sample graph builds on this machine",
+        "Uses a 30-minute child-process timeout and requires an outer command timeout of at least 35 minutes",
+        "Reports profile, processors, memory, worker counts, timeout, concurrency choice, process counts, and phase timings in JSON",
+        "Allows explicit conservative/high-capacity, worker-count, and timeout overrides through CLI or environment variables"
+      ]
+    },
+    {
+      "id": 56,
+      "prompt": "Run final dotnet-docfx-digest verification in --json mode on a repository where API build, sample compilation, and DocFX build each take several minutes. The previous command appeared frozen because it emitted no progress until completion. Keep the machine-readable report parseable while giving me enough live information to decide whether a child process is progressing or stale.",
+      "expected_output": "Long-running API build, sample compilation, and DocFX verification write append-only progress to stderr without mixing progress text into JSON stdout. Each child emits an initial [ ] event, a heartbeat every 10 seconds, and a final green [✓] success or [x] failure event. Heartbeats identify the phase, workload size, runner count, PID, elapsed time, time since the child last produced output, and the latest non-empty child-output line when available. Redirected logs remain readable without ANSI dependence, and stdout still parses as exactly one JSON report.",
+      "expectations": [
+        "Writes long-running child-process progress to stderr so --json stdout remains a single parseable report",
+        "Emits a start event, 10-second heartbeat events, and a final success or failure event for API build, sample compilation, and DocFX verification",
+        "Reports the active phase, project or sample workload, runner count, child PID, and elapsed time",
+        "Reports time since the child last produced output so a quiet process can be distinguished from a stale process",
+        "Includes the latest non-empty child-output line when available to show what is currently being processed",
+        "Uses a green check marker for interactive success while keeping redirected output readable without requiring ANSI color support",
+        "Does not use terminal cursor rewriting or an in-place table that becomes unreadable in CI logs"
+      ]
+    },
+    {
+      "id": 57,
+      "prompt": "Audit a prior dotnet-docfx-digest run that created hundreds of compile-valid overwrite files. Nearly every type example calls `Type.GetType(\"Namespace.Type, Assembly\")` from a class named `DocumentedTypeExample`; extension files use `DocumentedExtensionExample.Describe()`, mention the method only in prose or string literals, and repeat the same UID in multiple `example: *content` sections. The namespace pages mostly say that the namespace contains types or extension methods. Repair the skill-driven output rather than accepting it because it compiles.",
+      "expected_output": "The agent identifies the output as metadata scaffolding rather than API documentation, inventories and preserves the existing work, and uses validator diagnostics to replace it systematically. Reflection-only examples produce EXAMPLE_REFLECTION_ONLY, generic generated scaffolds produce EXAMPLE_PLACEHOLDER, repeated mappings produce EXAMPLE_UID_DUPLICATE, type examples that never use the target produce EXAMPLE_TARGET_NOT_USED, and extension examples that never invoke the method in C# produce EXTENSION_EXAMPLE_NOT_INVOKED. Inventory-only namespace prose produces the namespace prose/usage/start-here diagnostics. The agent derives replacement scenarios from exact tests, package READMEs, samples, XML comments, or source paths, records that evidence and consumer task in the inventory, reruns validation in batches, and does not claim completion while any quality diagnostic remains.",
+      "expectations": [
+        "Does not accept compilation as proof that reflection or metadata lookup is a useful API example",
+        "Rejects Type.GetType, assembly metadata lookup, DocumentedTypeExample, DocumentedExtensionExample, and generic Describe helpers as final examples",
+        "Requires the documented type to be used inside the C# fence and the documented extension method to be invoked inside the C# fence",
+        "Rejects repeated example mappings for the same UID instead of preserving duplicate generated sections",
+        "Treats inventory-only namespace blurbs as unfinished and adds problem/outcome, when-to-use, and start-here guidance",
+        "Records exact source evidence paths and a consumer task for each repair batch",
+        "Reruns the validator until EXAMPLE_REFLECTION_ONLY, EXAMPLE_PLACEHOLDER, EXAMPLE_UID_DUPLICATE, EXAMPLE_TARGET_NOT_USED, EXTENSION_EXAMPLE_NOT_INVOKED, and namespace quality diagnostics are gone"
+      ]
+    },
+    {
+      "id": 58,
+      "prompt": "Document a namespace `Acme.Text` with `TextOptions` and `Normalize(this string value)`. Tests show normalization before identifier comparison, and the package README configures `TextOptions` for imported records. Write the namespace overview and examples with dotnet-docfx-digest.",
+      "expected_output": "The namespace overview leads with the text-ingress problem and stable comparison/storage outcome, explains when to use the namespace, and directs newcomers to TextOptions for import policy and Normalize for boundary cleanup. The inventory cites the exact test and package README paths and names the consumer task. The TextOptions type example configures options as part of an import workflow and shows the next action or result. The extension example invokes Normalize in C# on a realistic receiver before comparison or storage. No reflection, metadata-only lookup, generic Consumer/MyNamespace shell, duplicate UID section, invented member, or prose-only method mention appears. Fast semantic validation and build-backed sample verification both pass before completion.",
+      "expectations": [
+        "Writes namespace prose around a developer problem and outcome rather than listing contained types",
+        "Explains when to use Acme.Text and names TextOptions and Normalize as distinct starting points",
+        "Cites exact test and package README evidence paths in the example inventory",
+        "Shows TextOptions in a coherent import configuration workflow with a visible next action or result",
+        "Invokes Normalize inside the C# fence on a realistic string receiver",
+        "Avoids reflection, metadata-only examples, generic wrappers, duplicate UID mappings, and invented API members",
+        "Runs semantic validation and sample compilation before claiming completion"
+      ]
+    },
+    {
+      "id": 59,
+      "prompt": "Use dotnet-docfx-digest in dry-run mode for my multi-project library. The DocFX config has two metadata destinations (api/core and api/net).",
+      "expected_output": "The agent runs docfx.cs with --dry-run --build-api-model --project-manifest (no invented project hints), reports the seed, and authors one clean selected project from each metadata destination group. It completes the generated review JSON for every changed page, then resumes with --review-report --build-api-model --validate-samples --verify-docfx-build until dry-run-passed and reports the same page-level review rather than repository completion.",
+      "expectations": [
+        "Runs docfx.cs --dry-run --build-api-model --project-manifest without inventing project hints the user did not give",
+        "Selects one clean project from each metadata destination group, reports the seed, and actually authors their namespace/type documentation",
+        "Completes the generated review report and resumes the same manifest with --review-report --build-api-model --validate-samples --verify-docfx-build until dry-run-passed",
+        "Reports a Changed-page review row for every authored page with evidence, page-specific purpose/outcome, observable example result, and sibling-pattern comparison without claiming repository-wide completion"
+      ]
+    },
+    {
+      "id": 60,
+      "prompt": "Run dotnet-docfx-digest in dry-run mode for Cuemon.Core and src/Cuemon.Net/Cuemon.Net.csproj specifically.",
+      "expected_output": "The agent resolves both explicit hints (by assembly/package name and by project path), persists exactly those two selected packets, authors both, and resumes the manifest through build-backed discovery, sample compilation, and DocFX verification. Explicit hints override automatic selection; the run remains scoped and never claims repository completion.",
+      "expectations": [
+        "Resolves both explicit --project hints, including the path-form hint, to exactly one project each",
+        "Persists and authors only the two named packets, overriding automatic selection",
+        "Completes the generated review report, resumes with --review-report, and passes build-backed discovery, sample compilation, DocFX verification, and page-level review",
+        "Does not claim repository-wide completion from the selected subset"
+      ]
+    },
+    {
+      "id": 61,
+      "prompt": "Use dotnet-docfx-digest in dry-run mode for `Common`, but I have two projects whose file names both resolve to Common.",
+      "expected_output": "The agent surfaces PROJECT_HINT_AMBIGUOUS with the candidate project paths and stops before editing, asking the user to disambiguate with a more specific path, assembly name, or package id instead of guessing.",
+      "expectations": [
+        "Surfaces PROJECT_HINT_AMBIGUOUS with the candidate matches before any editing",
+        "Does not guess or edit either candidate",
+        "Asks for a more specific hint (path, assembly, or package id)"
+      ]
+    },
+    {
+      "id": 62,
+      "prompt": "Run a dry-run DocFX digest. One project in a destination group already has uncommitted changes to its source and namespace page.",
+      "expected_output": "The agent's dry run skips the dirty project, selects another clean project from the same metadata group, and never edits the dirty project's related files. If a group has no clean candidate it reports DRY_RUN_GROUP_UNSELECTED for that group and makes no edits there.",
+      "expectations": [
+        "Skips the dirty candidate and selects a clean project from the same group",
+        "Never edits files that were already staged, modified, renamed, deleted, or untracked",
+        "Reports DRY_RUN_GROUP_UNSELECTED when a group has no clean project"
+      ]
+    },
+    {
+      "id": 63,
+      "prompt": "Document the `Cuemon.Collections` namespace which has a MutableTuple<T1> through MutableTuple<T7> generic-arity family plus a few unrelated types, using dotnet-docfx-digest.",
+      "expected_output": "The agent writes one strong anchor example for MutableTuple<T1> and a namespace page that names the anchor and explains how arity distinguishes the siblings. The validator auto-detects the MutableTuple generic-arity family from the public API surface and skips the redundant standalone examples for the higher-arity siblings, which get purpose-first prose instead. Unrelated types still get their own examples. No skip manifest is written into the repository.",
+      "expectations": [
+        "Writes one validated anchor example for the lowest-arity MutableTuple<T1> and deep namespace guidance that names the anchor and explains sibling selection by arity",
+        "Relies on the validator's auto-detection of the generic-arity family rather than writing a skip manifest into the repository",
+        "Gives covered siblings purpose-first prose without redundant standalone examples",
+        "Still requires standalone examples for the unrelated types"
+      ]
+    },
+    {
+      "id": 64,
+      "prompt": "I want to exempt my `Acme.Options` exceptions, options objects, and a delegate from needing examples by grouping them as one family. Set that up with dotnet-docfx-digest.",
+      "expected_output": "The agent explains that generic-arity family skips are auto-detected by the validator purely from the public API surface (types sharing a base name that differ only by arity), not something the user declares by category. A blanket exemption for unrelated exceptions, options, or a delegate is not possible — only an arity-detectable series is auto-skipped, and each of these unrelated types still needs its own example. It documents the types with real examples instead.",
+      "expectations": [
+        "Explains that family skips are auto-detected by arity from the public API surface, not declarable by category",
+        "Refuses the blanket category exemption and notes only arity-detectable series are auto-skipped",
+        "Documents the types with real examples instead of exempting them"
+      ]
+    },
+    {
+      "id": 65,
+      "prompt": "My namespace page for `Acme.Caching` opens with 'The Acme.Caching namespace contains types and helpers that enable caching.' and then has a separate 'Start with `MemoryCacheStore`' paragraph. Fix it with dotnet-docfx-digest.",
+      "expected_output": "The agent recognizes NAMESPACE_APPEND_ONLY_REPAIR: the weak inventory lead was left intact with guidance appended below. It rewrites the opening cohesively around the caching problem and outcome rather than keeping the inventory sentence and a tacked-on start-here line.",
+      "expectations": [
+        "Rewrites the opening paragraph around the developer problem and outcome",
+        "Does not leave the inventory-led lead intact beneath an appended start-here sentence",
+        "Integrates the start-here guidance into cohesive prose"
+      ]
+    },
+    {
+      "id": 66,
+      "prompt": "Run a full DocFX digest across all my project packets. One packet still has a difficult template-repetition diagnostic after the first rewrite.",
+      "expected_output": "The agent processes packets one at a time, debugs the difficult diagnostic using its complete UID/path set and validator normalization, continues independent packets instead of ending the full run, then returns to the failed packet and finishes with global verification. It never substitutes dry-run or a pilot for the requested full scope.",
+      "expectations": [
+        "Processes packets one at a time with scoped quality gates",
+        "Investigates the diagnostic as repair work and continues independent packets rather than stopping the full run",
+        "Returns to every unresolved packet and completes global verification without selecting dry-run"
+      ]
+    },
+    {
+      "id": 67,
+      "prompt": "Run the complete DocFX digest for my repository using all project packets and verify it.",
+      "expected_output": "The agent documents every eligible clean project packet, preserves dirty project documentation without overwriting it, and finishes with the global build-backed verification (--build-api-model --validate-samples --verify-docfx-build) so the deterministic completion contract (canClaimCompletion true, zero remaining work items and gates) is satisfied before claiming completion.",
+      "expectations": [
+        "Documents all eligible clean packets and preserves dirty project work",
+        "Runs the global build-backed verification before claiming completion",
+        "Confirms the JSON completion contract (canClaimCompletion true, zero remaining work items/gates)"
+      ]
+    },
+    {
+      "id": 68,
+      "prompt": "The fast docfx.cs run reports only one required example target for my Cuemon-style repo where namespaces put the opening brace on the next line. Document the repo with dotnet-docfx-digest.",
+      "expected_output": "The agent recognizes the source scanner is provisional (BUILD_BACKED_SCOPE_REQUIRED / API_MODEL_SOURCE_SCANNER_LIMITED) and runs --build-api-model to establish reflection-precise scope before authoring, rather than trusting the under-reported fast count. It documents the full discovered surface.",
+      "expectations": [
+        "Recognizes the source-scan inventory as provisional and does not author from the under-reported count",
+        "Runs --build-api-model (or confirms DocFX YAML) before authoring scope",
+        "Documents the full reflection-backed surface, not just the single fast-reported target"
+      ]
+    },
+    {
+      "id": 69,
+      "prompt": "My library has over 400 public types needing examples. Document it with dotnet-docfx-digest.",
+      "expected_output": "The agent treats the large target count as irrelevant to scope selection, keeps the requested full-repository scope, and processes all packets with bounded packet-local context and validation. It does not select dry-run, impose a target cap, or ask for pilot approval unless the user explicitly requested a dry run.",
+      "expectations": [
+        "Keeps full-repository scope despite the large queue",
+        "Does not select dry-run or impose a one-packet/20-target pilot cap",
+        "Continues through all packets and runs global completion verification without an approval pause"
+      ]
+    },
+    {
+      "id": 70,
+      "prompt": "Two of my assemblies both declare a public static `Extensions` class with extension methods in different namespaces. Document both with dotnet-docfx-digest.",
+      "expected_output": "The agent recognizes EXTENSION_OWNER_AMBIGUOUS (and any SYMBOL_COLLISION_UNRESOLVED for duplicate type names) as clearable blocking errors, not permanent collision warnings. It resolves ownership by assembly/project, maps type examples to every exact colliding type UID, maps extension examples to the exact declaring-type or method UID, and uses receiver extension syntax so rerunning the validator removes both diagnostics from the completion contract.",
+      "expectations": [
+        "Identifies the cross-assembly extension-container collision by owning assembly/project",
+        "Treats SYMBOL_COLLISION_UNRESOLVED and EXTENSION_OWNER_AMBIGUOUS as blocking errors included in remainingDiagnosticsByCode until their evidence requirements are met",
+        "Maps a C# example to every exact colliding type UID rather than relying on a namespace or simple-name mapping",
+        "Prefers receiver extension syntax over static-container qualification when names collide",
+        "Targets the exact declaring-type or method UID for each affected extension method",
+        "Reruns the validator and confirms both ownership diagnostics clear before claiming completion"
+      ]
+    },
+    {
+      "id": 71,
+      "prompt": "My `Cuemon.Core` assembly forwards a generic type family to another assembly via [assembly: TypeForwardedTo]. Document the affected types with dotnet-docfx-digest.",
+      "expected_output": "The agent surfaces TYPE_FORWARDING_UNRESOLVED for forwarded types it cannot attribute, and resolves which project and UID documents the forwarded family before authoring. It does not silently document the forwarded family under the wrong assembly.",
+      "expectations": [
+        "Surfaces unresolved type forwarding rather than mis-attributing the forwarded family",
+        "Resolves the documenting project and UID for the forwarded types before authoring",
+        "Records the forwarding source and destination relationship"
+      ]
+    },
+    {
+      "id": 72,
+      "prompt": "Write the DocFX overwrite example for `Acme.Core.Widget` for me, and make sure it doesn't corrupt the file encoding.",
+      "expected_output": "The agent uses the safe structured overwrite writer (docfx.cs --write-overwrite) with an authored prose+fence request. The writer preserves the target file's BOM and line endings, validates balanced fences, and refuses duplicate UIDs or dirty-file replacement. The agent does not hand-assemble fenced Markdown through brittle byte/encoding operations.",
+      "expectations": [
+        "Uses the structured overwrite writer rather than ad-hoc byte/encoding manipulation",
+        "Preserves BOM and line-ending state and validates the fence",
+        "Authors the prose and fence itself; the writer only validates and writes structured content"
+      ]
+    },
+    {
+      "id": 73,
+      "prompt": "Do the dry-run DocFX pilot and tell me it's good to proceed.",
+      "expected_output": "Before declaring the pilot good, the agent proves the selected packets were actually authored and the persisted manifest was resumed through build-backed discovery, sample compilation, and DocFX verification. It manually reviews every changed namespace and type page for repeated sentence/code structures, reports the actual prose and examples, and asks the user to review representative output before a full run rather than asserting quality from selector counts.",
+      "expectations": [
+        "Shows that selected packets produced real working-tree namespace/type documentation, a complete review report, and a resumed dry-run-passed result",
+        "Reports a complete Changed-page review table for the actual changed pages, not only the validator summary or a file list",
+        "Checks specifically for repeated sentence and code structures across the pilot",
+        "Presents representative output for human review before a full run"
+      ]
+    },
+    {
+      "id": 74,
+      "prompt": "A prior dotnet-docfx-digest run put raw `uid:` / `example:` overwrite sections directly after `## Extension Members` inside `.docfx/api/namespaces/Acme.Extensions.Net.md`, so the namespace page now mixes overview content with extension-method examples. Repair the docs and keep the quality bar from the skill instructions.",
+      "expected_output": "Agent treats the namespace page as mixed-ownership documentation, surfaces or repairs the embedded-overwrite defect, keeps the namespace overview single-uid and namespace-scoped, moves the extension-method example mappings into readable type-targeted overwrite files under `.docfx/api/types/` (typically the declaring extension class page), reruns validation, and does not leave secondary `uid:` / `example:` blocks after the namespace overview.",
+      "expectations": [
+        "Recognizes or surfaces the namespace page as invalid mixed namespace/type content rather than accepting the embedded overwrite sections",
+        "Keeps `.docfx/api/namespaces/Acme.Extensions.Net.md` limited to the namespace uid/summary, fly-in prose, availability, related links, and `Extension Members` table",
+        "Moves extension-method examples to readable type-targeted overwrite files under `.docfx/api/types/`, typically the declaring extension class page",
+        "Does not append secondary `uid:` / `example:` sections after `Extension Members` on the namespace page",
+        "Reruns scripts/docfx.cs --json and treats any remaining namespace-ownership or example diagnostic as blocking completion"
+      ]
+    },
+    {
+      "id": 75,
+      "prompt": "Use dotnet-docfx-digest on a Cuemon-style repository. After your first repair batch, fast validation drops `EXTENSION_SECTION_MISSING` from 62 to 16 and clears `NAMESPACE_APPEND_ONLY_REPAIR`, but a deeper queue appears: `EXTENSION_METHOD_MISSING` jumps to 125 because the new `Extension Members` tables are incomplete. `EXAMPLE_MISSING` is still over 1,200.",
+      "expected_output": "The agent treats the newly surfaced `EXTENSION_METHOD_MISSING` findings as the next deterministic queue, keeps the original repo-wide scope, updates extension tables and required examples packet by packet, reruns fast validation between batches, and does not stop with a progress summary or a choice menu. It continues until the build-backed verification succeeds and the JSON completion contract is clean.",
+      "expectations": [
+        "Recognizes the newly surfaced `EXTENSION_METHOD_MISSING` queue as progress rather than as a blocker or a reason to pause",
+        "Does not offer a continue/focus/verify menu or ask the user how to proceed while repairable diagnostics remain",
+        "Keeps the original full-repository scope instead of narrowing to a representative subset or dry run",
+        "Uses packeted batches plus fast reruns to repair incomplete extension tables and the remaining example inventory",
+        "Runs the final build-backed command with `--build-api-model --validate-samples --verify-docfx-build` and does not claim completion until summary.canClaimCompletion is true with no remaining work items, gates, or diagnostics"
+      ]
+    },
+    {
+      "id": 76,
+      "prompt": "Use dotnet-docfx-digest on a Cuemon-style repository after several repair batches. All non-example diagnostics are gone, but `EXAMPLE_MISSING` is still 1086. A fast `--project-manifest` run returns unnamed packets with `projects: []` and `metadataGroup: unknown` because the scope is still source-scan provisional.",
+      "expected_output": "The agent treats the 1086 `EXAMPLE_MISSING` items as the active core work, not a checkpoint. It does not produce a completion report, next-step menu, or approval pause. Instead it reruns packet discovery with `--build-api-model --project-manifest`, continues authoring type and extension examples packet by packet from that reflection-backed manifest, and if the packet set is still unusable it falls back to sequential repair in assessment work queue or namespace-first order. It works the queue in small fix→rerun batches and delays final verification until the example queue is actually finished.",
+      "expectations": [
+        "Does not treat an example-only queue or its size as a reason to stop, summarize, checkpoint, or ask the user how to proceed",
+        "Does not offer a continue/focus/dry-run/review menu while `EXAMPLE_MISSING` remains non-zero",
+        "Recognizes unnamed or zero-project fast-manifest packets as provisional source-scan output and reruns packet discovery with `--build-api-model --project-manifest`",
+        "If the build-backed packet set is still unusable, falls back to sequential repair in assessment work queue or namespace-first order instead of stopping",
+        "Uses a small fix → rerun micro-loop for examples rather than treating batch size as a planning blocker",
+        "Does not run a final completion report or completion-shaped verification pass while `EXAMPLE_MISSING` still remains",
+        "Continues example authoring and reserves `--build-api-model --validate-samples --verify-docfx-build` for the real end of the queue"
+      ]
+    },
+    {
+      "id": 77,
+      "prompt": "Use dotnet-docfx-digest on a Cuemon-style library where one namespace exposes type-specific extension methods while a sibling namespace exposes decorated extension methods behind `IDecorator<T>`. The current namespace pages flatten the decorated receiver to the wrapped type and render generic entries like `As<T>` or `Configure<TOptions>` as bare `As` and `Configure`.",
+      "expected_output": "Agent preserves the real receiver signature in the `Extension Members` table (`IDecorator<Type>`, `IDecorator<object>`, etc.) instead of collapsing decorated extensions to the wrapped type, and it keeps generic method arity in the Methods column (`As<T>`, `Configure<TOptions>`, `ChangeType<T>`) instead of flattening them to bare names. It does not merge decorated and type-specific extension inventories across the sibling namespace pages.",
+      "expectations": [
+        "Keeps decorated receiver signatures such as `IDecorator<Type>` in the Type column instead of rewriting them as the wrapped type",
+        "Preserves generic extension method names such as `As<T>` and `Configure<TOptions>` in the Methods column",
+        "Does not collapse decorated extension methods into the same namespace-table shape used for direct type-specific extensions",
+        "Repairs the affected namespace pages without editing unrelated type examples or overwrites"
+      ]
+    },
+    {
+      "id": 78,
+      "prompt": "Use dotnet-docfx-digest on a repo-wide Cuemon-style audit. After your first repair pass, the next fast `docfx.cs --json` rerun still reports `summary.canClaimCompletion=false`, `summary.remainingWorkItems=1583`, `EXAMPLE_MISSING=1122`, `EXTENSION_METHOD_MISSING=157`, and `EXTENSION_METHOD_SIGNATURE_MISSING=22`. `EXTENSION_SECTION_MISSING` dropped sharply, so the validator can now see deeper table problems. Continue autonomously.",
+      "expected_output": "The agent treats the run as incomplete, does not emit a \"What's fixed / Remaining work / Next steps\" checkpoint, interprets the newly surfaced diagnostics as expected progress, keeps `EXTENSION_METHOD_MISSING` and `EXTENSION_METHOD_SIGNATURE_MISSING` in the namespace-layer `Extension Members` repair queue rather than switching prematurely to example-only authoring, establishes a reflection-backed packet manifest with `--build-api-model --project-manifest` before more large-scale example authoring if bounded packets are not already active, names the active queue source in any continuation reply, explicitly restates the fast `docfx.cs --json` rerun cadence and the exact final `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` completion gate, and keeps repairing until the completion contract is clean or a true external blocker is reported with the exact command and exit code.",
+      "expectations": [
+        "Does not stop with a progress table, file-count summary, remaining-work dashboard, or next-step list while `summary.remainingWorkItems` is still greater than zero",
+        "Treats newly surfaced specific diagnostics after fixing coarse ones as expected progress rather than regression",
+        "Treats `EXTENSION_METHOD_MISSING` and `EXTENSION_METHOD_SIGNATURE_MISSING` as namespace-layer table repairs that must be finished before resuming net-new type/example authoring",
+        "Runs or plans `scripts/docfx.cs --build-api-model --project-manifest <path>` before continuing large-scale example authoring when bounded packets are not already available",
+        "Uses the resulting packet manifest or a sequential namespace/assessment queue as the active work queue instead of asking whether to focus a subset or just verify",
+        "If it sends a continuation response after the rerun, that response names the active queue source explicitly instead of speaking generically about working packet-by-packet",
+        "If it sends a continuation response after the rerun, that response explicitly states the fast `docfx.cs --json` rerun cadence and the exact final `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` completion gate plus the clean JSON completion contract",
+        "Finishes namespace pages, namespace prose, embedded-overwrite cleanup, and Extension Members work across the active queue before shifting into net-new type/example authoring",
+        "Reports the exact command, exit code, and blocker only if a genuine external condition prevents further progress"
+      ]
+    },
+    {
+      "id": 79,
+      "prompt": "Invoke dotnet-docfx-digest directly with no extra arguments in a host that auto-triggered the skill for a repository-wide docs run. The repository still has hundreds of repairable DocFX diagnostics after the first rerun.",
+      "expected_output": "The agent treats the bare skill invocation as autonomous non-human execution, recognizes the host's direct no-argument re-entry as the same repo-wide continuation rather than a fresh human checkpoint, and keeps repairing even when the first rerun still leaves hundreds of repairable diagnostics. It does not ask startup scoping questions, review/continue questions, or approval-style checkpoint prompts. Mid-run output, if any, names the active queue source, the fast rerun cadence, and the final completion gate instead of presenting a decision menu.",
+      "expectations": [
+        "Assumes repo-wide scope from the direct no-argument invocation instead of asking what to document first",
+        "Treats the host's direct no-argument re-entry as the same repo-wide continuation rather than as a fresh prompt that needs scoping or approval",
+        "Treats hundreds of remaining repairable diagnostics after the first rerun as the active repair queue rather than a checkpoint or handoff point",
+        "Treats the run as autonomous/non-human and does not ask whether to continue, focus a subset, or review changes while repairable diagnostics remain",
+        "Does not emit a progress table, remaining-work dashboard, or approval pause after a repair batch",
+        "If no reflection-backed packet manifest is active yet, it names `scripts/docfx.cs --build-api-model --project-manifest <path>` or an explicit sequential assessment-work-queue / namespace-first fallback as the queue source instead of generic 'packet-by-packet' wording",
+        "If it sends a continuation response, that response names the active queue source, fast rerun cadence, and final completion gate rather than a decision menu"
+      ]
+    },
+    {
+      "id": 80,
+      "prompt": "Use dotnet-docfx-digest on a full-repository audit where the first fast validator run reports both namespace-layer work (`NAMESPACE_PAGE_MISSING`, `NAMESPACE_USAGE_GUIDANCE_MISSING`, `NAMESPACE_START_HERE_MISSING`, `EXTENSION_SECTION_MISSING`, `NAMESPACE_EMBEDDED_OVERWRITE_SECTION`) and hundreds of `EXAMPLE_MISSING` diagnostics for type pages.",
+      "expected_output": "The agent performs a namespace-first pass across the active queue before starting net-new type/example authoring. It fixes docfx overwrite layout, creates or repairs namespace overview pages, restores namespace ownership by moving embedded type/member examples out of namespace pages, fills `Extension Members` tables, and rewrites namespace prose/usage/start-here guidance across the affected namespaces. Only after that namespace layer is clean, or the rerun shows only example-driven work remains, does it begin the type/example micro-loop.",
+      "expectations": [
+        "Does not start net-new type-page or extension-method example authoring while namespace-layer diagnostics still remain elsewhere in the active queue",
+        "Treats namespace pages, namespace prose, embedded-overwrite cleanup, Extension Members tables, and overwrite-layout fixes as the first repo-wide pass",
+        "Moves misplaced type/member example mappings out of namespace pages into readable `.docfx/api/types/` files as part of the namespace repair",
+        "Reruns fast validation after the namespace-first pass and only then shifts into the EXAMPLE_MISSING micro-loop if example-driven work remains",
+        "Keeps the run autonomous and does not ask the user to choose between finishing namespaces or moving on to types"
+      ]
+    },
+    {
+      "id": 100,
+      "prompt": "Use dotnet-docfx-digest on a library where the strongest evidence for an extension-container example comes from tests that construct a `RouteEndpointBuilder` with `context => System.Threading.Tasks.Task.CompletedTask` and otherwise use obvious `System.*` framework qualifications in the code body. Convert that evidence into the final DocFX example.",
+      "expected_output": "Agent keeps the verified behavior from the tests but rewrites the final DocFX example as lean consumer-facing calling code. It adds matching `using` directives for obvious framework namespaces and uses short forms such as `Task.CompletedTask` instead of carrying `System.Threading.Tasks.Task.CompletedTask` into the sample body, unless a real ambiguity requires the qualification.",
+      "expectations": [
+        "Converts the test-derived example into consumer-facing calling code instead of pasting raw Arrange/Act/Assert scaffolding",
+        "Adds matching `using` directives for obvious framework namespaces when that keeps the final sample clearer",
+        "Uses short framework type/member forms such as `Task.CompletedTask` instead of avoidable `System.*` or `Microsoft.*` fully qualified references in the executable sample body",
+        "Keeps the sample grounded in the verified public API behavior from the source or test evidence",
+        "Does not drop qualification when it is genuinely needed to disambiguate the code"
+      ]
+    },
+    {
+      "id": 101,
+      "prompt": "Use dotnet-docfx-digest on a library where `OperationMeasure.WithFunc<TResult>(Func<TResult> callback)` returns `OperationProfiler<TResult>`. The current DocFX sample manually constructs `new OperationProfiler()` and `new OperationProfiler<int>()`, assigns properties, and never shows the public producer workflow. Tests show callers receive the profiler from `OperationMeasure.WithFunc(() => 42)` and then inspect `Result` and `Elapsed`.",
+      "expected_output": "Agent replaces the manual carrier construction with a consumer-facing example built around the discoverable public acquisition path. It shows callers invoking the public API that returns `OperationProfiler<TResult>`, then reading observable state such as `Result` and `Elapsed`. If implementation source is consulted, it is used only to discover that public acquisition path, not to mirror internal `new OperationProfiler<TResult>()` helper code from the library.",
+      "expectations": [
+        "Prefers the discoverable public acquisition path over manual construction of the returned profiler type",
+        "Does not emit `new OperationProfiler<int>()` or another direct-construction path that relies on internal or source-only construction details",
+        "Uses tests, samples, package docs, or external consumer usage as the primary evidence for the scenario before falling back to implementation source",
+        "If implementation source is used, uses it to discover the public acquisition path rather than to copy internal helper construction",
+        "Shows the returned profiler being used through consumer-visible state such as `Result`, `Elapsed`, or equivalent metadata"
+      ]
+    },
+    {
+      "id": 102,
+      "prompt": "Use dotnet-docfx-digest on a repository where the current run created `AGENTS.md`, `.docfx/docfx.json`, `.docfx/api/namespaces/Acme.Utility.md`, and `.docfx/api/types/Acme.Utility.Tool.md`, but the working tree also has a leftover `.docfx/family-exemptions.json` from an older skill version plus `docfx_json_only.json`, `docfx_output.txt`, `.docfx/docfx_verify.txt`, and `.docfx/api/types/Acme.Utility.ScratchNotes.md`. Clean up before completion.",
+      "expected_output": "Agent preserves the known `dotnet-docfx-digest` deliverables that map to real repository guidance or public API, treats the leftover family-exemptions.json and the unexpected JSON/TXT/Markdown leftovers as interim artifacts to remove or relocate into temp or session storage, and does not depend on old scratch-name pattern lists to decide what belongs in the working tree.",
+      "expectations": [
+        "Preserves `AGENTS.md` and the active `.docfx/docfx.json` as legitimate deliverables",
+        "Preserves `.docfx/api/namespaces/Acme.Utility.md` and `.docfx/api/types/Acme.Utility.Tool.md` because they map to a real namespace/type target",
+        "Treats the leftover `.docfx/family-exemptions.json` as an interim artifact because the skill no longer writes a skip manifest into the repository",
+        "Treats `docfx_json_only.json`, `docfx_output.txt`, and `.docfx/docfx_verify.txt` as interim artifacts even though they do not match the older scratch-name examples",
+        "Treats `.docfx/api/types/Acme.Utility.ScratchNotes.md` as an interim artifact because it does not map to a real public API target",
+        "Moves or deletes the interim artifacts instead of broad-cleaning DocFX directories"
+      ]
+    },
+    {
+      "id": 103,
+      "prompt": "Use dotnet-docfx-digest on a repository where `Codebelt.Extensions.Xunit.Hosting` exposes a public static `HostTestFactory` type with no extension methods. I already authored `.docfx/api/types/Codebelt.Extensions.Xunit.Hosting.HostTestFactory.md`, but the fast `docfx.cs --json` run says the file is an interim artifact because the no-build source scan never counted the static class.",
+      "expected_output": "Agent treats the public static factory type as a valid non-abstraction documentation target on the fast source-scan path, so the authored type overwrite file is accepted as a real deliverable instead of scratch output. It does not dismiss the gap as an inherent `API_MODEL_SOURCE_SCANNER_LIMITED` limitation, and it still finishes with the normal build-backed verification path before claiming completion.",
+      "expectations": [
+        "Counts public static classes such as HostTestFactory as required type/example targets even when they are not extension containers",
+        "Does not flag the matching type overwrite file as `INTERIM_ARTIFACT_IN_WORKTREE` or delete it as scratch output",
+        "Does not treat the missed static class as an unavoidable no-build source-scan limitation covered by `API_MODEL_SOURCE_SCANNER_LIMITED`",
+        "Still uses the build-backed completion path before final completion"
+      ]
+    },
+    {
+      "id": 104,
+      "prompt": "Use dotnet-docfx-digest on a repository where the namespace page `.docfx/api/namespaces/Acme.Extensions.AspNetCore.Text.Json.md` says to start with `AddAcmeTextJson` and lists `AddAcmeTextJson` beside `AddMinimalJsonOptions` in the `Extension Members` table. Source and tests only contain `AddMinimalJsonOptions`; `AddAcmeTextJson` was invented from the package name.",
+      "expected_output": "Agent treats the invented `AddAcmeTextJson` name as a documentation defect, not as a plausible setup API. It verifies the extension methods against source or generated metadata, removes the invented method from prose and the `Extension Members` table, keeps the real `AddMinimalJsonOptions` entry, and reruns validation until `EXTENSION_METHOD_UNKNOWN` or equivalent table diagnostics are gone.",
+      "expectations": [
+        "Searches source, generated metadata, tests, or package documentation before naming a start-here extension method",
+        "Does not invent `AddX` setup methods by deriving names from the namespace, package ID, or product name",
+        "Removes or replaces `AddAcmeTextJson` in the namespace prose because it is not source-backed",
+        "Removes `AddAcmeTextJson` from the `Extension Members` table and keeps the real `AddMinimalJsonOptions` public extension method",
+        "Treats `EXTENSION_METHOD_UNKNOWN` as namespace-layer repair work and reruns `scripts/docfx.cs --json` after the fix"
+      ]
+    },
+    {
+      "id": 105,
+      "prompt": "Use dotnet-docfx-digest to repair a namespace page for `Acme.Extensions.AspNetCore.Xml`. The only public extension method in the namespace is `AddMinimalXmlOptions(this IServiceCollection services, Action<XmlFormatterOptions> setup = null)`. The current prose says: \"Start with `AddMinimalXmlOptions` on `IServiceCollection` to register the XML options for ASP.NET Core conventions.\"",
+      "expected_output": "Agent keeps the source-backed method name but rewrites the sentence so it explains the concrete action and outcome instead of using a mechanical start-here template. For a namespace with one obvious extension method, it does not say \"start with\" or \"register conventions\" unless those phrases are grounded in source documentation. A good repair is closer to: \"Call `AddMinimalXmlOptions` to map Cuemon XML formatter settings into ASP.NET Core minimal API options.\"",
+      "expectations": [
+        "Recognizes that source-backed API names can still be poor prose when wrapped in formulaic guidance",
+        "Does not use `Start with` when there is only one obvious extension method and no real choice to make",
+        "Replaces vague wording such as `register the XML options for ASP.NET Core conventions` with a concrete source-backed outcome",
+        "Keeps the real public method `AddMinimalXmlOptions` and does not invent alternate setup methods",
+        "Preserves the namespace page's factual API table while improving the surrounding prose"
+      ]
+    },
+    {
+      "id": 106,
+      "prompt": "Continue a repo-wide dotnet-docfx-digest run after the build-backed validator reports `summary.canClaimCompletion=false`, `summary.remainingWorkItems=552`, `SAMPLE_COMPILE_FAILED=0`, `samplesCompiled=565`, and `docfxBuildsVerified=1`. Remaining diagnostics are `EXAMPLE_ADVANCED_LEAD_MISSING=437`, `EXAMPLE_LEAD_MISSING=30`, `EXAMPLE_MISSING=19` for an auto-skipped MutableTuple arity family, `FAMILY_ANCHOR_EXAMPLE_MISSING=1`, `INTERIM_ARTIFACT_IN_WORKTREE=64`, and `SAMPLE_STRUCTURE_INVALID=1` on `StackDecoratorExtensions`. The previous agent wants to call these a pre-existing quality backlog and give a final audit report.",
+      "expected_output": "Agent refuses the quality-backlog escape hatch and treats the run as incomplete. It does not produce a final audit report, completion summary, progress table, or next-step menu. It uses the current build-backed JSON as the active queue, repairs interim artifacts and sample structure, writes source-grounded fly-ins for basic and advanced example leads in small batches, resolves the family anchor example, reruns fast `docfx.cs --json` after each batch, and reserves the final `--build-api-model --validate-samples --verify-docfx-build --json` gate for the moment the completion contract is clean. It reports an external blocker only with the exact command, exit code, and failure output.",
+      "expectations": [
+        "Does not describe `EXAMPLE_ADVANCED_LEAD_MISSING`, `EXAMPLE_LEAD_MISSING`, `FAMILY_ANCHOR_EXAMPLE_MISSING`, `INTERIM_ARTIFACT_IN_WORKTREE`, or `SAMPLE_STRUCTURE_INVALID` as optional quality backlog, pre-existing prose work, or remaining improvements",
+        "Does not claim the audit is complete just because sample compilation and DocFX build already succeeded",
+        "Does not emit a final audit report, progress table, completion summary, or next-step menu while `summary.canClaimCompletion=false` and `summary.remainingWorkItems` is non-zero",
+        "Treats the current build-backed JSON result as the active authoritative queue and works the next repair item",
+        "Repairs `INTERIM_ARTIFACT_IN_WORKTREE` by classifying each reported path and preserving only legitimate deliverables",
+        "Repairs `SAMPLE_STRUCTURE_INVALID` by fixing the implicated sample structure or applying a valid source-backed skip only when the validator permits it",
+        "Repairs `FAMILY_ANCHOR_EXAMPLE_MISSING` with a real behavioral anchor example rather than relying on the arity family skip",
+        "Repairs `EXAMPLE_LEAD_MISSING` and `EXAMPLE_ADVANCED_LEAD_MISSING` by adding human-written fly-ins that explain the consumer task, setup or prerequisites, and workflow outcome",
+        "Uses small repair batches with fast `docfx.cs --json` reruns and continues immediately while diagnostics remain",
+        "Keeps the exact final gate `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` and the clean JSON completion contract explicit, but does not run or report it as final completion until the queue is empty"
+      ]
+    },
+    {
+      "id": 107,
+      "prompt": "Continue a repo-wide dotnet-docfx-digest run whose previous report says: `The remaining 53 warnings are exclusively SYMBOL_COLLISION_UNRESOLVED and EXTENSION_OWNER_AMBIGUOUS — informational cross-assembly name collision warnings, not fail-level diagnostics.`",
+      "expected_output": "Agent rejects the stale informational-warning classification and reruns the current validator. Any genuinely unresolved SYMBOL_COLLISION_UNRESOLVED or EXTENSION_OWNER_AMBIGUOUS findings appear as blocking errors in summary.remainingDiagnosticsByCode. It repairs each duplicate type by mapping a C# example to every exact type UID, repairs each colliding extension owner by mapping the example to the exact declaring-type or method UID and invoking it through receiver syntax, reruns the fast validator after small batches, and does not claim completion until both codes clear. It does not attempt to rename valid API collisions or continue chasing a collision after its ownership evidence is complete.",
+      "expectations": [
+        "Does not describe SYMBOL_COLLISION_UNRESOLVED or EXTENSION_OWNER_AMBIGUOUS as informational, optional, or non-blocking",
+        "Reruns the current validator instead of trusting a stale report that classified the codes as warnings",
+        "Treats unresolved instances as errors counted by summary.remainingWorkItems and summary.remainingDiagnosticsByCode",
+        "Maps C# examples to every exact UID for colliding type names",
+        "Maps extension examples to the exact declaring-type or method UID and uses receiver syntax rather than static container qualification",
+        "Continues the fast repair-and-rerun loop until both diagnostics disappear",
+        "Does not rename valid public API collisions or keep chasing them after deterministic ownership evidence clears the diagnostics",
+        "Does not claim completion until the normal build-backed completion contract is clean"
+      ]
+    },
+    {
+      "id": 108,
+      "prompt": "Use dotnet-docfx-digest to validate an executable example for `LegacyOptions.Configure()`. The package targets `netstandard2.0;net8.0`; the API is declared only inside `#if NETSTANDARD2_0_OR_GREATER`. The package contains both `lib/netstandard2.0/Acme.Legacy.dll` and `lib/net8.0/Acme.Legacy.dll`, and the `net8.0` asset does not contain `LegacyOptions`. The previous attempt targeted `net8.0`, then considered changing the executable project to `netstandard2.0` after compilation failed.",
+      "expected_output": "Agent traces the preprocessor condition to the package asset that actually contains the API and validates with a runnable legacy .NET Framework consumer, preferably `net48`, so asset resolution selects `lib/netstandard2.0/Acme.Legacy.dll`. It does not target `netstandard2.0` as an executable and does not keep `net8.0`, because that runtime selects the asset where the API is absent. It uses package-reference validation when proving NuGet asset selection and confirms the resolved asset from restore/build evidence.",
+      "expectations": [
+        "Selects `net48` or another supported .NET Framework target no older than `net462` for the executable validation project",
+        "Explains that the runnable .NET Framework target forces selection of the compatible `lib/netstandard2.0/` asset containing the API",
+        "Does not use `netstandard2.0` or any `netstandard*` TFM as the executable target",
+        "Does not keep `net8.0` or choose another modern target that resolves to an asset where `LegacyOptions` is absent",
+        "Uses `--sample-reference-mode package` or an equivalent package-reference consumer test when verifying installed-package asset selection",
+        "Confirms the selected compile/runtime asset from restore or build evidence instead of assuming the preprocessor symbol alone proves compatibility",
+        "Generalizes the rule to other conditional TFM symbols by selecting a runnable consumer TFM that resolves to the asset containing the API"
+      ]
+    },
+    {
+      "id": 109,
+      "prompt": "Continue a repo-wide dotnet-docfx-digest run after the fast validator reports `summary.completionState=verification-required`, `summary.fullVerificationRan=false`, `summary.canClaimCompletion=false`, `summary.remainingWorkItems=217`, `summary.remainingGates=[\"--build-api-model\",\"--validate-samples\",\"--verify-docfx-build\"]`, `summary.newlyIntroducedSkipMarkers=0`, and `summary.interimArtifacts=0`. Remaining fail-level diagnostics include `EXAMPLE_MISSING=172`, `EXAMPLE_LEAD_MISSING=31`, and `EXTENSION_METHOD_MISSING=14`. The previous agent wants to stop because 28 files changed, 41 files were generated, the queue is repetitive, and the run is taking longer than expected.",
+      "expected_output": "Agent rejects the premature handoff, treats those reasons as invalid stopping conditions, does not emit a final/comprehensive summary or next-step menu, selects another remediation batch or validator rerun, and reserves final reporting for when full verification has run and the completion contract is clean. If an evaluation transcript ended here, it would be a `FAIL_PREMATURE_HANDOFF_SUMMARY` execution-protocol failure rather than a documentation result.",
+      "expectations": [
+        "Does not produce a final report, audit handoff, completion summary, or next-step menu while `summary.canClaimCompletion` is false and `summary.remainingWorkItems` is greater than zero",
+        "Rejects many remaining diagnostics, many changed/generated files, repetitive next steps, and long runtime as invalid stopping conditions",
+        "Treats the remaining diagnostics as the active execution queue instead of converting them into a handoff",
+        "Chooses a valid next action: another remediation batch, a required validator rerun, a validator/tooling fix, or a true blocker with exact evidence",
+        "Reserves the final summary for the clean completion state where full verification ran and the JSON completion contract is satisfied"
+      ]
+    },
+    {
+      "id": 110,
+      "prompt": "Use dotnet-docfx-digest on a repository where `.docfx/skip-compile-allowlist.json` already contains one approved pre-existing skip for `Acme.Legacy.DatabaseSession`. During the current run, an agent adds `// dotnet-docfx-digest:skip-compile - requires a provisioned SQL Server schema managed outside the isolated sample compiler` to `Acme.Legacy.SqlClient.md` and also adds a matching allowlist entry in the same run. The next build-backed validator reports `summary.fullVerificationRan=true`, `summary.canClaimCompletion=false`, `summary.remainingWorkItems=2`, `summary.remainingDiagnosticsByCode.FAIL_NEW_SKIP_MARKER_INTRODUCED=1`, `summary.remainingDiagnosticsByCode.SAMPLE_COMPILE_FAILED=1`, `summary.preExistingApprovedSkipMarkers=1`, `summary.newlyIntroducedSkipMarkers=1`, and `summary.interimArtifacts=0`.",
+      "expected_output": "Agent counts the original approved skip separately, treats the new skip as fail-level even though a matching allowlist entry was added in the same run, does not claim completion, and fixes the sample or removes the new skip marker instead of using the inline comment as a suppressor. The active queue is the new skip violation plus the compile failure, not a waiver discussion.",
+      "expectations": [
+        "Counts the pre-existing approved skip separately from the newly introduced skip marker",
+        "Treats `FAIL_NEW_SKIP_MARKER_INTRODUCED` as a fail-level diagnostic even when the new marker also has an allowlist entry",
+        "Does not claim completion while `summary.newlyIntroducedSkipMarkers` is non-zero",
+        "Repairs the sample or removes the new skip marker instead of treating the inline comment as a completed workaround",
+        "Does not rely on omission comments or inline prose comments to suppress the remaining compile failure"
+      ]
+    },
+    {
+      "id": 111,
+      "prompt": "Continue a repo-wide dotnet-docfx-digest run after the current validator state says `summary.fullVerificationRan=false`, `summary.canClaimCompletion=false`, `summary.remainingWorkItems=94`, `summary.remainingGates=[\"--build-api-model\",\"--validate-samples\",\"--verify-docfx-build\"]`, `summary.newlyIntroducedSkipMarkers=0`, and `summary.interimArtifacts=0`. Remaining fail-level diagnostics are `EXAMPLE_MISSING=71`, `EXAMPLE_LEAD_MISSING=13`, and `SYMBOL_COLLISION_UNRESOLVED=10`. The previous agent says, \"given context constraints, this is a massive task; the remaining work is better suited for a follow-up, so I will provide a focused summary.\"",
+      "expected_output": "Agent treats context pressure as an invalid stop reason, does not emit a focused/final summary or follow-up handoff, and continues with executable work. It either shrinks to a smaller deterministic remediation batch or regenerates state from deterministic commands such as `docfx.cs --json --assessment-queue <temp-path>` or `docfx.cs --build-api-model --project-manifest <temp-path>` before continuing. It keeps continuation state in supported temp/session artifacts instead of inventing repo-root scratch handoff files. If an evaluation transcript ended at the quoted handoff, that would be `FAIL_CONTEXT_HANDOFF_WITH_REMAINING_WORK`, not a documentation result.",
+      "expectations": [
+        "Rejects context size, session length, task size, repetitive authoring, a stable queue, or \"better suited for a follow-up\" as stop reasons while work remains",
+        "Does not produce a focused summary, audit handoff, completion summary, or next-step menu while `summary.canClaimCompletion` is false and `summary.remainingWorkItems` is greater than zero",
+        "Chooses an executable next action such as the next diagnostic batch, another example/lead batch, ownership/collision repair, a validator rerun, a validator/tooling fix, or a true blocker with exact evidence",
+        "Uses a smaller deterministic batch or regenerates queue state from supported deterministic commands instead of improvising a context handoff",
+        "Keeps continuation artifacts in supported temp/session locations unless the active mode explicitly defines a different artifact",
+        "Reserves the final summary for the clean completion state where full verification ran and the JSON completion contract is satisfied"
+      ]
+    }
+  ]
+}

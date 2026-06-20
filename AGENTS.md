@@ -61,7 +61,7 @@ Repo-managed skills live in four places that must stay in sync:
 - `skills/<name>/` — source control (and source of truth for edits)
 - `~/.claude/skills/<name>/` — local Claude install
 - `~/.agents/skills/<name>/` — local global agent install
-- `~/.gemini/antigravity/skills/<name>/` — local Gemini Antigravity install
+- `~/.gemini/antigravity-cli/skills/<name>/` — local Gemini Antigravity install
 
 Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo and the other local installs:
 
@@ -72,22 +72,24 @@ Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo
 - **Claude local → agent installs** (keep `~/.agents` and Gemini current):
   ```powershell
   Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
-  Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.gemini/antigravity/skills/<name>/<file>" -Force
+  Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.gemini/antigravity-cli/skills/<name>/<file>" -Force
   ```
 - **Repo → local installs** (after pulling changes or cloning fresh):
   ```powershell
   Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
   Copy-Item "skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
-  Copy-Item "skills/<name>/<file>" "$HOME/.gemini/antigravity/skills/<name>/<file>" -Force
+  Copy-Item "skills/<name>/<file>" "$HOME/.gemini/antigravity-cli/skills/<name>/<file>" -Force
   ```
 
-If you edit the `~/.agents/skills/<name>/` copy first, mirror it back to the repo and to `~/.claude/skills/<name>/` and `~/.gemini/antigravity/skills/<name>/` using the same pattern.
+If you edit the `~/.agents/skills/<name>/` copy first, mirror it back to the repo and to `~/.claude/skills/<name>/` and `~/.gemini/antigravity-cli/skills/<name>/` using the same pattern.
 
 When renaming a skill, update **all four** locations — the repo folder, the local Claude install folder, the local global agent install folder, and the local Gemini Antigravity install folder. The folder name and the `name:` field in the SKILL.md frontmatter must match. A mismatch causes the skill to disappear from tooling or show stale instructions.
 
 A sync mismatch means one side runs a stale version, which leads to confusing eval results and wasted iterations.
 
-After changing any repo-managed skill, sync the touched files across the repo copy, `~/.claude/skills/<name>/`, `~/.agents/skills/<name>/`, and `~/.gemini/antigravity/skills/<name>/` before considering the task done.
+After the source copy passes its deterministic tests, SHA-256 identity across the repo and all three local installs is sufficient installation verification. Do not rerun the same deterministic suites from a hash-identical installed copy; that duplicates time, compute, and token use without adding evidence. Run an installed-copy test only when install-path resolution, loader behavior, permissions, or an actual hash mismatch is the subject of the test.
+
+After changing any repo-managed skill, sync the touched files across the repo copy, `~/.claude/skills/<name>/`, `~/.agents/skills/<name>/`, and `~/.gemini/antigravity-cli/skills/<name>/` before considering the task done.
 
 ## Skill Directory Structure
 
@@ -141,9 +143,23 @@ When committing changes to this repo, group by technology and logical purpose �
 - Template files (`.csproj`, `.yml`, `.cs`) get their own commit(s)
 - Documentation updates (`README.md`, `CONTRIBUTING.md`) get their own commit
 
+## Markdown Formatting
+
+All markdown files in this repository must use natural paragraph flow. Do not artificially break paragraphs at fixed column widths or insert hard line breaks within sentences. Paragraphs should flow as complete thoughts, allowing line wrapping to be determined by the reader's viewport or rendering engine, not by arbitrary character limits.
+
+**Why:** Natural paragraphs are more readable, easier to edit, and render correctly across all devices and markdown renderers. Artificially clipped paragraphs create maintenance friction and look awkward in source control diffs.
+
 ## README Sync
 
 After modifying any skill (`SKILL.md`, `FORMS.md`) or repo-level config (`AGENTS.md`), **always update `README.md` before considering the task done**. This is a mandatory gate — not a nice-to-have. The README's "Available Skills" table, install examples, and "Why" sections must reflect the current state of all skills. A new skill without a README entry is incomplete work.
+
+## Blocking Completion Gates
+
+When repository guidance, an active skill, or a conversation summary identifies required follow-up work as pending, critical, blocking, or equivalent, treat those items as the active completion checklist for the current task rather than as background context. Do not call `task_complete`, describe the task as complete, or claim verification succeeded until every blocking item has either run successfully or been reported with the exact command, exit code, and remaining blocker.
+
+Before any completion message, reread the skill instructions and the current conversation summary's pending-task or blocker sections. If either one names a required script, validator, or maintenance step, that step is a hard gate, not optional polish.
+
+For script-backed workflows, creating or editing files is not enough on its own. If a skill requires deterministic maintenance or verification commands, run them before completion and report their concrete outcome. For `dotnet-docfx-digest`, `scripts/agents.cs` and `scripts/docfx.cs --build-api-model --validate-samples --verify-docfx-build` are blocking completion gates whenever the skill or task summary says they are required.
 
 ## User Input UX
 

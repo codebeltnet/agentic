@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-20
+
+This is a minor release adding scope-aware ownership validation, completion contract enforcement, and enhanced conditional API validation guidance to the dotnet-docfx-digest skill.
+
+### Added
+
+- Scope-aware ownership validation in dotnet-docfx-digest that requires exact-UID examples or receiver-style examples to resolve cross-assembly collisions, converting SYMBOL_COLLISION_UNRESOLVED and EXTENSION_OWNER_AMBIGUOUS from warnings to blocking errors,
+- Blocking completion contract enforcement: diagnostics such as EXAMPLE_LEAD_MISSING, EXAMPLE_ADVANCED_LEAD_MISSING, FAMILY_ANCHOR_EXAMPLE_MISSING, SAMPLE_STRUCTURE_INVALID, and INTERIM_ARTIFACT_IN_WORKTREE are now blocking repair items rather than optional quality backlog,
+- Enhanced conditional API validation guidance for selecting executable test frameworks from the asset containing a conditionally compiled API, with specific rules for NETSTANDARD2_0, modern asset variants, and framework selection via asset resolution confirmation,
+- Eval cases 106, 107, and 108 covering completion contract enforcement, scope-aware ownership validation, and conditional API framework selection.
+
+### Changed
+
+- Extended dotnet-docfx-digest SKILL.md with completion contract details, scope-aware ownership validation rules, and conditional API framework selection logic,
+- Enhanced docfx.cs help text and agents.cs prompt guidance with ownership validation and conditional API framework selection documentation,
+- Expanded workflow.md and scripts.md references with scope-aware validation logic and framework selection rules.
+
 ## [0.6.0] - 2026-06-08
 
 This is a minor release introducing the `dotnet-change-impact` skill for classifying .NET library and NuGet package changes against Microsoft's official compatibility rules. The skill automatically resolves the current branch against the upstream default branch, compares commits and diffs, and recommends the correct SemVer release bump (Major, Minor, or Patch) along with structured compatibility reasoning.
@@ -341,7 +358,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/codebeltnet/agentic/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/codebeltnet/agentic/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/codebeltnet/agentic/compare/v0.4.6...v0.5.0
 [0.4.6]: https://github.com/codebeltnet/agentic/compare/v0.4.5...v0.4.6

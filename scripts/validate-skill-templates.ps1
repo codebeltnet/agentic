@@ -1107,6 +1107,22 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
     }
 }
 
+Add-ValidationResult -Results $results -Name 'DocFX digest rejects metadata scaffolds and accepts scenario-led documentation' -Action {
+    $qualityTest = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-quality.ps1'
+    & $qualityTest
+    if ($LASTEXITCODE -ne 0) {
+        throw "DocFX semantic quality regression failed with exit code $LASTEXITCODE."
+    }
+}
+
+Add-ValidationResult -Results $results -Name 'DocFX digest project-scoped packets, dry run, families, and overwrite writer behave deterministically' -Action {
+    $scopeTest = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-project-scoped.ps1'
+    & $scopeTest
+    if ($LASTEXITCODE -ne 0) {
+        throw "DocFX project-scoped regression failed with exit code $LASTEXITCODE."
+    }
+}
+
 $passed = @($results | Where-Object { $_.Status -eq 'PASS' }).Count
 $failed = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
 $label = if ([string]::IsNullOrWhiteSpace($Ref)) { 'WORKTREE' } else { $Ref }
