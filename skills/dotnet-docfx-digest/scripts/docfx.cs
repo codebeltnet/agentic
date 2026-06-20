@@ -8105,7 +8105,10 @@ internal static class DocfxValidator
               --repo-root <path>       Repository root. Default: current directory.
               --docfx <path>           Path to docfx.json. Default: .docfx/docfx.json under repo root.
               --configuration <name>   Build configuration (only used by build/sample paths). Default: Release.
-              --framework <tfm>        Optional target framework to validate against.
+              --framework <tfm>        Optional runnable consumer TFM to validate against. Choose the
+                                      TFM that selects the asset containing a conditional API; use net48
+                                      for NETSTANDARD2_0 assets when modern assets omit the API. Never
+                                      use netstandard* as an executable target.
               --validate-samples       Compile C# samples (opt-in). Default: disabled.
               --no-validate-samples    Explicitly disable sample compilation (already the default).
               --sample-reference-mode <project|package>

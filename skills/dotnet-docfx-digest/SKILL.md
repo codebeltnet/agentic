@@ -292,6 +292,17 @@ Class-based examples that pass Gate 1 are compiled as a class library project re
 <!-- No compile-valid example could be generated for this type. -->
 ```
 
+**Select the validation framework from the asset that contains the API:**
+
+Before changing a sample to work around a missing type or member, inspect the declaration's preprocessor condition, the library target frameworks, and the package/project assets selected for the consumer. Target the runnable framework that selects the asset containing the documented API. Do not assume the newest target framework is correct: a modern `netX.0` consumer can select a modern package asset where a conditionally compiled API is absent.
+
+- For APIs inside `#if NETSTANDARD2_0` or `#if NETSTANDARD2_0_OR_GREATER`, when the package also ships modern `lib/netX.0/` assets, validate with `net48` (or another supported .NET Framework target no older than `net462`) so NuGet/MSBuild selects `lib/netstandard2.0/`.
+- Never use `netstandard*` as the target of an executable, smoke test, or runnable sample project. .NET Standard is an API contract, not a runtime.
+- Never use a modern `netX.0` test target when asset resolution selects an assembly where the API does not exist.
+- For other conditional TFM symbols, trace the symbol to the output asset that actually contains the API, then choose a runnable consumer TFM compatible with that asset. Confirm the selected compile/runtime asset from restore or build evidence instead of inferring compatibility from the preprocessor symbol alone.
+
+Use `--framework net48` when the validator must compile against the `netstandard2.0` project/asset. When installed-package asset selection is the behavior under test, combine it with `--sample-reference-mode package`. If one documentation scope contains APIs from incompatible assets, validate the affected samples in separate scoped runs rather than choosing one modern TFM that silently omits part of the public surface.
+
 **Example generation source priority:**
 
 Derive examples from these sources, in order:

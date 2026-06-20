@@ -1110,6 +1110,20 @@
         "Does not rename valid public API collisions or keep chasing them after deterministic ownership evidence clears the diagnostics",
         "Does not claim completion until the normal build-backed completion contract is clean"
       ]
+    },
+    {
+      "id": 108,
+      "prompt": "Use dotnet-docfx-digest to validate an executable example for `LegacyOptions.Configure()`. The package targets `netstandard2.0;net8.0`; the API is declared only inside `#if NETSTANDARD2_0_OR_GREATER`. The package contains both `lib/netstandard2.0/Acme.Legacy.dll` and `lib/net8.0/Acme.Legacy.dll`, and the `net8.0` asset does not contain `LegacyOptions`. The previous attempt targeted `net8.0`, then considered changing the executable project to `netstandard2.0` after compilation failed.",
+      "expected_output": "Agent traces the preprocessor condition to the package asset that actually contains the API and validates with a runnable legacy .NET Framework consumer, preferably `net48`, so asset resolution selects `lib/netstandard2.0/Acme.Legacy.dll`. It does not target `netstandard2.0` as an executable and does not keep `net8.0`, because that runtime selects the asset where the API is absent. It uses package-reference validation when proving NuGet asset selection and confirms the resolved asset from restore/build evidence.",
+      "expectations": [
+        "Selects `net48` or another supported .NET Framework target no older than `net462` for the executable validation project",
+        "Explains that the runnable .NET Framework target forces selection of the compatible `lib/netstandard2.0/` asset containing the API",
+        "Does not use `netstandard2.0` or any `netstandard*` TFM as the executable target",
+        "Does not keep `net8.0` or choose another modern target that resolves to an asset where `LegacyOptions` is absent",
+        "Uses `--sample-reference-mode package` or an equivalent package-reference consumer test when verifying installed-package asset selection",
+        "Confirms the selected compile/runtime asset from restore or build evidence instead of assuming the preprocessor symbol alone proves compatibility",
+        "Generalizes the rule to other conditional TFM symbols by selecting a runnable consumer TFM that resolves to the asset containing the API"
+      ]
     }
   ]
 }

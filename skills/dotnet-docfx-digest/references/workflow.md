@@ -30,6 +30,17 @@ Before writing a type or extension-method example, choose the smallest real task
 
 A scenario example is still concise. It should show one coherent task, not a tour of every member. If a compile-valid scenario cannot be produced from evidence, omit the example with the documented omission comment rather than inventing a plausible workflow.
 
+## Conditional API framework selection
+
+Treat preprocessor symbols as asset-selection evidence, not as executable target frameworks. Before validating a sample for a conditionally compiled API, inspect the declaration, project TFMs, package `lib/` assets, and the asset selected for the consumer. Choose a runnable consumer TFM that forces selection of the assembly containing the API.
+
+- For `NETSTANDARD2_0` or `NETSTANDARD2_0_OR_GREATER`, if the package also contains modern `lib/netX.0/` assets, use `net48` (or another supported .NET Framework TFM from `net462` onward). That consumer selects the compatible `lib/netstandard2.0/` asset instead of a modern asset that may omit the API.
+- Do not target `netstandard*` for an executable test. It describes an API surface and cannot run by itself.
+- Do not target a modern `netX.0` runtime merely because it is newer. Reject it when restore/build evidence shows that it resolves to an asset without the documented API.
+- For other TFM guards, identify which built asset contains the API and select a compatible runtime target that consumes that asset. Verify the chosen asset through restore/build output or `project.assets.json`.
+
+Pass the resulting runnable TFM through `docfx.cs --framework <tfm>`. Add `--sample-reference-mode package` when the test must prove installed-package asset selection. Use separate scoped validation runs when no single runnable TFM can select every conditional API asset in the documentation scope.
+
 Lead-writing diagnostics are not a lesser class of work. `EXAMPLE_LEAD_MISSING` means the code fence needs a direct consumer-task fly-in. `EXAMPLE_ADVANCED_LEAD_MISSING` means the sample is large, multi-block, setup-heavy, async, host/DI/configuration-oriented, or otherwise complex enough to need a multi-sentence lead that explains setup, prerequisite context, and workflow outcome. Fix these directly in the implicated overwrite files, in small batches if needed, then rerun the fast validator. Do not call them "quality backlog", "pre-existing prose", or "too large for this run."
 
 Ownership diagnostics are clearable example obligations, not permanent facts about duplicate names. For `SYMBOL_COLLISION_UNRESOLVED`, map a C# example to every exact colliding type UID. For `EXTENSION_OWNER_AMBIGUOUS`, map the example to the exact declaring-type or method UID and invoke the method through receiver syntax such as `value.Normalize()`; a namespace-level example or static `Extensions.Normalize(value)` call does not prove the owner. Rerun until both diagnostics disappear from `summary.remainingDiagnosticsByCode`.
