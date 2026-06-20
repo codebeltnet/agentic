@@ -12,7 +12,7 @@ Build a small example inventory from validator output and source evidence before
 | Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | Package README, ApplicationHostFactoryTest | Host a test server and create a client | Missing |
 ```
 
-Do not mark an item complete until the evidence cell names concrete repository paths, the scenario states a consumer task, the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles under `docfx.cs --validate-samples` (or has a justified skip marker), and `docfx.cs --json` no longer reports any missing, placeholder, reflection-only, target-use, invocation, duplicate-UID, lead, advanced-lead, family-anchor, sample-structure, or interim-artifact diagnostic.
+Do not mark an item complete until the evidence cell names concrete repository paths, the scenario states a consumer task, the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles under `docfx.cs --validate-samples` (or has a justified skip marker), and `docfx.cs --json` no longer reports any missing, placeholder, reflection-only, target-use, invocation, duplicate-UID, lead, advanced-lead, family-anchor, symbol-ownership, sample-structure, or interim-artifact diagnostic.
 
 ## Scenario example design
 
@@ -31,6 +31,8 @@ Before writing a type or extension-method example, choose the smallest real task
 A scenario example is still concise. It should show one coherent task, not a tour of every member. If a compile-valid scenario cannot be produced from evidence, omit the example with the documented omission comment rather than inventing a plausible workflow.
 
 Lead-writing diagnostics are not a lesser class of work. `EXAMPLE_LEAD_MISSING` means the code fence needs a direct consumer-task fly-in. `EXAMPLE_ADVANCED_LEAD_MISSING` means the sample is large, multi-block, setup-heavy, async, host/DI/configuration-oriented, or otherwise complex enough to need a multi-sentence lead that explains setup, prerequisite context, and workflow outcome. Fix these directly in the implicated overwrite files, in small batches if needed, then rerun the fast validator. Do not call them "quality backlog", "pre-existing prose", or "too large for this run."
+
+Ownership diagnostics are clearable example obligations, not permanent facts about duplicate names. For `SYMBOL_COLLISION_UNRESOLVED`, map a C# example to every exact colliding type UID. For `EXTENSION_OWNER_AMBIGUOUS`, map the example to the exact declaring-type or method UID and invoke the method through receiver syntax such as `value.Normalize()`; a namespace-level example or static `Extensions.Normalize(value)` call does not prove the owner. Rerun until both diagnostics disappear from `summary.remainingDiagnosticsByCode`.
 
 ## Targeted workflow
 
@@ -83,7 +85,7 @@ Use this path when the user invokes the skill without naming a specific API or n
 17. Audit related namespace pages together so fixes are consistent across the public API family.
 18. Add or repair `Extension Members` tables for namespaces with public extension methods. Use the literal `⬇️` (U+2B07 U+FE0F) in the Ext column. If `EXTENSION_METHOD_MISSING` or `EXTENSION_METHOD_SIGNATURE_MISSING` appears after `EXTENSION_SECTION_MISSING` drops, treat that as the same namespace-layer queue getting more specific: finish table contents and signature fidelity before resuming net-new examples.
 19. Finish the namespace-layer pass across the active queue before net-new type/example authoring: repair namespace prose, availability/start-here guidance, and `NAMESPACE_EMBEDDED_OVERWRITE_SECTION` ownership problems, moving misplaced type/member examples into readable type-targeted files under `.docfx/api/types/` when needed. Rerun the fast validator until namespace-layer diagnostics are gone or only example-driven work remains.
-20. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, or availability notes. Put a short human fly-in before every C# fence; when an example is large, multi-block, or setup-heavy, make the lead explain the setup/prerequisite and workflow outcome. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
+20. Add or repair overwrite content for public API items that need examples, remarks, corrected summaries, availability notes, or exact ownership evidence. For colliding type names, target every exact type UID. For colliding extension containers, target the exact declaring-type or method UID and use receiver syntax. Put a short human fly-in before every C# fence; when an example is large, multi-block, or setup-heavy, make the lead explain the setup/prerequisite and workflow outcome. Keep extension-container openings focused on the caller outcome and receiver scenario rather than C# declaration trivia unless a DocFX limitation genuinely needs a note.
 21. Create separate type-page overwrite files for public non-abstraction types that have no example yet, under `.docfx/api/types/{TypeUid}.md` in Codebelt repositories.
 22. Create explicit examples for public extension methods that still have none.
 23. Build or refresh the example inventory.
@@ -122,7 +124,7 @@ Target counts, diagnostic volume, ownership complexity, context pressure, and mo
 
 Reruns often replace a coarse queue with a more specific one: for example, `EXTENSION_SECTION_MISSING` may shrink only for `EXTENSION_METHOD_MISSING` or `EXTENSION_METHOD_SIGNATURE_MISSING` to appear once the tables exist, or namespace repairs may surface the next layer of `EXAMPLE_MISSING` work. Treat that handoff as expected progress. Do not stop to summarize partial progress, ask whether to continue, or offer a "focus this area vs. just verify" menu while repairable diagnostics remain.
 
-An example-only or example-quality-only queue is still incomplete. When `EXAMPLE_MISSING`, `EXAMPLE_LEAD_MISSING`, or `EXAMPLE_ADVANCED_LEAD_MISSING` is the only remaining diagnostic family — even 1,086 of them — the correct next step is more example authoring or lead repair, not a completion report, checkpoint, final verification pass, dry-run suggestion, or user choice menu. Internal worries like "this is massive", "this will take multiple sessions", "these are pre-existing", "this is just prose", or "this may exceed context limits" are not user-facing stop conditions; solve them with packets and keep going.
+An example-only, example-quality-only, or unresolved-ownership-only queue is still incomplete. When `EXAMPLE_MISSING`, `EXAMPLE_LEAD_MISSING`, `EXAMPLE_ADVANCED_LEAD_MISSING`, `SYMBOL_COLLISION_UNRESOLVED`, or `EXTENSION_OWNER_AMBIGUOUS` is the only remaining diagnostic family — even hundreds of them — the correct next step is more example authoring, lead repair, or ownership disambiguation, not a completion report, checkpoint, final verification pass, dry-run suggestion, or user choice menu. Internal worries like "this is massive", "this will take multiple sessions", "these are pre-existing", "these are just warnings", "this is just prose", or "this may exceed context limits" are not user-facing stop conditions; solve them with packets and keep going.
 
 ### Example and lead micro-loop
 
@@ -163,7 +165,7 @@ Process one packet at a time so the packet is the active context and write-owner
 
 ### Symbol ownership
 
-Duplicate simple type names across assemblies (`SYMBOL_COLLISION_UNRESOLVED`), forwarded type families that cannot be attributed (`TYPE_FORWARDING_UNRESOLVED`), and extension containers that cross project boundaries (`EXTENSION_OWNER_AMBIGUOUS`) require assembly/project-qualified resolution. Prefer receiver extension syntax over static-container qualification when container names collide, and target the uniquely owned overwrite UID.
+Duplicate simple type names and repeated extension-container names are valid API shapes; unresolved documentation ownership is not. `SYMBOL_COLLISION_UNRESOLVED` is a blocking error only while one or more colliding types lack a C# example under the exact type UID. `EXTENSION_OWNER_AMBIGUOUS` is a blocking error only while one or more affected methods lack receiver-style invocation evidence under the exact declaring-type or method UID. Both clear after those deterministic conditions are met and remain in `summary.remainingDiagnosticsByCode` until then. `TYPE_FORWARDING_UNRESOLVED` remains an informational warning when the source declaration cannot be attributed safely; report it rather than inventing an owner.
 
 ### Generic-arity family skips (auto-detected)
 
@@ -314,7 +316,7 @@ Before completing documentation work, verify:
 - [ ] No example is reflection-only, metadata-only, duplicated by UID, or built from `DocumentedTypeExample`, `DocumentedExtensionExample`, or generic `Describe()` scaffolding.
 - [ ] The C# fence itself uses the documented type or invokes the documented extension method; prose, comments, and strings are not counted as usage.
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`. Namespace pages are under `api/namespaces/` and type pages are under `api/types/`.
-- [ ] The Completion Repair Loop was run after edits, and the final report has zero missing/low-quality example, namespace-prose, extension, availability, overwrite-layout, sample, and DocFX-build diagnostics.
+- [ ] The Completion Repair Loop was run after edits, and the final report has zero missing/low-quality example, symbol-ownership, namespace-prose, extension, availability, overwrite-layout, sample, and DocFX-build diagnostics.
 - [ ] Examples are realistic, copy/paste-ready, and compile unless a justified skip marker is present.
 - [ ] Generated C# examples include a file-scoped namespace and a type declaration (class, struct, or record), or are explicitly labelled `// Program.cs`.
 - [ ] No generated C# example uses top-level statements without a `// Program.cs` label.

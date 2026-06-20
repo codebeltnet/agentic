@@ -875,11 +875,14 @@
     {
       "id": 70,
       "prompt": "Two of my assemblies both declare a public static `Extensions` class with extension methods in different namespaces. Document both with dotnet-docfx-digest.",
-      "expected_output": "The agent recognizes EXTENSION_OWNER_AMBIGUOUS (and any SYMBOL_COLLISION_UNRESOLVED for duplicate type names) and resolves ownership by assembly/project. It prefers receiver extension syntax in examples and targets the uniquely owned overwrite UID so each documented method is unambiguous.",
+      "expected_output": "The agent recognizes EXTENSION_OWNER_AMBIGUOUS (and any SYMBOL_COLLISION_UNRESOLVED for duplicate type names) as clearable blocking errors, not permanent collision warnings. It resolves ownership by assembly/project, maps type examples to every exact colliding type UID, maps extension examples to the exact declaring-type or method UID, and uses receiver extension syntax so rerunning the validator removes both diagnostics from the completion contract.",
       "expectations": [
         "Identifies the cross-assembly extension-container collision by owning assembly/project",
+        "Treats SYMBOL_COLLISION_UNRESOLVED and EXTENSION_OWNER_AMBIGUOUS as blocking errors included in remainingDiagnosticsByCode until their evidence requirements are met",
+        "Maps a C# example to every exact colliding type UID rather than relying on a namespace or simple-name mapping",
         "Prefers receiver extension syntax over static-container qualification when names collide",
-        "Targets the uniquely owned overwrite UID for each method"
+        "Targets the exact declaring-type or method UID for each affected extension method",
+        "Reruns the validator and confirms both ownership diagnostics clear before claiming completion"
       ]
     },
     {
@@ -1091,6 +1094,21 @@
         "Repairs `EXAMPLE_LEAD_MISSING` and `EXAMPLE_ADVANCED_LEAD_MISSING` by adding human-written fly-ins that explain the consumer task, setup or prerequisites, and workflow outcome",
         "Uses small repair batches with fast `docfx.cs --json` reruns and continues immediately while diagnostics remain",
         "Keeps the exact final gate `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` and the clean JSON completion contract explicit, but does not run or report it as final completion until the queue is empty"
+      ]
+    },
+    {
+      "id": 107,
+      "prompt": "Continue a repo-wide dotnet-docfx-digest run whose previous report says: `The remaining 53 warnings are exclusively SYMBOL_COLLISION_UNRESOLVED and EXTENSION_OWNER_AMBIGUOUS — informational cross-assembly name collision warnings, not fail-level diagnostics.`",
+      "expected_output": "Agent rejects the stale informational-warning classification and reruns the current validator. Any genuinely unresolved SYMBOL_COLLISION_UNRESOLVED or EXTENSION_OWNER_AMBIGUOUS findings appear as blocking errors in summary.remainingDiagnosticsByCode. It repairs each duplicate type by mapping a C# example to every exact type UID, repairs each colliding extension owner by mapping the example to the exact declaring-type or method UID and invoking it through receiver syntax, reruns the fast validator after small batches, and does not claim completion until both codes clear. It does not attempt to rename valid API collisions or continue chasing a collision after its ownership evidence is complete.",
+      "expectations": [
+        "Does not describe SYMBOL_COLLISION_UNRESOLVED or EXTENSION_OWNER_AMBIGUOUS as informational, optional, or non-blocking",
+        "Reruns the current validator instead of trusting a stale report that classified the codes as warnings",
+        "Treats unresolved instances as errors counted by summary.remainingWorkItems and summary.remainingDiagnosticsByCode",
+        "Maps C# examples to every exact UID for colliding type names",
+        "Maps extension examples to the exact declaring-type or method UID and uses receiver syntax rather than static container qualification",
+        "Continues the fast repair-and-rerun loop until both diagnostics disappear",
+        "Does not rename valid public API collisions or keep chasing them after deterministic ownership evidence clears the diagnostics",
+        "Does not claim completion until the normal build-backed completion contract is clean"
       ]
     }
   ]
