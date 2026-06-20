@@ -1124,6 +1124,30 @@
         "Confirms the selected compile/runtime asset from restore or build evidence instead of assuming the preprocessor symbol alone proves compatibility",
         "Generalizes the rule to other conditional TFM symbols by selecting a runnable consumer TFM that resolves to the asset containing the API"
       ]
+    },
+    {
+      "id": 109,
+      "prompt": "Continue a repo-wide dotnet-docfx-digest run after the fast validator reports `summary.completionState=verification-required`, `summary.fullVerificationRan=false`, `summary.canClaimCompletion=false`, `summary.remainingWorkItems=217`, `summary.remainingGates=[\"--build-api-model\",\"--validate-samples\",\"--verify-docfx-build\"]`, `summary.newlyIntroducedSkipMarkers=0`, and `summary.interimArtifacts=0`. Remaining fail-level diagnostics include `EXAMPLE_MISSING=172`, `EXAMPLE_LEAD_MISSING=31`, and `EXTENSION_METHOD_MISSING=14`. The previous agent wants to stop because 28 files changed, 41 files were generated, the queue is repetitive, and the run is taking longer than expected.",
+      "expected_output": "Agent rejects the premature handoff, treats those reasons as invalid stopping conditions, does not emit a final/comprehensive summary or next-step menu, selects another remediation batch or validator rerun, and reserves final reporting for when full verification has run and the completion contract is clean. If an evaluation transcript ended here, it would be a `FAIL_PREMATURE_HANDOFF_SUMMARY` execution-protocol failure rather than a documentation result.",
+      "expectations": [
+        "Does not produce a final report, audit handoff, completion summary, or next-step menu while `summary.canClaimCompletion` is false and `summary.remainingWorkItems` is greater than zero",
+        "Rejects many remaining diagnostics, many changed/generated files, repetitive next steps, and long runtime as invalid stopping conditions",
+        "Treats the remaining diagnostics as the active execution queue instead of converting them into a handoff",
+        "Chooses a valid next action: another remediation batch, a required validator rerun, a validator/tooling fix, or a true blocker with exact evidence",
+        "Reserves the final summary for the clean completion state where full verification ran and the JSON completion contract is satisfied"
+      ]
+    },
+    {
+      "id": 110,
+      "prompt": "Use dotnet-docfx-digest on a repository where `.docfx/skip-compile-allowlist.json` already contains one approved pre-existing skip for `Acme.Legacy.DatabaseSession`. During the current run, an agent adds `// dotnet-docfx-digest:skip-compile - requires a provisioned SQL Server schema managed outside the isolated sample compiler` to `Acme.Legacy.SqlClient.md` and also adds a matching allowlist entry in the same run. The next build-backed validator reports `summary.fullVerificationRan=true`, `summary.canClaimCompletion=false`, `summary.remainingWorkItems=2`, `summary.remainingDiagnosticsByCode.FAIL_NEW_SKIP_MARKER_INTRODUCED=1`, `summary.remainingDiagnosticsByCode.SAMPLE_COMPILE_FAILED=1`, `summary.preExistingApprovedSkipMarkers=1`, `summary.newlyIntroducedSkipMarkers=1`, and `summary.interimArtifacts=0`.",
+      "expected_output": "Agent counts the original approved skip separately, treats the new skip as fail-level even though a matching allowlist entry was added in the same run, does not claim completion, and fixes the sample or removes the new skip marker instead of using the inline comment as a suppressor. The active queue is the new skip violation plus the compile failure, not a waiver discussion.",
+      "expectations": [
+        "Counts the pre-existing approved skip separately from the newly introduced skip marker",
+        "Treats `FAIL_NEW_SKIP_MARKER_INTRODUCED` as a fail-level diagnostic even when the new marker also has an allowlist entry",
+        "Does not claim completion while `summary.newlyIntroducedSkipMarkers` is non-zero",
+        "Repairs the sample or removes the new skip marker instead of treating the inline comment as a completed workaround",
+        "Does not rely on omission comments or inline prose comments to suppress the remaining compile failure"
+      ]
     }
   ]
 }

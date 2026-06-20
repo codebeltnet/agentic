@@ -12,7 +12,7 @@ Build a small example inventory from validator output and source evidence before
 | Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | Package README, ApplicationHostFactoryTest | Host a test server and create a client | Missing |
 ```
 
-Do not mark an item complete until the evidence cell names concrete repository paths, the scenario states a consumer task, the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles under `docfx.cs --validate-samples` (or has a justified skip marker), and `docfx.cs --json` no longer reports any missing, placeholder, reflection-only, target-use, invocation, duplicate-UID, lead, advanced-lead, family-anchor, symbol-ownership, sample-structure, or interim-artifact diagnostic.
+Do not mark an item complete until the evidence cell names concrete repository paths, the scenario states a consumer task, the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, every sample that is not a pre-existing approved skip marker compiles under `docfx.cs --validate-samples`, and `docfx.cs --json` no longer reports any missing, placeholder, reflection-only, target-use, invocation, duplicate-UID, lead, advanced-lead, family-anchor, symbol-ownership, sample-structure, skip-marker, or interim-artifact diagnostic.
 
 ## Scenario example design
 
@@ -28,7 +28,7 @@ Before writing a type or extension-method example, choose the smallest real task
 8. Reject metadata-only substitutes before writing: `Type.GetType`, assembly lookup, `typeof`/`nameof` as the only operation, generic `Describe()` helpers, and repeated UID sections do not demonstrate a consumer task.
 9. Confirm the C# fence itself uses the documented type or invokes the documented extension method. Mentions outside the fence do not count.
 
-A scenario example is still concise. It should show one coherent task, not a tour of every member. If a compile-valid scenario cannot be produced from evidence, omit the example with the documented omission comment rather than inventing a plausible workflow.
+A scenario example is still concise. It should show one coherent task, not a tour of every member. If a compile-valid scenario cannot be produced from evidence, omit the example with the documented omission comment rather than inventing a plausible workflow. That omission comment is explanatory prose only; it does not suppress diagnostics or act as a skip waiver.
 
 ## Conditional API framework selection
 
@@ -154,6 +154,56 @@ While `remainingWorkItems > 0` or `canClaimCompletion` is false, do not emit bef
 If packet discovery stays weak even after `--build-api-model`, fall back to sequential repair in assessment work queue order or alphabetical namespace-first order. Clear the next namespace's namespace-layer diagnostics first, then its remaining examples (or the next 3-5 examples in it), rerun, and continue. A tool limitation is not a decision point.
 
 Final verification with `--build-api-model --validate-samples --verify-docfx-build` is reserved for the moment you intend to claim completion. While `remainingWorkItems > 0` or any diagnostics remain, stay on the fast `docfx.cs --json` loop and keep authoring.
+
+## No Premature Handoff
+
+Do not produce a final, comprehensive, completion-shaped, or handoff summary while `summary.canClaimCompletion` is `false`.
+
+When the validator reports remaining work, treat the remaining diagnostics as the execution queue and continue remediation. The following are not valid stopping conditions:
+
+- many remaining diagnostics
+- many changed files
+- many generated files
+- an "active queue" exists
+- prose repair remains
+- examples remain
+- full verification has not yet been run
+- the next step is repetitive
+- the task is taking longer than expected
+
+If `summary.remainingWorkItems > 0`, the next action must be one of:
+
+1. apply another remediation batch
+2. run the required validator command
+3. fix a validator/tooling failure
+4. report a true blocker with exact evidence
+
+A progress summary is allowed only as a short status update before continuing work. It must not be framed as a final report, completion report, audit result, or handoff unless a true blocker exists.
+
+A final summary is allowed only when `summary.completionState == "complete"`, `summary.canClaimCompletion == true`, `summary.remainingWorkItems == 0`, `summary.remainingGates` is empty, `summary.remainingDiagnosticsByCode` is empty, `summary.newlyIntroducedSkipMarkers == 0`, and `summary.interimArtifacts == 0`.
+
+## Premature Handoff Detection
+
+Treat `FAIL_PREMATURE_HANDOFF_SUMMARY` as an execution-protocol failure when an agent attempts to end the run while `summary.canClaimCompletion` is `false`, `summary.remainingWorkItems` is greater than `0`, `summary.remainingGates` is not empty, fail-level diagnostics remain, `summary.fullVerificationRan` is `false`, or unapproved skips/interim artifacts remain.
+
+The remediation is not to edit prose about the failure. The remediation is to continue the autonomous work loop:
+
+1. select the next diagnostic batch
+2. apply fixes
+3. rerun fast validation
+4. repeat until the completion contract is satisfied
+5. run full verification
+6. only then produce the final report
+
+## Skip Marker Policy
+
+Skip markers are waivers, not fixes.
+
+Do not introduce new skip markers during autonomous remediation unless the user explicitly approved that exact waiver, and even then the current run stays incomplete until the new skip marker is gone from the fail-level queue.
+
+Approved skips must be declared in the deterministic allowlist `<docfx-workspace>/skip-compile-allowlist.json`, not inferred from prose comments. Each entry must include `diagnosticCode`, `filePath`, `uid` or `symbol`, `reason`, `approval`, and `lifetime` (`temporary` or `permanent`).
+
+Only a pre-existing approved skip marker suppresses compilation. A newly introduced skip marker produces `FAIL_NEW_SKIP_MARKER_INTRODUCED`, remains fail-level, and does not permit a completion claim. An unallowlisted marker produces `SAMPLE_SKIP_NOT_ALLOWLISTED`, and the validator still compiles the sample so unresolved compile failures stay visible.
 
 ### Working-tree dry run
 
@@ -328,18 +378,18 @@ Before completing documentation work, verify:
 - [ ] The C# fence itself uses the documented type or invokes the documented extension method; prose, comments, and strings are not counted as usage.
 - [ ] Missing examples are added through DocFX overwrite content included by `build.overwrite`. Namespace pages are under `api/namespaces/` and type pages are under `api/types/`.
 - [ ] The Completion Repair Loop was run after edits, and the final report has zero missing/low-quality example, symbol-ownership, namespace-prose, extension, availability, overwrite-layout, sample, and DocFX-build diagnostics.
-- [ ] Examples are realistic, copy/paste-ready, and compile unless a justified skip marker is present.
+- [ ] Examples are realistic, copy/paste-ready, and compile unless the sample is covered by a pre-existing approved allowlist waiver.
 - [ ] Generated C# examples include a file-scoped namespace and a type declaration (class, struct, or record), or are explicitly labelled `// Program.cs`.
 - [ ] No generated C# example uses top-level statements without a `// Program.cs` label.
 - [ ] No generated C# example derives from a generic base type without concrete type arguments.
 - [ ] No generated C# example calls members that are not confirmed on the public API surface.
-- [ ] Where no compile-valid example could be generated, the overwrite file contains the appropriate omission comment.
+- [ ] Where no compile-valid example could be generated, the overwrite file contains the appropriate omission comment, and that comment is not being misused as a diagnostic suppressor or skip waiver.
 - [ ] Availability is included or explicitly stated and matches actual target frameworks and conditions.
 - [ ] Existing manual edits are preserved, stale documentation is corrected, and no contradictory documentation remains.
 - [ ] `git diff` for touched documentation paths was inspected before final verification.
 - [ ] `dotnet build` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.
 - [ ] `dotnet test` has been run, using `-p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`, or the failure is reported.
-- [ ] The build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` ran successfully, and final JSON reports `summary.canClaimCompletion: true`, `summary.remainingWorkItems: 0`, an empty `summary.remainingGates`, and an empty `summary.remainingDiagnosticsByCode`.
+- [ ] The build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` ran successfully, and final JSON reports `summary.fullVerificationRan: true`, `summary.canClaimCompletion: true`, `summary.remainingWorkItems: 0`, an empty `summary.remainingGates`, an empty `summary.remainingDiagnosticsByCode`, `summary.newlyIntroducedSkipMarkers: 0`, and `summary.interimArtifacts: 0`.
 - [ ] Generated metadata files and build output directories did not remain in the working tree after verification, and authored Markdown or documentation assets were not deleted as cleanup.
 - [ ] No broad restore or checkout command discarded authored documentation changes.
 
@@ -360,6 +410,6 @@ When reporting completion, include:
 - verification commands run
 - any verification failures or skipped checks
 
-Do not claim documentation was verified unless the relevant command actually ran successfully, and do not emit a completion-shaped report while `summary.remainingWorkItems > 0`, `summary.canClaimCompletion` is false, or `completionState` is still `incomplete` or `verification-required`.
+Do not claim documentation was verified unless the relevant command actually ran successfully, and do not emit a completion-shaped report while `summary.remainingWorkItems > 0`, `summary.canClaimCompletion` is false, `summary.fullVerificationRan` is false, `summary.newlyIntroducedSkipMarkers > 0`, `summary.interimArtifacts > 0`, or `completionState` is still `incomplete` or `verification-required`.
 
 If work must stop incomplete, distinguish a true external blocker from repair work. Pre-existing documentation gaps, large diagnostic counts, sample compile failures, and `DOCFX_BUILD_FAILED` output caused by the documentation/configuration being repaired are active work items. Only a user pause or an external condition that still prevents progress after concrete attempts justifies stopping, and that response must say the digest remains incomplete.
