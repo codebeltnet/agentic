@@ -79,6 +79,11 @@ function Assert-NoDiagnostic {
     if (@($Report.errors | Where-Object code -eq $Code)) { throw "Diagnostic '$Code' was unexpectedly present." }
 }
 
+function Assert-NoWarning {
+    param([object]$Report, [string]$Code)
+    if (@($Report.warnings | Where-Object code -eq $Code)) { throw "Warning '$Code' was unexpectedly present." }
+}
+
 function Initialize-GitRepo {
     param([string]$Workspace)
     Push-Location $Workspace
@@ -352,7 +357,7 @@ Run-Scenario 'Normal target volume never changes full-run scope' {
 }
 
 # ----------------------------------------------------------------------
-Run-Scenario 'Duplicate type names across assemblies and ambiguous extension owners are flagged' {
+Run-Scenario 'Cross-assembly ownership diagnostics block until exact UID and receiver evidence clears them' {
     param($ws)
     Write-Utf8File (Join-Path $ws 'AGENTS.md') $agents
     Write-Utf8File (Join-Path $ws 'src/One/One.csproj') $csproj
@@ -385,8 +390,146 @@ namespace Pkg.Two
     Initialize-GitRepo $ws
 
     $r = Invoke-Validator $ws
-    Assert-Diagnostic -Report $r -Code 'SYMBOL_COLLISION_UNRESOLVED' -Where 'warnings'
-    Assert-Diagnostic -Report $r -Code 'EXTENSION_OWNER_AMBIGUOUS' -Where 'warnings'
+    Assert-Diagnostic -Report $r -Code 'SYMBOL_COLLISION_UNRESOLVED'
+    Assert-Diagnostic -Report $r -Code 'EXTENSION_OWNER_AMBIGUOUS'
+    Assert-NoWarning -Report $r -Code 'SYMBOL_COLLISION_UNRESOLVED'
+    Assert-NoWarning -Report $r -Code 'EXTENSION_OWNER_AMBIGUOUS'
+    if (-not $r.summary.remainingDiagnosticsByCode.SYMBOL_COLLISION_UNRESOLVED) {
+        throw 'SYMBOL_COLLISION_UNRESOLVED was not included in the completion contract.'
+    }
+    if (-not $r.summary.remainingDiagnosticsByCode.EXTENSION_OWNER_AMBIGUOUS) {
+        throw 'EXTENSION_OWNER_AMBIGUOUS was not included in the completion contract.'
+    }
+
+    Write-Utf8File (Join-Path $ws '.docfx/api/types/Pkg.One.Result.md') @'
+---
+uid: Pkg.One.Result
+example: *content
+---
+This example records a result from the first package and exposes the stored value.
+
+```csharp
+namespace Samples;
+
+using Pkg.One;
+
+public static class FirstResult
+{
+    public static int Read() => new Result { N = 1 }.N;
+}
+```
+'@
+    Write-Utf8File (Join-Path $ws '.docfx/api/types/Pkg.Two.Result.md') @'
+---
+uid: Pkg.Two.Result
+example: *content
+---
+This example records a result from the second package and exposes the stored value.
+
+```csharp
+namespace Samples;
+
+using Pkg.Two;
+
+public static class SecondResult
+{
+    public static int Read() => new Result { N = 2 }.N;
+}
+```
+'@
+    Write-Utf8File (Join-Path $ws '.docfx/api/types/Pkg.One.Helpers.md') @'
+---
+uid: Pkg.One.Helpers
+example: *content
+---
+This example trims text with the helper owned by the first package.
+
+```csharp
+namespace Samples;
+
+using Pkg.One;
+
+public static class FirstDescription
+{
+    public static string Read() => Helpers.Describe(" text ");
+}
+```
+'@
+    Write-Utf8File (Join-Path $ws '.docfx/api/types/Pkg.Two.Helpers.md') @'
+---
+uid: Pkg.Two.Helpers
+example: *content
+---
+This example normalizes text with the helper owned by the second package.
+
+```csharp
+namespace Samples;
+
+using Pkg.Two;
+
+public static class SecondDescription
+{
+    public static string Read() => Helpers.Summarize("text");
+}
+```
+'@
+
+    $staticCalls = Invoke-Validator $ws
+    Assert-NoDiagnostic -Report $staticCalls -Code 'SYMBOL_COLLISION_UNRESOLVED'
+    Assert-Diagnostic -Report $staticCalls -Code 'EXTENSION_OWNER_AMBIGUOUS'
+
+    Write-Utf8File (Join-Path $ws '.docfx/api/types/Pkg.One.Helpers.md') @'
+---
+uid: Pkg.One.Helpers
+example: *content
+---
+This example trims text through receiver syntax so ownership remains tied to the first package import.
+
+```csharp
+namespace Samples;
+
+using Pkg.One;
+
+public static class FirstDescription
+{
+    public static string Read()
+    {
+        var value = " text ";
+        return value.Describe();
+    }
+}
+```
+'@
+    Write-Utf8File (Join-Path $ws '.docfx/api/types/Pkg.Two.Helpers.md') @'
+---
+uid: Pkg.Two.Helpers
+example: *content
+---
+This example normalizes text through receiver syntax so ownership remains tied to the second package import.
+
+```csharp
+namespace Samples;
+
+using Pkg.Two;
+
+public static class SecondDescription
+{
+    public static string Read()
+    {
+        var value = "text";
+        return value.Summarize();
+    }
+}
+```
+'@
+
+    $resolved = Invoke-Validator $ws
+    Assert-NoDiagnostic -Report $resolved -Code 'SYMBOL_COLLISION_UNRESOLVED'
+    Assert-NoDiagnostic -Report $resolved -Code 'EXTENSION_OWNER_AMBIGUOUS'
+    if ($resolved.summary.remainingDiagnosticsByCode.PSObject.Properties.Name -contains 'SYMBOL_COLLISION_UNRESOLVED' -or
+        $resolved.summary.remainingDiagnosticsByCode.PSObject.Properties.Name -contains 'EXTENSION_OWNER_AMBIGUOUS') {
+        throw 'Resolved ownership diagnostics remained in the completion contract.'
+    }
 }
 
 # ----------------------------------------------------------------------

@@ -334,8 +334,8 @@ internal static class DocfxValidator
         var families = DetectGenericArityFamilies(repoRoot, docfxWorkspace, api, workspace, namespacePageIndex, report);
         ApplySkippedFamilies(api, families);
         report.Summary.RequiredExampleTargets = api.RequiredExampleTargets.Count;
-        ValidateSymbolOwnership(api, workspace, report);
         var scope = ResolveScope(options, packets, metadataGroups, apiModelSource, repoRoot, report, resumeScope);
+        ValidateSymbolOwnership(api, workspace, scope, report);
         report.Summary.RunMode = scope.Mode;
         report.Summary.Seed = scope.Seed;
         report.Summary.ScopeState = scope.ScopeState;
@@ -6385,8 +6385,9 @@ internal static class DocfxValidator
         => element.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     // Symbol ownership: duplicate simple type names across owning projects, type forwarding that
-    // cannot be attributed, and extension containers that cross project boundaries.
-    private static void ValidateSymbolOwnership(ApiModel api, ValidationWorkspace ws, Report report)
+    // cannot be attributed, and extension containers that cross project boundaries. Collisions are
+    // valid API shapes; only missing exact-UID or receiver-call evidence is a blocking diagnostic.
+    private static void ValidateSymbolOwnership(ApiModel api, ValidationWorkspace ws, ScopePlan scope, Report report)
     {
         var ownerByNamespace = ws.NamespaceProjects;
         string OwnersOf(string ns) => ownerByNamespace.TryGetValue(ns, out var list)
@@ -6395,7 +6396,7 @@ internal static class DocfxValidator
 
         // Duplicate simple type names whose owning projects differ.
         foreach (var group in api.RequiredExampleTargets
-                     .Where(t => t.Kind == ApiTargetKind.Type)
+                     .Where(t => t.Kind == ApiTargetKind.Type && scope.IncludesNamespace(t.Namespace))
                      .GroupBy(t => SimpleNameFromUid(t.Uid), StringComparer.Ordinal))
         {
             var distinctUids = group.Select(t => t.Uid).Distinct(StringComparer.Ordinal).ToList();
@@ -6411,8 +6412,15 @@ internal static class DocfxValidator
                 .ToList();
             if (owners.Count >= 2)
             {
-                report.Warnings.Add(new Diagnostic("SYMBOL_COLLISION_UNRESOLVED", null, group.First().Namespace,
-                    $"Simple type name '{group.Key}' is documented in multiple assemblies/namespaces ({string.Join("; ", distinctUids.Select(u => $"{u} [{OwnersOf(NamespaceFromUid(u))}]"))}). Qualify examples and overwrite UIDs by owning assembly/project so coverage is not ambiguous."));
+                var unresolvedUids = distinctUids
+                    .Where(uid => !HasExactUidExample(ws.OverwriteSections, uid))
+                    .OrderBy(uid => uid, StringComparer.Ordinal)
+                    .ToList();
+                if (unresolvedUids.Count > 0)
+                {
+                    report.Errors.Add(new Diagnostic("SYMBOL_COLLISION_UNRESOLVED", null, group.First().Namespace,
+                        $"Simple type name '{group.Key}' exists in multiple assemblies/namespaces ({string.Join("; ", distinctUids.Select(u => $"{u} [{OwnersOf(NamespaceFromUid(u))}]"))}), and exact-UID example mappings are still missing for {string.Join(", ", unresolvedUids.Select(uid => $"`{uid}`"))}. Add a C# example mapped to each exact type UID; a namespace-level or simple-name mapping does not establish ownership."));
+                }
             }
         }
 
@@ -6447,11 +6455,13 @@ internal static class DocfxValidator
         }
 
         // Extension containers whose simple name appears in more than one namespace/project.
-        foreach (var group in api.Namespaces
-                     .SelectMany(ns => ns.ExtensionMethods.Select(e => (ns.Name, e.DeclaringClass)))
-                     .GroupBy(x => x.DeclaringClass, StringComparer.Ordinal))
+        foreach (var group in api.RequiredExampleTargets
+                     .Where(target => target.Kind == ApiTargetKind.ExtensionMethod &&
+                                      target.DeclaringTypeUid is not null &&
+                                      scope.IncludesNamespace(target.Namespace))
+                     .GroupBy(target => SimpleNameFromUid(target.DeclaringTypeUid!), StringComparer.Ordinal))
         {
-            var namespaces = group.Select(x => x.Name).Distinct(StringComparer.Ordinal).ToList();
+            var namespaces = group.Select(target => target.Namespace).Distinct(StringComparer.Ordinal).ToList();
             if (namespaces.Count < 2)
             {
                 continue;
@@ -6464,10 +6474,77 @@ internal static class DocfxValidator
                 .ToList();
             if (owners.Count >= 2)
             {
-                report.Warnings.Add(new Diagnostic("EXTENSION_OWNER_AMBIGUOUS", null, namespaces[0],
-                    $"Extension container '{group.Key}' is declared in multiple namespaces/assemblies ({string.Join(", ", namespaces.Select(ns => $"{ns} [{OwnersOf(ns)}]"))}). Prefer receiver extension syntax and a uniquely owned overwrite UID so the example targets the right declaring type."));
+                var unresolvedTargets = group
+                    .Where(target => !HasExactOwnerReceiverExample(ws.OverwriteSections, target))
+                    .OrderBy(target => target.Uid, StringComparer.Ordinal)
+                    .ToList();
+                if (unresolvedTargets.Count > 0)
+                {
+                    var exampleMethod = MethodBaseName(unresolvedTargets[0].DisplayName);
+                    report.Errors.Add(new Diagnostic("EXTENSION_OWNER_AMBIGUOUS", null, namespaces[0],
+                        $"Extension container '{group.Key}' is declared in multiple namespaces/assemblies ({string.Join(", ", namespaces.Select(ns => $"{ns} [{OwnersOf(ns)}]"))}), and receiver-style ownership evidence is still missing for {string.Join(", ", unresolvedTargets.Select(target => $"`{target.Uid}`"))}. Map each example to its exact declaring-type or method UID and invoke it through receiver syntax such as `receiver.{exampleMethod}(...)`; namespace-level mappings and static `{group.Key}.{exampleMethod}(receiver)` calls do not disambiguate the owner."));
+                }
             }
         }
+    }
+
+    private static bool HasExactUidExample(IReadOnlyList<OverwriteSection> sections, string uid)
+        => sections.Any(section =>
+            string.Equals(section.Uid, uid, StringComparison.Ordinal) &&
+            GetExampleCodeBlocks(section).Count > 0);
+
+    private static bool HasExactOwnerReceiverExample(IReadOnlyList<OverwriteSection> sections, ApiTargetInfo target)
+    {
+        if (target.DeclaringTypeUid is null)
+        {
+            return false;
+        }
+
+        return sections
+            .Where(section =>
+                string.Equals(section.Uid, target.DeclaringTypeUid, StringComparison.Ordinal) ||
+                string.Equals(section.Uid, target.Uid, StringComparison.Ordinal))
+            .SelectMany(GetExampleCodeBlocks)
+            .Any(code => HasReceiverMethodInvocation(code, target.DisplayName, target.DeclaringTypeUid));
+    }
+
+    private static List<string> GetExampleCodeBlocks(OverwriteSection section)
+    {
+        var scope = section.MappedToExample ? section.Body : ExtractExampleSection(section.Body);
+        return ExtractCSharpCodeBlocks(scope);
+    }
+
+    private static bool HasReceiverMethodInvocation(string code, string methodDisplayName, string declaringTypeUid)
+    {
+        var stripped = StripCodeCommentsAndStrings(code);
+        var methodName = MethodBaseName(methodDisplayName);
+        var declaringTypeName = SimpleNameFromUid(declaringTypeUid);
+        var staticReceivers = new HashSet<string>(StringComparer.Ordinal)
+        {
+            declaringTypeName
+        };
+
+        foreach (Match alias in Regex.Matches(stripped,
+                     @"(?m)^\s*using\s+(?<alias>[A-Za-z_]\w*)\s*=\s*(?:global::)?(?<type>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;"))
+        {
+            var aliasedType = alias.Groups["type"].Value;
+            if (string.Equals(aliasedType, declaringTypeUid, StringComparison.Ordinal) ||
+                string.Equals(aliasedType, declaringTypeName, StringComparison.Ordinal))
+            {
+                staticReceivers.Add(alias.Groups["alias"].Value);
+            }
+        }
+
+        foreach (Match invocation in Regex.Matches(stripped,
+                     $@"(?<receiver>[A-Za-z_]\w*|\)|\])\s*\??\.\s*{Regex.Escape(methodName)}(?:\s*<[^>\r\n]+>)?\s*\("))
+        {
+            if (!staticReceivers.Contains(invocation.Groups["receiver"].Value))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static ScopeReport BuildScopeReport(ScopePlan scope, List<ProjectPacket> packets,
@@ -7551,7 +7628,7 @@ internal static class DocfxValidator
         sb.AppendLine($"- Remaining final-verification gates: {(report.Summary.RemainingGates.Count == 0 ? "none" : string.Join(", ", report.Summary.RemainingGates.Select(gate => $"`{gate}`")))}");
         sb.AppendLine($"- Execution profile: `{report.Summary.Execution.Profile}` ({report.Summary.Execution.LogicalProcessors} processors, {report.Summary.Execution.AvailableMemoryBytes / (1024d * 1024 * 1024):F1} GiB available, build workers {report.Summary.Execution.BuildParallelism}, sample workers {report.Summary.Execution.SampleParallelism}, timeout {report.Summary.Execution.ProcessTimeoutMinutes} minutes, concurrent DocFX `{report.Summary.Execution.ConcurrentDocfxVerification.ToString().ToLowerInvariant()}`)");
         sb.AppendLine("- Every error below is an active repair item. Its age, pre-existing status, or the number of similar diagnostics does not make it a blocker or move it out of scope for a repo-wide digest.");
-        sb.AppendLine("- Do not relabel prose or cleanup errors as quality backlog. `EXAMPLE_LEAD_MISSING`, `EXAMPLE_ADVANCED_LEAD_MISSING`, `FAMILY_ANCHOR_EXAMPLE_MISSING`, `SAMPLE_STRUCTURE_INVALID`, and `INTERIM_ARTIFACT_IN_WORKTREE` are blocking repair items until the completion contract is clean.");
+        sb.AppendLine("- Do not relabel prose, cleanup, or unresolved ownership errors as quality backlog. `EXAMPLE_LEAD_MISSING`, `EXAMPLE_ADVANCED_LEAD_MISSING`, `FAMILY_ANCHOR_EXAMPLE_MISSING`, `SAMPLE_STRUCTURE_INVALID`, `INTERIM_ARTIFACT_IN_WORKTREE`, `SYMBOL_COLLISION_UNRESOLVED`, and `EXTENSION_OWNER_AMBIGUOUS` are blocking repair items until the completion contract is clean.");
         sb.AppendLine("- Do not stop after repairing only a sample of namespaces, types, extension sections, or examples. Rerun the validator and continue until `canClaimCompletion` is `true`.");
         sb.AppendLine("- An unrelated build or test failure may be reported separately, but it does not end documentation repair unless it prevents the validator or required evidence inspection from running.");
         sb.AppendLine("- Stop incomplete only when the user pauses the task or an external condition still prevents progress after concrete repair attempts. Report the exact command, exit code, blocker, and remaining diagnostic counts; never describe that state as complete.");
@@ -7586,9 +7663,13 @@ internal static class DocfxValidator
         AppendDiagnostics(sb, "Interim Scratch Cleanup", report.Errors.Where(e => e.Code is "INTERIM_ARTIFACT_IN_WORKTREE"));
         AppendDiagnostics(sb, "Encoding Repairs", report.Errors.Where(e =>
             e.Code.StartsWith("ENCODING_", StringComparison.Ordinal)));
+        AppendDiagnostics(sb, "Symbol Ownership Repairs", report.Errors.Where(e =>
+            e.Code is "SYMBOL_COLLISION_UNRESOLVED" or "EXTENSION_OWNER_AMBIGUOUS"));
         AppendDiagnostics(sb, "Namespace And Extension Table Repairs", report.Errors.Where(e =>
             e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) ||
-            e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) && !IsExampleQualityDiagnostic(e)));
+            e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
+            e.Code is not "EXTENSION_OWNER_AMBIGUOUS" &&
+            !IsExampleQualityDiagnostic(e)));
         AppendRequiredExampleDiagnostics(sb, report.Errors.Where(IsExampleQualityDiagnostic), report.PackageIds);
         AppendGitHubExampleSources(sb, report.PackageIds, report.ExampleSearchSnippets);
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
@@ -7599,6 +7680,7 @@ internal static class DocfxValidator
             !e.Code.StartsWith("ENCODING_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("NAMESPACE_", StringComparison.Ordinal) &&
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
+            e.Code is not "SYMBOL_COLLISION_UNRESOLVED" &&
             !IsExampleQualityDiagnostic(e) &&
             e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_STRUCTURE_INVALID"));
         AppendDiagnostics(sb, "Warnings", report.Warnings);
@@ -7607,7 +7689,7 @@ internal static class DocfxValidator
         sb.AppendLine();
         sb.AppendLine("- [ ] `agents.cs` has run successfully when `AGENTS_BLOCK_MISSING` appears.");
         sb.AppendLine("- [ ] `ENCODING_CORRUPTION` files restored from git or rewritten using byte-level operations.");
-        sb.AppendLine("- [ ] Every namespace and extension diagnostic above has been resolved; zero remain in the final report.");
+        sb.AppendLine("- [ ] Every symbol-ownership, namespace, and extension diagnostic above has been resolved; zero remain in the final report.");
         sb.AppendLine("- [ ] GitHub example sources consulted before writing any new example (see 'GitHub Example Sources' section).");
         sb.AppendLine("- [ ] Every missing, duplicate, placeholder, reflection-only, target-use, lead, advanced-lead, family-anchor, and extension-invocation example diagnostic above has been resolved.");
         sb.AppendLine("- [ ] Changed C# examples pass structural validation (namespace + type declaration, or labelled `// Program.cs`).");
