@@ -12,7 +12,7 @@ Build a small example inventory from validator output and source evidence before
 | Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory | Type | .docfx/api/types/Codebelt.Extensions.Xunit.Hosting.ApplicationHostFactory.md | Package README, ApplicationHostFactoryTest | Host a test server and create a client | Missing |
 ```
 
-Do not mark an item complete until the evidence cell names concrete repository paths, the scenario states a consumer task, the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles under `docfx.cs --validate-samples` (or has a justified skip marker), and `docfx.cs --json` no longer reports any missing, placeholder, reflection-only, target-use, invocation, or duplicate-UID diagnostic.
+Do not mark an item complete until the evidence cell names concrete repository paths, the scenario states a consumer task, the overwrite section targets the correct UID or approved extension-method location, the file is included by `build.overwrite`, the sample compiles under `docfx.cs --validate-samples` (or has a justified skip marker), and `docfx.cs --json` no longer reports any missing, placeholder, reflection-only, target-use, invocation, duplicate-UID, lead, advanced-lead, family-anchor, sample-structure, or interim-artifact diagnostic.
 
 ## Scenario example design
 
@@ -29,6 +29,8 @@ Before writing a type or extension-method example, choose the smallest real task
 9. Confirm the C# fence itself uses the documented type or invokes the documented extension method. Mentions outside the fence do not count.
 
 A scenario example is still concise. It should show one coherent task, not a tour of every member. If a compile-valid scenario cannot be produced from evidence, omit the example with the documented omission comment rather than inventing a plausible workflow.
+
+Lead-writing diagnostics are not a lesser class of work. `EXAMPLE_LEAD_MISSING` means the code fence needs a direct consumer-task fly-in. `EXAMPLE_ADVANCED_LEAD_MISSING` means the sample is large, multi-block, setup-heavy, async, host/DI/configuration-oriented, or otherwise complex enough to need a multi-sentence lead that explains setup, prerequisite context, and workflow outcome. Fix these directly in the implicated overwrite files, in small batches if needed, then rerun the fast validator. Do not call them "quality backlog", "pre-existing prose", or "too large for this run."
 
 ## Targeted workflow
 
@@ -53,7 +55,7 @@ Use this path when the user names a changed API or namespace.
 17. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 18. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 19. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-20. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing every remaining diagnostic, and updating the example inventory until `summary.canClaimCompletion` is `true`. Diagnostic age and volume are not blockers.
+20. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing every remaining diagnostic, and updating the example inventory until `summary.canClaimCompletion` is `true`. Diagnostic age, volume, prose-only status, and pre-existing status are not blockers.
 21. Run the build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` so samples compile, API discovery is reflection-precise, and DocFX builds in a temp copy.
 22. Inspect `git status` and confirm no disposable generated DocFX output or scratch artifacts remained in the working tree.
 23. Report verification results and any remaining deterministic findings.
@@ -90,13 +92,13 @@ Use this path when the user invokes the skill without naming a specific API or n
 26. Run `git diff` for touched documentation paths and confirm the diff is intentional.
 27. Run `dotnet build`, or `dotnet build -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
 28. Run `dotnet test`, or `dotnet test -p:SkipSignAssembly=true` when a Codebelt repository has no root `.snk`.
-29. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing every remaining diagnostic, and updating the example inventory until `summary.canClaimCompletion` is `true`. A large queue is still the task, not a reason to stop.
+29. Run the Completion Repair Loop by rerunning the fast `docfx.cs --json`, repairing every remaining diagnostic, and updating the example inventory until `summary.canClaimCompletion` is `true`. A large queue is still the task, not a reason to stop; this includes lead-writing, sample-structure, family-anchor, and interim-artifact cleanup queues.
 30. Keep the exact endgame command explicit in continuation responses: `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`, plus the clean completion contract. Do not replace it with generic "verify later" language.
 31. Run the build-backed completion verification `docfx.cs --build-api-model --validate-samples --verify-docfx-build` so samples compile, API discovery is reflection-precise, and DocFX builds in a temp copy.
 32. Inspect `git status` and confirm no disposable generated DocFX output or scratch artifacts remained in the working tree.
 33. Only after `summary.canClaimCompletion` is `true`, `summary.remainingWorkItems` is `0`, `summary.remainingGates` is empty, and `summary.remainingDiagnosticsByCode` is empty, report completion. If a genuine external blocker stops the run first, report the exact command, exit code, blocker, and that the digest remains incomplete.
 
-When resuming a partial repo-wide audit, begin by inventorying all tracked and untracked documentation changes and preserving them as in-flight work. Regenerate the deterministic assessment work queue and example inventory, refresh or create a reflection-backed project manifest for bounded packets, and use those artifacts as the authoritative queue. Keep those artifacts in temp or session storage rather than the repository. Finish the namespace-layer pass across the affected namespaces before returning to net-new type/example authoring. If the host re-enters with a bare `dotnet-docfx-digest` invocation and the first rerun still leaves hundreds of repairable diagnostics, that is still the same continuation and the same active queue. In the next response after each rerun, explicitly name whether the active queue is that manifest or the sequential assessment-work-queue / namespace-first fallback, restate the fast rerun cadence, and restate the exact final command plus clean completion contract. Work in small internal batches with a fast validator rerun after every batch, but do not treat a batch boundary as a reporting boundary. The exact final command is `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`; descriptive references to those activities do not replace running the flags together.
+When resuming a partial repo-wide audit, begin by inventorying all tracked and untracked documentation changes and preserving them as in-flight work. Regenerate the deterministic assessment work queue and example inventory, refresh or create a reflection-backed project manifest for bounded packets, and use those artifacts as the authoritative queue. Keep those artifacts in temp or session storage rather than the repository. Finish the namespace-layer pass across the affected namespaces before returning to net-new type/example authoring. If the host re-enters with a bare `dotnet-docfx-digest` invocation and the first rerun still leaves hundreds of repairable diagnostics, that is still the same continuation and the same active queue. If the remaining diagnostics are mostly `EXAMPLE_ADVANCED_LEAD_MISSING`, `EXAMPLE_LEAD_MISSING`, `FAMILY_ANCHOR_EXAMPLE_MISSING`, `SAMPLE_STRUCTURE_INVALID`, or `INTERIM_ARTIFACT_IN_WORKTREE`, treat them as the current repair queue and keep editing or cleaning. In the next response after each rerun, explicitly name whether the active queue is that manifest or the sequential assessment-work-queue / namespace-first fallback, restate the fast rerun cadence, and restate the exact final command plus clean completion contract. Work in small internal batches with a fast validator rerun after every batch, but do not treat a batch boundary as a reporting boundary. The exact final command is `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json`; descriptive references to those activities do not replace running the flags together.
 
 For the final command, let `auto` choose the execution profile unless the user requests a specific resource policy. High-capacity machines run the isolated DocFX verification lane concurrently with API/sample work; conservative machines remain sequential. Give the outer command a timeout at least five minutes above the validator's child-process timeout (35 minutes with the default 30-minute setting) so timeout diagnostics can be returned normally.
 
@@ -120,17 +122,17 @@ Target counts, diagnostic volume, ownership complexity, context pressure, and mo
 
 Reruns often replace a coarse queue with a more specific one: for example, `EXTENSION_SECTION_MISSING` may shrink only for `EXTENSION_METHOD_MISSING` or `EXTENSION_METHOD_SIGNATURE_MISSING` to appear once the tables exist, or namespace repairs may surface the next layer of `EXAMPLE_MISSING` work. Treat that handoff as expected progress. Do not stop to summarize partial progress, ask whether to continue, or offer a "focus this area vs. just verify" menu while repairable diagnostics remain.
 
-An example-only queue is still incomplete. When `EXAMPLE_MISSING` is the only remaining diagnostic family — even 1,086 of them — the correct next step is more example authoring, not a completion report, checkpoint, final verification pass, dry-run suggestion, or user choice menu. Internal worries like "this is massive", "this will take multiple sessions", or "this may exceed context limits" are not user-facing stop conditions; solve them with packets and keep going.
+An example-only or example-quality-only queue is still incomplete. When `EXAMPLE_MISSING`, `EXAMPLE_LEAD_MISSING`, or `EXAMPLE_ADVANCED_LEAD_MISSING` is the only remaining diagnostic family — even 1,086 of them — the correct next step is more example authoring or lead repair, not a completion report, checkpoint, final verification pass, dry-run suggestion, or user choice menu. Internal worries like "this is massive", "this will take multiple sessions", "these are pre-existing", "this is just prose", or "this may exceed context limits" are not user-facing stop conditions; solve them with packets and keep going.
 
-### EXAMPLE_MISSING micro-loop
+### Example and lead micro-loop
 
-When the queue is dominated by `EXAMPLE_MISSING`, shrink your mental scope to the next concrete target instead of the total count.
+When the queue is dominated by `EXAMPLE_MISSING`, `EXAMPLE_LEAD_MISSING`, or `EXAMPLE_ADVANCED_LEAD_MISSING`, shrink your mental scope to the next concrete target instead of the total count.
 
-1. Take the next `EXAMPLE_MISSING` diagnostic from the assessment work queue or current fast-validator output.
-2. Read that target's public API surface and one relevant test, sample, or usage source.
-3. Write one consumer-facing example to the correct type-targeted overwrite file.
+1. Take the next example or lead diagnostic from the assessment work queue or current fast-validator output.
+2. Read that target's public API surface, the existing overwrite prose/code, and one relevant test, sample, or usage source.
+3. Write one consumer-facing example to the correct type-targeted overwrite file, or add the missing fly-in/advanced lead that explains the consumer task, setup, prerequisite, and expected outcome for the existing example.
 4. Rerun the fast validator.
-5. Repeat for the next 3-5 examples, rerun the fast validator, and continue immediately while diagnostics remain.
+5. Repeat for the next 3-5 examples or leads, rerun the fast validator, and continue immediately while diagnostics remain.
 
 A "batch" does not need to be an architecturally complete namespace, packet, or package. A batch is any set of examples you can finish confidently before rerunning validation. Completeness emerges from iteration. Batch size is a validator-rerun cadence, not a checkpoint or reporting boundary.
 

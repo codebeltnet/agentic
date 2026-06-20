@@ -1075,6 +1075,23 @@
         "Keeps the real public method `AddMinimalXmlOptions` and does not invent alternate setup methods",
         "Preserves the namespace page's factual API table while improving the surrounding prose"
       ]
+    },
+    {
+      "id": 106,
+      "prompt": "Continue a repo-wide dotnet-docfx-digest run after the build-backed validator reports `summary.canClaimCompletion=false`, `summary.remainingWorkItems=552`, `SAMPLE_COMPILE_FAILED=0`, `samplesCompiled=565`, and `docfxBuildsVerified=1`. Remaining diagnostics are `EXAMPLE_ADVANCED_LEAD_MISSING=437`, `EXAMPLE_LEAD_MISSING=30`, `EXAMPLE_MISSING=19` for an auto-skipped MutableTuple arity family, `FAMILY_ANCHOR_EXAMPLE_MISSING=1`, `INTERIM_ARTIFACT_IN_WORKTREE=64`, and `SAMPLE_STRUCTURE_INVALID=1` on `StackDecoratorExtensions`. The previous agent wants to call these a pre-existing quality backlog and give a final audit report.",
+      "expected_output": "Agent refuses the quality-backlog escape hatch and treats the run as incomplete. It does not produce a final audit report, completion summary, progress table, or next-step menu. It uses the current build-backed JSON as the active queue, repairs interim artifacts and sample structure, writes source-grounded fly-ins for basic and advanced example leads in small batches, resolves the family anchor example, reruns fast `docfx.cs --json` after each batch, and reserves the final `--build-api-model --validate-samples --verify-docfx-build --json` gate for the moment the completion contract is clean. It reports an external blocker only with the exact command, exit code, and failure output.",
+      "expectations": [
+        "Does not describe `EXAMPLE_ADVANCED_LEAD_MISSING`, `EXAMPLE_LEAD_MISSING`, `FAMILY_ANCHOR_EXAMPLE_MISSING`, `INTERIM_ARTIFACT_IN_WORKTREE`, or `SAMPLE_STRUCTURE_INVALID` as optional quality backlog, pre-existing prose work, or remaining improvements",
+        "Does not claim the audit is complete just because sample compilation and DocFX build already succeeded",
+        "Does not emit a final audit report, progress table, completion summary, or next-step menu while `summary.canClaimCompletion=false` and `summary.remainingWorkItems` is non-zero",
+        "Treats the current build-backed JSON result as the active authoritative queue and works the next repair item",
+        "Repairs `INTERIM_ARTIFACT_IN_WORKTREE` by classifying each reported path and preserving only legitimate deliverables",
+        "Repairs `SAMPLE_STRUCTURE_INVALID` by fixing the implicated sample structure or applying a valid source-backed skip only when the validator permits it",
+        "Repairs `FAMILY_ANCHOR_EXAMPLE_MISSING` with a real behavioral anchor example rather than relying on the arity family skip",
+        "Repairs `EXAMPLE_LEAD_MISSING` and `EXAMPLE_ADVANCED_LEAD_MISSING` by adding human-written fly-ins that explain the consumer task, setup or prerequisites, and workflow outcome",
+        "Uses small repair batches with fast `docfx.cs --json` reruns and continues immediately while diagnostics remain",
+        "Keeps the exact final gate `docfx.cs --build-api-model --validate-samples --verify-docfx-build --json` and the clean JSON completion contract explicit, but does not run or report it as final completion until the queue is empty"
+      ]
     }
   ]
 }
