@@ -27,6 +27,14 @@ Before writing a type or extension-method example, choose the smallest real task
 7. Prefer domain-specific names such as `BenchmarkRunner`, `WorkspaceUsage`, or `HttpRetryExample` over `Consumer` and `MyNamespace` when the package domain is clear.
 8. Reject metadata-only substitutes before writing: `Type.GetType`, assembly lookup, `typeof`/`nameof` as the only operation, generic `Describe()` helpers, and repeated UID sections do not demonstrate a consumer task.
 9. Confirm the C# fence itself uses the documented type or invokes the documented extension method. Mentions outside the fence do not count.
+10. Reject runtime-type-name substitutes such as `host.Services.GetType().Name` or `service.GetType().FullName`. These reveal implementation metadata rather than the application behavior the API enables.
+11. For entry-point factories and fixtures, never declare an empty local `Program` merely to satisfy compilation. Show a real entry point or name the application-project prerequisite, then make the example's result depend on a service, configuration value, endpoint, or lifecycle event supplied by that application.
+
+## Key entry-point and upstream comparison pass
+
+Before finalizing namespace prose, inspect recent release notes or changelog entries, package READMEs, public factories/builders, and the strongest functional tests to identify the APIs that carry the current product story. Name those key entry points in the namespace page and give readers a compact choice among them. Naming conventions remain supporting detail, not the opening narrative.
+
+When a package is positioned as an alternative to an upstream framework type, inspect current official upstream documentation and compare concrete workflow differences: acquisition model, customization, lifecycle ownership, sharing/reuse, and the observable result exposed to tests. Call the API a replacement only when it is actually drop-in compatible; otherwise describe it as an alternative or convenience and state the tradeoffs.
 
 A scenario example is still concise. It should show one coherent task, not a tour of every member. If a compile-valid scenario cannot be produced from evidence, omit the example with the documented omission comment rather than inventing a plausible workflow. That omission comment is explanatory prose only; it does not suppress diagnostics or act as a skip waiver.
 
