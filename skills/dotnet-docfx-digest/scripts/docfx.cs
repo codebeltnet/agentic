@@ -34,7 +34,7 @@ internal static class DocfxValidator
     private static readonly TimeSpan ProcessStreamDrainTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ProcessHeartbeatInterval = TimeSpan.FromSeconds(10);
     private static readonly Regex SyntheticExtensionBlockUidMarkerRegex = new(
-        @"(?:^|\.)(?:<G>|\uF03CG\uF03E|%3cG%3e)(?:\$|%24)[0-9A-Fa-f]{8,}",
+        @"(?:^|\.)(?:<[GM]>|\uF03C[GM]\uF03E|%3c[GM]%3e)(?:\$|%24)[0-9A-Fa-f]{8,}",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
@@ -1846,6 +1846,8 @@ internal static class DocfxValidator
 
         foreach (var proj in libraryProjects)
         {
+            AddProjectOutputResolverPaths(proj, configuration, framework, resolverPaths);
+
             var dll = assemblyPaths.FirstOrDefault(p =>
                 string.Equals(Path.GetFileNameWithoutExtension(p), proj.AssemblyName, StringComparison.OrdinalIgnoreCase));
             if (dll is not null)
@@ -3058,6 +3060,29 @@ internal static class DocfxValidator
         AddDepsJsonResolverPaths(project, assemblyPath, configuration, projectFramework, resolverPaths);
     }
 
+    private static void AddProjectOutputResolverPaths(ProjectInfo project, string configuration, string? framework,
+        HashSet<string> resolverPaths)
+    {
+        var projectDir = Path.GetDirectoryName(project.Path)!;
+        var outputRoot = Path.Combine(projectDir, "bin", configuration);
+        if (!Directory.Exists(outputRoot))
+        {
+            return;
+        }
+
+        foreach (var dll in Directory.GetFiles(outputRoot, "*.dll", SearchOption.AllDirectories))
+        {
+            var normalized = dll.Replace('\\', '/');
+            if (!string.IsNullOrWhiteSpace(framework) &&
+                !normalized.Contains($"/{framework}/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            resolverPaths.Add(dll);
+        }
+    }
+
     private static string? DetectFrameworkFromAssemblyPath(ProjectInfo project, string assemblyPath)
     {
         if (project.TargetFrameworks.Count == 0)
@@ -3416,11 +3441,18 @@ internal static class DocfxValidator
             return false;
         }
 
-        var declaringType = type.DeclaringType;
-        return declaringType.IsClass &&
-               declaringType.IsAbstract &&
-               declaringType.IsSealed &&
-               IsExternallyVisible(declaringType);
+        var authoredOwner = type.DeclaringType;
+        while (authoredOwner.IsNested &&
+               ContainsSyntheticExtensionBlockUidMarker(authoredOwner.Name) &&
+               authoredOwner.DeclaringType is not null)
+        {
+            authoredOwner = authoredOwner.DeclaringType;
+        }
+
+        return authoredOwner.IsClass &&
+               authoredOwner.IsAbstract &&
+               authoredOwner.IsSealed &&
+               IsExternallyVisible(authoredOwner);
     }
 
     private static bool HasExtensionAttribute(MemberInfo member)
@@ -3467,37 +3499,14 @@ internal static class DocfxValidator
             return false;
         }
 
-        // Exclude abstract types, but allow static extension containers (abstract+sealed class
-        // with public static [Extension] members). These are valid documentation targets even
-        // though reflection reports IsAbstract == true for sealed abstract classes.
-        if (type.IsAbstract && !IsStaticExtensionContainer(type))
+        // Exclude abstract types, but allow every public static class (abstract+sealed in IL).
+        // Static factories and other non-extension entry points are documentation targets too.
+        if (type.IsAbstract && (!type.IsClass || !type.IsSealed))
         {
             return false;
         }
 
         return true;
-    }
-
-    private static bool IsStaticExtensionContainer(Type type)
-    {
-        // A static extension container is a sealed abstract class (static class in C# terms)
-        // that has at least one public static member with [ExtensionAttribute].
-        if (!type.IsClass || !type.IsAbstract || !type.IsSealed)
-        {
-            return false;
-        }
-
-        MethodInfo[] methods;
-        try
-        {
-            methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.DeclaredOnly);
-        }
-        catch
-        {
-            return false;
-        }
-
-        return methods.Any(HasExtensionAttribute);
     }
 
     private static string? TypeUid(Type type)
@@ -4527,6 +4536,14 @@ internal static class DocfxValidator
         }
 
         var combinedCode = string.Join(Environment.NewLine, codeBlocks);
+        var codeWithoutCommentsOrStrings = StripCodeCommentsAndStrings(combinedCode);
+        if (Regex.IsMatch(codeWithoutCommentsOrStrings,
+                @"\.\s*GetType\s*\(\s*\)\s*\.\s*(?:Name|FullName)\b"))
+        {
+            return new ExampleQualityResult(false, "EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME",
+                $"The example for `{target.DisplayName}` uses a runtime implementation type name as its visible outcome. Show application behavior, resolved data, configured state, an HTTP response, or another result that explains why a caller uses the API.", 13);
+        }
+
         if (Regex.IsMatch(section.Body,
                 @"(?i)\b(?:the documented type|the documented extension method|documented API at runtime|starting point for the extension surface)\b") ||
             Regex.IsMatch(combinedCode,
@@ -4538,9 +4555,14 @@ internal static class DocfxValidator
                 $"The example for `{target.DisplayName}` contains generic generated scaffolding instead of a consumer scenario. Replace placeholder prose and helper names with a focused example derived from tests, source, or package documentation.", 10);
         }
 
-        var codeWithoutCommentsOrStrings = StripCodeCommentsAndStrings(combinedCode);
         var hasReflectionLookup = Regex.IsMatch(combinedCode, @"\b(?:Type|Assembly)\.GetType\s*\(") ||
                                   Regex.IsMatch(combinedCode, @"\.Assembly\.GetType\s*\(");
+
+        if (IsApplicationEntryPointTarget(target) && HasEmptyProgramStub(codeWithoutCommentsOrStrings))
+        {
+            return new ExampleQualityResult(false, "EXAMPLE_EMPTY_ENTRY_POINT_STUB",
+                $"The example for `{target.DisplayName}` declares an empty local `Program` type while claiming to bootstrap an application entry point. Use a real minimal or conventional entry point, identify the application-project prerequisite, and demonstrate behavior supplied by that application.", 15);
+        }
 
         if (target.Kind == ApiTargetKind.ExtensionMethod)
         {
@@ -4641,6 +4663,27 @@ internal static class DocfxValidator
         }
 
         return ExampleQualityResult.Success;
+    }
+
+    private static bool IsApplicationEntryPointTarget(ApiTargetInfo target)
+    {
+        return target.Kind == ApiTargetKind.Type &&
+               target.DisplayName.Contains("Application", StringComparison.Ordinal) &&
+               (target.DisplayName.Contains("Factory", StringComparison.Ordinal) ||
+                target.DisplayName.Contains("Fixture", StringComparison.Ordinal));
+    }
+
+    private static bool HasEmptyProgramStub(string code)
+    {
+        if (!Regex.IsMatch(code, @"<\s*Program\s*>") &&
+            !Regex.IsMatch(code, @"<\s*Program\s*,") &&
+            !Regex.IsMatch(code, @",\s*Program\s*>"))
+        {
+            return false;
+        }
+
+        return Regex.IsMatch(code,
+            @"(?s)\b(?:class|record(?:\s+class)?|struct)\s+Program\b(?:\s*:\s*[^\{;\r\n]+)?\s*(?:\{\s*\}|;)");
     }
 
     private static ExampleQualityResult ValidateExampleNarrative(string scope, ApiTargetInfo target, List<string> codeBlocks)
@@ -8120,7 +8163,8 @@ internal static class DocfxValidator
             {
                 "EXAMPLE_UID_DUPLICATE" => "Merge the duplicate mappings into one coherent example section for the UID, then rerun validation.",
                 "EXAMPLE_PLACEHOLDER" or "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or
-                "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" =>
+                "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
+                "EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME" or "EXAMPLE_EMPTY_ENTRY_POINT_STUB" =>
                     "Inspect exact test, package README, sample, XML-comment, or source evidence; replace the scaffold with a consumer task that constructs or invokes the target in C# and exposes a result or next action.",
                 "EXAMPLE_EXTENSION_CONTAINER_LANGUAGE_FOCUS" =>
                     "Rewrite the extension-container opening around the caller task and receiver outcome instead of foregrounding C# extension-block syntax.",
@@ -8149,6 +8193,7 @@ internal static class DocfxValidator
         return diagnostic.Code is "EXAMPLE_MISSING" or "EXAMPLE_UID_DUPLICATE" or "EXAMPLE_PLACEHOLDER" or
             "EXAMPLE_REFLECTION_ONLY" or "EXAMPLE_TARGET_NOT_USED" or "EXTENSION_EXAMPLE_NOT_INVOKED" or
             "EXAMPLE_DEFAULT_PLACEHOLDER" or "EXAMPLE_NO_OBSERVABLE_OUTCOME" or "EXAMPLE_FORWARDING_SCAFFOLD" or
+            "EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME" or "EXAMPLE_EMPTY_ENTRY_POINT_STUB" or
             "EXAMPLE_TEMPLATE_REPETITION" or "EXAMPLE_EXTENSION_CONTAINER_LANGUAGE_FOCUS" or
             "EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE" or "EXAMPLE_LEAD_MISSING" or
             "EXAMPLE_ADVANCED_LEAD_MISSING";
