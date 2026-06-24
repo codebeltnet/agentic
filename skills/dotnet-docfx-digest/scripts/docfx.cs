@@ -3065,20 +3065,16 @@ internal static class DocfxValidator
     {
         var projectDir = Path.GetDirectoryName(project.Path)!;
         var outputRoot = Path.Combine(projectDir, "bin", configuration);
-        if (!Directory.Exists(outputRoot))
+        var searchRoot = string.IsNullOrWhiteSpace(framework)
+            ? outputRoot
+            : Path.Combine(outputRoot, framework);
+        if (!Directory.Exists(searchRoot))
         {
             return;
         }
 
-        foreach (var dll in Directory.GetFiles(outputRoot, "*.dll", SearchOption.AllDirectories))
+        foreach (var dll in Directory.GetFiles(searchRoot, "*.dll", SearchOption.TopDirectoryOnly))
         {
-            var normalized = dll.Replace('\\', '/');
-            if (!string.IsNullOrWhiteSpace(framework) &&
-                !normalized.Contains($"/{framework}/", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
             resolverPaths.Add(dll);
         }
     }
@@ -4668,9 +4664,8 @@ internal static class DocfxValidator
     private static bool IsApplicationEntryPointTarget(ApiTargetInfo target)
     {
         return target.Kind == ApiTargetKind.Type &&
-               target.DisplayName.Contains("Application", StringComparison.Ordinal) &&
-               (target.DisplayName.Contains("Factory", StringComparison.Ordinal) ||
-                target.DisplayName.Contains("Fixture", StringComparison.Ordinal));
+               Regex.IsMatch(target.DisplayName,
+                   @"^(?:(?:Web)?Application(?:Test)?|App|WebTest|Host)(?:Factory|Fixture)(?:<.*>)?$");
     }
 
     private static bool HasEmptyProgramStub(string code)

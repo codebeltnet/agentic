@@ -70,6 +70,28 @@ function Assert-NoDiagnostic {
     }
 }
 
+function Assert-DiagnosticForPath {
+    param([object]$Report, [string]$Code, [string]$PathFragment)
+
+    if (-not @($Report.errors | Where-Object {
+        $_.code -eq $Code -and $_.path -and $_.path.Replace('\\', '/').Contains($PathFragment)
+    })) {
+        throw "Expected diagnostic '$Code' for path containing '$PathFragment' was not reported."
+    }
+}
+
+function Assert-NoDiagnosticForPath {
+    param([object]$Report, [string]$Code, [string]$PathFragment)
+
+    $matches = @($Report.errors | Where-Object {
+        $_.code -eq $Code -and $_.path -and $_.path.Replace('\\', '/').Contains($PathFragment)
+    })
+    if ($matches) {
+        $details = $matches | ConvertTo-Json -Compress -Depth 5
+        throw "Diagnostic '$Code' was reported for path containing '$PathFragment'. Matching diagnostics: $details"
+    }
+}
+
 function Assert-Warning {
     param([object]$Report, [string]$Code)
 
@@ -934,6 +956,26 @@ public static class ApplicationTestFactory
 {
     public static Outcome Create<TEntryPoint>() where TEntryPoint : class => new() { Value = 42 };
 }
+
+public static class AppFactory
+{
+    public static Outcome Create<TEntryPoint>() where TEntryPoint : class => new() { Value = 42 };
+}
+
+public static class WebTestFactory
+{
+    public static Outcome Create<TEntryPoint>() where TEntryPoint : class => new() { Value = 42 };
+}
+
+public static class HostFixture
+{
+    public static Outcome Create<TEntryPoint>() where TEntryPoint : class => new() { Value = 42 };
+}
+
+public static class ApplicationRepositoryFactory
+{
+    public static Outcome Create<TModel>() where TModel : class => new() { Value = 42 };
+}
 '@
     Write-Utf8File (Join-Path $quality '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Demo.csproj'))
 
@@ -1035,6 +1077,50 @@ public static class ApplicationFactoryExample
         var application = ApplicationTestFactory.Create<Program>();
         return application.Value;
     }
+}
+
+public class Program { }
+```
+'@
+
+    foreach ($entryPointType in @('AppFactory', 'WebTestFactory', 'HostFixture')) {
+        Write-Utf8File (Join-Path $quality ".docfx/api/types/Acme.Demo.$entryPointType.md") @"
+---
+uid: Acme.Demo.$entryPointType
+example: *content
+---
+The following example claims to bootstrap an application and read its configured result.
+
+``````csharp
+using Acme.Demo;
+
+namespace Samples;
+
+public static class EntryPointExample
+{
+    public static int Read() => $entryPointType.Create<Program>().Value;
+}
+
+public class Program { }
+``````
+"@
+    }
+
+    Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.ApplicationRepositoryFactory.md') @'
+---
+uid: Acme.Demo.ApplicationRepositoryFactory
+example: *content
+---
+This repository factory example uses a local model and returns the configured value.
+
+```csharp
+using Acme.Demo;
+
+namespace Samples;
+
+public static class RepositoryFactoryExample
+{
+    public static int Read() => ApplicationRepositoryFactory.Create<Program>().Value;
 }
 
 public class Program { }
@@ -1200,6 +1286,10 @@ public static class Use$name
     )) {
         Assert-Diagnostic -Report $badQuality -Code $code
     }
+    foreach ($entryPointType in @('AppFactory', 'WebTestFactory', 'HostFixture')) {
+        Assert-DiagnosticForPath -Report $badQuality -Code 'EXAMPLE_EMPTY_ENTRY_POINT_STUB' -PathFragment "Acme.Demo.$entryPointType.md"
+    }
+    Assert-NoDiagnosticForPath -Report $badQuality -Code 'EXAMPLE_EMPTY_ENTRY_POINT_STUB' -PathFragment 'Acme.Demo.ApplicationRepositoryFactory.md'
 
     Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.ReadySignal.md') @'
 ---
