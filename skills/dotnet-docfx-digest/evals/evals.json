@@ -1169,6 +1169,7 @@
       "expectations": [
         "Validator emits EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME for `.GetType().Name` or `.GetType().FullName` used as the reader-visible result",
         "Validator emits EXAMPLE_EMPTY_ENTRY_POINT_STUB when an application factory or fixture example declares an empty local Program type",
+        "Applies the empty-entry-point check to the documented naming convention, including AppFactory, WebTestFactory, and HostFixture, without treating ApplicationRepositoryFactory as an application bootstrap target",
         "Does not accept compilation or Console.WriteLine as proof that the sample explains application behavior",
         "Derives the replacement ApplicationTestFactory scenario from functional tests or application samples and exposes configured state or a resolved domain service",
         "Derives the replacement WebApplicationTestFactory scenario from functional tests or application samples and exercises a real HTTP response, configuration override, or service override",
