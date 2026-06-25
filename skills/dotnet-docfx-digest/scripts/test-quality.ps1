@@ -55,15 +55,40 @@ function Assert-Diagnostic {
     param([object]$Report, [string]$Code)
 
     if (-not @($Report.errors | Where-Object code -eq $Code)) {
-        throw "Expected diagnostic '$Code' was not reported."
+        $reported = @($Report.errors | ForEach-Object code | Sort-Object -Unique) -join ', '
+        throw "Expected diagnostic '$Code' was not reported. Reported diagnostics: $reported"
     }
 }
 
 function Assert-NoDiagnostic {
     param([object]$Report, [string]$Code)
 
-    if (@($Report.errors | Where-Object code -eq $Code)) {
-        throw "Diagnostic '$Code' was reported but the fixture expected it to be absent."
+    $matches = @($Report.errors | Where-Object code -eq $Code)
+    if ($matches) {
+        $details = $matches | ConvertTo-Json -Compress -Depth 5
+        throw "Diagnostic '$Code' was reported but the fixture expected it to be absent. Matching diagnostics: $details"
+    }
+}
+
+function Assert-DiagnosticForPath {
+    param([object]$Report, [string]$Code, [string]$PathFragment)
+
+    if (-not @($Report.errors | Where-Object {
+        $_.code -eq $Code -and $_.path -and $_.path.Replace('\\', '/').Contains($PathFragment)
+    })) {
+        throw "Expected diagnostic '$Code' for path containing '$PathFragment' was not reported."
+    }
+}
+
+function Assert-NoDiagnosticForPath {
+    param([object]$Report, [string]$Code, [string]$PathFragment)
+
+    $matches = @($Report.errors | Where-Object {
+        $_.code -eq $Code -and $_.path -and $_.path.Replace('\\', '/').Contains($PathFragment)
+    })
+    if ($matches) {
+        $details = $matches | ConvertTo-Json -Compress -Depth 5
+        throw "Diagnostic '$Code' was reported for path containing '$PathFragment'. Matching diagnostics: $details"
     }
 }
 
@@ -796,7 +821,7 @@ public static class HostTestFactoryExample
 ```
 '@
 
-    $staticFactoryReport = Invoke-Validator -Workspace $staticFactory
+    $staticFactoryReport = Invoke-Validator -Workspace $staticFactory -ExtraArgs @('--build-api-model')
     if ([int]$staticFactoryReport.summary.requiredExampleTargets -ne 2) {
         throw "Public static factory discovery under-reported targets: expected 2, got $($staticFactoryReport.summary.requiredExampleTargets)."
     }
@@ -806,6 +831,98 @@ public static class HostTestFactoryExample
 } finally {
     if (Test-Path $staticFactory) {
         Remove-Item -Path $staticFactory -Recurse -Force
+    }
+}
+
+# ----------------------------------------------------------------------
+# Scenario: reflection-backed discovery must resolve project-reference DLLs
+# copied beside a documented project's runtime output even when the selected
+# metadata assembly is a reference assembly under obj/.
+# ----------------------------------------------------------------------
+$transitiveDiscovery = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-transitive-discovery-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $transitiveDiscovery 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $transitiveDiscovery 'src/Acme.Shared/Acme.Shared.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $transitiveDiscovery 'src/Acme.Shared/BaseContext.cs') @'
+namespace Acme.Shared;
+
+public abstract class BaseContext
+{
+    public string Name { get; protected set; } = string.Empty;
+}
+'@
+    Write-Utf8File (Join-Path $transitiveDiscovery 'src/Acme.Hosting/Acme.Hosting.csproj') @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Acme.Shared/Acme.Shared.csproj" />
+  </ItemGroup>
+</Project>
+'@
+    Write-Utf8File (Join-Path $transitiveDiscovery 'src/Acme.Hosting/HostContext.cs') @'
+using Acme.Shared;
+
+namespace Acme.Hosting;
+
+public sealed class HostContext : BaseContext
+{
+    public HostContext()
+    {
+        Name = "integration";
+    }
+}
+'@
+    Write-Utf8File (Join-Path $transitiveDiscovery '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Hosting/Acme.Hosting.csproj'))
+    Write-Utf8File (Join-Path $transitiveDiscovery '.docfx/api/namespaces/Acme.Hosting.md') @'
+---
+uid: Acme.Hosting
+summary: *content
+---
+Use `HostContext` when an integration workflow needs the configured host name exposed by the shared context contract.
+
+Start with `HostContext` to create the context and read its inherited `Name` result.
+
+Availability: `Acme.Hosting`
+'@
+    Write-Utf8File (Join-Path $transitiveDiscovery '.docfx/api/types/Acme.Hosting.HostContext.md') @'
+---
+uid: Acme.Hosting.HostContext
+example: *content
+---
+Create the context when a caller needs the integration host name supplied through the shared base contract.
+
+```csharp
+using Acme.Hosting;
+
+namespace Samples;
+
+public static class HostContextExample
+{
+    public static string ReadName()
+    {
+        var context = new HostContext();
+        return context.Name;
+    }
+}
+```
+'@
+
+    $transitiveReport = Invoke-Validator -Workspace $transitiveDiscovery -ExtraArgs @('--build-api-model')
+    Assert-NoDiagnostic -Report $transitiveReport -Code 'PUBLIC_API_DISCOVERY_FAILED'
+    if ([int]$transitiveReport.summary.requiredExampleTargets -ne 1) {
+        throw "Project-reference discovery under-reported targets: expected 1, got $($transitiveReport.summary.requiredExampleTargets)."
+    }
+
+    Write-Host 'DocFX transitive project-reference discovery passed.'
+} finally {
+    if (Test-Path $transitiveDiscovery) {
+        Remove-Item -Path $transitiveDiscovery -Recurse -Force
     }
 }
 
@@ -826,6 +943,7 @@ namespace Acme.Demo;
 
 public sealed class Holder { public int Value { get; set; } }
 public sealed class Outcome { public int Value { get; set; } }
+public sealed class RuntimeNamed { public int Value { get; set; } }
 public sealed class Forwarder { public int Value { get; set; } }
 public sealed class RepA { public int Value { get; set; } }
 public sealed class RepB { public int Value { get; set; } }
@@ -833,6 +951,31 @@ public sealed class RepC { public int Value { get; set; } }
 public sealed class ReadySignal { public bool IsReady { get; set; } }
 public sealed class Leadless { public int Value { get; set; } public void Apply(int value) => Value = value; }
 public sealed class AdvancedSetup { public int Value { get; set; } public void Apply(int value) => Value = value; }
+
+public static class ApplicationTestFactory
+{
+    public static Outcome Create<TEntryPoint>() where TEntryPoint : class => new() { Value = 42 };
+}
+
+public static class AppFactory
+{
+    public static Outcome Create<TEntryPoint>() where TEntryPoint : class => new() { Value = 42 };
+}
+
+public static class WebTestFactory
+{
+    public static Outcome Create<TEntryPoint>() where TEntryPoint : class => new() { Value = 42 };
+}
+
+public static class HostFixture
+{
+    public static Outcome Create<TEntryPoint>() where TEntryPoint : class => new() { Value = 42 };
+}
+
+public static class ApplicationRepositoryFactory
+{
+    public static Outcome Create<TModel>() where TModel : class => new() { Value = 42 };
+}
 '@
     Write-Utf8File (Join-Path $quality '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Demo.csproj'))
 
@@ -886,6 +1029,101 @@ public static class UseOutcome
         return result;
     }
 }
+```
+'@
+
+    # Runtime implementation type names are mechanically observable but do not explain API behavior.
+    Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.RuntimeNamed.md') @'
+---
+uid: Acme.Demo.RuntimeNamed
+example: *content
+---
+The following example prints the runtime implementation name after constructing the documented type.
+
+```csharp
+using System;
+using Acme.Demo;
+
+namespace Samples;
+
+public static class RuntimeNameReporter
+{
+    public static void Report()
+    {
+        var item = new RuntimeNamed { Value = 42 };
+        Console.WriteLine(item.GetType().Name);
+    }
+}
+```
+'@
+
+    # An empty Program type makes an entry-point sample compile without representing a runnable application.
+    Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.ApplicationTestFactory.md') @'
+---
+uid: Acme.Demo.ApplicationTestFactory
+example: *content
+---
+The following example claims to bootstrap an application and read its configured result.
+
+```csharp
+using Acme.Demo;
+
+namespace Samples;
+
+public static class ApplicationFactoryExample
+{
+    public static int Read()
+    {
+        var application = ApplicationTestFactory.Create<Program>();
+        return application.Value;
+    }
+}
+
+public class Program { }
+```
+'@
+
+    foreach ($entryPointType in @('AppFactory', 'WebTestFactory', 'HostFixture')) {
+        Write-Utf8File (Join-Path $quality ".docfx/api/types/Acme.Demo.$entryPointType.md") @"
+---
+uid: Acme.Demo.$entryPointType
+example: *content
+---
+The following example claims to bootstrap an application and read its configured result.
+
+``````csharp
+using Acme.Demo;
+
+namespace Samples;
+
+public static class EntryPointExample
+{
+    public static int Read() => $entryPointType.Create<Program>().Value;
+}
+
+public class Program { }
+``````
+"@
+    }
+
+    Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.ApplicationRepositoryFactory.md') @'
+---
+uid: Acme.Demo.ApplicationRepositoryFactory
+example: *content
+---
+This repository factory example uses a local model and returns the configured value.
+
+```csharp
+using Acme.Demo;
+
+namespace Samples;
+
+public static class RepositoryFactoryExample
+{
+    public static int Read() => ApplicationRepositoryFactory.Create<Program>().Value;
+}
+
+public class Program { }
 ```
 '@
 
@@ -1033,10 +1271,12 @@ public static class Use$name
 "@
     }
 
-    $badQuality = Invoke-Validator -Workspace $quality
+    $badQuality = Invoke-Validator -Workspace $quality -ExtraArgs @('--build-api-model')
     foreach ($code in @(
         'EXAMPLE_DEFAULT_PLACEHOLDER',
         'EXAMPLE_NO_OBSERVABLE_OUTCOME',
+        'EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME',
+        'EXAMPLE_EMPTY_ENTRY_POINT_STUB',
         'EXAMPLE_FORWARDING_SCAFFOLD',
         'EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE',
         'EXAMPLE_LEAD_MISSING',
@@ -1046,6 +1286,10 @@ public static class Use$name
     )) {
         Assert-Diagnostic -Report $badQuality -Code $code
     }
+    foreach ($entryPointType in @('AppFactory', 'WebTestFactory', 'HostFixture')) {
+        Assert-DiagnosticForPath -Report $badQuality -Code 'EXAMPLE_EMPTY_ENTRY_POINT_STUB' -PathFragment "Acme.Demo.$entryPointType.md"
+    }
+    Assert-NoDiagnosticForPath -Report $badQuality -Code 'EXAMPLE_EMPTY_ENTRY_POINT_STUB' -PathFragment 'Acme.Demo.ApplicationRepositoryFactory.md'
 
     Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.ReadySignal.md') @'
 ---
@@ -1071,7 +1315,7 @@ public static class UseReadySignal
 ```
 '@
 
-    $leanQuality = Invoke-Validator -Workspace $quality
+    $leanQuality = Invoke-Validator -Workspace $quality -ExtraArgs @('--build-api-model')
     Assert-NoDiagnostic -Report $leanQuality -Code 'EXAMPLE_FULLY_QUALIFIED_FRAMEWORK_TYPE'
 
     Write-Host 'DocFX example quality regression passed.'
@@ -1767,8 +2011,9 @@ if (Test-Path $factoryOrigin) {
 
     # ----------------------------------------------------------------------
     # Scenario: build-backed reflection discovery must also collapse C# 14
-    # extension-block containers. The generated nested type is not nameable from C#,
-    # so it must never become an EXAMPLE_TARGET_NOT_USED work item.
+    # extension-block containers. Current compilers emit nested <G>$... and <M>$...
+    # implementation types; neither is nameable from C#, so neither may become an
+    # EXAMPLE_MISSING or EXAMPLE_TARGET_NOT_USED work item.
     # ----------------------------------------------------------------------
 $reflectionExtensionBlocks = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-reflection-extension-blocks-' + [guid]::NewGuid().ToString('N'))
 try {

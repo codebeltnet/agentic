@@ -1161,6 +1161,24 @@
         "Keeps continuation artifacts in supported temp/session locations unless the active mode explicitly defines a different artifact",
         "Reserves the final summary for the clean completion state where full verification ran and the JSON completion contract is satisfied"
       ]
+    },
+    {
+      "id": 112,
+      "prompt": "Use dotnet-docfx-digest on a hosting library whose new `ApplicationTestFactory` and `WebApplicationTestFactory` are positioned as WebApplicationFactory-like entry points. Their current compile-valid examples declare `public class Program { }` and end with `Console.WriteLine(application.Host.Services.GetType().Name)`. The namespace page explains fixture prefixes but does not mention either factory, while functional tests exercise configured services, application configuration, and real HTTP responses.",
+      "expected_output": "The agent rejects the current examples with EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME and EXAMPLE_EMPTY_ENTRY_POINT_STUB, identifies the factories as key entry points from release notes/package context and functional tests, and rewrites the documentation around observable application behavior. It shows ApplicationTestFactory bootstrapping a real console, worker, or generic-host entry point and reading configured state or a domain service. It shows WebApplicationTestFactory bootstrapping a real ASP.NET Core entry point, obtaining a TestServer client, and verifying a response or a service/configuration override. The namespace guidance gives readers a compact choice between one-shot factories, reusable xUnit fixture/base-class patterns, and lower-level host construction. When comparing Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory, it uses current official documentation and describes the Codebelt API as an alternative with different acquisition, customization, sharing, and lifecycle tradeoffs rather than claiming drop-in replacement compatibility.",
+      "expectations": [
+        "Validator emits EXAMPLE_RUNTIME_TYPE_NAME_OUTCOME for `.GetType().Name` or `.GetType().FullName` used as the reader-visible result",
+        "Validator emits EXAMPLE_EMPTY_ENTRY_POINT_STUB when an application factory or fixture example declares an empty local Program type",
+        "Applies the empty-entry-point check to the documented naming convention, including AppFactory, WebTestFactory, and HostFixture, without treating ApplicationRepositoryFactory as an application bootstrap target",
+        "Does not accept compilation or Console.WriteLine as proof that the sample explains application behavior",
+        "Derives the replacement ApplicationTestFactory scenario from functional tests or application samples and exposes configured state or a resolved domain service",
+        "Derives the replacement WebApplicationTestFactory scenario from functional tests or application samples and exercises a real HTTP response, configuration override, or service override",
+        "Identifies the new factories as key namespace entry points from release notes, package documentation, public API shape, and strong functional tests",
+        "Adds decision guidance that distinguishes one-shot factories, reusable fixture/base-class testing, and lower-level host construction",
+        "Uses current official upstream documentation before comparing with WebApplicationFactory",
+        "Calls the Codebelt API an alternative or convenience unless source evidence proves drop-in replacement compatibility",
+        "Explains concrete differences in acquisition, customization, lifecycle ownership, and sharing/reuse rather than using unsupported marketing language"
+      ]
     }
   ]
 }
