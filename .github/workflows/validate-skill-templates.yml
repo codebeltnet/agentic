@@ -24,4 +24,4 @@ jobs:
 
       - name: Run validator
         shell: pwsh
-        run: pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1
+        run: pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Full
