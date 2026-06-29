@@ -44,6 +44,7 @@ internal static class DocfxValidator
     private static readonly Dictionary<string, int> ProcessCounts =
         new(StringComparer.OrdinalIgnoreCase) { ["dotnet"] = 0, ["msbuild"] = 0, ["docfx"] = 0, ["gh"] = 0, ["git"] = 0 };
     private static HashSet<ProcessPermission> _allowedPermissions = new() { ProcessPermission.Git };
+    private static bool _quietProgress;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -85,10 +86,12 @@ internal static class DocfxValidator
         {
             if (options.WriteOverwriteRequestPath is not null)
             {
+                _quietProgress = options.QuietProgress;
                 ConfigureProcessGuard(options);
                 return WriteOverwriteCommand(options);
             }
 
+            _quietProgress = options.QuietProgress;
             return Validate(options);
         }
         catch (Exception ex)
@@ -349,10 +352,13 @@ internal static class DocfxValidator
         // Append-only packet selection status on stderr keeps the single-document JSON stdout clean
         // while still giving a live view of which project packet is active (Phase 11 heartbeats).
         var selectedPackets = packets.Where(p => p.Selected).ToList();
-        for (var pi = 0; pi < selectedPackets.Count; pi++)
+        if (!options.QuietProgress)
         {
-            var pkt = selectedPackets[pi];
-            Console.Error.WriteLine($"[ ] project {pi + 1}/{selectedPackets.Count} | {pkt.Project.AssemblyName} | scope={scope.Mode} | {pkt.Targets.Count} target(s){(pkt.SharedNamespaces.Count > 0 ? $" | shared:{string.Join(",", pkt.SharedNamespaces)}" : string.Empty)}");
+            for (var pi = 0; pi < selectedPackets.Count; pi++)
+            {
+                var pkt = selectedPackets[pi];
+                Console.Error.WriteLine($"[ ] project {pi + 1}/{selectedPackets.Count} | {pkt.Project.AssemblyName} | scope={scope.Mode} | {pkt.Targets.Count} target(s){(pkt.SharedNamespaces.Count > 0 ? $" | shared:{string.Join(",", pkt.SharedNamespaces)}" : string.Empty)}");
+            }
         }
 
         // 7. Validate namespace overview pages, extension tables and availability.
@@ -556,22 +562,26 @@ internal static class DocfxValidator
 
             if (!contentExclude.Any(pattern => DocfxPatternEquals(pattern, "api/namespaces/**")))
             {
-                configProblems.Add("Add `api/namespaces/**` to the `build.content` exclusions.");
+                configProblems.Add(DescribeMissingDocfxPattern(contentExclude, "api/namespaces/**",
+                    "build.content exclusions", "Add"));
             }
 
             if (!contentExclude.Any(pattern => DocfxPatternEquals(pattern, "api/types/**")))
             {
-                configProblems.Add("Add `api/types/**` to the `build.content` exclusions.");
+                configProblems.Add(DescribeMissingDocfxPattern(contentExclude, "api/types/**",
+                    "build.content exclusions", "Add"));
             }
 
             if (!overwriteFiles.Any(pattern => DocfxPatternEquals(pattern, "api/namespaces/**/*.md")))
             {
-                configProblems.Add("Include `api/namespaces/**/*.md` under `build.overwrite`.");
+                configProblems.Add(DescribeMissingDocfxPattern(overwriteFiles, "api/namespaces/**/*.md",
+                    "build.overwrite", "Include"));
             }
 
             if (!overwriteFiles.Any(pattern => DocfxPatternEquals(pattern, "api/types/**/*.md")))
             {
-                configProblems.Add("Include `api/types/**/*.md` under `build.overwrite`.");
+                configProblems.Add(DescribeMissingDocfxPattern(overwriteFiles, "api/types/**/*.md",
+                    "build.overwrite", "Include"));
             }
 
             if (overwriteFiles.Any(pattern => DocfxPatternEquals(pattern, "api/**/*.md")))
@@ -582,7 +592,7 @@ internal static class DocfxValidator
             if (configProblems.Count > 0)
             {
                 report.Errors.Add(new Diagnostic("API_OVERWRITE_CONFIG_INVALID", docfxPath, null,
-                    $"DocFX API overwrite Markdown must use separate namespace and type subdirectories so overwrite content merges into managed API pages without being treated as normal content. {string.Join(" ", configProblems)}"));
+                    $"DocFX API overwrite Markdown must use separate namespace and type subdirectories so overwrite content merges into managed API pages without being treated as normal content. Pattern checks use normalized literal equality after trimming and slash normalization; near-miss globs do not count. {string.Join(" ", configProblems)}"));
             }
         }
 
@@ -641,6 +651,69 @@ internal static class DocfxValidator
     private static bool DocfxPatternEquals(string actual, string expected)
     {
         return string.Equals(NormalizeDocfxPattern(actual), NormalizeDocfxPattern(expected), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string DescribeMissingDocfxPattern(IReadOnlyCollection<string> actualPatterns, string expected, string location, string verb)
+    {
+        var message = $"{verb} `{expected}` under `{location}`.";
+        var nearMisses = actualPatterns
+            .Select(NormalizeDocfxPattern)
+            .Where(pattern => LooksLikeDocfxPatternNearMiss(pattern, expected))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(3)
+            .ToList();
+
+        if (nearMisses.Count == 0)
+        {
+            return message;
+        }
+
+        return message + $" Closest configured pattern(s): {string.Join(", ", nearMisses.Select(p => $"`{p}`"))}.";
+    }
+
+    private static bool LooksLikeDocfxPatternNearMiss(string actual, string expected)
+    {
+        if (string.IsNullOrWhiteSpace(actual))
+        {
+            return false;
+        }
+
+        var expectedSegment = expected.Contains("api/namespaces/", StringComparison.OrdinalIgnoreCase)
+            ? "api/namespaces/"
+            : expected.Contains("api/types/", StringComparison.OrdinalIgnoreCase)
+                ? "api/types/"
+                : expected.Contains("api/", StringComparison.OrdinalIgnoreCase)
+                    ? "api/"
+                    : expected;
+
+        return actual.Contains(expectedSegment, StringComparison.OrdinalIgnoreCase) ||
+               LevenshteinDistance(actual, expected) <= 3;
+    }
+
+    private static int LevenshteinDistance(string left, string right)
+    {
+        var previous = new int[right.Length + 1];
+        var current = new int[right.Length + 1];
+        for (var j = 0; j <= right.Length; j++)
+        {
+            previous[j] = j;
+        }
+
+        for (var i = 1; i <= left.Length; i++)
+        {
+            current[0] = i;
+            for (var j = 1; j <= right.Length; j++)
+            {
+                var cost = char.ToUpperInvariant(left[i - 1]) == char.ToUpperInvariant(right[j - 1]) ? 0 : 1;
+                current[j] = Math.Min(
+                    Math.Min(current[j - 1] + 1, previous[j] + 1),
+                    previous[j - 1] + cost);
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length];
     }
 
     private static string NormalizeDocfxPattern(string pattern)
@@ -4632,7 +4705,7 @@ internal static class DocfxValidator
             if (!HasObservableOutcome(codeWithoutCommentsOrStrings))
             {
                 return new ExampleQualityResult(false, "EXAMPLE_NO_OBSERVABLE_OUTCOME",
-                    $"The example for `{target.DisplayName}` only holds, returns, or constructs the type without an observable outcome. Configure it, invoke a member, pass it to an API, or otherwise produce a result a reader can see.", 14);
+                    $"The example for `{target.DisplayName}` only holds, returns, or constructs the type without an observable outcome. Configure it, invoke a member, pass it to an API, or otherwise produce a result a reader can see. For example, `return new {target.DisplayName}();` or a branch with placeholder comments still fails; printing a value produced by the API, showing configured state, or passing the value to a real consumer API gives the reader an observable result.", 14);
             }
         }
 
@@ -5350,7 +5423,50 @@ internal static class DocfxValidator
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        return relevant.Count > 0 ? string.Join(Environment.NewLine, relevant) : output;
+        var diagnostics = relevant.Count > 0 ? string.Join(Environment.NewLine, relevant) : output;
+        return AddSampleCompileHints(diagnostics);
+    }
+
+    private static string AddSampleCompileHints(string diagnostics)
+    {
+        var hints = new List<string>();
+        foreach (Match match in Regex.Matches(diagnostics,
+                     @"CS1061: .*?definition for '([^']+)' and no accessible extension method",
+                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            var method = match.Groups[1].Value;
+            if (IsLinqExtensionMethod(method))
+            {
+                hints.Add($"Hint: CS1061 for LINQ method `{method}` usually means the sample is missing `using System.Linq;`.");
+            }
+            else if (string.Equals(method, "AddJob", StringComparison.Ordinal))
+            {
+                hints.Add("Hint: CS1061 for BenchmarkDotNet `AddJob` usually means the sample is missing `using BenchmarkDotNet.Configs;`, which brings the extension method into scope.");
+            }
+            else
+            {
+                hints.Add($"Hint: CS1061 can mean the sample is missing the namespace that defines extension method `{method}`. Add the source-backed `using` directive for that extension method, then rerun `docfx.cs --validate-samples`.");
+            }
+        }
+
+        if (hints.Count == 0)
+        {
+            return diagnostics;
+        }
+
+        return diagnostics + Environment.NewLine + string.Join(Environment.NewLine, hints.Distinct(StringComparer.Ordinal));
+    }
+
+    private static bool IsLinqExtensionMethod(string method)
+    {
+        return method is "Aggregate" or "All" or "Any" or "Append" or "Average" or "Cast" or "Concat" or
+            "Contains" or "Count" or "DefaultIfEmpty" or "Distinct" or "ElementAt" or "Except" or
+            "First" or "FirstOrDefault" or "GroupBy" or "GroupJoin" or "Intersect" or "Join" or
+            "Last" or "LastOrDefault" or "LongCount" or "Max" or "Min" or "OfType" or "OrderBy" or
+            "OrderByDescending" or "Prepend" or "Reverse" or "Select" or "SelectMany" or "SequenceEqual" or
+            "Single" or "SingleOrDefault" or "Skip" or "SkipLast" or "SkipWhile" or "Sum" or "Take" or
+            "TakeLast" or "TakeWhile" or "ThenBy" or "ThenByDescending" or "ToArray" or "ToDictionary" or
+            "ToHashSet" or "ToList" or "ToLookup" or "Union" or "Where" or "Zip";
     }
 
     private static void WritePhase(Options options, Report report, string name, TimeSpan elapsed, string? detail = null)
@@ -7703,6 +7819,11 @@ internal static class DocfxValidator
             "working" => ColorizeProgressMarker("[ ]", "33"),
             _ => "[ ]"
         };
+        if (_quietProgress && state is "pending" or "working")
+        {
+            return;
+        }
+
         var idle = state == "pending"
             ? string.Empty
             : $" | last output {FormatElapsed(timeSinceLastOutput)} ago";
@@ -8278,6 +8399,10 @@ internal static class DocfxValidator
                     if (!int.TryParse(pt, out var ptv) || ptv < 1 || ptv > 180) { error = "--process-timeout-minutes must be between 1 and 180."; return false; }
                     options.ProcessTimeoutMinutes = ptv;
                     break;
+                case "--quiet":
+                case "--no-heartbeat":
+                    options.QuietProgress = true;
+                    break;
                 case "--execution-profile":
                     if (!Next(args, ref i, out var ep)) { error = "--execution-profile requires auto, conservative, or high-capacity."; return false; }
                     if (!IsValidExecutionProfile(ep)) { error = "--execution-profile must be auto, conservative, or high-capacity."; return false; }
@@ -8478,6 +8603,9 @@ internal static class DocfxValidator
               --process-timeout-minutes <n>
                                       Child-process timeout from 1-180 minutes. Default: 30.
                                       Override with env var DOCFX_DIGEST_PROCESS_TIMEOUT_MINUTES.
+              --quiet, --no-heartbeat
+                                      Suppress start/heartbeat progress chatter on stderr for long-running
+                                      child processes while keeping final [✓]/[x] phase markers.
               --build-api-model        Reflection-backed API discovery (opt-in). Default: no-build discovery.
               --changed-only           Validate only files changed according to git (git is read-only and allowed).
               --verify-docfx-build     Run DocFX against a temp copy of the repository (opt-in).
@@ -8560,6 +8688,7 @@ internal static class DocfxValidator
         public int? SampleParallelism { get; set; }
         public int? BuildParallelism { get; set; }
         public int? ProcessTimeoutMinutes { get; set; }
+        public bool QuietProgress { get; set; }
         public string? ExecutionProfile { get; set; }
         public string SampleReferenceMode { get; set; } = "project";
         public List<string> ProjectHints { get; } = new();

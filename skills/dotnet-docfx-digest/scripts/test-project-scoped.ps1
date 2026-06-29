@@ -785,6 +785,21 @@ Run-Scenario 'Single JSON document on stdout while heartbeats stay on stderr' {
     }
     $parsed = $stdout | ConvertFrom-Json
     if (-not $parsed.summary) { throw 'stdout did not parse as a single JSON report' }
+
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $combined = (& dotnet run --file $ValidatorPath -- --repo-root $ws --json --quiet 2>&1 | Out-String)
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+
+    if ($combined -match '\[ \] project') {
+        throw '--quiet should suppress project packet progress lines on stderr.'
+    }
+    if ($combined.TrimStart().Length -eq 0 -or $combined.TrimStart()[0] -ne '{') {
+        throw '--quiet should leave stdout as the parseable JSON document.'
+    }
 }
 
 if ($failures -gt 0) {
