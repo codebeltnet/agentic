@@ -198,7 +198,8 @@ function Invoke-ThreadJobBatch {
         [object[]]$Items,
         [string]$Activity,
         [int]$ThrottleLimit,
-        [scriptblock]$ScriptBlock
+        [scriptblock]$ScriptBlock,
+        [switch]$UseProcessJobs
     )
 
     $pending = [System.Collections.Queue]::new()
@@ -211,7 +212,7 @@ function Invoke-ThreadJobBatch {
     $total = $Items.Count
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $lastHeartbeat = [DateTimeOffset]::UtcNow
-    $useThreadJob = $null -ne (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue)
+    $useThreadJob = -not $UseProcessJobs -and $null -ne (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue)
 
     Write-Host ("[RUN] {0}: {1} work item(s), {2} worker(s)" -f $Activity, $total, $ThrottleLimit)
 
@@ -322,13 +323,32 @@ function Invoke-ValidationScriptJobs {
         -Items $Scripts `
         -Activity 'DocFX regression suites' `
         -ThrottleLimit $parallelism `
+        -UseProcessJobs `
         -ScriptBlock {
             param($Script)
 
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $output = & $Script.Path 2>&1
-            $exitCode = $LASTEXITCODE
-            $stopwatch.Stop()
+            $output = @()
+            $exitCode = 1
+            $dotnetHome = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-dotnet-home-' + [Guid]::NewGuid().ToString('N'))
+            $oldDotNetCliHome = $env:DOTNET_CLI_HOME
+            $oldXdgDataHome = $env:XDG_DATA_HOME
+
+            try {
+                New-Item -ItemType Directory -Path $dotnetHome -Force | Out-Null
+                $env:DOTNET_CLI_HOME = $dotnetHome
+                $env:XDG_DATA_HOME = Join-Path $dotnetHome 'share'
+
+                $output = & $Script.Path 2>&1
+                $exitCode = $LASTEXITCODE
+            } finally {
+                $env:DOTNET_CLI_HOME = $oldDotNetCliHome
+                $env:XDG_DATA_HOME = $oldXdgDataHome
+                if (Test-Path $dotnetHome) {
+                    Remove-Item -Path $dotnetHome -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                $stopwatch.Stop()
+            }
 
             [pscustomobject]@{
                 Name = $Script.Name
