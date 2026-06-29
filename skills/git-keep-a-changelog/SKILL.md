@@ -1,7 +1,7 @@
 ---
 name: git-keep-a-changelog
 description: >
-  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...), "yolo", "auto". Reads full commit bodies and diffs, creates compliant structure with required SemVer highlights, infers versions from branches, must ask a mandatory Yes / No / Custom confirmation question before including pending staged, unstaged, or untracked worktree changes in a concrete release draft (bypassed in yolo/auto mode — all changes included automatically), edits directly for review, preserves prose wrapping, avoids commit-log dumps.
+  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...), "yolo", "auto". Reads full commit bodies and diffs, treats the selected branch or range as author-agnostic scope by default, creates compliant structure with required SemVer highlights, infers versions from branches, must ask a mandatory Yes / No / Custom confirmation question before including pending staged, unstaged, or untracked worktree changes in a concrete release draft (bypassed in yolo/auto mode — all changes included automatically), edits directly for review, preserves prose wrapping, avoids commit-log dumps.
 ---
 
 # Git Keep A Changelog
@@ -28,6 +28,8 @@ When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in
 - If `CHANGELOG.md` does not exist, create a compliant one before populating it.
 - Read full commit subjects and bodies before writing the changelog.
 - Inspect the net diff too; do not infer the release from subjects alone.
+- Treat branch or range topology as the changelog scope source of truth, not author identity.
+- Include commits from every author/contributor in the selected scope. Do not filter to the current git user, current contributor, bot identity, configured author, or "my changes" unless the user explicitly asks for an author-filtered changelog.
 - If the current branch starts with a version hint such as `v0.3.0/`, use that to target a concrete release heading.
 - Otherwise, target `## [Unreleased]`.
 - Always write a release highlight immediately below the target heading.
@@ -112,6 +114,9 @@ Use the most explicit range the user gave you.
 - If no upstream is configured, try `main`, then `master`.
 - If no safe comparison point can be established, stop and ask for a base branch or range instead of guessing.
 
+Never add `--author`, `--committer`, current-user, current-email, current-contributor, or identity-mode filters while resolving ordinary branch-level changelog scopes. Author metadata may help explain ownership, but it must not narrow the default release scope.
+Do not stop to ask whether the latest branch commit, release-prep commit, or another contributor's commit "should count". If it is on the selected branch or range, it is in scope by default unless the user explicitly narrows the author or range.
+
 Helpful commands:
 
 ```bash
@@ -181,6 +186,8 @@ Read enough git history to understand what the release actually changed.
 
 - Read the full commit message bodies, not just `--oneline`.
 - Inspect the net diff so fixups and partial reversals do not distort the changelog.
+- When dependency or version manifests changed anywhere in the selected range, diff those manifests from the resolved base to `HEAD` so you capture the full cumulative update set, not just whichever commit last touched the file.
+- Treat manifest files such as `Directory.Packages.props`, `package.json`, lockfiles, `pom.xml`, `go.mod`, or similar version baselines as range-level evidence. If several commits touched them, use the base-to-`HEAD` diff to understand every package/version change that survived into the release.
 - When the user approved pending changes, inspect the selected staged, unstaged, and/or untracked worktree deltas too.
 - Prefer the final user-visible or maintainer-meaningful outcome over the implementation path.
 
@@ -191,6 +198,8 @@ git log --reverse --format=medium <range>
 git log --reverse --stat --format=medium <range>
 git diff --stat <base>..HEAD
 git diff <base>..HEAD
+git diff <base>..HEAD -- Directory.Packages.props
+git diff <base>..HEAD -- package.json
 git diff --cached
 git diff
 git ls-files --others --exclude-standard
@@ -241,6 +250,8 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Includes a required SemVer-aware release highlight.
 - Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
 - Reflects the meaning of full commit bodies and the net diff.
+- Uses base-to-`HEAD` manifest diffs to preserve the cumulative dependency/version picture when release-range commits touched version baselines multiple times.
+- Treats the selected branch or range as author-agnostic scope and includes every contributor's commits unless the user explicitly narrows by author.
 - Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes (or skips Step 3 entirely and includes all changes when yolo/auto mode is active).
 - Maintains or inserts the compare-link footer at the bottom of the file on both create and update paths.
 - Preserves natural prose wrapping with no fixed column-width target.
@@ -259,3 +270,5 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Emitting empty `Added` / `Changed` / `Fixed` headings.
 - Updating an existing changelog entry but leaving the compare-link footer missing or stale.
 - Claiming breaking changes, fixes, or security work not supported by git.
+- Filtering the selected branch or range to the current user's or current contributor's commits, or treating "my changes" as the default release scope.
+- Understating dependency or version changes because the skill only read individual commit diffs and never inspected the surviving manifest delta from base to `HEAD`.
