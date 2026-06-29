@@ -131,6 +131,19 @@
     },
     {
       "id": 12,
+      "prompt": "Summarize this branch for squash merge. The history updates Microsoft.NET.Test.Sdk from 18.6.0 to 18.7.0, later adjusts it back to 18.6.0 while keeping other build refactors, and also touches shared project metadata. Use the normal grouped lines only.",
+      "expected_output": "A grouped squash summary that preserves dependency/version work as its own semantic group instead of treating the version churn as net-zero and collapsing it into build-system or refactor wording.",
+      "expectations": [
+        "Checks for dependency or version changes before applying net-effect collapsing",
+        "Does not collapse dependency or version-pin work even when later commits revert or adjust the version",
+        "Treats dependency and version baseline changes as a hard-rule retained semantic group",
+        "Keeps pure build-system, config, or refactor work separate from dependency/version work",
+        "Uses a dependency-oriented emoji such as 📌 or ⬆️ when a retained line is primarily dependency or version-pin work",
+        "Returns grouped summary lines only"
+      ]
+    },
+    {
+      "id": 13,
       "prompt": "Draft the normal git-visual squash summary for this branch. Make it paste-ready for GitHub, keep identifiers like ValidateSkillTemplates intact, and keep the repo's emoji-first style.",
       "expected_output": "A paste-ready grouped squash summary whose normal descriptions start lowercase after the emoji while still preserving case-sensitive technical identifiers when they appear.",
       "expectations": [
@@ -141,7 +154,7 @@
       ]
     },
     {
-      "id": 13,
+      "id": 14,
       "prompt": "/git-visual-squash-summary on a feature branch that is in sync with origin/current-feature, while origin/HEAD points to origin/main and the feature branch has real changes versus origin/main.",
       "expected_output": "A direct grouped summary of the feature branch changes versus the repository base branch, not a no-commits-ahead response based on the same-named tracking remote.",
       "expectations": [
@@ -153,7 +166,7 @@
       ]
     },
     {
-      "id": 14,
+      "id": 15,
       "prompt": "Summarize this feature branch for squash merge.",
       "expected_output": "A grouped squash summary that inspects and semantically collapses the whole selected branch/range across all authors instead of filtering to the current user's commits.",
       "expectations": [
