@@ -2328,6 +2328,8 @@ public abstract class AbstractBase
 public sealed class Concrete
 {
     public string Value => "ok";
+
+    public string GetValue() => Value;
 }
 '@
     Write-Utf8File (Join-Path $xrefTypeWorkspace '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Xref.csproj'))
@@ -2338,7 +2340,7 @@ uid: Acme.Xref
 ---
 
 Use <xref:Acme.Xref.IMyService> for service contracts and [AbstractBase](xref:Acme.Xref.AbstractBase) for shared behavior.
-Avoid member-level links such as [Value](xref:Acme.Xref.Concrete.Value).
+Avoid method-level links such as <xref:Acme.Xref.Concrete.GetValue()>.
 '@
 
     $xrefTypeReport = Invoke-Validator -Workspace $xrefTypeWorkspace -ExtraArgs @('--build-api-model')
@@ -2350,8 +2352,8 @@ Avoid member-level links such as [Value](xref:Acme.Xref.Concrete.Value).
     if ($xrefMessages -match 'Acme\.Xref\.AbstractBase') {
         throw "Abstract type-level xref was incorrectly reported as XREF_MEMBER_LINK. Got: $xrefMessages"
     }
-    if ($xrefMessages -notmatch 'Acme\.Xref\.Concrete\.Value') {
-        throw "Expected member-level xref for Concrete.Value to remain reported. Got: $xrefMessages"
+    if ($xrefMessages -notmatch 'Acme\.Xref\.Concrete\.GetValue\(\)') {
+        throw "Expected method-level xref for Concrete.GetValue() to remain reported. Got: $xrefMessages"
     }
 
     Write-Host 'DocFX build-backed type-level xref regression passed.'
