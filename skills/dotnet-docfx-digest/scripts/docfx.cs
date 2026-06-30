@@ -2138,6 +2138,7 @@ internal static class DocfxValidator
                 continue;
             }
 
+            AddTypeUid(ns, item.Uid);
             var isStatic = Regex.IsMatch(item.Syntax, @"\bstatic\b");
             typeContextByUid[item.Uid] = (nsName, isStatic);
 
@@ -2357,6 +2358,7 @@ internal static class DocfxValidator
                     var kind = typeMatch.Groups["kind"].Value;
                     var isStatic = Regex.IsMatch(mods, @"\bstatic\b");
 
+                    AddTypeUid(ns, uid);
                     if (isStatic && string.Equals(kind, "class", StringComparison.Ordinal))
                     {
                         // Public static classes are valid non-abstraction documentation targets
@@ -2525,10 +2527,19 @@ internal static class DocfxValidator
 
     private static void AddTypeTarget(NamespaceInfo ns, string uid, string nsName, string displayName)
     {
+        AddTypeUid(ns, uid);
         var target = new ApiTargetInfo(uid, nsName, ApiTargetKind.Type, displayName);
         if (!ns.RequiredExampleTargets.Contains(target))
         {
             ns.RequiredExampleTargets.Add(target);
+        }
+    }
+
+    private static void AddTypeUid(NamespaceInfo ns, string uid)
+    {
+        if (!string.IsNullOrEmpty(uid))
+        {
+            ns.TypeUids.Add(uid);
         }
     }
 
@@ -3464,6 +3475,7 @@ internal static class DocfxValidator
             return;
         }
 
+        AddTypeUid(ns, typeUid);
         if (ReferenceEquals(documentedType, type) && IsExampleRequiredType(documentedType))
         {
             var typeTarget = new ApiTargetInfo(typeUid, ns.Name, ApiTargetKind.Type, SimpleTypeName(documentedType));
@@ -4364,9 +4376,9 @@ internal static class DocfxValidator
             foreach (var ns in api.Namespaces)
             {
                 knownNamespaceUids.Add(ns.Name);
-                foreach (var target in ns.RequiredExampleTargets)
+                foreach (var uid in ns.TypeUids)
                 {
-                    knownTypeUids.Add(target.Uid);
+                    knownTypeUids.Add(uid);
                 }
             }
         }
@@ -9003,6 +9015,7 @@ internal static class DocfxValidator
     private sealed class NamespaceInfo(string name)
     {
         public string Name { get; } = name;
+        public HashSet<string> TypeUids { get; } = new(StringComparer.Ordinal);
         public List<ApiTargetInfo> RequiredExampleTargets { get; } = new();
         public List<ExtensionMethodInfo> ExtensionMethods { get; } = new();
         public bool HasCSharp14ExtensionBlocks { get; set; }
