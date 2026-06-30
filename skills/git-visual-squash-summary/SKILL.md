@@ -112,6 +112,23 @@ Collapsing checklist:
 
 Ask yourself: "If I had to explain the real work in 2-5 compact lines, what are the distinct changes that mattered?"
 
+#### Emoji Resolution: Common Mistakes
+
+**⚠️ Sparkles (✨) is often misused.** It is **only for 100% new feature introduction** — a capability that did not exist before. Do **not** use ✨ for:
+
+- Bug fixes (use `🐛` or `🩹`)
+- Documentation updates or skill description clarifications (use `📝`)
+- Enhancements to existing features (still use `♻️`, `⚡️`, or feature-specific emoji)
+- Refactoring existing code or skill content (use `♻️`)
+- Adding tests for existing code (use `✅` or `🧪`)
+
+**Examples of emoji resolution mistakes:**
+- ❌ `✨ update git-keep-a-changelog skill description for clarity` → ✅ `📝 clarify git-keep-a-changelog skill description`
+- ❌ `✨ improve error handling in parser` → ✅ `🐛 improve error handling in parser` or `♻️ improve error handling in parser`
+- ❌ `✨ add unit tests for auth module` → ✅ `✅ add unit tests for auth module`
+
+When in doubt between two emojis, pick the one whose meaning most closely matches **what the change actually does**, not what you hope it represents. Read the reference table carefully — each emoji has a specific scope.
+
 ### Step 4: Draft the grouped summary
 
 Use this exact output shape:
@@ -132,6 +149,13 @@ Formatting rules:
 - Preserve case-sensitive identifiers such as `ValidateSkillTemplates`, `Directory.Packages.props`, API names, type names, command names, and paths when they must appear first.
 - Do not convert normal verbs to sentence case. Prefer `🧪 add ValidateSkillTemplates coverage`, not `🧪 Add ValidateSkillTemplates coverage`.
 - Use the shared prefix and emoji guidance in `references/commit-language.md`.
+- **Emoji correctness check (critical):** Validate every emoji against the reference file:
+  - ✨ sparkles is **ONLY** for 100% new features that didn't exist before. If the summary line updates an existing skill, fixes a bug, clarifies docs, adds tests to existing code, or enhances existing features → use a different emoji (📝, ♻️, 🐛, ✅, etc.)
+  - 📝 memo is appropriate for documentation updates, clarity improvements, and skill description changes
+  - ♻️ recycle is appropriate for restructuring, refactoring, or reorganizing existing content
+  - 🐛 bug is for fixes to broken behavior
+  - ✅ check mark is for new test coverage
+  - If an emoji doesn't fit the actual change, **swap it before presenting the summary**. Do not let the user catch emoji mistakes.
 - If a retained line is primarily dependency or version-alignment work, prefer the dependency emoji from the shared reference such as `⬆️`, `⬇️`, `➕`, `➖`, or `📌` rather than a generic config or refactor emoji.
 - If a retained line is mainly changelog, community-health, or release-status communication, prefer `💬` from the shared reference rather than a generic docs emoji.
 - Do not add bullets, numbering, a body, rationale paragraph, or chronology recap.

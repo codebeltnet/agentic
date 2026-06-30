@@ -22,19 +22,19 @@ Examples in the emoji tables below use the default no-prefix form. Only switch t
 | Emoji | Gitmoji code | Use when | Example |
 |-------|-------------|----------|---------|
 | 🎉 | `:tada:` | Begin a brand-new project | `🎉 begin api project` |
-| ✨ | `:sparkles:` | Introduce new application code, modules, endpoints, features | `✨ add user submission endpoint` |
+| ✨ | `:sparkles:` | **ONLY for 100% new feature introduction** — a capability that did not exist before. NOT for bug fixes, enhancements to existing features, documentation updates, skill description clarifications, or refactors of existing code. | `✨ add user submission endpoint` |
 | 🎨 | `:art:` | Code style, formatting, structure cleanup | `🎨 format endpoint modules` |
 | ⚡️ | `:zap:` | Improve performance | `⚡️ optimize query execution in repository` |
 | 🐛 | `:bug:` | Fix a bug | `🐛 handle null optional fields in dto` |
 | 🩹 | `:adhesive_bandage:` | Simple fix for a non-critical issue | `🩹 correct default value in config` |
 | 🚑️ | `:ambulance:` | Critical hotfix | `🚑️ patch auth bypass vulnerability` |
 | ✏️ | `:pencil2:` | Fix typos | `✏️ correct typo in error message` |
-| ♻️ | `:recycle:` | Refactor code | `♻️ extract mapper to separate class` |
+| ♻️ | `:recycle:` | Refactor code, restructure existing logic without behavior change, or reorganize existing skill content | `♻️ extract mapper to separate class` |
 | 🚚 | `:truck:` | Move or rename files, folders, or resources | `🚚 rename auth module to identity` |
 | 🔥 | `:fire:` | Remove code or files | `🔥 remove deprecated submission handler` |
 | ⚰️ | `:coffin:` | Remove dead code | `⚰️ remove unused dto properties` |
 | 🗑️ | `:wastebasket:` | Deprecate code that needs cleanup | `🗑️ deprecate v1 submission endpoint` |
-| 📝 | `:memo:` | Documentation, inline comments, API annotations, and docs prose that is not primarily repo-health or release-status communication | `📝 add inline docs to submission handler` |
+| 📝 | `:memo:` | Documentation, inline comments, API annotations, docs prose, and clarity improvements to existing guidance (skill descriptions, readmes, code comments) that is not primarily repo-health or release-status communication | `📝 add inline docs to submission handler` |
 | 💡 | `:bulb:` | Add or update inline comments | `💡 add comments to submission processing logic` |
 | 💬 | `:speech_balloon:` | Community health, changelog, release-status communication, and other human-facing repo messaging; also user-facing text literals | `💬 update changelog and community guidance` |
 | 🔧 | `:wrench:` | Configuration files (app config, environment settings) | `🔧 configure swagger and versioning` |
