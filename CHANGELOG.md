@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-01
+
+This is a patch release focused on skill refinement and documentation improvements, including xref member-link validation enhancements to dotnet-docfx-digest, structural improvements to git-keep-a-changelog's manifest-diff reading, and emoji discipline improvements across git-visual skills.
+
+### Added
+
+- xref member link validator to docfx diagnostic engine for precise cross-assembly reference validation,
+- Expanded test coverage in docfx-digest `test-quality.ps1` for xref member-link scenarios.
+
+### Changed
+
+- git-keep-a-changelog: restructured Step 4 to read manifest diffs before commit bodies, ensuring the full cumulative dependency picture when multiple commits touched version files,
+- git-keep-a-changelog: added mandatory Step 4a for concrete releases to inspect the base commit before reading manifests, capturing foundational release-prep changes and version bumps,
+- dotnet-docfx-digest: enhanced SKILL.md documentation to cover xref member link validation rules for interface and abstract types,
+- git-visual-commits and git-visual-squash-summary: improved emoji discipline and alignment across commit-language references,
+- README: updated skill inventory and capability summaries to reflect enhanced xref validation and changelog-automation improvements.
+
+### Fixed
+
+- xref member-link false positives for interface and abstract types in docfx diagnostic engine,
+- manifest inspection steps documentation in git-keep-a-changelog to reflect new Step 4a–4b–4c sequencing for concrete releases.
+
 ## [0.7.2] - 2026-06-29
 
 This is a minor release that further refines adaptive execution profiles, enhances heartbeat suppression options, strengthens parallel skill validation support, and expands evaluation coverage for git-visual-squash-summary.
@@ -396,7 +418,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/codebeltnet/agentic/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/codebeltnet/agentic/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/codebeltnet/agentic/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/codebeltnet/agentic/compare/v0.6.0...v0.7.0
