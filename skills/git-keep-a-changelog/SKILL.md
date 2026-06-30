@@ -182,24 +182,50 @@ git ls-files --others --exclude-standard
 
 ### Step 4: Read the full history and net effect
 
-Read enough git history to understand what the release actually changed.
+Follow these sub-steps in order. Sub-steps 4a and 4b are mandatory whenever manifests were touched and must run before reading commit bodies.
 
-- Read the full commit message bodies, not just `--oneline`.
-- Inspect the net diff so fixups and partial reversals do not distort the changelog.
-- When dependency or version manifests changed anywhere in the selected range, diff those manifests from the resolved base to `HEAD` so you capture the full cumulative update set, not just whichever commit last touched the file.
-- Treat manifest files such as `Directory.Packages.props`, `package.json`, lockfiles, `pom.xml`, `go.mod`, or similar version baselines as range-level evidence. If several commits touched them, use the base-to-`HEAD` diff to understand every package/version change that survived into the release.
-- When the user approved pending changes, inspect the selected staged, unstaged, and/or untracked worktree deltas too.
-- Prefer the final user-visible or maintainer-meaningful outcome over the implementation path.
+**4a — Detect manifest changes.** Before reading any commit messages, check which files changed in the range:
 
-Helpful commands:
+```bash
+git diff --name-only <base>..HEAD
+```
+
+If any dependency or version manifest appears in the output — `Directory.Packages.props`, `Directory.Build.props`, `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `pom.xml`, `build.gradle`, `go.mod`, `go.sum`, or similar — proceed to 4b immediately. Do not skip ahead to reading commit bodies.
+
+**4b — Diff each touched manifest base-to-HEAD (mandatory).** For every manifest found in 4a, run a full range-level diff:
+
+```bash
+git diff <base>..HEAD -- Directory.Packages.props
+git diff <base>..HEAD -- package.json
+git diff <base>..HEAD -- go.mod
+# Repeat for every manifest file identified in 4a
+```
+
+Parse the cumulative delta: which packages were added, removed, upgraded, or downgraded, and what the exact before → after versions are across the full selected range. This is the **authoritative source of truth** for dependency changes. Individual commit messages may describe partial steps because multiple commits touched the same file; the manifest diff captures the net outcome that survived into the release.
+
+When an individual commit says "upgrade X from A → B" but the manifest diff shows X ended at C (because a later commit in the same range bumped it again), the manifest diff result is authoritative. Use C in the changelog, not B.
+
+**4c — Read the full commit log.** After completing 4a–4b, read individual commit bodies for context and non-manifest changes:
 
 ```bash
 git log --reverse --format=medium <range>
 git log --reverse --stat --format=medium <range>
+```
+
+Use commit bodies to understand *why* packages were updated, what behavioral changes were made, and whether any migration guidance is warranted. Treat commit messages as supporting context; do not let them override the version facts established in 4b.
+
+**4d — Inspect the net diff for non-manifest changes.**
+
+```bash
 git diff --stat <base>..HEAD
 git diff <base>..HEAD
-git diff <base>..HEAD -- Directory.Packages.props
-git diff <base>..HEAD -- package.json
+```
+
+Verify that fixups and partial reversals do not distort the changelog. Prefer the final user-visible or maintainer-meaningful outcome over the implementation path.
+
+**4e — Include approved pending changes.** When the user approved pending changes in Step 3, also inspect the selected worktree deltas:
+
+```bash
 git diff --cached
 git diff
 git ls-files --others --exclude-standard
@@ -250,7 +276,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Includes a required SemVer-aware release highlight.
 - Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
 - Reflects the meaning of full commit bodies and the net diff.
-- Uses base-to-`HEAD` manifest diffs to preserve the cumulative dependency/version picture when release-range commits touched version baselines multiple times.
+- Runs base-to-`HEAD` manifest diffs as the first evidence step (4a–4b) whenever any manifest was touched, capturing the full cumulative dependency/version picture before reading individual commit messages.
 - Treats the selected branch or range as author-agnostic scope and includes every contributor's commits unless the user explicitly narrows by author.
 - Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes (or skips Step 3 entirely and includes all changes when yolo/auto mode is active).
 - Maintains or inserts the compare-link footer at the bottom of the file on both create and update paths.
@@ -272,3 +298,4 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Claiming breaking changes, fixes, or security work not supported by git.
 - Filtering the selected branch or range to the current user's or current contributor's commits, or treating "my changes" as the default release scope.
 - Understating dependency or version changes because the skill only read individual commit diffs and never inspected the surviving manifest delta from base to `HEAD`.
+- Reading commit messages before running manifest diffs, then reporting only the packages mentioned in whichever commits happened to be read first, rather than the full cumulative set from the manifest diff.

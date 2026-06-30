@@ -140,6 +140,18 @@
         "Does not understate dependency updates simply because they were spread across multiple commits",
         "Keeps the changelog grounded in the net manifest delta that reached HEAD"
       ]
+    },
+    {
+      "id": 13,
+      "prompt": "Update CHANGELOG.md for this release. Directory.Packages.props was changed in two separate commits across the range: the first upgraded three packages and the second upgraded a fourth. Make sure all four package upgrades appear in the changelog.",
+      "expected_output": "The changelog lists all four package upgrades in the Changed section, derived from a base-to-HEAD manifest diff rather than from individual commit messages alone.",
+      "expectations": [
+        "Runs a base-to-HEAD diff of Directory.Packages.props before reading individual commit bodies",
+        "Treats the manifest diff as the authoritative source of truth for all package version changes in the range",
+        "Captures package upgrades from both commits even when the same manifest file was touched multiple times",
+        "Does not underreport package updates because they were spread across separate commits",
+        "Does not let commit-message version descriptions override manifest diff version facts when the two differ"
+      ]
     }
   ]
 }
