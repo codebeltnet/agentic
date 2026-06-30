@@ -37,6 +37,14 @@ internal static class DocfxValidator
         @"(?:^|\.)(?:<[GM]>|\uF03C[GM]\uF03E|%3c[GM]%3e)(?:\$|%24)[0-9A-Fa-f]{8,}",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    // xref link detection: [label](xref:UID) and <xref:UID> patterns in DocFX markdown.
+    private static readonly Regex XrefMarkdownLinkRegex = new(
+        @"\[(?:[^\]]*)\]\(xref:([^)\s]+)\)",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex XrefInlineTagRegex = new(
+        @"<xref:([^>\s]+)>",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     // Process guard state. The fast (default) path forbids dotnet/msbuild/docfx/gh entirely;
     // each external process is tagged with the permission that authorizes it, and the set of
     // allowed permissions is configured from the parsed options before any process runs.
@@ -395,6 +403,12 @@ internal static class DocfxValidator
 
         WritePhase(options, report, "namespace validation", phaseTimer.Elapsed);
 
+        // 7b. Detect xref member/method links that render as broken links outside a DocFX build.
+        phaseTimer.Restart();
+        ValidateXrefMemberLinks(repoRoot, markdownFiles, workspace,
+            ReadDocfxSiteBaseUrl(docfxPath), api, apiModelSource, report);
+        WritePhase(options, report, "xref link validation", phaseTimer.Elapsed);
+
         // 8. Verify mandatory examples exist before compiling the examples that were found.
         phaseTimer.Restart();
         ValidateRequiredExamples(repoRoot, docfxWorkspace, allOverwriteSections, api, options, changedFiles, scope, workspace.NamespaceProjects, report);
@@ -508,6 +522,44 @@ internal static class DocfxValidator
         if (File.Exists(atRoot))
         {
             return atRoot;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads the deployed site base URL from <c>build.sitemap.baseUrl</c> in the DocFX configuration.
+    /// Returns <see langword="null"/> when the property is absent or the file cannot be read.
+    /// </summary>
+    private static string? ReadDocfxSiteBaseUrl(string docfxPath)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(docfxPath), new JsonDocumentOptions
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            });
+
+            if (!doc.RootElement.TryGetProperty("build", out var build) || build.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (!build.TryGetProperty("sitemap", out var sitemap) || sitemap.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (sitemap.TryGetProperty("baseUrl", out var baseUrl) && baseUrl.ValueKind == JsonValueKind.String)
+            {
+                var url = baseUrl.GetString()?.Trim().TrimEnd('/');
+                return string.IsNullOrEmpty(url) ? null : url;
+            }
+        }
+        catch
+        {
+            // Best-effort: site URL is optional guidance for diagnostic messages.
         }
 
         return null;
@@ -2086,6 +2138,7 @@ internal static class DocfxValidator
                 continue;
             }
 
+            AddTypeUid(ns, item.Uid);
             var isStatic = Regex.IsMatch(item.Syntax, @"\bstatic\b");
             typeContextByUid[item.Uid] = (nsName, isStatic);
 
@@ -2305,6 +2358,7 @@ internal static class DocfxValidator
                     var kind = typeMatch.Groups["kind"].Value;
                     var isStatic = Regex.IsMatch(mods, @"\bstatic\b");
 
+                    AddTypeUid(ns, uid);
                     if (isStatic && string.Equals(kind, "class", StringComparison.Ordinal))
                     {
                         // Public static classes are valid non-abstraction documentation targets
@@ -2473,10 +2527,19 @@ internal static class DocfxValidator
 
     private static void AddTypeTarget(NamespaceInfo ns, string uid, string nsName, string displayName)
     {
+        AddTypeUid(ns, uid);
         var target = new ApiTargetInfo(uid, nsName, ApiTargetKind.Type, displayName);
         if (!ns.RequiredExampleTargets.Contains(target))
         {
             ns.RequiredExampleTargets.Add(target);
+        }
+    }
+
+    private static void AddTypeUid(NamespaceInfo ns, string uid)
+    {
+        if (!string.IsNullOrEmpty(uid))
+        {
+            ns.TypeUids.Add(uid);
         }
     }
 
@@ -3412,6 +3475,7 @@ internal static class DocfxValidator
             return;
         }
 
+        AddTypeUid(ns, typeUid);
         if (ReferenceEquals(documentedType, type) && IsExampleRequiredType(documentedType))
         {
             var typeTarget = new ApiTargetInfo(typeUid, ns.Name, ApiTargetKind.Type, SimpleTypeName(documentedType));
@@ -4282,6 +4346,151 @@ internal static class DocfxValidator
         }
 
         return Regex.IsMatch(body, @"(?im)^\s*Availability\s*:");
+    }
+
+    // ----------------------------------------------------------------------
+    // Xref member/method link validation
+    // ----------------------------------------------------------------------
+
+    /// <summary>
+    /// Scans all DocFX Markdown files for <c>xref:</c> links that point to method or member UIDs.
+    /// Such links do not resolve outside a DocFX build (GitHub, NuGet README, and other Markdown
+    /// renderers render them as broken links) and must be replaced with absolute anchor URLs
+    /// built from the deployed site's <c>xrefmap.yml</c>.
+    /// </summary>
+    private static void ValidateXrefMemberLinks(
+        string repoRoot,
+        IReadOnlyList<string> markdownFiles,
+        ValidationWorkspace workspace,
+        string? siteBaseUrl,
+        ApiModel api,
+        ApiModelSource apiModelSource,
+        Report report)
+    {
+        // On the build-backed path, build a UID lookup so we can also flag non-method member UIDs
+        // (properties, fields, events) that are not types or namespaces in the discovered API.
+        var knownTypeUids = new HashSet<string>(StringComparer.Ordinal);
+        var knownNamespaceUids = new HashSet<string>(StringComparer.Ordinal);
+        if (apiModelSource == ApiModelSource.BuildBacked)
+        {
+            foreach (var ns in api.Namespaces)
+            {
+                knownNamespaceUids.Add(ns.Name);
+                foreach (var uid in ns.TypeUids)
+                {
+                    knownTypeUids.Add(uid);
+                }
+            }
+        }
+
+        // Track (relPath, uid) pairs so the same broken xref in the same file is reported once.
+        var seen = new HashSet<(string, string)>();
+
+        foreach (var md in markdownFiles)
+        {
+            var text = workspace.ReadMarkdown(md);
+            if (string.IsNullOrEmpty(text))
+            {
+                continue;
+            }
+
+            var rel = Rel(repoRoot, md);
+
+            // [label](xref:UID) — standard Markdown link with xref protocol.
+            foreach (Match m in XrefMarkdownLinkRegex.Matches(text))
+            {
+                var uid = m.Groups[1].Value.Trim();
+                if (seen.Add((rel, uid)) && IsXrefMemberUid(uid, knownTypeUids, knownNamespaceUids, apiModelSource))
+                {
+                    EmitXrefMemberLinkDiagnostic(rel, uid, m.Value, siteBaseUrl, report);
+                }
+            }
+
+            // <xref:UID> — inline DocFX xref tag (supports literal parentheses in the UID).
+            foreach (Match m in XrefInlineTagRegex.Matches(text))
+            {
+                var uid = m.Groups[1].Value.Trim();
+                if (seen.Add((rel, uid)) && IsXrefMemberUid(uid, knownTypeUids, knownNamespaceUids, apiModelSource))
+                {
+                    EmitXrefMemberLinkDiagnostic(rel, uid, m.Value, siteBaseUrl, report);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when the xref UID refers to a method or other member (not a
+    /// type or namespace) and will therefore produce a broken link outside a DocFX build.
+    /// </summary>
+    private static bool IsXrefMemberUid(
+        string uid,
+        HashSet<string> knownTypeUids,
+        HashSet<string> knownNamespaceUids,
+        ApiModelSource apiModelSource)
+    {
+        if (string.IsNullOrEmpty(uid))
+        {
+            return false;
+        }
+
+        // Method UIDs always contain '(' (literal or URL-encoded) — reliably detectable without
+        // the API model and always broken outside a DocFX build.
+        if (uid.Contains('(') || uid.Contains("%28", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // On the build-backed path, also flag dotted UIDs that are not known types or namespaces.
+        // A UID with at least two segments that resolves to neither a type nor a namespace is
+        // a property, field, event, or parameterless method reference.
+        if (apiModelSource == ApiModelSource.BuildBacked &&
+            uid.Contains('.') &&
+            !knownTypeUids.Contains(uid) &&
+            !knownNamespaceUids.Contains(uid))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void EmitXrefMemberLinkDiagnostic(
+        string rel,
+        string uid,
+        string rawLink,
+        string? siteBaseUrl,
+        Report report)
+    {
+        string fixGuidance;
+        if (siteBaseUrl is not null)
+        {
+            fixGuidance =
+                $"Replace with an absolute anchor URL. " +
+                $"Fetch `{siteBaseUrl}/xrefmap.yml`, find the entry where `uid: {uid}`, " +
+                $"extract the `href` value, and construct: `[label]({siteBaseUrl}/{{href}})`. " +
+                $"The `href` follows the pattern `api/TypePage.html#TypePage_Member_ParamTypes_` " +
+                $"with namespace and type dots, parentheses, and commas replaced by underscores.";
+        }
+        else
+        {
+            fixGuidance =
+                $"Replace with an absolute anchor URL. " +
+                $"Fetch `xrefmap.yml` from the deployed docs site, find the entry where `uid: {uid}`, " +
+                $"extract the `href` value, and construct `{{siteBaseUrl}}/{{href}}`. " +
+                $"The `href` follows the pattern `api/TypePage.html#TypePage_Member_ParamTypes_` " +
+                $"with dots, parentheses, and commas replaced by underscores. " +
+                $"Set `build.sitemap.baseUrl` in `docfx.json` to enable site-aware resolution guidance.";
+        }
+
+        report.Errors.Add(new Diagnostic(
+            "XREF_MEMBER_LINK",
+            rel,
+            null,
+            $"Member-level `xref:` link `{rawLink}` (UID: `{uid}`) does not resolve outside a DocFX build. " +
+            $"In GitHub, NuGet README, and other Markdown renderers, `xref:` links to method and member UIDs " +
+            $"render as broken links rather than deep anchor links. " + fixGuidance,
+            uid: uid,
+            symbol: rawLink));
     }
 
     // ----------------------------------------------------------------------
@@ -8142,6 +8351,7 @@ internal static class DocfxValidator
         AppendGitHubExampleSources(sb, report.PackageIds, report.ExampleSearchSnippets);
         AppendDiagnostics(sb, "Sample Compilation Repairs", report.Errors.Where(e =>
             e.Code is "SAMPLE_COMPILE_FAILED" or "SAMPLE_SKIP_REASON_MISSING" or "SAMPLE_SKIP_REASON_INSUFFICIENT" or "SAMPLE_SKIP_NOT_ALLOWLISTED" or "FAIL_NEW_SKIP_MARKER_INTRODUCED" or "SAMPLE_STRUCTURE_INVALID" or "SKIP_ALLOWLIST_INVALID"));
+        AppendDiagnostics(sb, "Xref Member Link Repairs", report.Errors.Where(e => e.Code is "XREF_MEMBER_LINK"));
         AppendDiagnostics(sb, "Other Errors", report.Errors.Where(e =>
             e.Code is not "AGENTS_BLOCK_MISSING" &&
             e.Code is not "INTERIM_ARTIFACT_IN_WORKTREE" &&
@@ -8150,7 +8360,7 @@ internal static class DocfxValidator
             !e.Code.StartsWith("EXTENSION_", StringComparison.Ordinal) &&
             e.Code is not "SYMBOL_COLLISION_UNRESOLVED" &&
             !IsExampleQualityDiagnostic(e) &&
-            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_SKIP_NOT_ALLOWLISTED" and not "FAIL_NEW_SKIP_MARKER_INTRODUCED" and not "SAMPLE_STRUCTURE_INVALID" and not "SKIP_ALLOWLIST_INVALID"));
+            e.Code is not "SAMPLE_COMPILE_FAILED" and not "SAMPLE_SKIP_REASON_MISSING" and not "SAMPLE_SKIP_REASON_INSUFFICIENT" and not "SAMPLE_SKIP_NOT_ALLOWLISTED" and not "FAIL_NEW_SKIP_MARKER_INTRODUCED" and not "SAMPLE_STRUCTURE_INVALID" and not "SKIP_ALLOWLIST_INVALID" and not "XREF_MEMBER_LINK"));
         AppendDiagnostics(sb, "Warnings", report.Warnings);
 
         sb.AppendLine("## Completion Checklist");
@@ -8163,6 +8373,7 @@ internal static class DocfxValidator
         sb.AppendLine("- [ ] Changed C# examples pass structural validation (namespace + type declaration, or labelled `// Program.cs`).");
         sb.AppendLine("- [ ] Every sample that is not a pre-existing approved allowlist waiver compiles successfully.");
         sb.AppendLine("- [ ] Any remaining skip markers are pre-existing approved allowlist entries in `skip-compile-allowlist.json`; zero newly introduced or unapproved skip markers remain.");
+        sb.AppendLine("- [ ] Every `XREF_MEMBER_LINK` diagnostic has been repaired: `xref:` links to method/member UIDs replaced with absolute anchor URLs resolved from `xrefmap.yml`.");
         sb.AppendLine("- [ ] Authored Markdown files still exist after generated-artifact cleanup.");
         sb.AppendLine("- [ ] Final JSON reports `fullVerificationRan: true`, `canClaimCompletion: true`, `remainingWorkItems: 0`, no remaining gates, no remaining fail-level diagnostic counts, `newlyIntroducedSkipMarkers: 0`, and `interimArtifacts: 0`.");
         sb.AppendLine("- [ ] Final validation command and exit code are reported.");
@@ -8804,6 +9015,7 @@ internal static class DocfxValidator
     private sealed class NamespaceInfo(string name)
     {
         public string Name { get; } = name;
+        public HashSet<string> TypeUids { get; } = new(StringComparer.Ordinal);
         public List<ApiTargetInfo> RequiredExampleTargets { get; } = new();
         public List<ExtensionMethodInfo> ExtensionMethods { get; } = new();
         public bool HasCSharp14ExtensionBlocks { get; set; }

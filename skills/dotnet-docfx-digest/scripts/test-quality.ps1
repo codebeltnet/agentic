@@ -2300,6 +2300,70 @@ public static class CounterExample
 }
 
 # ----------------------------------------------------------------------
+# Scenario: build-backed xref member-link validation must not treat
+# interface or abstract-class type UIDs as member UIDs just because those
+# types are intentionally exempt from required examples.
+# ----------------------------------------------------------------------
+$xrefTypeWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-xref-type-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $xrefTypeWorkspace 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+    Write-Utf8File (Join-Path $xrefTypeWorkspace 'src/Acme.Xref.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $xrefTypeWorkspace 'src/Types.cs') @'
+namespace Acme.Xref;
+
+public interface IMyService
+{
+    string Name { get; }
+}
+
+public abstract class AbstractBase
+{
+    public string Name => GetType().Name;
+}
+
+public sealed class Concrete
+{
+    public string Value => "ok";
+
+    public string GetValue() => Value;
+}
+'@
+    Write-Utf8File (Join-Path $xrefTypeWorkspace '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Xref.csproj'))
+    Initialize-GitRepo $xrefTypeWorkspace
+    Write-Utf8File (Join-Path $xrefTypeWorkspace '.docfx/api/namespaces/Acme.Xref.md') @'
+---
+uid: Acme.Xref
+---
+
+Use <xref:Acme.Xref.IMyService> for service contracts and [AbstractBase](xref:Acme.Xref.AbstractBase) for shared behavior.
+Avoid method-level links such as <xref:Acme.Xref.Concrete.GetValue()>.
+'@
+
+    $xrefTypeReport = Invoke-Validator -Workspace $xrefTypeWorkspace -ExtraArgs @('--build-api-model')
+    $xrefDiagnostics = @($xrefTypeReport.errors | Where-Object code -eq 'XREF_MEMBER_LINK')
+    $xrefMessages = ($xrefDiagnostics | ForEach-Object message) -join "`n"
+    if ($xrefMessages -match 'Acme\.Xref\.IMyService') {
+        throw "Interface type-level xref was incorrectly reported as XREF_MEMBER_LINK. Got: $xrefMessages"
+    }
+    if ($xrefMessages -match 'Acme\.Xref\.AbstractBase') {
+        throw "Abstract type-level xref was incorrectly reported as XREF_MEMBER_LINK. Got: $xrefMessages"
+    }
+    if ($xrefMessages -notmatch 'Acme\.Xref\.Concrete\.GetValue\(\)') {
+        throw "Expected method-level xref for Concrete.GetValue() to remain reported. Got: $xrefMessages"
+    }
+
+    Write-Host 'DocFX build-backed type-level xref regression passed.'
+} finally {
+    if (Test-Path $xrefTypeWorkspace) {
+        Remove-Item $xrefTypeWorkspace -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ----------------------------------------------------------------------
 # Scenario: the conservative source scanner must only surface 'public static'
 # extension methods as required targets. Private, protected, and internal
 # 'static' helpers with 'this' parameters are implementation details, not
