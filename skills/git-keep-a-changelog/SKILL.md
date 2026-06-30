@@ -188,6 +188,10 @@ Follow these sub-steps in order. Sub-steps 4b and 4c are mandatory whenever mani
 
 **4a — Inspect the base commit (concrete releases only).** Before detecting manifest changes or reading commit bodies, inspect the base commit itself:
 
+If any dependency or version manifest appears in the output — `Directory.Packages.props`, `Directory.Build.props`, `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `pom.xml`, `build.gradle`, `go.mod`, `go.sum`, or similar — proceed to 4b immediately. Do not skip ahead to reading commit bodies.
+
+**4b — Diff each touched manifest base-to-HEAD (mandatory).** For every manifest found in 4a, run a full range-level diff:
+
 ```bash
 git show --format=medium <base>
 git diff <base>^..<base> --stat
@@ -233,6 +237,7 @@ git log --reverse --format=medium <base>^..HEAD
 git log --reverse --stat --format=medium <base>^..HEAD
 
 # For [Unreleased]:
+```
 git log --reverse --format=medium <range>
 git log --reverse --stat --format=medium <range>
 ```
@@ -247,6 +252,7 @@ git diff --stat <base>^..HEAD
 git diff <base>^..HEAD
 
 # For [Unreleased]:
+```
 git diff --stat <base>..HEAD
 git diff <base>..HEAD
 ```
