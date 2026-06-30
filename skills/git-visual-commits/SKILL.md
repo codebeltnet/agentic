@@ -298,7 +298,7 @@ Use the inspected commit-language reference as the meaning source, not your gut.
 
 - Bug fixes (use `🐛` or `🩹`)
 - Documentation updates or skill description clarifications (use `📝`)
-- Enhancements to existing features (still use `🐛`, `♻️`, or feature-specific emoji)
+- Enhancements to existing features (still use `♻️`, `⚡️`, or feature-specific emoji)
 - Refactoring existing code or skill content (use `♻️`)
 - Adding tests for existing code (use `✅` or `🧪`)
 
