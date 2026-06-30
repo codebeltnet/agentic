@@ -292,6 +292,23 @@ Before composing any commit message, bucket every changed file by its **semantic
 
 Use the inspected commit-language reference as the meaning source, not your gut. For example, restructuring an existing skill's `SKILL.md`, `FORMS.md`, `references/`, or `evals/` is normally refactor intent and should map to `♻️`; configuration-file changes map to `🔧`; truly new repo or application capabilities map to `✨`.
 
+#### Emoji Resolution: Common Mistakes
+
+**⚠️ Sparkles (✨) is often misused.** It is **only for 100% new feature introduction** — a capability that did not exist before. Do **not** use ✨ for:
+
+- Bug fixes (use `🐛` or `🩹`)
+- Documentation updates or skill description clarifications (use `📝`)
+- Enhancements to existing features (still use `🐛`, `♻️`, or feature-specific emoji)
+- Refactoring existing code or skill content (use `♻️`)
+- Adding tests for existing code (use `✅` or `🧪`)
+
+**Examples of emoji resolution mistakes:**
+- ❌ `✨ update git-keep-a-changelog skill description for clarity` → ✅ `📝 clarify git-keep-a-changelog skill description`
+- ❌ `✨ improve error handling in parser` → ✅ `🐛 improve error handling in parser` or `♻️ improve error handling in parser`
+- ❌ `✨ add unit tests for auth module` → ✅ `✅ add unit tests for auth module`
+
+When in doubt between two emojis, pick the one whose meaning most closely matches **what the change actually does**, not what you hope it represents. Read the reference table carefully — each emoji has a specific scope.
+
 Derive categories from the actual diff — don't assume a fixed set. Common categories include:
 
 - **New repo capabilities** — introducing a new repo-managed skill, workflow, or top-level capability
@@ -457,6 +474,13 @@ Before committing, validate each message against its file list:
 
 - **Breaking-change check:** If the commit subject contains "breaking" or uses 💥, verify that the majority of files in that commit directly implement or document the breaking change. Build-matrix files, CI config, environment files, and unrelated tooling changes **fail this check** — move them to a separate commit.
 - **Scope consistency:** The commit message should accurately describe what the files do. If the message says "rename" but the commit includes deletions of compatibility shims, split them.
+- **Emoji correctness check (critical):** Validate every emoji against the reference file:
+  - ✨ sparkles is **ONLY** for 100% new features that didn't exist before. If the commit updates an existing skill, fixes a bug, clarifies docs, adds tests to existing code, or enhances existing features → use a different emoji (📝, ♻️, 🐛, ✅, etc.)
+  - 📝 memo is appropriate for documentation updates, clarity improvements, and skill description changes
+  - ♻️ recycle is appropriate for restructuring, refactoring, or reorganizing existing content
+  - 🐛 bug is for fixes to broken behavior
+  - ✅ check mark is for new test coverage
+  - If an emoji doesn't fit the actual change, **swap it before presenting the plan**. Do not let the user catch emoji mistakes.
 
 ### Step 5: Stage and commit each group
 
