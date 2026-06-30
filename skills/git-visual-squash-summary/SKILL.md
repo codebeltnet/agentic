@@ -92,15 +92,23 @@ git diff <base>..HEAD
 
 Before drafting the summary, reduce the range into the smallest truthful set of retained groups:
 
+- First ask: "Does this group contain dependency or version changes?" If yes, preserve that work as its own retained group before running any collapsing logic. This is a hard gate.
 - Collapse repeated fixups into the group they support.
 - Merge overlapping commits into the clearest final intent.
-- Prefer the net effect over the path taken to get there.
+- Prefer the net effect over the path taken to get there for refactors, documentation, and build-system changes only. This rule does not apply to dependencies.
 - Drop typo-only, whitespace-only, and other low-signal cleanup unless it materially changes a retained group.
-- Treat dependency or version baseline changes as their own semantic intent. Do not absorb package version updates into a generic build-system, configuration, or refactor line just because they landed in the same commit.
-- When the diff mixes shared dependency manifests or version pins with build-system metadata or project-structure refactors, keep those as separate retained groups unless the net effect truly collapses to one intent.
+- Treat dependency or version baseline changes as their own semantic intent. This is a hard rule. Do not evaluate whether dependencies were later reverted or adjusted; preserve them as a distinct group in the summary.
+- Do not absorb package version updates into a generic build-system, configuration, or refactor line just because they landed in the same commit.
+- When the diff mixes shared dependency manifests or version pins with build-system metadata or project-structure refactors, keep those as separate retained groups.
 - Keep documentation-only work separate in your reasoning, but include it only when it represents a meaningful unique change.
 - Treat late changelog, version-bump, or release-finalization commits as part of the branch by default, then decide here whether they deserve a retained summary line or should be merged into a stronger parent group.
 - Highlight distinct meaningful efforts instead of forcing one dominant umbrella theme.
+
+Collapsing checklist:
+
+- Do not collapse if the group contains dependencies.
+- Do not collapse if the group contains version pins.
+- Only collapse pure refactors, docs, or config changes with no dependency component.
 
 Ask yourself: "If I had to explain the real work in 2-5 compact lines, what are the distinct changes that mattered?"
 

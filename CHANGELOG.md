@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-06-29
+
+This is a minor release that further refines adaptive execution profiles, enhances heartbeat suppression options, strengthens parallel skill validation support, and expands evaluation coverage for git-visual-squash-summary.
+
+### Added
+
+- Enhanced eval coverage for git-visual-squash-summary documenting semantic grouping, commit language reference compliance, and attribution workflows,
+- Parallel skill validation in `validate-skill-templates.ps1` using ThreadJob/Start-Job with adaptive throttling based on processor count, `-Full` flag for comprehensive validation suites, and improved timing/result tracking.
+
+### Changed
+
+- Refined docfx-digest `docfx.cs` with expanded adaptive profile selection logic, multi-phase coordination improvements, and enhanced worker-count scaling,
+- Extended docfx-digest SKILL.md with refined adaptive execution profile documentation, heartbeat configuration guidance, and process timeout tuning,
+- Enhanced validation workflow in `scripts/validate-skill-templates.ps1` with parallel execution support, per-test timing metrics, and comprehensive `-Full` mode for extended test suites,
+- Improved README with current skill capability inventory reflecting validation tooling enhancements and adaptive execution features.
+
+### Fixed
+
+- Corrected heartbeat output suppression in docfx-digest to support `--quiet` and `--no-heartbeat` flags for cleaner output when heartbeats obscure JSON inspection.
+
+## [0.7.1] - 2026-06-25
+
+This is a minor release introducing adaptive execution profiles for long-running operations, comprehensive test coverage expansion, and enhanced docfx-digest skill documentation.
+
+### Added
+
+- Adaptive execution profiles in docfx-digest that select between `conservative` (sequential phases, low worker counts) and `high-capacity` (concurrent phases, scaled workers) based on available processors and memory, with runtime selection heuristics and `--execution-profile` override support,
+- Progress heartbeat protocol in docfx-digest with 10-second intervals, elapsed-time tracking, phase context, and optional `--quiet` / `--no-heartbeat` suppression for cleaner output when heartbeats obscure JSON inspection,
+- Eval cases covering entry-point detection refinement, test-quality validation scenarios, and enhanced diagnostic guidance in docfx-digest,
+- Expanded `test-quality.ps1` comprehensive test validator with extended coverage for quality gates, diagnostic categories, timeout handling, and multi-phase execution scenarios.
+
+### Changed
+
+- Refined entry-point detection logic in docfx-digest with improved test coverage and diagnostic accuracy,
+- Enhanced SKILL.md documentation for docfx-digest with clarified validation workflows, completion contract enforcement, and adaptive execution profile guidance,
+- Expanded validation scripts and diagnostics in docfx-digest `docfx.cs` and supporting utilities for better failure detection and reporting,
+- Extended `references/scripts.md` and `references/workflow.md` with detailed validation guidance, edge-case handling, and heartbeat configuration documentation.
+
 ## [0.7.0] - 2026-06-20
 
 This is a minor release adding scope-aware ownership validation, completion contract enforcement, and enhanced conditional API validation guidance to the dotnet-docfx-digest skill.
@@ -358,7 +396,9 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/codebeltnet/agentic/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/codebeltnet/agentic/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/codebeltnet/agentic/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/codebeltnet/agentic/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/codebeltnet/agentic/compare/v0.4.6...v0.5.0

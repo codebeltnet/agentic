@@ -100,6 +100,18 @@ function Assert-Warning {
     }
 }
 
+function Assert-DiagnosticMessageContains {
+    param([object]$Report, [string]$Code, [string]$Text)
+
+    $matches = @($Report.errors | Where-Object {
+        $_.code -eq $Code -and $_.message -and $_.message.Contains($Text)
+    })
+    if (-not $matches) {
+        $details = @($Report.errors | Where-Object code -eq $Code) | ConvertTo-Json -Compress -Depth 5
+        throw "Expected diagnostic '$Code' message to contain '$Text'. Matching diagnostics: $details"
+    }
+}
+
 function Initialize-GitRepo {
     param([string]$Workspace)
     Push-Location $Workspace
@@ -188,6 +200,47 @@ public sealed class Tool
     } finally {
         if (Test-Path $templateOnlyWorkspace) {
             Remove-Item $templateOnlyWorkspace -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $badConfigWorkspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-bad-config-' + [guid]::NewGuid().ToString('N'))
+    try {
+        Write-Utf8File (Join-Path $badConfigWorkspace 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+        Write-Utf8File (Join-Path $badConfigWorkspace 'src/Utility/Utility.csproj') $projectCsproj
+        Write-Utf8File (Join-Path $badConfigWorkspace 'src/Utility/Utility.cs') @'
+namespace Acme.Utility;
+
+public sealed class Tool
+{
+    public int Attempts { get; set; }
+}
+'@
+        Write-Utf8File (Join-Path $badConfigWorkspace '.docfx/docfx.json') @'
+{
+  "metadata": [{
+    "src": [{ "src": "../", "files": ["src/Utility/Utility.csproj"] }],
+    "dest": "api",
+    "properties": { "TargetFramework": "net10.0" }
+  }],
+  "build": {
+    "content": [{ "files": ["*.md"], "exclude": ["api/namespaces/**", "api/types/**"] }],
+    "overwrite": [{ "files": ["api/namespaces/**.md", "api/types/**/*.md"] }],
+    "dest": "_site"
+  }
+}
+'@
+
+        $badConfig = Invoke-Validator -Workspace $badConfigWorkspace
+        Assert-Diagnostic -Report $badConfig -Code 'API_OVERWRITE_CONFIG_INVALID'
+        Assert-DiagnosticMessageContains -Report $badConfig -Code 'API_OVERWRITE_CONFIG_INVALID' -Text 'normalized literal equality'
+        Assert-DiagnosticMessageContains -Report $badConfig -Code 'API_OVERWRITE_CONFIG_INVALID' -Text 'Closest configured pattern(s): `api/namespaces/**.md`'
+    } finally {
+        if (Test-Path $badConfigWorkspace) {
+            Remove-Item $badConfigWorkspace -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -1290,6 +1343,7 @@ public static class Use$name
         Assert-DiagnosticForPath -Report $badQuality -Code 'EXAMPLE_EMPTY_ENTRY_POINT_STUB' -PathFragment "Acme.Demo.$entryPointType.md"
     }
     Assert-NoDiagnosticForPath -Report $badQuality -Code 'EXAMPLE_EMPTY_ENTRY_POINT_STUB' -PathFragment 'Acme.Demo.ApplicationRepositoryFactory.md'
+    Assert-DiagnosticMessageContains -Report $badQuality -Code 'EXAMPLE_NO_OBSERVABLE_OUTCOME' -Text 'placeholder comments still fails'
 
     Write-Utf8File (Join-Path $quality '.docfx/api/types/Acme.Demo.ReadySignal.md') @'
 ---
@@ -2006,6 +2060,64 @@ Write-Host 'DocFX factory-origin example regression passed.'
 } finally {
 if (Test-Path $factoryOrigin) {
     Remove-Item -Path $factoryOrigin -Recurse -Force
+}
+}
+
+# ----------------------------------------------------------------------
+# Scenario: sample compile diagnostics should point at likely missing
+# extension-method using directives instead of leaving only raw CS1061.
+# ----------------------------------------------------------------------
+$missingUsing = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-missing-using-' + [guid]::NewGuid().ToString('N'))
+try {
+Write-Utf8File (Join-Path $missingUsing 'AGENTS.md') @'
+<!-- dotnet-docfx-digest:start -->
+Managed DocFX guidance.
+<!-- dotnet-docfx-digest:end -->
+'@
+Write-Utf8File (Join-Path $missingUsing 'src/Acme.Linq.csproj') $projectCsproj
+Write-Utf8File (Join-Path $missingUsing 'src/QueryRunner.cs') @'
+namespace Acme.Linq;
+
+public sealed class QueryRunner
+{
+    public int[] Values { get; } = new[] { 1, 2, 3 };
+}
+'@
+Write-Utf8File (Join-Path $missingUsing '.docfx/docfx.json') (New-DocfxJson -ProjectFiles @('src/Acme.Linq.csproj'))
+Write-Utf8File (Join-Path $missingUsing '.docfx/api/types/Acme.Linq.QueryRunner.md') @'
+---
+uid: Acme.Linq.QueryRunner
+example: *content
+---
+Use `QueryRunner` when callers need to transform the produced values before displaying them.
+
+```csharp
+namespace Samples;
+
+using System;
+using Acme.Linq;
+
+public static class QueryRunnerExample
+{
+    public static void PrintValues()
+    {
+        var runner = new QueryRunner();
+        var doubled = runner.Values.Select(value => value * 2);
+
+        Console.WriteLine(string.Join(", ", doubled));
+    }
+}
+```
+'@
+
+$missingUsingReport = Invoke-Validator -Workspace $missingUsing -ExtraArgs @('--build-api-model', '--validate-samples')
+Assert-Diagnostic -Report $missingUsingReport -Code 'SAMPLE_COMPILE_FAILED'
+Assert-DiagnosticMessageContains -Report $missingUsingReport -Code 'SAMPLE_COMPILE_FAILED' -Text 'missing `using System.Linq;`'
+
+Write-Host 'DocFX missing-using compile diagnostic regression passed.'
+} finally {
+if (Test-Path $missingUsing) {
+    Remove-Item -Path $missingUsing -Recurse -Force
 }
 }
 

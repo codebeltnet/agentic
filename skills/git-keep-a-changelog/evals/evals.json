@@ -116,6 +116,30 @@
         "Keeps existing release history intact while restoring the missing diff-range footer",
         "Uses Keep a Changelog compare-link style rather than omitting diff ranges from the updated file"
       ]
+    },
+    {
+      "id": 11,
+      "prompt": "Update CHANGELOG.md for this feature branch in Keep a Changelog style. The branch includes commits from multiple contributors, and I want the real branch release story rather than only my commits.",
+      "expected_output": "The changelog entry inspects and curates the whole selected branch or range across all authors instead of filtering to the current user's contributions.",
+      "expectations": [
+        "Treats branch or range topology as the changelog scope rather than author identity",
+        "Includes commits from every author or contributor in the selected branch or range before curating release sections",
+        "Does not apply an implicit --author, --committer, current-user, current-email, current-contributor, or identity-mode filter",
+        "Treats author metadata as context only unless the user explicitly asks for an author-filtered changelog",
+        "Keeps CHANGELOG.md grounded in the full multi-author branch history instead of narrowing to the latest contributor"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Update CHANGELOG.md for this release. Dependency manifests such as Directory.Packages.props and package.json were touched across multiple commits in the selected range, so make sure the changelog captures the full cumulative package/version updates that survived from base to HEAD.",
+      "expected_output": "The changelog workflow treats dependency/version manifests as range-level evidence and uses base-to-HEAD diffs so cumulative package updates are not missed when several commits touched the same manifest.",
+      "expectations": [
+        "When dependency or version manifests changed in the selected range, inspects those manifests with a base-to-HEAD diff rather than relying only on individual commit diffs",
+        "Treats files such as Directory.Packages.props, package.json, lockfiles, pom.xml, or go.mod as version-baseline evidence when they are relevant",
+        "Captures the full cumulative dependency or version picture that survived into the release",
+        "Does not understate dependency updates simply because they were spread across multiple commits",
+        "Keeps the changelog grounded in the net manifest delta that reached HEAD"
+      ]
     }
   ]
 }

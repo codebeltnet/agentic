@@ -1,5 +1,6 @@
 param(
-    [string]$Ref
+    [string]$Ref,
+    [switch]$Full
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,20 +156,209 @@ function Add-ValidationResult {
         [scriptblock]$Action
     )
 
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-Host ("[RUN] {0}" -f $Name)
+
     try {
         & $Action
+        $stopwatch.Stop()
         $Results.Add([pscustomobject]@{
             Name = $Name
             Status = 'PASS'
             Details = ''
         })
+        Write-Host ("[PASS] {0} ({1:n1}s)" -f $Name, $stopwatch.Elapsed.TotalSeconds)
     } catch {
+        $stopwatch.Stop()
         $Results.Add([pscustomobject]@{
             Name = $Name
             Status = 'FAIL'
             Details = $_.Exception.Message
         })
+        Write-Host ("[FAIL] {0} ({1:n1}s)" -f $Name, $stopwatch.Elapsed.TotalSeconds)
     }
+}
+
+function Get-ValidationParallelism {
+    param(
+        [int]$WorkItemCount,
+        [int]$Maximum = 12
+    )
+
+    if ($WorkItemCount -le 0) {
+        return 1
+    }
+
+    $processorCount = [System.Environment]::ProcessorCount
+    return [Math]::Max(1, [Math]::Min($WorkItemCount, [Math]::Min($Maximum, $processorCount)))
+}
+
+function Invoke-ThreadJobBatch {
+    param(
+        [object[]]$Items,
+        [string]$Activity,
+        [int]$ThrottleLimit,
+        [scriptblock]$ScriptBlock,
+        [switch]$UseProcessJobs
+    )
+
+    $pending = [System.Collections.Queue]::new()
+    foreach ($item in $Items) {
+        [void]$pending.Enqueue($item)
+    }
+
+    $active = @()
+    $results = [System.Collections.Generic.List[object]]::new()
+    $total = $Items.Count
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $lastHeartbeat = [DateTimeOffset]::UtcNow
+    $useThreadJob = -not $UseProcessJobs -and $null -ne (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue)
+
+    Write-Host ("[RUN] {0}: {1} work item(s), {2} worker(s)" -f $Activity, $total, $ThrottleLimit)
+
+    while ($pending.Count -gt 0 -or $active.Count -gt 0) {
+        while ($pending.Count -gt 0 -and $active.Count -lt $ThrottleLimit) {
+            $item = $pending.Dequeue()
+            if ($useThreadJob) {
+                $active += Start-ThreadJob -ScriptBlock $ScriptBlock -ArgumentList $item
+            } else {
+                $active += Start-Job -ScriptBlock $ScriptBlock -ArgumentList $item
+            }
+        }
+
+        $completed = @($active | Where-Object { $_.State -notin @('NotStarted', 'Running') })
+        foreach ($job in $completed) {
+            try {
+                foreach ($result in @(Receive-Job -Job $job -ErrorAction Stop)) {
+                    [void]$results.Add($result)
+                }
+            } catch {
+                [void]$results.Add([pscustomobject]@{
+                    Name = $job.Name
+                    ExitCode = 1
+                    Output = $_.Exception.Message
+                    ElapsedSeconds = 0
+                })
+            } finally {
+                Remove-Job -Job $job -Force
+            }
+        }
+
+        if ($completed.Count -gt 0) {
+            $completedIds = @($completed | ForEach-Object { $_.Id })
+            $active = @($active | Where-Object { $completedIds -notcontains $_.Id })
+        }
+
+        $now = [DateTimeOffset]::UtcNow
+        if (($now - $lastHeartbeat).TotalSeconds -ge 10) {
+            $done = $results.Count
+            Write-Host ("[WAIT] {0}: {1}/{2} done, {3} running, {4:n0}s elapsed" -f $Activity, $done, $total, $active.Count, $stopwatch.Elapsed.TotalSeconds)
+            $lastHeartbeat = $now
+        }
+
+        if ($pending.Count -gt 0 -or $active.Count -gt 0) {
+            Start-Sleep -Milliseconds 250
+        }
+    }
+
+    $stopwatch.Stop()
+    Write-Host ("[DONE] {0}: {1} work item(s) in {2:n1}s" -f $Activity, $total, $stopwatch.Elapsed.TotalSeconds)
+    return @($results)
+}
+
+function Invoke-DotNetBuildsForValidation {
+    param(
+        [object[]]$BuildRequests
+    )
+
+    $parallelism = Get-ValidationParallelism -WorkItemCount $BuildRequests.Count -Maximum 12
+    $buildResults = Invoke-ThreadJobBatch `
+        -Items $BuildRequests `
+        -Activity 'app smoke builds' `
+        -ThrottleLimit $parallelism `
+        -ScriptBlock {
+            param($Request)
+
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $outputs = [System.Collections.Generic.List[string]]::new()
+            $exitCode = 0
+            foreach ($projectPath in @($Request.ProjectPaths)) {
+                $output = & dotnet build $projectPath '--nologo' 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    $exitCode = $LASTEXITCODE
+                }
+
+                $outputs.Add(("[{0}]`n{1}" -f $projectPath, ($output -join [Environment]::NewLine)))
+            }
+            $stopwatch.Stop()
+
+            [pscustomobject]@{
+                Name = $Request.CaseName
+                ProjectPath = ($Request.ProjectPaths -join ', ')
+                ExitCode = $exitCode
+                Output = ($outputs -join ([Environment]::NewLine + [Environment]::NewLine))
+                ElapsedSeconds = $stopwatch.Elapsed.TotalSeconds
+            }
+        }
+
+    $failures = [System.Collections.Generic.List[string]]::new()
+    foreach ($build in $buildResults) {
+        $status = if ($build.ExitCode -eq 0) { 'PASS' } else { 'FAIL' }
+        Write-Host ("[{0}] app smoke build {1} ({2:n1}s)" -f $status, $build.Name, $build.ElapsedSeconds)
+        if ($build.ExitCode -ne 0) {
+            $failures.Add(("[{0}] dotnet build failed for {1}`n{2}" -f $build.Name, $build.ProjectPath, $build.Output))
+        }
+    }
+
+    return @($failures)
+}
+
+function Invoke-ValidationScriptJobs {
+    param(
+        [object[]]$Scripts
+    )
+
+    $parallelism = Get-ValidationParallelism -WorkItemCount $Scripts.Count -Maximum 4
+    $scriptResults = Invoke-ThreadJobBatch `
+        -Items $Scripts `
+        -Activity 'DocFX regression suites' `
+        -ThrottleLimit $parallelism `
+        -UseProcessJobs `
+        -ScriptBlock {
+            param($Script)
+
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $output = @()
+            $exitCode = 1
+            $dotnetHome = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-dotnet-home-' + [Guid]::NewGuid().ToString('N'))
+            $oldDotNetCliHome = $env:DOTNET_CLI_HOME
+            $oldXdgDataHome = $env:XDG_DATA_HOME
+
+            try {
+                New-Item -ItemType Directory -Path $dotnetHome -Force | Out-Null
+                $env:DOTNET_CLI_HOME = $dotnetHome
+                $env:XDG_DATA_HOME = Join-Path $dotnetHome 'share'
+
+                $output = & $Script.Path 2>&1
+                $exitCode = $LASTEXITCODE
+            } finally {
+                $env:DOTNET_CLI_HOME = $oldDotNetCliHome
+                $env:XDG_DATA_HOME = $oldXdgDataHome
+                if (Test-Path $dotnetHome) {
+                    Remove-Item -Path $dotnetHome -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                $stopwatch.Stop()
+            }
+
+            [pscustomobject]@{
+                Name = $Script.Name
+                ExitCode = $exitCode
+                Output = ($output -join [Environment]::NewLine)
+                ElapsedSeconds = $stopwatch.Elapsed.TotalSeconds
+            }
+        }
+
+    return @($scriptResults)
 }
 
 function Get-AppPlaceholderMap {
@@ -236,18 +426,6 @@ function Write-RenderedFileFromTemplate {
     $content = Get-FileText -RepoRoot $RepoRoot -RelativePath $RelativePath -GitRef $GitRef
     $rendered = Apply-Replacements -Content $content -Map $Map
     Write-Utf8File -Path $DestinationPath -Content $rendered
-}
-
-function Invoke-DotNetBuildForValidation {
-    param(
-        [string]$ProjectPath
-    )
-
-    $output = & dotnet build $ProjectPath '--nologo' 2>&1
-    return [pscustomobject]@{
-        ExitCode = $LASTEXITCODE
-        Output = ($output -join [Environment]::NewLine)
-    }
 }
 
 $repoRoot = Get-RepoRoot
@@ -1015,6 +1193,7 @@ Add-ValidationResult -Results $results -Name 'Rendered app templates compile in 
         )
 
         $failures = [System.Collections.Generic.List[string]]::new()
+        $buildRequests = [System.Collections.Generic.List[object]]::new()
 
         foreach ($case in $cases) {
             $caseRoot = Join-Path $workspaceRoot $case.Name
@@ -1049,11 +1228,15 @@ Add-ValidationResult -Results $results -Name 'Rendered app templates compile in 
                 }
             }
 
-            foreach ($pathToBuild in @($projectPath, $testProjectPath)) {
-                $build = Invoke-DotNetBuildForValidation -ProjectPath $pathToBuild
-                if ($build.ExitCode -ne 0) {
-                    $failures.Add(("[{0}] dotnet build failed for {1}`n{2}" -f $case.Name, $pathToBuild, $build.Output))
-                }
+            [void]$buildRequests.Add([pscustomobject]@{
+                CaseName = $case.Name
+                ProjectPaths = @($projectPath, $testProjectPath)
+            })
+        }
+
+        foreach ($buildFailure in @(Invoke-DotNetBuildsForValidation -BuildRequests @($buildRequests))) {
+            if (-not [string]::IsNullOrWhiteSpace($buildFailure)) {
+                $failures.Add($buildFailure)
             }
         }
 
@@ -1107,27 +1290,46 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
     }
 }
 
-Add-ValidationResult -Results $results -Name 'DocFX digest rejects metadata scaffolds and accepts scenario-led documentation' -Action {
-    $qualityTest = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-quality.ps1'
-    & $qualityTest
-    if ($LASTEXITCODE -ne 0) {
-        throw "DocFX semantic quality regression failed with exit code $LASTEXITCODE."
-    }
-}
+if ($Full) {
+    $docfxScriptResults = Invoke-ValidationScriptJobs -Scripts @(
+        [pscustomobject]@{
+            Name = 'DocFX digest rejects metadata scaffolds and accepts scenario-led documentation'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-quality.ps1'
+        }
+        [pscustomobject]@{
+            Name = 'DocFX digest project-scoped packets, dry run, families, and overwrite writer behave deterministically'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-project-scoped.ps1'
+        }
+    )
 
-Add-ValidationResult -Results $results -Name 'DocFX digest project-scoped packets, dry run, families, and overwrite writer behave deterministically' -Action {
-    $scopeTest = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-project-scoped.ps1'
-    & $scopeTest
-    if ($LASTEXITCODE -ne 0) {
-        throw "DocFX project-scoped regression failed with exit code $LASTEXITCODE."
+    foreach ($docfxScriptResult in $docfxScriptResults) {
+        if ($docfxScriptResult.ExitCode -eq 0) {
+            $results.Add([pscustomobject]@{
+                Name = $docfxScriptResult.Name
+                Status = 'PASS'
+                Details = ''
+            })
+            Write-Host ("[PASS] {0} ({1:n1}s)" -f $docfxScriptResult.Name, $docfxScriptResult.ElapsedSeconds)
+        } else {
+            $results.Add([pscustomobject]@{
+                Name = $docfxScriptResult.Name
+                Status = 'FAIL'
+                Details = $docfxScriptResult.Output
+            })
+            Write-Host ("[FAIL] {0} ({1:n1}s)" -f $docfxScriptResult.Name, $docfxScriptResult.ElapsedSeconds)
+        }
     }
+} else {
+    Write-Host '[SKIP] DocFX digest regression suites (use -Full to run skills/dotnet-docfx-digest/scripts/test-quality.ps1 and test-project-scoped.ps1)'
 }
 
 $passed = @($results | Where-Object { $_.Status -eq 'PASS' }).Count
 $failed = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
 $label = if ([string]::IsNullOrWhiteSpace($Ref)) { 'WORKTREE' } else { $Ref }
+$mode = if ($Full) { 'FULL' } else { 'FAST' }
 
 Write-Host ("Validation target: {0}" -f $label)
+Write-Host ("Validation mode: {0}" -f $mode)
 Write-Host ("Passed: {0}" -f $passed)
 Write-Host ("Failed: {0}" -f $failed)
 Write-Host ''
