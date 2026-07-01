@@ -152,6 +152,19 @@
         "Does not underreport package updates because they were spread across separate commits",
         "Does not let commit-message version descriptions override manifest diff version facts when the two differ"
       ]
+    },
+    {
+      "id": 14,
+      "prompt": "My branch is named v0.5.9/release-prep. The base commit includes dependency upgrades and release-prep files, and those changes must be part of the concrete release changelog. Update CHANGELOG.md without omitting the base commit.",
+      "expected_output": "The workflow treats this as a concrete release, uses <base>^..HEAD throughout Step 4, reports the base commit findings before continuing, and includes base-commit dependency or release-prep changes in the changelog evidence.",
+      "expectations": [
+        "Recognizes the concrete release target from the v0.5.9 branch prefix",
+        "Uses <base>^..HEAD with the caret for concrete-release Step 4 commands instead of <base>..HEAD",
+        "Runs Step 4a as a mandatory gate before reading the broader history",
+        "Shows and analyzes the base commit output before proceeding to manifest diffs or commit logs",
+        "Explicitly reports files changed in the base commit and whether manifests were found",
+        "Includes foundational dependency, version, or release-prep changes from the base commit in the changelog evidence"
+      ]
     }
   ]
 }

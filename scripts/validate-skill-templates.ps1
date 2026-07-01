@@ -996,6 +996,11 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'you must ask a direct confirmation question before drafting the changelog entry.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not skip this question.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Wait for the user''s explicit response before proceeding to Step 4.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Pre-Step 4 Validation (Mandatory for Concrete Releases)'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**You must use `<base>^..HEAD`** (with the caret) throughout Step 4.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Inspect and report the base commit (concrete releases ONLY'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**Show the full output** in your response (do not summarize or skip lines).'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**Step 4a Confirmation (before proceeding):**'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not dump commit subjects verbatim into the changelog.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` is missing, create it with the standard title,'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Always maintain the Keep a Changelog compare-link footer at the bottom of the file.'
@@ -1016,6 +1021,7 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the pending-worktree question as a mandatory gate before Step 4 for a concrete release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let user intent bypass the mandatory pending-worktree confirmation gate for a concrete release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Inserts the compare-link footer at the bottom when it is missing from an existing changelog'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Uses <base>^..HEAD with the caret for concrete-release Step 4 commands instead of <base>..HEAD'
 }
 
 Add-ValidationResult -Results $results -Name 'Rendered app worker template leaves no unexpected placeholders' -Action {

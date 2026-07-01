@@ -180,22 +180,62 @@ git diff --stat
 git ls-files --others --exclude-standard
 ```
 
+### Pre-Step 4 Validation (Mandatory for Concrete Releases)
+
+Before proceeding to Step 4, verify your approach:
+
+- If the target is a concrete release (e.g., `## [0.5.9]`): **You must use `<base>^..HEAD`** (with the caret) throughout Step 4. The caret means "include the base commit."
+- If the target is `## [Unreleased]`: Use `<base>..HEAD` (without the caret).
+
+| Syntax | Meaning | Use For |
+|--------|---------|---------|
+| `base^..HEAD` | From base's parent through HEAD (inclusive of base) | Concrete releases (includes foundational changes) |
+| `base..HEAD` | From base through HEAD (exclusive of base) | `[Unreleased]` or historical analysis |
+
+**Never accidentally omit the `^` for concrete releases.** The base commit frequently contains version bumps, release-prep changes, and initial dependency updates that form the foundation of the complete deliverable.
+
 ### Step 4: Read the full history and net effect
 
 Follow these sub-steps in order. Sub-steps 4b and 4c are mandatory whenever manifests were touched and must run before reading commit bodies.
 
-**Range extension for concrete releases:** When the changelog target is a concrete version heading (e.g., `## [X.Y.Z]`), use `<base>^..HEAD` throughout Step 4 to include the base commit itself. The base commit frequently contains the initial version bumps or release-prep changes that are part of the complete deliverable. For `## [Unreleased]`, continue using `<base>..HEAD` — no change.
+**Range extension for concrete releases — CRITICAL:** When the changelog target is a concrete version heading (e.g., `## [X.Y.Z]`), **always use `<base>^..HEAD`** (with the caret `^`) throughout Step 4. The `^` means "starting from the parent of base", which includes base itself. Without the `^`, you will silently omit the base commit, losing foundational version bumps, release-prep, and dependency changes.
 
-**4a — Inspect the base commit (concrete releases only).** Before detecting manifest changes or reading commit bodies, inspect the base commit itself:
+Example:
+- ❌ `git diff base..HEAD` — skips base commit (wrong for concrete releases)
+- ✅ `git diff base^..HEAD` — includes base commit (required for concrete releases)
+
+For `## [Unreleased]`, continue using `<base>..HEAD` — no caret.
+
+**4a — Inspect and report the base commit (concrete releases ONLY — MANDATORY GATE).**
+
+This sub-step is a required checkpoint. Do not proceed past 4a until you have shown the output and analyzed it.
+
+Before detecting manifest changes or reading anything else, inspect the base commit itself:
 
 ```bash
 git show --format=medium <base>
 git diff <base>^..<base> --stat
 ```
 
-If any dependency or version manifest appears in the output — `Directory.Packages.props`, `Directory.Build.props`, `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `pom.xml`, `build.gradle`, `go.mod`, `go.sum`, or similar — proceed to 4b immediately. Do not skip ahead to reading commit bodies.
+After running these commands:
 
-This reveals what the branch author prepared as the foundation: release prep, version bumps, or initial dependency updates. If the base commit contains manifest changes, treat those as the starting point for the dependency picture established in 4b–4c.
+1. **Show the full output** in your response (do not summarize or skip lines).
+2. **Identify any dependency/version manifests** — Directory.Packages.props, Directory.Build.props, `package.json`, `pom.xml`, `go.mod`, or similar.
+3. **Identify any release-prep files** — CHANGELOG.md, package release notes, version files, or similar.
+4. **Explicitly state:** "Base commit contains [X files changed]: [file list]" and "Manifests found: [yes/no, list if yes]".
+5. **Only after showing and analyzing this output, proceed to 4b.**
+
+If the base commit contains **any** manifest changes or release-prep work, Step 4b and 4c become mandatory (do not skip them). If the base commit is clean, still run 4b to detect manifests across the full range; you may skip 4c only when 4b also finds no manifest changes.
+
+**Step 4a Confirmation (before proceeding):**
+
+You must explicitly confirm what you found in Step 4a before proceeding to 4b–4d. Answer these questions:
+
+1. Did the base commit modify any manifests (dependencies, versions, build config)? (Yes/No)
+2. Did the base commit modify any release-prep files (CHANGELOG, release notes, version files)? (Yes/No)
+3. If YES to either: List the specific files and their changes.
+
+Only after answering these questions, proceed to 4b.
 
 **4b — Detect manifest changes.** Check which files changed across the full range:
 
@@ -308,7 +348,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Includes a required SemVer-aware release highlight.
 - Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
 - Reflects the meaning of full commit bodies and the net diff.
-- Inspects the base commit before anything else for concrete releases (4a), then runs base-to-`HEAD` manifest diffs as the first evidence steps (4b–4c) whenever any manifest was touched, capturing the full cumulative dependency/version picture before reading individual commit messages.
+- Inspects the base commit before anything else for concrete releases (4a) and explicitly reports the findings (files changed, manifests detected), then runs base-to-`HEAD` manifest diffs as the first evidence steps (4b–4c) whenever any manifest was touched, capturing the full cumulative dependency/version picture before reading individual commit messages. Always uses `<base>^..HEAD` (with caret) for concrete releases to ensure the base commit is included.
 - Includes the base commit in concrete release changelogs by using `<base>^..HEAD`, so foundational version bumps and release-prep changes are never omitted from the release narrative.
 - Treats the selected branch or range as author-agnostic scope and includes every contributor's commits unless the user explicitly narrows by author.
 - Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes (or skips Step 3 entirely and includes all changes when yolo/auto mode is active).
@@ -319,6 +359,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 
 ## Bad Output Characteristics
 
+- **CRITICAL — Omitting the base commit from a concrete release changelog.** This is a silently-wrong output that breaks the release narrative. The base commit frequently contains foundational version bumps, release-prep changes, dependency baseline updates, or other changes that are integral to the deliverable. Always use `<base>^..HEAD` for concrete releases, not `<base>..HEAD`. Always run Step 4a first and show the output before proceeding.
 - Copying commit subjects line by line into the changelog.
 - Omitting the release highlight.
 - Failing to classify the release as major, minor, or patch.
