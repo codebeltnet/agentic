@@ -996,7 +996,7 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'you must ask a direct confirmation question before drafting the changelog entry.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not skip this question.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Wait for the user''s explicit response before proceeding to Step 4.'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Pre-Step 4 Validation (Mandatory for Concrete Releases)'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Step 3b: Verify Your Approach'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**You must use `<base>^..HEAD`** (with the caret) throughout Step 4.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Inspect and report the base commit (concrete releases ONLY'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**Show the full output** in your response (do not summarize or skip lines).'

@@ -180,7 +180,7 @@ git diff --stat
 git ls-files --others --exclude-standard
 ```
 
-### Pre-Step 4 Validation (Mandatory for Concrete Releases)
+### Step 3b: Verify Your Approach
 
 Before proceeding to Step 4, verify your approach:
 
@@ -373,4 +373,3 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Filtering the selected branch or range to the current user's or current contributor's commits, or treating "my changes" as the default release scope.
 - Understating dependency or version changes because the skill only read individual commit diffs and never inspected the surviving manifest delta from base to `HEAD`.
 - Reading commit messages before running manifest diffs, then reporting only the packages mentioned in whichever commits happened to be read first, rather than the full cumulative set from the manifest diff.
-- Omitting the base commit from a concrete release changelog, causing the release narrative to miss foundational version bumps, release prep, or initial dependency updates that form part of the complete deliverable.
