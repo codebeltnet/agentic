@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-16
+
+This is a minor release introducing the `dotnet-benchmark` skill, a comprehensive benchmarking solution for .NET types using BenchmarkDotNet. The skill scaffolds benchmark projects following codebelt engineering conventions, provides parameter collection and complexity-aware test strategies, includes benchmark runner infrastructure, and supplies essential BenchmarkDotNet and codebelt-specific guidance.
+
+### Added
+
+- `dotnet-benchmark` skill with workflow guidance for authoring and running BenchmarkDotNet performance tests for specific .NET types, supporting complexity-appropriate strategies (simple, parameterized, fixture-based),
+- `FORMS.md` for `dotnet-benchmark` with structured parameter collection for target type, benchmark family, and complexity level,
+- Benchmark project templates and runner infrastructure including `benchmark.csproj`, `benchmark-runner.csproj`, parameterized benchmark templates, and benchmark program entry points,
+- `check-benchmark-requirements.ps1` script validating BenchmarkDotNet installation and NuGet feed accessibility before running benchmarks,
+- Detailed reference documentation covering BenchmarkDotNet essentials (result interpretation, memory allocations, statistical confidence), codebelt conventions (namespace alignment, methodology rigor, result storage), and onboarding workflow for new benchmark authors,
+- Eval coverage for `dotnet-benchmark` including target-type inspection, benchmark strategy selection, template application, and runner validation,
+- README updates with `dotnet-benchmark` installation snippet, capability showcase, and "Why dotnet-benchmark?" section highlighting performance-test authoring for throughput and allocation measurement.
+
+## [0.7.5] - 2026-07-15
+
+This is a patch release focused on extending `trunk-first-repo` with a push-remote workflow mode that safely handles first-time remote pushes by pushing `main` before feature branches, ensuring the remote defaults to the correct branch while maintaining the PR-first workflow philosophy.
+
+### Added
+
+- Push Remote Workflow mode in `trunk-first-repo` for safely pushing to a newly-established remote without manually switching branches or checking out `main`, allowing `push remote <url>` invocation from the feature branch to send `main` by ref (`main:main`) before the feature branch,
+- Enhanced eval coverage for `trunk-first-repo` documenting push-remote workflow and Step 0 mode selection behavior,
+- Updated README description for `trunk-first-repo` to document safe first-push capability and `push remote <url>` mode alongside the Initialize Workflow.
+
+### Changed
+
+- Extended `trunk-first-repo` SKILL.md with Step 0 mode selector to distinguish between Initialize Workflow (repository creation) and Push Remote Workflow (remote establishment),
+- Refined README guidance to emphasize that `push remote <url>` can be invoked later from the feature branch for safer first-push without switching branches,
+- Added explicit push-remote documentation to trunk-first-repo "Why?" section explaining safer first-push behavior and benefits of sending `main` by ref.
+
+## [0.7.4] - 2026-07-03
+
+This is a patch release focused on strengthening `git-keep-a-changelog` with mandatory Step 4a base-commit inspection for concrete releases, ensuring that foundational version bumps, release-prep changes, and dependency baseline updates are never omitted from release narratives. The skill now requires explicit inspection of the base commit before manifest diffs and commit bodies, with output verification and structured reporting.
+
+### Added
+
+- Step 4a mandatory checkpoint in `git-keep-a-changelog` that inspects and explicitly reports the base commit for concrete releases (e.g., `## [X.Y.Z]`), showing changed files, identifying dependency/version manifests, and confirming release-prep file modifications before proceeding to Step 4b manifest diffs,
+- Explicit base-commit-inclusion enforcement using `<base>^..HEAD` (with caret) throughout Step 4 for concrete releases, ensuring the base commit itself is included in the changelog narrative,
+- Verification and confirmation gates in Step 4a requiring agents to show full base commit output, identify manifests, and explicitly state whether manifests or release-prep files were touched before proceeding to 4b,
+- Detailed comparison matrix in Step 3b distinguishing between `base^..HEAD` (for concrete releases, inclusive of base) and `base..HEAD` (for [Unreleased], exclusive of base),
+- Eval coverage validating base-commit inclusion, manifest detection, and Step 4a output verification for concrete release scenarios.
+
+### Changed
+
+- Restructured `git-keep-a-changelog` Step 4 into explicit sub-steps (4a through 4f) with clear sequencing: base-commit inspection first (4a), manifest detection (4b), manifest diff inspection (4c), commit-body reading (4d), net-diff inspection (4e), and pending-change integration (4f),
+- Enhanced `git-keep-a-changelog` SKILL.md with critical range-extension guidance for concrete releases, emphasizing that `<base>^..HEAD` (with caret) must be used consistently to include the base commit itself,
+- Strengthened "Bad Output Characteristics" section with **CRITICAL** emphasis on the consequences of omitting the base commit: silently-wrong output that breaks release narratives and loses foundational version bumps,
+- Updated README with enhanced description of `git-keep-a-changelog` base-commit enforcement and Step 4a mandatory checkpoint.
+
 ## [0.7.3] - 2026-07-01
 
 This is a patch release focused on skill refinement and documentation improvements, including xref member-link validation enhancements to dotnet-docfx-digest, structural improvements to git-keep-a-changelog's manifest-diff reading, and emoji discipline improvements across git-visual skills.
@@ -418,7 +467,10 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.5...HEAD
+[0.8.0]: https://github.com/codebeltnet/agentic/compare/v0.7.5...v0.8.0
+[0.7.5]: https://github.com/codebeltnet/agentic/compare/v0.7.4...v0.7.5
+[0.7.4]: https://github.com/codebeltnet/agentic/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/codebeltnet/agentic/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/codebeltnet/agentic/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/codebeltnet/agentic/compare/v0.7.0...v0.7.1
