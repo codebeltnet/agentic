@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>{RUNNER_TARGET_FRAMEWORK}</TargetFramework>
+    <RootNamespace>{RUNNER_NAMESPACE}</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\tuning\**\*.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Codebelt.Extensions.BenchmarkDotNet.Console" />
+  </ItemGroup>
+
+</Project>

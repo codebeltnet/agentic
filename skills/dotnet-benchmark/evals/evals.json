@@ -1,0 +1,70 @@
+{
+  "skill_name": "dotnet-benchmark",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "This repo has a src/Acme.Core/Acme.Core.csproj library but no benchmarks at all. Set up BenchmarkDotNet so I can start benchmarking, following the codebelt convention.",
+      "expected_output": "The harness is onboarded in place: a tuning/Acme.Core.Benchmarks project referencing the SUT src project, a single tooling/ runner host that references Codebelt.Extensions.BenchmarkDotNet.Console, benchmark packages added (CPM or PackageReference as the repo dictates), and the new projects wired into the detected solution.",
+      "expectations": [
+        "Runs or references scripts/check-benchmark-requirements.ps1 to detect current state before changing anything",
+        "Creates tuning/Acme.Core.Benchmarks with a ProjectReference to src/Acme.Core/Acme.Core.csproj and RootNamespace set to the SUT root namespace",
+        "Creates exactly one tooling/ runner host whose Program.cs calls BenchmarkProgram.Run and defaults the folder name to benchmark-runner",
+        "Resolves BenchmarkDotNet, BenchmarkDotNet.Diagnostics.Windows, and Codebelt.Extensions.BenchmarkDotNet.Console versions from NuGet instead of hardcoding",
+        "Wires the new projects into the detected .slnx or .sln solution format"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Add a thorough benchmark for the Acme.DateWindow value type (constructor, ToString, equality, GetHashCode). It's a small value type.",
+      "expected_output": "A simple-tier benchmark class DateWindowBenchmark in namespace Acme (no .Benchmarks suffix), using MemoryDiagnoser, GroupBenchmarksBy ByCategory, a GlobalSetup, and a Baseline=true anchor, benchmarking the members as discrete scenarios.",
+      "expectations": [
+        "Chooses the simple/member-scenario tier and briefly explains why",
+        "Names the class DateWindowBenchmark and declares it in the same namespace as the SUT (no .Benchmarks suffix)",
+        "Applies [MemoryDiagnoser] and marks exactly one method Baseline = true with Description values",
+        "Places the class under tuning/{SutProject}.Benchmarks and does not run the benchmark by default"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Benchmark our Acme.Hashing.Crc32 implementation against the built-in one across small and large inputs — I want to see allocations too.",
+      "expected_output": "A complex-tier benchmark using [Params] to sweep input sizes (and/or an implementation variant), deterministic payloads built in GlobalSetup with a seeded Random, MemoryDiagnoser, and a Baseline=true method comparing implementations.",
+      "expectations": [
+        "Chooses the complex/params tier for a size- and variant-sensitive type",
+        "Uses [Params] to sweep multiple input sizes and prepares deterministic payloads in [GlobalSetup]",
+        "Includes [MemoryDiagnoser] and a Baseline = true comparison anchor",
+        "Uses deterministic in-memory data with no network, disk, or database in measured methods"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I want the benchmark for Acme.Core's Parser to also compare .NET Framework 4.8 against .NET 9 and .NET 10.",
+      "expected_output": "Runner Program.cs gains one AddJob(slimJob.WithRuntime(...)) per requested runtime (ClrRuntime.Net48, CoreRuntime.Core90, CoreRuntime.Core10_0), and the benchmark project targets the matching TFMs so those jobs can run.",
+      "expectations": [
+        "Adds one .AddJob(slimJob.WithRuntime(...)) line per requested runtime using the correct monikers (ClrRuntime.Net48, CoreRuntime.Core90, CoreRuntime.Core10_0)",
+        "Ensures the benchmark project TargetFrameworks include the matching TFMs (e.g. net48) so the jobs are runnable",
+        "Explains that the Codebelt runner host runs on .NET 9/10 while BenchmarkDotNet jobs can measure other runtimes"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Our repo already has tooling/bdn-runner and a tuning/ folder with other benchmarks. Add a benchmark for Cuemon.Security.Cryptography.SHA512256.",
+      "expected_output": "The existing bdn-runner is reused (no second runner is created), the benchmark class is added under the appropriate tuning/*.Benchmarks project in namespace Cuemon.Security.Cryptography, and the runner's existing wildcard tuning reference picks it up.",
+      "expectations": [
+        "Detects and reuses the existing tooling/bdn-runner instead of creating a benchmark-runner",
+        "Adds the class to the matching tuning/*.Benchmarks project in namespace Cuemon.Security.Cryptography with a Sha512256-style Benchmark class name",
+        "Does not duplicate the runner host or change the existing wildcard tuning ProjectReference"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Set up benchmarking for a plain SDK-style repo that uses a classic MyApp.sln and does not use central package management.",
+      "expected_output": "Onboarding adapts to the non-codebelt layout: the benchmark project declares its own TargetFrameworks and versioned BenchmarkDotNet PackageReferences (no Directory.Packages.props), the runner declares its Console PackageReference version, and projects are added with dotnet sln add against the .sln.",
+      "expectations": [
+        "Detects the classic .sln format and non-CPM state and adapts instead of assuming the codebelt-centralized layout",
+        "Puts versioned <PackageReference> entries directly in the project files because there is no Directory.Packages.props",
+        "Adds self-contained TargetFrameworks and IsPackable=false to the benchmark/runner projects since the root Directory.Build.props does not centralize benchmark conventions",
+        "Wires projects into the solution using dotnet sln MyApp.sln add"
+      ]
+    }
+  ]
+}
