@@ -1,0 +1,73 @@
+{
+  "skill_name": "agent-smith",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/agent-smith add validation for an optional configuration property",
+      "expected_output": "A proportional implementation: inspects the repository, follows existing conventions and naming, adds the validation plus a test, validates, and reports briefly — without producing an architecture document or other ceremony.",
+      "expectations": [
+        "Scales the process to a small task and does not produce an architecture document or heavy ceremony",
+        "Inspects the repository and follows existing conventions and naming for the configuration property",
+        "Implements the validation and adds or updates a test that covers valid and invalid input",
+        "Runs or names the relevant validation (build/tests) and reports honestly without claiming unrun checks",
+        "Still applies the core standard (correctness, consistency, evidence) despite the task being trivial"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/agent-smith assess these benchmark results and implement only improvements that are measurable and preserve behaviour",
+      "expected_output": "A performance-mode assessment that selects performance and implementation guidance, insists on a defined workload, baseline, and statistical relevance, rejects speculative micro-optimizations, and requires tests plus a measured benchmark comparison before accepting any change.",
+      "expectations": [
+        "Selects performance and implementation guidance for the task",
+        "Requires a defined workload, a baseline, and considers statistical significance versus noise",
+        "Rejects speculative or unmeasured micro-optimizations, especially those that reduce clarity",
+        "Requires correctness/behaviour preservation with tests and a measured before/after benchmark comparison",
+        "Does not fabricate benchmark numbers and does not claim measurements it did not run"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/agent-smith review this public API before release",
+      "expected_output": "An API-mode review that selects API design and compatibility, versioning, documentation, and platform guidance, and evaluates source, binary, behavioural, and serialization (wire) compatibility, mapping the change to a Semantic Versioning bump.",
+      "expectations": [
+        "Selects API design and compatibility, versioning, documentation, and relevant platform guidance",
+        "Considers source, binary, behavioural, and serialization/wire compatibility explicitly",
+        "Treats the public API as a long-lived consumer contract and maps changes to a SemVer bump",
+        "Produces prioritized, specific findings with compatibility/migration impact rather than vague advice"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "/agent-smith improve this GitHub Actions pipeline",
+      "expected_output": "A delivery-and-security review that selects delivery-and-repositories and security-and-devsecops guidance and addresses least-privilege permissions, immutable (SHA-pinned) action references, credential handling, build-once artifact promotion, and reproducibility.",
+      "expectations": [
+        "Selects delivery-and-repositories and security-and-devsecops guidance",
+        "Addresses least-privilege workflow permissions and pinning third-party actions to immutable commit SHAs",
+        "Addresses credential handling (short-lived credentials or workload identity over long-lived PATs)",
+        "Addresses build-once artifact promotion and pipeline reproducibility/determinism",
+        "Explains operational consequences of findings, not only theoretical risk"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/agent-smith implement this feature in a TypeScript repository",
+      "expected_output": "The core craftsmanship standard is applied, but .NET-specific guidance is not loaded or imposed; the implementation follows local TypeScript conventions discovered in the repository.",
+      "expectations": [
+        "Applies the core principles and execution workflow regardless of technology",
+        "Does not load or impose .NET/C#-specific guidance on the TypeScript work",
+        "Inspects and follows local TypeScript conventions (tooling, style, test framework) for implementation detail",
+        "Adds or updates tests and validates using the repository's actual TypeScript toolchain"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Write me a short, upbeat birthday poem for my friend Sam.",
+      "expected_output": "This casual creative-writing request is outside the skill's scope; agent-smith should not activate its engineering workflow, apply engineering severity/finding structure, or impose repository inspection on ordinary prose.",
+      "expectations": [
+        "Does not engage the engineering craftsmanship workflow for an ordinary creative-writing request",
+        "Does not apply review severity, findings structure, or repository inspection to the prose",
+        "Recognizes this as outside the automatic-trigger scope (ordinary writing) and simply helps normally"
+      ]
+    }
+  ]
+}
