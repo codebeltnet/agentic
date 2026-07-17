@@ -3,80 +3,109 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "This repo has a src/Acme.Core/Acme.Core.csproj library but no benchmarks at all. Set up BenchmarkDotNet so I can start benchmarking, following the codebelt convention.",
-      "expected_output": "The harness is onboarded in place: a tuning/Acme.Core.Benchmarks project referencing the SUT src project, a single tooling/ runner host that references Codebelt.Extensions.BenchmarkDotNet.Console, benchmark packages added (CPM or PackageReference as the repo dictates), and the new projects wired into the detected solution.",
+      "prompt": "This repo has src/Acme.Core/Acme.Core.csproj but no benchmark infrastructure. Set up the codebelt BenchmarkDotNet harness without inventing a benchmark target yet.",
+      "expected_output": "The agent detects repository state first and onboards only the missing tuning project and single tooling runner, preserves CPM/solution conventions, resolves current package versions dynamically, and does not fabricate a target type or benchmark method.",
       "expectations": [
-        "Runs or references scripts/check-benchmark-requirements.ps1 to detect current state before changing anything",
-        "Creates tuning/Acme.Core.Benchmarks with a ProjectReference to src/Acme.Core/Acme.Core.csproj and RootNamespace set to the SUT root namespace",
-        "Creates exactly one tooling/ runner host whose Program.cs calls BenchmarkProgram.Run and defaults the folder name to benchmark-runner",
-        "Resolves BenchmarkDotNet, BenchmarkDotNet.Diagnostics.Windows, and Codebelt.Extensions.BenchmarkDotNet.Console versions from NuGet instead of hardcoding",
-        "Wires the new projects into the detected .slnx or .sln solution format"
+        "Runs or references scripts/check-benchmark-requirements.ps1 before changing harness files",
+        "Creates or proposes exactly one reusable tooling runner and a tuning benchmark project while preserving the detected solution and package-management conventions",
+        "Resolves BenchmarkDotNet package versions dynamically from NuGet.org rather than copying hardcoded example versions",
+        "Does not invent a SUT type, member, workload, or benchmark class when none was supplied",
+        "Explains that candidate discovery starts after a concrete type is available"
       ]
     },
     {
       "id": 2,
-      "prompt": "Add a thorough benchmark for the Acme.DateWindow value type (constructor, ToString, equality, GetHashCode). It's a small value type.",
-      "expected_output": "A simple-tier benchmark class DateWindowBenchmark in namespace Acme (no .Benchmarks suffix), using MemoryDiagnoser, GroupBenchmarksBy ByCategory, a GlobalSetup, and a Baseline=true anchor, benchmarking the members as discrete scenarios.",
+      "prompt": "Create the most useful BenchmarkDotNet benchmark for Acme.Routing.RouteMatcher from the attached source. I only know that routing gets expensive in large route tables; inspect the type and usages and choose what is worth measuring.",
+      "files": [
+        "evals/files/route-matcher/RouteMatcher.cs",
+        "evals/files/route-matcher/RouteTable.cs",
+        "evals/files/route-matcher/RouteMatcherTests.cs"
+      ],
+      "expected_output": "The agent selects IsMatch as the evidence-backed hot operation because RouteTable calls it inside the route scan, identifies repeated regex construction as a cost hypothesis, builds structured hit/miss and pattern/path-complexity scenarios, characterizes the current operation without inventing a candidate or fake baseline, and rejects low-value Normalize/ToString member coverage.",
       "expectations": [
-        "Chooses the simple/member-scenario tier and briefly explains why",
-        "Names the class DateWindowBenchmark and declares it in the same namespace as the SUT (no .Benchmarks suffix)",
-        "Applies [MemoryDiagnoser] and marks exactly one method Baseline = true with Description values",
-        "Places the class under tuning/{SutProject}.Benchmarks and does not run the benchmark by default"
+        "Uses RouteTable call-site evidence to prioritize RouteMatcher.IsMatch rather than enumerating every public member",
+        "Identifies per-call wildcard-to-regex conversion and Regex.IsMatch construction/caching behavior as hypotheses to measure without claiming they are already proven bottlenecks",
+        "Uses representative coupled scenarios covering hit and miss plus simple and complex patterns instead of a meaningless Cartesian product or random strings",
+        "Authors or proposes a single-operation characterization benchmark with MemoryDiagnoser and no Baseline=true because no equivalent candidate implementation exists",
+        "Keeps input/setup work outside the measured method, returns or consumes the IsMatch result, and includes build, list, and dry-run validation",
+        "Explicitly rejects Normalize and ToString as lower-value candidates based on the supplied usage evidence"
       ]
     },
     {
       "id": 3,
-      "prompt": "Benchmark our Acme.Hashing.Crc32 implementation against the built-in one across small and large inputs — I want to see allocations too.",
-      "expected_output": "A complex-tier benchmark using [Params] to sweep input sizes, deterministic payloads built in GlobalSetup with a seeded Random, MemoryDiagnoser, and separate baseline/candidate benchmark methods that compare implementations without unused template scaffolding.",
+      "prompt": "Benchmark Acme.Text.DecimalParser and tell me whether the span-based implementation is a worthwhile replacement for the legacy implementation. Use the attached type, call site, and tests to choose cases. Measure allocations too, but do not run a full benchmark yet.",
+      "files": [
+        "evals/files/decimal-parser/DecimalParser.cs",
+        "evals/files/decimal-parser/ImportPipeline.cs",
+        "evals/files/decimal-parser/DecimalParserTests.cs"
+      ],
+      "expected_output": "The agent creates a fair Legacy versus Span comparison using identical UTF-8 inputs derived from realistic valid and invalid import values, treats Legacy as the production baseline, validates equivalent success/value/consumed behavior outside measurement, and stops after Release build, discovery, and dry execution without claiming a speedup.",
       "expectations": [
-        "Chooses the complex/params tier for a size- and variant-sensitive type",
-        "Uses [Params] to sweep multiple input sizes and prepares deterministic payloads in [GlobalSetup]",
-        "Compares implementations through separate benchmark methods with exactly one Baseline = true anchor instead of leaving behind an unused implementation [Params] property",
-        "Includes [MemoryDiagnoser] and a Baseline = true comparison anchor",
-        "Omits unused using directives from the generated benchmark file",
-        "Uses deterministic in-memory data with no network, disk, or database in measured methods"
+        "Selects ParseLegacy versus TryParseSpan as equivalent implementation candidates and uses ParseLegacy as the production baseline",
+        "Derives valid typical, boundary, long, and invalid/partially-consumed cases from the source/tests instead of using arbitrary buffer sizes alone",
+        "Avoids independent parameters that create invalid combinations by using coupled scenario objects or an equivalent explicit case source",
+        "Checks success, parsed value, and consumed length equivalence for every case outside the timed methods",
+        "Feeds both methods identical bytes and keeps encoding/input construction outside measurement",
+        "Uses MemoryDiagnoser, returns observable results, and either performs Release build/list/dry validation or gives those commands while honestly reporting that the source-only fixture lacks a runnable harness; makes no performance claim because the full benchmark was not run"
       ]
     },
     {
       "id": 4,
-      "prompt": "I want the benchmark for Acme.Core's Parser to also compare .NET Framework 4.8 against .NET 9 and .NET 10.",
-      "expected_output": "Runner Program.cs gains one AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(...)) call per requested runtime (ClrRuntime.Net48, CoreRuntime.Core90, CoreRuntime.Core10_0), includes the runtime-job using directives needed for those jobs, and the benchmark project targets the matching TFMs so those jobs can run.",
+      "prompt": "Add a thorough benchmark for Acme.DateWindow: construction, formatting, equality, and GetHashCode. I want useful optimization evidence, not just a benchmark file.",
+      "files": [
+        "evals/files/date-window/DateWindow.cs",
+        "evals/files/date-window/DateWindowUsage.cs"
+      ],
+      "expected_output": "The agent challenges the request to compare unrelated members, uses dictionary/set call-site evidence to prioritize equality/hash behavior, treats formatting and construction as separate questions only if retained, and never makes constructor timing the baseline for formatting/equality/hashing.",
       "expectations": [
-        "Adds one .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(...)) line per requested runtime using the correct monikers (ClrRuntime.Net48, CoreRuntime.Core90, CoreRuntime.Core10_0)",
-        "Keeps the runtime-job using directives only when those extra jobs are present",
-        "Ensures the benchmark project TargetFrameworks include the matching TFMs (e.g. net48) so the jobs are runnable",
-        "Explains that the Codebelt runner host runs on .NET 9/10 while BenchmarkDotNet jobs can measure other runtimes"
+        "Inspects supplied usage evidence and prioritizes Equals/GetHashCode or the dictionary lookup consumer operation over equal-weight public-member coverage",
+        "Does not use construction as the baseline for formatting, equality, or hashing and does not present ratios between unrelated work",
+        "Uses equal, unequal-early, unequal-late, dictionary hit, or dictionary miss scenarios where they answer the selected question",
+        "Splits independent questions into focused classes/categories or omits low-value operations with explicit reasons",
+        "Uses MemoryDiagnoser and an honest baseline only within an equivalent comparison group, or no baseline for a single-operation characterization"
       ]
     },
     {
       "id": 5,
-      "prompt": "Our repo already has tooling/bdn-runner and a tuning/ folder with other benchmarks. Add a benchmark for Cuemon.Security.Cryptography.SHA512256.",
-      "expected_output": "The existing bdn-runner is reused (no second runner is created), the benchmark class is added under the appropriate tuning/*.Benchmarks project in namespace Cuemon.Security.Cryptography, and the runner's existing wildcard tuning reference picks it up.",
+      "prompt": "Find and benchmark the bottleneck in Acme.Reporting.ReportLoader. Users say loading large report files is slow. Use the attached source and usage, and make the benchmark as realistic as possible.",
+      "files": [
+        "evals/files/report-loader/ReportLoader.cs",
+        "evals/files/report-loader/ReportImportJob.cs"
+      ],
+      "expected_output": "The agent refuses to claim a bottleneck from source alone and does not put disk I/O in a microbenchmark. It recommends profiling the end-to-end import and, if a useful BenchmarkDotNet artifact is requested, isolates in-memory JSON parsing with representative payload sizes while clearly excluding file-system latency from the conclusion.",
       "expectations": [
-        "Detects and reuses the existing tooling/bdn-runner instead of creating a benchmark-runner",
-        "Adds the class to the matching tuning/*.Benchmarks project in namespace Cuemon.Security.Cryptography with a Sha512256-style Benchmark class name",
-        "Does not duplicate the runner host or change the existing wildcard tuning ProjectReference"
+        "States that source inspection alone cannot prove whether file I/O or JSON parsing dominates and recommends profiling or a macrobenchmark for the end-to-end load",
+        "Does not call File.ReadAllText, File.ReadAllBytes, or other disk I/O inside a Benchmark method",
+        "If authoring BenchmarkDotNet code, isolates Parse on preloaded in-memory UTF-8 payloads and labels the result as parsing-only",
+        "Uses structured small/typical/large report payloads rather than arbitrary random bytes",
+        "Does not claim that an in-memory parsing result represents end-to-end report-loading latency"
       ]
     },
     {
       "id": 6,
-      "prompt": "Set up benchmarking for a plain SDK-style repo that uses a classic MyApp.sln and does not use central package management.",
-      "expected_output": "Onboarding adapts to the non-codebelt layout: the benchmark project declares its own TargetFrameworks and versioned BenchmarkDotNet PackageReferences (no Directory.Packages.props), the runner declares its Console PackageReference version, and projects are added with dotnet sln add against the .sln.",
+      "prompt": "Benchmark Acme.Caching.ConcurrentMemoizer. We suspect lock contention during parallel request bursts. Inspect the attached type and call site, then create the benchmark that would actually answer that question.",
+      "files": [
+        "evals/files/concurrent-memoizer/ConcurrentMemoizer.cs",
+        "evals/files/concurrent-memoizer/MemoizedEndpoint.cs"
+      ],
+      "expected_output": "The agent designs a defined contention experiment rather than a sequential GetOrAdd microbenchmark: fixed worker counts, synchronized start, shared memoizer, realistic warm-hit/miss mix, per-operation normalization, ThreadingDiagnoser plus MemoryDiagnoser, and a clear warning that service tail latency still needs load testing/profiling.",
       "expectations": [
-        "Detects the classic .sln format and non-CPM state and adapts instead of assuming the codebelt-centralized layout",
-        "Puts versioned <PackageReference> entries directly in the project files because there is no Directory.Packages.props",
-        "Adds self-contained TargetFrameworks and IsPackable=false to the benchmark/runner projects since the root Directory.Build.props does not centralize benchmark conventions",
-        "Wires projects into the solution using dotnet sln MyApp.sln add"
+        "Uses the Parallel.ForEachAsync call site as evidence that concurrent shared-state behavior is the relevant operation",
+        "Defines worker count, shared state, hit/miss mix, synchronized start or equivalent coordination, and per-operation normalization",
+        "Avoids a benchmark that only measures one sequential GetOrAdd call and avoids accidentally making Task creation the unexplained dominant cost",
+        "Adds ThreadingDiagnoser for lock-contention evidence alongside MemoryDiagnoser",
+        "Separates contention characterization from service-level throughput/tail-latency claims and recommends load testing or profiling for the latter",
+        "Defines reset/lifecycle behavior so cache state does not leak unpredictably between cases"
       ]
     },
     {
       "id": 7,
-      "prompt": "Set up a benchmark for Acme.Core.Parser, but keep the runner on its default runtime only. I do not want extra net48/net9/net10 comparison jobs.",
-      "expected_output": "Runner Program.cs stays on the default runner configuration with a plain `return c;`, no raw template placeholders or stray runtime-job syntax, and no extra runtime-job using directives.",
+      "prompt": "Set up a benchmark for Acme.Core.Parser, but keep the codebelt runner on its default runtime only. I do not want net48/net8/net9/net10 comparison jobs.",
+      "expected_output": "The runner remains a valid default configuration with return c;, no raw placeholders, no AddJob chain, and no unused runtime-job using directives; benchmark design still waits for inspection of Parser and its workload.",
       "expectations": [
-        "Leaves the runner-default-only case as valid C# by replacing the runtime-job placeholder with nothing so ConfigureBenchmarkDotNet returns `c;`",
-        "Does not emit raw template placeholders or malformed chained AddJob syntax when no extra runtimes were requested",
-        "Omits BenchmarkDotNet.Environments, BenchmarkDotNet.Jobs, and Codebelt.Extensions.BenchmarkDotNet using directives when no extra runtimes were selected"
+        "Keeps ConfigureBenchmarkDotNet as a valid plain return c; expression without AddJob calls",
+        "Emits no raw runtime placeholders or unused BenchmarkDotNet.Environments, BenchmarkDotNet.Jobs, or Codebelt.Extensions.BenchmarkDotNet runtime-job using directives",
+        "Does not treat the absence of extra jobs as permission to skip target-type and workload inspection"
       ]
     }
   ]
