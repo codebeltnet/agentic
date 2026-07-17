@@ -8,11 +8,15 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$SkillRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$SkillRoot
 )
 
 $ErrorActionPreference = 'Stop'
 $failures = [System.Collections.Generic.List[string]]::new()
+
+if ([string]::IsNullOrWhiteSpace($SkillRoot)) {
+    $SkillRoot = Split-Path -Parent $PSScriptRoot
+}
 
 function Add-Failure {
     param([string]$Message)
@@ -64,6 +68,7 @@ if ($failures.Count -eq 0) {
     $skillPath = Join-Path $SkillRoot 'SKILL.md'
     $skill = [System.IO.File]::ReadAllText($skillPath)
     $skillLines = [System.IO.File]::ReadAllLines($skillPath)
+    $benchmarkEssentials = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/benchmarkdotnet-essentials.md'))
     $lineCount = $skillLines.Count
     if ($lineCount -gt 500) {
         Add-Failure "SKILL.md must stay at or below 500 lines; found $lineCount"
@@ -94,6 +99,9 @@ if ($failures.Count -eq 0) {
     Assert-Contains 'SKILL.md' $skill 'read `references/runner-preflight.md`'
     Assert-Contains 'SKILL.md' $skill '-BenchmarkType <Namespace.TypeBenchmark>'
     Assert-Contains 'SKILL.md' $skill 'reports.wouldSkipRequestedBenchmark'
+    Assert-Contains 'SKILL.md' $skill 'complete BenchmarkDotNet summary'
+    Assert-Contains 'SKILL.md' $skill 'When a parameter is only size or payload'
+    Assert-Contains 'SKILL.md' $skill 'After the first valid full result'
 
     $forms = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'FORMS.md'))
     Assert-Contains 'FORMS.md' $forms '## Yolo mode override'
@@ -125,17 +133,29 @@ if ($failures.Count -eq 0) {
     Assert-Contains 'references/runner-preflight.md' $runnerPreflight 'SkipBenchmarksWithReports = true'
     Assert-Contains 'references/runner-preflight.md' $runnerPreflight 'reports/tuning/'
     Assert-Contains 'references/runner-preflight.md' $runnerPreflight 'Anti-thrashing rule'
+    Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) '## Workload invariants'
+    Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) '## Benchmark validity gate'
+    Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) '## Deferred execution and terminal operations'
+    Assert-Contains 'references/benchmarkdotnet-essentials.md' $benchmarkEssentials 'one warmup iteration plus controlled iteration counts'
+    Assert-Contains 'references/benchmarkdotnet-essentials.md' $benchmarkEssentials '## Deferred pipelines and terminal operations'
+    Assert-Contains 'references/benchmarkdotnet-essentials.md' $benchmarkEssentials '## Result-validity gate'
 
     try {
         $evals = Get-Content -LiteralPath (Join-Path $SkillRoot 'evals/evals.json') -Raw | ConvertFrom-Json
         if ($evals.skill_name -ne 'dotnet-benchmark') {
             Add-Failure 'evals/evals.json skill_name must be dotnet-benchmark'
         }
-        if ($evals.evals.Count -lt 5) {
-            Add-Failure 'evals/evals.json must include at least five diverse evals'
+        if ($evals.evals.Count -lt 11) {
+            Add-Failure 'evals/evals.json must include at least eleven diverse evals'
         }
         if (-not ($evals.evals | Where-Object { $_.prompt -match '(?i)yolo' })) {
             Add-Failure 'evals/evals.json must include a yolo-mode interaction eval'
+        }
+        if (-not ($evals.evals | Where-Object { $_.prompt -match 'LegacyAliasQuery' })) {
+            Add-Failure 'evals/evals.json must include the invalid parameter-matrix and drifting-selectivity eval'
+        }
+        if (-not ($evals.evals | Where-Object { $_.prompt -match 'TraitFilter helper only runs in test discovery' })) {
+            Add-Failure 'evals/evals.json must include the proportionate-stopping eval'
         }
         $ids = @($evals.evals | ForEach-Object { $_.id })
         if (($ids | Sort-Object -Unique).Count -ne $ids.Count) {
@@ -154,6 +174,15 @@ if ($failures.Count -eq 0) {
         }
     } catch {
         Add-Failure "evals/evals.json is invalid: $($_.Exception.Message)"
+    }
+    $evalFixtureRoot = Join-Path $SkillRoot 'evals/files'
+    if (Test-Path -LiteralPath $evalFixtureRoot) {
+        Get-ChildItem -LiteralPath $evalFixtureRoot -Recurse -Directory -Force |
+            Where-Object { $_.Name -in @('obj', 'bin', 'BenchmarkDotNet.Artifacts') } |
+            ForEach-Object {
+                $relativePath = $_.FullName.Substring($SkillRoot.Length).TrimStart('\')
+                Add-Failure "Eval fixtures must not contain generated artifact directories: $relativePath"
+            }
     }
     Write-Verbose 'Template and eval checks completed.'
 }
