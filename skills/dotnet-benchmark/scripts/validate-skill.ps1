@@ -50,6 +50,7 @@ $requiredFiles = @(
     'references/codebelt-conventions.md',
     'references/experiment-design.md',
     'references/onboarding.md',
+    'references/runner-preflight.md',
     'scripts/check-benchmark-requirements.ps1',
     'evals/evals.json'
 )
@@ -87,6 +88,17 @@ if ($failures.Count -eq 0) {
     Assert-Contains 'SKILL.md' $skill '--list flat'
     Assert-Contains 'SKILL.md' $skill '--job dry'
     Assert-Contains 'SKILL.md' $skill 'Never report performance numbers from a build, discovery listing, dry run, or unexecuted benchmark.'
+    Assert-Contains 'SKILL.md' $skill '#### Yolo mode'
+    Assert-Contains 'SKILL.md' $skill 'Start a full performance run only after an explicit human instruction to run it now.'
+    Assert-Contains 'SKILL.md' $skill 'Yolo never authorizes a full performance run.'
+    Assert-Contains 'SKILL.md' $skill 'read `references/runner-preflight.md`'
+    Assert-Contains 'SKILL.md' $skill '-BenchmarkType <Namespace.TypeBenchmark>'
+    Assert-Contains 'SKILL.md' $skill 'reports.wouldSkipRequestedBenchmark'
+
+    $forms = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'FORMS.md'))
+    Assert-Contains 'FORMS.md' $forms '## Yolo mode override'
+    Assert-Contains 'FORMS.md' $forms 'skip `candidate_plan_confirmation`'
+    Assert-Contains 'FORMS.md' $forms 'explicit human instruction to start a full performance run'
 
     $comparison = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'assets/comparison-benchmark.cs'))
     $operation = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'assets/operation-benchmark.cs'))
@@ -106,6 +118,13 @@ if ($failures.Count -eq 0) {
     $runner = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'assets/benchmark-program.cs'))
     Assert-Contains 'assets/benchmark-program.cs' $runner 'return c{RUNTIME_JOBS};'
     Assert-Contains 'assets/benchmark-program.cs' $runner '{RUNTIME_USINGS}'
+    Assert-Contains 'assets/benchmark-program.cs' $runner '{RUNTIME_SETUP}'
+    Assert-Contains 'assets/benchmark-program.cs' $runner 'public static class Program'
+
+    $runnerPreflight = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/runner-preflight.md'))
+    Assert-Contains 'references/runner-preflight.md' $runnerPreflight 'SkipBenchmarksWithReports = true'
+    Assert-Contains 'references/runner-preflight.md' $runnerPreflight 'reports/tuning/'
+    Assert-Contains 'references/runner-preflight.md' $runnerPreflight 'Anti-thrashing rule'
 
     try {
         $evals = Get-Content -LiteralPath (Join-Path $SkillRoot 'evals/evals.json') -Raw | ConvertFrom-Json
@@ -114,6 +133,9 @@ if ($failures.Count -eq 0) {
         }
         if ($evals.evals.Count -lt 5) {
             Add-Failure 'evals/evals.json must include at least five diverse evals'
+        }
+        if (-not ($evals.evals | Where-Object { $_.prompt -match '(?i)yolo' })) {
+            Add-Failure 'evals/evals.json must include a yolo-mode interaction eval'
         }
         $ids = @($evals.evals | ForEach-Object { $_.id })
         if (($ids | Sort-Object -Unique).Count -ne $ids.Count) {
@@ -142,16 +164,19 @@ Write-Verbose "Creating detector fixture: $fixtureRoot"
 try {
     New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'tuning/Acme.Core.Benchmarks') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'tooling/bdn-runner') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fixtureRoot 'reports/tuning') -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'Acme.sln'), '')
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'Directory.Packages.props'), '<Project><ItemGroup><PackageVersion Include="BenchmarkDotNet" Version="1.0.0" /></ItemGroup></Project>')
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'Directory.Build.props'), '<Project><PropertyGroup><IsBenchmarkProject>false</IsBenchmarkProject><IsToolingProject>false</IsToolingProject></PropertyGroup></Project>')
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'tuning/Acme.Core.Benchmarks/Acme.Core.Benchmarks.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />')
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'tooling/bdn-runner/bdn-runner.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Codebelt.Extensions.BenchmarkDotNet.Console" /></ItemGroup></Project>')
+    [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'tooling/bdn-runner/Program.cs'), 'using Codebelt.Extensions.BenchmarkDotNet; using Codebelt.Extensions.BenchmarkDotNet.Console; using BenchmarkDotNet.Environments; public static class Program { public static void Main(string[] args) { BenchmarkProgram.Run(args, o => { o.SkipBenchmarksWithReports = true; o.ConfigureBenchmarkDotNet(c => { var slimJob = BenchmarkWorkspaceOptions.Slim; return c.AddJob(slimJob.WithRuntime(CoreRuntime.Core90)); }); }); } }')
+    [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'reports/tuning/Acme.Core.WidgetBenchmark-report-github.md'), '# existing report')
 
     $detectorPath = Join-Path $SkillRoot 'scripts/check-benchmark-requirements.ps1'
     if (Test-Path -LiteralPath $detectorPath) {
         try {
-            $detected = & powershell -NoProfile -ExecutionPolicy Bypass -File $detectorPath -RepoRoot $fixtureRoot -SkipSdkCheck | ConvertFrom-Json
+            $detected = & powershell -NoProfile -ExecutionPolicy Bypass -File $detectorPath -RepoRoot $fixtureRoot -BenchmarkType Acme.Core.WidgetBenchmark -SkipSdkCheck | ConvertFrom-Json
             if ($detected.solutionFormat -ne 'sln' -or -not $detected.centralPackageManagement -or -not $detected.centralizesBenchmarkConventions) {
                 Add-Failure 'Harness detector did not recognize the fixture solution, CPM, and centralized conventions'
             }
@@ -160,6 +185,12 @@ try {
             }
             if ($detected.benchmarkProjects.Count -ne 1 -or $detected.runner.name -ne 'bdn-runner' -or -not $detected.harnessReady) {
                 Add-Failure 'Harness detector did not recognize the existing benchmark project and runner'
+            }
+            if (-not $detected.runner.skipBenchmarksWithReports -or -not $detected.runner.usesSlimJob -or @($detected.runner.configuredRuntimes) -notcontains 'CoreRuntime.Core90') {
+                Add-Failure 'Harness detector did not recognize report skipping, the Slim job, and configured runtime'
+            }
+            if (-not $detected.reports.wouldSkipRequestedBenchmark -or @($detected.reports.matchingReportFiles).Count -ne 1) {
+                Add-Failure 'Harness detector did not identify the matching report that suppresses the requested benchmark type'
             }
         } catch {
             Add-Failure "Harness detector failed on the deterministic fixture: $($_.Exception.Message)"

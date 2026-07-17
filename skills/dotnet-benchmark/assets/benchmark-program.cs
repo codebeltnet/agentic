@@ -14,6 +14,7 @@ public class Program
             o.SkipBenchmarksWithReports = true;
             o.ConfigureBenchmarkDotNet(c =>
             {
+{RUNTIME_SETUP}
                 // If the user chose "Runner default only", leave the next line as `return c;`.
                 // Otherwise append newline-prefixed chained `.AddJob(...)` calls to the return expression.
                 return c{RUNTIME_JOBS};

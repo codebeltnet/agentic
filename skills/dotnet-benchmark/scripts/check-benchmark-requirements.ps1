@@ -10,6 +10,9 @@
 .PARAMETER RepoRoot
     Repository root to inspect. Defaults to the current directory.
 
+.PARAMETER BenchmarkType
+    Optional namespace-qualified or simple benchmark type name used to detect matching reports that would suppress execution.
+
 .PARAMETER SkipSdkCheck
     Skips invoking dotnet --version. Intended for deterministic detector tests; normal skill runs should not use it.
 
@@ -19,6 +22,7 @@
 [CmdletBinding()]
 param(
     [string]$RepoRoot = (Get-Location).Path,
+    [string]$BenchmarkType,
     [switch]$SkipSdkCheck
 )
 
@@ -124,16 +128,54 @@ if (Test-Path -LiteralPath $toolingDir) {
             $text -match 'Codebelt\.Extensions\.BenchmarkDotNet\.Console'
         } | Select-Object -First 1
     if ($runnerCsproj) {
+        $programFile = Get-ChildItem -LiteralPath $runnerCsproj.Directory.FullName -Filter Program.cs -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        $programText = if ($programFile) { [System.IO.File]::ReadAllText($programFile.FullName) } else { '' }
+        $configuredRuntimes = @(
+            [regex]::Matches($programText, '(?:ClrRuntime|CoreRuntime)\.[A-Za-z0-9_]+') |
+            ForEach-Object { $_.Value } |
+            Select-Object -Unique
+        )
         $runner = [ordered]@{
-            name              = $runnerCsproj.Directory.Name
-            path              = $runnerCsproj.FullName.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'
-            referencesConsole = $true
+            name                      = $runnerCsproj.Directory.Name
+            path                      = $runnerCsproj.FullName.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'
+            programPath               = if ($programFile) { $programFile.FullName.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/' } else { $null }
+            referencesConsole         = $true
+            skipBenchmarksWithReports = $programText -match 'SkipBenchmarksWithReports\s*=\s*true'
+            usesSlimJob               = $programText -match 'BenchmarkWorkspaceOptions\.Slim'
+            configuredRuntimes        = $configuredRuntimes
         }
     }
 }
 
 # --- reports/ ---------------------------------------------------------------
-$reportsExists = Test-Path -LiteralPath (Join-Path $RepoRoot 'reports')
+$reportsPath = Join-Path $RepoRoot 'reports'
+$reportsTuningPath = Join-Path $reportsPath 'tuning'
+$reportsExists = Test-Path -LiteralPath $reportsPath
+$reportFiles = @()
+if (Test-Path -LiteralPath $reportsTuningPath) {
+    $reportFiles = @(
+        Get-ChildItem -LiteralPath $reportsTuningPath -File -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.FullName.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/' }
+    )
+}
+
+$matchingReportFiles = @()
+if (-not [string]::IsNullOrWhiteSpace($BenchmarkType)) {
+    $benchmarkTypeName = ($BenchmarkType -split '\.')[-1]
+    $matchingReportFiles = @(
+        $reportFiles | Where-Object {
+            $filename = [System.IO.Path]::GetFileNameWithoutExtension($_)
+            $potentialTypeFullName = ($filename -split '-', 2)[0]
+            $potentialTypeName = ($potentialTypeFullName -split '\.')[-1]
+            $potentialTypeName.Equals($benchmarkTypeName, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+    )
+}
+
+$wouldSkipRequestedBenchmark = ($runner -ne $null) -and
+    $runner.skipBenchmarksWithReports -and
+    (-not [string]::IsNullOrWhiteSpace($BenchmarkType)) -and
+    ($matchingReportFiles.Count -gt 0)
 
 $harnessReady = ($runner -ne $null) -and ($benchmarkProjects.Count -gt 0)
 
@@ -148,6 +190,14 @@ $result = [ordered]@{
     benchmarkProjects               = $benchmarkProjects
     runner                          = $runner
     reportsFolderExists             = $reportsExists
+    reports                         = [ordered]@{
+        path                         = $reportsPath.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'
+        tuningPath                   = $reportsTuningPath.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'
+        files                        = $reportFiles
+        requestedBenchmarkType       = $BenchmarkType
+        matchingReportFiles          = $matchingReportFiles
+        wouldSkipRequestedBenchmark  = $wouldSkipRequestedBenchmark
+    }
     harnessReady                    = $harnessReady
 }
 
