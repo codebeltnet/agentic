@@ -832,15 +832,18 @@ Add-ValidationResult -Results $results -Name 'Benchmark runner wildcard is prese
     Assert-Match -Name 'benchmark-program.cs' -Content $program -Pattern 'namespace\s+\{BENCHMARK_RUNNER_NAMESPACE\};'
 }
 
-Add-ValidationResult -Results $results -Name 'dotnet-benchmark selects evidence-backed candidates, supports yolo mode, and preserves honest comparison semantics' -Action {
+Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, proportionate experiments and preserves honest comparison semantics' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/SKILL.md' -GitRef $Ref
     $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/FORMS.md' -GitRef $Ref
     $candidateSelection = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/candidate-selection.md' -GitRef $Ref
     $experimentDesign = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/experiment-design.md' -GitRef $Ref
+    $benchmarkEssentials = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/benchmarkdotnet-essentials.md' -GitRef $Ref
     $runnerPreflight = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/runner-preflight.md' -GitRef $Ref
     $comparison = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/assets/comparison-benchmark.cs' -GitRef $Ref
     $operation = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/assets/operation-benchmark.cs' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/evals/evals.json' -GitRef $Ref
+    $fixtureFiles = Get-RepoFileList -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/evals/files' -GitRef $Ref
+    $validateSkillScript = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/scripts/validate-skill.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'A microbenchmark measures a suspected cost under a defined workload; it does not prove that the type is an application bottleneck.'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Do not use construction as the baseline for formatting, equality, hashing, parsing, or another unrelated operation.'
@@ -853,6 +856,9 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark selects evidence-
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Yolo never authorizes a full performance run.'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'read `references/runner-preflight.md`'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'reports.wouldSkipRequestedBenchmark'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'complete BenchmarkDotNet summary'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'When a parameter is only size or payload'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'After the first valid full result'
     Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle 'Auto-discover the highest-value performance questions (Recommended)'
     Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle '### candidate_plan_confirmation'
     Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle '## Yolo mode override'
@@ -862,8 +868,15 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark selects evidence-
     Assert-Contains -Name 'candidate-selection.md' -Content $candidateSelection -Needle '## Profiling-first gate'
     Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Correctness oracle'
     Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle 'Do not compare unrelated operations.'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Workload invariants'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Benchmark validity gate'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Deferred execution and terminal operations'
+    Assert-Contains -Name 'benchmarkdotnet-essentials.md' -Content $benchmarkEssentials -Needle 'one warmup iteration plus controlled iteration counts'
+    Assert-Contains -Name 'benchmarkdotnet-essentials.md' -Content $benchmarkEssentials -Needle '## Deferred pipelines and terminal operations'
+    Assert-Contains -Name 'benchmarkdotnet-essentials.md' -Content $benchmarkEssentials -Needle '## Result-validity gate'
     Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'SkipBenchmarksWithReports = true'
     Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'Anti-thrashing rule'
+    Assert-Contains -Name 'validate-skill.ps1' -Content $validateSkillScript -Needle 'if ([string]::IsNullOrWhiteSpace($SkillRoot))'
     Assert-Contains -Name 'comparison-benchmark.cs' -Content $comparison -Needle '{EQUIVALENCE_CHECK}'
     Assert-Contains -Name 'comparison-benchmark.cs' -Content $comparison -Needle 'Baseline = true'
     Assert-Contains -Name 'operation-benchmark.cs' -Content $operation -Needle 'Do not add Baseline = true merely to produce a ratio column.'
@@ -873,6 +886,11 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark selects evidence-
     Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'ThreadingDiagnoser'
     Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'YOLO mode:'
     Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'Acme.Core.ParserBenchmark-report-github.md'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'LegacyAliasQuery benchmark and summary'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'TraitFilter helper only runs in test discovery'
+    if (@($fixtureFiles | Where-Object { $_ -match '(^|/)(obj|bin|BenchmarkDotNet\.Artifacts)(/|$)' }).Count -gt 0) {
+        throw 'dotnet-benchmark eval fixtures must not include obj/, bin/, or BenchmarkDotNet.Artifacts paths'
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Strong-name skill matches FORMS summary flow and 1024-bit default' -Action {
