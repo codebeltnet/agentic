@@ -75,7 +75,8 @@ scaffold and `codebeltnet/xunit`). Copy `assets/benchmark-runner.csproj` and
 |-------------|-------|
 | `{RUNNER_TARGET_FRAMEWORK}` | Highest supported non-preview executable TFM (`net10.0` or `net9.0`). |
 | `{RUNNER_NAMESPACE}` | Runner folder name converted to a valid C# identifier (`benchmark-runner` -> `benchmark_runner`). |
-| `{RUNTIME_JOBS}` | One indented `.AddJob(slimJob.WithRuntime(...))` line per runtime to measure (see `benchmarkdotnet-essentials.md`). At minimum, add the runner's own TFM. |
+| `{RUNTIME_USINGS}` | Empty for **Runner default only**. Otherwise emit the `using BenchmarkDotNet.Environments;`, `using BenchmarkDotNet.Jobs;`, and `using Codebelt.Extensions.BenchmarkDotNet;` lines, each terminated with a newline, because the added runtime jobs need all three namespaces. |
+| `{RUNTIME_JOBS}` | Empty for **Runner default only** so the method stays `return c;`. Otherwise emit newline-prefixed chained `.AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(...))` calls, one per runtime to measure (see `benchmarkdotnet-essentials.md`). |
 
 If the root `Directory.Build.props` does **not** mark tooling projects as executables, add
 `<OutputType>Exe</OutputType>` and `<IsPackable>false</IsPackable>` to the runner `PropertyGroup`.

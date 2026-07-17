@@ -27,20 +27,23 @@
     {
       "id": 3,
       "prompt": "Benchmark our Acme.Hashing.Crc32 implementation against the built-in one across small and large inputs — I want to see allocations too.",
-      "expected_output": "A complex-tier benchmark using [Params] to sweep input sizes (and/or an implementation variant), deterministic payloads built in GlobalSetup with a seeded Random, MemoryDiagnoser, and a Baseline=true method comparing implementations.",
+      "expected_output": "A complex-tier benchmark using [Params] to sweep input sizes, deterministic payloads built in GlobalSetup with a seeded Random, MemoryDiagnoser, and separate baseline/candidate benchmark methods that compare implementations without unused template scaffolding.",
       "expectations": [
         "Chooses the complex/params tier for a size- and variant-sensitive type",
         "Uses [Params] to sweep multiple input sizes and prepares deterministic payloads in [GlobalSetup]",
+        "Compares implementations through separate benchmark methods with exactly one Baseline = true anchor instead of leaving behind an unused implementation [Params] property",
         "Includes [MemoryDiagnoser] and a Baseline = true comparison anchor",
+        "Omits unused using directives from the generated benchmark file",
         "Uses deterministic in-memory data with no network, disk, or database in measured methods"
       ]
     },
     {
       "id": 4,
       "prompt": "I want the benchmark for Acme.Core's Parser to also compare .NET Framework 4.8 against .NET 9 and .NET 10.",
-      "expected_output": "Runner Program.cs gains one AddJob(slimJob.WithRuntime(...)) per requested runtime (ClrRuntime.Net48, CoreRuntime.Core90, CoreRuntime.Core10_0), and the benchmark project targets the matching TFMs so those jobs can run.",
+      "expected_output": "Runner Program.cs gains one AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(...)) call per requested runtime (ClrRuntime.Net48, CoreRuntime.Core90, CoreRuntime.Core10_0), includes the runtime-job using directives needed for those jobs, and the benchmark project targets the matching TFMs so those jobs can run.",
       "expectations": [
-        "Adds one .AddJob(slimJob.WithRuntime(...)) line per requested runtime using the correct monikers (ClrRuntime.Net48, CoreRuntime.Core90, CoreRuntime.Core10_0)",
+        "Adds one .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(...)) line per requested runtime using the correct monikers (ClrRuntime.Net48, CoreRuntime.Core90, CoreRuntime.Core10_0)",
+        "Keeps the runtime-job using directives only when those extra jobs are present",
         "Ensures the benchmark project TargetFrameworks include the matching TFMs (e.g. net48) so the jobs are runnable",
         "Explains that the Codebelt runner host runs on .NET 9/10 while BenchmarkDotNet jobs can measure other runtimes"
       ]
@@ -64,6 +67,16 @@
         "Puts versioned <PackageReference> entries directly in the project files because there is no Directory.Packages.props",
         "Adds self-contained TargetFrameworks and IsPackable=false to the benchmark/runner projects since the root Directory.Build.props does not centralize benchmark conventions",
         "Wires projects into the solution using dotnet sln MyApp.sln add"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Set up a benchmark for Acme.Core.Parser, but keep the runner on its default runtime only. I do not want extra net48/net9/net10 comparison jobs.",
+      "expected_output": "Runner Program.cs stays on the default runner configuration with a plain `return c;`, no raw template placeholders or stray runtime-job syntax, and no extra runtime-job using directives.",
+      "expectations": [
+        "Leaves the runner-default-only case as valid C# by replacing the runtime-job placeholder with nothing so ConfigureBenchmarkDotNet returns `c;`",
+        "Does not emit raw template placeholders or malformed chained AddJob syntax when no extra runtimes were requested",
+        "Omits BenchmarkDotNet.Environments, BenchmarkDotNet.Jobs, and Codebelt.Extensions.BenchmarkDotNet using directives when no extra runtimes were selected"
       ]
     }
   ]

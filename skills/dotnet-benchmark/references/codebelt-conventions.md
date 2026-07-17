@@ -110,8 +110,12 @@ public class TestBenchmark
 }
 ```
 
-Template: `assets/params-benchmark.cs`. Prefer seeded RNG (`new Random(42)`) and fixed sizes so runs
-are deterministic. Choose micro / mid / macro sizes to reveal trends.
+Template: `assets/params-benchmark.cs`. The starter keeps input size as the `[Params]` axis and
+compares baseline/candidate implementations through separate benchmark methods so `Baseline = true`
+stays meaningful. If you instead introduce an implementation enum as a `[Params]` dimension, collapse
+the measured work into one dispatching `[Benchmark]` method; do not keep duplicate benchmark methods
+and an unused parameter. Prefer seeded RNG (`new Random(42)`) and fixed sizes so runs are
+deterministic. Choose micro / mid / macro sizes to reveal trends.
 
 ## How to pick a tier
 

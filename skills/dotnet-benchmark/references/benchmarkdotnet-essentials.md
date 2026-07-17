@@ -38,9 +38,9 @@ and you add jobs fluently in the runner's `Program.cs`:
 
 ```csharp
 return c
-    .AddJob(slimJob.WithRuntime(ClrRuntime.Net48))
-    .AddJob(slimJob.WithRuntime(CoreRuntime.Core90))
-    .AddJob(slimJob.WithRuntime(CoreRuntime.Core10_0));
+    .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(ClrRuntime.Net48))
+    .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(CoreRuntime.Core90))
+    .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(CoreRuntime.Core10_0));
 ```
 
 Although `Codebelt.Extensions.BenchmarkDotNet` itself targets .NET 9/10, the **jobs** can measure
@@ -55,7 +55,10 @@ older and newer runtimes. Runtime moniker map:
 | Mono | `MonoRuntime.Default` |
 
 Only add runtimes the benchmark project actually targets (its `TargetFrameworks` must include the
-matching TFM, e.g. `net48` for `ClrRuntime.Net48`). Docs: https://benchmarkdotnet.org/articles/configs/jobs.html
+matching TFM, e.g. `net48` for `ClrRuntime.Net48`). In the starter runner template, keep the
+runtime-job `using` directives plus the `.AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(...))`
+chain only when the user explicitly asked for extra runtimes; the **Runner default only** case should
+stay warning-free as plain `return c;`. Docs: https://benchmarkdotnet.org/articles/configs/jobs.html
 
 Other useful job knobs (usually leave BenchmarkDotNet's smart defaults alone): `RunStrategy`
 (`Throughput`/`ColdStart`/`Monitoring`), `WarmupCount`, `IterationCount`, `LaunchCount`, `Platform`,

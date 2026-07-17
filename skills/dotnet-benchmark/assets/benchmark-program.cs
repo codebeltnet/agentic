@@ -1,7 +1,5 @@
-using BenchmarkDotNet.Configs;
-using BenchmarkDotNet.Environments;
-using BenchmarkDotNet.Jobs;
-using Codebelt.Extensions.BenchmarkDotNet;
+// Emit these runtime-job using directives only when extra AddJob(...) runtimes were selected.
+{RUNTIME_USINGS}
 using Codebelt.Extensions.BenchmarkDotNet.Console;
 
 namespace {RUNNER_NAMESPACE};
@@ -16,9 +14,9 @@ public class Program
             o.SkipBenchmarksWithReports = true;
             o.ConfigureBenchmarkDotNet(c =>
             {
-                var slimJob = BenchmarkWorkspaceOptions.Slim;
-                return c
-{RUNTIME_JOBS};
+                // If the user chose "Runner default only", leave the next line as `return c;`.
+                // Otherwise append newline-prefixed chained `.AddJob(...)` calls to the return expression.
+                return c{RUNTIME_JOBS};
             });
         });
     }
