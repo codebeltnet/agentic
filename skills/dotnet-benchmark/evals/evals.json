@@ -145,6 +145,44 @@
         "Does not disable SkipBenchmarksWithReports, rename the type, or delete/move/overwrite the report automatically",
         "Does not start or claim a full performance run and requires explicit human direction for a fresh run plus report-retention choice"
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "Review the attached Acme.Search.LegacyAliasQuery benchmark and summary. I tried to compare List.Count with a filtered Where(...).Count() across sizes 8, 256, and 4096, but the filtered Size=8 case reported NA and I still wrote up the larger rows as a win. Fix the benchmark design and tell me whether any performance conclusion is valid.",
+      "files": [
+        "evals/files/selectivity-drift/LegacyAliasQuery.cs",
+        "evals/files/selectivity-drift/LegacyAliasImport.cs",
+        "evals/files/selectivity-drift/LegacyAliasQueryTests.cs",
+        "evals/files/selectivity-drift/LegacyAliasCountBenchmark.cs",
+        "evals/files/selectivity-drift/LegacyAliasCountBenchmark-summary.md"
+      ],
+      "expected_output": "The agent rejects the benchmark as invalid because the intended matrix is incomplete and the filtered Size=8 case fails in setup, explains that List.Count is an O(1) collection fast path rather than predicate enumeration, replaces the drifting workload with deterministic fixed-width or explicit selectivity scenarios, removes the unrelated baseline and decorative category grouping, and reruns build, discovery, and dry validation before allowing any future full run.",
+      "expectations": [
+        "Detects the valid zero-match boundary or the summary's NA and Benchmarks with issues signals and refuses to treat the surviving rows as a completed benchmark",
+        "Reports the failing method, job, and parameter case exactly and makes no performance claim from the invalid run",
+        "Replaces the drifting generator with deterministic fixed-width or explicit selectivity scenarios so size changes do not silently change predicate selectivity, and verifies exact expected match counts for every scenario",
+        "Removes Baseline = true from the unrelated collection Count fast path comparison or otherwise separates it from filtered enumeration instead of using it as the baseline",
+        "Removes GroupBenchmarksBy(ByCategory) when categories are absent, or only uses meaningful categories with equivalent comparison groups",
+        "States that after fixing benchmark-owned issues it must rerun build, discovery, and dry validation, and that another full measurement run still requires explicit human approval"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "The attached Acme.Testing.TraitFilter helper only runs in test discovery. I already have the first valid benchmark summary, and the costs are low-microsecond with small fixed allocations. Tell me whether to go deeper and what benchmark, if any, is still justified.",
+      "files": [
+        "evals/files/proportionate-stop/TraitFilter.cs",
+        "evals/files/proportionate-stop/TraitDiscovery.cs",
+        "evals/files/proportionate-stop/TraitDiscoveryTests.cs",
+        "evals/files/proportionate-stop/TraitFilterBenchmark-summary.md"
+      ],
+      "expected_output": "The agent keeps the suite to one focused characterization benchmark for the real filter operation, treats the attached first valid full result as enough to answer the current question, reports that no production change is justified for a low-microsecond test-support helper, declines automatic escalation to extra diagnostics or alternative implementations, and names the condition that would justify reopening the investigation.",
+      "expectations": [
+        "Uses the test-discovery call site to keep the scope to one linear filter and materialization benchmark rather than inventing baselines or extra implementations",
+        "Reads the first valid full result proportionally and answers whether the effect is reproducible, material, and decision-changing before suggesting more work",
+        "Concludes that no production optimization change is justified for the supplied low-microsecond test-support utility",
+        "Does not automatically add repeated full reruns, tiered-PGO, disassembly, EventPipe or ETW tracing, runtime-source archaeology, or speculative alternative implementations",
+        "Identifies a concrete reopen condition such as promotion to a production hot path, materially larger inputs or frequencies, or a new regression with decision-changing cost"
+      ]
     }
   ]
 }

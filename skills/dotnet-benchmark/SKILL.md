@@ -15,7 +15,11 @@ Create the smallest benchmark suite that can answer the most valuable performanc
 - Rank candidates using evidence from the implementation, call sites, tests, documentation, existing benchmark results, and profiles. Never invent usage frequency, input distributions, or a competing implementation.
 - Compare only operations that produce equivalent observable work. Do not use construction as the baseline for formatting, equality, hashing, parsing, or another unrelated operation.
 - Use `Baseline = true` only when at least two benchmark methods form a meaningful comparison group. A single-operation scaling or regression benchmark needs no fabricated baseline. When a class has several comparison groups, assign categories and one baseline inside each category.
-- Keep correctness outside the timed path but inside the verification workflow. Equivalent implementations must be checked on every benchmark case before a full run.
+- Before build or dry validation, inspect benchmark attributes for internal coherence: `Baseline = true` only on equivalent observable work, `[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]` only with meaningful `[BenchmarkCategory]` values, every baseline category has an equivalent peer, single-operation characterization benchmarks have no fabricated baseline, benchmark descriptions name the real measured terminal operation, and decorative grouping attributes are removed.
+- Keep correctness outside the timed path but inside the verification workflow. Every parameter or scenario case needs an exact observable-result oracle for count, value, status, exception behavior, output contents, or mutation unless the domain explicitly defines approximation. Valid zero-match cases stay valid; if a zero result is unintended, fix the workload before measurement.
+- When one parameter only scales size, payload, or another magnitude, keep selectivity, hit/miss ratio, valid/invalid ratio, branch distribution, collision rate, string shape/encoding, type mix, entropy, and cache state stable unless one of them is intentionally exposed as a named scenario or parameter.
+- A benchmark is invalid for performance interpretation until the complete BenchmarkDotNet summary shows the full intended method/job/parameter matrix without `NA`, `Benchmarks with issues`, setup/cleanup exceptions, validation errors, failed jobs/runtimes, or missing combinations. Report the exact failing method, job, and parameter case, do not treat surviving rows as a completed benchmark, fix only benchmark-owned causes, rerun build/list/dry validation, and require fresh explicit human authority before any replacement full run.
+- Treat deferred pipeline creation, terminal operations such as `Count()`, `Any()`, or `First()`, explicit full enumeration, and materialization through `ToArray()` or `ToList()` as different workloads. Inspect fast paths such as `List<T>.Count` before describing a benchmark as enumeration or using it as the baseline for predicate traversal.
 - Keep external I/O, network latency, database latency, sleeps, logging, and random data generation out of measured microbenchmark methods. Recommend profiling, a macrobenchmark, or a load test when those effects are the actual question.
 - Always distinguish code that was built, smoke-executed, or fully measured. Never report performance numbers from a build, discovery listing, dry run, or unexecuted benchmark.
 - Start a full performance run only after an explicit human instruction to run it now. Never infer that authority from yolo mode, defaults, plan acceptance, an agent recommendation, or the existence of a runnable benchmark.
@@ -96,6 +100,10 @@ Read `references/experiment-design.md` and `references/benchmarkdotnet-essential
 
 Do not copy an asset blindly. The assets are structural examples with placeholders; adapt namespaces, types, cases, lifecycle, return consumption, correctness checks, and attributes to the real API.
 
+When a parameter is only size or payload, preserve the other workload characteristics unless the experiment names them explicitly. For predicate or filter benchmarks, state the intended selectivity, use deterministic data, prefer fixed-width or otherwise structurally stable inputs when digit length or formatting would change the branch mix, and verify the exact expected match count for every scenario.
+
+For LINQ and other deferred pipelines, decide whether the benchmark measures query or iterator creation, a terminal operation, explicit enumeration, or materialization. Encode that distinction in names, descriptions, baselines, and conclusions; `List<T>.Count` and `Where(...).Count()` are not interchangeable evidence.
+
 ### 7. Author the benchmark
 
 Place the class under `tuning/{SutProject}.Benchmarks/`. Name it for the performance question and end the class name with `Benchmark`. Keep it in the SUT namespace rather than adding `.Benchmarks`; the benchmark project `RootNamespace` supports this codebelt convention.
@@ -112,7 +120,9 @@ If the detector found missing infrastructure, follow `references/onboarding.md`.
 
 ### 9. Validate in layers
 
-First validate the benchmark's correctness through existing tests or a setup-time oracle for every parameter case. Then build the benchmark project in Release:
+Before the build, inspect the benchmark attributes for coherence and remove decorative configuration that no longer serves the question.
+
+First validate the benchmark's correctness through existing tests or a setup-time oracle for every parameter case. The oracle should normally verify exact observable behavior rather than merely nonzero or approximate success. Then build the benchmark project in Release:
 
 ```powershell
 dotnet build -c Release tuning/{SutProject}.Benchmarks/{SutProject}.Benchmarks.csproj
@@ -132,29 +142,42 @@ Verify runner discovery without measuring:
 dotnet run -c Release --project tooling/{runner} -- --list flat --filter *{BenchmarkClass}*
 ```
 
+Compare the discovered method, job, and parameter matrix with the intended design. Missing or surprise combinations are validation failures, not report quirks.
+
 Unless execution is impossible or the user declines, run a dry execution smoke check and inspect all BenchmarkDotNet validation warnings. A dry run proves executable wiring and basic lifecycle, not performance:
 
 ```powershell
 dotnet run -c Release --project tooling/{runner} -- --job dry --filter *{BenchmarkClass}*
 ```
 
+Inspect the complete BenchmarkDotNet summary after the dry run and before reading any numbers. If any intended case shows `NA`, appears under `Benchmarks with issues`, throws in setup or cleanup, triggers a validation error, fails a job or runtime, or is missing from the intended matrix, report the exact failing method, job, and parameter case. Do not interpret successful rows as the completed benchmark. Correct the benchmark design only when the cause is within the benchmark, then rerun build, discovery, and dry validation.
+
 Run the full benchmark only when the human explicitly asks to start it. Use an unplugged laptop, debugger, busy CI worker, VM, or power-throttled environment only if that environment is itself the target; otherwise warn that the results may not be stable or representative.
+
+After any full run, apply the same full-summary validity gate before interpreting the tables. If rerunning is necessary because of a benchmark-owned issue, preserve the human-authority rule and get explicit approval before starting another full measurement run.
 
 ### 10. Report the outcome
 
-Summarize the selected and rejected candidates, benchmark question, cases, correctness oracle, diagnosers, generated files, and validation commands/results. If a full run occurred, report environment, mean/median where relevant, error and standard deviation, ratios only within valid comparison groups, allocations/GC, warnings, and the workload-specific conclusion. Recommend an optimization only when measurements identify a meaningful opportunity and correctness remains protected.
+Summarize the selected and rejected candidates, benchmark question, cases, correctness oracle, diagnosers, generated files, and validation commands/results. If dry or full execution exposed an invalid case, report that invalid experiment instead of a performance conclusion.
+
+If a full run occurred, report the environment, active job shape, mean/median where relevant, error and standard deviation, ratios only within valid comparison groups, allocations/GC, warnings, and the workload-specific conclusion. When the runner uses `BenchmarkWorkspaceOptions.Slim`, report that shortened job accurately and mention its warmup/iteration limits whenever they matter to interpretation, especially for runtime- or JIT-sensitive comparisons.
+
+After the first valid full result, answer three questions: is the result reproducible, is the absolute cost material for observed or plausible usage, and would a deeper diagnostic change a concrete engineering decision? Stop when the answer does not justify further work. Do not automatically escalate to repeated full reruns, tiered-PGO variants, disassembly, EventPipe or ETW tracing, alternative implementations, or runtime-source archaeology. Escalate only when the result is reproducible, material, the next diagnostic can distinguish concrete competing explanations, and the user requested it or it is necessary to answer the original decision. For low-microsecond test-support utilities with no credible production change, prefer a concise "no change justified" conclusion.
 
 ## Completion checklist
 
 - [ ] Candidate selection is supported by implementation, usage, tests, telemetry, or profiling evidence.
 - [ ] The suite answers one to three explicit performance questions and excludes low-value member coverage.
 - [ ] Baselines compare equivalent work; single operations and unrelated members have no misleading ratio.
-- [ ] Cases represent realistic, boundary, scaling, and adverse paths without useless Cartesian products.
+- [ ] Cases represent realistic, boundary, scaling, and adverse paths without useless Cartesian products, and size-only sweeps keep other workload invariants stable unless explicitly named.
 - [ ] Setup, mutation, async, concurrency, disposal, and result consumption are handled correctly.
-- [ ] Equivalent implementations pass a correctness oracle for every case.
+- [ ] Exact correctness oracles cover every parameter and scenario case, including valid zero-match boundaries.
+- [ ] Baselines, categories, grouping attributes, and descriptions are internally coherent and non-decorative.
 - [ ] `[MemoryDiagnoser]` is present and every additional diagnoser has a stated purpose.
 - [ ] Harness changes preserve repository conventions and reuse existing projects/runner where possible.
 - [ ] Runner preflight accounts for `SkipBenchmarksWithReports`, configured slim/runtime jobs, and any matching `reports/tuning/` artifact before benchmark-code diagnosis.
 - [ ] Release build, benchmark discovery, and dry execution succeed, or exact blockers are reported.
-- [ ] Full-run performance claims are made only from an actual full run in a described environment.
+- [ ] The complete discovery/dry/full summary covers the full intended matrix with no `NA`, `Benchmarks with issues`, failed jobs, or missing cases before any performance interpretation.
+- [ ] Full-run performance claims are made only from an actual full run in a described environment, and any Slim-job limitation or other warning is reported honestly.
+- [ ] After the first valid full result, deeper diagnostics or reruns are justified by a reproducible, material, decision-changing question rather than sunk cost.
 - [ ] Generated files are UTF-8 without mojibake, and no unrelated files were changed.
