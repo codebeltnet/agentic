@@ -216,7 +216,8 @@ try {
     $detectorPath = Join-Path $SkillRoot 'scripts/check-benchmark-requirements.ps1'
     if (Test-Path -LiteralPath $detectorPath) {
         try {
-            $detected = & powershell -NoProfile -ExecutionPolicy Bypass -File $detectorPath -RepoRoot $fixtureRoot -BenchmarkType Acme.Core.WidgetBenchmark -SkipSdkCheck | ConvertFrom-Json
+            $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
+            $detected = & $pwshExe -NoProfile -ExecutionPolicy Bypass -File $detectorPath -RepoRoot $fixtureRoot -BenchmarkType Acme.Core.WidgetBenchmark -SkipSdkCheck | ConvertFrom-Json
             if ($detected.solutionFormat -ne 'sln' -or -not $detected.centralPackageManagement -or -not $detected.centralizesBenchmarkConventions) {
                 Add-Failure 'Harness detector did not recognize the fixture solution, CPM, and centralized conventions'
             }
