@@ -13,12 +13,13 @@
     },
     {
       "id": 2,
-      "prompt": "Set up a new repository with trunk-based development and configure origin https://github.com/example/demo.git.",
-      "expected_output": "The workflow initializes trunk-first git history and adds the provided remote origin.",
+      "prompt": "Set up a new repository with trunk-based development, configure origin https://github.com/example/demo.git, and show me the post-init summary.",
+      "expected_output": "The workflow initializes trunk-first git history, adds the provided remote origin, pushes empty main by ref from the feature branch, and summarizes the configured remote plus the remaining first-feature push step.",
       "expectations": [
         "Adds the provided remote URL after initialization",
-        "Pushes or documents pushing main with an explicit main:main ref while staying on the feature branch",
-        "Summarizes next steps after setup"
+        "Pushes main with an explicit main:main ref while staying on the feature branch",
+        "Shows the configured remote URL in the summary instead of saying the remote is not configured",
+        "Tells the user the remaining publish step is git push -u origin HEAD when the branch is ready"
       ]
     },
     {
@@ -34,10 +35,11 @@
     {
       "id": 4,
       "prompt": "I initialized a trunk-first repo, committed my first files on v0.1.0/init, and only now added a GitHub remote. Help me push without making the feature branch the default branch or manually deleting files from main.",
-      "expected_output": "The workflow pushes main to the remote first by ref, then pushes the current feature branch, without checking out main or deleting working-tree files.",
+      "expected_output": "The workflow routes this late-remote case through the guarded push-remote flow so it validates the current feature branch and empty main seed state before adding origin and pushing main then the feature branch.",
       "expectations": [
-        "Runs or recommends git push -u origin main:main before pushing the feature branch",
-        "Runs or recommends git push -u origin HEAD for the current feature branch",
+        "Checks the current branch before pushing and refuses to continue from main",
+        "Checks main with git ls-tree -r --name-only main before pushing",
+        "Adds origin only if it is missing and then runs or recommends git push -u origin main:main before git push -u origin HEAD",
         "Avoids switching to main just to push it",
         "Explains that untracked or ignored files in the checkout are not part of main and suggests git ls-tree -r --name-only main to verify branch contents"
       ]
