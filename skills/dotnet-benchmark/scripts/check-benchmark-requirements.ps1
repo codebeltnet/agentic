@@ -10,12 +10,16 @@
 .PARAMETER RepoRoot
     Repository root to inspect. Defaults to the current directory.
 
+.PARAMETER SkipSdkCheck
+    Skips invoking dotnet --version. Intended for deterministic detector tests; normal skill runs should not use it.
+
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-benchmark-requirements.ps1 -RepoRoot C:\src\myrepo
 #>
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = (Get-Location).Path
+    [string]$RepoRoot = (Get-Location).Path,
+    [switch]$SkipSdkCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,17 +29,52 @@ function Test-CommandExists {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Get-DotNetSdkVersion {
+    param([int]$TimeoutMilliseconds = 10000)
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = (Get-Command 'dotnet' -ErrorAction Stop).Source
+    $startInfo.Arguments = '--version'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            return [ordered]@{ status = 'start-failed'; version = $null }
+        }
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            $process.Kill()
+            return [ordered]@{ status = 'timed-out'; version = $null }
+        }
+        if ($process.ExitCode -ne 0) {
+            return [ordered]@{ status = 'failed'; version = $null }
+        }
+        $version = ($process.StandardOutput.ReadToEnd() -split '\r?\n' | Select-Object -First 1).Trim()
+        return [ordered]@{ status = 'available'; version = $version }
+    } finally {
+        $process.Dispose()
+    }
+}
+
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 
 # --- .NET SDK ---------------------------------------------------------------
 $sdkAvailable = $false
 $sdkVersion = $null
-if (Test-CommandExists 'dotnet') {
+$sdkStatus = if ($SkipSdkCheck) { 'skipped' } else { 'not-found' }
+if (-not $SkipSdkCheck -and (Test-CommandExists 'dotnet')) {
     try {
-        $sdkVersion = (& dotnet --version 2>$null | Select-Object -First 1)
+        $sdkProbe = Get-DotNetSdkVersion
+        $sdkVersion = $sdkProbe.version
+        $sdkStatus = $sdkProbe.status
         $sdkAvailable = -not [string]::IsNullOrWhiteSpace($sdkVersion)
     } catch {
         $sdkAvailable = $false
+        $sdkStatus = 'failed'
     }
 }
 
@@ -86,8 +125,8 @@ if (Test-Path -LiteralPath $toolingDir) {
         } | Select-Object -First 1
     if ($runnerCsproj) {
         $runner = [ordered]@{
-            name             = $runnerCsproj.Directory.Name
-            path             = $runnerCsproj.FullName.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'
+            name              = $runnerCsproj.Directory.Name
+            path              = $runnerCsproj.FullName.Substring($RepoRoot.Length).TrimStart('\', '/') -replace '\\', '/'
             referencesConsole = $true
         }
     }
@@ -100,7 +139,7 @@ $harnessReady = ($runner -ne $null) -and ($benchmarkProjects.Count -gt 0)
 
 $result = [ordered]@{
     repoRoot                        = $RepoRoot
-    sdk                             = [ordered]@{ available = $sdkAvailable; version = $sdkVersion }
+    sdk                             = [ordered]@{ available = $sdkAvailable; version = $sdkVersion; status = $sdkStatus }
     solutionFormat                  = $solutionFormat
     solutionFiles                   = $solutionFiles
     centralPackageManagement        = $cpm

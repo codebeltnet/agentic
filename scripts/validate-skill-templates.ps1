@@ -832,6 +832,36 @@ Add-ValidationResult -Results $results -Name 'Benchmark runner wildcard is prese
     Assert-Match -Name 'benchmark-program.cs' -Content $program -Pattern 'namespace\s+\{BENCHMARK_RUNNER_NAMESPACE\};'
 }
 
+Add-ValidationResult -Results $results -Name 'dotnet-benchmark selects evidence-backed candidates and preserves honest comparison semantics' -Action {
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/SKILL.md' -GitRef $Ref
+    $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/FORMS.md' -GitRef $Ref
+    $candidateSelection = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/candidate-selection.md' -GitRef $Ref
+    $experimentDesign = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/experiment-design.md' -GitRef $Ref
+    $comparison = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/assets/comparison-benchmark.cs' -GitRef $Ref
+    $operation = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/assets/operation-benchmark.cs' -GitRef $Ref
+    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/evals/evals.json' -GitRef $Ref
+
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'A microbenchmark measures a suspected cost under a defined workload; it does not prove that the type is an application bottleneck.'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Do not use construction as the baseline for formatting, equality, hashing, parsing, or another unrelated operation.'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Read `references/candidate-selection.md`'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Read `references/experiment-design.md`'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '--list flat'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '--job dry'
+    Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle 'Auto-discover the highest-value performance questions (Recommended)'
+    Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle '### candidate_plan_confirmation'
+    Assert-Contains -Name 'candidate-selection.md' -Content $candidateSelection -Needle '## Candidate matrix'
+    Assert-Contains -Name 'candidate-selection.md' -Content $candidateSelection -Needle '## Profiling-first gate'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Correctness oracle'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle 'Do not compare unrelated operations.'
+    Assert-Contains -Name 'comparison-benchmark.cs' -Content $comparison -Needle '{EQUIVALENCE_CHECK}'
+    Assert-Contains -Name 'comparison-benchmark.cs' -Content $comparison -Needle 'Baseline = true'
+    Assert-Contains -Name 'operation-benchmark.cs' -Content $operation -Needle 'Do not add Baseline = true merely to produce a ratio column.'
+    Assert-NotContains -Name 'operation-benchmark.cs measured method' -Content ($operation -replace '// Do not add Baseline = true merely to produce a ratio column\.', '') -Needle 'Baseline = true'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'RouteMatcher.IsMatch'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'cannot prove whether file I/O or JSON parsing dominates'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'ThreadingDiagnoser'
+}
+
 Add-ValidationResult -Results $results -Name 'Strong-name skill matches FORMS summary flow and 1024-bit default' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-strong-name-signing/SKILL.md' -GitRef $Ref
     Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'compute the defaults silently, and present a single summary for confirmation'
