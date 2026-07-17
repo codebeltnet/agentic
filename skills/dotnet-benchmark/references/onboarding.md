@@ -75,8 +75,9 @@ scaffold and `codebeltnet/xunit`). Copy `assets/benchmark-runner.csproj` and
 |-------------|-------|
 | `{RUNNER_TARGET_FRAMEWORK}` | Highest supported non-preview executable TFM (`net10.0` or `net9.0`). |
 | `{RUNNER_NAMESPACE}` | Runner folder name converted to a valid C# identifier (`benchmark-runner` -> `benchmark_runner`). |
-| `{RUNTIME_USINGS}` | Empty for **Runner default only**. Otherwise emit the `using BenchmarkDotNet.Environments;`, `using BenchmarkDotNet.Jobs;`, and `using Codebelt.Extensions.BenchmarkDotNet;` lines, each terminated with a newline, because the added runtime jobs need all three namespaces. |
-| `{RUNTIME_JOBS}` | Empty for **Runner default only** so the method stays `return c;`. Otherwise emit newline-prefixed chained `.AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(...))` calls, one per runtime to measure (see `benchmarkdotnet-essentials.md`). |
+| `{RUNTIME_USINGS}` | Empty for **Runner default only**. Otherwise emit `using Codebelt.Extensions.BenchmarkDotNet;`, `using BenchmarkDotNet.Configs;`, `using BenchmarkDotNet.Environments;`, and `using BenchmarkDotNet.Jobs;`, each terminated with a newline. The slim job and runtime-specific `AddJob` chain need all four namespaces. |
+| `{RUNTIME_SETUP}` | Empty for **Runner default only**. Otherwise emit the indented `var slimJob = BenchmarkWorkspaceOptions.Slim;` declaration used by every configured runtime job. |
+| `{RUNTIME_JOBS}` | Empty for **Runner default only** so the method stays `return c;`. Otherwise emit newline-prefixed chained `.AddJob(slimJob.WithRuntime(...))` calls, one per runtime to measure (see `benchmarkdotnet-essentials.md`). |
 
 If the root `Directory.Build.props` does **not** mark tooling projects as executables, add
 `<OutputType>Exe</OutputType>` and `<IsPackable>false</IsPackable>` to the runner `PropertyGroup`.
@@ -106,6 +107,8 @@ If the root `Directory.Build.props` does **not** mark tooling projects as execut
 
 Benchmark output is written under `reports/` by the Codebelt workspace. You do not need to pre-create
 it; the runner creates it on first run. Mention it so the user knows where results land.
+
+The standard runner sets `SkipBenchmarksWithReports = true`. Existing matching files under `reports/tuning/` deliberately filter their benchmark type from later list/dry/full invocations. Read `runner-preflight.md` before treating a skipped type as a benchmark-code defect.
 
 ## Guardrails
 

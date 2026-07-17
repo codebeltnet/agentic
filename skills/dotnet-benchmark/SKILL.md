@@ -1,7 +1,7 @@
 ---
 name: dotnet-benchmark
 description: >
-  Discover, prioritize, and author trustworthy BenchmarkDotNet performance experiments for a .NET type while following codebelt engineering conventions and using the Codebelt.Extensions.BenchmarkDotNet Console runner. Use whenever a user wants to benchmark, micro-benchmark, performance-test, profile, optimize, compare implementations, investigate allocations or contention, or find likely bottlenecks in a .NET type or method. The skill inspects implementation code, call sites, tests, existing benchmarks, and available profiling evidence; ranks high-value operations instead of benchmarking every public member; selects representative workloads; rejects misleading microbenchmarks; creates or reuses the tuning/ and tooling/ harness; validates correctness and benchmark discovery; and keeps full performance runs explicit.
+  Discover, prioritize, and author trustworthy BenchmarkDotNet performance experiments for a .NET type while following codebelt engineering conventions and using the Codebelt.Extensions.BenchmarkDotNet Console runner. Use whenever a user wants to benchmark, micro-benchmark, performance-test, profile, optimize, compare implementations, investigate allocations or contention, or find likely bottlenecks in a .NET type or method. The skill inspects source and usage evidence, ranks high-value operations instead of every public member, selects representative workloads, rejects misleading microbenchmarks, creates or reuses the tuning/ and tooling/ harness, preflights existing-report skips, validates correctness and discovery, and keeps full runs human-initiated. When the user says yolo, it auto-accepts routine defaults and proceeds through safe validation without confirmation churn.
 ---
 
 # Evidence-Driven .NET Benchmarking
@@ -18,6 +18,8 @@ Create the smallest benchmark suite that can answer the most valuable performanc
 - Keep correctness outside the timed path but inside the verification workflow. Equivalent implementations must be checked on every benchmark case before a full run.
 - Keep external I/O, network latency, database latency, sleeps, logging, and random data generation out of measured microbenchmark methods. Recommend profiling, a macrobenchmark, or a load test when those effects are the actual question.
 - Always distinguish code that was built, smoke-executed, or fully measured. Never report performance numbers from a build, discovery listing, dry run, or unexecuted benchmark.
+- Start a full performance run only after an explicit human instruction to run it now. Never infer that authority from yolo mode, defaults, plan acceptance, an agent recommendation, or the existence of a runnable benchmark.
+- When a Codebelt runner appears to list or execute nothing, inspect `SkipBenchmarksWithReports` and matching `reports/tuning/` artifacts before changing benchmark code. An existing report is an expected skip condition, not a reason to rename a lean class or add diagnosers.
 
 ## Workflow
 
@@ -25,7 +27,22 @@ Create the smallest benchmark suite that can answer the most valuable performanc
 
 Read `FORMS.md` and use its one-field-at-a-time interaction only for information that is not already clear. A named type plus a request such as “find the likely bottlenecks” is sufficient to start inspection. Do not make the user choose an implementation tier or BenchmarkDotNet attributes.
 
-Default to automatic candidate discovery, the runner's existing/default runtime, and build plus discovery and dry execution validation. Ask about extra runtimes only when cross-runtime comparison is part of the request. Require explicit user intent before a full benchmark run because it can be long and machine-sensitive.
+Default to automatic candidate discovery, the runner's existing/default runtime, and build plus discovery and dry execution validation. Ask about extra runtimes only when cross-runtime comparison is part of the request. Require an explicit human instruction before a full benchmark run because it can be long and machine-sensitive.
+
+#### Yolo mode
+
+Activate yolo mode only when the current request explicitly says `yolo`, `yolo mode`, `auto-proceed`, or an equally clear instruction to use defaults without routine confirmation. The mode applies to the current benchmark task only; do not persist it into later requests.
+
+In yolo mode:
+
+- infer automatic candidate discovery unless the user already supplied a more specific performance intent;
+- use the strongest defensible workload and repository conventions from source, call sites, tests, profiles, and existing benchmarks, recording material assumptions instead of asking the user to approve a 99%-certain default;
+- present the compact experiment plan as a progress update and continue immediately without asking `candidate_plan_confirmation`;
+- select build, discovery listing, and dry execution as the default validation depth without asking `execution_depth`;
+- stop and ask only when a missing fact creates material correctness/design risk and no safe repo-derived choice exists, or when new authority is required;
+- preserve all benchmark-quality, repository, and safety gates. Yolo is a convenience mode, not permission to invent workloads, ignore blockers, run unrelated operations, commit, push, or make external changes.
+
+Yolo never authorizes a full performance run. Start the full benchmark only when the human explicitly asks to run or measure it fully now; otherwise stop after build/list/dry validation. An agent must not promote its own recommendation into that authority.
 
 ### 2. Inspect the repository and harness
 
@@ -36,6 +53,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-benchmark-requ
 ```
 
 Also inspect applicable `AGENTS.md`, solution/project files, `Directory.Build.props`, `Directory.Packages.props`, existing `tuning/` and `tooling/` projects, and nearby benchmark styles. Reuse an existing runner and benchmark project when they fit. Read `references/onboarding.md` only when the detector finds missing or partial harness infrastructure.
+
+When investigating a benchmark that builds but is not listed or executed, read `references/runner-preflight.md` before inspecting or rewriting the benchmark class. Rerun the detector with `-BenchmarkType <Namespace.TypeBenchmark>` and inspect the reported runner program, `SkipBenchmarksWithReports` setting, slim/runtime jobs, `reports/tuning/` files, and `wouldSkipRequestedBenchmark`. If a matching existing report explains the skip, preserve the runner and benchmark unchanged, report the matching file, and stop diagnostic escalation. Do not add disassembly, rename the class, disable report skipping, or churn through tools to evade the filter.
 
 The .NET SDK is the only hard harness prerequisite. If detector status is `not-found`, report that blocker instead of generating unverified project files. If the probe is `timed-out`, `start-failed`, or `failed`, report the probe failure distinctly and verify the SDK through a safe direct check before concluding that it is absent.
 
@@ -65,7 +84,7 @@ Before authoring code, present a compact plan with:
 - candidates deliberately rejected and why;
 - whether the result will be exploratory or grounded in profile/telemetry evidence.
 
-Follow the confirmation flow in `FORMS.md`. If the user already named exact members, inputs, and implementations, confirm only material corrections or risks rather than repeating settled choices.
+Follow the confirmation flow in `FORMS.md` in interactive mode. In yolo mode, post the plan as a concise progress update and proceed without confirmation. If the user already named exact members, inputs, and implementations, confirm only material corrections or risks rather than repeating settled choices.
 
 ### 6. Design the experiment
 
@@ -99,6 +118,14 @@ First validate the benchmark's correctness through existing tests or a setup-tim
 dotnet build -c Release tuning/{SutProject}.Benchmarks/{SutProject}.Benchmarks.csproj
 ```
 
+Before interpreting discovery or execution output, run the report-aware preflight for the exact class:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
+```
+
+If `reports.wouldSkipRequestedBenchmark` is true, the runner is intentionally filtering the type because a prior report exists. Report that as the validation outcome; do not claim the list/dry run exercised the class and do not modify code to force it through. A fresh full run and any report archive/replacement require explicit human direction.
+
 Verify runner discovery without measuring:
 
 ```powershell
@@ -111,7 +138,7 @@ Unless execution is impossible or the user declines, run a dry execution smoke c
 dotnet run -c Release --project tooling/{runner} -- --job dry --filter *{BenchmarkClass}*
 ```
 
-Run the full benchmark only when the user explicitly asks. Use an unplugged laptop, debugger, busy CI worker, VM, or power-throttled environment only if that environment is itself the target; otherwise warn that the results may not be stable or representative.
+Run the full benchmark only when the human explicitly asks to start it. Use an unplugged laptop, debugger, busy CI worker, VM, or power-throttled environment only if that environment is itself the target; otherwise warn that the results may not be stable or representative.
 
 ### 10. Report the outcome
 
@@ -127,6 +154,7 @@ Summarize the selected and rejected candidates, benchmark question, cases, corre
 - [ ] Equivalent implementations pass a correctness oracle for every case.
 - [ ] `[MemoryDiagnoser]` is present and every additional diagnoser has a stated purpose.
 - [ ] Harness changes preserve repository conventions and reuse existing projects/runner where possible.
+- [ ] Runner preflight accounts for `SkipBenchmarksWithReports`, configured slim/runtime jobs, and any matching `reports/tuning/` artifact before benchmark-code diagnosis.
 - [ ] Release build, benchmark discovery, and dry execution succeed, or exact blockers are reported.
 - [ ] Full-run performance claims are made only from an actual full run in a described environment.
 - [ ] Generated files are UTF-8 without mojibake, and no unrelated files were changed.

@@ -45,7 +45,9 @@ Do not use network, disk, database, logging, or sleep calls inside a microbenchm
 
 ## Runner and reports
 
-The runner calls `Codebelt.Extensions.BenchmarkDotNet.Console.BenchmarkProgram.Run`, reuses the repository's existing name such as `benchmark-runner` or `bdn-runner`, and writes artifacts under `reports/`. Default runtime configuration stays plain `return c;`; add runtime jobs only when cross-runtime comparison is explicitly requested.
+The runner calls `Codebelt.Extensions.BenchmarkDotNet.Console.BenchmarkProgram.Run`, reuses the repository's existing name such as `benchmark-runner` or `bdn-runner`, and writes artifacts under `reports/`. Codebelt libraries normally keep `SkipBenchmarksWithReports = true`; a matching file under `reports/tuning/` intentionally filters that benchmark type on later invocations. Run the `runner-preflight.md` checks before diagnosing benchmark code.
+
+Default runtime configuration stays plain `return c;`. For explicit runtime jobs, assign `BenchmarkWorkspaceOptions.Slim` once to `slimJob`, then add `slimJob.WithRuntime(...)` for each supported TFM. The TFM list is the expected repository-specific difference; preserve the surrounding lean runner shape.
 
 ## Reference implementations
 

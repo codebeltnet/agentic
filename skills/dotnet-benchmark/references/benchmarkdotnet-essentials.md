@@ -52,11 +52,12 @@ Diagnosers may require separate runs and increase duration.
 The codebelt runner starts from `BenchmarkWorkspaceOptions.Slim`. Add runtime jobs only for an explicit cross-runtime question:
 
 ```csharp
+var slimJob = BenchmarkWorkspaceOptions.Slim;
 return c
-    .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(ClrRuntime.Net48))
-    .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(CoreRuntime.Core80))
-    .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(CoreRuntime.Core90))
-    .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(CoreRuntime.Core10_0));
+    .AddJob(slimJob.WithRuntime(ClrRuntime.Net48))
+    .AddJob(slimJob.WithRuntime(CoreRuntime.Core80))
+    .AddJob(slimJob.WithRuntime(CoreRuntime.Core90))
+    .AddJob(slimJob.WithRuntime(CoreRuntime.Core10_0));
 ```
 
 | Target | Job runtime |
@@ -69,6 +70,12 @@ return c
 Only add jobs that the SUT and benchmark toolchain can execute. Keep the runner-default-only template as `return c;` with no unused runtime `using` directives.
 
 Let BenchmarkDotNet choose warmup, iteration, launch, and invocation counts unless the performance question requires cold start, monitoring, or another specific run strategy. Short/dry jobs validate or iterate quickly; they do not replace the default job for performance conclusions.
+
+## Existing-report filtering
+
+Codebelt library runners normally set `SkipBenchmarksWithReports = true`. The console runner filters a loaded `*Benchmark` type when a matching report already exists under the artifacts tuning folder, normally `reports/tuning/`. Therefore a successful build followed by an empty list/dry/full invocation can be expected behavior.
+
+Run the bundled detector with `-BenchmarkType <Namespace.TypeBenchmark>` and inspect its runner/report fields before changing a benchmark or adding diagnostics. Read `runner-preflight.md` for the matching rule and the no-thrashing workflow. Never rename a class, add disassembly, or disable the option merely to evade an existing report.
 
 ## Runner commands
 
