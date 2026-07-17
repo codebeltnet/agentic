@@ -101,6 +101,10 @@ if ($failures.Count -eq 0) {
     Assert-Contains 'SKILL.md' $skill 'reports.wouldSkipRequestedBenchmark'
     Assert-Contains 'SKILL.md' $skill 'complete BenchmarkDotNet summary'
     Assert-Contains 'SKILL.md' $skill 'When a parameter is only size or payload'
+    Assert-Contains 'SKILL.md' $skill 'Semantic preflight'
+    Assert-Contains 'SKILL.md' $skill 'independently derived exact expected result'
+    Assert-Contains 'SKILL.md' $skill 'Successful execution is not a correctness oracle.'
+    Assert-Contains 'SKILL.md' $skill 'do the baseline and candidate perform equivalent consumer-visible work over identical logical input?'
     Assert-Contains 'SKILL.md' $skill 'After the first valid full result'
 
     $forms = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'FORMS.md'))
@@ -136,6 +140,10 @@ if ($failures.Count -eq 0) {
     Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) '## Workload invariants'
     Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) '## Benchmark validity gate'
     Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) '## Deferred execution and terminal operations'
+    Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) '## Semantic preflight'
+    Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) 'Successful execution is not a correctness oracle.'
+    Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) 'do the baseline and candidate perform equivalent consumer-visible work over identical logical input?'
+    Assert-Contains 'references/experiment-design.md' ([System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/experiment-design.md'))) 'Do not benchmark a homogeneous all-match store and call it type filtering unless the all-match path is the actual subject.'
     Assert-Contains 'references/benchmarkdotnet-essentials.md' $benchmarkEssentials 'one warmup iteration plus controlled iteration counts'
     Assert-Contains 'references/benchmarkdotnet-essentials.md' $benchmarkEssentials '## Deferred pipelines and terminal operations'
     Assert-Contains 'references/benchmarkdotnet-essentials.md' $benchmarkEssentials '## Result-validity gate'
@@ -145,14 +153,17 @@ if ($failures.Count -eq 0) {
         if ($evals.skill_name -ne 'dotnet-benchmark') {
             Add-Failure 'evals/evals.json skill_name must be dotnet-benchmark'
         }
-        if ($evals.evals.Count -lt 11) {
-            Add-Failure 'evals/evals.json must include at least eleven diverse evals'
+        if ($evals.evals.Count -lt 12) {
+            Add-Failure 'evals/evals.json must include at least twelve diverse evals'
         }
         if (-not ($evals.evals | Where-Object { $_.prompt -match '(?i)yolo' })) {
             Add-Failure 'evals/evals.json must include a yolo-mode interaction eval'
         }
         if (-not ($evals.evals | Where-Object { $_.prompt -match 'LegacyAliasQuery' })) {
             Add-Failure 'evals/evals.json must include the invalid parameter-matrix and drifting-selectivity eval'
+        }
+        if (-not ($evals.evals | Where-Object { $_.prompt -match 'InMemoryTestStore benchmark' })) {
+            Add-Failure 'evals/evals.json must include the semantic-preflight workload validation eval'
         }
         if (-not ($evals.evals | Where-Object { $_.prompt -match 'TraitFilter helper only runs in test discovery' })) {
             Add-Failure 'evals/evals.json must include the proportionate-stopping eval'
