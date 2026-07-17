@@ -107,6 +107,44 @@
         "Emits no raw runtime placeholders or unused BenchmarkDotNet.Environments, BenchmarkDotNet.Jobs, or Codebelt.Extensions.BenchmarkDotNet runtime-job using directives",
         "Does not treat the absence of extra jobs as permission to skip target-type and workload inspection"
       ]
+    },
+    {
+      "id": 8,
+      "prompt": "YOLO mode: add the most useful benchmark for Acme.Routing.RouteMatcher from the attached source. Use the repo evidence and recommended defaults, proceed without routine confirmation, and do not run a full performance benchmark.",
+      "files": [
+        "evals/files/route-matcher/RouteMatcher.cs",
+        "evals/files/route-matcher/RouteTable.cs",
+        "evals/files/route-matcher/RouteMatcherTests.cs"
+      ],
+      "expected_output": "The agent recognizes yolo mode, autonomously selects the evidence-backed RouteMatcher.IsMatch characterization, reports the experiment plan as a progress update rather than a question, authors the benchmark, and proceeds through build/list/dry validation or honestly reports a source-only harness blocker. It never treats yolo as authorization for a full run or unrelated side effects.",
+      "expectations": [
+        "Recognizes yolo mode and does not ask for performance intent, workload, candidate-plan confirmation, or execution depth when repository evidence provides safe defaults",
+        "Uses RouteTable and tests to select RouteMatcher.IsMatch plus representative coupled hit/miss and pattern-complexity cases",
+        "States the experiment plan and material assumptions as information, then proceeds without asking the user to approve the recommended plan",
+        "Uses a MemoryDiagnoser single-operation characterization with no fabricated Baseline=true",
+        "Selects build, list, and dry validation by default, or supplies those commands while honestly reporting that the source-only fixture lacks a runnable harness",
+        "Does not run or claim a full performance benchmark without an explicit human instruction, and does not treat yolo as authorization for unrelated repository or remote operations"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Acme.Core.ParserBenchmark builds, but the codebelt runner appears to do nothing when I list or run it. Diagnose the attached minimal repository. Keep the benchmark slim and do not start a full performance run.",
+      "files": [
+        "evals/files/runner-skip/tooling/benchmark-runner/Program.cs",
+        "evals/files/runner-skip/tooling/benchmark-runner/benchmark-runner.csproj",
+        "evals/files/runner-skip/tuning/Acme.Core.Benchmarks/ParserBenchmark.cs",
+        "evals/files/runner-skip/tuning/Acme.Core.Benchmarks/Acme.Core.Benchmarks.csproj",
+        "evals/files/runner-skip/reports/tuning/Acme.Core.ParserBenchmark-report-github.md"
+      ],
+      "expected_output": "The agent performs runner preflight before benchmark-code diagnosis, recognizes that SkipBenchmarksWithReports=true plus the matching reports/tuning file deliberately filters ParserBenchmark, verifies the canonical Slim runtime jobs, preserves the lean benchmark and its name, avoids disassembly/tool thrash, and does not remove reports, disable the option, or start a full run without explicit human direction.",
+      "expectations": [
+        "Runs the detector with -BenchmarkType Acme.Core.ParserBenchmark against the canonical repo layout and reports runner.skipBenchmarksWithReports=true, Slim runtime jobs, the matching report, and reports.wouldSkipRequestedBenchmark=true",
+        "Identifies Acme.Core.ParserBenchmark-report-github.md as a case-insensitive type-name match that deliberately filters ParserBenchmark",
+        "Explains that an empty list or execution is expected runner behavior rather than evidence that ParserBenchmark is malformed",
+        "Preserves the lean ParserBenchmark class, method, attributes, and name without adding DisassemblyDiagnoser or unrelated benchmark cases",
+        "Does not disable SkipBenchmarksWithReports, rename the type, or delete/move/overwrite the report automatically",
+        "Does not start or claim a full performance run and requires explicit human direction for a fresh run plus report-retention choice"
+      ]
     }
   ]
 }
