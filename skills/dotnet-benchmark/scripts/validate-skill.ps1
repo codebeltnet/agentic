@@ -119,7 +119,7 @@ if ($failures.Count -eq 0) {
     Assert-Contains 'assets/benchmark-program.cs' $runner 'return c{RUNTIME_JOBS};'
     Assert-Contains 'assets/benchmark-program.cs' $runner '{RUNTIME_USINGS}'
     Assert-Contains 'assets/benchmark-program.cs' $runner '{RUNTIME_SETUP}'
-    Assert-Contains 'assets/benchmark-program.cs' $runner 'public static class Program'
+    Assert-Contains 'assets/benchmark-program.cs' $runner 'public class Program'
 
     $runnerPreflight = [System.IO.File]::ReadAllText((Join-Path $SkillRoot 'references/runner-preflight.md'))
     Assert-Contains 'references/runner-preflight.md' $runnerPreflight 'SkipBenchmarksWithReports = true'
@@ -170,7 +170,7 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'Directory.Build.props'), '<Project><PropertyGroup><IsBenchmarkProject>false</IsBenchmarkProject><IsToolingProject>false</IsToolingProject></PropertyGroup></Project>')
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'tuning/Acme.Core.Benchmarks/Acme.Core.Benchmarks.csproj'), '<Project Sdk="Microsoft.NET.Sdk" />')
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'tooling/bdn-runner/bdn-runner.csproj'), '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Codebelt.Extensions.BenchmarkDotNet.Console" /></ItemGroup></Project>')
-    [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'tooling/bdn-runner/Program.cs'), 'using Codebelt.Extensions.BenchmarkDotNet; using Codebelt.Extensions.BenchmarkDotNet.Console; using BenchmarkDotNet.Environments; public static class Program { public static void Main(string[] args) { BenchmarkProgram.Run(args, o => { o.SkipBenchmarksWithReports = true; o.ConfigureBenchmarkDotNet(c => { var slimJob = BenchmarkWorkspaceOptions.Slim; return c.AddJob(slimJob.WithRuntime(CoreRuntime.Core90)); }); }); } }')
+    [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'tooling/bdn-runner/Program.cs'), 'using Codebelt.Extensions.BenchmarkDotNet; using Codebelt.Extensions.BenchmarkDotNet.Console; using BenchmarkDotNet.Environments; public class Program { public static void Main(string[] args) { BenchmarkProgram.Run(args, o => { o.SkipBenchmarksWithReports = true; o.ConfigureBenchmarkDotNet(c => { var slimJob = BenchmarkWorkspaceOptions.Slim; return c.AddJob(slimJob.WithRuntime(CoreRuntime.Core90)); }); }); } }')
     [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'reports/tuning/Acme.Core.WidgetBenchmark-report-github.md'), '# existing report')
 
     $detectorPath = Join-Path $SkillRoot 'scripts/check-benchmark-requirements.ps1'
