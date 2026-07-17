@@ -1,133 +1,59 @@
 # Codebelt Benchmark Conventions
 
-These rules mirror the pasted "Writing Performance Tests in Cuemon" guidance and the real
-implementations in `codebeltnet/cuemon` and `codebeltnet/xunit`. Follow them so benchmarks stay
-consistent, discoverable, and comparable across repos.
+Follow these repository conventions so benchmark projects remain discoverable and consistent across codebelt repositories. Experiment validity takes precedence over forcing a template shape.
 
 ## Naming and placement
 
-- Benchmark projects live under `tuning/` and are named `{SutProject}.Benchmarks`
-  (e.g. `Cuemon.Core.Benchmarks`, `Codebelt.Extensions.Xunit.Benchmarks`).
-- A benchmark class name **ends with `Benchmark`** (e.g. `DateSpanBenchmark`, `Sha512256Benchmark`).
-- The class lives in the **same namespace as the type it measures** — do **not** append `.Benchmarks`.
-  The benchmark project overrides `RootNamespace` to the SUT root so this compiles:
+- Benchmark projects live under `tuning/` and are named `{SutProject}.Benchmarks`, such as `Cuemon.Core.Benchmarks`.
+- A benchmark class name ends with `Benchmark` and names the measured question or type, such as `DateSpanFormattingBenchmark` or `Sha512256ComparisonBenchmark`.
+- The benchmark class uses the same namespace as the type it measures; do not append `.Benchmarks`. The project overrides `RootNamespace` to the SUT root.
+- Method names distinguish implementations or scenarios and every `[Benchmark]` has a readable `Description`.
+- One `tooling/` runner host discovers all `tuning/` projects through the existing wildcard project reference.
 
-  ```xml
-  <PropertyGroup>
-    <RootNamespace>Cuemon</RootNamespace>
-  </PropertyGroup>
-  ```
+## Default instrumentation
 
-  So `Cuemon.Security.Cryptography.SHA512256` is benchmarked by a `Sha512256Benchmark` class declared
-  in `namespace Cuemon.Security.Cryptography`, inside the `Cuemon.Security.Cryptography.Benchmarks`
-  assembly.
-- Method names are descriptive scenarios (`Parse_Short`, `ComputeHash_Large`, `Match_ComplexWildcard`).
+Every codebelt benchmark class uses `[MemoryDiagnoser]`. Add `[GroupBenchmarksBy]` when the class has multiple methods/params and the grouping makes the report clearer. Use `[GlobalSetup]` when state or correctness checks must be prepared outside measurement; do not add an empty setup merely for visual consistency.
 
-## Always-on attributes
+Baselines follow experiment semantics:
 
-Every codebelt benchmark class carries:
+- A current/reference implementation is `Baseline = true` when one or more equivalent alternatives are compared.
+- A single-operation characterization benchmark has no baseline.
+- Unrelated operations do not share a baseline.
+- A cohesive class with several alternative pairs uses `[BenchmarkCategory]`, grouping by category, and one baseline per category.
 
-- `[MemoryDiagnoser]`
-- `[GroupBenchmarksBy(...)]` — `ByCategory` for member-scenario suites, `ByParams` for size/variant sweeps
-- a `[GlobalSetup]` that prepares deterministic state
-- exactly one `[Benchmark(Baseline = true, ...)]` anchor, with `Description` on each method
+This refines the older “exactly one baseline per class” shortcut. BenchmarkDotNet ratios are useful only when the grouped methods perform comparable work.
 
-## Tier 1 — Simple type (member scenarios)
+## Experiment shapes
 
-For value-like types with no size-sensitive input, benchmark the meaningful members as discrete
-scenarios. This is the `DateSpanBenchmark` shape:
+### Equivalent implementation comparison
 
-```csharp
-namespace Cuemon
-{
-    [MemoryDiagnoser]
-    [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
-    public class DateSpanBenchmark
-    {
-        private DateSpan _shortSpan;
+Use `assets/comparison-benchmark.cs` when the same consumer operation has a current/reference and candidate implementation. Keep inputs and wrappers symmetric, validate equivalent results in setup, and sweep only dimensions that can change the comparison.
 
-        [GlobalSetup]
-        public void Setup() => _shortSpan = new DateSpan(DateTime.UtcNow, DateTime.UtcNow.AddHours(36));
+### Single-operation characterization
 
-        [Benchmark(Baseline = true, Description = "Ctor (short span)")]
-        public DateSpan Construct_Short() => new DateSpan(DateTime.UtcNow, DateTime.UtcNow.AddHours(36));
+Use `assets/operation-benchmark.cs` when there is no honest competing implementation. This shape characterizes time, allocations, and scaling for one operation across representative cases without inventing a baseline.
 
-        [Benchmark(Description = "ToString (short)")]
-        public string ToString_Short() => _shortSpan.ToString();
+### Multiple independent questions
 
-        [Benchmark(Description = "GetWeeks (short)")]
-        public int GetWeeks_Short() => _shortSpan.GetWeeks();
-    }
-}
-```
+Prefer separate focused classes. If existing repository convention keeps them together, use categories that prevent unrelated ratios. Construction, formatting, equality, hashing, parsing, and matching are not automatically comparable merely because they belong to one type.
 
-Cover construction, parsing/formatting, equality, hashing, and any hot instance methods. Template:
-`assets/simple-benchmark.cs`.
+## Deterministic inputs
 
-## Tier 2 — Complex / size- or variant-sensitive type
+Build inputs outside measured methods. Use fixed seeds only when pseudo-random data matches the domain. Prefer structured inputs for parsers, matchers, collections, caches, and serializers. Parameter cases should have readable report labels.
 
-For hashing, parsing, buffers, or anything whose cost scales with input or has competing
-implementations, sweep with `[Params]` and prepare payloads in `[GlobalSetup]`. Two real shapes:
+Do not use network, disk, database, logging, or sleep calls inside a microbenchmark. When external behavior is the point, select profiling, load testing, or a macrobenchmark and preserve codebelt project placement only if it remains useful.
 
-`Sha512256Benchmark` (variant + size, `ByParams`, compares custom vs built-in):
+## Runner and reports
 
-```csharp
-[MemoryDiagnoser]
-[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByParams)]
-public class Sha512256Benchmark
-{
-    public enum AlgorithmVariant { CustomSHA512_256, SHA512_Truncated }
+The runner calls `Codebelt.Extensions.BenchmarkDotNet.Console.BenchmarkProgram.Run`, reuses the repository's existing name such as `benchmark-runner` or `bdn-runner`, and writes artifacts under `reports/`. Default runtime configuration stays plain `return c;`; add runtime jobs only when cross-runtime comparison is explicitly requested.
 
-    [Params(AlgorithmVariant.CustomSHA512_256, AlgorithmVariant.SHA512_Truncated)]
-    public AlgorithmVariant Variant { get; set; }
+## Reference implementations
 
-    private byte[] _smallInput;   // 64 bytes
-    private byte[] _largeInput;   // 1 MB
-
-    [GlobalSetup]
-    public void GlobalSetup() { /* seeded Random(42) fills deterministic payloads */ }
-
-    [Benchmark(Baseline = true, Description = "Custom SHA-512/256 - small")]
-    public byte[] CustomSHA512256_Small() { /* ... */ }
-}
-```
-
-`TestBenchmark` (size sweep via `[Params(8, 256, 4096)]`, `ByCategory`):
-
-```csharp
-[MemoryDiagnoser]
-[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
-public class TestBenchmark
-{
-    [Params(8, 256, 4096)]
-    public int Length { get; set; }
-
-    [GlobalSetup]
-    public void Setup() { /* build patterns/inputs from Length */ }
-
-    [Benchmark(Baseline = true, Description = "Match - exact string")]
-    public bool Match_Exact() => Test.Match(_shortPattern, _shortActual);
-}
-```
-
-Template: `assets/params-benchmark.cs`. The starter keeps input size as the `[Params]` axis and
-compares baseline/candidate implementations through separate benchmark methods so `Baseline = true`
-stays meaningful. If you instead introduce an implementation enum as a `[Params]` dimension, collapse
-the measured work into one dispatching `[Benchmark]` method; do not keep duplicate benchmark methods
-and an unused parameter. Prefer seeded RNG (`new Random(42)`) and fixed sizes so runs are
-deterministic. Choose micro / mid / macro sizes to reveal trends.
-
-## How to pick a tier
-
-Lean Tier 2 when the type: takes a collection/stream/buffer/string whose length matters, has multiple
-implementations worth comparing, exposes an algorithm with a size parameter, or is on a documented hot
-path. Otherwise Tier 1 is enough. When unsure, ask the user which members and input sizes matter most —
-they know the hot paths.
-
-## Reference files (source of truth)
+Repository precedents include:
 
 - `codebeltnet/cuemon/tuning/Cuemon.Core.Benchmarks/DateSpanBenchmark.cs`
 - `codebeltnet/cuemon/tuning/Cuemon.Security.Cryptography.Benchmarks/Sha512256Benchmark.cs`
 - `codebeltnet/xunit/tuning/Codebelt.Extensions.Xunit.Benchmarks/TestBenchmark.cs`
-- `codebeltnet/cuemon/tooling/bdn-runner/Program.cs` and
-  `codebeltnet/xunit/tooling/benchmark-runner/Program.cs` (runner + multi-runtime jobs)
+- the `tooling/bdn-runner` or `tooling/benchmark-runner` hosts in those repositories
+
+Use these for placement and runner conventions, not as authority to preserve a misleading experiment. Adapt the benchmark design to the actual performance question.

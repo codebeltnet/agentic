@@ -1,81 +1,109 @@
 # BenchmarkDotNet Essentials
 
-A compact toolbox for authoring benchmarks. Full docs: https://benchmarkdotnet.org/articles/overview.html
+Use this as a compact API and validation reference after the experiment question is defined. Official documentation: <https://benchmarkdotnet.org/articles/toc.html>.
 
 ## Core attributes
 
 | Attribute | Purpose |
-|-----------|---------|
-| `[Benchmark]` | Marks a measured method. Add `Baseline = true` on the reference method and `Description = "..."` for readable reports. |
-| `[MemoryDiagnoser]` | Captures allocations and GC counts. Always include it — codebelt benchmarks care about allocations, not just time. |
-| `[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]` | Groups related methods so comparisons read cleanly. Use `ByParams` when the story is "same operation across sizes/variants". |
-| `[Params(...)]` | Sweeps input values (sizes, enum variants). BenchmarkDotNet runs every method once per combination. |
-| `[ParamsSource(nameof(...))]` | Use when the parameter set is computed rather than literal. |
-| `[GlobalSetup]` | One-time initialization that is **not** measured. Build payloads and instances here. |
-| `[IterationSetup]` / `[IterationCleanup]` | Per-iteration hooks; use sparingly (they add overhead) for state that must reset each iteration. |
-| `[Arguments(...)]` | Passes literal arguments to a benchmark method — lighter than `[Params]` for a few fixed cases. |
+|---|---|
+| `[Benchmark]` | Marks measured work. Add `Baseline = true` only inside an equivalent comparison group and use `Description` for readable reports. |
+| `[MemoryDiagnoser]` | Reports managed allocations and GC counts. Always include it for codebelt benchmarks. |
+| `[BenchmarkCategory("...")]` | Labels logical comparison groups when one class contains multiple alternative pairs. |
+| `[GroupBenchmarksBy(...)]` | Groups report rows by category, params, or a deliberate combination. Grouping changes presentation and baseline scope; choose it from the question. |
+| `[Params(...)]` | Sweeps independent compile-time-constant values. Multiple params properties create a Cartesian product. |
+| `[ParamsSource(nameof(...))]` | Supplies computed or coupled scenario objects with readable names. |
+| `[Arguments(...)]` / `[ArgumentsSource]` | Supplies method arguments, useful for explicit scenario sets. |
+| `[GlobalSetup]` / `[GlobalCleanup]` | Prepares and releases per-method/per-parameter state outside measurement. |
+| `[IterationSetup]` / `[IterationCleanup]` | Resets per iteration but forces single invocation/unroll; avoid for tiny microbenchmarks. |
 
-## Choosing what to measure
+## Baselines
 
-- Keep each `[Benchmark]` method to a **single logical operation**; move setup out of the measured path.
-- Return a value from the method (or consume inputs) so the JIT cannot optimize the work away.
-- Use deterministic, in-memory data. No network, disk, or database in measured methods — they destroy
-  repeatability and are not micro-benchmarks.
-- Name methods for the scenario (`Parse_Short`, `ComputeHash_Large`, `Match_ComplexWildcard`) so the
-  report is self-describing.
+A method baseline adds a ratio distribution against equivalent methods. BenchmarkDotNet allows category-specific baselines when benchmarks are grouped by category. Do not attach a baseline to an unrelated member or a lone benchmark just to satisfy a template.
 
-## Diagnosers worth knowing
+Runtime comparisons can use a job baseline. Keep method, inputs, and implementation fixed when attributing a difference to runtime.
 
-- `[MemoryDiagnoser]` — allocations (default for codebelt).
-- `[DisassemblyDiagnoser]` — emitted asm; heavy, opt-in for deep dives.
-- `BenchmarkDotNet.Diagnostics.Windows` (`[EtwProfiler]`, native counters) — Windows-only; referenced
-  by codebelt benchmark projects but enable specific diagnosers only when needed.
+## Prevent invalid measurements
+
+- Use Release builds and run without an attached debugger.
+- Return or consume results to prevent dead-code elimination.
+- Keep setup and correctness checks outside timed methods.
+- Do not rely on execution order or shared mutation between methods.
+- Avoid manual loops unless batching is the real workload; BenchmarkDotNet selects invocation counts automatically.
+- Inspect all validation and environment warnings before reading result tables.
+- Keep the machine powered and quiet for full runs unless the noisy/throttled environment is the intended target.
+
+## Validators
+
+BenchmarkDotNet always validates duplicate baselines. `ExecutionValidator` can smoke-execute cases and `ReturnValueValidator` can compare compatible return values, but domain-specific correctness checks remain necessary. A Release build plus `--job dry` provides practical wiring/lifecycle validation through the codebelt runner.
+
+## Diagnosers and profilers
+
+- `[MemoryDiagnoser]`: allocations and GC, always enabled by this skill.
+- `[ThreadingDiagnoser]`: completed thread-pool work items and monitor lock contention on .NET Core 3+.
+- `[ExceptionDiagnoser]`: exception frequency for intentional exception-path experiments.
+- `[DisassemblyDiagnoser]`: generated code; heavy and subject to toolchain/platform restrictions.
+- EventPipe profiler: cross-platform CPU/GC/JIT trace artifacts for a targeted deep dive.
+- ETW/native hardware diagnostics: Windows/privilege/toolchain restrictions; opt in only when needed.
+
+Diagnosers may require separate runs and increase duration.
 
 ## Jobs and runtimes
 
-A **job** describes how to run a benchmark. The Codebelt runner starts from `BenchmarkWorkspaceOptions.Slim`
-and you add jobs fluently in the runner's `Program.cs`:
+The codebelt runner starts from `BenchmarkWorkspaceOptions.Slim`. Add runtime jobs only for an explicit cross-runtime question:
 
 ```csharp
 return c
     .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(ClrRuntime.Net48))
+    .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(CoreRuntime.Core80))
     .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(CoreRuntime.Core90))
     .AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(CoreRuntime.Core10_0));
 ```
 
-Although `Codebelt.Extensions.BenchmarkDotNet` itself targets .NET 9/10, the **jobs** can measure
-older and newer runtimes. Runtime moniker map:
-
 | Target | Job runtime |
-|--------|-------------|
+|---|---|
 | .NET Framework 4.8 | `ClrRuntime.Net48` (Windows only) |
 | .NET 8 | `CoreRuntime.Core80` |
 | .NET 9 | `CoreRuntime.Core90` |
 | .NET 10 | `CoreRuntime.Core10_0` |
-| Mono | `MonoRuntime.Default` |
 
-Only add runtimes the benchmark project actually targets (its `TargetFrameworks` must include the
-matching TFM, e.g. `net48` for `ClrRuntime.Net48`). In the starter runner template, keep the
-runtime-job `using` directives plus the `.AddJob(BenchmarkWorkspaceOptions.Slim.WithRuntime(...))`
-chain only when the user explicitly asked for extra runtimes; the **Runner default only** case should
-stay warning-free as plain `return c;`. Docs: https://benchmarkdotnet.org/articles/configs/jobs.html
+Only add jobs that the SUT and benchmark toolchain can execute. Keep the runner-default-only template as `return c;` with no unused runtime `using` directives.
 
-Other useful job knobs (usually leave BenchmarkDotNet's smart defaults alone): `RunStrategy`
-(`Throughput`/`ColdStart`/`Monitoring`), `WarmupCount`, `IterationCount`, `LaunchCount`, `Platform`,
-`GcMode.Server`. Set these only for a specific reason.
+Let BenchmarkDotNet choose warmup, iteration, launch, and invocation counts unless the performance question requires cold start, monitoring, or another specific run strategy. Short/dry jobs validate or iterate quickly; they do not replace the default job for performance conclusions.
 
-## Running
+## Runner commands
 
-BenchmarkDotNet requires a **Release** build. Through the Codebelt console runner:
+Build:
 
 ```powershell
-dotnet run -c Release --project tooling/{runner} -- --filter *{TypeName}Benchmark*
+dotnet build -c Release tuning/{SutProject}.Benchmarks/{SutProject}.Benchmarks.csproj
 ```
 
-Common runner/BDN switches passed after `--`:
+List cases without measuring:
 
-- `--filter <glob>` — select benchmarks by full name (`*DateSpanBenchmark*`, `*.Parse_*`).
-- `--list flat` — list discovered benchmarks without running.
-- `--job short` — a faster, less precise job for smoke checks.
+```powershell
+dotnet run -c Release --project tooling/{runner} -- --list flat --filter *{BenchmarkClass}*
+```
+
+Dry execution smoke:
+
+```powershell
+dotnet run -c Release --project tooling/{runner} -- --job dry --filter *{BenchmarkClass}*
+```
+
+Full default run:
+
+```powershell
+dotnet run -c Release --project tooling/{runner} -- --filter *{BenchmarkClass}*
+```
 
 Reports are written under `reports/`.
+
+## Primary sources
+
+- BenchmarkDotNet good practices: <https://benchmarkdotnet.org/articles/guides/good-practices.html>
+- Parameterization: <https://benchmarkdotnet.org/articles/features/parameterization.html>
+- Setup and cleanup: <https://benchmarkdotnet.org/articles/features/setup-and-cleanup.html>
+- Baselines: <https://benchmarkdotnet.org/articles/features/baselines.html>
+- Diagnosers: <https://benchmarkdotnet.org/articles/configs/diagnosers.html>
+- Validators: <https://benchmarkdotnet.org/articles/configs/validators.html>
+- .NET diagnostics overview: <https://learn.microsoft.com/dotnet/core/diagnostics/>
