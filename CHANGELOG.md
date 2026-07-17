@@ -4,21 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-07-17
 
-## [0.8.0] - 2026-07-16
-
-This is a minor release introducing the `dotnet-benchmark` skill, a comprehensive benchmarking solution for .NET types using BenchmarkDotNet. The skill scaffolds benchmark projects following codebelt engineering conventions, provides parameter collection and complexity-aware test strategies, includes benchmark runner infrastructure, and supplies essential BenchmarkDotNet and codebelt-specific guidance.
+This is a minor release introducing evidence-driven discovery and performance-experiment design in `dotnet-benchmark`. The skill prioritizes identifying high-value benchmark targets through source inspection and profiling evidence, provides a structured discovery workflow before measurement, and includes new template assets and reference documentation for measurement-focused benchmarking.
 
 ### Added
 
-- `dotnet-benchmark` skill with workflow guidance for authoring and running BenchmarkDotNet performance tests for specific .NET types, supporting complexity-appropriate strategies (simple, parameterized, fixture-based),
-- `FORMS.md` for `dotnet-benchmark` with structured parameter collection for target type, benchmark family, and complexity level,
-- Benchmark project templates and runner infrastructure including `benchmark.csproj`, `benchmark-runner.csproj`, parameterized benchmark templates, and benchmark program entry points,
-- `check-benchmark-requirements.ps1` script validating BenchmarkDotNet installation and NuGet feed accessibility before running benchmarks,
-- Detailed reference documentation covering BenchmarkDotNet essentials (result interpretation, memory allocations, statistical confidence), codebelt conventions (namespace alignment, methodology rigor, result storage), and onboarding workflow for new benchmark authors,
-- Eval coverage for `dotnet-benchmark` including target-type inspection, benchmark strategy selection, template application, and runner validation,
-- README updates with `dotnet-benchmark` installation snippet, capability showcase, and "Why dotnet-benchmark?" section highlighting performance-test authoring for throughput and allocation measurement.
+- Evidence-driven discovery workflow in `dotnet-benchmark` prioritizing candidate selection, cost-signal analysis, and measurement fitness over tier-based template enumeration; includes new workflow steps for intent resolution, repository inspection, performance evidence gathering, and experiment-plan presentation,
+- New template assets `operation-benchmark.cs` and `comparison-benchmark.cs` replacing tier-based starters, providing refined structural guidance for single-operation and comparative-implementation benchmarks with clearer baseline configuration,
+- `candidate-selection.md` reference documenting evidence ladders, call-site inspection, profiling integration, and candidate-ranking heuristics to drive the discovery phase,
+- `experiment-design.md` reference detailing performance questions, workload selection, correctness verification, and measurement fitness to ensure benchmarks answer the right questions,
+- Refactored `FORMS.md` for `dotnet-benchmark` aligned with the new discovery-focused workflow, reducing parameter collection friction by deferring implementation-tier choice to workflow inspection,
+- Enhanced eval coverage for `dotnet-benchmark` with test cases validating candidate discovery, evidence gathering, cost-signal analysis, implementation-comparison patterns, and runtime-selection decisions; includes fixture code supporting five representative benchmark scenarios,
+- Enhanced `check-benchmark-requirements.ps1` and new `validate-skill.ps1` tooling supporting discovery workflow validation and template-asset consistency checking,
+- Updated README with discovery-focused `dotnet-benchmark` description and rationale emphasizing evidence-backed benchmarking over generic performance testing.
 
 ## [0.7.5] - 2026-07-15
 
@@ -467,7 +466,6 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.5...HEAD
 [0.8.0]: https://github.com/codebeltnet/agentic/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/codebeltnet/agentic/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/codebeltnet/agentic/compare/v0.7.3...v0.7.4
