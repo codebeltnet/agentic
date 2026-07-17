@@ -1,7 +1,7 @@
 ---
 name: dotnet-benchmark
 description: >
-  Discover, prioritize, and author trustworthy BenchmarkDotNet performance experiments for a .NET type while following codebelt engineering conventions and using the Codebelt.Extensions.BenchmarkDotNet Console runner. Use whenever a user wants to benchmark, micro-benchmark, performance-test, profile, optimize, compare implementations, investigate allocations or contention, or find likely bottlenecks in a .NET type or method. The skill inspects source and usage evidence, ranks high-value operations instead of every public member, selects representative workloads, rejects misleading microbenchmarks, creates or reuses the tuning/ and tooling/ harness, preflights existing-report skips, validates correctness and discovery, and keeps full runs human-initiated. When the user says yolo, it auto-accepts routine defaults and proceeds through safe validation without confirmation churn.
+  Discover, prioritize, and author trustworthy BenchmarkDotNet performance experiments for a .NET type while following codebelt engineering conventions and using the Codebelt.Extensions.BenchmarkDotNet Console runner. Use whenever a user wants to benchmark, micro-benchmark, performance-test, profile, optimize, compare implementations, investigate allocations or contention, or find likely bottlenecks in a .NET type or method. The skill inspects source and usage evidence, ranks high-value operations instead of every public member, selects representative workloads, rejects misleading microbenchmarks, creates or reuses the tuning/ and tooling/ harness, preflights existing-report skips, semantic-preflights workload correctness, validates discovery, and keeps full runs human-initiated. When the user says yolo, it auto-accepts routine defaults and proceeds through safe validation without confirmation churn.
 ---
 
 # Evidence-Driven .NET Benchmarking
@@ -15,8 +15,9 @@ Create the smallest benchmark suite that can answer the most valuable performanc
 - Rank candidates using evidence from the implementation, call sites, tests, documentation, existing benchmark results, and profiles. Never invent usage frequency, input distributions, or a competing implementation.
 - Compare only operations that produce equivalent observable work. Do not use construction as the baseline for formatting, equality, hashing, parsing, or another unrelated operation.
 - Use `Baseline = true` only when at least two benchmark methods form a meaningful comparison group. A single-operation scaling or regression benchmark needs no fabricated baseline. When a class has several comparison groups, assign categories and one baseline inside each category.
+- Before accepting `Baseline = true`, answer: do the baseline and candidate perform equivalent consumer-visible work over identical logical input? If not, remove the baseline or split the experiment.
 - Before build or dry validation, inspect benchmark attributes for internal coherence: `Baseline = true` only on equivalent observable work, `[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]` only with meaningful `[BenchmarkCategory]` values, every baseline category has an equivalent peer, single-operation characterization benchmarks have no fabricated baseline, benchmark descriptions name the real measured terminal operation, and decorative grouping attributes are removed.
-- Keep correctness outside the timed path but inside the verification workflow. Every parameter or scenario case needs an exact observable-result oracle for count, value, status, exception behavior, output contents, or mutation unless the domain explicitly defines approximation. Valid zero-match cases stay valid; if a zero result is unintended, fix the workload before measurement.
+- Keep correctness outside the timed path but inside the verification workflow. Every scenario must define the input, intended operation, exact expected observable result, how that result was derived independently of the measured API path, and any promised workload characteristic such as selectivity, hit rate, type mix, or branch distribution. Successful execution is not a correctness oracle. Every parameter or scenario case needs exact observable-result validation for count, value, status, exception behavior, output contents, or mutation unless the domain explicitly defines approximation. Valid zero-match cases stay valid; if a zero result is unintended, fix the workload before measurement.
 - When one parameter only scales size, payload, or another magnitude, keep selectivity, hit/miss ratio, valid/invalid ratio, branch distribution, collision rate, string shape/encoding, type mix, entropy, and cache state stable unless one of them is intentionally exposed as a named scenario or parameter.
 - A benchmark is invalid for performance interpretation until the complete BenchmarkDotNet summary shows the full intended method/job/parameter matrix without `NA`, `Benchmarks with issues`, setup/cleanup exceptions, validation errors, failed jobs/runtimes, or missing combinations. Report the exact failing method, job, and parameter case, do not treat surviving rows as a completed benchmark, fix only benchmark-owned causes, rerun build/list/dry validation, and require fresh explicit human authority before any replacement full run.
 - Treat deferred pipeline creation, terminal operations such as `Count()`, `Any()`, or `First()`, explicit full enumeration, and materialization through `ToArray()` or `ToList()` as different workloads. Inspect fast paths such as `List<T>.Count` before describing a benchmark as enumeration or using it as the baseline for predicate traversal.
@@ -83,8 +84,8 @@ Before authoring code, present a compact plan with:
 - the performance question and metric: latency/throughput, allocated bytes, scaling, contention, cold start, or exception frequency;
 - the selected operation and the evidence that made it important;
 - the baseline and candidate, if a fair comparison exists;
-- representative cases, including typical, boundary, scaling, and adverse-but-valid inputs where relevant;
-- setup/reset strategy and correctness oracle;
+- representative cases, including typical, boundary, scaling, and adverse-but-valid inputs where relevant, plus any named workload characteristic such as selectivity, hit rate, type mix, or branch distribution;
+- setup/reset strategy and correctness oracle, including how each exact expected result is derived independently of the benchmark method;
 - candidates deliberately rejected and why;
 - whether the result will be exploratory or grounded in profile/telemetry evidence.
 
@@ -102,7 +103,11 @@ Do not copy an asset blindly. The assets are structural examples with placeholde
 
 When a parameter is only size or payload, preserve the other workload characteristics unless the experiment names them explicitly. For predicate or filter benchmarks, state the intended selectivity, use deterministic data, prefer fixed-width or otherwise structurally stable inputs when digit length or formatting would change the branch mix, and verify the exact expected match count for every scenario.
 
+If a case label promises an exact percentage such as `10% selectivity`, make that statement true for every size under a documented rounding rule. Otherwise choose compatible sizes, define explicit scenario objects with exact expected counts, or rename the cases honestly with qualitative names such as `LowSelectivity`, `HalfMatches`, or `AllMatch`.
+
 For LINQ and other deferred pipelines, decide whether the benchmark measures query or iterator creation, a terminal operation, explicit enumeration, or materialization. Encode that distinction in names, descriptions, baselines, and conclusions; `List<T>.Count` and `Where(...).Count()` are not interchangeable evidence.
+
+For `QueryFor<T>`-style runtime-type filters, use deterministic heterogeneous input with exact matches, sibling nonmatches, derived types when exact-type versus assignability semantics matter, and nulls only when supported and relevant. Validate the exact expected count and, when it matters, insertion order and exact runtime types. Do not benchmark a homogeneous all-match store and call it type filtering unless that all-match path is the stated subject.
 
 ### 7. Author the benchmark
 
@@ -122,7 +127,17 @@ If the detector found missing infrastructure, follow `references/onboarding.md`.
 
 Before the build, inspect the benchmark attributes for coherence and remove decorative configuration that no longer serves the question.
 
-First validate the benchmark's correctness through existing tests or a setup-time oracle for every parameter case. The oracle should normally verify exact observable behavior rather than merely nonzero or approximate success. Then build the benchmark project in Release:
+Run a semantic preflight across the full Cartesian set of benchmark methods, parameter values, runtime jobs, and scenario objects before build, discovery, dry execution, or any request for a full run. For every case verify that setup succeeds, the exact expected output is known independently, the actual output matches, the named workload characteristic is true, the intended code path is exercised, and the case does not collapse into a trivial fast path unless that fast path is the stated subject.
+
+Semantic preflight
+- Every scenario has an independently derived exact expected result.
+- Every parameter combination satisfies that oracle.
+- Benchmark names accurately describe the generated workload.
+- Selectivity, hit rate, type mix, and other workload distributions are explicit and verified.
+- Every benchmark exercises the intended path.
+- Baselines compare equivalent observable work.
+
+Successful execution is not a correctness oracle. After semantic preflight, validate the benchmark's correctness through existing tests or a setup-time oracle for every parameter case. The oracle should normally verify exact observable behavior rather than merely nonzero or approximate success unless that is the real domain contract. Then build the benchmark project in Release:
 
 ```powershell
 dotnet build -c Release tuning/{SutProject}.Benchmarks/{SutProject}.Benchmarks.csproj
@@ -172,6 +187,7 @@ After the first valid full result, answer three questions: is the result reprodu
 - [ ] Cases represent realistic, boundary, scaling, and adverse paths without useless Cartesian products, and size-only sweeps keep other workload invariants stable unless explicitly named.
 - [ ] Setup, mutation, async, concurrency, disposal, and result consumption are handled correctly.
 - [ ] Exact correctness oracles cover every parameter and scenario case, including valid zero-match boundaries.
+- [ ] A semantic preflight covered every method/param/job/scenario combination with independently derived expected results, truthful workload labels, intended code paths, and no accidental fast paths.
 - [ ] Baselines, categories, grouping attributes, and descriptions are internally coherent and non-decorative.
 - [ ] `[MemoryDiagnoser]` is present and every additional diagnoser has a stated purpose.
 - [ ] Harness changes preserve repository conventions and reuse existing projects/runner where possible.

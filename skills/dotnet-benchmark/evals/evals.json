@@ -183,6 +183,25 @@
         "Does not automatically add repeated full reruns, tiered-PGO, disassembly, EventPipe or ETW tracing, runtime-source archaeology, or speculative alternative implementations",
         "Identifies a concrete reopen condition such as promotion to a production hot path, materially larger inputs or frequencies, or a new regression with decision-changing cost"
       ]
+    },
+    {
+      "id": 12,
+      "prompt": "Review the attached Codebelt.Extensions.Xunit InMemoryTestStore benchmark and the first successful summary excerpt. Close the remaining correctness and workload-semantics gap before any further performance interpretation or rerun. Fix the benchmark design only; do not begin another deep performance investigation.",
+      "files": [
+        "evals/files/inmemory-test-store/InMemoryTestStore.cs",
+        "evals/files/inmemory-test-store/InMemoryTestStoreTests.cs",
+        "evals/files/inmemory-test-store/InMemoryTestStoreBenchmark.cs",
+        "evals/files/inmemory-test-store/InMemoryTestStoreBenchmark-summary.md"
+      ],
+      "expected_output": "The agent adds a semantic preflight before any further run, derives independently trusted exact expected counts for every ItemCount and scenario, rejects the false 10% label at the smallest size, fixes or relabels the fake type-filter workload, removes the invalid no-predicate baseline, and validates the full case matrix without drifting into a broader performance investigation.",
+      "expectations": [
+        "States that the existing successful benchmark summary is not a correctness oracle and requires semantic preflight before any future full run or interpretation",
+        "Derives exact expected counts independently of the measured Query path and validates every ItemCount/scenario combination, including the 8-item case whose current 10% label yields zero matches",
+        "Either chooses sizes or explicit scenario objects that preserve exact percentage semantics, or renames the cases honestly with qualitative labels such as LowSelectivity, HalfMatches, and AllMatch",
+        "Replaces the homogeneous QueryFor<int>() input with deterministic heterogeneous runtime types spanning matches, sibling nonmatches, and derived types when assignability matters, or explicitly relabels the benchmark as the all-match path instead of type filtering",
+        "Removes Baseline=true from the no-predicate Count fast path comparison and rejects decorative ByCategory grouping unless an equivalent comparison group remains",
+        "Checks the full Cartesian matrix of benchmark methods, ItemCount values, runtime jobs, and scenario objects before build/list/dry/full validation, then stops without launching another deep performance investigation"
+      ]
     }
   ]
 }

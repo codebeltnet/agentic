@@ -10,11 +10,14 @@ Write down:
 - the primary metric: time/throughput, allocations, scaling, contention, cold start, or exception frequency;
 - baseline and candidate implementations, if both exist;
 - parameter cases and why each can change the result;
+- the exact expected observable result for each scenario;
+- how each expected result is derived independently of the measured API path;
+- workload characteristics that the scenario name promises, such as match count, selectivity, hit rate, type distribution, or branch distribution;
 - setup/reset/disposal strategy;
 - a correctness oracle;
 - environmental variables that must remain fixed.
 
-If these cannot be defined, more inspection is needed. Attributes do not rescue an ambiguous experiment.
+If these cannot be defined, more inspection is needed. Attributes do not rescue an ambiguous experiment. Successful execution is not a correctness oracle.
 
 ## Comparison semantics
 
@@ -25,6 +28,8 @@ Do not compare unrelated operations. Construction, parsing, formatting, equality
 For a single current implementation measured across sizes or scenarios, omit `Baseline = true`. The parameter columns and absolute time/allocation results already describe scaling. A fake baseline adds no evidence.
 
 When comparing runtimes rather than implementations, use a job baseline and keep the measured method the same. Do not mix runtime and algorithm changes in one conclusion unless the full matrix is intentional.
+
+Before accepting a method baseline, answer: do the baseline and candidate perform equivalent consumer-visible work over identical logical input? Reject baselines where one side returns an existing collection while the other enumerates, uses an O(1) fast path while the other scans, filters while the other does not, materializes while the other stays deferred, or validates/parses/transforms different semantics.
 
 ## Configuration coherence
 
@@ -67,6 +72,19 @@ For predicate and filter benchmarks:
 - prefer fixed-width or structurally stable inputs when digit length or formatting would otherwise move cases between branches;
 - verify the exact expected match count for every scenario, including valid zero-match cases.
 
+If a case name promises an exact percentage such as `10% selectivity`, make that statement true for every size under a documented rounding rule. When that is not possible, choose compatible sizes, define explicit scenario objects with exact expected counts, or rename the cases honestly with qualitative names such as `LowSelectivity`, `HalfMatches`, or `AllMatch`.
+
+### Runtime-type filtering
+
+For `QueryFor<T>`-style or other runtime-type filters, use deterministic heterogeneous input:
+
+- exact matches;
+- sibling nonmatches;
+- derived types when exact-type versus assignability semantics matter;
+- nulls only when supported and relevant.
+
+Validate the exact expected count and, when it matters, insertion order and exact runtime types. Do not benchmark a homogeneous all-match store and call it type filtering unless the all-match path is the actual subject.
+
 ## Setup, state, and disposal
 
 Use `[GlobalSetup]` for deterministic state that is not part of the operation: payload creation, parsing expected results, object construction for instance methods, and correctness checks. BenchmarkDotNet runs global setup for each benchmark method and parameter combination, so setup must not rely on another benchmark method having run first.
@@ -85,18 +103,21 @@ Avoid state leakage between methods, params, warmup, and measurement. Never depe
 
 ## Correctness oracle
 
-An optimization benchmark without correctness validation can reward wrong code. Before a full run:
+An optimization benchmark without correctness validation can reward wrong code. For every scenario, define the input, intended operation, exact expected observable result, how that result was derived independently of the measured API path, and any promised workload characteristic such as selectivity, hit rate, or type mix. Successful execution is not a correctness oracle. Before a full run:
 
 1. Execute baseline and candidate for every scenario outside the timed method.
-2. Compare exact observable results with the domain's real equivalence rule, including counts, values, status codes, exceptions, output buffers, mutations, and side effects.
-3. Fail setup or a focused test when results differ.
-4. Keep the assertion/check out of the timed path.
+2. Compare exact observable results with the domain's real equivalence rule, including counts, values, status codes, exceptions, output buffers, mutations, side effects, insertion order, and runtime types when they matter.
+3. Ensure the expected value is derived independently of the measured API path; do not turn the implementation's current behavior into the oracle by computing `_expected` with the same call you intend to benchmark.
+4. Fail setup or a focused test when results differ or when the generated workload does not match the named scenario.
+5. Keep the assertion/check out of the timed path.
 
 Approximate checks are acceptable only when approximation is part of the domain semantics and the benchmark documents that rule. A valid boundary case that produces zero matches must still pass; only unexpected zero results should fail setup and force workload redesign.
 
+A check such as `result == 0` is acceptable only when zero versus nonzero is the real domain contract. For collections, filters, parsers, matchers, and type selection, validate exact counts or exact outputs for every parameter case.
+
 For non-equivalent APIs, do not force a comparison. Characterize them separately and state the semantic difference.
 
-BenchmarkDotNet's `ReturnValueValidator` can supplement this for compatible return values, but it does not replace domain-aware correctness checks.
+BenchmarkDotNet's `ReturnValueValidator` can supplement this for compatible return values, but it does not replace domain-aware correctness checks. A reference implementation may act as the oracle only when it is identified explicitly as trusted and is semantically equivalent.
 
 ## Prevent dead-code elimination and accidental work
 
@@ -163,14 +184,36 @@ Benchmark trivial getters/operators only with evidence of extreme frequency or a
 
 Diagnosers can create additional runs and change total duration. Do not combine every diagnoser into a default benchmark.
 
+## Semantic preflight
+
+Before build, list, or dry validation, inspect the full Cartesian set of benchmark methods, parameter values, runtime jobs, and scenario objects. For every case verify:
+
+- setup succeeds;
+- the exact expected output is known independently;
+- the exact actual output matches;
+- the named workload characteristic is true;
+- the case exercises the intended code path;
+- the case does not collapse into a trivial fast path unless that fast path is the stated subject.
+
+Semantic preflight
+- Every scenario has an independently derived exact expected result.
+- Every parameter combination satisfies that oracle.
+- Benchmark names accurately describe the generated workload.
+- Selectivity, hit rate, type mix, and other workload distributions are explicit and verified.
+- Every benchmark exercises the intended path.
+- Baselines compare equivalent observable work.
+
+If any item fails, fix the benchmark before build, list, dry validation, or human authorization for a full run.
+
 ## Layered validation
 
-1. Run existing correctness tests for the SUT where feasible.
-2. Execute the benchmark's correctness oracle for every case.
-3. Build the benchmark project in Release.
-4. Run `--list flat` with a filter and confirm the expected case/method combinations without accidental Cartesian products.
-5. Run a `--job dry` execution smoke and resolve BenchmarkDotNet validation warnings or runtime failures.
-6. Run the full default job only with explicit user intent and a suitable environment.
+1. Run the semantic preflight across the full case matrix.
+2. Run existing correctness tests for the SUT where feasible.
+3. Execute the benchmark's correctness oracle for every case.
+4. Build the benchmark project in Release.
+5. Run `--list flat` with a filter and confirm the expected case/method combinations without accidental Cartesian products.
+6. Run a `--job dry` execution smoke and resolve BenchmarkDotNet validation warnings or runtime failures.
+7. Run the full default job only with explicit user intent and a suitable environment.
 
 A dry job has too few measurements for conclusions. It validates wiring and lifecycle only.
 
