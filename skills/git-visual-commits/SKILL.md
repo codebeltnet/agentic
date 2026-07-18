@@ -1,7 +1,7 @@
 ---
 name: git-visual-commits
 description: >
-  Structured git commit workflow with emoji-first subjects and identity-aware modes: `git bot commit`, regular `git commit`, and `git our commit`. Use this skill whenever the user asks to commit changes, stage files, write a commit message, or review what should be committed. Also use it when the user says "commit this", "make a commit", "commit your changes", "commit what you just did", "what should my commit message be", "stage and commit", "git bot commit", "git our commit", or combines a commit request with "yolo" or "auto". Treat commit wording as an automatic trigger for this skill, not as a casual hint. Supports auto-approval mode, defaults to no prefix after the emoji, allows an emoji plus conventional-commit prefix combo only when the user explicitly asks for it, keeps subjects under 70 chars, validates commit-language choices against the inspected reference, and verifies author/body after commit.
+  Structured git commit workflow with deterministically validated emoji-first subjects and identity-aware modes: `git bot commit`, regular `git commit`, and `git our commit`. Use this skill whenever the user asks to commit changes, stage files, write a commit message, or review what should be committed. Also use it when the user says "commit this", "make a commit", "commit your changes", "commit what you just did", "what should my commit message be", "stage and commit", "git bot commit", "git our commit", or combines a commit request with "yolo" or "auto". Treat commit wording as an automatic trigger for this skill, not as a casual hint. Requires a full read through EOF before action, defaults to no prefix after the emoji, allows an emoji plus conventional-commit prefix combo only when the user explicitly asks for it, blocks subjects unless they use an approved emoji, exactly one following space, a lowercase description beginning, and at most 70 characters, and verifies the stored result after commit.
 ---
 
 # Git Visual Commits
@@ -11,6 +11,26 @@ description: >
 This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji, and only adding a conventional prefix when the user explicitly asks for that combo. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
 
 ## Critical Rules
+
+### Full-Skill Read and Subject Lock
+
+Before running any Git command or composing a subject, read this `SKILL.md` completely from the first line through EOF. A metadata preview, excerpt, cached recollection, or partial read is not sufficient. If a tool truncates the file, continue from the first unread line until EOF before proceeding.
+
+The first visible character after the emoji and its single separator space must be lowercase. This is a blocking requirement, not a style suggestion. Every proposed subject must have this exact default shape:
+
+```text
+<approved-emoji><one ASCII space><lowercase-beginning description>
+```
+
+After selecting the emoji from the bundled `references/commit-language.md`, run the bundled deterministic validator before showing the subject in a plan and again immediately before passing it to Git:
+
+```powershell
+pwsh -NoProfile -File <skill-root>/scripts/validate-commit-subject.ps1 -Subject '<subject>'
+```
+
+Only when the user explicitly requested the conventional-prefix combo, add `-PrefixMode Required`. Resolve `<skill-root>` from this skill's installed directory, not from the current repository. The validator must exit successfully. If it fails, correct the subject and rerun it; never show, commit, or preserve the invalid subject. `yolo` and `auto` do not bypass the full-read or subject-validation locks.
+
+The validator enforces an emoji present in the bundled reference table, exactly one ASCII space after it, a lowercase first description character, the opt-in prefix contract, and the 70-character maximum. Semantic emoji selection still comes from reading the reference and inspecting the actual diff.
 
 ### Identity Lock
 
@@ -39,9 +59,11 @@ This skill drives the entire git commit workflow — reviewing changes, grouping
 `yolo` / `auto` skips user confirmation only. It never skips:
 
 - skill activation
+- the full-skill read
 - identity selection
 - semantic grouping
 - mixed-scope validation
+- deterministic subject validation
 - post-commit author verification
 
 If the user did **not** say `yolo` or `auto`, and session-level auto mode is not already enabled, do **not** run any commit command yet. You must stop after Step 4, present the plan, and wait for approval.
@@ -97,15 +119,11 @@ git log -1 --format="%an <%ae>"
 
 Confirm that the author matches the requested identity mode. If the author is wrong, treat the commit as invalid and repair it before reporting success.
 
-Then verify the stored commit message body too:
-
 ```bash
 git log -1 --format=%B
 ```
 
 If the body contains literal escape sequences such as `\n` instead of real line breaks, treat the commit message as invalid and repair it before reporting success.
-
-Also reject a stored short prose body when it was split across lines only to chase a 72-column habit. If a non-empty body line ends mid-sentence and the next non-empty line simply continues that same sentence, treat the commit message as invalid and repair it before reporting success. A single short paragraph should usually stay as one natural prose line; add manual line breaks only for real paragraphing, lists, quotes, or readability-driven separation.
 
 ### Umbrella Commit Rejection
 
@@ -128,14 +146,6 @@ git config --global alias.bot '!git -c user.name="<bot-name>" -c user.email="<bo
 
 Replace `<bot-name>` and `<bot-email>` with the identity you want AI-authored commits to appear under.
 
-Verify it works:
-
-```bash
-git bot commit --allow-empty -m "test bot identity"
-git log -1 --format="%an <%ae>"   # should show bot name and email
-git reset HEAD~1                   # undo the test commit
-```
-
 If `git config --global --get alias.bot` returns nothing when the user asked for `git bot commit`, stop and report that the bot alias is missing. Do not proceed with `git commit` as a fallback.
 
 ---
@@ -152,30 +162,7 @@ In all cases, **the AI does all the work** — reviewing changes, grouping them 
 
 ### How `git our commit` works
 
-When the user says "our commit" (or similar), the agent attributes each commit to whoever authored the files in it:
-
-1. **Analyze the diff** — review all changed files and determine which were modified by the agent during the current session vs which were edited by the human outside the session
-2. **Present the breakdown** — show the user a summary:
-   ```
-   🤖 Agent-authored:  src/UserService.cs, src/UserController.cs
-   👤 Human-authored:  README.md, appsettings.json
-   🤝 Mixed/unclear:  src/Startup.cs
-   ```
-3. **Group into commits** (Step 2 of the main workflow) — then assign attribution per group:
-   - If all files in a group are agent-authored → `git bot commit`
-   - If all files in a group are human-authored → `git commit`
-   - If a group has mixed/unclear files → ask: **"Who should be the author for this group — you or bot?"**
-4. **Present the commit plan with attribution already assigned** — show which commits use which identity:
-   ```
-   1. 🙈 add gitignore                          (👤 you)
-      Files: .gitignore
-   2. 🦾 add agent agreements                    (🤖 bot)
-      Files: AGENTS.md
-   3. 🍱 add photo and hero image assets         (👤 you)
-      Files: assets/dj-photo.jpg, assets/hero.png
-   ```
-   The user confirms or adjusts the plan — they can override any attribution.
-5. **Commit** each group with its assigned identity — no `Co-authored-by` trailer (GitHub's PR flow already tracks collaboration)
+When the user says "our commit", analyze which changed files were agent-authored, human-authored, or mixed/unclear. Group by semantic intent first, then assign each all-agent group to `git bot commit` and each all-human group to `git commit`. For mixed/unclear groups, ask who should be the author. Present the attribution beside every planned commit; the user may override it. Do not add `Co-authored-by` trailers because the pull-request flow already records collaboration.
 
 The commit message format, emoji conventions, grouping strategy, and everything else is **identical** for both. The profile is the only thing that changes.
 
@@ -203,7 +190,7 @@ Only when the user explicitly asks for an emoji plus conventional-commit combo:
 
 - **Emoji** comes first — picked from `references/commit-language.md`
 - **Prefix** is omitted by default. Only add one when the user explicitly asked for an emoji plus conventional-commit combo. When combo mode is active, the prefix is lowercase (see `references/commit-language.md`) — **never use `feat:`**
-- **Description** is lowercase, imperative, max 70 characters total (including emoji and any explicit-request prefix)
+- **Description** begins with a lowercase letter, uses imperative wording, and keeps the full subject to at most 70 characters (including emoji and any explicit-request prefix)
 - **Body** is included by default — a short paragraph explaining *why* the change was made, not just *what* changed. Separate from the subject with a blank line. Do **not** hard-wrap commit bodies at 72 characters; keep short bodies as normal prose and add line breaks only when they improve readability. Can be suppressed with `no-body` (see below).
 - **Body repair rule** — if verification shows the stored body was split mid-sentence just to fit an arbitrary width, amend the commit before reporting success.
 - One logical change per commit — don't bundle unrelated things
@@ -218,57 +205,23 @@ That reference now defines prefixes as opt-in. Unless the user explicitly asked 
 
 ### Source Discipline for Explanations
 
-- When you explain why an emoji, prefix, or grouping choice is correct, anchor the explanation to a source you actually inspected in the current session.
-- Distinguish verified sources from inference. Say "the reference file says..." only after reading that file; otherwise say "based on your feedback/example..." or similar.
-- Do not claim that a document, attachment, screenshot, or image contained guidance unless you verified that it actually did.
+Anchor emoji, prefix, and grouping explanations to sources inspected in the current session. Distinguish verified sources from inference, and never claim that a document, attachment, screenshot, or image contained guidance unless you verified it.
 
 ---
 
 ## Auto-Approval Mode
 
-By default, the agent presents a commit plan and waits for user confirmation before staging and committing (Step 4). Auto-approval mode skips this wait — the plan is still displayed for transparency, but the agent proceeds immediately.
-
-**What auto-approval skips:** user confirmation only. **What auto-approval never skips:** classification (Step 2), grouping validation (Step 3), and the mixed-scope guard. These self-checks run unconditionally — they exist to catch bad groupings before they become commits, regardless of whether a human is reviewing the plan.
-
-### Per-request activation
-
-Include the word **"yolo"** or **"auto"** anywhere in your request:
-
-- "yolo commit this"
-- "auto commit my changes"
-- "do a git bot commit, yolo"
-
-The agent will show a one-line commit plan summary and proceed without waiting. Example:
+`yolo` or `auto` in a request skips the Step 4 approval wait for that request. `enable yolo mode` or `enable auto mode` keeps it active until the user disables it. Auto-approval applies to all identity modes and skips confirmation only; every classification, grouping, subject-validation, identity, and post-commit check still runs. Show the plan before proceeding:
 
 ```
 Auto-committing: 🔧 build/toolchain → 🚚 moved types → 💥 breaking shim removal → 💬 release notes
 ```
 
-### Session-level activation
-
-Say **"enable yolo mode"** or **"enable auto mode"** to activate auto-approval for the rest of the session. All subsequent commits skip the approval gate until the user says **"disable yolo mode"** or **"disable auto mode"**.
-
-> **Note:** Auto-approval applies to all three identity modes (`git commit`, `git bot commit`, `git our commit`). For `git our commit`, the agent still presents the authorship breakdown and attribution — but proceeds with its best-guess attribution without waiting for confirmation. The user can always say "undo" or "reset" if the result isn't right.
-
 ---
 
 ## No-Body Mode
 
-By default, every commit includes a body paragraph explaining *why* the change was made. This can be suppressed when only a subject line is desired.
-
-### Per-request activation
-
-Include **"no-body"** or **"tmi"** anywhere in your request:
-
-- "git bot commit, no-body"
-- "commit this tmi"
-- "yolo tmi" (combines both modes)
-
-### Session-level activation
-
-Say **"enable no-body mode"** or **"enable tmi mode"** to suppress commit bodies for the rest of the session. All subsequent commits will be subject-only until the user says **"disable no-body mode"** or **"disable tmi mode"**.
-
-> **Note:** No-body mode suppresses the body paragraph only. The subject line, emoji, prefix, classification, and grouping rules all still apply.
+Commits include a body by default. `no-body` or `tmi` suppresses it for one request; `enable no-body mode` or `enable tmi mode` keeps subjects-only until disabled. This mode suppresses only the body. Subject, emoji, prefix, classification, grouping, and validation rules still apply.
 
 ---
 
@@ -294,20 +247,7 @@ Use the inspected commit-language reference as the meaning source, not your gut.
 
 #### Emoji Resolution: Common Mistakes
 
-**⚠️ Sparkles (✨) is often misused.** It is **only for 100% new feature introduction** — a capability that did not exist before. Do **not** use ✨ for:
-
-- Bug fixes (use `🐛` or `🩹`)
-- Documentation updates or skill description clarifications (use `📝`)
-- Enhancements to existing features (still use `♻️`, `⚡️`, or feature-specific emoji)
-- Refactoring existing code or skill content (use `♻️`)
-- Adding tests for existing code (use `✅` or `🧪`)
-
-**Examples of emoji resolution mistakes:**
-- ❌ `✨ update git-keep-a-changelog skill description for clarity` → ✅ `📝 clarify git-keep-a-changelog skill description`
-- ❌ `✨ improve error handling in parser` → ✅ `🐛 improve error handling in parser` or `♻️ improve error handling in parser`
-- ❌ `✨ add unit tests for auth module` → ✅ `✅ add unit tests for auth module`
-
-When in doubt between two emojis, pick the one whose meaning most closely matches **what the change actually does**, not what you hope it represents. Read the reference table carefully — each emoji has a specific scope.
+Sparkles (`✨`) is only for a capability that did not exist before. Do not use it for fixes, documentation, improvements to existing behavior, refactors, or tests. When two emoji seem plausible, use the reference meaning that most closely describes what the diff actually does.
 
 Derive categories from the actual diff — don't assume a fixed set. Common categories include:
 
@@ -315,17 +255,9 @@ Derive categories from the actual diff — don't assume a fixed set. Common cate
 - **Existing skill refactors** — restructuring or extracting shared rules from an already existing skill
 - **Dependency/version baselines** — shared dependency manifests, package version props, runner-image version pins, or environment baselines that primarily align versions
 - **Package/publish metadata** — release-note definitions, pack/publish targets, nuspec-like metadata, or files that define what a package publishes
-- **Project/solution files** — build system metadata that defines project structure
-- **Preprocessor/build-only changes** — conditional compilation, build-target switches
 - **Build/tooling** — CI workflows, container definitions, build scripts
 - **Documentation publishing** — doc-site navigation, generated-doc assets, site branding, or files whose main job is to make published docs render correctly
 - **Community health/release communication** — changelogs, support/contribution/community defaults, and other files whose main audience is humans reading repo health or release status; this bucket normally maps to `💬`
-- **Environment/configuration** — test environment config, connection strings, runner settings, infra setup
-- **Source moves/renames** — renamed files, moved namespaces, updated imports
-- **Breaking removals** — removed public types, deleted forwarding attributes, dropped compatibility shims
-- **Documentation** — readmes, usage guides, inline doc comments, API docs, and similar documentation that is not primarily repo-health or release-status communication
-- **Application code** — new features, bug fixes, refactors, business logic
-- **Test logic** — changed assertions, updated expectations, new test cases, modified test behavior
 
 These categories are examples, not a fixed taxonomy. Reuse the *rationale* behind them even when another repo uses different filenames or technologies.
 
@@ -444,7 +376,7 @@ Before staging or committing anything, present the full commit plan to the user.
    Files: tests/Identity.Tests/
 ```
 
-Before you render that plan, validate every proposed emoji and every proposed prefix against the inspected `references/commit-language.md`. Fix mismatches before the user sees them. If the user did not explicitly ask for a conventional-commit combo, strip prefixes from the proposed subjects before presenting the plan.
+Before you render that plan, validate every proposed emoji and every proposed prefix against the inspected `references/commit-language.md`, then run `scripts/validate-commit-subject.ps1` for every exact subject. Fix failures before the user sees them. If the user did not explicitly ask for a conventional-commit combo, strip prefixes from the proposed subjects before presenting the plan. A plan containing an unvalidated subject is invalid, including in auto-approval mode.
 
 If auto-approval is **not** active, Step 4 is a hard stop. Do not stage, do not commit, and do not treat silence or momentum as approval.
 
@@ -472,22 +404,17 @@ If the user's response is ambiguous, such as "4 is wrong now" or "that was fine 
 
 Before committing, validate each message against its file list:
 
-- **Breaking-change check:** If the commit subject contains "breaking" or uses 💥, verify that the majority of files in that commit directly implement or document the breaking change. Build-matrix files, CI config, environment files, and unrelated tooling changes **fail this check** — move them to a separate commit.
-- **Scope consistency:** The commit message should accurately describe what the files do. If the message says "rename" but the commit includes deletions of compatibility shims, split them.
-- **Emoji correctness check (critical):** Validate every emoji against the reference file:
-  - ✨ sparkles is **ONLY** for 100% new features that didn't exist before. If the commit updates an existing skill, fixes a bug, clarifies docs, adds tests to existing code, or enhances existing features → use a different emoji (📝, ♻️, 🐛, ✅, etc.)
-  - 📝 memo is appropriate for documentation updates, clarity improvements, and skill description changes
-  - ♻️ recycle is appropriate for restructuring, refactoring, or reorganizing existing content
-  - 🐛 bug is for fixes to broken behavior
-  - ✅ check mark is for new test coverage
-  - If an emoji doesn't fit the actual change, **swap it before presenting the plan**. Do not let the user catch emoji mistakes.
+- If the subject claims a breaking change or uses `💥`, most files must directly implement or document that break; split build, CI, environment, and unrelated tooling files.
+- The subject must describe every staged file consistently. Split rename work from compatibility-shim removal.
+- Validate the emoji meaning against the reference and the exact subject shape with the script. Correct mismatches before presenting the plan.
 
 ### Step 5: Stage and commit each group
 
 For each group:
 1. `git add <specific files>` — be precise, don't use `git add .` unless everything belongs in one commit
 2. Compose the commit message (see format above)
-3. Run the appropriate commit command:
+3. Run `scripts/validate-commit-subject.ps1` again against the exact subject that will be passed to Git. Add `-PrefixMode Required` only for an explicitly requested combo. Do not run Git unless the validator exits successfully.
+4. Run the appropriate commit command:
    - `git bot commit -m "<subject>"` — if the user asked the AI to commit (bot identity)
    - `git commit -m "<subject>"` — if the user asked to commit under their own identity
    - For `git our commit` — use whichever command matches the attribution the human chose
@@ -501,7 +428,7 @@ When the body is just one short explanatory paragraph, prefer a single natural p
 
 ### Step 6: Verify
 
-After committing, run `git log --oneline -5` to confirm the commit looks right. Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success. Also run `git log -1 --format=%B` and verify the stored body contains readable prose with real line breaks, not literal escape sequences such as `\n`, and is not hard-wrapped mid-sentence just to satisfy a column limit. If that verification fails, amend the commit immediately instead of merely warning about it.
+After committing, run `git log --oneline -5` to confirm the commit looks right. Read the stored subject with `git log -1 --format=%s` and run `scripts/validate-commit-subject.ps1` against that exact value. Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success. Also run `git log -1 --format=%B` and verify the stored body contains readable prose with real line breaks, not literal escape sequences such as `\n`, and is not hard-wrapped mid-sentence just to satisfy a column limit. If any verification fails, amend the commit immediately instead of merely warning about it.
 
 If verification fails because the commit path used the wrong author or ignored the requested alias, stop treating it as a message-tweaking problem. Correct the tool path first, preserve the worktree safely, and only then repair the commit.
 
@@ -509,39 +436,12 @@ If verification fails because the commit path used the wrong author or ignored t
 
 ## Good Examples
 
-Subject-only (when the change is self-explanatory):
 ```
 🎉 begin api project
 ✨ add submission endpoint module
 🐛 handle null optional fields in dto
 ➕ add validation library
-```
-
-With body (when context adds value):
-```
-🚚 rename templates/ to assets/ per Anthropic skill conventions
-
-Align with the official skill directory structure: SKILL.md, scripts/, references/, and assets/. Updates all path references in SKILL.md, reference docs, and AGENTS.md for both app and library skills.
-```
-
-```
-♻️ streamline app skill with FORMS.md wizard
-
-Replace inline parameter table with structured FORMS.md form definition.
-Step 1 now references FORMS.md instead of listing 12 fields inline.
-```
-
-When the user explicitly asked for the emoji plus conventional-commit combo:
-```
-🐛 fix: handle null optional fields in dto
-♻️ refactor: streamline app skill with FORMS.md wizard
-```
-
-With body repair after a bad first attempt:
-```
-💬 add git release-note guidance
-
-Clarify when the repo should keep release-note docs separate from code changes so commit history stays easier to scan and review.
+🐛 fix: handle null optional fields in dto   ← only when combo mode was requested
 ```
 
 ## Bad Examples (and why)
@@ -549,28 +449,14 @@ Clarify when the repo should keep release-note docs separate from code changes s
 ```
 feat: add submission endpoint            ← "feat:" is not an allowed prefix
 ✨ Feat: Add Submission Module            ← uppercase, "Feat:" not allowed
+💬 Update CHANGELOG for v10.0.10          ← uppercase description beginning
+💬  update changelog for v10.0.10         ← more than one separator space
+📋 update changelog for v10.0.10          ← emoji is absent from the approved reference table
 🎉 initial commit with all files         ← vague, bundles everything
 ⚙️ config: setup api                     ← "config:" is not an allowed prefix
 ♻️ refactor: reorganize skill wording    ← bad default if the user did not ask for the combo
 ```
 
-```
-💬 add git release-note guidance
-
-Clarify when the repo should keep release-note docs separate
-from code changes so commit history stays easier to scan and review.
-                                         ← bad wrap: short prose split mid-sentence for width only
-```
-
----
-
 ## Branching (for reference)
 
-Branch format: `[version]/[description]`
-
-Examples:
-- `v1.0.0/mvp` — initial MVP
-- `v1.1.0/validation` — adding validation
-- `v1.2.0/admin-dashboard` — adding a new feature area
-
-Don't create, rename, or delete branches unless the user explicitly asks.
+When explicitly requested, use `[version]/[description]` (for example `v1.2.0/admin-dashboard`). Do not create, rename, or delete branches unless the user explicitly asks.
