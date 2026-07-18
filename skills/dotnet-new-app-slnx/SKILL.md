@@ -89,7 +89,7 @@ Read `references/app.md` for the app-specific project structure, template file m
 
 Before writing `Directory.Packages.props`, resolve every `*_VERSION` placeholder in that file to the latest stable listed version for its matching package ID on NuGet.org.
 
-When `pwsh` 7+ is available, prefer the deterministic helper in `<skill-root>/scripts/resolve-package-versions.ps1` over manual lookup. Run it as `pwsh -NoProfile -File <skill-root>/scripts/resolve-package-versions.ps1 -TargetFramework <TargetFramework>`. By default it resolves placeholders from this skill's own `assets/shared/Directory.Packages.props`, so a normal scaffold run only needs `-TargetFramework`. Treat its JSON output as the source of truth for package placeholders.
+When `pwsh` 7+ is available, prefer the deterministic helper in `<skill-root>/scripts/resolve-package-versions.ps1` over manual lookup. Run it as `pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework <TargetFramework>`. By default it resolves placeholders from this skill's own `assets/shared/Directory.Packages.props`, so a normal scaffold run only needs `-TargetFramework`. Treat its JSON output as the source of truth for package placeholders.
 
 - Use the NuGet V3 service index at `https://api.nuget.org/v3/index.json` to discover the package metadata endpoints
 - Prefer registration metadata so you can ignore unlisted versions and prerelease builds
@@ -153,7 +153,7 @@ Copy every file from `assets/shared/` to the project root, preserving directory 
 
 Do this as a recursive, dotfile-aware copy. Hidden folders and files under `assets/shared/` are part of the scaffold and must not be skipped. In particular, copy `assets/shared/.bot/README.md` as a real file in the generated repo; do not replace it with a synthetic `.gitkeep` or placeholder note.
 
-**Asset mismatch policy — pivot immediately to upstream.** The `npx skills add` installer silently strips dot-prefixed entries (`.bot/`, `.github/`, `.editorconfig`, `.gitattributes`, `.gitignore`). Do not spend time re-proving what is absent. The moment any entry from `assets/shared.manifest.json` is missing from the installed skill copy, run `pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1` to fetch every missing file directly from the upstream repository in one step, then continue. If `pwsh` 7+ is unavailable, use the raw base URL in the **Upstream Source** table above to download each missing file manually. If upstream fetch fails, halt and report — do not substitute placeholders.
+**Asset mismatch policy — pivot immediately to upstream.** The `npx skills add` installer silently strips dot-prefixed entries (`.bot/`, `.github/`, `.editorconfig`, `.gitattributes`, `.gitignore`). Do not spend time re-proving what is absent. The moment any entry from `assets/shared.manifest.json` is missing from the installed skill copy, run `pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1"` to fetch every missing file directly from the upstream repository in one step, then continue. If `pwsh` 7+ is unavailable, use the raw base URL in the **Upstream Source** table above to download each missing file manually. If upstream fetch fails, halt and report — do not substitute placeholders.
 
 Do not selectively copy only "key" shared files. The intended output includes the complete shared asset inventory, including `.gitignore`, `.gitattributes`, `AGENTS.md`, `CHANGELOG.md`, `.github/`, and `.bot/`, in addition to the build and package-management files.
 
@@ -193,7 +193,7 @@ After generating, verify:
 - [ ] `.slnx` references all generated src/ and test/ projects
 - [ ] The generated solution filename is `{SOLUTION_NAME}.slnx` with the original user-facing casing preserved
 - [ ] Every file listed in `assets/shared.manifest.json` exists in the generated repo at its declared relative path (this covers all dotfiles and dotfolders)
-- [ ] If any manifest entry was absent from the installed skill copy, `pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1` was run (or files were fetched manually from the upstream raw URL) — not diagnosed iteratively
+- [ ] If any manifest entry was absent from the installed skill copy, `pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1"` was run (or files were fetched manually from the upstream raw URL) — not diagnosed iteratively
 - [ ] `Directory.Packages.props` lists all `<PackageReference>` packages used in the solution (including host-type-specific packages)
 - [ ] `Directory.Packages.props` contains concrete version numbers with no unresolved `*_VERSION` placeholders
 - [ ] No generated `.csproj` file or `Directory.Build.props` contains ad-hoc inline `Version=` attributes for packages that are supposed to be centrally managed by `Directory.Packages.props`

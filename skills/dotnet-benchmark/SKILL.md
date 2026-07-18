@@ -54,7 +54,7 @@ Yolo never authorizes a full performance run. Start the full benchmark only when
 Run the bundled read-only detector before changing files:
 
 ```console
-pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root>
+pwsh -NoProfile -File "<skill-root>/scripts/check-benchmark-requirements.ps1" -RepoRoot "<repo-root>"
 ```
 
 If `pwsh` 7+ is unavailable, report that blocker instead of falling back to legacy Windows PowerShell.
@@ -148,7 +148,7 @@ dotnet build -c Release tuning/{SutProject}.Benchmarks/{SutProject}.Benchmarks.c
 Before interpreting discovery or execution output, run the report-aware preflight for the exact class:
 
 ```console
-pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
+pwsh -NoProfile -File "<skill-root>/scripts/check-benchmark-requirements.ps1" -RepoRoot "<repo-root>" -BenchmarkType <Namespace.TypeBenchmark>
 ```
 
 If `pwsh` 7+ is unavailable, report that blocker instead of falling back to legacy Windows PowerShell.

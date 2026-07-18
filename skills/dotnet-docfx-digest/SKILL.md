@@ -18,14 +18,14 @@ Create and maintain developer-friendly DocFX documentation digests for .NET publ
 - Iterate quickly with the fast path, reading diagnostics as the next work queue:
 
 ```bash
-dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --json
+dotnet run --file "<resolved-skill-dir>/scripts/docfx.cs" -- --repo-root "<repo-root>" --json
 ```
 
 - Before claiming completion, run `agents.cs`, then a thorough build-backed verification that compiles samples, uses reflection-backed API discovery, and verifies the DocFX build:
 
 ```bash
-dotnet run --file <resolved-skill-dir>/scripts/agents.cs -- --repo-root <repo-root>
-dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --build-api-model --validate-samples --verify-docfx-build
+dotnet run --file "<resolved-skill-dir>/scripts/agents.cs" -- --repo-root "<repo-root>"
+dotnet run --file "<resolved-skill-dir>/scripts/docfx.cs" -- --repo-root "<repo-root>" --build-api-model --validate-samples --verify-docfx-build
 ```
 
 - `--build-api-model` makes API discovery reflection-precise (the fast source-scan path is conservative and may under-report), `--validate-samples` compiles every C# documentation sample through isolated projects in one temporary `.slnx` graph build with bounded MSBuild parallelism, and `--verify-docfx-build` confirms the DocFX build succeeds. Treat `API_MODEL_SOURCE_SCANNER_LIMITED` in a fast run as a reminder to run the build-backed verification before completion, not as a failure.
@@ -34,7 +34,7 @@ dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-roo
 - For noisy audits, write and read a deterministic assessment work queue with `--assessment-queue`. This works on the fast path; add `--search-examples` to embed real GitHub usage:
 
 ```bash
-dotnet run --file docfx.cs -- --repo-root <repo-root> --json --assessment-queue <temp-path> --search-examples
+dotnet run --file "docfx.cs" -- --repo-root "<repo-root>" --json --assessment-queue <temp-path> --search-examples
 ```
 
 Resolve `<temp-path>` outside the target repository working tree (for example, `$env:TEMP\docfx-assessment-queue.md` on Windows or `/tmp/docfx-assessment-queue.md` on Unix).
@@ -46,7 +46,7 @@ The assessment work queue includes a "GitHub Example Sources" section with pre-c
 - For repo-wide or other full authoring runs, establish a bounded write queue before authoring new examples or overwrite rewrites:
 
 ```bash
-dotnet run --file <resolved-skill-dir>/scripts/docfx.cs -- --repo-root <repo-root> --build-api-model --project-manifest <temp-path> --json
+dotnet run --file "<resolved-skill-dir>/scripts/docfx.cs" -- --repo-root "<repo-root>" --build-api-model --project-manifest <temp-path> --json
 ```
 
 Resolve `<temp-path>` outside the target repository working tree (for example, `$env:TEMP\dotnet-docfx-digest-project-manifest.json` on Windows or `/tmp/dotnet-docfx-digest-project-manifest.json` on Unix). When you name this command in a continuation response, replace the placeholder with that concrete temp/session path rather than leaving `<temp-path>` unresolved.

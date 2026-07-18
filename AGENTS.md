@@ -4,11 +4,7 @@ Repository-level rules for AI agents working in this codebase.
 
 ## Local Shell Execution
 
-Agents may use Bash or `pwsh` 7+ for local development.
-
-Whenever a local command uses PowerShell syntax or executes a `.ps1` script, invoke `pwsh`, never `powershell` or `powershell.exe`. Keep `.ps1` filenames unchanged; the required change is the runtime, not the script extension. Use the form `pwsh -NoProfile -File ./scripts/example.ps1` for local `.ps1` execution.
-
-Do not silently fall back to legacy Windows PowerShell. If `pwsh` 7+ is unavailable for a required local `.ps1` script, report the missing prerequisite instead of invoking legacy Windows PowerShell. This rule applies to local agent execution only; GitHub Actions may continue using `bash`, `sh`, `pwsh`, platform defaults, or another justified shell, and existing workflow shell choices should not be rewritten without a functional reason.
+Agents may use any appropriate local shell. When using PowerShell syntax or executing a `.ps1` script locally, use PowerShell 7+ through `pwsh`; never invoke `powershell` or `powershell.exe`. This does not prescribe GitHub Actions shell choices.
 
 ## Eval Isolation
 

@@ -50,7 +50,7 @@ For example, `reports/tuning/Acme.Core.ParserBenchmark-report-github.md` causes 
 2. Run the detector with the intended benchmark type:
 
    ```console
-   pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
+   pwsh -NoProfile -File "<skill-root>/scripts/check-benchmark-requirements.ps1" -RepoRoot "<repo-root>" -BenchmarkType <Namespace.TypeBenchmark>
    ```
 
    If `pwsh` 7+ is unavailable, report that blocker instead of invoking legacy Windows PowerShell.
