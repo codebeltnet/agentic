@@ -2,6 +2,8 @@
 name: git-keep-a-changelog
 description: >
   Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...), "yolo", "auto". Reads full commit bodies and diffs, treats the selected branch or range as author-agnostic scope by default, creates compliant structure with required SemVer highlights, infers versions from branches, must ask a mandatory Yes / No / Custom confirmation question before including pending staged, unstaged, or untracked worktree changes in a concrete release draft (bypassed in yolo/auto mode — all changes included automatically), edits directly for review, preserves prose wrapping, avoids commit-log dumps.
+compatibility: >
+  Requires Git and PowerShell 7+ for deterministic branch-scope resolution.
 ---
 
 # Git Keep A Changelog
@@ -18,6 +20,7 @@ When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in
 
 - **Skip Step 3 entirely.** Do not ask the confirmation question. Do not present the `Yes / No / Custom` gate.
 - **Include all pending changes automatically.** Staged, unstaged, and untracked files are all treated as part of the release scope without asking.
+- **Keep committed history isolated.** Yolo changes only the pending-worktree decision; use the same resolved branch ranges and bleed guard as every other invocation.
 - **Make all scope decisions independently.** The user has explicitly delegated judgment. Do not pause for input at any point in the workflow.
 - All other quality rules remain in force: the release highlight is still required, the SemVer classification is still required, bullet punctuation still applies, and the compare-link footer must still be maintained.
 - Yolo/auto is a user signal of full autonomy — not a shortcut past quality. Treat it as deliberate and act on it immediately.
@@ -29,6 +32,9 @@ When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in
 - Read full commit subjects and bodies before writing the changelog.
 - Inspect the net diff too; do not infer the release from subjects alone.
 - Treat branch or range topology as the changelog scope source of truth, not author identity.
+- For branch-derived scope, exclude every commit already reachable from the comparison branch. A merge-base is a boundary, not a release commit.
+- Run `scripts/resolve-release-scope.ps1` for branch-derived scope and use its emitted ranges without widening them.
+- Never change range inclusivity because the changelog target is a concrete version instead of `[Unreleased]`.
 - Include commits from every author/contributor in the selected scope. Do not filter to the current git user, current contributor, bot identity, configured author, or "my changes" unless the user explicitly asks for an author-filtered changelog.
 - If the current branch starts with a version hint such as `v0.3.0/`, use that to target a concrete release heading.
 - Otherwise, target `## [Unreleased]`.
@@ -40,6 +46,7 @@ When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in
 - Preserve natural line breaks and readable prose. Do not apply any fixed column limit or artificial hard wrapping to changelog paragraphs or bullets.
 - End each bullet with `,` and end the last bullet in each section with `.`.
 - If pending worktree changes exist for a concrete release draft, do not silently include or exclude them. Ask the user first with a short `Yes / No / Custom` prompt. **Exception: in yolo/auto mode, include all pending changes automatically without asking.**
+- Yolo/auto changes pending-worktree handling only. It never widens committed history or includes the comparison boundary.
 - Do not dump commit subjects verbatim into the changelog.
 - Do not invent unsupported changes, risks, or migration guidance.
 
@@ -48,8 +55,9 @@ When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in
 These checkpoints cannot be skipped or bypassed, even when the user's opening request sounds like a shortcut.
 
 1. Step 3 confirmation gate: if pending worktree changes exist for a concrete release such as `## [1.2.3]`, present the confirmation question before drafting or writing the changelog entry. **Bypassed in yolo/auto mode — all pending changes are included automatically.**
-2. Release highlight contract: every concrete release entry must include a release highlight paragraph that explicitly classifies the release as `major`, `minor`, or `patch`.
-3. Bullet punctuation: all bullets must end with `,` except the final bullet in each populated section, which must end with `.` Do not finish the edit until this is consistent.
+2. Release isolation: for branch-derived scope, run the bundled resolver and require `base_history_bleed` to be `false`. The `excluded_boundary_commit` must not appear in `selected_commits`.
+3. Release highlight contract: every concrete release entry must include a release highlight paragraph that explicitly classifies the release as `major`, `minor`, or `patch`.
+4. Bullet punctuation: all bullets must end with `,` except the final bullet in each populated section, which must end with `.` Do not finish the edit until this is consistent.
 
 ## Release Highlight Contract
 
@@ -107,26 +115,34 @@ Silent inclusion of pending changes in a changelog is a production risk. The gat
 
 ### Step 1: Resolve the source range
 
-Use the most explicit range the user gave you.
+Use the most explicit scope the user gave you.
 
-- If the user named a range, branch comparison, base branch, or PR range, use that.
-- Otherwise, compare the current branch to its upstream merge-base.
-- If no upstream is configured, try `main`, then `master`.
-- If no safe comparison point can be established, stop and ask for a base branch or range instead of guessing.
+- If the user named a complete range, use that exact range. Do not silently add `^`, move its boundary, or reinterpret inclusivity.
+- If the user named a base branch or PR target, pass it as `-BaseRef` to the bundled resolver.
+- Otherwise, run the resolver without `-BaseRef`. It derives the remote's default branch from the current branch's tracking remote, then falls back to `origin/main`, `origin/master`, `main`, or `master` only when those refs exist locally.
+- Never use the current feature branch's same-name tracking ref as its comparison base. For example, `origin/v1.2.3/service-update` tracks delivery of the feature branch; it is not the branch the PR changes are measured against.
+- Do not fetch, pull, or contact a remote while resolving scope. Use local refs. If the correct PR target is not available locally, stop and ask for the base branch instead of guessing.
 
 Never add `--author`, `--committer`, current-user, current-email, current-contributor, or identity-mode filters while resolving ordinary branch-level changelog scopes. Author metadata may help explain ownership, but it must not narrow the default release scope.
 Do not stop to ask whether the latest branch commit, release-prep commit, or another contributor's commit "should count". If it is on the selected branch or range, it is in scope by default unless the user explicitly narrows the author or range.
 
-Helpful commands:
+For a branch-derived scope, run:
 
-```bash
-git status --short --branch
-git rev-parse --abbrev-ref HEAD
-git rev-parse --abbrev-ref --symbolic-full-name @{upstream}
-git merge-base HEAD @{upstream}
-git merge-base HEAD main
-git merge-base HEAD master
+```powershell
+pwsh -NoProfile -File <skill-root>/scripts/resolve-release-scope.ps1 -Repository .
+
+# When the user named the PR target or base branch:
+pwsh -NoProfile -File <skill-root>/scripts/resolve-release-scope.ps1 -Repository . -BaseRef origin/release/1.x
 ```
+
+The JSON output separates two evidence surfaces:
+
+- `history_range` is the commit-SHA-pinned equivalent of `<comparison-ref>..HEAD`. Use it for commit logs because it selects commits unique to the checked-out branch and excludes everything already reachable from the comparison branch.
+- `diff_range` is the commit-SHA-pinned equivalent of `<merge-base>..HEAD`. Use it for manifest and net diffs because it measures the branch's resulting file changes from the common boundary without treating later base-only work as removals.
+
+The comparison boundary is always excluded from a branch-derived release, even when it is tagged or the changelog target is a concrete version. If the previous release tag points at the merge-base, that confirms the commit belongs to the previous release; it is not a reason to include it.
+
+Do not confuse the excluded merge boundary with the first PR commit. `history_range` includes every branch-unique commit after that boundary, including the PR's earliest commit and commits from other contributors. This preserves complete checked-out PR coverage without importing completed base-branch history.
 
 ### Step 2: Resolve the changelog target
 
@@ -180,128 +196,66 @@ git diff --stat
 git ls-files --others --exclude-standard
 ```
 
-### Step 3b: Verify Your Approach
+### Step 3b: Verify Release Isolation
 
-Before proceeding to Step 4, verify your approach:
+For branch-derived scope, inspect the resolver output before reading history or diffs:
 
-- If the target is a concrete release (e.g., `## [0.5.9]`): **You must use `<base>^..HEAD`** (with the caret) throughout Step 4. The caret means "include the base commit."
-- If the target is `## [Unreleased]`: Use `<base>..HEAD` (without the caret).
+1. Require `base_history_bleed` to be `false`.
+2. Confirm `excluded_boundary_commit` is absent from `selected_commits`.
+3. Confirm `comparison_ref` is the intended PR target or default branch, not the current feature branch's tracking ref.
+4. Record `history_range` and `diff_range` exactly as emitted. Do not append `^` or widen either range for a concrete release.
 
-| Syntax | Meaning | Use For |
-|--------|---------|---------|
-| `base^..HEAD` | From base's parent through HEAD (inclusive of base) | Concrete releases (includes foundational changes) |
-| `base..HEAD` | From base through HEAD (exclusive of base) | `[Unreleased]` or historical analysis |
-
-**Never accidentally omit the `^` for concrete releases.** The base commit frequently contains version bumps, release-prep changes, and initial dependency updates that form the foundation of the complete deliverable.
+If any check fails, stop without editing `CHANGELOG.md`. Report the resolved refs and ask for the correct base branch. This is a correctness failure, not a reason to guess another range.
 
 ### Step 4: Read the full history and net effect
 
-Follow these sub-steps in order. Sub-steps 4b and 4c are mandatory whenever manifests were touched and must run before reading commit bodies.
+Follow these sub-steps in order. Manifest detection and cumulative manifest diffs must run before commit-body interpretation.
 
-**Range extension for concrete releases — CRITICAL:** When the changelog target is a concrete version heading (e.g., `## [X.Y.Z]`), **always use `<base>^..HEAD`** (with the caret `^`) throughout Step 4. The `^` means "starting from the parent of base", which includes base itself. Without the `^`, you will silently omit the base commit, losing foundational version bumps, release-prep, and dependency changes.
-
-Example:
-- ❌ `git diff base..HEAD` — skips base commit (wrong for concrete releases)
-- ✅ `git diff base^..HEAD` — includes base commit (required for concrete releases)
-
-For `## [Unreleased]`, continue using `<base>..HEAD` — no caret.
-
-**4a — Inspect and report the base commit (concrete releases ONLY — MANDATORY GATE).**
-
-This sub-step is a required checkpoint. Do not proceed past 4a until you have shown the output and analyzed it.
-
-Before detecting manifest changes or reading anything else, inspect the base commit itself:
+**4a — Detect manifest changes.** Check the files changed across the emitted `diff_range`:
 
 ```bash
-git show --format=medium <base>
-git diff <base>^..<base> --stat
+git diff --name-only <diff_range>
 ```
 
-After running these commands:
+If any dependency or version manifest appears — `Directory.Packages.props`, `Directory.Build.props`, `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `pom.xml`, `build.gradle`, `go.mod`, `go.sum`, or similar — proceed to 4b immediately. Do not read commit bodies first.
 
-1. **Show the full output** in your response (do not summarize or skip lines).
-2. **Identify any dependency/version manifests** — Directory.Packages.props, Directory.Build.props, `package.json`, `pom.xml`, `go.mod`, or similar.
-3. **Identify any release-prep files** — CHANGELOG.md, package release notes, version files, or similar.
-4. **Explicitly state:** "Base commit contains [X files changed]: [file list]" and "Manifests found: [yes/no, list if yes]".
-5. **Only after showing and analyzing this output, proceed to 4b.**
-
-If the base commit contains **any** manifest changes or release-prep work, Step 4b and 4c become mandatory (do not skip them). If the base commit is clean, still run 4b to detect manifests across the full range; you may skip 4c only when 4b also finds no manifest changes.
-
-**Step 4a Confirmation (before proceeding):**
-
-You must explicitly confirm what you found in Step 4a before proceeding to 4b–4d. Answer these questions:
-
-1. Did the base commit modify any manifests (dependencies, versions, build config)? (Yes/No)
-2. Did the base commit modify any release-prep files (CHANGELOG, release notes, version files)? (Yes/No)
-3. If YES to either: List the specific files and their changes.
-
-Only after answering these questions, proceed to 4b.
-
-**4b — Detect manifest changes.** Check which files changed across the full range:
+**4b — Diff each touched manifest.** For every manifest found in 4a, run its cumulative diff across the emitted `diff_range`:
 
 ```bash
-# For concrete releases (## [X.Y.Z]):
-git diff --name-only <base>^..HEAD
-
-# For [Unreleased]:
-git diff --name-only <base>..HEAD
+git diff <diff_range> -- Directory.Packages.props
+git diff <diff_range> -- package.json
+# Repeat for every manifest identified in 4a.
 ```
 
-If any dependency or version manifest appears in the output — `Directory.Packages.props`, `Directory.Build.props`, `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `pom.xml`, `build.gradle`, `go.mod`, `go.sum`, or similar — proceed to 4c immediately. Do not skip ahead to reading commit bodies.
+Parse the cumulative delta: which packages were added, removed, upgraded, or downgraded, and the exact before → after versions that survive at `HEAD`. This is the authoritative dependency evidence. Individual commit messages may describe partial steps; they do not override the resulting manifest diff.
 
-**4c — Diff each touched manifest (mandatory).** For every manifest found in 4b, run the following diffs. For concrete releases, inspect the base commit's manifest changes first, then the full range:
+**4c — Read the full branch-unique commit log.** Use the emitted `history_range`:
 
 ```bash
-# Base commit manifest changes first (concrete releases only):
-git diff <base>^..<base> -- Directory.Packages.props
-git diff <base>^..<base> -- package.json
-# Repeat for every manifest identified in 4b
-
-# Full range diff:
-git diff <base>^..HEAD -- Directory.Packages.props   # concrete release
-git diff <base>..HEAD -- Directory.Packages.props    # [Unreleased]
-# Repeat for every manifest identified in 4b
+git log --reverse --format=medium <history_range>
+git log --reverse --stat --format=medium <history_range>
 ```
 
-Parse the cumulative delta: which packages were added, removed, upgraded, or downgraded, and what the exact before → after versions are across the full selected range. This is the **authoritative source of truth** for dependency changes. Individual commit messages may describe partial steps because multiple commits touched the same file; the manifest diff captures the net outcome that survived into the release.
+Read every selected contributor's full subject and body. The boundary commit and any commit already reachable from the comparison branch are absent by construction and must remain absent.
 
-When an individual commit says "upgrade X from A → B" but the manifest diff shows X ended at C (because a later commit in the same range bumped it again), the manifest diff result is authoritative. Use C in the changelog, not B.
-
-**4d — Read the full commit log.** After completing 4b–4c, read individual commit bodies for context and non-manifest changes. For concrete releases, include the base commit:
+**4d — Inspect the net diff for non-manifest changes.** Use the emitted `diff_range`:
 
 ```bash
-# For concrete releases (## [X.Y.Z]):
-git log --reverse --format=medium <base>^..HEAD
-git log --reverse --stat --format=medium <base>^..HEAD
-
-# For [Unreleased]:
-git log --reverse --format=medium <range>
-git log --reverse --stat --format=medium <range>
-```
-
-Use commit bodies to understand *why* packages were updated, what behavioral changes were made, and whether any migration guidance is warranted. Treat commit messages as supporting context; do not let them override the version facts established in 4c.
-
-**4e — Inspect the net diff for non-manifest changes.**
-
-```bash
-# For concrete releases (## [X.Y.Z]):
-git diff --stat <base>^..HEAD
-git diff <base>^..HEAD
-
-# For [Unreleased]:
-git diff --stat <base>..HEAD
-git diff <base>..HEAD
+git diff --stat <diff_range>
+git diff <diff_range>
 ```
 
 Verify that fixups and partial reversals do not distort the changelog. Prefer the final user-visible or maintainer-meaningful outcome over the implementation path.
 
-**4f — Include approved pending changes.** When the user approved pending changes in Step 3, also inspect the selected worktree deltas:
+**4e — Include approved pending changes.** When the user approved pending changes in Step 3, also inspect the selected worktree deltas. In yolo/auto mode, inspect all of them automatically:
 
 ```bash
 git diff --cached
 git diff
 git ls-files --others --exclude-standard
 ```
+
+Pending changes are additive to the already-isolated committed scope. They never justify widening `history_range` or `diff_range`.
 
 ### Step 5: Classify the release
 
@@ -348,10 +302,11 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Includes a required SemVer-aware release highlight.
 - Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
 - Reflects the meaning of full commit bodies and the net diff.
-- Inspects the base commit before anything else for concrete releases (4a) and explicitly reports the findings (files changed, manifests detected), then runs base-to-`HEAD` manifest diffs as the first evidence steps (4b–4c) whenever any manifest was touched, capturing the full cumulative dependency/version picture before reading individual commit messages. Always uses `<base>^..HEAD` (with caret) for concrete releases to ensure the base commit is included.
-- Includes the base commit in concrete release changelogs by using `<base>^..HEAD`, so foundational version bumps and release-prep changes are never omitted from the release narrative.
+- Resolves branch-derived scope with the bundled script, uses branch-unique commits for history and the merge boundary for net diffs, and verifies that no selected commit is already reachable from the comparison branch.
+- Excludes the comparison boundary from both concrete releases and `[Unreleased]`; changelog heading choice never changes Git range inclusivity.
 - Treats the selected branch or range as author-agnostic scope and includes every contributor's commits unless the user explicitly narrows by author.
 - Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes (or skips Step 3 entirely and includes all changes when yolo/auto mode is active).
+- Keeps yolo/auto limited to pending-worktree inclusion and never uses autonomy mode to widen committed history.
 - Maintains or inserts the compare-link footer at the bottom of the file on both create and update paths.
 - Preserves natural prose wrapping with no fixed column-width target.
 - Keeps bullets specific, concrete, non-repetitive, and consistently punctuated.
@@ -359,7 +314,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 
 ## Bad Output Characteristics
 
-- **CRITICAL — Omitting the base commit from a concrete release changelog.** This is a silently-wrong output that breaks the release narrative. The base commit frequently contains foundational version bumps, release-prep changes, dependency baseline updates, or other changes that are integral to the deliverable. Always use `<base>^..HEAD` for concrete releases, not `<base>..HEAD`. Always run Step 4a first and show the output before proceeding.
+- **CRITICAL — Including the comparison boundary or previous release commit in a new release.** This silently duplicates already-released work. Never widen a branch-derived range with `^`; require the resolver's bleed guard to pass before writing.
 - Copying commit subjects line by line into the changelog.
 - Omitting the release highlight.
 - Failing to classify the release as major, minor, or patch.
@@ -371,5 +326,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Updating an existing changelog entry but leaving the compare-link footer missing or stale.
 - Claiming breaking changes, fixes, or security work not supported by git.
 - Filtering the selected branch or range to the current user's or current contributor's commits, or treating "my changes" as the default release scope.
+- Using the feature branch's same-name remote tracking ref as the comparison base, producing an empty or misleading branch scope.
+- Letting a concrete version heading or yolo/auto mode change committed-history inclusivity.
 - Understating dependency or version changes because the skill only read individual commit diffs and never inspected the surviving manifest delta from base to `HEAD`.
 - Reading commit messages before running manifest diffs, then reporting only the packages mentioned in whichever commits happened to be read first, rather than the full cumulative set from the manifest diff.

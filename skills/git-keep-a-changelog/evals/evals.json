@@ -155,15 +155,28 @@
     },
     {
       "id": 14,
-      "prompt": "My branch is named v0.5.9/release-prep. The base commit includes dependency upgrades and release-prep files, and those changes must be part of the concrete release changelog. Update CHANGELOG.md without omitting the base commit.",
-      "expected_output": "The workflow treats this as a concrete release, uses <base>^..HEAD throughout Step 4, reports the base commit findings before continuing, and includes base-commit dependency or release-prep changes in the changelog evidence.",
+      "prompt": "My branch is named v10.0.10/service-update. Its merge-base with origin/main is commit 9e5d6c4, which is already tagged v10.0.9 and merged to main. Update CHANGELOG.md for v10.0.10 without repeating any v10.0.9 work.",
+      "expected_output": "The workflow treats 9e5d6c4 as an excluded comparison boundary, uses branch-unique history plus a merge-base-to-HEAD net diff, and refuses to include any commit already reachable from origin/main.",
       "expectations": [
-        "Recognizes the concrete release target from the v0.5.9 branch prefix",
-        "Uses <base>^..HEAD with the caret for concrete-release Step 4 commands instead of <base>..HEAD",
-        "Runs Step 4a as a mandatory gate before reading the broader history",
-        "Shows and analyzes the base commit output before proceeding to manifest diffs or commit logs",
-        "Explicitly reports files changed in the base commit and whether manifests were found",
-        "Includes foundational dependency, version, or release-prep changes from the base commit in the changelog evidence"
+        "Recognizes the concrete release target from the v10.0.10 branch prefix",
+        "Treats the merge-base as an excluded boundary rather than the first commit of the concrete release",
+        "Does not use <base>^..HEAD or otherwise widen the branch-derived scope",
+        "Excludes 9e5d6c4 and all other commits already reachable from origin/main",
+        "Requires the deterministic base-history bleed check to pass before editing CHANGELOG.md",
+        "Keeps the changelog grounded in branch-unique commits and their resulting net diff"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Yolo: update CHANGELOG.md for v10.0.10/service-update. The checked-out PR has commits from me and other contributors after tagged v10.0.9 on main, plus staged, unstaged, and untracked dependency and Docker updates. Include all current PR work, but never repeat v10.0.9.",
+      "expected_output": "Yolo mode includes all pending worktree changes without prompting while the committed scope remains isolated to every branch-unique PR commit after v10.0.9.",
+      "expectations": [
+        "Includes staged, unstaged, and untracked changes automatically because yolo mode is active",
+        "Keeps every branch-unique commit from every PR contributor regardless of author identity",
+        "Treats pending worktree changes as additive to the isolated committed scope",
+        "Does not let yolo mode widen committed history or include the v10.0.9 boundary commit",
+        "Uses the same deterministic bleed guard as non-yolo branch-derived releases",
+        "Does not contact or switch to main to invent a broader release narrative"
       ]
     }
   ]
