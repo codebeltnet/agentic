@@ -6,7 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.8.0] - 2026-07-18
 
-
 This is a minor release introducing the `agent-smith` skill, a rigorous software-craftsmanship advisor for design, architecture, implementation, refactoring, code review, public API analysis, testing, performance, security, DevSecOps, CI/CD, delivery, and repository governance. The skill provides explicit guidance across technology domains (.NET, Git, GitHub, CI/CD, REST, supply-chain) while respecting repository conventions, challenging weak assumptions, validating before completion, and reporting evidence and tradeoffs honestly. Additionally, this release introduces the `dotnet-benchmark` skill for performance testing of .NET types with evidence-driven discovery and measurement discipline. The release emphasizes candidate selection through profiling evidence, semantic correctness validation before performance interpretation, and proportionate-stopping decision logic. Furthermore, it standardizes local PowerShell execution to `pwsh` 7+ and strengthens validation discipline across repo-managed skills.
 
 ### Added
