@@ -1169,12 +1169,24 @@ Add-ValidationResult -Results $results -Name 'Strong-name skill matches FORMS su
     Assert-NotContains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 4096'
 }
 
-Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces identity lock and umbrella commit rejection' -Action {
+Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces subject, identity, and grouping locks' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/SKILL.md' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/evals/evals.json' -GitRef $Ref
     $commitLanguage = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/references/commit-language.md' -GitRef $Ref
+    $subjectValidator = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/scripts/validate-commit-subject.ps1' -GitRef $Ref
+    $subjectTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/scripts/test-commit-subject.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Full-Skill Read and Subject Lock'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Before running any Git command or composing a subject, read this `SKILL.md` completely from the first line through EOF.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If a tool truncates the file, continue from the first unread line until EOF before proceeding.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'The first visible character after the emoji and its single separator space must be lowercase.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'scripts/validate-commit-subject.ps1'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'The validator must exit successfully.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` and `auto` do not bypass the full-read or subject-validation locks.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'run `scripts/validate-commit-subject.ps1` for every exact subject'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Run `scripts/validate-commit-subject.ps1` again against the exact subject that will be passed to Git.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'git log -1 --format=%s'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Identity Lock'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Never silently downgrade a requested `git bot commit` to `git commit`.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If the required `git bot` alias is unavailable, halt and report that exact blocker instead of falling back to human identity.'
@@ -1232,6 +1244,18 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'Community health, changelog, release-status communication'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'package release-note metadata'
 
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle "[ValidateSet('Forbidden', 'Required')]"
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle '[System.Globalization.StringInfo]::ParseCombiningCharacters($Subject).Count'
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'Use exactly one ASCII space between the emoji and the following text.'
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle "elseif (`$description -cnotmatch '^\p{Ll}')"
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'is not an approved entry in the bundled commit-language reference.'
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle '$maxLength = 70'
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'the maximum is $maxLength.'
+    Assert-Contains -Name 'git-visual-commits/scripts/test-commit-subject.ps1' -Content $subjectTests -Needle 'reported screenshot regression'
+    Assert-Contains -Name 'git-visual-commits/scripts/test-commit-subject.ps1' -Content $subjectTests -Needle '💬 Update changelog'
+    Assert-Contains -Name 'git-visual-commits/scripts/test-commit-subject.ps1' -Content $subjectTests -Needle '💬  update changelog'
+    Assert-Contains -Name 'git-visual-commits/scripts/test-commit-subject.ps1' -Content $subjectTests -Needle '📋 Update CHANGELOG for v10.0.10'
+
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not let yolo collapse multiple semantic intents into one umbrella commit'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Verifies the commit author after commit and confirms it matches bot identity'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Verifies the stored commit body does not contain literal \\n escape sequences'
@@ -1252,6 +1276,9 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'package release notes or package metadata work instead of the community-health emoji'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats references/commit-language.md as a bundled skill resource rather than a repo-root path by default'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not report a blocker solely because the current repository lacks a top-level references directory'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Reads SKILL.md completely through EOF before any staging or commit command'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Rejects the proposed subject because 📋 is absent from the approved commit-language table'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Runs scripts/validate-commit-subject.ps1 before showing the corrected subject and again immediately before passing it to Git'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
