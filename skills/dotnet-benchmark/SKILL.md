@@ -54,8 +54,10 @@ Yolo never authorizes a full performance run. Start the full benchmark only when
 Run the bundled read-only detector before changing files:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root>
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root>
 ```
+
+On Windows where PowerShell 7+ is unavailable, use `powershell` instead of `pwsh`.
 
 Also inspect applicable `AGENTS.md`, solution/project files, `Directory.Build.props`, `Directory.Packages.props`, existing `tuning/` and `tooling/` projects, and nearby benchmark styles. Reuse an existing runner and benchmark project when they fit. Read `references/onboarding.md` only when the detector finds missing or partial harness infrastructure.
 
@@ -146,8 +148,10 @@ dotnet build -c Release tuning/{SutProject}.Benchmarks/{SutProject}.Benchmarks.c
 Before interpreting discovery or execution output, run the report-aware preflight for the exact class:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
 ```
+
+On Windows where PowerShell 7+ is unavailable, use `powershell` instead of `pwsh`.
 
 If `reports.wouldSkipRequestedBenchmark` is true, the runner is intentionally filtering the type because a prior report exists. Report that as the validation outcome; do not claim the list/dry run exercised the class and do not modify code to force it through. A fresh full run and any report archive/replacement require explicit human direction.
 
