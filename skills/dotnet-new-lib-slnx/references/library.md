@@ -90,9 +90,9 @@ If an installer path omits dot-prefixed files from the source tree, treat that a
 - Prefer byte-preserving copy for files that do not need substitutions
 - Preserve the source template's BOM policy by default; do not add a UTF-8 BOM unless the source had one or the target format explicitly needs it
 
-Recommended `pwsh` 7+ approach for rewritten templates:
+Recommended PowerShell approach for rewritten templates:
 
-```ps1
+```powershell
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $content = [System.IO.File]::ReadAllText($src, $utf8NoBom)
 $updated = Apply-Replacements -Content $content -Map $replaceMap

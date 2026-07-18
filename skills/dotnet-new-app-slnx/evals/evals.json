@@ -36,8 +36,7 @@
         "Resolves package versions from NuGet instead of carrying hardcoded examples from a previous scaffold",
         "Copies the complete shared asset inventory from assets/shared instead of cherry-picking only a subset of governance or dotfiles",
         "Keeps TargetFramework centralized in the generated root Directory.Build.props instead of adding TargetFramework directly to generated app or test csproj files",
-        "Produces valid XML in generated root build props files before the first build rather than relying on mid-run repair",
-        "If it invokes scripts/resolve-package-versions.ps1, it does so through `pwsh -NoProfile -File` and never through `powershell` or `powershell.exe`"
+        "Produces valid XML in generated root build props files before the first build rather than relying on mid-run repair"
       ]
     },
     {

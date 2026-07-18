@@ -102,15 +102,15 @@ Copy every file from `assets/shared/` to the project root, preserving directory 
 
 Do this as a recursive, dotfile-aware copy. Hidden folders and files under `assets/shared/` are part of the scaffold and must not be skipped. In particular, copy `assets/shared/.bot/README.md` as a real file in the generated repo; do not replace it with a synthetic `.gitkeep` or placeholder note.
 
-**Asset mismatch policy — pivot immediately to upstream.** The `npx skills add` installer silently strips dot-prefixed entries (`.bot/`, `.github/`, `.editorconfig`, `.gitattributes`, `.gitignore`). Do not spend time re-proving what is absent. The moment any entry from `assets/shared.manifest.json` is missing from the installed skill copy, run `pwsh -NoProfile -File ./scripts/restore-missing-shared-assets.ps1` to fetch every missing file directly from the upstream repository in one step, then continue. If `pwsh` 7+ is unavailable, report that blocker instead of invoking legacy Windows PowerShell. If upstream fetch fails, halt and report — do not substitute placeholders.
+**Asset mismatch policy — pivot immediately to upstream.** The `npx skills add` installer silently strips dot-prefixed entries (`.bot/`, `.github/`, `.editorconfig`, `.gitattributes`, `.gitignore`). Do not spend time re-proving what is absent. The moment any entry from `assets/shared.manifest.json` is missing from the installed skill copy, run `pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1` to fetch every missing file directly from the upstream repository in one step, then continue. If `pwsh` 7+ is unavailable, use the raw base URL in the **Upstream Source** table above to download each missing file manually. If upstream fetch fails, halt and report — do not substitute placeholders.
 
 Preserve UTF-8 when reading, copying, and writing text files. Do not transcode templates to ANSI, OEM, Windows-1252, or any system-default code page during generation. The shared `.editorconfig` in the scaffold declares `charset = utf-8`, and generated text files should match it from the start.
 
 When a text file does not need substitutions, prefer a byte-preserving file copy instead of read/transform/write.
 
-When a text file does need substitutions, use explicit UTF-8 APIs end-to-end. In `pwsh` 7+, prefer .NET file APIs with an explicit `UTF8Encoding` instance rather than locale-dependent text cmdlets. For example:
+When a text file does need substitutions, use explicit UTF-8 APIs end-to-end. In PowerShell, prefer .NET file APIs with an explicit `UTF8Encoding` instance rather than locale-dependent text cmdlets. For example:
 
-```ps1
+```powershell
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $content = [System.IO.File]::ReadAllText($src, $utf8NoBom)
 $updated = Apply-Replacements -Content $content -Map $replaceMap
@@ -189,7 +189,7 @@ After generating, verify:
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
 - [ ] `.bot/README.md` exists in the generated repo and came from the shared asset template, not from a synthetic `.gitkeep` fallback
 - [ ] Every file listed in `assets/shared.manifest.json` exists in the generated repo at its declared relative path (this covers all dotfiles and dotfolders)
-- [ ] If any manifest entry was absent from the installed skill copy, `pwsh -NoProfile -File ./scripts/restore-missing-shared-assets.ps1` was run — not diagnosed iteratively
+- [ ] If any manifest entry was absent from the installed skill copy, `pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1` was run (or files were fetched manually from the upstream raw URL) — not diagnosed iteratively
 - [ ] No manifest entries were silently skipped; if the restore script reported failures, generation was halted rather than continuing with incomplete shared assets
 - [ ] `.github/dependabot.yml` watches the repo root so central NuGet package management stays current after scaffolding
 

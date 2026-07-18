@@ -88,7 +88,7 @@ Aim for 3–5 evals that cover distinct scenarios: happy path, edge cases, and c
 
 Run evals from a temp workspace, not from this repository:
 
-```ps1
+```powershell
 $workspace = Join-Path $env:TEMP '<skill-name>-workspace'
 ```
 
@@ -116,7 +116,7 @@ When a skill needs defaults for versions, paths, repository names, or support wi
 
 Use the repo validation harness before submitting scaffold or template changes:
 
-```ps1
+```console
 pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1
 ```
 
@@ -124,7 +124,7 @@ Run the validator locally first for the fastest feedback loop. Bash and `pwsh` 7
 
 To compare a change against the initial imported version, run the same harness against a git ref:
 
-```ps1
+```console
 pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD
 ```
 

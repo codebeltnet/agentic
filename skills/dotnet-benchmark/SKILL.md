@@ -53,8 +53,8 @@ Yolo never authorizes a full performance run. Start the full benchmark only when
 
 Run the bundled read-only detector before changing files:
 
-```ps1
-pwsh -NoProfile -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root>
+```console
+pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root>
 ```
 
 If `pwsh` 7+ is unavailable, report that blocker instead of falling back to legacy Windows PowerShell.
@@ -141,14 +141,14 @@ Semantic preflight
 
 Successful execution is not a correctness oracle. After semantic preflight, validate the benchmark's correctness through existing tests or a setup-time oracle for every parameter case. The oracle should normally verify exact observable behavior rather than merely nonzero or approximate success unless that is the real domain contract. Then build the benchmark project in Release:
 
-```bash
+```console
 dotnet build -c Release tuning/{SutProject}.Benchmarks/{SutProject}.Benchmarks.csproj
 ```
 
 Before interpreting discovery or execution output, run the report-aware preflight for the exact class:
 
-```ps1
-pwsh -NoProfile -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
+```console
+pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
 ```
 
 If `pwsh` 7+ is unavailable, report that blocker instead of falling back to legacy Windows PowerShell.
@@ -157,7 +157,7 @@ If `reports.wouldSkipRequestedBenchmark` is true, the runner is intentionally fi
 
 Verify runner discovery without measuring:
 
-```bash
+```console
 dotnet run -c Release --project tooling/{runner} -- --list flat --filter *{BenchmarkClass}*
 ```
 
@@ -165,7 +165,7 @@ Compare the discovered method, job, and parameter matrix with the intended desig
 
 Unless execution is impossible or the user declines, run a dry execution smoke check and inspect all BenchmarkDotNet validation warnings. A dry run proves executable wiring and basic lifecycle, not performance:
 
-```bash
+```console
 dotnet run -c Release --project tooling/{runner} -- --job dry --filter *{BenchmarkClass}*
 ```
 

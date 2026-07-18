@@ -152,7 +152,7 @@ Resolve each package-specific `*_VERSION` placeholder in `Directory.Packages.pro
 
 Keep target-framework selection centralized too: the generated root `Directory.Build.props` owns `<TargetFramework>{TARGET_FRAMEWORK}</TargetFramework>` for source and test projects. Do **not** duplicate `<TargetFramework>` inside the generated app or test `.csproj` files as a workaround.
 
-When `pwsh` 7+ is available, prefer `pwsh -NoProfile -File ./scripts/resolve-package-versions.ps1 -TargetFramework {TARGET_FRAMEWORK}` to produce the package placeholder map for this skill. The script defaults to this skill's own `assets/shared/Directory.Packages.props`, so the normal path only needs `{TARGET_FRAMEWORK}`. Its output should drive the final substitutions instead of remembered version numbers, and legacy Windows PowerShell is not a substitute runtime for this helper.
+When `pwsh` 7+ is available, prefer `pwsh -NoProfile -File <skill-root>/scripts/resolve-package-versions.ps1 -TargetFramework {TARGET_FRAMEWORK}` to produce the package placeholder map for this skill. The script defaults to this skill's own `assets/shared/Directory.Packages.props`, so the normal path only needs `{TARGET_FRAMEWORK}`. Its output should drive the final substitutions instead of remembered version numbers.
 
 For framework-aligned ASP.NET packages, keep the selected target framework major in mind when resolving the final version:
 

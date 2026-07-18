@@ -49,8 +49,8 @@ For example, `reports/tuning/Acme.Core.ParserBenchmark-report-github.md` causes 
 1. Build the benchmark project in Release. Stop on a compiler error; report it directly.
 2. Run the detector with the intended benchmark type:
 
-   ```ps1
-   pwsh -NoProfile -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
+   ```console
+   pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
    ```
 
    If `pwsh` 7+ is unavailable, report that blocker instead of invoking legacy Windows PowerShell.

@@ -1182,12 +1182,12 @@
     },
     {
       "id": 113,
-      "prompt": "Use dotnet-docfx-digest on a repository whose `.docfx/docfx.json` has `build.overwrite` set to `api/namespaces/**.md` and `api/types/**/*.md`, and whose samples include one compile failure from calling LINQ `Select` without `using System.Linq;`. One type-page example constructs and returns the documented type from an if/else branch but never prints, configures, invokes, or passes the value to another API. Run validation with JSON, keep the output easy to inspect in `pwsh`, and repair the docs.",
-      "expected_output": "Agent treats the near-miss DocFX glob as a literal config mismatch, recognizes the exact expected `api/namespaces/**/*.md` pattern, uses quiet/no-heartbeat validation when `pwsh` or another host would obscure JSON, fixes the no-observable example by showing a reader-visible result, and maps the CS1061 sample compile failure to a missing extension-method using such as `using System.Linq;` before rerunning validation.",
+      "prompt": "Use dotnet-docfx-digest on a repository whose `.docfx/docfx.json` has `build.overwrite` set to `api/namespaces/**.md` and `api/types/**/*.md`, and whose samples include one compile failure from calling LINQ `Select` without `using System.Linq;`. One type-page example constructs and returns the documented type from an if/else branch but never prints, configures, invokes, or passes the value to another API. Run validation with JSON, keep the output easy to inspect in PowerShell, and repair the docs.",
+      "expected_output": "Agent treats the near-miss DocFX glob as a literal config mismatch, recognizes the exact expected `api/namespaces/**/*.md` pattern, uses quiet/no-heartbeat validation when terminal noise would obscure JSON, fixes the no-observable example by showing a reader-visible result, and maps the CS1061 sample compile failure to a missing extension-method using such as `using System.Linq;` before rerunning validation.",
       "expectations": [
         "Recognizes that `api/namespaces/**.md` is a near-miss and does not satisfy the expected literal `api/namespaces/**/*.md` overwrite pattern",
         "Repairs `build.overwrite` without widening the glob to `api/**/*.md` or moving namespace/type overwrite Markdown into `build.content`",
-        "Uses `--quiet` or `--no-heartbeat` when progress stderr makes JSON validation output hard to inspect interactively in `pwsh` or another host",
+        "Uses `--quiet` or `--no-heartbeat` when progress stderr makes JSON validation output hard to inspect interactively",
         "Treats `EXAMPLE_NO_OBSERVABLE_OUTCOME` as a failing example even when the code has a real branch or returns the documented type",
         "Repairs the example by producing a consumer-visible result such as printed data, configured state, an invoked member result, or a real consumer API call",
         "Interprets CS1061 extension-method failures as likely missing using directives when source/API evidence supports it",

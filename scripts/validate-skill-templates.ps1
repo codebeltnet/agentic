@@ -129,11 +129,7 @@ function Get-LocalShellPolicyFindingsFromContentItems {
     param([object[]]$Items)
 
     $legacyShell = 'power' + 'shell'
-    $productName = 'Power' + 'Shell'
     $legacyShellPattern = [regex]::Escape($legacyShell)
-    $productNamePattern = [regex]::Escape($productName)
-    $fence = [string]([char]96) * 3
-    $fencePattern = [regex]::Escape($fence)
 
     $rules = @(
         [pscustomobject]@{
@@ -143,34 +139,6 @@ function Get-LocalShellPolicyFindingsFromContentItems {
         [pscustomobject]@{
             Pattern = "(?i)\bshell:\s*$legacyShellPattern(?:\.exe)?\b"
             Message = 'Workflow steps that explicitly choose a `pwsh`-style shell must use `pwsh`.'
-        }
-        [pscustomobject]@{
-            Pattern = "(?i)\buse\b.*\b$legacyShellPattern(?:\.exe)?\b.*\binstead of\b.*\bpwsh\b"
-            Message = 'Do not tell agents to fall back from `pwsh` to the legacy executable.'
-        }
-        [pscustomobject]@{
-            Pattern = "(?i)\bwhen\s+$productNamePattern\s+is\s+available\b"
-            Message = 'Local guidance must name `pwsh` 7+ explicitly instead of generic shell availability.'
-        }
-        [pscustomobject]@{
-            Pattern = "(?i)\bif\s+$productNamePattern\s+is\s+unavailable\b"
-            Message = 'Missing `pwsh` 7+ must be reported as the blocker for required local `.ps1` execution.'
-        }
-        [pscustomobject]@{
-            Pattern = "(?i)\brun this\s+$productNamePattern\s+script\b"
-            Message = 'Local script instructions must name `pwsh` 7+ explicitly.'
-        }
-        [pscustomobject]@{
-            Pattern = "(?i)\b$productNamePattern\s+session\b"
-            Message = 'Refer to a `pwsh` session for local execution guidance.'
-        }
-        [pscustomobject]@{
-            Pattern = "(?i)\b$productNamePattern\s+or\s+terminal\b"
-            Message = 'Prefer `pwsh` 7+ or shell-agnostic wording for local execution guidance.'
-        }
-        [pscustomobject]@{
-            Pattern = "(?i)^$fencePattern$legacyShellPattern\s*$"
-            Message = 'Use `ps1` for `pwsh` syntax fences or a shell-agnostic fence such as `bash` for generic commands.'
         }
     )
 
@@ -200,17 +168,6 @@ function Get-LocalShellPolicyFindingsFromContentItems {
                 if ($line -match $rule.Pattern) {
                     $message = $rule.Message
                     break
-                }
-            }
-
-            if ($null -eq $message) {
-                $mentionsPs1 = $line -match '(?i)\.ps1\b'
-                $mentionsPwsh = $line -match '(?i)\bpwsh\b'
-                $isPs1CommandExample = $line -match '^\s*(?:\./|\.\\)?[A-Za-z0-9_./\\-]+\.ps1(?:\s|$)'
-                $isPs1RunInstruction = $line -match '(?i)\b(?:run|invoke|execute)\b.*?\.ps1\b'
-
-                if ($mentionsPs1 -and -not $mentionsPwsh -and ($isPs1CommandExample -or $isPs1RunInstruction)) {
-                    $message = 'Local `.ps1` instructions must include `pwsh -NoProfile -File` explicitly.'
                 }
             }
 
@@ -684,7 +641,7 @@ Add-ValidationResult -Results $results -Name 'All repo-managed skills keep YAML 
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Active local shell guidance requires pwsh for local `.ps1` and shell execution' -Action {
+Add-ValidationResult -Results $results -Name 'Active local shell guidance rejects only legacy PowerShell executable use' -Action {
     $findings = @(Get-LocalShellPolicyFindings -RepoRoot $repoRoot -GitRef $Ref)
 
     if ($findings.Count -gt 0) {
@@ -694,14 +651,13 @@ Add-ValidationResult -Results $results -Name 'Active local shell guidance requir
             }
         )
 
-        throw ("Local `.ps1` and shell execution requires `pwsh` 7+; update these lines:`n" + ($details -join "`n"))
+        throw ("Legacy `powershell` executable usage is still present; update these lines:`n" + ($details -join "`n"))
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Local shell policy scanner rejects legacy runtime guidance and allows approved alternatives' -Action {
+Add-ValidationResult -Results $results -Name 'Local shell policy scanner rejects legacy executable invocations and allows valid terminology' -Action {
     $legacyShell = 'power' + 'shell'
     $legacyExe = $legacyShell + '.exe'
-    $productName = 'Power' + 'Shell'
     $fence = [string]([char]96) * 3
 
     $cases = @(
@@ -720,7 +676,7 @@ Add-ValidationResult -Results $results -Name 'Local shell policy scanner rejects
         [pscustomobject]@{
             Name = 'legacy executable command'
             Path = 'skills/example/case-03.md'
-            Content = "$legacyExe -File ./scripts/example.ps1"
+            Content = "$legacyExe -Command Get-ChildItem"
             ExpectViolation = $true
         }
         [pscustomobject]@{
@@ -748,9 +704,15 @@ Add-ValidationResult -Results $results -Name 'Local shell policy scanner rejects
             ExpectViolation = $false
         }
         [pscustomobject]@{
-            Name = 'ps1 fence'
+            Name = 'powershell fence'
             Path = 'skills/example/case-08.md'
-            Content = $fence + 'ps1' + [Environment]::NewLine + '$value = 1' + [Environment]::NewLine + $fence
+            Content = $fence + 'powershell' + [Environment]::NewLine + '$value = 1' + [Environment]::NewLine + $fence
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'PowerShell session prose'
+            Path = 'skills/example/case-09.md'
+            Content = 'Use a PowerShell session if that is the host the user already chose.'
             ExpectViolation = $false
         }
         [pscustomobject]@{
@@ -766,14 +728,8 @@ Add-ValidationResult -Results $results -Name 'Local shell policy scanner rejects
             ExpectViolation = $false
         }
         [pscustomobject]@{
-            Name = 'generic availability phrasing'
-            Path = 'skills/example/case-11.md'
-            Content = "When $productName is available, prefer the helper."
-            ExpectViolation = $true
-        }
-        [pscustomobject]@{
             Name = 'legacy workflow shell'
-            Path = '.github/workflows/case-12.yml'
+            Path = '.github/workflows/case-11.yml'
             Content = "shell: $legacyShell"
             ExpectViolation = $true
         }
@@ -845,8 +801,8 @@ Add-ValidationResult -Results $results -Name 'App skill documents web-family App
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Treat the scaffold as a fidelity copy of the documented template set, not a "best effort" approximation.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle '## Step 3: Resolve Dynamic Dependency Versions'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'scripts/resolve-package-versions.ps1'
-    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File ./scripts/resolve-package-versions.ps1 -TargetFramework <TargetFramework>'
-    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File ./scripts/restore-missing-shared-assets.ps1'
+    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File <skill-root>/scripts/resolve-package-versions.ps1 -TargetFramework <TargetFramework>'
+    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'current working directory'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'If the host does not render native form controls, follow the deterministic plain-text fallback defined in `FORMS.md` instead of improvising your own questioning style.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Consistency matters more than creativity during parameter collection.'
@@ -957,7 +913,7 @@ Add-ValidationResult -Results $results -Name 'App reference guide uses ROOT_NAME
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Directory.Packages.props` is the authoritative version source for app scaffolds.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Do **not** duplicate `<TargetFramework>` inside the generated app or test `.csproj` files as a workaround.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'scripts/resolve-package-versions.ps1'
-    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'pwsh -NoProfile -File ./scripts/resolve-package-versions.ps1 -TargetFramework {TARGET_FRAMEWORK}'
+    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'pwsh -NoProfile -File <skill-root>/scripts/resolve-package-versions.ps1 -TargetFramework {TARGET_FRAMEWORK}'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle '`testenvironments.json` is required output for the scaffold.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'MinVer may report a bootstrap pre-release such as `0.0.0-alpha.0`'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Where `{AppType}` maps to the emitted project suffix:'
@@ -1071,8 +1027,8 @@ Add-ValidationResult -Results $results -Name 'Library skill documents PROJECT_NA
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'current working directory'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle '{PROJECT_NAME}'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle '{DOCFX_TARGET_FRAMEWORK}'
-    Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File ./scripts/restore-missing-shared-assets.ps1'
-    Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'In `pwsh` 7+, prefer .NET file APIs'
+    Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1'
+    Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'In PowerShell, prefer .NET file APIs'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'If the host does not render native form controls, follow the deterministic plain-text fallback defined in `FORMS.md` instead of improvising your own questioning style.'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'Consistency matters more than creativity during parameter collection.'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'treat a blank response as accepting that shown value'
@@ -1102,7 +1058,7 @@ Add-ValidationResult -Results $results -Name 'Library reference guide uses curre
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'current working directory'
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'do not create an extra solution-named wrapper folder'
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'src/{PROJECT_NAME}/{PROJECT_NAME}.csproj'
-    Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'Recommended `pwsh` 7+ approach for rewritten templates:'
+    Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'Recommended PowerShell approach for rewritten templates:'
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'offer every other generally supported non-preview .NET LTS and STS channel'
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'highest selected generally supported non-preview executable TFM'
 }
@@ -1153,7 +1109,7 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, p
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Read `references/experiment-design.md`'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '--list flat'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '--job dry'
-    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root>'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root>'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '#### Yolo mode'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Start a full performance run only after an explicit human instruction to run it now.'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Yolo never authorizes a full performance run.'
@@ -1187,7 +1143,7 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, p
     Assert-Contains -Name 'benchmarkdotnet-essentials.md' -Content $benchmarkEssentials -Needle '## Result-validity gate'
     Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'SkipBenchmarksWithReports = true'
     Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'Anti-thrashing rule'
-    Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'pwsh -NoProfile -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>'
+    Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>'
     Assert-Contains -Name 'validate-skill.ps1' -Content $validateSkillScript -Needle 'if ([string]::IsNullOrWhiteSpace($SkillRoot))'
     Assert-Contains -Name 'validate-skill.ps1' -Content $validateSkillScript -Needle 'Harness detector validation requires pwsh 7+'
     Assert-Contains -Name 'comparison-benchmark.cs' -Content $comparison -Needle '{EQUIVALENCE_CHECK}'
@@ -1212,7 +1168,7 @@ Add-ValidationResult -Results $results -Name 'Strong-name skill matches FORMS su
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-strong-name-signing/SKILL.md' -GitRef $Ref
     Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'compute the defaults silently, and present a single summary for confirmation'
     Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 1024'
-    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'Run this command block in a `pwsh` 7+ session in the target directory:'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'Run this PowerShell command block with `pwsh` 7+ in the target directory:'
     Assert-NotContains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 4096'
 }
 

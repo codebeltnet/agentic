@@ -24,9 +24,9 @@ Read `FORMS.md`, compute the defaults silently, and present a single summary for
 
 ### Step 2: Generate the Key File
 
-Run this command block in a `pwsh` 7+ session in the target directory:
+Run this PowerShell command block with `pwsh` 7+ in the target directory:
 
-```ps1
+```powershell
 $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider({KEY_SIZE})
 $keyBlob = $rsa.ExportCspBlob($true)
 [System.IO.File]::WriteAllBytes("{OUTPUT_PATH}", $keyBlob)
@@ -43,7 +43,7 @@ The `ExportCspBlob($true)` method exports the full key pair (public + private) i
 
 After generating the file, verify it exists and report:
 
-```ps1
+```powershell
 $snkFile = Get-Item "{OUTPUT_PATH}"
 Write-Host "✅ Strong name key generated"
 Write-Host ""

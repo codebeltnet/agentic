@@ -58,7 +58,7 @@ scripts/digest.cs
 
 Run it with `dotnet run --file` so it is not confused with a nearby project file:
 
-```bash
+```console
 dotnet run --file <skill-root>/scripts/digest.cs -- --repo-url <repo-url> --output-root <output-root>
 ```
 
@@ -87,7 +87,7 @@ The runner requires the .NET 10 SDK or newer and `git`. It performs one shallow 
 
 The runner also supports deterministic result validation for authored workspaces:
 
-```bash
+```console
 dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>
 ```
 
@@ -204,7 +204,7 @@ Choose the workspace mode from the user's input, not from folders you happen to 
 
 For a fresh run, execute the bundled runner from this skill:
 
-```bash
+```console
 dotnet run --file <skill-root>/scripts/digest.cs -- --repo-url <repo-url> --output-root <output-root> [--external-repo-url <external-url>]...
 ```
 
@@ -320,7 +320,7 @@ If any package digest is missing, decide from the manifest:
 
 Run the deterministic result validator and require a pass before reporting completion:
 
-```bash
+```console
 dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>
 ```
 
@@ -417,7 +417,7 @@ Before finishing, verify:
 
 Use targeted searches instead of rereading everything:
 
-```bash
+```console
 rg -n "TODO|TBD|confidence|citation|analysis notes|I cannot|as an AI|\\.\\.\\.|placeholder" <workspace>/result
 rg -n "Write a source-grounded|Write a short lede" <workspace>/result
 rg -n "Greeting|MessageService|Hello World|Hello, World|Hello from DI|\\bOK\\b|GenerateReport|CreateService|BuildHost|FormatInvoice|CreateClient|SampleMiddleware|MyService|IMyService|MyRepository|FakeRepository|MyController|SampleController|\\bFoo\\b|\\bBar\\b|\\bDummy\\b" <workspace>/result

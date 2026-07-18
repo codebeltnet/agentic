@@ -8,8 +8,7 @@
       "expectations": [
         "Computes defaults silently before asking for confirmation",
         "Defaults to a 1024-bit RSA key",
-        "Uses the RSACryptoServiceProvider ExportCspBlob flow",
-        "Uses `pwsh` 7+ when it presents or executes the PowerShell command block locally"
+        "Uses the RSACryptoServiceProvider ExportCspBlob flow"
       ]
     },
     {

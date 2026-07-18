@@ -101,25 +101,25 @@ Run the bundled detector with `-BenchmarkType <Namespace.TypeBenchmark>` and ins
 
 Build:
 
-```bash
+```console
 dotnet build -c Release tuning/{SutProject}.Benchmarks/{SutProject}.Benchmarks.csproj
 ```
 
 List cases without measuring:
 
-```bash
+```console
 dotnet run -c Release --project tooling/{runner} -- --list flat --filter *{BenchmarkClass}*
 ```
 
 Dry execution smoke:
 
-```bash
+```console
 dotnet run -c Release --project tooling/{runner} -- --job dry --filter *{BenchmarkClass}*
 ```
 
 Full default run:
 
-```bash
+```console
 dotnet run -c Release --project tooling/{runner} -- --filter *{BenchmarkClass}*
 ```
 

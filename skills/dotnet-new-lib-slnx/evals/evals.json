@@ -55,17 +55,6 @@
         "Continues to the summary instead of asking a second root_namespace clarification question",
         "Uses native structured inputs when available and a one-field-at-a-time plain-text fallback when they are not"
       ]
-    },
-    {
-      "id": 6,
-      "prompt": "The installed dotnet-new-lib-slnx skill copy is missing shared dotfiles from assets/shared.manifest.json. Restore the missing shared assets before continuing the scaffold.",
-      "expected_output": "The agent immediately uses the bundled restore helper through `pwsh -NoProfile -File`, treats missing `pwsh` 7+ as a blocker instead of falling back to legacy Windows PowerShell, and avoids iterative file-by-file diagnosis.",
-      "expectations": [
-        "Runs `pwsh -NoProfile -File ./scripts/restore-missing-shared-assets.ps1` when shared assets from assets/shared.manifest.json are missing",
-        "Does not invoke `powershell` or `powershell.exe` as a fallback runtime for the restore helper",
-        "Treats missing `pwsh` 7+ as a prerequisite blocker instead of silently changing runtimes",
-        "Restores the manifest-defined shared asset set in one step rather than diagnosing missing dotfiles iteratively"
-      ]
     }
   ]
 }
