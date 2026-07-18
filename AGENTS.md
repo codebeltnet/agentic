@@ -2,6 +2,14 @@
 
 Repository-level rules for AI agents working in this codebase.
 
+## Local Shell Execution
+
+Agents may use Bash or `pwsh` 7+ for local development.
+
+Whenever a local command uses PowerShell syntax or executes a `.ps1` script, invoke `pwsh`, never `powershell` or `powershell.exe`. Keep `.ps1` filenames unchanged; the required change is the runtime, not the script extension. Use the form `pwsh -NoProfile -File ./scripts/example.ps1` for local `.ps1` execution.
+
+Do not silently fall back to legacy Windows PowerShell. If `pwsh` 7+ is unavailable for a required local `.ps1` script, report the missing prerequisite instead of invoking legacy Windows PowerShell. This rule applies to local agent execution only; GitHub Actions may continue using `bash`, `sh`, `pwsh`, platform defaults, or another justified shell, and existing workflow shell choices should not be rewritten without a functional reason.
+
 ## Eval Isolation
 
 Eval workspaces and test repositories must **never** be created inside this repository. This includes:
@@ -66,16 +74,16 @@ Repo-managed skills live in four places that must stay in sync:
 Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo and the other local installs:
 
 - **Claude local → repo** (persist changes to source control):
-  ```powershell
+  ```ps1
   Copy-Item "$HOME/.claude/skills/<name>/<file>" "skills/<name>/<file>" -Force
   ```
 - **Claude local → agent installs** (keep `~/.agents` and Gemini current):
-  ```powershell
+  ```ps1
   Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
   Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.gemini/antigravity-cli/skills/<name>/<file>" -Force
   ```
 - **Repo → local installs** (after pulling changes or cloning fresh):
-  ```powershell
+  ```ps1
   Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
   Copy-Item "skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
   Copy-Item "skills/<name>/<file>" "$HOME/.gemini/antigravity-cli/skills/<name>/<file>" -Force
