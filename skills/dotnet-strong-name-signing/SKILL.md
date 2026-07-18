@@ -24,7 +24,7 @@ Read `FORMS.md`, compute the defaults silently, and present a single summary for
 
 ### Step 2: Generate the Key File
 
-Run this PowerShell script in the target directory:
+Run this PowerShell command block with `pwsh` 7+ in the target directory:
 
 ```powershell
 $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider({KEY_SIZE})

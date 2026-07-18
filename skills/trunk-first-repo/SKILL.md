@@ -66,22 +66,22 @@ If skipped, remind the user they can add it later:
 
 ### Step 3a: First Feature Push
 
-After the user commits the first project files on the feature branch, push in this order:
+After the user commits the first project files on the feature branch:
+
+If Step 3 already configured and pushed `origin/main`, publish only the current feature branch:
 
 ```bash
-git push -u origin main:main
 git push -u origin HEAD
 ```
 
-This order matters. `main` must exist on the remote before the feature branch is pushed so hosts such as GitHub do not make the feature branch the default branch for a brand-new remote.
+If the remote was not configured during initialization, do not inline a shortened variant here. Use the Push Remote Workflow below instead so it:
 
-If the remote was added only after the first feature commit, still run the same order from the feature branch:
+- checks `git branch --show-current` before pushing
+- verifies `main` is still only the empty seed branch with `git ls-tree -r --name-only main`
+- adds `origin` only when needed
+- pushes `main:main` before `HEAD`
 
-```bash
-git remote add origin {REMOTE_URL}
-git push -u origin main:main
-git push -u origin HEAD
-```
+This avoids a redundant `git push -u origin main:main` when Step 3 already handled the empty trunk push, while keeping the guarded `main`-before-`HEAD` order for late-remote cases.
 
 Do not manually delete project files from the working tree to "clean" `main`. When the user is worried about files appearing on `main`, explicitly explain that untracked or ignored checkout files can remain visible in the directory but are not part of the `main` branch. If the user needs to verify that `main` is empty, inspect the branch tree instead of the checkout directory:
 
@@ -95,7 +95,25 @@ If the feature branch was accidentally pushed before `main`, push `main` next an
 
 ### Step 4: Summary
 
-After initialization, display a summary:
+After initialization, display the matching summary:
+
+If Step 3 configured `origin`:
+
+```
+✅ Repository initialized with trunk-first workflow
+
+  main branch:    🌱 seeded (empty — content enters only via PRs)
+  feature branch: v0.1.0/init (current — start working here)
+  remote:         origin -> https://github.com/example/repo.git
+
+  Next steps:
+  1. Stage and commit your files on this branch
+  2. When the branch is ready, push it with `git push -u origin HEAD`
+  3. Open a PR to main
+  4. After review, merge the PR — main stays clean
+```
+
+If Step 3 was skipped:
 
 ```
 ✅ Repository initialized with trunk-first workflow

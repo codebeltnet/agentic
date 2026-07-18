@@ -60,6 +60,25 @@ function Get-RepoFileList {
     return @($output | Where-Object { $_ -like "$prefix*" } | ForEach-Object { $_.Substring($prefix.Length) } | Sort-Object)
 }
 
+function Get-TrackedRepoPaths {
+    param(
+        [string]$RepoRoot,
+        [string]$GitRef
+    )
+
+    if ([string]::IsNullOrWhiteSpace($GitRef)) {
+        $output = git -C $RepoRoot ls-files 2>$null
+    } else {
+        $output = git -C $RepoRoot ls-tree -r --name-only $GitRef 2>$null
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to enumerate tracked repository files for validation.'
+    }
+
+    return @($output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object)
+}
+
 function Get-FileText {
     param(
         [string]$RepoRoot,
@@ -81,6 +100,109 @@ function Get-FileText {
         throw "Missing file at ref '$GitRef': $RelativePath"
     }
     return ($output -join [Environment]::NewLine)
+}
+
+function Test-IsLocalShellPolicyScanCandidate {
+    param([string]$RelativePath)
+
+    $normalizedPath = $RelativePath -replace '\\', '/'
+    if ($normalizedPath.StartsWith('./')) {
+        $normalizedPath = $normalizedPath.Substring(2)
+    }
+    if ($normalizedPath -eq 'CHANGELOG.md') {
+        return $false
+    }
+
+    if ($normalizedPath -eq 'scripts/validate-skill-templates.ps1') {
+        return $false
+    }
+
+    if ($normalizedPath -like 'skills/skill-creator-agnostic/*') {
+        return $false
+    }
+
+    $extension = [System.IO.Path]::GetExtension($normalizedPath).ToLowerInvariant()
+    return @('.cs', '.json', '.md', '.ps1', '.yml', '.yaml') -contains $extension
+}
+
+function Get-LocalShellPolicyFindingsFromContentItems {
+    param([object[]]$Items)
+
+    $legacyShell = 'power' + 'shell'
+    $legacyShellPattern = [regex]::Escape($legacyShell)
+
+    $rules = @(
+        [pscustomobject]@{
+            Pattern = "(?i)\b$legacyShellPattern(?:\.exe)?\s+-"
+            Message = 'Local command examples must use `pwsh` 7+ instead of the legacy executable.'
+        }
+        [pscustomobject]@{
+            Pattern = "(?i)\bshell:\s*$legacyShellPattern(?:\.exe)?\b"
+            Message = 'Workflow steps that explicitly choose a `pwsh`-style shell must use `pwsh`.'
+        }
+    )
+
+    $findings = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($item in @($Items)) {
+        if ($null -eq $item -or [string]::IsNullOrWhiteSpace([string]$item.Path)) {
+            continue
+        }
+
+        $relativePath = [string]$item.Path -replace '\\', '/'
+        if ($relativePath.StartsWith('./')) {
+            $relativePath = $relativePath.Substring(2)
+        }
+        if (-not (Test-IsLocalShellPolicyScanCandidate -RelativePath $relativePath)) {
+            continue
+        }
+
+        $content = if ($null -eq $item.Content) { '' } else { [string]$item.Content }
+        $lines = [regex]::Split($content, '\r?\n')
+
+        for ($index = 0; $index -lt $lines.Length; $index++) {
+            $line = $lines[$index]
+            $message = $null
+
+            foreach ($rule in $rules) {
+                if ($line -match $rule.Pattern) {
+                    $message = $rule.Message
+                    break
+                }
+            }
+
+            if ($null -ne $message) {
+                $findings.Add([pscustomobject]@{
+                    Path = $relativePath
+                    LineNumber = $index + 1
+                    Line = $line
+                    Message = $message
+                })
+            }
+        }
+    }
+
+    return @($findings)
+}
+
+function Get-LocalShellPolicyFindings {
+    param(
+        [string]$RepoRoot,
+        [string]$GitRef
+    )
+
+    $items = foreach ($path in Get-TrackedRepoPaths -RepoRoot $RepoRoot -GitRef $GitRef) {
+        if (-not (Test-IsLocalShellPolicyScanCandidate -RelativePath $path)) {
+            continue
+        }
+
+        [pscustomobject]@{
+            Path = $path
+            Content = Get-FileText -RepoRoot $RepoRoot -RelativePath $path -GitRef $GitRef
+        }
+    }
+
+    return @(Get-LocalShellPolicyFindingsFromContentItems -Items $items)
 }
 
 function Assert-Contains {
@@ -519,6 +641,133 @@ Add-ValidationResult -Results $results -Name 'All repo-managed skills keep YAML 
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Active local shell guidance rejects only legacy PowerShell executable use' -Action {
+    $findings = @(Get-LocalShellPolicyFindings -RepoRoot $repoRoot -GitRef $Ref)
+
+    if ($findings.Count -gt 0) {
+        $details = @(
+            $findings | ForEach-Object {
+                '{0}:{1}: {2}`n       {3}' -f $_.Path, $_.LineNumber, $_.Message, $_.Line.Trim()
+            }
+        )
+
+        throw ("Legacy `powershell` executable usage is still present; update these lines:`n" + ($details -join "`n"))
+    }
+}
+
+Add-ValidationResult -Results $results -Name 'Local shell policy scanner rejects legacy executable invocations and allows valid terminology' -Action {
+    $legacyShell = 'power' + 'shell'
+    $legacyExe = $legacyShell + '.exe'
+    $fence = [string]([char]96) * 3
+
+    $cases = @(
+        [pscustomobject]@{
+            Name = 'maintained skill legacy command'
+            Path = 'skills/example/case-01.md'
+            Content = "$legacyShell -NoProfile -File ./scripts/example.ps1"
+            ExpectViolation = $true
+        }
+        [pscustomobject]@{
+            Name = 'case-variant legacy command'
+            Path = 'skills/example/case-02.md'
+            Content = ('PoWeR' + 'ShElL -NoProfile -File ./scripts/example.ps1')
+            ExpectViolation = $true
+        }
+        [pscustomobject]@{
+            Name = 'legacy executable command'
+            Path = 'skills/example/case-03.md'
+            Content = "$legacyExe -Command Get-ChildItem"
+            ExpectViolation = $true
+        }
+        [pscustomobject]@{
+            Name = 'pwsh script command'
+            Path = 'skills/example/case-04.md'
+            Content = 'pwsh -NoProfile -File ./scripts/example.ps1'
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'bash command'
+            Path = 'skills/example/case-05.md'
+            Content = 'bash ./scripts/example.sh'
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'workflow bash shell'
+            Path = '.github/workflows/case-06.yml'
+            Content = 'shell: bash'
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'workflow pwsh shell'
+            Path = '.github/workflows/case-07.yml'
+            Content = 'shell: pwsh'
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'powershell fence'
+            Path = 'skills/example/case-08.md'
+            Content = $fence + 'powershell' + [Environment]::NewLine + '$value = 1' + [Environment]::NewLine + $fence
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'PowerShell session prose'
+            Path = 'skills/example/case-09.md'
+            Content = 'Use a PowerShell session if that is the host the user already chose.'
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'released changelog exclusion'
+            Path = 'CHANGELOG.md'
+            Content = "$legacyShell -File ./scripts/example.ps1"
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'obsolete skill exclusion'
+            Path = 'skills/skill-creator-agnostic/SKILL.md'
+            Content = "$legacyShell -File ./scripts/example.ps1"
+            ExpectViolation = $false
+        }
+        [pscustomobject]@{
+            Name = 'legacy workflow shell'
+            Path = '.github/workflows/case-11.yml'
+            Content = "shell: $legacyShell"
+            ExpectViolation = $true
+        }
+    )
+
+    $items = foreach ($case in $cases) {
+        [pscustomobject]@{
+            Path = $case.Path
+            Content = $case.Content
+        }
+    }
+
+    $findings = Get-LocalShellPolicyFindingsFromContentItems -Items $items
+
+    foreach ($case in $cases) {
+        $caseFindings = @($findings | Where-Object { $_.Path -eq $case.Path })
+
+        if ($case.ExpectViolation -and $caseFindings.Count -eq 0) {
+            throw "Expected a finding for '$($case.Name)' but none was reported."
+        }
+
+        if (-not $case.ExpectViolation -and $caseFindings.Count -gt 0) {
+            throw "Expected no finding for '$($case.Name)' but found: $($caseFindings[0].Message)"
+        }
+    }
+}
+
+Add-ValidationResult -Results $results -Name 'Repository docs define the local shell execution policy' -Action {
+    $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
+    $contributing = Get-FileText -RepoRoot $repoRoot -RelativePath 'CONTRIBUTING.md' -GitRef $Ref
+
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '## Local Shell Execution'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Agents may use any appropriate local shell.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'use PowerShell 7+ through `pwsh`; never invoke `powershell` or `powershell.exe`'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD'
+}
+
 Add-ValidationResult -Results $results -Name 'App skill collects target framework and conditional web_variant' -Action {
     $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/FORMS.md' -GitRef $Ref
     Assert-Contains -Name 'dotnet-new-app-slnx/FORMS.md' -Content $forms -Needle '### target_framework'
@@ -549,6 +798,8 @@ Add-ValidationResult -Results $results -Name 'App skill documents web-family App
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Treat the scaffold as a fidelity copy of the documented template set, not a "best effort" approximation.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle '## Step 3: Resolve Dynamic Dependency Versions'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'scripts/resolve-package-versions.ps1'
+    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework <TargetFramework>'
+    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1"'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'current working directory'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'If the host does not render native form controls, follow the deterministic plain-text fallback defined in `FORMS.md` instead of improvising your own questioning style.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Consistency matters more than creativity during parameter collection.'
@@ -659,6 +910,7 @@ Add-ValidationResult -Results $results -Name 'App reference guide uses ROOT_NAME
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Directory.Packages.props` is the authoritative version source for app scaffolds.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Do **not** duplicate `<TargetFramework>` inside the generated app or test `.csproj` files as a workaround.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'scripts/resolve-package-versions.ps1'
+    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework {TARGET_FRAMEWORK}'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle '`testenvironments.json` is required output for the scaffold.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'MinVer may report a bootstrap pre-release such as `0.0.0-alpha.0`'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Where `{AppType}` maps to the emitted project suffix:'
@@ -772,6 +1024,8 @@ Add-ValidationResult -Results $results -Name 'Library skill documents PROJECT_NA
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'current working directory'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle '{PROJECT_NAME}'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle '{DOCFX_TARGET_FRAMEWORK}'
+    Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1"'
+    Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'In PowerShell, prefer .NET file APIs'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'If the host does not render native form controls, follow the deterministic plain-text fallback defined in `FORMS.md` instead of improvising your own questioning style.'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'Consistency matters more than creativity during parameter collection.'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'treat a blank response as accepting that shown value'
@@ -801,6 +1055,7 @@ Add-ValidationResult -Results $results -Name 'Library reference guide uses curre
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'current working directory'
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'do not create an extra solution-named wrapper folder'
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'src/{PROJECT_NAME}/{PROJECT_NAME}.csproj'
+    Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'Recommended PowerShell approach for rewritten templates:'
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'offer every other generally supported non-preview .NET LTS and STS channel'
     Assert-Contains -Name 'dotnet-new-lib-slnx/references/library.md' -Content $guide -Needle 'highest selected generally supported non-preview executable TFM'
 }
@@ -832,10 +1087,85 @@ Add-ValidationResult -Results $results -Name 'Benchmark runner wildcard is prese
     Assert-Match -Name 'benchmark-program.cs' -Content $program -Pattern 'namespace\s+\{BENCHMARK_RUNNER_NAMESPACE\};'
 }
 
+Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, proportionate experiments and preserves honest comparison semantics' -Action {
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/SKILL.md' -GitRef $Ref
+    $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/FORMS.md' -GitRef $Ref
+    $candidateSelection = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/candidate-selection.md' -GitRef $Ref
+    $experimentDesign = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/experiment-design.md' -GitRef $Ref
+    $benchmarkEssentials = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/benchmarkdotnet-essentials.md' -GitRef $Ref
+    $runnerPreflight = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/references/runner-preflight.md' -GitRef $Ref
+    $comparison = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/assets/comparison-benchmark.cs' -GitRef $Ref
+    $operation = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/assets/operation-benchmark.cs' -GitRef $Ref
+    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/evals/evals.json' -GitRef $Ref
+    $fixtureFiles = Get-RepoFileList -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/evals/files' -GitRef $Ref
+    $validateSkillScript = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/scripts/validate-skill.ps1' -GitRef $Ref
+
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'A microbenchmark measures a suspected cost under a defined workload; it does not prove that the type is an application bottleneck.'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Do not use construction as the baseline for formatting, equality, hashing, parsing, or another unrelated operation.'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Read `references/candidate-selection.md`'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Read `references/experiment-design.md`'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '--list flat'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '--job dry'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/check-benchmark-requirements.ps1" -RepoRoot "<repo-root>"'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '#### Yolo mode'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Start a full performance run only after an explicit human instruction to run it now.'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Yolo never authorizes a full performance run.'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'read `references/runner-preflight.md`'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'reports.wouldSkipRequestedBenchmark'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'complete BenchmarkDotNet summary'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'When a parameter is only size or payload'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Semantic preflight'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'independently derived exact expected result'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Successful execution is not a correctness oracle.'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'do the baseline and candidate perform equivalent consumer-visible work over identical logical input?'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'After the first valid full result'
+    Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle 'Auto-discover the highest-value performance questions (Recommended)'
+    Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle '### candidate_plan_confirmation'
+    Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle '## Yolo mode override'
+    Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle 'skip `candidate_plan_confirmation`'
+    Assert-Contains -Name 'dotnet-benchmark/FORMS.md' -Content $forms -Needle 'explicit human instruction to start a full performance run'
+    Assert-Contains -Name 'candidate-selection.md' -Content $candidateSelection -Needle '## Candidate matrix'
+    Assert-Contains -Name 'candidate-selection.md' -Content $candidateSelection -Needle '## Profiling-first gate'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Correctness oracle'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle 'Do not compare unrelated operations.'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Workload invariants'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Benchmark validity gate'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Deferred execution and terminal operations'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle '## Semantic preflight'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle 'Successful execution is not a correctness oracle.'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle 'do the baseline and candidate perform equivalent consumer-visible work over identical logical input?'
+    Assert-Contains -Name 'experiment-design.md' -Content $experimentDesign -Needle 'Do not benchmark a homogeneous all-match store and call it type filtering unless the all-match path is the actual subject.'
+    Assert-Contains -Name 'benchmarkdotnet-essentials.md' -Content $benchmarkEssentials -Needle 'one warmup iteration plus controlled iteration counts'
+    Assert-Contains -Name 'benchmarkdotnet-essentials.md' -Content $benchmarkEssentials -Needle '## Deferred pipelines and terminal operations'
+    Assert-Contains -Name 'benchmarkdotnet-essentials.md' -Content $benchmarkEssentials -Needle '## Result-validity gate'
+    Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'SkipBenchmarksWithReports = true'
+    Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'Anti-thrashing rule'
+    Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/check-benchmark-requirements.ps1" -RepoRoot "<repo-root>" -BenchmarkType <Namespace.TypeBenchmark>'
+    Assert-Contains -Name 'validate-skill.ps1' -Content $validateSkillScript -Needle 'if ([string]::IsNullOrWhiteSpace($SkillRoot))'
+    Assert-Contains -Name 'validate-skill.ps1' -Content $validateSkillScript -Needle 'Harness detector validation requires pwsh 7+'
+    Assert-Contains -Name 'comparison-benchmark.cs' -Content $comparison -Needle '{EQUIVALENCE_CHECK}'
+    Assert-Contains -Name 'comparison-benchmark.cs' -Content $comparison -Needle 'Baseline = true'
+    Assert-Contains -Name 'operation-benchmark.cs' -Content $operation -Needle 'Do not add Baseline = true merely to produce a ratio column.'
+    Assert-NotContains -Name 'operation-benchmark.cs measured method' -Content ($operation -replace '// Do not add Baseline = true merely to produce a ratio column\.', '') -Needle 'Baseline = true'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'RouteMatcher.IsMatch'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'cannot prove whether file I/O or JSON parsing dominates'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'ThreadingDiagnoser'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'YOLO mode:'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'Acme.Core.ParserBenchmark-report-github.md'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'LegacyAliasQuery benchmark and summary'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'InMemoryTestStore benchmark'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'LowSelectivity, HalfMatches, and AllMatch'
+    Assert-Contains -Name 'dotnet-benchmark/evals/evals.json' -Content $evals -Needle 'TraitFilter helper only runs in test discovery'
+    if (@($fixtureFiles | Where-Object { $_ -match '(^|/)(obj|bin|BenchmarkDotNet\.Artifacts)(/|$)' }).Count -gt 0) {
+        throw 'dotnet-benchmark eval fixtures must not include obj/, bin/, or BenchmarkDotNet.Artifacts paths'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Strong-name skill matches FORMS summary flow and 1024-bit default' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-strong-name-signing/SKILL.md' -GitRef $Ref
     Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'compute the defaults silently, and present a single summary for confirmation'
     Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 1024'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'Run this PowerShell command block with `pwsh` 7+ in the target directory:'
     Assert-NotContains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 4096'
 }
 

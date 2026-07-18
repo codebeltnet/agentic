@@ -58,8 +58,8 @@ scripts/digest.cs
 
 Run it with `dotnet run --file` so it is not confused with a nearby project file:
 
-```powershell
-dotnet run --file <skill-root>/scripts/digest.cs -- --repo-url <repo-url> --output-root <output-root>
+```console
+dotnet run --file "<skill-root>/scripts/digest.cs" -- --repo-url <repo-url> --output-root <output-root>
 ```
 
 Required inputs:
@@ -87,8 +87,8 @@ The runner requires the .NET 10 SDK or newer and `git`. It performs one shallow 
 
 The runner also supports deterministic result validation for authored workspaces:
 
-```powershell
-dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>
+```console
+dotnet run --file "<skill-root>/scripts/digest.cs" -- --validate-results --workspace <workspace>
 ```
 
 Use this as a deterministic gate after authoring result files. It reports unsupported package-owned API member access in C# examples, low-signal Basic usage patterns, non-Codebelt-style xUnit snippets, non-PascalCase `MethodName_Scenario_ExpectedBehavior` test-method names, and Basic usage snippets that do not compile and pass as temporary Codebelt.Extensions.Xunit tests. For executable validation, the runner creates temp test projects with direct package references for the page's NuGet package plus xUnit test packages and `Codebelt.Extensions.Xunit`, then runs `dotnet test` with bounded parallelism. The agent must revise from source evidence and rerun until validation passes.
@@ -204,8 +204,8 @@ Choose the workspace mode from the user's input, not from folders you happen to 
 
 For a fresh run, execute the bundled runner from this skill:
 
-```powershell
-dotnet run --file <skill-root>/scripts/digest.cs -- --repo-url <repo-url> --output-root <output-root> [--external-repo-url <external-url>]...
+```console
+dotnet run --file "<skill-root>/scripts/digest.cs" -- --repo-url <repo-url> --output-root <output-root> [--external-repo-url <external-url>]...
 ```
 
 The runner writes deterministic evidence files, prompt files, and the `result` folder. It does not call an LLM and does not overwrite existing `result/*.md` files.
@@ -320,8 +320,8 @@ If any package digest is missing, decide from the manifest:
 
 Run the deterministic result validator and require a pass before reporting completion:
 
-```powershell
-dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>
+```console
+dotnet run --file "<skill-root>/scripts/digest.cs" -- --validate-results --workspace <workspace>
 ```
 
 This validator catches C# Basic usage member accesses on package-owned receiver types that do not exist in source evidence, non-Codebelt-style xUnit snippets, test methods not named with the exact PascalCase `MethodName_Scenario_ExpectedBehavior` convention, malformed Basic usage sections, low-signal Basic usage examples, and snippets that fail an executable Codebelt.Extensions.Xunit harness. It intentionally does not guess replacement APIs. If it reports an error, revise the example from source evidence and rerun validation until it passes.
@@ -417,7 +417,7 @@ Before finishing, verify:
 
 Use targeted searches instead of rereading everything:
 
-```powershell
+```console
 rg -n "TODO|TBD|confidence|citation|analysis notes|I cannot|as an AI|\\.\\.\\.|placeholder" <workspace>/result
 rg -n "Write a source-grounded|Write a short lede" <workspace>/result
 rg -n "Greeting|MessageService|Hello World|Hello, World|Hello from DI|\\bOK\\b|GenerateReport|CreateService|BuildHost|FormatInvoice|CreateClient|SampleMiddleware|MyService|IMyService|MyRepository|FakeRepository|MyController|SampleController|\\bFoo\\b|\\bBar\\b|\\bDummy\\b" <workspace>/result
