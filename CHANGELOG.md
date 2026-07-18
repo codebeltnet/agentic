@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.8.0] - 2026-07-18
 
-This is a minor release introducing the `agent-smith` skill for rigorous software-craftsmanship standards across design, architecture, implementation, testing, performance, security, DevSecOps, and CI/CD, alongside the `dotnet-benchmark` skill for evidence-driven performance testing. The release also resolves a critical git-keep-a-changelog bug that could silently include already-released commits when determining scope boundaries, replacing implicit caret notation with deterministic branch-derived scope validation. PowerShell execution is standardized to pwsh 7+, and skill validation tooling is strengthened across the repository.
+This is a minor release introducing the `agent-smith` skill for rigorous software-craftsmanship standards across design, architecture, implementation, testing, performance, security, DevSecOps, and CI/CD, alongside the `dotnet-benchmark` skill for evidence-driven performance testing. The release resolves a critical git-keep-a-changelog bug that could silently include already-released commits when determining scope boundaries, replaces implicit caret notation with deterministic branch-derived scope validation, and introduces deterministic commit-subject validation infrastructure to `git-visual-commits` with a bundled PowerShell validator and full-skill-read gating. PowerShell execution is standardized to pwsh 7+, and skill validation tooling is strengthened across the repository.
 
 ### Added
 
@@ -26,14 +26,21 @@ This is a minor release introducing the `agent-smith` skill for rigorous softwar
 - Comprehensive eval coverage for `dotnet-benchmark` with 12 test cases covering discovery workflow, candidate selection, evidence gathering, cost-signal analysis, implementation-comparison patterns, semantic preflight validation, selectivity-drift repair, proportionate stopping, yolo mode, and report-aware preflight; includes fixture code supporting five representative benchmark scenarios,
 - Enhanced `check-benchmark-requirements.ps1` and new `validate-skill.ps1` tooling supporting discovery workflow validation and template-asset consistency checking,
 - Deterministic release-scope resolver script `scripts/resolve-release-scope.ps1` for git-keep-a-changelog providing bleed-guard validation and branch-unique commit identification with JSON output,
-- Base history bleed validation guard in git-keep-a-changelog ensuring that only commits unique to the selected branch are included in changelog entries, preventing accidental duplication of already-released work.
+- Base history bleed validation guard in git-keep-a-changelog ensuring that only commits unique to the selected branch are included in changelog entries, preventing accidental duplication of already-released work,
+- Deterministic commit-subject validator `scripts/validate-commit-subject.ps1` for git-visual-commits enforcing emoji presence in bundled reference table, exactly one ASCII space separator, lowercase description beginning, opt-in conventional-prefix contract, and 70-character maximum,
+- Comprehensive test coverage for deterministic subject validation via `scripts/test-commit-subject.ps1` covering validator behavior, error cases, and edge conditions,
+- Full-skill-read and subject-validation gates in git-visual-commits requiring complete SKILL.md read before any Git command, bundled deterministic validator invocation before plan display and before commit, and subject validation lock that bypasses `yolo`/`auto` mode.
 
 ### Changed
 
 - Standardized local PowerShell execution to `pwsh` 7+ while preserving Bash and workflow-specific shell choices; updated all local command examples and contributor guidance accordingly,
 - Refactored git-keep-a-changelog scope resolution from implicit caret-notation to deterministic branch-derived ranges using the bundled `resolve-release-scope.ps1` resolver, providing explicit separation between `history_range` (for commits) and `diff_range` (for manifest diffs),
 - Enhanced git-keep-a-changelog Step 1 guidance to use the resolver script for all branch-derived scope, eliminating manual range construction and the risk of incorrect inclusivity or boundary drift,
-- Improved skill-template validator to recognize and validate git-keep-a-changelog's new deterministic resolver behavior and bleed-guard requirements.
+- Improved skill-template validator to recognize and validate git-keep-a-changelog's new deterministic resolver behavior and bleed-guard validation requirements,
+- Restructured git-visual-commits SKILL.md with new Critical Rules section documenting full-skill-read requirement, deterministic subject validation lock, identity lock, direct Git execution rule, fail-fast tool validation, auto-approval guard, default scope rule, recovery safety rule, and approval-and-clarification lock,
+- Enhanced git-visual-commits description to highlight deterministic validation, full-skill-read requirement, and exact subject format enforcement (approved emoji, one space, lowercase beginning, 70-character maximum),
+- Updated repo validator to check git-visual-commits subject-validation infrastructure presence including validate-commit-subject.ps1, test-commit-subject.ps1, and SKILL.md documentation of full-skill-read and subject-validation gates,
+- Updated README with documentation of git-visual-commits deterministic subject validation gating and rejection criteria.
 
 ### Fixed
 
