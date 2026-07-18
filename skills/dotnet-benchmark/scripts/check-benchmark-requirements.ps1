@@ -17,7 +17,7 @@
     Skips invoking dotnet --version. Intended for deterministic detector tests; normal skill runs should not use it.
 
 .EXAMPLE
-    pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot C:\src\myrepo
+    pwsh -NoProfile -File "<skill-root>/scripts/check-benchmark-requirements.ps1" -RepoRoot "C:\src\myrepo"
 #>
 [CmdletBinding()]
 param(

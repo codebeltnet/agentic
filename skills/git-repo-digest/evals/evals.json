@@ -26,7 +26,7 @@
       "expectations": [
         "Uses .bot/digests under the active workspace as the output root because the user supplied no output path",
         "Does not ask before using the well-defined .bot/digests output-root default",
-        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root for the .bot/digests default",
+        "Runs dotnet run --file \"<skill-root>/scripts/digest.cs\" with --repo-url and --output-root for the .bot/digests default",
         "Passes the full repository URL, not a slug or partial reference",
         "Does not ask the user for repo-id, run-id, output-root, or result directory",
         "Uses a run-id formatted yyyyMMdd-HHmmssZ so default workspaces sort chronologically",
@@ -394,7 +394,7 @@
         "Does not treat the presence of .bot/digests/xunit as permission to reuse an existing run",
         "Does not pick the latest existing run-id folder when the user supplied only a repository URL",
         "Uses .bot/digests under the active workspace as output-root when no output path was supplied",
-        "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url https://github.com/codebeltnet/xunit and --output-root",
+        "Runs dotnet run --file \"<skill-root>/scripts/digest.cs\" with --repo-url https://github.com/codebeltnet/xunit and --output-root",
         "Creates or expects a new run-id folder under {output-root}/xunit/{yyyyMMdd-HHmmssZ}",
         "Reads the generated manifest from the new run before writing result files",
         "Reuses an existing run only when the user explicitly provides a workspace path or asks to reuse, continue, inspect, validate, or repair existing output"
@@ -449,7 +449,7 @@
       "prompt": "Use git-repo-digest to validate an existing workspace whose aggregate package result contains a C# Basic usage snippet with a package-owned fixture parameter named fixture and the invalid member access fixture.ServiceProvider. The referenced package source evidence declares the fixture type, but the fixture type itself does not declare ServiceProvider.",
       "expected_output": "Runs deterministic result validation, catches that fixture.ServiceProvider is not declared on the fixture type in source evidence, treats that as a blocking API-shape error, revises the example from source evidence rather than relying on a hardcoded repair, and reruns validation until it passes. Framework receivers that are not package-owned, such as IServiceCollection, are not treated as package API-shape errors.",
       "expectations": [
-        "Runs dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>",
+        "Runs dotnet run --file \"<skill-root>/scripts/digest.cs\" -- --validate-results --workspace <workspace>",
         "Reports the missing ServiceProvider member on the package-owned fixture receiver as a deterministic validation finding",
         "Does not use hardcoded ServiceProvider or Host.Services rewrite rules inside digest.cs",
         "Requires the agent to revise the example from source evidence before reporting completion",
@@ -466,7 +466,7 @@
         "Does not use a direct write-then-read snippet as the Basic usage example for package-owned store/logger/collector/recorder APIs",
         "Keeps every type, member, namespace, constructor, and assertion grounded in current source, tests, or source-valid external usage evidence",
         "Uses generic role-based guidance rather than a hardcoded rule for any specific type name",
-        "Runs or plans `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after authoring results",
+        "Runs or plans `dotnet run --file \"<skill-root>/scripts/digest.cs\" -- --validate-results --workspace <workspace>` after authoring results",
         "Requires the NuGet-backed executable Basic usage test to pass before reporting completion",
         "Reports direct helper round-trips as deterministic Basic usage quality diagnostics"
       ]
@@ -513,7 +513,7 @@
     {
       "id": 35,
       "prompt": "Use git-repo-digest to validate an existing workspace whose package page has YAML frontmatter packageId WidgetPack and a Basic usage C# block. The package is published on NuGet, and the local machine has the .NET SDK available.",
-      "expected_output": "Runs deterministic post-validation with `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>`. For each Basic usage C# block, the validator creates a temporary Codebelt.Extensions.Xunit test project outside the repository with direct package references for Microsoft.NET.Test.Sdk, xunit.v3, xunit.runner.visualstudio, Codebelt.Extensions.Xunit, and the page packageId from NuGet, writes the snippet as a test file, runs `dotnet test` with bounded parallelism, and treats any restore, compile, or test failure as blocking. The agent rewrites failing examples from evidence and reruns validation until it passes.",
+      "expected_output": "Runs deterministic post-validation with `dotnet run --file \"<skill-root>/scripts/digest.cs\" -- --validate-results --workspace <workspace>`. For each Basic usage C# block, the validator creates a temporary Codebelt.Extensions.Xunit test project outside the repository with direct package references for Microsoft.NET.Test.Sdk, xunit.v3, xunit.runner.visualstudio, Codebelt.Extensions.Xunit, and the page packageId from NuGet, writes the snippet as a test file, runs `dotnet test` with bounded parallelism, and treats any restore, compile, or test failure as blocking. The agent rewrites failing examples from evidence and reruns validation until it passes.",
       "expectations": [
         "Uses the page frontmatter packageId, or the result filename when packageId is absent, as the NuGet package to install for executable validation",
         "Creates the executable validation project in a temp directory rather than inside the repository or digest workspace",
@@ -554,7 +554,7 @@
         "Requires the result file to contain exactly one top-level `## Basic usage` section",
         "Requires every Basic usage section to contain a complete fenced C# code block",
         "Treats any result-file edit after a validation pass as invalidating that prior pass",
-        "Reruns `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after the final result-file repair"
+        "Reruns `dotnet run --file \"<skill-root>/scripts/digest.cs\" -- --validate-results --workspace <workspace>` after the final result-file repair"
       ]
     },
     {
@@ -581,7 +581,7 @@
         "Inspects the affected Basic usage snippet and exact executable failure line before speculating about framework internals",
         "Limits hypothesis loops and replaces failing examples from source-backed evidence when the cause is not quickly confirmed",
         "Makes focused edits tied to validator diagnostics rather than broad rewrites from unrelated search hits",
-        "Reruns `dotnet run --file <skill-root>/scripts/digest.cs -- --validate-results --workspace <workspace>` after the final result-file edit"
+        "Reruns `dotnet run --file \"<skill-root>/scripts/digest.cs\" -- --validate-results --workspace <workspace>` after the final result-file edit"
       ]
     },
     {

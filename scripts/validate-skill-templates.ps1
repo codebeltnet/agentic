@@ -760,15 +760,12 @@ Add-ValidationResult -Results $results -Name 'Local shell policy scanner rejects
 Add-ValidationResult -Results $results -Name 'Repository docs define the local shell execution policy' -Action {
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $contributing = Get-FileText -RepoRoot $repoRoot -RelativePath 'CONTRIBUTING.md' -GitRef $Ref
-    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
 
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '## Local Shell Execution'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Agents may use Bash or `pwsh` 7+ for local development.'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Use the form `pwsh -NoProfile -File ./scripts/example.ps1` for local `.ps1` execution.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Agents may use any appropriate local shell.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'use PowerShell 7+ through `pwsh`; never invoke `powershell` or `powershell.exe`'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD'
-    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Bash and `pwsh` 7+ are both valid for local development'
-    Assert-Contains -Name 'README.md' -Content $readme -Needle 'pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1'
 }
 
 Add-ValidationResult -Results $results -Name 'App skill collects target framework and conditional web_variant' -Action {
@@ -801,8 +798,8 @@ Add-ValidationResult -Results $results -Name 'App skill documents web-family App
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Treat the scaffold as a fidelity copy of the documented template set, not a "best effort" approximation.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle '## Step 3: Resolve Dynamic Dependency Versions'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'scripts/resolve-package-versions.ps1'
-    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File <skill-root>/scripts/resolve-package-versions.ps1 -TargetFramework <TargetFramework>'
-    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1'
+    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework <TargetFramework>'
+    Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1"'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'current working directory'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'If the host does not render native form controls, follow the deterministic plain-text fallback defined in `FORMS.md` instead of improvising your own questioning style.'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Consistency matters more than creativity during parameter collection.'
@@ -913,7 +910,7 @@ Add-ValidationResult -Results $results -Name 'App reference guide uses ROOT_NAME
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Directory.Packages.props` is the authoritative version source for app scaffolds.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Do **not** duplicate `<TargetFramework>` inside the generated app or test `.csproj` files as a workaround.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'scripts/resolve-package-versions.ps1'
-    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'pwsh -NoProfile -File <skill-root>/scripts/resolve-package-versions.ps1 -TargetFramework {TARGET_FRAMEWORK}'
+    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework {TARGET_FRAMEWORK}'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle '`testenvironments.json` is required output for the scaffold.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'MinVer may report a bootstrap pre-release such as `0.0.0-alpha.0`'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Where `{AppType}` maps to the emitted project suffix:'
@@ -1027,7 +1024,7 @@ Add-ValidationResult -Results $results -Name 'Library skill documents PROJECT_NA
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'current working directory'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle '{PROJECT_NAME}'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle '{DOCFX_TARGET_FRAMEWORK}'
-    Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1'
+    Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1"'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'In PowerShell, prefer .NET file APIs'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'If the host does not render native form controls, follow the deterministic plain-text fallback defined in `FORMS.md` instead of improvising your own questioning style.'
     Assert-Contains -Name 'dotnet-new-lib-slnx/SKILL.md' -Content $skill -Needle 'Consistency matters more than creativity during parameter collection.'
@@ -1109,7 +1106,7 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, p
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Read `references/experiment-design.md`'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '--list flat'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '--job dry'
-    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root>'
+    Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/check-benchmark-requirements.ps1" -RepoRoot "<repo-root>"'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle '#### Yolo mode'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Start a full performance run only after an explicit human instruction to run it now.'
     Assert-Contains -Name 'dotnet-benchmark/SKILL.md' -Content $skill -Needle 'Yolo never authorizes a full performance run.'
@@ -1143,7 +1140,7 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, p
     Assert-Contains -Name 'benchmarkdotnet-essentials.md' -Content $benchmarkEssentials -Needle '## Result-validity gate'
     Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'SkipBenchmarksWithReports = true'
     Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'Anti-thrashing rule'
-    Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'pwsh -NoProfile -File <skill-root>/scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>'
+    Assert-Contains -Name 'runner-preflight.md' -Content $runnerPreflight -Needle 'pwsh -NoProfile -File "<skill-root>/scripts/check-benchmark-requirements.ps1" -RepoRoot "<repo-root>" -BenchmarkType <Namespace.TypeBenchmark>'
     Assert-Contains -Name 'validate-skill.ps1' -Content $validateSkillScript -Needle 'if ([string]::IsNullOrWhiteSpace($SkillRoot))'
     Assert-Contains -Name 'validate-skill.ps1' -Content $validateSkillScript -Needle 'Harness detector validation requires pwsh 7+'
     Assert-Contains -Name 'comparison-benchmark.cs' -Content $comparison -Needle '{EQUIVALENCE_CHECK}'

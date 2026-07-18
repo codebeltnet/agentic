@@ -17,10 +17,10 @@
 
 .EXAMPLE
     # Restore missing files into the installed skill copy
-    pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1
+    pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1"
 
     # Preview what is missing without restoring
-    pwsh -NoProfile -File <skill-root>/scripts/restore-missing-shared-assets.ps1 -DryRun
+    pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1" -DryRun
 #>
 [CmdletBinding()]
 param(
