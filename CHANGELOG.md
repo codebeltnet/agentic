@@ -17,7 +17,8 @@ This is a minor release introducing evidence-driven discovery and performance-ex
 - Refactored `FORMS.md` for `dotnet-benchmark` aligned with the new discovery-focused workflow, reducing parameter collection friction by deferring implementation-tier choice to workflow inspection,
 - Enhanced eval coverage for `dotnet-benchmark` with test cases validating candidate discovery, evidence gathering, cost-signal analysis, implementation-comparison patterns, and runtime-selection decisions; includes fixture code supporting five representative benchmark scenarios,
 - Enhanced `check-benchmark-requirements.ps1` and new `validate-skill.ps1` tooling supporting discovery workflow validation and template-asset consistency checking,
-- Updated README with discovery-focused `dotnet-benchmark` description and rationale emphasizing evidence-backed benchmarking over generic performance testing.
+- Updated README with discovery-focused `dotnet-benchmark` description and rationale emphasizing evidence-backed benchmarking over generic performance testing,
+- Standardized local PowerShell and `.ps1` execution on `pwsh` 7+ while preserving Bash and workflow-specific shell choices.
 
 ## [0.7.5] - 2026-07-15
 
