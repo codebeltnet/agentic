@@ -4,21 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.0] - 2026-07-17
+## [0.8.0] - 2026-07-18
 
-This is a minor release introducing evidence-driven discovery and performance-experiment design in `dotnet-benchmark`. The skill prioritizes identifying high-value benchmark targets through source inspection and profiling evidence, provides a structured discovery workflow before measurement, and includes new template assets and reference documentation for measurement-focused benchmarking.
+This is a minor release introducing the `dotnet-benchmark` skill for performance testing of .NET types with evidence-driven discovery and measurement discipline. The release emphasizes candidate selection through profiling evidence, semantic correctness validation before performance interpretation, and proportionate-stopping decision logic. Additionally, the release standardizes local PowerShell execution to `pwsh` 7+ and strengthens validation discipline across repo-managed skills.
 
 ### Added
 
-- Evidence-driven discovery workflow in `dotnet-benchmark` prioritizing candidate selection, cost-signal analysis, and measurement fitness over tier-based template enumeration; includes new workflow steps for intent resolution, repository inspection, performance evidence gathering, and experiment-plan presentation,
-- New template assets `operation-benchmark.cs` and `comparison-benchmark.cs` replacing tier-based starters, providing refined structural guidance for single-operation and comparative-implementation benchmarks with clearer baseline configuration,
+- `dotnet-benchmark` skill with evidence-driven workflow for identifying high-value benchmark targets, designed to avoid low-signal performance testing and over-measurement; includes step-by-step discovery phases from intent resolution through experiment planning,
+- Discovery-focused FORMS.md parameter collection for `dotnet-benchmark` reducing implementation-tier choice friction by deferring tier selection to workflow inspection,
+- New template assets `operation-benchmark.cs` and `comparison-benchmark.cs` providing refined structural guidance for single-operation and comparative-implementation benchmarks,
 - `candidate-selection.md` reference documenting evidence ladders, call-site inspection, profiling integration, and candidate-ranking heuristics to drive the discovery phase,
-- `experiment-design.md` reference detailing performance questions, workload selection, correctness verification, and measurement fitness to ensure benchmarks answer the right questions,
-- Refactored `FORMS.md` for `dotnet-benchmark` aligned with the new discovery-focused workflow, reducing parameter collection friction by deferring implementation-tier choice to workflow inspection,
-- Enhanced eval coverage for `dotnet-benchmark` with test cases validating candidate discovery, evidence gathering, cost-signal analysis, implementation-comparison patterns, and runtime-selection decisions; includes fixture code supporting five representative benchmark scenarios,
-- Enhanced `check-benchmark-requirements.ps1` and new `validate-skill.ps1` tooling supporting discovery workflow validation and template-asset consistency checking,
-- Updated README with discovery-focused `dotnet-benchmark` description and rationale emphasizing evidence-backed benchmarking over generic performance testing,
-- Standardized local PowerShell and `.ps1` execution on `pwsh` 7+ while preserving Bash and workflow-specific shell choices.
+- `experiment-design.md` reference detailing performance questions, workload selection, semantic preflight and correctness oracle validation, measurement fitness assessment, and early-stop conditions,
+- Mandatory semantic preflight validation gate in `dotnet-benchmark` SKILL.md requiring deterministic correctness oracle derivation before accepting full-run results, preventing false-positive baseline misinterpretation,
+- Proportionate-stopping decision logic in `dotnet-benchmark` recognizing when measurement is complete and cost does not justify deeper investigation; includes case studies and selectivity-drift repair guidance,
+- Yolo mode support in `dotnet-benchmark` for autonomous candidate selection and progress-update-only planning when user intent is explicit,
+- Report-aware runner preflight in `dotnet-benchmark` recognizing when SkipBenchmarksWithReports plus matching reports/tuning/ artifacts intentionally filter a benchmark type, preserving benchmark code unchanged,
+- Comprehensive eval coverage for `dotnet-benchmark` with 12 test cases covering discovery workflow, candidate selection, evidence gathering, cost-signal analysis, implementation-comparison patterns, semantic preflight validation, selectivity-drift repair, proportionate stopping, yolo mode, and report-aware preflight; includes fixture code supporting five representative benchmark scenarios,
+- Enhanced `check-benchmark-requirements.ps1` and new `validate-skill.ps1` tooling supporting discovery workflow validation and template-asset consistency checking.
+
+### Changed
+
+- Standardized local PowerShell execution to `pwsh` 7+ while preserving Bash and workflow-specific shell choices; updated all local command examples and contributor guidance accordingly.
 
 ## [0.7.5] - 2026-07-15
 
