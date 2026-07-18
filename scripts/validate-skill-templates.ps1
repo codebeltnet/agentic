@@ -1306,6 +1306,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/SKILL.md' -GitRef $Ref
     $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/FORMS.md' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/evals/evals.json' -GitRef $Ref
+    $scopeResolver = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/resolve-release-scope.ps1' -GitRef $Ref
+    $scopeResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Create or update `CHANGELOG.md` directly, then stop for user review.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` does not exist, create a compliant one before'
@@ -1326,11 +1328,11 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'you must ask a direct confirmation question before drafting the changelog entry.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not skip this question.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Wait for the user''s explicit response before proceeding to Step 4.'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Step 3b: Verify Your Approach'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**You must use `<base>^..HEAD`** (with the caret) throughout Step 4.'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Inspect and report the base commit (concrete releases ONLY'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**Show the full output** in your response (do not summarize or skip lines).'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**Step 4a Confirmation (before proceeding):**'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Step 3b: Verify Release Isolation'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Require `base_history_bleed` to be `false`.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not append `^` or widen either range for a concrete release.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'The comparison boundary is always excluded from a branch-derived release'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Yolo/auto changes pending-worktree handling only.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not dump commit subjects verbatim into the changelog.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` is missing, create it with the standard title,'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Always maintain the Keep a Changelog compare-link footer at the bottom of the file.'
@@ -1340,6 +1342,11 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/FORMS.md' -Content $forms -Needle 'This is the mandatory Step 3 confirmation gate for concrete releases.'
     Assert-Contains -Name 'git-keep-a-changelog/FORMS.md' -Content $forms -Needle 'I found pending changes not yet committed for release `{release_label}`: `{staged_count}` staged, `{unstaged_count}` unstaged, `{untracked_count}` untracked. Include them in the changelog draft? Yes / No / Custom'
     Assert-Contains -Name 'git-keep-a-changelog/FORMS.md' -Content $forms -Needle 'Do not skip this gate when the target is a concrete release'
+
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-scope.ps1' -Content $scopeResolver -Needle '$historyRange = "$baseCommit..$headCommit"'
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-scope.ps1' -Content $scopeResolver -Needle '$diffRange = "$mergeBase..$headCommit"'
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-scope.ps1' -Content $scopeResolver -Needle 'base_history_bleed = $false'
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/test-resolve-release-scope.ps1' -Content $scopeResolverTests -Needle 'the tagged previous release bled into the new release scope'
 
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Updates CHANGELOG.md directly instead of only drafting notes in chat'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Reads full commit subjects and bodies before writing the release entry'
@@ -1351,7 +1358,12 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the pending-worktree question as a mandatory gate before Step 4 for a concrete release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let user intent bypass the mandatory pending-worktree confirmation gate for a concrete release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Inserts the compare-link footer at the bottom when it is missing from an existing changelog'
-    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Uses <base>^..HEAD with the caret for concrete-release Step 4 commands instead of <base>..HEAD'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the merge-base as an excluded boundary rather than the first commit of the concrete release'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let yolo mode widen committed history or include the v10.0.9 boundary commit'
+
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        & (Join-Path $repoRoot 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1') | Out-Null
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Rendered app worker template leaves no unexpected placeholders' -Action {
