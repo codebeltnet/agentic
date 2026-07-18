@@ -7,6 +7,7 @@
       "expected_output": "The agent detects repository state first and onboards only the missing tuning project and single tooling runner, preserves CPM/solution conventions, resolves current package versions dynamically, and does not fabricate a target type or benchmark method.",
       "expectations": [
         "Runs or references scripts/check-benchmark-requirements.ps1 before changing harness files",
+        "Invokes scripts/check-benchmark-requirements.ps1 through `pwsh -NoProfile -File` and never falls back to `powershell` or `powershell.exe`",
         "Creates or proposes exactly one reusable tooling runner and a tuning benchmark project while preserving the detected solution and package-management conventions",
         "Resolves BenchmarkDotNet package versions dynamically from NuGet.org rather than copying hardcoded example versions",
         "Does not invent a SUT type, member, workload, or benchmark class when none was supplied",

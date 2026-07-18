@@ -216,22 +216,26 @@ try {
     $detectorPath = Join-Path $SkillRoot 'scripts/check-benchmark-requirements.ps1'
     if (Test-Path -LiteralPath $detectorPath) {
         try {
-            $pwshExe = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
-            $detected = & $pwshExe -NoProfile -ExecutionPolicy Bypass -File $detectorPath -RepoRoot $fixtureRoot -BenchmarkType Acme.Core.WidgetBenchmark -SkipSdkCheck | ConvertFrom-Json
-            if ($detected.solutionFormat -ne 'sln' -or -not $detected.centralPackageManagement -or -not $detected.centralizesBenchmarkConventions) {
-                Add-Failure 'Harness detector did not recognize the fixture solution, CPM, and centralized conventions'
-            }
-            if ($detected.sdk.status -ne 'skipped') {
-                Add-Failure 'Harness detector did not report the intentional skipped SDK probe distinctly'
-            }
-            if ($detected.benchmarkProjects.Count -ne 1 -or $detected.runner.name -ne 'bdn-runner' -or -not $detected.harnessReady) {
-                Add-Failure 'Harness detector did not recognize the existing benchmark project and runner'
-            }
-            if (-not $detected.runner.skipBenchmarksWithReports -or -not $detected.runner.usesSlimJob -or @($detected.runner.configuredRuntimes) -notcontains 'CoreRuntime.Core90') {
-                Add-Failure 'Harness detector did not recognize report skipping, the Slim job, and configured runtime'
-            }
-            if (-not $detected.reports.wouldSkipRequestedBenchmark -or @($detected.reports.matchingReportFiles).Count -ne 1) {
-                Add-Failure 'Harness detector did not identify the matching report that suppresses the requested benchmark type'
+            $pwshExe = Get-Command pwsh -ErrorAction SilentlyContinue
+            if ($null -eq $pwshExe) {
+                Add-Failure 'Harness detector validation requires pwsh 7+; do not fall back to legacy Windows PowerShell.'
+            } else {
+                $detected = & $pwshExe.Source -NoProfile -File $detectorPath -RepoRoot $fixtureRoot -BenchmarkType Acme.Core.WidgetBenchmark -SkipSdkCheck | ConvertFrom-Json
+                if ($detected.solutionFormat -ne 'sln' -or -not $detected.centralPackageManagement -or -not $detected.centralizesBenchmarkConventions) {
+                    Add-Failure 'Harness detector did not recognize the fixture solution, CPM, and centralized conventions'
+                }
+                if ($detected.sdk.status -ne 'skipped') {
+                    Add-Failure 'Harness detector did not report the intentional skipped SDK probe distinctly'
+                }
+                if ($detected.benchmarkProjects.Count -ne 1 -or $detected.runner.name -ne 'bdn-runner' -or -not $detected.harnessReady) {
+                    Add-Failure 'Harness detector did not recognize the existing benchmark project and runner'
+                }
+                if (-not $detected.runner.skipBenchmarksWithReports -or -not $detected.runner.usesSlimJob -or @($detected.runner.configuredRuntimes) -notcontains 'CoreRuntime.Core90') {
+                    Add-Failure 'Harness detector did not recognize report skipping, the Slim job, and configured runtime'
+                }
+                if (-not $detected.reports.wouldSkipRequestedBenchmark -or @($detected.reports.matchingReportFiles).Count -ne 1) {
+                    Add-Failure 'Harness detector did not identify the matching report that suppresses the requested benchmark type'
+                }
             }
         } catch {
             Add-Failure "Harness detector failed on the deterministic fixture: $($_.Exception.Message)"

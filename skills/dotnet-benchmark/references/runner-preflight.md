@@ -49,9 +49,11 @@ For example, `reports/tuning/Acme.Core.ParserBenchmark-report-github.md` causes 
 1. Build the benchmark project in Release. Stop on a compiler error; report it directly.
 2. Run the detector with the intended benchmark type:
 
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
+   ```ps1
+   pwsh -NoProfile -File scripts/check-benchmark-requirements.ps1 -RepoRoot <repo-root> -BenchmarkType <Namespace.TypeBenchmark>
    ```
+
+   If `pwsh` 7+ is unavailable, report that blocker instead of invoking legacy Windows PowerShell.
 
 3. Inspect `runner.programPath`, `runner.skipBenchmarksWithReports`, `runner.usesSlimJob`, `runner.configuredRuntimes`, `reports.tuningPath`, `reports.matchingReportFiles`, and `reports.wouldSkipRequestedBenchmark`.
 4. Verify that configured runtime jobs match the repository's supported TFMs. The TFM list is the normal variable; do not rewrite the runner merely to make it look different.

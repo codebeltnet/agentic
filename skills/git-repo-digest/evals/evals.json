@@ -27,6 +27,7 @@
         "Uses .bot/digests under the active workspace as the output root because the user supplied no output path",
         "Does not ask before using the well-defined .bot/digests output-root default",
         "Runs dotnet run --file <skill-root>/scripts/digest.cs with --repo-url and --output-root for the .bot/digests default",
+        "Keeps the runner invocation shell-agnostic instead of wrapping `dotnet run --file` in legacy Windows PowerShell",
         "Passes the full repository URL, not a slug or partial reference",
         "Does not ask the user for repo-id, run-id, output-root, or result directory",
         "Uses a run-id formatted yyyyMMdd-HHmmssZ so default workspaces sort chronologically",

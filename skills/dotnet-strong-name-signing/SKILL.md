@@ -8,7 +8,7 @@ description: >
 
 ![Strong Name Signing](assets/hero.jpg)
 
-Generate a strong name key pair (`.snk` file) for signing .NET assemblies. Uses the .NET runtime's built-in `RSACryptoServiceProvider` instead of `sn.exe`, so it works in **any PowerShell or terminal** — no Visual Studio Developer Command Prompt needed.
+Generate a strong name key pair (`.snk` file) for signing .NET assemblies. Uses the .NET runtime's built-in `RSACryptoServiceProvider` instead of `sn.exe`, so it works in any terminal and, when local PowerShell syntax is preferred, runs through **`pwsh` 7+** — no Visual Studio Developer Command Prompt needed.
 
 ## Why this matters
 
@@ -24,9 +24,9 @@ Read `FORMS.md`, compute the defaults silently, and present a single summary for
 
 ### Step 2: Generate the Key File
 
-Run this PowerShell script in the target directory:
+Run this command block in a `pwsh` 7+ session in the target directory:
 
-```powershell
+```ps1
 $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider({KEY_SIZE})
 $keyBlob = $rsa.ExportCspBlob($true)
 [System.IO.File]::WriteAllBytes("{OUTPUT_PATH}", $keyBlob)
@@ -43,7 +43,7 @@ The `ExportCspBlob($true)` method exports the full key pair (public + private) i
 
 After generating the file, verify it exists and report:
 
-```powershell
+```ps1
 $snkFile = Get-Item "{OUTPUT_PATH}"
 Write-Host "✅ Strong name key generated"
 Write-Host ""
@@ -87,4 +87,4 @@ Remind the user about `.snk` file handling:
 
 ### Cross-Platform
 
-This approach works on Windows, macOS, and Linux — anywhere the .NET runtime or PowerShell 7+ is installed. The `RSACryptoServiceProvider` class is available in both .NET Framework and .NET (Core).
+This approach works on Windows, macOS, and Linux — anywhere the .NET runtime or `pwsh` 7+ is installed. The `RSACryptoServiceProvider` class is available in both .NET Framework and .NET (Core).
