@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.8.0] - 2026-07-18
 
-This is a minor release introducing the `agent-smith` skill, a rigorous software-craftsmanship advisor for design, architecture, implementation, refactoring, code review, public API analysis, testing, performance, security, DevSecOps, CI/CD, delivery, and repository governance. The skill provides explicit guidance across technology domains (.NET, Git, GitHub, CI/CD, REST, supply-chain) while respecting repository conventions, challenging weak assumptions, validating before completion, and reporting evidence and tradeoffs honestly. Additionally, this release introduces the `dotnet-benchmark` skill for performance testing of .NET types with evidence-driven discovery and measurement discipline. The release emphasizes candidate selection through profiling evidence, semantic correctness validation before performance interpretation, and proportionate-stopping decision logic. Furthermore, it standardizes local PowerShell execution to `pwsh` 7+ and strengthens validation discipline across repo-managed skills.
+This is a minor release introducing the `agent-smith` skill for rigorous software-craftsmanship standards across design, architecture, implementation, testing, performance, security, DevSecOps, and CI/CD, alongside the `dotnet-benchmark` skill for evidence-driven performance testing. The release also resolves a critical git-keep-a-changelog bug that could silently include already-released commits when determining scope boundaries, replacing implicit caret notation with deterministic branch-derived scope validation. PowerShell execution is standardized to pwsh 7+, and skill validation tooling is strengthened across the repository.
 
 ### Added
 
@@ -14,7 +14,6 @@ This is a minor release introducing the `agent-smith` skill, a rigorous software
 - Detailed reference documentation for agent-smith covering core principles, decision frameworks, architecture guidelines, implementation patterns, testing strategies, performance considerations, security and DevSecOps guidance, CI/CD workflows, delivery discipline, repository governance, engineering assessment templates, and agent handoff protocols,
 - Eval coverage for `agent-smith` including discipline verification, review scenarios, and governance application across multiple engineering contexts,
 - README updates with `agent-smith` installation snippet, capability showcase, and "Why agent-smith?" section explaining technology-neutral core, progressive disclosure, evidence-driven reporting, local-convention respect, and honest completion gates,
-- Hero image asset for `agent-smith`.
 - `dotnet-benchmark` skill with evidence-driven workflow for identifying high-value benchmark targets, designed to avoid low-signal performance testing and over-measurement; includes step-by-step discovery phases from intent resolution through experiment planning,
 - Discovery-focused FORMS.md parameter collection for `dotnet-benchmark` reducing implementation-tier choice friction by deferring tier selection to workflow inspection,
 - New template assets `operation-benchmark.cs` and `comparison-benchmark.cs` providing refined structural guidance for single-operation and comparative-implementation benchmarks,
@@ -25,11 +24,21 @@ This is a minor release introducing the `agent-smith` skill, a rigorous software
 - Yolo mode support in `dotnet-benchmark` for autonomous candidate selection and progress-update-only planning when user intent is explicit,
 - Report-aware runner preflight in `dotnet-benchmark` recognizing when SkipBenchmarksWithReports plus matching reports/tuning/ artifacts intentionally filter a benchmark type, preserving benchmark code unchanged,
 - Comprehensive eval coverage for `dotnet-benchmark` with 12 test cases covering discovery workflow, candidate selection, evidence gathering, cost-signal analysis, implementation-comparison patterns, semantic preflight validation, selectivity-drift repair, proportionate stopping, yolo mode, and report-aware preflight; includes fixture code supporting five representative benchmark scenarios,
-- Enhanced `check-benchmark-requirements.ps1` and new `validate-skill.ps1` tooling supporting discovery workflow validation and template-asset consistency checking.
+- Enhanced `check-benchmark-requirements.ps1` and new `validate-skill.ps1` tooling supporting discovery workflow validation and template-asset consistency checking,
+- Deterministic release-scope resolver script `scripts/resolve-release-scope.ps1` for git-keep-a-changelog providing bleed-guard validation and branch-unique commit identification with JSON output,
+- Base history bleed validation guard in git-keep-a-changelog ensuring that only commits unique to the selected branch are included in changelog entries, preventing accidental duplication of already-released work.
 
 ### Changed
 
-- Standardized local PowerShell execution to `pwsh` 7+ while preserving Bash and workflow-specific shell choices; updated all local command examples and contributor guidance accordingly.
+- Standardized local PowerShell execution to `pwsh` 7+ while preserving Bash and workflow-specific shell choices; updated all local command examples and contributor guidance accordingly,
+- Refactored git-keep-a-changelog scope resolution from implicit caret-notation to deterministic branch-derived ranges using the bundled `resolve-release-scope.ps1` resolver, providing explicit separation between `history_range` (for commits) and `diff_range` (for manifest diffs),
+- Enhanced git-keep-a-changelog Step 1 guidance to use the resolver script for all branch-derived scope, eliminating manual range construction and the risk of incorrect inclusivity or boundary drift,
+- Improved skill-template validator to recognize and validate git-keep-a-changelog's new deterministic resolver behavior and bleed-guard requirements.
+
+### Fixed
+
+- Resolved critical git-keep-a-changelog bug where implicit caret notation and loose range handling could inadvertently include already-released commits in new changelog entries, causing silent duplication of previous release content; now requires explicit bleed-guard validation via the deterministic resolver,
+- Corrected skill-validator behavior to account for git-keep-a-changelog's updated scope-resolution contract and bleed-guard validation requirements.
 
 ## [0.7.5] - 2026-07-15
 
