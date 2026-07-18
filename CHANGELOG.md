@@ -4,11 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-07-18
 
-## [0.8.0] - 2026-07-16
 
-This is a minor release introducing the `agent-smith` skill, a rigorous software-craftsmanship advisor for design, architecture, implementation, refactoring, code review, public API analysis, testing, performance, security, DevSecOps, CI/CD, delivery, and repository governance. The skill provides explicit guidance across technology domains (.NET, Git, GitHub, CI/CD, REST, supply-chain) while respecting repository conventions, challenging weak assumptions, validating before completion, and reporting evidence and tradeoffs honestly.
+This is a minor release introducing the `agent-smith` skill, a rigorous software-craftsmanship advisor for design, architecture, implementation, refactoring, code review, public API analysis, testing, performance, security, DevSecOps, CI/CD, delivery, and repository governance. The skill provides explicit guidance across technology domains (.NET, Git, GitHub, CI/CD, REST, supply-chain) while respecting repository conventions, challenging weak assumptions, validating before completion, and reporting evidence and tradeoffs honestly. Additionally, this release introduces the `dotnet-benchmark` skill for performance testing of .NET types with evidence-driven discovery and measurement discipline. The release emphasizes candidate selection through profiling evidence, semantic correctness validation before performance interpretation, and proportionate-stopping decision logic. Furthermore, it standardizes local PowerShell execution to `pwsh` 7+ and strengthens validation discipline across repo-managed skills.
 
 ### Added
 
@@ -17,6 +16,21 @@ This is a minor release introducing the `agent-smith` skill, a rigorous software
 - Eval coverage for `agent-smith` including discipline verification, review scenarios, and governance application across multiple engineering contexts,
 - README updates with `agent-smith` installation snippet, capability showcase, and "Why agent-smith?" section explaining technology-neutral core, progressive disclosure, evidence-driven reporting, local-convention respect, and honest completion gates,
 - Hero image asset for `agent-smith`.
+- `dotnet-benchmark` skill with evidence-driven workflow for identifying high-value benchmark targets, designed to avoid low-signal performance testing and over-measurement; includes step-by-step discovery phases from intent resolution through experiment planning,
+- Discovery-focused FORMS.md parameter collection for `dotnet-benchmark` reducing implementation-tier choice friction by deferring tier selection to workflow inspection,
+- New template assets `operation-benchmark.cs` and `comparison-benchmark.cs` providing refined structural guidance for single-operation and comparative-implementation benchmarks,
+- `candidate-selection.md` reference documenting evidence ladders, call-site inspection, profiling integration, and candidate-ranking heuristics to drive the discovery phase,
+- `experiment-design.md` reference detailing performance questions, workload selection, semantic preflight and correctness oracle validation, measurement fitness assessment, and early-stop conditions,
+- Mandatory semantic preflight validation gate in `dotnet-benchmark` SKILL.md requiring deterministic correctness oracle derivation before accepting full-run results, preventing false-positive baseline misinterpretation,
+- Proportionate-stopping decision logic in `dotnet-benchmark` recognizing when measurement is complete and cost does not justify deeper investigation; includes case studies and selectivity-drift repair guidance,
+- Yolo mode support in `dotnet-benchmark` for autonomous candidate selection and progress-update-only planning when user intent is explicit,
+- Report-aware runner preflight in `dotnet-benchmark` recognizing when SkipBenchmarksWithReports plus matching reports/tuning/ artifacts intentionally filter a benchmark type, preserving benchmark code unchanged,
+- Comprehensive eval coverage for `dotnet-benchmark` with 12 test cases covering discovery workflow, candidate selection, evidence gathering, cost-signal analysis, implementation-comparison patterns, semantic preflight validation, selectivity-drift repair, proportionate stopping, yolo mode, and report-aware preflight; includes fixture code supporting five representative benchmark scenarios,
+- Enhanced `check-benchmark-requirements.ps1` and new `validate-skill.ps1` tooling supporting discovery workflow validation and template-asset consistency checking.
+
+### Changed
+
+- Standardized local PowerShell execution to `pwsh` 7+ while preserving Bash and workflow-specific shell choices; updated all local command examples and contributor guidance accordingly.
 
 ## [0.7.5] - 2026-07-15
 
@@ -39,20 +53,17 @@ This is a patch release focused on extending `trunk-first-repo` with a push-remo
 This is a patch release focused on strengthening `git-keep-a-changelog` with mandatory Step 4a base-commit inspection for concrete releases, ensuring that foundational version bumps, release-prep changes, and dependency baseline updates are never omitted from release narratives. The skill now requires explicit inspection of the base commit before manifest diffs and commit bodies, with output verification and structured reporting.
 
 ### Added
-
 - Step 4a mandatory checkpoint in `git-keep-a-changelog` that inspects and explicitly reports the base commit for concrete releases (e.g., `## [X.Y.Z]`), showing changed files, identifying dependency/version manifests, and confirming release-prep file modifications before proceeding to Step 4b manifest diffs,
 - Explicit base-commit-inclusion enforcement using `<base>^..HEAD` (with caret) throughout Step 4 for concrete releases, ensuring the base commit itself is included in the changelog narrative,
 - Verification and confirmation gates in Step 4a requiring agents to show full base commit output, identify manifests, and explicitly state whether manifests or release-prep files were touched before proceeding to 4b,
 - Detailed comparison matrix in Step 3b distinguishing between `base^..HEAD` (for concrete releases, inclusive of base) and `base..HEAD` (for [Unreleased], exclusive of base),
 - Eval coverage validating base-commit inclusion, manifest detection, and Step 4a output verification for concrete release scenarios.
-
 ### Changed
 
 - Restructured `git-keep-a-changelog` Step 4 into explicit sub-steps (4a through 4f) with clear sequencing: base-commit inspection first (4a), manifest detection (4b), manifest diff inspection (4c), commit-body reading (4d), net-diff inspection (4e), and pending-change integration (4f),
 - Enhanced `git-keep-a-changelog` SKILL.md with critical range-extension guidance for concrete releases, emphasizing that `<base>^..HEAD` (with caret) must be used consistently to include the base commit itself,
 - Strengthened "Bad Output Characteristics" section with **CRITICAL** emphasis on the consequences of omitting the base commit: silently-wrong output that breaks release narratives and loses foundational version bumps,
 - Updated README with enhanced description of `git-keep-a-changelog` base-commit enforcement and Step 4a mandatory checkpoint.
-
 ## [0.7.3] - 2026-07-01
 
 This is a patch release focused on skill refinement and documentation improvements, including xref member-link validation enhancements to dotnet-docfx-digest, structural improvements to git-keep-a-changelog's manifest-diff reading, and emoji discipline improvements across git-visual skills.
@@ -465,7 +476,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.0...HEAD
 [0.8.0]: https://github.com/codebeltnet/agentic/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/codebeltnet/agentic/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/codebeltnet/agentic/compare/v0.7.3...v0.7.4

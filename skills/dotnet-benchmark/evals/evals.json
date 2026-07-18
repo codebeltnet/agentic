@@ -1,0 +1,207 @@
+{
+  "skill_name": "dotnet-benchmark",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "This repo has src/Acme.Core/Acme.Core.csproj but no benchmark infrastructure. Set up the codebelt BenchmarkDotNet harness without inventing a benchmark target yet.",
+      "expected_output": "The agent detects repository state first and onboards only the missing tuning project and single tooling runner, preserves CPM/solution conventions, resolves current package versions dynamically, and does not fabricate a target type or benchmark method.",
+      "expectations": [
+        "Runs or references scripts/check-benchmark-requirements.ps1 before changing harness files",
+        "Creates or proposes exactly one reusable tooling runner and a tuning benchmark project while preserving the detected solution and package-management conventions",
+        "Resolves BenchmarkDotNet package versions dynamically from NuGet.org rather than copying hardcoded example versions",
+        "Does not invent a SUT type, member, workload, or benchmark class when none was supplied",
+        "Explains that candidate discovery starts after a concrete type is available"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Create the most useful BenchmarkDotNet benchmark for Acme.Routing.RouteMatcher from the attached source. I only know that routing gets expensive in large route tables; inspect the type and usages and choose what is worth measuring.",
+      "files": [
+        "evals/files/route-matcher/RouteMatcher.cs",
+        "evals/files/route-matcher/RouteTable.cs",
+        "evals/files/route-matcher/RouteMatcherTests.cs"
+      ],
+      "expected_output": "The agent selects IsMatch as the evidence-backed hot operation because RouteTable calls it inside the route scan, identifies repeated regex construction as a cost hypothesis, builds structured hit/miss and pattern/path-complexity scenarios, characterizes the current operation without inventing a candidate or fake baseline, and rejects low-value Normalize/ToString member coverage.",
+      "expectations": [
+        "Uses RouteTable call-site evidence to prioritize RouteMatcher.IsMatch rather than enumerating every public member",
+        "Identifies per-call wildcard-to-regex conversion and Regex.IsMatch construction/caching behavior as hypotheses to measure without claiming they are already proven bottlenecks",
+        "Uses representative coupled scenarios covering hit and miss plus simple and complex patterns instead of a meaningless Cartesian product or random strings",
+        "Authors or proposes a single-operation characterization benchmark with MemoryDiagnoser and no Baseline=true because no equivalent candidate implementation exists",
+        "Keeps input/setup work outside the measured method, returns or consumes the IsMatch result, and includes build, list, and dry-run validation",
+        "Explicitly rejects Normalize and ToString as lower-value candidates based on the supplied usage evidence"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Benchmark Acme.Text.DecimalParser and tell me whether the span-based implementation is a worthwhile replacement for the legacy implementation. Use the attached type, call site, and tests to choose cases. Measure allocations too, but do not run a full benchmark yet.",
+      "files": [
+        "evals/files/decimal-parser/DecimalParser.cs",
+        "evals/files/decimal-parser/ImportPipeline.cs",
+        "evals/files/decimal-parser/DecimalParserTests.cs"
+      ],
+      "expected_output": "The agent creates a fair Legacy versus Span comparison using identical UTF-8 inputs derived from realistic valid and invalid import values, treats Legacy as the production baseline, validates equivalent success/value/consumed behavior outside measurement, and stops after Release build, discovery, and dry execution without claiming a speedup.",
+      "expectations": [
+        "Selects ParseLegacy versus TryParseSpan as equivalent implementation candidates and uses ParseLegacy as the production baseline",
+        "Derives valid typical, boundary, long, and invalid/partially-consumed cases from the source/tests instead of using arbitrary buffer sizes alone",
+        "Avoids independent parameters that create invalid combinations by using coupled scenario objects or an equivalent explicit case source",
+        "Checks success, parsed value, and consumed length equivalence for every case outside the timed methods",
+        "Feeds both methods identical bytes and keeps encoding/input construction outside measurement",
+        "Uses MemoryDiagnoser, returns observable results, and either performs Release build/list/dry validation or gives those commands while honestly reporting that the source-only fixture lacks a runnable harness; makes no performance claim because the full benchmark was not run"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Add a thorough benchmark for Acme.DateWindow: construction, formatting, equality, and GetHashCode. I want useful optimization evidence, not just a benchmark file.",
+      "files": [
+        "evals/files/date-window/DateWindow.cs",
+        "evals/files/date-window/DateWindowUsage.cs"
+      ],
+      "expected_output": "The agent challenges the request to compare unrelated members, uses dictionary/set call-site evidence to prioritize equality/hash behavior, treats formatting and construction as separate questions only if retained, and never makes constructor timing the baseline for formatting/equality/hashing.",
+      "expectations": [
+        "Inspects supplied usage evidence and prioritizes Equals/GetHashCode or the dictionary lookup consumer operation over equal-weight public-member coverage",
+        "Does not use construction as the baseline for formatting, equality, or hashing and does not present ratios between unrelated work",
+        "Uses equal, unequal-early, unequal-late, dictionary hit, or dictionary miss scenarios where they answer the selected question",
+        "Splits independent questions into focused classes/categories or omits low-value operations with explicit reasons",
+        "Uses MemoryDiagnoser and an honest baseline only within an equivalent comparison group, or no baseline for a single-operation characterization"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Find and benchmark the bottleneck in Acme.Reporting.ReportLoader. Users say loading large report files is slow. Use the attached source and usage, and make the benchmark as realistic as possible.",
+      "files": [
+        "evals/files/report-loader/ReportLoader.cs",
+        "evals/files/report-loader/ReportImportJob.cs"
+      ],
+      "expected_output": "The agent refuses to claim a bottleneck from source alone and does not put disk I/O in a microbenchmark. It recommends profiling the end-to-end import and, if a useful BenchmarkDotNet artifact is requested, isolates in-memory JSON parsing with representative payload sizes while clearly excluding file-system latency from the conclusion.",
+      "expectations": [
+        "States that source inspection alone cannot prove whether file I/O or JSON parsing dominates and recommends profiling or a macrobenchmark for the end-to-end load",
+        "Does not call File.ReadAllText, File.ReadAllBytes, or other disk I/O inside a Benchmark method",
+        "If authoring BenchmarkDotNet code, isolates Parse on preloaded in-memory UTF-8 payloads and labels the result as parsing-only",
+        "Uses structured small/typical/large report payloads rather than arbitrary random bytes",
+        "Does not claim that an in-memory parsing result represents end-to-end report-loading latency"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Benchmark Acme.Caching.ConcurrentMemoizer. We suspect lock contention during parallel request bursts. Inspect the attached type and call site, then create the benchmark that would actually answer that question.",
+      "files": [
+        "evals/files/concurrent-memoizer/ConcurrentMemoizer.cs",
+        "evals/files/concurrent-memoizer/MemoizedEndpoint.cs"
+      ],
+      "expected_output": "The agent designs a defined contention experiment rather than a sequential GetOrAdd microbenchmark: fixed worker counts, synchronized start, shared memoizer, realistic warm-hit/miss mix, per-operation normalization, ThreadingDiagnoser plus MemoryDiagnoser, and a clear warning that service tail latency still needs load testing/profiling.",
+      "expectations": [
+        "Uses the Parallel.ForEachAsync call site as evidence that concurrent shared-state behavior is the relevant operation",
+        "Defines worker count, shared state, hit/miss mix, synchronized start or equivalent coordination, and per-operation normalization",
+        "Avoids a benchmark that only measures one sequential GetOrAdd call and avoids accidentally making Task creation the unexplained dominant cost",
+        "Adds ThreadingDiagnoser for lock-contention evidence alongside MemoryDiagnoser",
+        "Separates contention characterization from service-level throughput/tail-latency claims and recommends load testing or profiling for the latter",
+        "Defines reset/lifecycle behavior so cache state does not leak unpredictably between cases"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Set up a benchmark for Acme.Core.Parser, but keep the codebelt runner on its default runtime only. I do not want net48/net8/net9/net10 comparison jobs.",
+      "expected_output": "The runner remains a valid default configuration with return c;, no raw placeholders, no AddJob chain, and no unused runtime-job using directives; benchmark design still waits for inspection of Parser and its workload.",
+      "expectations": [
+        "Keeps ConfigureBenchmarkDotNet as a valid plain return c; expression without AddJob calls",
+        "Emits no raw runtime placeholders or unused BenchmarkDotNet.Environments, BenchmarkDotNet.Jobs, or Codebelt.Extensions.BenchmarkDotNet runtime-job using directives",
+        "Does not treat the absence of extra jobs as permission to skip target-type and workload inspection"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "YOLO mode: add the most useful benchmark for Acme.Routing.RouteMatcher from the attached source. Use the repo evidence and recommended defaults, proceed without routine confirmation, and do not run a full performance benchmark.",
+      "files": [
+        "evals/files/route-matcher/RouteMatcher.cs",
+        "evals/files/route-matcher/RouteTable.cs",
+        "evals/files/route-matcher/RouteMatcherTests.cs"
+      ],
+      "expected_output": "The agent recognizes yolo mode, autonomously selects the evidence-backed RouteMatcher.IsMatch characterization, reports the experiment plan as a progress update rather than a question, authors the benchmark, and proceeds through build/list/dry validation or honestly reports a source-only harness blocker. It never treats yolo as authorization for a full run or unrelated side effects.",
+      "expectations": [
+        "Recognizes yolo mode and does not ask for performance intent, workload, candidate-plan confirmation, or execution depth when repository evidence provides safe defaults",
+        "Uses RouteTable and tests to select RouteMatcher.IsMatch plus representative coupled hit/miss and pattern-complexity cases",
+        "States the experiment plan and material assumptions as information, then proceeds without asking the user to approve the recommended plan",
+        "Uses a MemoryDiagnoser single-operation characterization with no fabricated Baseline=true",
+        "Selects build, list, and dry validation by default, or supplies those commands while honestly reporting that the source-only fixture lacks a runnable harness",
+        "Does not run or claim a full performance benchmark without an explicit human instruction, and does not treat yolo as authorization for unrelated repository or remote operations"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Acme.Core.ParserBenchmark builds, but the codebelt runner appears to do nothing when I list or run it. Diagnose the attached minimal repository. Keep the benchmark slim and do not start a full performance run.",
+      "files": [
+        "evals/files/runner-skip/tooling/benchmark-runner/Program.cs",
+        "evals/files/runner-skip/tooling/benchmark-runner/benchmark-runner.csproj",
+        "evals/files/runner-skip/tuning/Acme.Core.Benchmarks/ParserBenchmark.cs",
+        "evals/files/runner-skip/tuning/Acme.Core.Benchmarks/Acme.Core.Benchmarks.csproj",
+        "evals/files/runner-skip/reports/tuning/Acme.Core.ParserBenchmark-report-github.md"
+      ],
+      "expected_output": "The agent performs runner preflight before benchmark-code diagnosis, recognizes that SkipBenchmarksWithReports=true plus the matching reports/tuning file deliberately filters ParserBenchmark, verifies the canonical Slim runtime jobs, preserves the lean benchmark and its name, avoids disassembly/tool thrash, and does not remove reports, disable the option, or start a full run without explicit human direction.",
+      "expectations": [
+        "Runs the detector with -BenchmarkType Acme.Core.ParserBenchmark against the canonical repo layout and reports runner.skipBenchmarksWithReports=true, Slim runtime jobs, the matching report, and reports.wouldSkipRequestedBenchmark=true",
+        "Identifies Acme.Core.ParserBenchmark-report-github.md as a case-insensitive type-name match that deliberately filters ParserBenchmark",
+        "Explains that an empty list or execution is expected runner behavior rather than evidence that ParserBenchmark is malformed",
+        "Preserves the lean ParserBenchmark class, method, attributes, and name without adding DisassemblyDiagnoser or unrelated benchmark cases",
+        "Does not disable SkipBenchmarksWithReports, rename the type, or delete/move/overwrite the report automatically",
+        "Does not start or claim a full performance run and requires explicit human direction for a fresh run plus report-retention choice"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Review the attached Acme.Search.LegacyAliasQuery benchmark and summary. I tried to compare List.Count with a filtered Where(...).Count() across sizes 8, 256, and 4096, but the filtered Size=8 case reported NA and I still wrote up the larger rows as a win. Fix the benchmark design and tell me whether any performance conclusion is valid.",
+      "files": [
+        "evals/files/selectivity-drift/LegacyAliasQuery.cs",
+        "evals/files/selectivity-drift/LegacyAliasImport.cs",
+        "evals/files/selectivity-drift/LegacyAliasQueryTests.cs",
+        "evals/files/selectivity-drift/LegacyAliasCountBenchmark.cs",
+        "evals/files/selectivity-drift/LegacyAliasCountBenchmark-summary.md"
+      ],
+      "expected_output": "The agent rejects the benchmark as invalid because the intended matrix is incomplete and the filtered Size=8 case fails in setup, explains that List.Count is an O(1) collection fast path rather than predicate enumeration, replaces the drifting workload with deterministic fixed-width or explicit selectivity scenarios, removes the unrelated baseline and decorative category grouping, and reruns build, discovery, and dry validation before allowing any future full run.",
+      "expectations": [
+        "Detects the valid zero-match boundary or the summary's NA and Benchmarks with issues signals and refuses to treat the surviving rows as a completed benchmark",
+        "Reports the failing method, job, and parameter case exactly and makes no performance claim from the invalid run",
+        "Replaces the drifting generator with deterministic fixed-width or explicit selectivity scenarios so size changes do not silently change predicate selectivity, and verifies exact expected match counts for every scenario",
+        "Removes Baseline = true from the unrelated collection Count fast path comparison or otherwise separates it from filtered enumeration instead of using it as the baseline",
+        "Removes GroupBenchmarksBy(ByCategory) when categories are absent, or only uses meaningful categories with equivalent comparison groups",
+        "States that after fixing benchmark-owned issues it must rerun build, discovery, and dry validation, and that another full measurement run still requires explicit human approval"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "The attached Acme.Testing.TraitFilter helper only runs in test discovery. I already have the first valid benchmark summary, and the costs are low-microsecond with small fixed allocations. Tell me whether to go deeper and what benchmark, if any, is still justified.",
+      "files": [
+        "evals/files/proportionate-stop/TraitFilter.cs",
+        "evals/files/proportionate-stop/TraitDiscovery.cs",
+        "evals/files/proportionate-stop/TraitDiscoveryTests.cs",
+        "evals/files/proportionate-stop/TraitFilterBenchmark-summary.md"
+      ],
+      "expected_output": "The agent keeps the suite to one focused characterization benchmark for the real filter operation, treats the attached first valid full result as enough to answer the current question, reports that no production change is justified for a low-microsecond test-support helper, declines automatic escalation to extra diagnostics or alternative implementations, and names the condition that would justify reopening the investigation.",
+      "expectations": [
+        "Uses the test-discovery call site to keep the scope to one linear filter and materialization benchmark rather than inventing baselines or extra implementations",
+        "Reads the first valid full result proportionally and answers whether the effect is reproducible, material, and decision-changing before suggesting more work",
+        "Concludes that no production optimization change is justified for the supplied low-microsecond test-support utility",
+        "Does not automatically add repeated full reruns, tiered-PGO, disassembly, EventPipe or ETW tracing, runtime-source archaeology, or speculative alternative implementations",
+        "Identifies a concrete reopen condition such as promotion to a production hot path, materially larger inputs or frequencies, or a new regression with decision-changing cost"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Review the attached Codebelt.Extensions.Xunit InMemoryTestStore benchmark and the first successful summary excerpt. Close the remaining correctness and workload-semantics gap before any further performance interpretation or rerun. Fix the benchmark design only; do not begin another deep performance investigation.",
+      "files": [
+        "evals/files/inmemory-test-store/InMemoryTestStore.cs",
+        "evals/files/inmemory-test-store/InMemoryTestStoreTests.cs",
+        "evals/files/inmemory-test-store/InMemoryTestStoreBenchmark.cs",
+        "evals/files/inmemory-test-store/InMemoryTestStoreBenchmark-summary.md"
+      ],
+      "expected_output": "The agent adds a semantic preflight before any further run, derives independently trusted exact expected counts for every ItemCount and scenario, rejects the false 10% label at the smallest size, fixes or relabels the fake type-filter workload, removes the invalid no-predicate baseline, and validates the full case matrix without drifting into a broader performance investigation.",
+      "expectations": [
+        "States that the existing successful benchmark summary is not a correctness oracle and requires semantic preflight before any future full run or interpretation",
+        "Derives exact expected counts independently of the measured Query path and validates every ItemCount/scenario combination, including the 8-item case whose current 10% label yields zero matches",
+        "Either chooses sizes or explicit scenario objects that preserve exact percentage semantics, or renames the cases honestly with qualitative labels such as LowSelectivity, HalfMatches, and AllMatch",
+        "Replaces the homogeneous QueryFor<int>() input with deterministic heterogeneous runtime types spanning matches, sibling nonmatches, and derived types when assignability matters, or explicitly relabels the benchmark as the all-match path instead of type filtering",
+        "Removes Baseline=true from the no-predicate Count fast path comparison and rejects decorative ByCategory grouping unless an equivalent comparison group remains",
+        "Checks the full Cartesian matrix of benchmark methods, ItemCount values, runtime jobs, and scenario objects before build/list/dry/full validation, then stops without launching another deep performance investigation"
+      ]
+    }
+  ]
+}

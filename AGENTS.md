@@ -2,6 +2,10 @@
 
 Repository-level rules for AI agents working in this codebase.
 
+## Local Shell Execution
+
+Agents may use any appropriate local shell. When using PowerShell syntax or executing a `.ps1` script locally, use PowerShell 7+ through `pwsh`; never invoke `powershell` or `powershell.exe`. This does not prescribe GitHub Actions shell choices.
+
 ## Eval Isolation
 
 Eval workspaces and test repositories must **never** be created inside this repository. This includes:

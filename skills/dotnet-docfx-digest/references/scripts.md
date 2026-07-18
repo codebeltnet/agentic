@@ -9,15 +9,15 @@ dotnet build <script>.cs
 
 Both scripts declare `#:property TargetFramework=net10.0` and `#:property PublishAot=false`, return deterministic exit codes, and emit machine-readable JSON with `--json`.
 
-When invoking the scripts from an installed skill, resolve the script path from the loaded `dotnet-docfx-digest` skill directory and pass the target repository separately with `--repo-root <repo-root>`. Do not assume the target repository contains `skills/dotnet-docfx-digest/scripts/*.cs`. If the loaded skill directory cannot be resolved, a repo-managed source checkout may use the repo-relative `skills/dotnet-docfx-digest/scripts/*.cs` path after confirming it exists.
+When invoking the scripts from an installed skill, resolve the script path from the loaded `dotnet-docfx-digest` skill directory and pass the target repository separately with `--repo-root "<repo-root>"`. Do not assume the target repository contains `skills/dotnet-docfx-digest/scripts/*.cs`. If the loaded skill directory cannot be resolved, a repo-managed source checkout may use the repo-relative `skills/dotnet-docfx-digest/scripts/*.cs` path after confirming it exists.
 
 ## agents.cs
 
 Ensures the repository root `AGENTS.md` contains a marker-bounded DocFX documentation-maintenance block. It is idempotent, so repeated runs never duplicate the block. Content outside the markers is preserved, the host file's line endings are respected, and new files are written as UTF-8 without a BOM.
 
 ```bash
-dotnet run --file agents.cs -- --repo-root .            # write (default)
-dotnet run --file agents.cs -- --repo-root . --check    # CI enforcement
+dotnet run --file "agents.cs" -- --repo-root "."            # write (default)
+dotnet run --file "agents.cs" -- --repo-root "." --check    # CI enforcement
 dotnet run --file agents.cs -- --repo-root . --dry-run  # preview
 dotnet run --file agents.cs -- --repo-root . --json     # machine-readable
 ```
