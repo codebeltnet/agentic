@@ -6,6 +6,8 @@ Load this reference only when the user explicitly requests .NET EditorConfig, co
 
 Treat every enabled and fixable `.editorconfig` diagnostic within the user-defined scope as enforceable repository policy, even when `dotnet build` does not emit it. Visual Studio can surface informational diagnostics while a build remains clean; the build result does not make those configured findings optional.
 
+`dotnet format` defaults to severity `warn`. For informational diagnostics, informational-or-higher conformance, and any conformance task that does not explicitly set a different minimum, omitting `--severity info` silently changes the verification scope and can produce a false clean result. Treat the explicit severity as part of the scope identity: carry it through discovery, investigation, recovery retries, and final verification without omission. Use `warn` or `error` only when the user explicitly requests that narrower minimum and it does not exclude a requested diagnostic; otherwise stop and resolve the conflict.
+
 Keep these checks distinct:
 
 - `dotnet format ... --verify-no-changes` verifies formatter, code-style, and supported analyzer conformance within the selected scope.
@@ -21,7 +23,7 @@ Before discovery, state a compact scope record:
 - **Mode:** targeted remediation or full conformance.
 - **Diagnostics:** the exact requested IDs, or all formatter-supported findings when full conformance was requested without IDs.
 - **Target:** the selected solution, solution filter, project, and any included directories or files.
-- **Minimum severity:** `info` unless the user explicitly requests another `dotnet format`-supported minimum.
+- **Minimum severity:** `info` unless the user explicitly requests a narrower `warn`- or `error`-only scope that does not exclude a requested diagnostic.
 - **Validation:** the affected build target and relevant tests.
 
 Resolve scope in this order:
@@ -60,6 +62,8 @@ Use `dotnet format` only for discovery, investigation, and verification. Every i
 
 Never invoke it in mutating mode. Make fixes through deliberate source edits that you inspect and understand. Write JSON reports and optional binary logs to a temporary or already-ignored artifact directory; do not commit them unless the user explicitly requests it.
 
+Every invocation must also state the resolved `--severity` explicitly. Do not rely on the formatter default. If `--no-restore` is justified during investigation, add it without removing `--severity`, `--verify-no-changes`, the diagnostic filters, target, includes, or report output; it is a restore switch, not a conformance fallback.
+
 Record the pre-existing Git working-tree state before running discovery. Preserve every user change and distinguish it from files changed for the remediation.
 
 ## Canonical PowerShell commands
@@ -68,8 +72,22 @@ Adapt quoting and line continuation to the active shell without changing command
 
 ### One requested diagnostic
 
+Use the category-specific subcommand so a targeted code-style or analyzer task does not silently include unrelated whitespace findings.
+
+For an IDE code-style diagnostic:
+
 ```powershell
-dotnet format "<solution-or-project>" `
+dotnet format style "<solution-or-project>" `
+    --diagnostics "<diagnostic-id>" `
+    --severity info `
+    --verify-no-changes `
+    --report "<temporary-report-directory>"
+```
+
+For a CA or third-party analyzer diagnostic:
+
+```powershell
+dotnet format analyzers "<solution-or-project>" `
     --diagnostics "<diagnostic-id>" `
     --severity info `
     --verify-no-changes `
@@ -78,20 +96,12 @@ dotnet format "<solution-or-project>" `
 
 ### Multiple requested diagnostics
 
-```powershell
-dotnet format "<solution-or-project>" `
-    --diagnostics "<diagnostic-id-1>" "<diagnostic-id-2>" `
-    --severity info `
-    --verify-no-changes `
-    --report "<temporary-report-directory>"
-```
-
-Preserve the exact diagnostic list. Do not replace it with a broad command after editing.
+Group the requested IDs by formatter category. Run `dotnet format style` for the exact IDE code-style IDs and `dotnet format analyzers` for the exact CA or third-party analyzer IDs, each with `--severity info`, `--verify-no-changes`, and a separate temporary report directory. Preserve the complete requested diagnostic list across the category commands. Do not replace them with a broad top-level command after editing; top-level `dotnet format` also runs whitespace formatting and can introduce unrelated findings into a targeted task.
 
 ### Explicit directory or file scope
 
 ```powershell
-dotnet format "<solution-or-project>" `
+dotnet format style "<solution-or-project>" `
     --diagnostics "<diagnostic-id>" `
     --include "<relative-path>" `
     --severity info `
@@ -99,7 +109,7 @@ dotnet format "<solution-or-project>" `
     --report "<temporary-report-directory>"
 ```
 
-Pass multiple relative paths after `--include` when the user names more than one. Do not invent exclusions or narrow include paths merely to make verification pass.
+This example is for an IDE code-style rule; use `dotnet format analyzers` for an analyzer rule. Pass multiple relative paths after `--include` when the user names more than one. Do not invent exclusions or narrow include paths merely to make verification pass.
 
 ### Full conformance
 
@@ -112,7 +122,7 @@ dotnet format "<solution-or-project>" `
 
 Use this unfiltered diagnostic gate only in full-conformance mode. Retain an explicit `--include` path restriction if the user requested conformance only within named directories or files.
 
-`dotnet format style` and `dotnet format analyzers` may isolate a category during investigation. They do not replace the final command for the requested scope, and every investigative call must also use `--verify-no-changes`.
+For targeted remediation, `dotnet format style` and `dotnet format analyzers` are the final category-specific gates. For full-conformance mode, they may isolate a category during investigation but do not replace the final broad top-level command. Every invocation must retain the resolved explicit severity and `--verify-no-changes`.
 
 ## Interpret results, including non-zero exits
 
@@ -135,10 +145,30 @@ Before planning edits, de-duplicate findings by normalized physical file path, d
 
 Never invoke `dotnet format` in mutating mode to apply bulk code fixes to a multi-targeted project or solution. Roslyn may be unable to merge overlapping changes from different target-framework project contexts and can insert `Unmerged change from project` conflict annotations into source files.
 
+If a previous mutating formatter invocation already inserted those annotations, stop invoking the formatter and recover before continuing:
+
+1. Record the current working-tree state and inspect the complete diff so pre-existing user changes remain distinguishable.
+2. Run the bundled Roslyn multi-project artifact tool in non-mutating check mode. The tool name and detection contract are diagnostic-neutral because the merge failure is not unique to one formatter rule:
+
+   ```powershell
+   pwsh -NoProfile -File "<skill-root>/scripts/repair-roslyn-multiproject-artifacts.ps1" -Path "<scoped-source-path>"
+   ```
+
+3. Inspect its JSON. Detection is generic: any `Unmerged change from project` signature is an artifact. Automatic repair is handler-based and currently accepts only the `whole-document-namespace-conversion` pattern: one complete current-format Roslyn block whose `Before` branch is block-scoped namespace form, whose partial `After` branch is file-scoped namespace form for the same namespace, and whose partial `After` lines are an exact prefix of the retained complete document. It reports `unsafe` with pattern `unrecognized` and exits `2` for mismatches, legacy comment artifacts, localized conflicts, multiple blocks, or any other unsupported shape.
+4. Only when every artifact is `recoverable`, apply the preflighted repair:
+
+   ```powershell
+   pwsh -NoProfile -File "<skill-root>/scripts/repair-roslyn-multiproject-artifacts.ps1" -Path "<scoped-source-path>" -Apply
+   ```
+
+   Directory application is all-or-nothing at preflight: if any scanned artifact is unsafe, the tool writes no files. It preserves UTF-8 BOM state, uses the formatter-produced complete tail as the source of truth, collapses each proven duplicate once, and ignores `bin` and `obj`.
+5. Do not infer recoverability from a diagnostic ID. A new artifact grammar needs its own evidence and deterministic handler before automatic repair is safe. Do not merely delete marker lines while leaving both bodies, and do not use `git reset`, `git checkout`, or `git restore` to erase the working tree. If the tool refuses a file, inspect it deliberately and report a blocker when the intended source cannot be distinguished safely.
+6. Re-run the artifact tool; repaired files must now report `clean`. Then re-run the original scoped formatter command with the same target, category, diagnostic filters if any, explicit severity, includes, `--verify-no-changes`, and report path, followed by the artifact gate below. Only proceed to build and tests when all three gates are clean.
+
 After remediation and before build or test validation, run this mandatory artifact gate:
 
 ```powershell
-git grep -n -E '^(<<<<<<< TODO: Unmerged change from project|>>>>>>> After)$'
+git grep -n -F 'Unmerged change from project'
 ```
 
 Any match is a failed remediation. Correct every artifact deliberately, then re-run both the same scoped read-only formatter verification and this artifact gate before proceeding to build or test validation. Exit code `1` with no output means no tracked match; any other non-zero result is a tooling failure that must be diagnosed rather than reported as a clean gate.
@@ -152,7 +182,7 @@ Any match is a failed remediation. Correct every artifact deliberately, then re-
 5. Group findings, de-duplicate multi-target repeats by physical file path, diagnostic ID, and source span, and inspect representative occurrences before bulk edits.
 6. Research unfamiliar or semantically meaningful rules.
 7. Apply deliberate edits in small, reviewable groups where practical.
-8. Re-run the same scoped read-only command after each logical group.
+8. Re-run the same scoped read-only command, including the same explicit severity, after each logical group.
 9. Continue until it succeeds or a legitimate blocker is established.
 10. Run the formatter-conflict artifact gate and correct any matches.
 11. Build the affected solution or projects.

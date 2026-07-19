@@ -76,7 +76,8 @@
       "expectations": [
         "The response selects targeted remediation for IDE0055 and does not broaden the task to unrelated IDE or CA diagnostics",
         "The response defines deterministic target resolution from repository instructions or primary automation rather than choosing the first solution found",
-        "The response presents discovery and final verification commands with the resolved-target placeholder, --diagnostics IDE0055, --severity info, --verify-no-changes, and --report",
+        "The response presents category-specific dotnet format style discovery and final verification commands with the resolved-target placeholder, --diagnostics IDE0055, --severity info, --verify-no-changes, and --report",
+        "The response explains that omitting --severity info would fall back to warn and could hide the informational IDE0055 findings",
         "The response states that the clean dotnet build is insufficient evidence of EditorConfig conformance",
         "The response requires fixes through deliberate source edits and never proposes dotnet format in mutating mode",
         "The response requires inspecting representative findings and the effective rule context rather than assuming every formatter-supported correction is mechanically safe",
@@ -87,12 +88,12 @@
     {
       "id": 8,
       "prompt": "/agent-smith resolve IDE0005 and CA1822 only in src/Codebelt.Core and src/Codebelt.Core.Tests. There are nested .editorconfig files, generated .g.cs files, and unrelated dirty changes elsewhere in the worktree. Preserve all of that.",
-      "expected_output": "A multi-diagnostic, path-scoped remediation plan whose discovery and final verification preserve both diagnostic IDs and both include paths, respect effective nested EditorConfig settings, preserve dirty work, avoid generated output, and validate affected build and tests.",
+      "expected_output": "A multi-diagnostic, path-scoped remediation plan that groups IDE0005 under dotnet format style and CA1822 under dotnet format analyzers while preserving both include paths, respects effective nested EditorConfig settings, preserves dirty work, avoids generated output, and validates affected build and tests.",
       "expectations": [
         "The response records both IDE0005 and CA1822 as the authoritative diagnostic scope",
-        "The response carries both explicit directories through proposed discovery and final verification using --include without inventing exclusions",
-        "The response presents the owning-target command with --diagnostics IDE0005 CA1822, --severity info, --verify-no-changes, and --report",
-        "The response requires the same target, diagnostics, include paths, severity, and SDK environment for final verification",
+        "The response carries both explicit directories through every proposed discovery and final verification category command using --include without inventing exclusions",
+        "The response uses dotnet format style with --diagnostics IDE0005 and dotnet format analyzers with --diagnostics CA1822, each with --severity info, --verify-no-changes, and a separate --report path",
+        "The response preserves the same target, complete diagnostic set, include paths, severity, formatter categories, and SDK environment for final verification",
         "The response requires inspection of nested .editorconfig precedence instead of assuming one repository-wide setting",
         "The response requires recording and preserving all pre-existing dirty working-tree changes",
         "The response prohibits silently editing generated source and requires investigating the generator or template when generated findings appear",
@@ -120,7 +121,7 @@
       "expected_output": "A targeted, file-scoped workflow that distinguishes the SDK/project-load failure from ordinary conformance findings, preserves the CA1822 and include filters, consults official rule documentation before editing, and reports a precise blocker without weakening scope or policy.",
       "expectations": [
         "The response keeps CA1822 and src/Library/Widget.cs as the authoritative diagnostic and path scope",
-        "The response presents an owning-target command with --diagnostics CA1822, --include src/Library/Widget.cs, the requested or default severity, --verify-no-changes, and --report",
+        "The response presents an owning-target dotnet format analyzers command with --diagnostics CA1822, --include src/Library/Widget.cs, the requested or default severity, --verify-no-changes, and --report",
         "The response classifies the incompatible SDK and project-load failure as tooling failures rather than ordinary formatter findings",
         "The response does not weaken or narrow verification scope to work around the tooling failure",
         "The response requires consulting official Microsoft CA1822 documentation and inspecting repository semantics before deciding whether to edit",
@@ -131,18 +132,56 @@
     {
       "id": 11,
       "prompt": "/agent-smith fix all IDE0044 findings in MultiTargeted.sln. Library.cs is compiled for net8.0, net9.0, and net10.0, and the dotnet format report repeats the same physical source span three times. Prevent formatter merge artifacts and prove none remain before build or tests.",
-      "expected_output": "A targeted multi-target remediation workflow that de-duplicates repeated findings by physical file path, diagnostic ID, and source span, preserves target-framework contexts as evidence, edits each physical occurrence once, never runs dotnet format in mutating mode, and runs the exact formatter-conflict artifact gate before build or test validation.",
+      "expected_output": "A targeted multi-target remediation workflow that uses dotnet format style with explicit informational severity, de-duplicates repeated findings by physical file path, diagnostic ID, and source span, preserves target-framework contexts as evidence, edits each physical occurrence once, never runs dotnet format in mutating mode, and runs the exact formatter-conflict artifact gate before build or test validation.",
       "expectations": [
         "The response selects targeted IDE0044 remediation for MultiTargeted.sln and preserves the requested target and diagnostic scope",
+        "The response uses category-specific dotnet format style for IDE0044 with --diagnostics IDE0044, --severity info, and --verify-no-changes",
+        "The final verification remains the same category-specific dotnet format style command and does not switch to broad top-level dotnet format",
         "The response recognizes the three target-framework reports for the same physical source span as one logical finding rather than three independent edits",
         "The response de-duplicates findings by physical file path, diagnostic ID, and source span",
         "The response retains affected project or target-framework contexts as evidence while applying the deliberate correction once to Library.cs",
+        "The response keeps --severity info explicit in discovery, investigation, retries, and final verification rather than relying on dotnet format's warn default",
         "The response never proposes dotnet format in mutating mode or bulk-applies formatter fixes to the multi-targeted solution",
-        "The response presents exactly git grep -n -E '^(<<<<<<< TODO: Unmerged change from project|>>>>>>> After)$' as a mandatory gate after remediation and before build or tests",
+        "The response presents exactly git grep -n -F 'Unmerged change from project' as a diagnostic-neutral mandatory gate after remediation and before build or tests",
         "The response treats any marker match as failed remediation and requires deliberate correction before build or test validation",
         "The response requires re-running the same scoped read-only formatter verification and the artifact gate after correcting a match",
         "The response distinguishes git grep exit code 1 with no output from a tooling failure and does not claim a clean gate for other failures",
         "The response does not claim completion until the formatter-conflict artifact gate is clean"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "/agent-smith finish fixing all IDE0161 findings in MultiTargeted.sln. The projects target net8.0, net9.0, and net10.0. A previous agent ran mutating dotnet format, source files now contain 'Unmerged change from project' annotations, and it then tried --no-restore, saw a clean build, and claimed success without checking the informational findings. Preserve unrelated dirty changes and recover safely.",
+      "expected_output": "A targeted IDE0161 recovery workflow that stops mutating formatter use, preserves dirty work, uses the diagnostic-neutral Roslyn multi-project artifact tool in check mode before all-or-nothing apply, and keeps --severity info plus --verify-no-changes on category-specific dotnet format style verification. It treats --no-restore and a clean build as non-evidence of informational conformance and requires the repair-tool clean check, generic artifact gate, and formatter gate before build and tests.",
+      "expectations": [
+        "The response selects targeted IDE0161 remediation for MultiTargeted.sln and records --severity info as part of the authoritative scope",
+        "The response explains that dotnet format defaults to warn, so omitting --severity info can hide the informational IDE0161 findings and produce a false clean result",
+        "The response requires category-specific dotnet format style with --diagnostics IDE0161, --severity info, and --verify-no-changes on discovery, investigation, recovery retries, and final verification",
+        "The response states that --no-restore changes restore behavior only and cannot replace --severity info, --verify-no-changes, or the original diagnostic scope",
+        "The response stops mutating formatter use, records the dirty working tree, inspects the diff, and preserves unrelated user changes",
+        "The response invokes <skill-root>/scripts/repair-roslyn-multiproject-artifacts.ps1 in non-mutating check mode before considering -Apply and does not tie the tool identity to IDE0161",
+        "The response identifies whole-document-namespace-conversion as the supported structural repair pattern and permits -Apply only when every artifact is recoverable; mismatches, multiple blocks, legacy artifacts, localized conflicts, and other unrecognized shapes fail closed without partial directory writes",
+        "The response requires de-duplicating repeated target-framework findings and retaining the complete After document once rather than merely deleting marker lines",
+        "The response does not propose git reset, git checkout, or git restore as recovery for the dirty working tree and reports a blocker if intended code cannot be distinguished safely",
+        "The response presents exactly git grep -n -F 'Unmerged change from project' and requires a clean artifact result before build or tests",
+        "The response rejects a clean build as proof of EditorConfig conformance and requires the repair tool to report clean plus the same targeted IDE0161 style command to succeed with --severity info before completion",
+        "The response requires relevant build and tests only after the repair-tool, formatter, and artifact gates are clean and does not claim success from unchecked command output"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "/agent-smith recover MultiTargeted.sln after a previous agent ran broad mutating dotnet format --severity info. A shared source file is compiled for net8.0, net9.0, and net10.0 and now has legacy /* Unmerged change from project ... */ blocks around localized if-statement formatting. There was no --diagnostics filter. Preserve unrelated dirty changes and do not guess that this is IDE0161.",
+      "expected_output": "A diagnostic-neutral Roslyn multi-project artifact workflow that preserves the original full-conformance scope, invokes the neutral artifact tool in check mode, recognizes the localized legacy shape as unrecognized and refuses automatic repair, preserves every file, and requires deliberate recovery followed by the tool-clean check, generic artifact gate, original read-only formatter verification, build, and tests.",
+      "expectations": [
+        "The response treats Unmerged change from project as a Roslyn multi-project artifact class that is not unique to IDE0161",
+        "The response preserves broad full-conformance scope because the original command had no diagnostics filter and retains explicit --severity info",
+        "The response invokes <skill-root>/scripts/repair-roslyn-multiproject-artifacts.ps1 in non-mutating check mode",
+        "The response expects the localized legacy comment artifact to be unsafe with pattern unrecognized and does not invoke -Apply",
+        "The response does not attempt namespace-conversion de-duplication or invent a generic automatic repair for the unsupported localized artifact",
+        "The response records the dirty working tree, preserves unrelated changes, and does not propose git reset, git checkout, or git restore",
+        "The response presents exactly git grep -n -F 'Unmerged change from project' as the artifact gate so both current marker and legacy comment shapes are detected",
+        "After deliberate recovery, the response requires the artifact tool to report clean and reruns broad dotnet format against MultiTargeted.sln with --severity info and --verify-no-changes",
+        "The response does not proceed to build or tests or claim completion while any artifact remains unsafe or detected"
       ]
     }
   ]

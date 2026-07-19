@@ -16,6 +16,14 @@ Apply **one coherent engineering standard** across design, implementation, valid
 
 The standard is technology-neutral. Specialist guidance (including .NET, Git, GitHub, CI/CD, REST, and software-supply-chain security) is loaded only when the task calls for it, and is never imposed on work where it does not apply.
 
+## Critical .NET conformance lock
+
+When the task selects .NET EditorConfig conformance mode, read both `references/dotnet.md` and `references/dotnet-editorconfig-conformance.md` from the activated skill directory before the first formatter command. Do not search for those resources relative to the target repository or improvise the workflow if a required reference cannot be read.
+
+For informational diagnostics, informational-or-higher conformance, and any conformance task that does not explicitly set a different minimum, every discovery, investigation, retry, and final `dotnet format` command must include both `--severity info` and `--verify-no-changes`. The formatter defaults to `warn` when `--severity` is omitted, which can hide the findings that define success. Keep the resolved severity explicit and identical throughout the remediation loop. `--no-restore` changes restore behaviour only; it never replaces either required flag or proves conformance.
+
+If a prior mutating formatter pass has produced `Unmerged change from project` annotations, use the bundled `scripts/repair-roslyn-multiproject-artifacts.ps1` from this skill directory. The tool detects the neutral Roslyn multi-project artifact signature and reports the structural pattern independently of diagnostic ID. It currently repairs only the proven `whole-document-namespace-conversion` pattern. Run its default check mode first and use `-Apply` only when every artifact is reported as `recoverable`; an unrecognized or differing candidate prevents all writes. Pattern-specific recovery is not permission to use the formatter in mutating mode.
+
 ## Activation and invocation
 
 Explicit invocation is authoritative:
