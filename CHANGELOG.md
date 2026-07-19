@@ -30,9 +30,11 @@ This is a minor release introducing the `agent-smith` skill for rigorous softwar
 - Deterministic commit-subject validator `scripts/validate-commit-subject.ps1` for git-visual-commits enforcing emoji presence in bundled reference table, exactly one ASCII space separator, lowercase description beginning, opt-in conventional-prefix contract, and 70-character maximum,
 - Comprehensive test coverage for deterministic subject validation via `scripts/test-commit-subject.ps1` covering validator behavior, error cases, and edge conditions,
 - Full-skill-read and subject-validation gates in git-visual-commits requiring complete SKILL.md read before any Git command, bundled deterministic validator invocation before plan display and before commit, and subject validation lock that bypasses `yolo`/`auto` mode.
+- Deterministic `repair-roslyn-multiproject-artifacts.ps1` recovery for `agent-smith` that detects Roslyn merge artifacts independently of diagnostic ID, collapses only the registered whole-document namespace-conversion pattern, fails closed on differing or unrecognized candidates, preflights directory repairs before writing, and includes fixture-backed tests for encoding, idempotence, unsupported localized artifacts, and partial-write prevention.
 
 ### Changed
 
+- Hardened `agent-smith` EditorConfig conformance guidance so informational workflows preserve explicit `--severity info` across discovery, recovery, and final verification, targeted checks use category-specific formatter subcommands, Roslyn multi-project recovery is based on proven artifact structure rather than diagnostic ID, and `--no-restore` cannot be mistaken for conformance evidence,
 - Standardized local PowerShell execution to `pwsh` 7+ while preserving Bash and workflow-specific shell choices; updated all local command examples and contributor guidance accordingly,
 - Refactored git-keep-a-changelog scope resolution from implicit caret-notation to deterministic branch-derived ranges using the bundled `resolve-release-scope.ps1` resolver, providing explicit separation between `history_range` (for commits) and `diff_range` (for manifest diffs),
 - Enhanced git-keep-a-changelog Step 1 guidance to use the resolver script for all branch-derived scope, eliminating manual range construction and the risk of incorrect inclusivity or boundary drift,
