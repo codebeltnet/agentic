@@ -4,6 +4,8 @@ Load **only when .NET or C# is relevant.** Never impose this guidance on non-.NE
 
 Follow the repository's own conventions first (target frameworks, analyzers, nullable settings, test framework, naming). This reference supplements those; it does not override them.
 
+When the user explicitly requests EditorConfig, code-style, informational IDE, named diagnostic, or formatter-supported analyzer conformance work, also load `dotnet-editorconfig-conformance.md`. A clean `dotnet build` does not prove that enabled informational diagnostics conform to repository policy.
+
 ## API and language
 
 - Follow established .NET API design conventions (naming, `Try`-patterns, `Async` suffixes, argument validation, `IDisposable`/`IAsyncDisposable` where ownership transfers).

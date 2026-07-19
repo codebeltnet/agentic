@@ -1,7 +1,7 @@
 ---
 name: agent-smith
 description: >
-  Apply a rigorous, consistent, evidence-driven software-craftsmanship standard across a whole software-engineering task, small or large, so correctness, consistency, maintainability, compatibility, security, and due diligence govern every decision. Invoke explicitly as `/agent-smith <task>`, or automatically for design, architecture, implementation, refactoring, code review, public API review, compatibility and Semantic Versioning analysis, testing, benchmarking, performance, documentation, security and DevSecOps, CI/CD, delivery, repository governance, and engineering assessment. It performs the requested work, respects repository conventions, challenges weak assumptions, validates before claiming completion, and reports evidence, trade-offs, and risk honestly. Technology-neutral at its core, with optional .NET, Git, GitHub, CI/CD, REST, and supply-chain guidance. Do NOT use for ordinary prose writing, casual conversation, translation, image generation, or unrelated factual questions.
+  Apply a rigorous, consistent, evidence-driven software-craftsmanship standard across a whole engineering task. Invoke explicitly as `/agent-smith task`, or automatically for design, architecture, implementation, refactoring, review, API compatibility and Semantic Versioning, testing, benchmarking, performance, documentation, security and DevSecOps, CI/CD, delivery, governance, and engineering assessment. For .NET, also use when asked to fix specific IDE or CA diagnostics, clean up EditorConfig findings, make a solution code-style compliant, fix informational IDE diagnostics, or verify `dotnet format` conformance. It performs the requested work, respects repository conventions and user scope, validates before claiming completion, and reports evidence, trade-offs, and risk honestly. Technology-neutral at its core, with optional specialist guidance. Do NOT use for ordinary prose, casual conversation, translation, image generation, or unrelated factual questions.
 ---
 
 # Agent Smith
@@ -63,6 +63,7 @@ A task may select **multiple** modes. Load core principles for every invocation,
 | API design & compatibility | public/HTTP APIs, libraries, contracts, serialization, versioning, Semantic Versioning | `references/api-design-and-compatibility.md` |
 | Implementation | coding and refactoring | `references/implementation.md` |
 | .NET | .NET or C# is relevant | `references/dotnet.md` |
+| .NET EditorConfig conformance | the user explicitly requests EditorConfig, code-style, formatter-supported analyzer, informational IDE, or named diagnostic remediation or verification | `references/dotnet.md` + `references/dotnet-editorconfig-conformance.md` |
 | Testing | test design/review, regression, functional/integration/contract testing | `references/testing.md` |
 | Performance | benchmarking, profiling, optimization, latency, throughput, allocation, scalability | `references/performance.md` |
 | Security & DevSecOps | identity, authorization, secrets, dependencies, pipelines, supply chain, permissions, deployment security | `references/security-and-devsecops.md` |
@@ -78,6 +79,7 @@ A task may select **multiple** modes. Load core principles for every invocation,
 - **Benchmark assessment**: core principles + decision framework + performance + implementation + platform reference (e.g. `dotnet.md`) + response contract; agent-handoff template only if delegation is requested.
 - **Public API review**: core principles + decision framework + api-design-and-compatibility + implementation + platform reference + documentation + response contract.
 - **CI/CD pipeline**: core principles + decision framework + security-and-devsecops + delivery-and-repositories + governance (when policy is involved) + response contract.
+- **Scoped .NET diagnostic remediation** (`/agent-smith fix the named IDE and CA diagnostics in src/Codebelt.Core`): core principles + implementation + .NET + .NET EditorConfig conformance + testing. Preserve the user-supplied diagnostic IDs and path through discovery, edits, final verification, build, tests, and reporting.
 
 ## Repository precedence
 
@@ -158,6 +160,7 @@ Load on demand, per the routing table:
 - `references/api-design-and-compatibility.md` — public and HTTP API contracts and versioning.
 - `references/implementation.md` — coding and refactoring discipline.
 - `references/dotnet.md` — .NET/C#-specific guidance (load only when relevant).
+- `references/dotnet-editorconfig-conformance.md` — scope-aware, read-only `dotnet format` discovery and verification for explicit .NET EditorConfig, code-style, and supported analyzer conformance work.
 - `references/testing.md` — test design and review.
 - `references/performance.md` — benchmarking, profiling, optimization.
 - `references/security-and-devsecops.md` — identity, secrets, dependencies, pipelines, supply chain.
