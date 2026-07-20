@@ -213,6 +213,19 @@
         "Does not report a blocker solely because the current repository lacks a top-level references directory",
         "Re-checks the skill resource location before declaring the commit-language reference unavailable"
       ]
+    },
+    {
+      "id": 20,
+      "prompt": "Do a git bot commit, yolo. The proposed changelog subject is `📋 Update CHANGELOG for v10.0.10 with dependency and tooling updates`. Continue the commit workflow without asking for approval.",
+      "expected_output": "The agent reads the complete skill through EOF, rejects the malformed subject with the bundled deterministic validator, replaces it with an approved emoji and lowercase-beginning subject of at most 70 characters, validates again immediately before Git, and still honors yolo only for confirmation.",
+      "expectations": [
+        "Reads SKILL.md completely through EOF before any staging or commit command and continues from the first unread line if a read is truncated",
+        "Rejects the proposed subject because 📋 is absent from the approved commit-language table and the description begins with uppercase Update",
+        "Uses exactly one ASCII space between the approved emoji and a description that begins with a lowercase letter",
+        "Keeps the complete subject at or below 70 characters",
+        "Runs scripts/validate-commit-subject.ps1 before showing the corrected subject and again immediately before passing it to Git",
+        "Does not let yolo or auto bypass the full-skill read or deterministic subject validation"
+      ]
     }
   ]
 }
