@@ -183,6 +183,22 @@
         "After deliberate recovery, the response requires the artifact tool to report clean and reruns broad dotnet format against MultiTargeted.sln with --severity info and --verify-no-changes",
         "The response does not proceed to build or tests or claim completion while any artifact remains unsafe or detected"
       ]
+    },
+    {
+      "id": 14,
+      "prompt": "/agent-smith improve our incident-research skill in this .NET-first repository family. It fetches twelve independent service endpoints sequentially, includes a reusable Python validator, has a long implementation-focused description, and has never been compared with a baseline. Keep the guidance reusable across our repositories and tell future agents how to validate the change.",
+      "expected_output": "A concise, evidence-driven skill-authoring workflow grounded in real traces and repository constraints. It explicitly maps safe bounded concurrency for independent fetches and eval work, preserves ordered or rate-limited operations, favors a C#/.NET validator using a dynamically resolved supported LTS when local pins do not decide, improves and tests the description as an activation contract, and requires clean-context candidate-versus-baseline evals with objective grading, timing, aggregation, and human review.",
+      "expectations": [
+        "The response requires inspecting the existing skill, repository conventions, real execution traces, and failure evidence before rewriting generic guidance",
+        "The response identifies the twelve independent endpoint calls as concurrency candidates and recommends batching or bounded fan-out instead of sequential fetching",
+        "The response preserves sequential execution for real dependencies, shared mutations, rate limits, or fragile ordering and requires deterministic result ordering and attributable failures",
+        "The response recommends measuring elapsed time, cost or tokens, error rate, and output quality rather than assuming concurrency is faster",
+        "The response favors replacing the reusable Python validator with C# and .NET unless repository or host constraints justify another language",
+        "The response resolves the latest supported .NET LTS dynamically from Microsoft's official support policy when no compatible repository SDK or target-framework pin decides the version, rather than hardcoding a drifting release",
+        "The response treats the description as the activation contract, uses concise imperative user-intent wording, respects the 1,024-character limit, and tests realistic positive and near-miss triggers with repeated runs and a fixed train/validation split",
+        "The response requires realistic clean-context candidate-versus-original baseline evals, objective assertions with deterministic grading where possible, timing capture, benchmark aggregation, and human review",
+        "The feedback is concise and permits compact fragments without omitting validation limits, blockers, compatibility impact, or material risk"
+      ]
     }
   ]
 }
