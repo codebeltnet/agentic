@@ -1,7 +1,7 @@
 ---
 name: git-visual-commits
 description: >
-  Structured git commit workflow with deterministically validated emoji-first subjects and identity-aware modes: `git bot commit`, regular `git commit`, and `git our commit`. Use this skill whenever the user asks to commit changes, stage files, write a commit message, or review what should be committed. Also use it when the user says "commit this", "make a commit", "commit your changes", "commit what you just did", "what should my commit message be", "stage and commit", "git bot commit", "git our commit", or combines a commit request with "yolo" or "auto". Treat commit wording as an automatic trigger for this skill, not as a casual hint. Requires a full read through EOF before action, defaults to no prefix after the emoji, allows an emoji plus conventional-commit prefix combo only when the user explicitly asks for it, blocks subjects unless they use an approved emoji, exactly one following space, a lowercase description beginning, and at most 70 characters, and verifies the stored result after commit.
+  Structured git commit workflow with deterministically validated emoji-first subjects and identity-aware modes: `git bot commit`, regular `git commit`, and `git our commit`. Use it whenever the user asks to commit or stage changes, write or review a commit message, or says "commit this", "git bot commit", "git our commit", "yolo", or "auto". Treat commit wording as an automatic trigger for this skill, not as a casual hint. Require a full read through EOF, semantic grouping, an approved emoji, exactly one following space, a lowercase description beginning, at most 70 characters, and post-commit verification. Default to emoji-only subjects; allow conventional-commit prefixes only on explicit request. For multi-file changes that initially collapse to one category, require a visible full-context quality gate; single-file changes may skip it.
 ---
 
 # Git Visual Commits
@@ -282,6 +282,16 @@ For every proposed commit, verify that all files share the same *rationale*. Pre
 - One file changed because of an **operational/infrastructure decision** and another because of a **framework or API change**
 
 When only two files changed but their rationales differ, **explicitly state that two commits are warranted** in the commit plan. Small file count does not justify bundling.
+
+#### Single-category context quality gate
+
+When more than one file is changed and your first classification puts every changed file into one semantic category or commit bucket, stop before Step 3 and run this gate. Exactly one changed file is the only fast-path exception; skip this gate for that case.
+
+Ask yourself explicitly: **“Did I actually read the whole `git-visual-commits` skill through EOF in this session before classifying this change?”** A metadata preview, remembered rule, or partial read is a failed answer. If the answer is no or uncertain, read `SKILL.md` from its first line through EOF and restart Step 1 and Step 2.
+
+Then re-check the complete `git status`, `git diff`, and applicable staged diff; enumerate every changed path; explain each path's rationale, audience, and lifecycle; and consider whether any path belongs to a different category such as documentation, configuration, tooling, validation, tests, or release communication. Re-read `references/commit-language.md` before confirming the category and emoji.
+
+Only keep one category after this audit if every path still has one rationale. Put a visible line in the commit plan such as `Quality gate: 3 files, one category retained; full skill read, full diff review, per-file rationale check, and alternative-category check confirmed.` If any check fails or any file has a materially different intent, split the groups and rerun the normal validation. `yolo` and `auto` do not bypass this gate.
 
 #### Commit body guidance
 

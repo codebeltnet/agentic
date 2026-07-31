@@ -226,6 +226,29 @@
         "Runs scripts/validate-commit-subject.ps1 before showing the corrected subject and again immediately before passing it to Git",
         "Does not let yolo or auto bypass the full-skill read or deterministic subject validation"
       ]
+    },
+    {
+      "id": 21,
+      "prompt": "Do a git bot commit, yolo. The current diff has two changed files in the same existing skill: its SKILL.md and evals/evals.json. They may share one refactor rationale. Work through the full workflow and show the plan.",
+      "expected_output": "A multi-file single-category plan that pauses for the context quality gate, explicitly asks whether the whole skill was read through EOF, rechecks the full diff and each file rationale, and retains one category only if the audit confirms the shared rationale.",
+      "expectations": [
+        "Triggers the single-category context quality gate because more than one file is being placed in one category",
+        "Explicitly asks whether the whole git-visual-commits skill was read through EOF before accepting the one-category result",
+        "Rechecks complete git state and the full diff, including an explanation for every changed path",
+        "Considers whether a different audience, lifecycle, or intent warrants a second category before retaining one",
+        "Shows the quality-gate result visibly in the commit plan",
+        "Does not let yolo or auto bypass the quality gate"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Do a git bot commit, yolo. Only README.md changed for a small typo fix. Work through the workflow and show the plan.",
+      "expected_output": "A normal single-file commit plan that still follows the full-read, diff-review, emoji-reference, and subject-validation rules without adding the multi-file single-category quality-gate ceremony.",
+      "expectations": [
+        "Recognizes exactly one changed file as the explicit exception and skips the single-category context quality gate",
+        "Still reads the whole skill through EOF and reviews the changed file before planning the commit",
+        "Still validates the emoji and exact subject before proceeding in yolo mode"
+      ]
     }
   ]
 }
