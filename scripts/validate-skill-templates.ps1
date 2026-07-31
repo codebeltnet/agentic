@@ -1213,6 +1213,7 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     $commitLanguage = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/references/commit-language.md' -GitRef $Ref
     $subjectValidator = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/scripts/validate-commit-subject.ps1' -GitRef $Ref
     $subjectTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/scripts/test-commit-subject.ps1' -GitRef $Ref
+    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Full-Skill Read and Subject Lock'
@@ -1267,6 +1268,12 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Documentation publishing**'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Community health/release communication**'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Temporal proximity is not a grouping signal.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Single-category context quality gate'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Exactly one changed file is the only fast-path exception; skip this gate for that case.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Did I actually read the whole `git-visual-commits` skill through EOF in this session before classifying this change?'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Then re-check the complete `git status`, `git diff`, and applicable staged diff; enumerate every changed path'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Put a visible line in the commit plan such as `Quality gate:'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` and `auto` do not bypass this gate.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Release-adjacent splitting rule'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Concrete example: if one diff updates `Directory.Build.targets`, `Directory.Packages.props`, or `testenvironments.json`,'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Keep `.nuget/*/PackageReleaseNotes.txt` with the'
@@ -1317,6 +1324,10 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Reads SKILL.md completely through EOF before any staging or commit command'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Rejects the proposed subject because 📋 is absent from the approved commit-language table'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Runs scripts/validate-commit-subject.ps1 before showing the corrected subject and again immediately before passing it to Git'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Triggers the single-category context quality gate because more than one file is being placed in one category'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Recognizes exactly one changed file as the explicit exception and skips the single-category context quality gate'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '**Single-category context gate**'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Multi-file plans that initially collapse to one category also require a visible full-context quality gate'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
