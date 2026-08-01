@@ -249,6 +249,26 @@
         "Still reads the whole skill through EOF and reviews the changed file before planning the commit",
         "Still validates the emoji and exact subject before proceeding in yolo mode"
       ]
+    },
+    {
+      "id": 23,
+      "prompt": "Please update the validator and run its checks yolo. This is a validation task only—do not stage or commit anything.",
+      "expected_output": "A validator-focused response that does not enter the git commit workflow merely because the user said yolo.",
+      "expectations": [
+        "Does not trigger git-visual-commits from standalone yolo wording in a non-commit request",
+        "Does not propose, stage, or execute a commit",
+        "Keeps the response focused on the requested validator work"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Run the formatter in auto mode for this linting task. I am not asking you to stage or commit changes.",
+      "expected_output": "A linting-focused response that does not enter the git commit workflow merely because the user said auto.",
+      "expectations": [
+        "Does not trigger git-visual-commits from standalone auto wording in a non-commit request",
+        "Does not propose, stage, or execute a commit",
+        "Keeps the response focused on the requested formatter work"
+      ]
     }
   ]
 }
