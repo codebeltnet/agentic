@@ -1164,17 +1164,27 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, p
 Add-ValidationResult -Results $results -Name 'Agent Smith protects informational and multi-target EditorConfig remediation' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/SKILL.md' -GitRef $Ref
     $reference = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/references/dotnet-editorconfig-conformance.md' -GitRef $Ref
+    $skillAuthoring = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/references/skill-authoring.md' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/evals/evals.json' -GitRef $Ref
     $repair = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/scripts/repair-roslyn-multiproject-artifacts.ps1' -GitRef $Ref
     $repairTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/scripts/test-repair-roslyn-multiproject-artifacts.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'every discovery, investigation, retry, and final `dotnet format` command must include both `--severity info` and `--verify-no-changes`'
     Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'scripts/repair-roslyn-multiproject-artifacts.ps1'
+    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'Always analyze the task graph for safe parallelism and concurrency.'
+    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle '**Be concise. Sacrifice grammar for the sake of concision.**'
+    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Batch independent retrieval through one multi-call request where the tool supports it.'
+    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Choose C# and .NET by default for non-trivial reusable scripts'
+    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle '## Required authoring feedback'
+    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Microsoft''s official .NET support policy'
+    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Optimizing skill descriptions'
+    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Evaluating skill output quality'
     Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle 'dotnet format style "<solution-or-project>"'
     Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle '`dotnet format` defaults to severity `warn`'
     Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle 'Directory application is all-or-nothing at preflight'
     Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle "git grep -n -F 'Unmerged change from project'"
     Assert-Contains -Name 'agent-smith/evals/evals.json' -Content $evals -Needle 'finish fixing all IDE0161 findings in MultiTargeted.sln'
+    Assert-Contains -Name 'agent-smith/evals/evals.json' -Content $evals -Needle 'fetches twelve independent service endpoints sequentially'
     Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle 'function Test-LinePrefix'
     Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle "pattern = 'whole-document-namespace-conversion'"
     Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle "pattern = 'unrecognized'"
@@ -1203,6 +1213,7 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     $commitLanguage = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/references/commit-language.md' -GitRef $Ref
     $subjectValidator = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/scripts/validate-commit-subject.ps1' -GitRef $Ref
     $subjectTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/scripts/test-commit-subject.ps1' -GitRef $Ref
+    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Full-Skill Read and Subject Lock'
@@ -1257,6 +1268,12 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Documentation publishing**'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**Community health/release communication**'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Temporal proximity is not a grouping signal.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Single-category context quality gate'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Exactly one changed file is the only fast-path exception; skip this gate for that case.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Did I actually read the whole `git-visual-commits` skill through EOF in this session before classifying this change?'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Then re-check the complete `git status`, `git diff`, and applicable staged diff; enumerate every changed path'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Put a visible line in the commit plan such as `Quality gate:'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` and `auto` do not bypass this gate.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Release-adjacent splitting rule'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Concrete example: if one diff updates `Directory.Build.targets`, `Directory.Packages.props`, or `testenvironments.json`,'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Keep `.nuget/*/PackageReleaseNotes.txt` with the'
@@ -1307,6 +1324,10 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Reads SKILL.md completely through EOF before any staging or commit command'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Rejects the proposed subject because 📋 is absent from the approved commit-language table'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Runs scripts/validate-commit-subject.ps1 before showing the corrected subject and again immediately before passing it to Git'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Triggers the single-category context quality gate because more than one file is being placed in one category'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Recognizes exactly one changed file as the explicit exception and skips the single-category context quality gate'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '**Single-category context gate**'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Multi-file plans that initially collapse to one category also require a visible full-context quality gate'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {

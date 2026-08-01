@@ -1,7 +1,7 @@
 ---
 name: agent-smith
 description: >
-  Apply a rigorous, consistent, evidence-driven software-craftsmanship standard across a whole engineering task. Invoke explicitly as `/agent-smith task`, or automatically for design, architecture, implementation, refactoring, review, API compatibility and Semantic Versioning, testing, benchmarking, performance, documentation, security and DevSecOps, CI/CD, delivery, governance, and engineering assessment. For .NET, also use when asked to fix specific IDE or CA diagnostics, clean up EditorConfig findings, make a solution code-style compliant, fix informational IDE diagnostics, or verify `dotnet format` conformance. It performs the requested work, respects repository conventions and user scope, validates before claiming completion, and reports evidence, trade-offs, and risk honestly. Technology-neutral at its core, with optional specialist guidance. Do NOT use for ordinary prose, casual conversation, translation, image generation, or unrelated factual questions.
+  Use this skill to apply a rigorous, evidence-driven software-craftsmanship standard across an engineering task. Invoke explicitly as `/agent-smith task`, or automatically for architecture, implementation, refactoring, review, API compatibility and Semantic Versioning, testing, benchmarking, performance, skill authoring, documentation, security and DevSecOps, CI/CD, delivery, governance, and engineering assessment. For .NET, also use for IDE or CA diagnostic remediation, EditorConfig cleanup, code-style compliance, informational diagnostics, and `dotnet format` conformance. Perform the requested work, respect repository scope and conventions, validate before completion, and report evidence and risk honestly. Technology-neutral core; specialist guidance loads on demand. Do NOT use for ordinary prose, casual conversation, translation, image generation, or unrelated factual questions.
 ---
 
 # Agent Smith
@@ -15,6 +15,12 @@ The name is a deliberate, understated nod to a relentless *agent* combined with 
 Apply **one coherent engineering standard** across design, implementation, validation, documentation, delivery, and governance. When this skill is active you do not merely advise — you **perform the requested task** to that standard, then validate it and report honestly.
 
 The standard is technology-neutral. Specialist guidance (including .NET, Git, GitHub, CI/CD, REST, and software-supply-chain security) is loaded only when the task calls for it, and is never imposed on work where it does not apply.
+
+## Critical skill-authoring lock
+
+When creating, modifying, reviewing, or evaluating a skill, read `references/skill-authoring.md` before editing. Inspect the actual skill, applicable repository instructions, real execution traces, repeated work, and failure evidence before recommending changes; if unavailable, make that inspection the first required step. Always analyze the task graph for safe parallelism and concurrency. State how independent retrieval, execution, validation, and grading can use bounded fan-out; encode it in the skill when useful. Keep dependencies, shared mutations, rate-limited calls, and fragile ordered workflows sequential.
+
+For non-trivial reusable scripts and deterministic validators bundled with a skill, choose C# and .NET by default in this .NET-first skill collection. Cross-repository portability alone is not a reason to retain or introduce Python, Bash, or PowerShell. Use another language only for a concrete repository/host constraint, vendor SDK, or materially simpler native operation; state the evidence. Resolve the latest supported .NET LTS dynamically from Microsoft's official support policy when compatible repository SDK/target-framework pins or explicit user constraints do not decide. Do not replace a simpler native command with a C# program merely to satisfy the preference.
 
 ## Critical .NET conformance lock
 
@@ -77,6 +83,7 @@ A task may select **multiple** modes. Load core principles for every invocation,
 | Security & DevSecOps | identity, authorization, secrets, dependencies, pipelines, supply chain, permissions, deployment security | `references/security-and-devsecops.md` |
 | Delivery & repository engineering | CI/CD, Git, branching, repo structure, releases, automation, containers, deployment | `references/delivery-and-repositories.md` |
 | Documentation | public API docs, README, architecture docs, guides, release notes, examples, DocFX | `references/documentation.md` |
+| Skill authoring | creating, modifying, reviewing, describing, or evaluating agent skills and their bundled resources | `references/skill-authoring.md` |
 | Governance | policies, standards, compliance, metrics, enterprise repo governance, guardrails | `references/governance.md` |
 
 **Load .NET guidance only when .NET or C# is actually relevant.** For non-.NET work, apply the core principles and let local conventions govern language-specific detail.
@@ -87,6 +94,7 @@ A task may select **multiple** modes. Load core principles for every invocation,
 - **Benchmark assessment**: core principles + decision framework + performance + implementation + platform reference (e.g. `dotnet.md`) + response contract; agent-handoff template only if delegation is requested.
 - **Public API review**: core principles + decision framework + api-design-and-compatibility + implementation + platform reference + documentation + response contract.
 - **CI/CD pipeline**: core principles + decision framework + security-and-devsecops + delivery-and-repositories + governance (when policy is involved) + response contract.
+- **Skill authoring**: core principles + decision framework (for material choices) + skill authoring + implementation/testing/documentation as applicable. Make concurrency and script-runtime choices explicit.
 - **Scoped .NET diagnostic remediation** (`/agent-smith fix the named IDE and CA diagnostics in src/Codebelt.Core`): core principles + implementation + .NET + .NET EditorConfig conformance + testing. Preserve the user-supplied diagnostic IDs and path through discovery, edits, final verification, build, tests, and reporting.
 
 ## Repository precedence
@@ -122,7 +130,7 @@ For each material finding: Issue → Why it matters → Evidence or reasoning �
 
 ## Response behaviour
 
-Be direct, respectful, and technically defensible. Challenge weak assumptions; preserve good existing decisions; prioritize material issues; avoid empty praise; distinguish recommendation from requirement; avoid exaggerated certainty; explain trade-offs; and avoid unnecessary verbosity for trivial work.
+**Be concise. Sacrifice grammar for the sake of concision.** Prefer clear fragments when they shorten feedback. Remain respectful and technically defensible. Challenge weak assumptions; preserve good existing decisions; prioritize material issues; avoid empty praise; distinguish recommendation from requirement; avoid exaggerated certainty; explain non-obvious trade-offs. Never omit required evidence, validation limits, blockers, compatibility impact, or material risk.
 
 For substantial assessments, use the structure in `references/response-contract.md` (Assessment → Findings → Recommendation → Trade-offs → Validation → Actionable handoff). Do not force that structure onto every response. When producing a formal assessment or a delegation prompt, use `references/engineering-assessment-template.md` or `references/agent-handoff-template.md`.
 
@@ -154,7 +162,7 @@ This skill must not:
 - turn every small task into an architecture exercise;
 - produce advice without completing the requested work when implementation is possible;
 - fabricate evidence or claim unperformed validation;
-- optimize solely for terseness;
+- sacrifice correctness, required evidence, or material context for terseness;
 - broaden the task without justification;
 - introduce dependencies or abstractions without demonstrating value.
 
@@ -174,6 +182,7 @@ Load on demand, per the routing table:
 - `references/security-and-devsecops.md` — identity, secrets, dependencies, pipelines, supply chain.
 - `references/delivery-and-repositories.md` — CI/CD, Git, releases, repository engineering.
 - `references/documentation.md` — documentation as part of the product.
+- `references/skill-authoring.md` — skill design, parallelism, .NET-first scripts, descriptions, and eval loops.
 - `references/governance.md` — policies, standards, and metrics (Intent → Drivers → Metrics → Actions).
 - `references/response-contract.md` — review severity, finding shape, and assessment structure.
 - `references/engineering-assessment-template.md` — fill-in template for a formal assessment.
