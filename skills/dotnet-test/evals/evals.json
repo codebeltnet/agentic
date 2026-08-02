@@ -44,15 +44,16 @@
     },
     {
       "id": 3,
-      "prompt": "Migrate the attached lean Acme.Cdn.Origin functional tests from the web-cdn-origin-style CdnOriginTestApplication WebApplicationFactory wrapper to the focused Codebelt WebApplicationTestFactory pattern. Preserve per-test settings, Production environment, temporary content ownership, client behavior, services, disposal, isolation, and existing test names. Remove every selected WebApplicationFactory usage and validate restore/build/test.",
-      "expected_output": "Focused Test-derived functional tests use WebApplicationTestFactory with no WebApplicationFactory remaining and retain per-test isolation/configuration.",
+      "prompt": "Migrate the attached lean Acme.Cdn.Origin functional tests from the web-cdn-origin-style CdnOriginTestApplication WebApplicationFactory wrapper to the focused Codebelt WebApplicationTestFactory pattern. Preserve per-test settings, Production environment, temporary content ownership, client behavior, services, disposal, isolation, and existing test names. Keep Program as the composition root under test; do not rebuild its WebApplication or TestServer pipeline in test code. Remove every selected WebApplicationFactory usage and validate restore/build/test.",
+      "expected_output": "Focused Test-derived functional tests bootstrap Program through WebApplicationTestFactory, contain no replacement WebApplication/TestServer composition root or legacy WebApplicationFactory, and retain per-test isolation/configuration.",
       "expectations": [
         "Classifies the project as ASP.NET Core functional tests and selects focused ownership",
-        "Replaces CdnOriginTestApplication and all WebApplicationFactory usages with WebApplicationTestFactory",
+        "Replaces CdnOriginTestApplication and all WebApplicationFactory usages with WebApplicationTestFactory.Create<Program>",
+        "Bootstraps the real Program entry point and does not call WebApplication.CreateBuilder, UseTestServer, new TestServer, or otherwise reconstruct the application pipeline in test source",
         "Preserves Production environment, in-memory settings, temporary content disposal, and one application per test",
         "Keeps CompressionTest and both existing method names unchanged",
         "Removes Microsoft.AspNetCore.Mvc.Testing when no longer needed",
-        "Search finds no WebApplicationFactory in the selected migration and restore/build/test succeed"
+        "The focused inspector postcondition succeeds, search finds no WebApplicationFactory in the selected migration, and restore/build/test succeed"
       ],
       "files": [
         "evals/files/focused-web/Directory.Build.props",
@@ -111,4 +112,3 @@
     }
   ]
 }
-

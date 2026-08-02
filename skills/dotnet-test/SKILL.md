@@ -14,6 +14,8 @@ Bootstrap and refactor xUnit projects using the tested patterns from [Codebelt x
 
 - Inspect before editing. Run `scripts/inspect-dotnet-tests.ps1` against the selected project and treat its role, package ownership, `WebApplicationFactory` inventory, and blockers as the starting contract.
 - Classify every selected project as exactly one of: **Ordinary unit test**, **ASP.NET Core functional test**, or **Console or worker functional test**.
+- Treat the selected Codebelt host abstraction as an output contract. Removing `WebApplicationFactory` is not a migration unless focused web tests use `WebApplicationTestFactory` or shared web tests use `WebApplicationTest<TEntryPoint, T>`.
+- Do not reconstruct an application entry point inside test code with `WebApplication.CreateBuilder`, `WebHostBuilder`, `HostBuilder`, `UseTestServer`, copied service registrations, or copied middleware. That creates a second composition root which can pass while the real `Program` is broken.
 - Preserve target frameworks, central package management, unrelated MSBuild configuration, existing test names, and test isolation.
 - Replace every selected `WebApplicationFactory` usage. A partial migration that leaves a selected usage or package reference behind is incomplete.
 - Keep functional testing in-process. Never add a process-launching fallback for console or worker applications.
@@ -79,6 +81,7 @@ Read `references/xunit-v3-modernization.md` whenever inspection reports xUnit v2
 
 - Keep the test class derived from `Test`.
 - Use `WebApplicationTestFactory.Create<TEntryPoint>(...)` per focused test or per deliberately owned test scope.
+- Keep the production entry point as `TEntryPoint`; configure its host through the factory callback instead of building a replacement `WebApplication` in the test project.
 - Create the client from `application.Host.GetTestClient()` or the returned `TestServer` as appropriate.
 - Dispose the factory result, clients, responses, and owned external resources at the same effective lifecycle as before.
 
@@ -118,6 +121,8 @@ For any `WebApplicationFactory` migration, read `references/migration-invariants
 
 Delete `Microsoft.AspNetCore.Mvc.Testing` only when no selected code or remaining authorized project surface needs it. After edits, search the selected scope for both `WebApplicationFactory` and `Microsoft.AspNetCore.Mvc.Testing`.
 
+A helper may prepare settings or own temporary resources, but the focused test must still call `WebApplicationTestFactory.Create<TEntryPoint>`. The helper must not build, start, stop, or dispose a replacement host, and must not replay statements from `Program`.
+
 ## Step 6: Bootstrap a behavior test
 
 Read the selected production source, its public behavior, and nearby tests. Choose the lowest-cost deterministic behavior that could catch a real defect. Adapt the matching asset rather than copying it literally:
@@ -134,11 +139,11 @@ Replace every placeholder with repository evidence. Do not invent an endpoint, s
 
 Run the narrowest authoritative sequence that covers the selected change:
 
-1. rerun `inspect-dotnet-tests.ps1`;
+1. rerun `inspect-dotnet-tests.ps1`; for a web migration, pass `-ExpectedWebPattern Focused` or `-ExpectedWebPattern Shared` to make the chosen pattern, zero legacy factories, and zero direct replacement-host constructions a fail-closed postcondition;
 2. restore the selected test project;
 3. build the selected test project;
 4. run `dotnet test` when restore/build/test was requested and confirm the expected non-zero test count with zero failures; a zero-discovery exit code is a failure and `dotnet run` is not a substitute;
-5. for migrations, search the selected scope and confirm zero remaining `WebApplicationFactory` usages;
+5. for migrations, search the selected scope and confirm zero remaining `WebApplicationFactory` usages; do not treat that zero count as sufficient without the expected-pattern postcondition;
 6. inspect the final diff for target-framework, package-owner, test-name, and unrelated-change drift.
 
 If tests expose a migration regression, repair the preserved lifecycle or configuration behavior rather than weakening assertions.

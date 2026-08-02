@@ -84,6 +84,32 @@ System.Console.WriteLine("legacy");
     if ($workerProject.referencedApplications[0].hostPattern -ne 'MinimalWorkerProgram') { throw 'Expected MinimalWorkerProgram detection.' }
     if ($consoleProject.referencedApplications[0].hostPattern -ne 'MinimalConsoleProgram') { throw 'Expected MinimalConsoleProgram detection.' }
 
+    Write-File -Path (Join-Path $workspace 'test/App.FunctionalTests/HealthTest.cs') -Content @'
+using Codebelt.Extensions.Xunit.Hosting.AspNetCore; public class HealthTest { public void Create() { using var application = WebApplicationTestFactory.Create<Program>(); } }
+'@
+    $focusedJson = & pwsh -NoProfile -File $scriptPath -RepoRoot $workspace -ProjectPath 'test/App.FunctionalTests/App.FunctionalTests.csproj' -ExpectedWebPattern Focused
+    if ($LASTEXITCODE -ne 0) { throw "Focused web postcondition exited with $LASTEXITCODE.`n$($focusedJson -join [Environment]::NewLine)" }
+    $focusedReport = $focusedJson | ConvertFrom-Json
+    if ($focusedReport.projects[0].focusedWebApplicationTestFactoryUsages.Count -ne 1) { throw 'Expected one focused WebApplicationTestFactory usage.' }
+    if ($focusedReport.projects[0].directWebHostConstructions.Count -ne 0) { throw 'Expected no direct host construction in the focused pattern.' }
+
+    Write-File -Path (Join-Path $workspace 'test/App.FunctionalTests/HealthTest.cs') -Content @'
+using Microsoft.AspNetCore.Builder; using Microsoft.AspNetCore.TestHost; public class HealthTest { public void Create() { var builder = WebApplication.CreateBuilder(); builder.WebHost.UseTestServer(); } }
+'@
+    $manualJson = & pwsh -NoProfile -File $scriptPath -RepoRoot $workspace -ProjectPath 'test/App.FunctionalTests/App.FunctionalTests.csproj' -ExpectedWebPattern Focused
+    if ($LASTEXITCODE -ne 2) { throw "Expected direct host reconstruction to exit with 2, found $LASTEXITCODE." }
+    $manualReport = $manualJson | ConvertFrom-Json
+    if ($manualReport.projects[0].directWebHostConstructions.Count -ne 1) { throw 'Expected direct WebApplication and TestServer construction evidence on the fixture source line.' }
+    if (@($manualReport.projects[0].blockers | Where-Object { $_ -match 'replacement host' }).Count -ne 1) { throw 'Expected the replacement-host blocker.' }
+
+    Write-File -Path (Join-Path $workspace 'test/App.FunctionalTests/HealthTest.cs') -Content @'
+using Codebelt.Extensions.Xunit.Hosting.AspNetCore; public class HealthTest : WebApplicationTest<Program, BlockingManagedWebApplicationFixture<Program>> { public HealthTest(BlockingManagedWebApplicationFixture<Program> fixture) : base(fixture) { } }
+'@
+    $sharedJson = & pwsh -NoProfile -File $scriptPath -RepoRoot $workspace -ProjectPath 'test/App.FunctionalTests/App.FunctionalTests.csproj' -ExpectedWebPattern Shared
+    if ($LASTEXITCODE -ne 0) { throw "Shared web postcondition exited with $LASTEXITCODE.`n$($sharedJson -join [Environment]::NewLine)" }
+    $sharedReport = $sharedJson | ConvertFrom-Json
+    if ($sharedReport.projects[0].sharedWebApplicationTestUsages.Count -ne 1) { throw 'Expected one shared WebApplicationTest usage.' }
+
     Write-Host 'inspect-dotnet-tests.ps1 regression: PASS'
 } finally {
     if (Test-Path -LiteralPath $workspace) { Remove-Item -LiteralPath $workspace -Recurse -Force }

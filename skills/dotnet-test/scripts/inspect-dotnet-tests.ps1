@@ -1,6 +1,8 @@
 param(
     [string]$RepoRoot = (Get-Location).Path,
-    [string]$ProjectPath
+    [string]$ProjectPath,
+    [ValidateSet('Focused', 'Shared')]
+    [string]$ExpectedWebPattern
 )
 
 Set-StrictMode -Version Latest
@@ -130,6 +132,9 @@ function Get-HostPattern {
 }
 
 $repoRootPath = (Resolve-Path -LiteralPath $RepoRoot).Path
+if (-not [string]::IsNullOrWhiteSpace($ExpectedWebPattern) -and [string]::IsNullOrWhiteSpace($ProjectPath)) {
+    throw 'ExpectedWebPattern requires one selected ProjectPath so unrelated test projects cannot affect the postcondition.'
+}
 $projects = if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
     @(Get-ChildItem -LiteralPath $repoRootPath -Recurse -File -Filter '*.csproj' |
         Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
@@ -184,12 +189,28 @@ $reports = foreach ($project in $projects) {
     $packageIds = @($packages | ForEach-Object { $_.id })
 
     $webUsages = [System.Collections.Generic.List[object]]::new()
+    $focusedWebUsages = [System.Collections.Generic.List[object]]::new()
+    $sharedWebUsages = [System.Collections.Generic.List[object]]::new()
+    $directWebHostConstructions = [System.Collections.Generic.List[object]]::new()
     $inheritance = [System.Collections.Generic.List[object]]::new()
     foreach ($record in $sourceRecords) {
         for ($index = 0; $index -lt $record.lines.Count; $index++) {
             $line = $record.lines[$index]
             if ($line -match '\bWebApplicationFactory(?:\s*<|\b)') {
                 $webUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match '\bWebApplicationTestFactory\s*\.\s*Create\s*<') {
+                $focusedWebUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match ':\s*WebApplicationTest\s*<') {
+                $sharedWebUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match '\bWebApplication\s*\.\s*CreateBuilder\s*\(' -or
+                $line -match '\bWebHost\s*\.\s*CreateDefaultBuilder\s*\(' -or
+                $line -match '\bHost\s*\.\s*Create(?:DefaultBuilder|ApplicationBuilder)\s*\(' -or
+                $line -match '\bnew\s+(?:WebHostBuilder|HostBuilder|TestServer)\s*\(' -or
+                $line -match '\bUseTestServer\s*\(') {
+                $directWebHostConstructions.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
             }
             if ($line -match '\bclass\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)[^:\r\n]*:\s*(?<base>[^\{]+)') {
                 $inheritance.Add([pscustomobject]@{ path = $record.path; line = $index + 1; type = $Matches.name; baseTypes = $Matches.base.Trim() })
@@ -244,6 +265,23 @@ $reports = foreach ($project in $projects) {
     if ($role -eq 'Console or worker functional test' -and $projectReferences.Count -eq 0 -and $combinedSource -notmatch '\b(ApplicationTestFactory|ApplicationTest<)\b') {
         $blockers.Add('No referenced executable or existing Codebelt application-test entry point was found for the console/worker functional-test role.')
     }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedWebPattern)) {
+        if ($role -ne 'ASP.NET Core functional test') {
+            $blockers.Add("The requested $ExpectedWebPattern web postcondition cannot be applied because the selected project was classified as '$role'.")
+        }
+        if ($webUsages.Count -gt 0) {
+            $blockers.Add('The selected web migration still contains WebApplicationFactory. Removing every selected legacy factory is required.')
+        }
+        if ($directWebHostConstructions.Count -gt 0) {
+            $blockers.Add('The selected web migration constructs a replacement host in test code. Bootstrap the production entry point through the selected Codebelt web-test abstraction instead of replaying Program, WebApplication.CreateBuilder, or TestServer setup.')
+        }
+        if ($ExpectedWebPattern -eq 'Focused' -and $focusedWebUsages.Count -eq 0) {
+            $blockers.Add('The focused web postcondition requires at least one WebApplicationTestFactory.Create<TEntryPoint> call in the selected project.')
+        }
+        if ($ExpectedWebPattern -eq 'Shared' -and $sharedWebUsages.Count -eq 0) {
+            $blockers.Add('The shared web postcondition requires a test class derived from WebApplicationTest<TEntryPoint, TFixture> in the selected project.')
+        }
+    }
 
     $recommendations = [System.Collections.Generic.List[string]]::new()
     if ($xunitGeneration -eq 'v2') { $recommendations.Add('Modernize the selected project to xUnit v3 and Microsoft Testing Platform while preserving target frameworks and package ownership.') }
@@ -270,14 +308,23 @@ $reports = foreach ($project in $projects) {
         packageOwnership = $packages
         inheritance = @($inheritance | Sort-Object path, line)
         webApplicationFactoryUsages = @($webUsages | Sort-Object path, line)
+        focusedWebApplicationTestFactoryUsages = @($focusedWebUsages | Sort-Object path, line)
+        sharedWebApplicationTestUsages = @($sharedWebUsages | Sort-Object path, line)
+        directWebHostConstructions = @($directWebHostConstructions | Sort-Object path, line)
         referencedApplications = @($referencedHosts | Sort-Object path)
         recommendations = @($recommendations)
         blockers = @($blockers)
     }
 }
 
-[ordered]@{
+$result = [ordered]@{
     repoRoot = $repoRootPath
+    expectedWebPattern = $ExpectedWebPattern
     projectCount = @($reports).Count
     projects = @($reports)
-} | ConvertTo-Json -Depth 8
+}
+
+$result | ConvertTo-Json -Depth 8
+if (-not [string]::IsNullOrWhiteSpace($ExpectedWebPattern) -and @($reports | Where-Object { $_.blockers.Count -gt 0 }).Count -gt 0) {
+    exit 2
+}
