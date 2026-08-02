@@ -1,0 +1,114 @@
+{
+  "skill_name": "dotnet-test",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "In the attached Acme.Calculator fixture, bootstrap the existing test project as an ordinary Codebelt xUnit test project. Add a real behavior test for Calculator.Add, preserve net10.0 and central package management, use xUnit v3 with Microsoft Testing Platform, and run restore/build/test.",
+      "expected_output": "A buildable xUnit v3/MTP unit-test project with Codebelt Test inheritance, ITestOutputHelper, and a source-grounded Add behavior test.",
+      "expectations": [
+        "Classifies the selected project as an ordinary unit test",
+        "Keeps net10.0 and central package management",
+        "Uses xunit.v3, Microsoft Testing Platform, and a compatible Codebelt xUnit package",
+        "Adds a Test-derived class with ITestOutputHelper and file-scoped Acme.Calculator namespace",
+        "Adds a ShouldReturnSum_WhenAddingTwoNumbers-style source-grounded behavior test rather than a placeholder",
+        "Restore, build, and test succeed"
+      ],
+      "files": [
+        "evals/files/fresh-unit/Directory.Build.props",
+        "evals/files/fresh-unit/Directory.Packages.props",
+        "evals/files/fresh-unit/src/Acme.Calculator/Acme.Calculator.csproj",
+        "evals/files/fresh-unit/src/Acme.Calculator/Calculator.cs",
+        "evals/files/fresh-unit/test/Acme.Calculator.Tests/Acme.Calculator.Tests.csproj"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Modernize the attached Acme.Inventory.Tests xUnit v2 project to xUnit v3 and Microsoft Testing Platform using Codebelt conventions. Preserve the target framework, central package ownership, existing test class and method names, and unrelated project settings. Run restore/build/test.",
+      "expected_output": "The existing tests compile and pass on xUnit v3/MTP with preserved names and central versions.",
+      "expectations": [
+        "Detects xUnit v2 and central package ownership",
+        "Replaces xunit and Xunit.Abstractions with the xUnit v3 shape",
+        "Enables executable output and UseMicrosoftTestingPlatformRunner without changing net10.0",
+        "Makes InventoryServiceTest inherit Test and inject ITestOutputHelper",
+        "Preserves InventoryServiceTest and GetAvailableCount_ReturnsOnlyAvailableItems names",
+        "Restore, build, and test succeed"
+      ],
+      "files": [
+        "evals/files/v2-modernization/Directory.Build.props",
+        "evals/files/v2-modernization/Directory.Packages.props",
+        "evals/files/v2-modernization/src/Acme.Inventory/Acme.Inventory.csproj",
+        "evals/files/v2-modernization/src/Acme.Inventory/InventoryService.cs",
+        "evals/files/v2-modernization/test/Acme.Inventory.Tests/Acme.Inventory.Tests.csproj",
+        "evals/files/v2-modernization/test/Acme.Inventory.Tests/InventoryServiceTest.cs"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Migrate the attached lean Acme.Cdn.Origin functional tests from the web-cdn-origin-style CdnOriginTestApplication WebApplicationFactory wrapper to the focused Codebelt WebApplicationTestFactory pattern. Preserve per-test settings, Production environment, temporary content ownership, client behavior, services, disposal, isolation, and existing test names. Remove every selected WebApplicationFactory usage and validate restore/build/test.",
+      "expected_output": "Focused Test-derived functional tests use WebApplicationTestFactory with no WebApplicationFactory remaining and retain per-test isolation/configuration.",
+      "expectations": [
+        "Classifies the project as ASP.NET Core functional tests and selects focused ownership",
+        "Replaces CdnOriginTestApplication and all WebApplicationFactory usages with WebApplicationTestFactory",
+        "Preserves Production environment, in-memory settings, temporary content disposal, and one application per test",
+        "Keeps CompressionTest and both existing method names unchanged",
+        "Removes Microsoft.AspNetCore.Mvc.Testing when no longer needed",
+        "Search finds no WebApplicationFactory in the selected migration and restore/build/test succeed"
+      ],
+      "files": [
+        "evals/files/focused-web/Directory.Build.props",
+        "evals/files/focused-web/Directory.Packages.props",
+        "evals/files/focused-web/src/Acme.Cdn.Origin/Acme.Cdn.Origin.csproj",
+        "evals/files/focused-web/src/Acme.Cdn.Origin/Program.cs",
+        "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/Acme.Cdn.Origin.FunctionalTests.csproj",
+        "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/CdnOriginTestApplication.cs",
+        "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/CompressionTest.cs",
+        "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/TempContent.cs"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Migrate the attached Acme.Status functional-test class from IClassFixture<WebApplicationFactory<Program>> to the shared Codebelt WebApplicationTest<Program, BlockingManagedWebApplicationFixture<Program>> pattern. Preserve shared fixture lifecycle, Staging environment, configuration, service access, client behavior, and existing test names. Remove every selected WebApplicationFactory usage and run restore/build/test.",
+      "expected_output": "A shared blocking managed web fixture replaces IClassFixture WebApplicationFactory with preserved host customization and passing tests.",
+      "expectations": [
+        "Selects the shared fixture pattern rather than focused per-test ownership",
+        "Uses WebApplicationTest with BlockingManagedWebApplicationFixture and constructor-injected ITestOutputHelper",
+        "Moves Staging/configuration customization into the pre-start shared host customization path",
+        "Preserves StatusTest and its existing test method names",
+        "Removes Microsoft.AspNetCore.Mvc.Testing when unused",
+        "Search finds no WebApplicationFactory and restore/build/test succeed"
+      ],
+      "files": [
+        "evals/files/shared-web/Directory.Build.props",
+        "evals/files/shared-web/Directory.Packages.props",
+        "evals/files/shared-web/src/Acme.Status/Acme.Status.csproj",
+        "evals/files/shared-web/src/Acme.Status/Program.cs",
+        "evals/files/shared-web/test/Acme.Status.FunctionalTests/Acme.Status.FunctionalTests.csproj",
+        "evals/files/shared-web/test/Acme.Status.FunctionalTests/StatusTest.cs"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Bootstrap the attached Acme.QueuePump worker functional-test project using the focused Codebelt ApplicationTestFactory pattern. The application already follows Codebelt Bootstrapper Worker and must stay in-process; do not launch a process. Add a source-grounded test that resolves QueuePumpMarker from the started host, preserve net10.0 and central package management, and run restore/build/test.",
+      "expected_output": "A buildable focused console/worker functional test uses ApplicationTestFactory against the existing Bootstrapper Generic Host and verifies a real registered service.",
+      "expectations": [
+        "Classifies the project as a console or worker functional test",
+        "Recognizes the existing Codebelt Bootstrapper Worker Generic Host and does not rewrite production startup unnecessarily",
+        "Uses a Test-derived class with ITestOutputHelper and ApplicationTestFactory",
+        "Does not use Process.Start, dotnet run, shell execution, or port polling",
+        "Adds a ShouldResolveMarker_WhenApplicationStarts-style test grounded in QueuePumpMarker registration",
+        "Restore, build, and test succeed"
+      ],
+      "files": [
+        "evals/files/worker-functional/Directory.Build.props",
+        "evals/files/worker-functional/Directory.Packages.props",
+        "evals/files/worker-functional/src/Acme.QueuePump/Acme.QueuePump.csproj",
+        "evals/files/worker-functional/src/Acme.QueuePump/Program.cs",
+        "evals/files/worker-functional/src/Acme.QueuePump/Startup.cs",
+        "evals/files/worker-functional/src/Acme.QueuePump/QueuePumpMarker.cs",
+        "evals/files/worker-functional/src/Acme.QueuePump/QueuePumpWorker.cs",
+        "evals/files/worker-functional/test/Acme.QueuePump.FunctionalTests/Acme.QueuePump.FunctionalTests.csproj"
+      ]
+    }
+  ]
+}
+

@@ -1,0 +1,283 @@
+param(
+    [string]$RepoRoot = (Get-Location).Path,
+    [string]$ProjectPath
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+
+function Resolve-ContainedPath {
+    param([string]$Root, [string]$Path)
+
+    $resolvedRoot = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\', '/')
+    $candidate = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path $resolvedRoot $Path }
+    $resolvedCandidate = (Resolve-Path -LiteralPath $candidate).Path
+    if (-not $resolvedCandidate.StartsWith($resolvedRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::Equals($resolvedCandidate, $resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path '$Path' is outside repository root '$resolvedRoot'."
+    }
+    return $resolvedCandidate
+}
+
+function Convert-ToRelativePath {
+    param([string]$Root, [string]$Path)
+    return [System.IO.Path]::GetRelativePath($Root, $Path).Replace('\', '/')
+}
+
+function Get-EvaluatedProperties {
+    param([string]$Path)
+
+    $arguments = @(
+        'msbuild', $Path, '-nologo',
+        '-getProperty:TargetFramework,TargetFrameworks,IsTestProject,OutputType,ManagePackageVersionsCentrally,UseMicrosoftTestingPlatformRunner,RootNamespace'
+    )
+    $output = @(& dotnet @arguments 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet msbuild property evaluation failed for '$Path' with exit code $LASTEXITCODE.`n$($output -join [Environment]::NewLine)"
+    }
+    try {
+        return (($output -join [Environment]::NewLine) | ConvertFrom-Json).Properties
+    } catch {
+        throw "dotnet msbuild did not return parseable JSON for '$Path'.`n$($output -join [Environment]::NewLine)"
+    }
+}
+
+function Get-AncestorFiles {
+    param([string]$StartDirectory, [string]$Root, [string]$Name)
+
+    $files = [System.Collections.Generic.List[string]]::new()
+    $current = [System.IO.DirectoryInfo]::new($StartDirectory)
+    $rootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    while ($null -ne $current) {
+        $candidate = Join-Path $current.FullName $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            $files.Add((Resolve-Path -LiteralPath $candidate).Path)
+        }
+        if ([string]::Equals($current.FullName.TrimEnd('\', '/'), $rootPath, [System.StringComparison]::OrdinalIgnoreCase)) { break }
+        $current = $current.Parent
+    }
+    return @($files)
+}
+
+function Get-PackageNodes {
+    param([string]$Path, [string]$NodeName)
+
+    try { [xml]$xml = [System.IO.File]::ReadAllText($Path, $utf8NoBom) } catch { return @() }
+    $nodes = @($xml.SelectNodes("//$NodeName"))
+    return @($nodes | ForEach-Object {
+        $versionNode = $_.SelectSingleNode('Version')
+        $versionAttribute = [string]$_.GetAttribute('Version')
+        $version = if ($null -ne $versionNode) { [string]$versionNode.InnerText } elseif (-not [string]::IsNullOrWhiteSpace($versionAttribute)) { $versionAttribute } else { $null }
+        [pscustomobject]@{
+            id = [string]$_.GetAttribute('Include')
+            version = $version
+            owner = $Path
+        }
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_.id) })
+}
+
+function Get-ProjectReferencePaths {
+    param([string]$Path)
+
+    try { [xml]$xml = [System.IO.File]::ReadAllText($Path, $utf8NoBom) } catch { return @() }
+    $directory = Split-Path -Path $Path -Parent
+    return @($xml.SelectNodes('//ProjectReference') | ForEach-Object {
+        $include = [string]$_.GetAttribute('Include')
+        if ([string]::IsNullOrWhiteSpace($include)) { return }
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $directory $include))
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $candidate }
+    } | Sort-Object -Unique)
+}
+
+function Get-SourceFiles {
+    param([string]$Directory)
+    return @(Get-ChildItem -LiteralPath $Directory -Recurse -File -Filter '*.cs' |
+        Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
+        Sort-Object FullName)
+}
+
+function Test-GenericHostEntryPoint {
+    param([string]$ProjectReference)
+
+    $directory = Split-Path -Path $ProjectReference -Parent
+    $source = (Get-SourceFiles -Directory $directory | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, $utf8NoBom) }) -join "`n"
+    return $source -match 'Host\.Create(DefaultBuilder|ApplicationBuilder)|HostApplicationBuilder|WebApplication\.CreateBuilder|CreateHostBuilder\s*\(|:\s*(ConsoleProgram|MinimalConsoleProgram|WorkerProgram|MinimalWorkerProgram|WebProgram|MinimalWebProgram)'
+}
+
+function Test-WebEntryPoint {
+    param([string]$ProjectReference)
+
+    $projectText = [System.IO.File]::ReadAllText($ProjectReference, $utf8NoBom)
+    $directory = Split-Path -Path $ProjectReference -Parent
+    $source = (Get-SourceFiles -Directory $directory | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, $utf8NoBom) }) -join "`n"
+    return $projectText -match 'Microsoft\.NET\.Sdk\.Web' -or $source -match 'WebApplication\.CreateBuilder|:\s*(WebProgram|MinimalWebProgram)'
+}
+
+function Get-HostPattern {
+    param([string]$ProjectReference)
+
+    $directory = Split-Path -Path $ProjectReference -Parent
+    $source = (Get-SourceFiles -Directory $directory | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, $utf8NoBom) }) -join "`n"
+    foreach ($pattern in @('MinimalConsoleProgram', 'MinimalWorkerProgram', 'MinimalWebProgram', 'ConsoleProgram', 'WorkerProgram', 'WebProgram')) {
+        if ($source -match ":\s*$pattern(?:\s*<|\b)") { return $pattern }
+    }
+    if ($source -match 'WebApplication\.CreateBuilder') { return 'ASP.NET Core minimal host' }
+    if ($source -match 'Host\.Create(DefaultBuilder|ApplicationBuilder)|HostApplicationBuilder|CreateHostBuilder\s*\(') { return 'Generic Host' }
+    return $null
+}
+
+$repoRootPath = (Resolve-Path -LiteralPath $RepoRoot).Path
+$projects = if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+    @(Get-ChildItem -LiteralPath $repoRootPath -Recurse -File -Filter '*.csproj' |
+        Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
+        Sort-Object FullName |
+        Where-Object {
+            $text = [System.IO.File]::ReadAllText($_.FullName, $utf8NoBom)
+            $_.BaseName -match '(Tests?|FunctionalTests)$' -or $text -match '<IsTestProject>\s*true\s*</IsTestProject>|PackageReference[^>]+Include="(?:xunit|xunit\.v3)"'
+        } |
+        Select-Object -ExpandProperty FullName)
+} else {
+    @((Resolve-ContainedPath -Root $repoRootPath -Path $ProjectPath))
+}
+
+if (@($projects).Count -eq 0) { throw "No test projects were found under '$repoRootPath'." }
+
+$reports = foreach ($project in $projects) {
+    if ([System.IO.Path]::GetExtension($project) -ne '.csproj') { throw "Selected project is not a .csproj: $project" }
+    $projectDirectory = Split-Path -Path $project -Parent
+    $properties = Get-EvaluatedProperties -Path $project
+    $sourceFiles = @(Get-SourceFiles -Directory $projectDirectory)
+    $sourceRecords = @($sourceFiles | ForEach-Object {
+        [pscustomobject]@{
+            path = Convert-ToRelativePath -Root $repoRootPath -Path $_.FullName
+            lines = [System.IO.File]::ReadAllLines($_.FullName, $utf8NoBom)
+            text = [System.IO.File]::ReadAllText($_.FullName, $utf8NoBom)
+        }
+    })
+    $combinedSource = (@($sourceRecords | ForEach-Object { $_.text }) -join "`n")
+
+    $centralFiles = @(Get-AncestorFiles -StartDirectory $projectDirectory -Root $repoRootPath -Name 'Directory.Packages.props')
+    $buildPropsFiles = @(Get-AncestorFiles -StartDirectory $projectDirectory -Root $repoRootPath -Name 'Directory.Build.props')
+    $centralVersions = @{}
+    foreach ($centralFile in @($centralFiles | Sort-Object { $_.Length })) {
+        foreach ($node in Get-PackageNodes -Path $centralFile -NodeName 'PackageVersion') {
+            $centralVersions[$node.id] = $node
+        }
+    }
+    $packageReferences = [System.Collections.Generic.List[object]]::new()
+    foreach ($owner in @($project) + @($buildPropsFiles)) {
+        foreach ($node in Get-PackageNodes -Path $owner -NodeName 'PackageReference') {
+            $central = if ($centralVersions.ContainsKey($node.id)) { $centralVersions[$node.id] } else { $null }
+            $packageReferences.Add([pscustomobject]@{
+                id = $node.id
+                version = if ($node.version) { $node.version } elseif ($central) { $central.version } else { $null }
+                referenceOwner = Convert-ToRelativePath -Root $repoRootPath -Path $owner
+                versionOwner = if ($node.version) { Convert-ToRelativePath -Root $repoRootPath -Path $owner } elseif ($central) { Convert-ToRelativePath -Root $repoRootPath -Path $central.owner } else { $null }
+                ownership = if ($node.version) { 'project-or-import' } elseif ($central) { 'central' } else { 'unresolved-or-transitive' }
+            })
+        }
+    }
+    $packages = @($packageReferences | Sort-Object id, referenceOwner -Unique)
+    $packageIds = @($packages | ForEach-Object { $_.id })
+
+    $webUsages = [System.Collections.Generic.List[object]]::new()
+    $inheritance = [System.Collections.Generic.List[object]]::new()
+    foreach ($record in $sourceRecords) {
+        for ($index = 0; $index -lt $record.lines.Count; $index++) {
+            $line = $record.lines[$index]
+            if ($line -match '\bWebApplicationFactory(?:\s*<|\b)') {
+                $webUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match '\bclass\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)[^:\r\n]*:\s*(?<base>[^\{]+)') {
+                $inheritance.Add([pscustomobject]@{ path = $record.path; line = $index + 1; type = $Matches.name; baseTypes = $Matches.base.Trim() })
+            }
+        }
+    }
+
+    $projectReferences = @(Get-ProjectReferencePaths -Path $project)
+    $referencedHosts = @($projectReferences | ForEach-Object {
+        $referencedProjectText = [System.IO.File]::ReadAllText($_, $utf8NoBom)
+        [pscustomobject]@{
+            path = Convert-ToRelativePath -Root $repoRootPath -Path $_
+            genericHost = Test-GenericHostEntryPoint -ProjectReference $_
+            webHost = Test-WebEntryPoint -ProjectReference $_
+            hostPattern = Get-HostPattern -ProjectReference $_
+            executable = $referencedProjectText -match '<OutputType>\s*Exe\s*</OutputType>|Microsoft\.NET\.Sdk\.(?:Worker|Web)'
+        }
+    })
+
+    $isWeb = $webUsages.Count -gt 0 -or
+        $packageIds -contains 'Microsoft.AspNetCore.Mvc.Testing' -or
+        $packageIds -contains 'Microsoft.AspNetCore.TestHost' -or
+        $packageIds -contains 'Codebelt.Extensions.Xunit.Hosting.AspNetCore' -or
+        $combinedSource -match '\b(WebApplicationTestFactory|WebApplicationTest<|TestServer)\b' -or
+        @($referencedHosts | Where-Object webHost).Count -gt 0
+    $isApplication = -not $isWeb -and (
+        $combinedSource -match '\b(ApplicationTestFactory|ApplicationTest<|BlockingManagedApplicationFixture)\b' -or
+        @($referencedHosts | Where-Object genericHost).Count -gt 0 -or
+        @($referencedHosts | Where-Object executable).Count -gt 0 -or
+        $combinedSource -match '\b(IHostedService|BackgroundService)\b'
+    )
+    $role = if ($isWeb) { 'ASP.NET Core functional test' } elseif ($isApplication) { 'Console or worker functional test' } else { 'Ordinary unit test' }
+
+    $xunitGeneration = if ($packageIds -contains 'xunit.v3' -or $combinedSource -match '\bXunit\.v3\b') {
+        'v3'
+    } elseif ($packageIds -contains 'xunit' -or $packageIds -contains 'xunit.core' -or $combinedSource -match '\bXunit\.Abstractions\b') {
+        'v2'
+    } else {
+        'unknown'
+    }
+
+    $frameworks = if (-not [string]::IsNullOrWhiteSpace([string]$properties.TargetFrameworks)) {
+        @(([string]$properties.TargetFrameworks).Split(';', [System.StringSplitOptions]::RemoveEmptyEntries))
+    } elseif (-not [string]::IsNullOrWhiteSpace([string]$properties.TargetFramework)) {
+        @([string]$properties.TargetFramework)
+    } else { @() }
+
+    $blockers = [System.Collections.Generic.List[string]]::new()
+    if ($role -eq 'Console or worker functional test' -and $referencedHosts.Count -gt 0 -and @($referencedHosts | Where-Object genericHost).Count -eq 0) {
+        $blockers.Add('The referenced executable does not expose a detectable Generic Host entry point. Test-only scope must report the required application-host adaptation; application scope must adapt bootstrap before using ApplicationTestFactory.')
+    }
+    if ($role -eq 'Console or worker functional test' -and $projectReferences.Count -eq 0 -and $combinedSource -notmatch '\b(ApplicationTestFactory|ApplicationTest<)\b') {
+        $blockers.Add('No referenced executable or existing Codebelt application-test entry point was found for the console/worker functional-test role.')
+    }
+
+    $recommendations = [System.Collections.Generic.List[string]]::new()
+    if ($xunitGeneration -eq 'v2') { $recommendations.Add('Modernize the selected project to xUnit v3 and Microsoft Testing Platform while preserving target frameworks and package ownership.') }
+    if ([string]$properties.UseMicrosoftTestingPlatformRunner -ne 'true') { $recommendations.Add('Enable UseMicrosoftTestingPlatformRunner for the selected xUnit v3 test project, preferably in its existing shared test-project property owner.') }
+    if ($webUsages.Count -gt 0) { $recommendations.Add('Replace every selected WebApplicationFactory usage and preserve configuration, start behavior, clients, services, disposal, and isolation.') }
+    switch ($role) {
+        'Ordinary unit test' { $recommendations.Add('Use Test or an established Test-derived base with ITestOutputHelper.') }
+        'ASP.NET Core functional test' { $recommendations.Add('Use WebApplicationTestFactory for focused ownership or WebApplicationTest with BlockingManagedWebApplicationFixture for shared fixture ownership.') }
+        'Console or worker functional test' { $recommendations.Add('Use ApplicationTestFactory for focused ownership or ApplicationTest with BlockingManagedApplicationFixture for shared fixture ownership.') }
+    }
+
+    [pscustomobject]@{
+        project = Convert-ToRelativePath -Root $repoRootPath -Path $project
+        role = $role
+        frameworks = @($frameworks)
+        xunitGeneration = $xunitGeneration
+        properties = [ordered]@{
+            isTestProject = [string]$properties.IsTestProject
+            outputType = [string]$properties.OutputType
+            useMicrosoftTestingPlatformRunner = [string]$properties.UseMicrosoftTestingPlatformRunner
+            managePackageVersionsCentrally = [string]$properties.ManagePackageVersionsCentrally
+            rootNamespace = [string]$properties.RootNamespace
+        }
+        packageOwnership = $packages
+        inheritance = @($inheritance | Sort-Object path, line)
+        webApplicationFactoryUsages = @($webUsages | Sort-Object path, line)
+        referencedApplications = @($referencedHosts | Sort-Object path)
+        recommendations = @($recommendations)
+        blockers = @($blockers)
+    }
+}
+
+[ordered]@{
+    repoRoot = $repoRootPath
+    projectCount = @($reports).Count
+    projects = @($reports)
+} | ConvertTo-Json -Depth 8
