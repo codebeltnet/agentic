@@ -1087,6 +1087,83 @@ Add-ValidationResult -Results $results -Name 'Benchmark runner wildcard is prese
     Assert-Match -Name 'benchmark-program.cs' -Content $program -Pattern 'namespace\s+\{BENCHMARK_RUNNER_NAMESPACE\};'
 }
 
+Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific Codebelt xUnit migration and bootstrap contracts' -Action {
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/SKILL.md' -GitRef $Ref
+    $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/FORMS.md' -GitRef $Ref
+    $web = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/web-functional-tests.md' -GitRef $Ref
+    $application = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/application-functional-tests.md' -GitRef $Ref
+    $bootstrapper = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/bootstrapper-hosts.md' -GitRef $Ref
+    $modernization = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/xunit-v3-modernization.md' -GitRef $Ref
+    $migration = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/migration-invariants.md' -GitRef $Ref
+    $inspect = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/inspect-dotnet-tests.ps1' -GitRef $Ref
+    $resolve = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/resolve-test-package-versions.ps1' -GitRef $Ref
+    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/evals/evals.json' -GitRef $Ref
+    $fixtureFiles = Get-RepoFileList -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/evals/files' -GitRef $Ref
+
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Ordinary unit test'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ASP.NET Core functional test'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Console or worker functional test'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'WebApplicationTestFactory.Create<TEntryPoint>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'WebApplicationTest<TEntryPoint, BlockingManagedWebApplicationFixture<TEntryPoint>>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ApplicationTestFactory.Create<TEntryPoint>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ApplicationTest<TEntryPoint, BlockingManagedApplicationFixture<TEntryPoint>>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Never add a process-launching fallback'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'zero remaining `WebApplicationFactory`'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Do not invent an endpoint, service, configuration key, or expected result.'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'An MTP executable run may supplement that gate but never replaces it'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### project_selection'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### operation_mode'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### test_role'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle 'Field: <field-name>'
+    Assert-Contains -Name 'dotnet-test/web-functional-tests.md' -Content $web -Needle 'BlockingManagedWebApplicationFixture<TEntryPoint>'
+    Assert-Contains -Name 'dotnet-test/application-functional-tests.md' -Content $application -Needle 'Do not introduce `Process.Start`'
+    foreach ($program in @('MinimalConsoleProgram', 'MinimalWorkerProgram', 'MinimalWebProgram')) {
+        Assert-Contains -Name 'dotnet-test/bootstrapper-hosts.md' -Content $bootstrapper -Needle $program
+        Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle $program
+    }
+    Assert-Contains -Name 'dotnet-test/xunit-v3-modernization.md' -Content $modernization -Needle '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>'
+    Assert-Contains -Name 'dotnet-test/xunit-v3-modernization.md' -Content $modernization -Needle 'A zero-discovery test command is not a successful test run'
+    Assert-Contains -Name 'dotnet-test/migration-invariants.md' -Content $migration -Needle 'lazy until `CreateClient`, `Server`, or `Services`'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle '-getProperty:TargetFramework,TargetFrameworks,IsTestProject,OutputType,ManagePackageVersionsCentrally,UseMicrosoftTestingPlatformRunner,RootNamespace'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'webApplicationFactoryUsages'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'packageOwnership'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'https://api.nuget.org/v3/index.json'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'isolated restore passed'
+
+    $evalObject = $evals | ConvertFrom-Json
+    if (@($evalObject.evals).Count -ne 5) {
+        throw "dotnet-test must define exactly five requested paired eval scenarios; found $(@($evalObject.evals).Count)"
+    }
+    foreach ($needle in @('attached Acme.Calculator fixture', 'xUnit v2 project', 'web-cdn-origin-style', 'IClassFixture<WebApplicationFactory<Program>>', 'ApplicationTestFactory pattern')) {
+        Assert-Contains -Name 'dotnet-test/evals/evals.json' -Content $evals -Needle $needle
+    }
+    if (@($fixtureFiles | Where-Object { $_ -match '(^|[\\/])(bin|obj)([\\/]|$)' }).Count -gt 0) {
+        throw 'dotnet-test eval fixtures must not include bin/ or obj/ paths'
+    }
+
+    foreach ($asset in @(
+        'skills/dotnet-test/assets/unit/BehaviorTest.cs',
+        'skills/dotnet-test/assets/web/FocusedWebApplicationTest.cs',
+        'skills/dotnet-test/assets/web/SharedWebApplicationTest.cs',
+        'skills/dotnet-test/assets/application/FocusedApplicationTest.cs',
+        'skills/dotnet-test/assets/application/SharedApplicationTest.cs',
+        'skills/dotnet-test/assets/bootstrapper/console/Program.cs',
+        'skills/dotnet-test/assets/bootstrapper/worker/Program.cs',
+        'skills/dotnet-test/assets/bootstrapper/console-minimal/Program.cs',
+        'skills/dotnet-test/assets/bootstrapper/worker-minimal/Program.cs',
+        'skills/dotnet-test/assets/bootstrapper/web-minimal/Program.cs'
+    )) {
+        [void](Get-FileText -RepoRoot $repoRoot -RelativePath $asset -GitRef $Ref)
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        & pwsh -NoProfile -File (Join-Path $repoRoot 'skills/dotnet-test/scripts/validate-skill.ps1')
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet-test skill validation failed with exit code $LASTEXITCODE."
+        }
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, proportionate experiments and preserves honest comparison semantics' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/SKILL.md' -GitRef $Ref
     $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/FORMS.md' -GitRef $Ref
