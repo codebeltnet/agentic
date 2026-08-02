@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.0 - 2026-08-02
+
+### Added
+
+- `dotnet-test` skill for classifying, bootstrapping, and refactoring xUnit projects across ordinary unit, ASP.NET Core functional, and console/worker functional roles,
+- Deterministic .NET test inspection and NuGet-backed compatible package-resolution scripts, structured forms, role references, adaptable Codebelt xUnit/Bootstrapper assets, and five paired evaluation fixtures,
+- Repository validation for the `dotnet-test` lifecycle, modernization, Generic Host, fixture, script, asset, and evaluation contracts.
+- Explicit recognition and adaptable assets for Bootstrapper `MinimalConsoleProgram`, `MinimalWorkerProgram`, and `MinimalWebProgram` host families.
+
+### Changed
+
+- Updated the root skill catalogue, install bundle, installation examples, and rationale documentation for `dotnet-test`.
+
+## [0.8.1] - 2026-08-01
+
+This is a minor release focused on tightening `agent-smith` skill guidance for clearer communication and parallelism, adding deterministic validators for skill-template compliance, and refining `git-visual-commits` with improved single-category quality gates and clearer auto-approval triggering semantics.
+
+### Added
+
+- `ValidateSkillTemplates` coverage in skill-template validator recognizing and validating `agent-smith` and `git-visual-commits` structural requirements,
+- Enhanced validation tooling in `scripts/validate-skill-templates.ps1` for skill contract enforcement.
+
+### Changed
+
+- Refactored `agent-smith` SKILL.md guidance for conciseness, parallelism, and clearer presentation of engineering-discipline workflows,
+- Restructured `agent-smith` skill-authoring reference with consolidated Anthropic skill-authoring best practices, three-level progressive disclosure guidance, and improved field definitions,
+- Refined `git-visual-commits` single-category quality gate documentation with explicit audit workflow and per-file rationale checks,
+- Clarified `git-visual-commits` auto-approval triggering semantics distinguishing between auto-approval modifiers (`yolo`/`auto`) within explicit commit requests versus standalone non-commit invocations,
+- Updated README with refined `agent-smith` description and enhanced `git-visual-commits` quality-gate documentation.
+
 ## [0.8.0] - 2026-07-18
 
 This is a minor release introducing the `agent-smith` skill for rigorous software-craftsmanship standards across design, architecture, implementation, testing, performance, security, DevSecOps, and CI/CD, alongside the `dotnet-benchmark` skill for evidence-driven performance testing. The release resolves a critical git-keep-a-changelog bug that could silently include already-released commits when determining scope boundaries, replaces implicit caret notation with deterministic branch-derived scope validation, and introduces deterministic commit-subject validation infrastructure to `git-visual-commits` with a bundled PowerShell validator and full-skill-read gating. PowerShell execution is standardized to pwsh 7+, and skill validation tooling is strengthened across the repository.
@@ -493,7 +523,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/codebeltnet/agentic/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/codebeltnet/agentic/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/codebeltnet/agentic/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/codebeltnet/agentic/compare/v0.7.3...v0.7.4
