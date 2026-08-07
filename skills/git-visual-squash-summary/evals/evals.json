@@ -122,7 +122,7 @@
       "prompt": "Summarize this branch for squash merge. One branch commit collapses dependency updates and build-system changes into a single subject, while the diff touches Directory.Packages.props plus Directory.Build.targets.",
       "expected_output": "A grouped squash summary that keeps dependency upgrades as their own retained line, separate from build-system or refactor work, even when those changes landed in the same commit.",
       "expectations": [
-        "Treats dependency or version baseline changes as a separate semantic intent from build-system metadata or refactoring",
+        "Treats dependency or version baseline changes as a separate semantic intent from build-system metadata or refactoring when both survive in the final diff",
         "Does not collapse dependency upgrades into a generic build-system or configuration line",
         "Uses a dependency-oriented emoji such as ⬆️ when a retained line is primarily dependency upgrade work",
         "Keeps the build-system or refactor effort on its own retained line when the diff shows a separate intent",
@@ -132,13 +132,12 @@
     {
       "id": 12,
       "prompt": "Summarize this branch for squash merge. The history updates Microsoft.NET.Test.Sdk from 18.6.0 to 18.7.0, later adjusts it back to 18.6.0 while keeping other build refactors, and also touches shared project metadata. Use the normal grouped lines only.",
-      "expected_output": "A grouped squash summary that preserves dependency/version work as its own semantic group instead of treating the version churn as net-zero and collapsing it into build-system or refactor wording.",
+      "expected_output": "A grouped squash summary that drops the reverted dependency churn, keeps only the surviving build or metadata outcomes, and never invents a dependency line once the version returns to its base value.",
       "expectations": [
-        "Checks for dependency or version changes before applying net-effect collapsing",
-        "Does not collapse dependency or version-pin work even when later commits revert or adjust the version",
-        "Treats dependency and version baseline changes as a hard-rule retained semantic group",
-        "Keeps pure build-system, config, or refactor work separate from dependency/version work",
-        "Uses a dependency-oriented emoji such as 📌 or ⬆️ when a retained line is primarily dependency or version-pin work",
+        "Resolves dependency or version groups from the cumulative base-to-HEAD diff rather than from the chronological story alone",
+        "Omits the `Microsoft.NET.Test.Sdk` change because the final version returns to `18.6.0`",
+        "Retains only the surviving build or metadata work that remains after the version churn cancels out",
+        "Does not invent a dependency line merely because the history contained version churn",
         "Returns grouped summary lines only"
       ]
     },
@@ -175,6 +174,42 @@
         "Does not apply an implicit --author, --committer, current-user, current-email, current-contributor, or identity-mode filter",
         "Treats author metadata as context only unless the user explicitly asks for an author-filtered summary",
         "Returns grouped summary lines only without explaining the author-scope rule"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-visual-squash-summary there. Start from `main` with `README.md` and `src/Widget.cs`. On a feature branch commit sequence is: add `src/Foo.cs`; edit `src/Foo.cs` twice; delete `src/Foo.cs`; change `README.md`; revert the `README.md` change exactly; add `src/Bar.cs`; revise `src/Bar.cs` twice. Return the grouped squash summary lines only for the feature branch versus `main`.",
+      "expected_output": "The grouped summary omits `Foo` and the reverted `README.md` churn, and emits one surviving added-capability line for `Bar` in its final form.",
+      "expectations": [
+        "Omits `Foo` entirely because it is absent at both the base and `HEAD` states",
+        "Omits the `README.md` change because it was reverted exactly",
+        "Describes `Bar` once as one surviving added outcome in its final form",
+        "Does not produce separate added, changed, or fixed lines for repeated edits to the same surviving file",
+        "Returns grouped lines only"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-visual-squash-summary there. Start from `main` with `src/Service.cs`, `src/Legacy.cs`, and `Directory.Packages.props`. On a feature branch: rename `src/Service.cs` to `src/Core/Service.cs` and modify it; delete `src/Legacy.cs`; restore `src/Legacy.cs` identically; change `Newtonsoft.Json` from `13.0.3` to `14.0.0` and then to `14.0.2`; include an intermediate commit message that claims another package was upgraded even though the final diff does not show it. Return the grouped summary lines only.",
+      "expected_output": "The grouped summary keeps one coherent move/update line for `Service`, one surviving dependency line for `Newtonsoft.Json 13.0.3 -> 14.0.2`, omits `Legacy`, and ignores the contradicted extra package claim from history.",
+      "expectations": [
+        "Produces one coherent rename/move/change outcome instead of Added plus Removed duplication for `Service`",
+        "Omits `Legacy` because it matches the base state after being restored identically",
+        "Reports one surviving dependency upgrade from `Newtonsoft.Json 13.0.3` to `14.0.2`",
+        "Does not report the contradicted extra package change from commit history when the final diff disagrees",
+        "Returns grouped lines only"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-visual-squash-summary there. Start from `main` with `src/WidgetClient.cs`. On a feature branch: add `SendAsync`; fix it twice; replace the first implementation with a second; add a temporary `LegacyMode` option and later remove it; briefly delete `WidgetClient.Send()` and restore it unchanged; finish with a docs or release-prep follow-up commit. Return the grouped squash summary lines only.",
+      "expected_output": "The grouped summary keeps one surviving `SendAsync` capability line, omits `LegacyMode`, omits the restored `Send()` removal, and produces a small number of high-signal lines independent of commit count.",
+      "expectations": [
+        "Keeps one line for the surviving `SendAsync` capability in its final form",
+        "Omits the temporary `LegacyMode` work because it does not survive into `HEAD`",
+        "Does not emit a breaking-removal claim for `WidgetClient.Send()` because it was restored unchanged",
+        "Produces a small number of high-signal lines independent of commit count",
+        "Does not emit one line per fixup or implementation swap"
       ]
     }
   ]

@@ -17,22 +17,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Updated the root skill catalogue, install bundle, installation examples, and rationale documentation for `dotnet-test`.
 
-## [0.8.1] - 2026-08-01
+## [0.8.2] - 2026-08-07
 
-This is a minor release focused on tightening `agent-smith` skill guidance for clearer communication and parallelism, adding deterministic validators for skill-template compliance, and refining `git-visual-commits` with improved single-category quality gates and clearer auto-approval triggering semantics.
+This is a patch release focused on skill refinement and documentation hardening. The release significantly expands `git-keep-a-changelog` with step-by-step workflow improvements, strengthens `git-nuget-release-notes` and `git-visual-squash-summary` skills, deprecates `skill-creator-agnostic` in favor of the upstream Anthropic `skill-creator`, enhances skill validation tooling, and improves repository guidance documentation in `AGENTS.md` and `README.md`.
 
 ### Added
 
-- `ValidateSkillTemplates` coverage in skill-template validator recognizing and validating `agent-smith` and `git-visual-commits` structural requirements,
-- Enhanced validation tooling in `scripts/validate-skill-templates.ps1` for skill contract enforcement.
+- Comprehensive step-by-step workflow sections in `git-keep-a-changelog` covering release-scope resolution, changelog-target determination, pending-worktree-change confirmation gates, cumulative-result inspection, release classification, content curation, and careful changelog editing,
+- Deterministic reduction model in `git-keep-a-changelog` for semantic-delta analysis using cumulative manifests and net diffs before commit-body interpretation, with detailed reconciliation rules to avoid duplicate or conflicting changelog entries,
+- Release highlight contract in `git-keep-a-changelog` requiring every concrete release entry to open with a human-written paragraph that explicitly classifies the release as `major`, `minor`, or `patch`, with optional warning callouts for migration risk,
+- Mandatory checkpoint enforcement in `git-keep-a-changelog` including release-isolation verification, base-history-bleed detection, release-highlight presence, and bullet-punctuation consistency before completing edits,
+- Enhanced `git-keep-a-changelog` good and bad output characteristics sections documenting silent-boundary inclusion as a critical failure mode, proper use of `history_range` and `diff_range`, comprehensive commit-body reading, and complete changelog maintenance,
+- Expanded `git-keep-a-changelog` user-intent vs. gates guidance clarifying that yolo/auto mode bypasses the Step 3 confirmation gate but never widens committed history or changes Git range inclusivity,
+- New eval coverage for `git-keep-a-changelog` including deterministic reduction model validation, reconciliation rule verification, manifest-diff prioritization, pending-change handling, and step-by-step workflow validation,
+- Enhanced `git-nuget-release-notes` skill with improved guidance on per-package release notes generation from git history and manifest deltas,
+- Expanded `git-nuget-release-notes` eval coverage documenting package discovery, release version resolution, cumulative-history preservation, and per-assembly changelog generation patterns,
+- Enhanced `git-visual-squash-summary` skill documentation with improved commit-language reference compliance and semantic-grouping guidance,
+- Expanded `git-visual-squash-summary` eval coverage documenting author-neutral scope, base-branch resolution, commit-grouping validation, and curated-summary quality standards,
+- Enhanced `scripts/validate-skill-templates.ps1` with improved skill content validation, SKILL.md structure verification, and asset consistency checking,
+- Deprecation notice for `skill-creator-agnostic` with clear redirect to Anthropic's `skill-creator` and repository-specific `AGENTS.md` guidance.
 
 ### Changed
 
-- Refactored `agent-smith` SKILL.md guidance for conciseness, parallelism, and clearer presentation of engineering-discipline workflows,
-- Restructured `agent-smith` skill-authoring reference with consolidated Anthropic skill-authoring best practices, three-level progressive disclosure guidance, and improved field definitions,
-- Refined `git-visual-commits` single-category quality gate documentation with explicit audit workflow and per-file rationale checks,
-- Clarified `git-visual-commits` auto-approval triggering semantics distinguishing between auto-approval modifiers (`yolo`/`auto`) within explicit commit requests versus standalone non-commit invocations,
-- Updated README with refined `agent-smith` description and enhanced `git-visual-commits` quality-gate documentation.
+- Refactored `git-keep-a-changelog` SKILL.md with new mandatory workflow sections (Steps 1–8) replacing implicit procedures with explicit, checkpointed guidance for all changelog-generation paths,
+- Enhanced `git-keep-a-changelog` yolo/auto mode documentation to clarify that full autonomy applies only to pending-worktree decisions, never to committed-history scope or range inclusivity,
+- Restructured `git-keep-a-changelog` non-negotiable rules to emphasize deterministic scope resolution, git-history authority, author-agnostic scope by default, and mandatory release highlights,
+- Updated `git-keep-a-changelog` Step 3 confirmation-gate guidance to clarify plain-text fallback paths when native structured input is unavailable, with mandatory `Yes / No / Custom` meaning preserved across both paths,
+- Expanded `git-keep-a-changelog` Step 3b release-isolation verification to require explicit base-history-bleed detection and boundary-commit validation before proceeding,
+- Reorganized `git-keep-a-changelog` Step 4 into explicit sub-steps (4a–4f) with clear sequencing: base-commit inspection, manifest detection, cumulative manifest-diff inspection, approved pending-change inspection, surviving-outcome determination, and chronological commit-body reading,
+- Enhanced `git-keep-a-changelog` reconciliation rules with detailed examples showing how churn elimination and surviving-outcome classification prevent duplicate changelog entries,
+- Updated README.md descriptions for `git-keep-a-changelog`, `git-nuget-release-notes`, and `git-visual-squash-summary` to reflect enhanced skill guidance and workflow improvements,
+- Simplified `skill-creator-agnostic` SKILL.md to a deprecation shim with only redirect guidance, removing all deprecated workflow documentation,
+- Updated AGENTS.md with explicit deprecation notice for `skill-creator-agnostic` and clear directive to use Anthropic's `skill-creator` with repository `AGENTS.md` rules,
+- Enhanced AGENTS.md third-party-skills guidance to clarify that companion overlays around third-party skills must not be created; instead, document repo-specific behavior in `AGENTS.md` itself.
+
+### Deprecated
+
+- `skill-creator-agnostic` is now explicitly deprecated, no longer maintained, and retained only for backward compatibility until **1.0.0**; new skill creation, modification, and benchmarking should use Anthropic's `skill-creator` directly together with the repository rules in `AGENTS.md`.
+
+## [0.8.1] - 2026-08-01
+
+This is a patch release focused on agent-smith refinement, skill-validator hardening, and improved git-visual-commits quality gating. The release refactors agent-smith guidance for conciseness and parallelism, introduces skill-template validators to the repository, hardens the git-visual-commits single-category quality gate, and clarifies auto-approval triggering behavior with new eval coverage.
+
+### Added
+
+- Skill template validators in `scripts/validate-skill-templates.ps1` that check skill directory structure, SKILL.md frontmatter, description completeness, FORMS.md usage patterns, eval coverage, and cross-reference consistency,
+- Deterministic skill content validation including presence of required `name` and `description` fields, YAML frontmatter correctness, file-extension consistency, and description character-count verification,
+- New `skills/agent-smith/references/skill-authoring.md` reference document providing comprehensive skill-creation guidance covering real-task grounding, repository inspection, parallelism mapping, sequential-constraint identification, script-language selection with .NET-first defaults, evaluation workflow, and required authoring-feedback elements,
+- Eval cases documenting skill validation behavior, template consistency checking, and edge-case handling across repo-managed skills,
+- Enhanced eval coverage for `agent-smith` and `git-visual-commits` including new single-category quality-gate scenarios, auto-approval edge cases, and subject-validation lock verification.
+
+### Changed
+
+- Refactored `agent-smith` SKILL.md with improved guidance on conciseness, parallelism identification, task-graph mapping, and sequential-vs-concurrent constraint analysis,
+- Enhanced `agent-smith` section organization for clearer progressive disclosure of domain-specific guidance across engineering disciplines,
+- Refined `git-visual-commits` SKILL.md with improved single-category quality gate documentation, clarifying when multi-file changes collapse to one semantic category and when the gate requires full-context review,
+- Enhanced `git-visual-commits` auto-approval triggering documentation to explicitly document yolo/auto mode and when auto-approval bypasses confirmation steps,
+- Updated README.md with improved descriptions for `agent-smith` and `git-visual-commits` highlighting new skill-validation capabilities and quality-gate refinements.
 
 ## [0.8.0] - 2026-07-18
 
@@ -523,8 +564,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.1...HEAD
-[0.8.1]: https://github.com/codebeltnet/agentic/compare/v0.8.0...v0.8.1
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.0...HEAD
 [0.8.0]: https://github.com/codebeltnet/agentic/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/codebeltnet/agentic/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/codebeltnet/agentic/compare/v0.7.3...v0.7.4

@@ -58,6 +58,42 @@
         "Does not invent unsupported package references",
         "Keeps the output grounded in git history plus actual project/package metadata"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "Create a deterministic temp .NET git repo outside the current repository under `$env:TEMP`, then use git-nuget-release-notes there. Start from a base commit with a packable `src/Acme.Core/Acme.Core.csproj`, `.nuget/Acme.Core/PackageReleaseNotes.txt`, and `Directory.Packages.props`. On branch `v2.1.0/net-result-packages`, add a `FeatureFoo` API and later remove it; add a `FeatureBar` API and revise it twice so it survives; change `Newtonsoft.Json` from `13.0.3` to `14.0.0` and back to `13.0.3`; change `Serilog` from `3.0.0` to `4.0.0` and then to `4.1.0`. Update the package release notes and stop after the edit.",
+      "expected_output": "The package notes omit `FeatureFoo` and the reverted `Newtonsoft.Json` churn, record one surviving `Serilog` upgrade to `4.1.0`, and describe `FeatureBar` once in its final form.",
+      "expectations": [
+        "Omits `FeatureFoo` because it does not survive into the package's final state",
+        "Omits the reverted `Newtonsoft.Json` change because the final version matches the base state",
+        "Records one surviving dependency upgrade from `Serilog 3.0.0` to `4.1.0`",
+        "Describes `FeatureBar` once in its final surviving form instead of scattering its lifecycle across multiple sections",
+        "Updates `.nuget/Acme.Core/PackageReleaseNotes.txt` directly and stops after the edit"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Create a deterministic temp .NET git repo outside the current repository under `$env:TEMP`, then use git-nuget-release-notes there. Start from a base commit with a packable `src/Acme.Core/Acme.Core.csproj`, `.nuget/Acme.Core/PackageReleaseNotes.txt`, `src/Acme.Core/WidgetClient.cs`, and `src/Acme.Core/LegacyFormatter.cs`. On branch `v3.0.0/api-reconcile`, remove `WidgetClient.LegacySend()` and later restore it unchanged; move `WidgetClient` into a new namespace/path and modify one surviving method; delete `LegacyFormatter.cs` and recreate it identically; delete `ResponseNormalizer.cs` and recreate it with different behavior. Update the package release notes and stop after the edit.",
+      "expected_output": "The package notes avoid a false breaking-change claim for the restored API, omit the identically restored file churn, and describe the surviving moved-and-changed API and recreated-differently behavior as coherent final outcomes instead of naive add/remove duplication.",
+      "expectations": [
+        "Does not claim a breaking API removal for `WidgetClient.LegacySend()` because it was restored unchanged",
+        "Omits the delete-and-identically-restore `LegacyFormatter.cs` churn because it matches the base state again",
+        "Treats the moved `WidgetClient` surface as one coherent surviving rename/move/change outcome rather than Added plus Removed duplication",
+        "Treats the differently recreated `ResponseNormalizer` behavior as one surviving modification or replacement outcome instead of naive Added plus Removed prose",
+        "Keeps the release notes grounded in the package's final delta"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Create a deterministic temp .NET git repo outside the current repository under `$env:TEMP`, then use git-nuget-release-notes there. Start from a base commit with a packable `src/Acme.Core/Acme.Core.csproj`, `.nuget/Acme.Core/PackageReleaseNotes.txt`, and package metadata. On branch `v4.0.0/noisy-alm`, temporarily add `net9.0` and later remove it again, add `net10.0` so it survives, temporarily change package icon metadata and restore it, finally update `RepositoryUrl`, and finish with a commit body that claims another dependency upgrade the final diff does not support. Update the package release notes and stop after the edit.",
+      "expected_output": "The package notes keep only the surviving TFM and metadata changes, omit the reverted ALM churn, and do not echo the contradicted dependency claim from history.",
+      "expectations": [
+        "Records the surviving `net10.0` availability change while omitting the reverted temporary `net9.0` churn",
+        "Omits the temporary package icon metadata change because it was restored to the base state",
+        "Keeps the surviving `RepositoryUrl` metadata update instead of replaying every intermediate packaging edit",
+        "Does not report a dependency change that appears only in the commit body when the final diff contradicts it",
+        "Uses history as supporting context only after the final package delta is clear"
+      ]
     }
   ]
 }
