@@ -72,7 +72,6 @@ npx skills add https://github.com/codebeltnet/agentic --skill git-keep-a-changel
 npx skills add https://github.com/codebeltnet/agentic --skill git-nuget-release-notes
 npx skills add https://github.com/codebeltnet/agentic --skill git-nuget-readme
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
-npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agnostic
 npx skills add https://github.com/codebeltnet/agentic --skill markdown-illustrator
 npx skills add https://github.com/codebeltnet/agentic --skill git-repo-digest
 npx skills add https://github.com/codebeltnet/agentic --skill trunk-first-repo
@@ -86,6 +85,8 @@ npx skills add https://github.com/codebeltnet/agentic --skill dotnet-benchmark
 npx skills add https://github.com/codebeltnet/agentic --skill agent-smith
 # npx skills add https://github.com/codebeltnet/agentic --skill another-skill
 ```
+
+`skill-creator-agnostic` is intentionally omitted from the recommended always-on install list. It is **⚠️ Deprecated**, no longer maintained, and scheduled for removal in **1.0.0**; use Anthropic `skill-creator` plus this repository's `AGENTS.md` instead.
 
 ### Scoping options
 
@@ -104,11 +105,11 @@ npx skills add https://github.com/codebeltnet/agentic --skill agent-smith
 | Skill | Description |
 |-------|-------------|
 | [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with deterministically validated emoji-first subjects (gitmoji-first), optional conventional prefixes only on explicit request, and three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit` — agent analyzes authorship, human picks attribution). Its first critical rule requires a complete SKILL.md read through EOF, then a bundled PowerShell gate rejects unapproved emoji, anything other than one separator space, uppercase description beginnings, and subjects over 70 characters before plan display and immediately before Git. Multi-file plans that initially collapse to one category also require a visible full-context quality gate; one-file changes keep the fast path. Includes commit body by default (opt out with `no-body`), semantic intent splitting, clarification-before-correction safety, and auto-approval mode (`yolo` / `auto`) that cannot bypass validation. Stack-agnostic. |
-| [git-keep-a-changelog](skills/git-keep-a-changelog/SKILL.md) | Git-aware Keep a Changelog companion that creates or updates `CHANGELOG.md` from the current branch by default. A bundled deterministic resolver separates branch-unique commit history from merge-base-to-`HEAD` net diffs, excludes the previous-release or comparison boundary for both concrete releases and `[Unreleased]`, and fails if commits already reachable from the comparison branch bleed into the selected scope. It inspects dependency and version manifests before commit bodies, treats the selected branch or explicit range as author-agnostic so all PR contributors remain included, infers a release heading from a branch version hint like `v0.3.0/...`, asks a mandatory `Yes / No / Custom` question before including pending worktree changes in ordinary concrete-release drafts, and keeps yolo/auto limited to automatic staged, unstaged, and untracked inclusion without widening committed history. It also creates missing changelogs, writes required SemVer-aware highlights, maintains compare-link footers, preserves natural prose wrapping, and curates standard Keep a Changelog sections instead of dumping raw commit logs. |
-| [git-nuget-release-notes](skills/git-nuget-release-notes/SKILL.md) | Git-aware NuGet release-notes companion for .NET repos that keep cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Discovers packable `src/` projects, resolves concrete package version and availability, creates missing files when needed, and writes per-package `ALM` / `Breaking Changes` / `New Features` / `Improvements` / `Bug Fixes` style notes from full commit context plus the net diff instead of dumping commit subjects. |
+| [git-keep-a-changelog](skills/git-keep-a-changelog/SKILL.md) | Git-aware Keep a Changelog companion that creates or updates `CHANGELOG.md` from the current branch by default. A bundled deterministic resolver separates branch-unique commit history from merge-base-to-`HEAD` net diffs, excludes the previous-release or comparison boundary for both concrete releases and `[Unreleased]`, and fails if commits already reachable from the comparison branch bleed into the selected scope. It reduces the selected range to surviving base-to-`HEAD` outcomes before section classification, inspects dependency and version manifests before commit bodies, treats the selected branch or explicit range as author-agnostic so all PR contributors remain included, infers a release heading from a branch version hint like `v0.3.0/...`, asks a mandatory `Yes / No / Custom` question before including pending worktree changes in ordinary concrete-release drafts, and keeps yolo/auto limited to automatic staged, unstaged, and untracked inclusion without widening committed history. It also creates missing changelogs, writes required SemVer-aware highlights, maintains compare-link footers, preserves natural prose wrapping, and curates standard Keep a Changelog sections instead of dumping raw commit logs. |
+| [git-nuget-release-notes](skills/git-nuget-release-notes/SKILL.md) | Git-aware NuGet release-notes companion for .NET repos that keep cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Discovers packable `src/` projects, resolves concrete package version and availability, creates missing files when needed, reduces each package to its surviving base-to-`HEAD` delta before classifying history, and writes per-package `ALM` / `Breaking Changes` / `New Features` / `Improvements` / `Bug Fixes` style notes from final package state plus supporting commit context instead of dumping commit subjects. |
 | [git-nuget-readme](skills/git-nuget-readme/SKILL.md) | Git-aware NuGet README companion for .NET repos that advertise a package from `src/`. Resolves the real packable project the README should sell, combines git history with actual package metadata, source capabilities, and relevant tests when feasible, preserves honest badge/docs/contributing sections, and writes a forthcoming, adoption-friendly `README.md` with repo-derived branding, clear value, install, framework-support, and quick-start guidance. |
-| [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns the full current feature branch into a curated set of compact lowercase-start summary lines for PR or squash-and-merge contexts by default, comparing against the repository base branch rather than a same-named tracking remote, including commits from all authors unless explicitly narrowed, preserving technical identifiers, merging overlap, dropping low-signal noise, retaining dependency and version-pin changes as hard-rule semantic groups before net-effect collapsing, highlighting distinct meaningful efforts, and avoiding changelog-style wording, unsupported claims, yolo prompts, needless commit-range questions, or commit-selection UI for ordinary branch-level squash requests. |
-| [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | Runner-agnostic overlay for Anthropic `skill-creator`. Adds repo and environment guardrails for skill authoring and benchmarking: temp-workspace isolation, `iteration-N/eval-name/{config}/run-N/` benchmark layout, valid `grading.json` summaries, generated `benchmark.json`, honest `MEASURED` vs `SIMULATED` labeling, and sync/README discipline for repo-managed skills. |
+| [git-visual-squash-summary](skills/git-visual-squash-summary/SKILL.md) | Non-mutating grouped-summary companion to `git-visual-commits`. Turns the full current feature branch into a curated set of compact lowercase-start summary lines for PR or squash-and-merge contexts by default, comparing against the repository base branch rather than a same-named tracking remote, including commits from all authors unless explicitly narrowed, reducing the cumulative base-to-`HEAD` delta first so reverted churn disappears, preserving technical identifiers, merging overlap, keeping surviving dependency/version changes separate from build/refactor work when the final diff still shows them, and avoiding changelog-style wording, unsupported claims, yolo prompts, needless commit-range questions, or commit-selection UI for ordinary branch-level squash requests. |
+| [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | **⚠️ Deprecated** — no longer maintained and retained only for backward compatibility until **1.0.0**. Do not use it for new skill-authoring work; use Anthropic `skill-creator` together with this repository's `AGENTS.md`. |
 | [markdown-illustrator](skills/markdown-illustrator/SKILL.md) | Reads a markdown file and answers directly in chat with one document-wide Visual Brief plus one compiled prompt. Infers a compact visual strategy by default, keeps follow-up questions near zero, and only branches when the user explicitly asks for added specificity. |
 | [git-repo-digest](skills/git-repo-digest/SKILL.md) | Turns any full repository URL into a deterministic digest workspace using the bundled .NET file-based runner `scripts/digest.cs`. Requires explicit `--repo-url`, resolves omitted output paths to `<active-workspace>/.bot/digests` and passes that as `--output-root`, maps multiple positional URLs the same way for slash commands, bare pasted URLs, and natural-language requests by treating the first URL as the digest repo and every later URL as repeated `--external-repo-url`, always writes into `{output-root}/{repo-id}/{yyyyMMdd-HHmmssZ}`, accepts repeated curated public consumer repos, derives `{repo-id}`, fixes `result/`, performs shallow git clones, packs local tracked files with the bundled C# packer using `git ls-files`, separates XML evidence into `source.xml`, `tests.xml`, `projects.xml`, editorial `readmes.xml`, and scenario-only `external-usage.xml`, writes package and conceptual overview prompts under `prompts/`, emits public API summaries, engineering signals, evidence indexes, ordered XML chunks, referenced-package evidence maps for aggregate examples, and manifest-backed frontmatter hints, treats previous digest prose as contamination during fresh generation, then guides the agent to fully read the current phase's required evidence before writing package digests and a concept-led `result/Index.md` with YAML frontmatter containing Product-derived overview title metadata, validated documentation URLs resolved from PackageProjectUrl, documentation-host-filtered exact `.nuget/<PackageName>/README.md` documentation links including emoji-prefixed Documentation headings and "More documentation..." blocks, DocFX `metadata[].dest` API paths, and source namespace page candidates from `src/<PackageName>/**/*.cs`, target frameworks, package/library counts, external links, package-family links, and context glyphs, and validates authored result examples with `--validate-results` as a deterministic API-shape, Codebelt.Extensions.Xunit shape, PascalCase `MethodName_Scenario_ExpectedBehavior` test-method naming, Basic usage quality, and optimized NuGet-backed executable test gate with bounded parallelism. |
 | [dotnet-new-lib-slnx](skills/dotnet-new-lib-slnx/SKILL.md) | Scaffold a new .NET NuGet library solution following codebeltnet engineering conventions. Dynamic defaults for TFM/repository metadata, latest-stable NuGet package resolution, tuning projects plus a tooling-based benchmark runner, TFM-aware test environments, strong-name signing, NuGet packaging, DocFX documentation, CI/CD pipeline, and code quality tooling. |
@@ -155,11 +156,13 @@ npx skills add https://github.com/codebeltnet/agentic --skill git-nuget-readme
 npx skills add https://github.com/codebeltnet/agentic --skill git-visual-squash-summary
 ```
 
-`skill-creator-agnostic`
+`skill-creator-agnostic` **⚠️ Deprecated — legacy compatibility only**
 
 ```bash
 npx skills add https://github.com/codebeltnet/agentic --skill skill-creator-agnostic
 ```
+
+No longer maintained. Scheduled for removal in **1.0.0**. Do not install it for new work; use Anthropic `skill-creator` and apply the repository rules in `AGENTS.md`.
 
 `markdown-illustrator`
 
@@ -279,7 +282,8 @@ Sometimes the history is already written and the only thing you need is the fina
 - **No yolo prompt** — the skill is read-only, so it acts directly without asking for auto-approval language from mutating workflows
 - **No commit-picker UX** — ordinary branch-level squash requests do not become commit-selection questions or widgets; the skill resolves the branch scope and writes the summary
 - **Distinct efforts stay distinct** — preserves meaningful change groups instead of forcing one umbrella line
-- **Dependency updates stay explicit** — package/version baseline changes and version pins are hard-rule retained groups, even when later commits revert or adjust them, and never get absorbed into generic build-system or refactor wording
+- **Final-state first** — computes the cumulative base-to-`HEAD` delta before reading chronology, so reverted experiments and temporary implementations disappear
+- **Surviving dependency truth** — package/version changes stay explicit when they survive in the final diff and disappear entirely when they return to the base value
 - **Intent over chronology** — collapses noisy commit stacks into the retained grouped effort
 - **Low-signal noise gets dropped** — typo-only and trivial fixup churn do not deserve their own lines
 - **Late release-prep commits stay in scope** — changelog, version-bump, and release-finalization follow-ups are treated as part of the branch by default and then merged or dropped during semantic collapsing
@@ -295,6 +299,7 @@ Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too
 
 - **Keep a Changelog first** — writes `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security` sections in the expected style
 - **Full-commit context** — reads complete commit messages and the net diff before writing
+- **History is evidence, result is truth** — reduces the selected range to surviving base-to-`HEAD` outcomes before section classification, so reverted work disappears and one surviving capability is described once
 - **Deterministic release isolation** — resolves the real comparison branch, excludes its merge boundary, and verifies that no commit already on the base branch can bleed into the new release
 - **PR-complete history** — keeps every branch-unique commit from every contributor while avoiding a same-name feature tracking ref as the comparison base
 - **Cumulative dependency coverage** — when version manifests changed across the release range, diffs them from base to `HEAD` so the changelog reflects the surviving package/version story instead of only per-commit fragments
@@ -318,6 +323,8 @@ Repo-wide changelogs are useful, but NuGet packages often need package-scoped re
 
 - **Per-package, not repo-wide** — writes one truthful release block per publishable assembly/package
 - **Concrete package metadata** — resolves `Version:` and `Availability:` from the branch/project instead of inventing placeholders
+- **Package delta first** — resolves public APIs, dependency versions, TFMs, and package metadata from base to `HEAD` before using history as supporting context
+- **Reverted churn disappears** — temporary upgrades, removed-then-restored APIs, and other cancelled work do not reach the final release block
 - **Current codebelt format** — follows the established `ALM`, `Breaking Changes`, `New Features`, `Improvements`, `Bug Fixes`, and optional `References` blueprint
 - **Missing-file aware** — can create `.nuget/{ProjectName}/PackageReleaseNotes.txt` when a packable project should be represented
 - **History-aware** — preserves cumulative newest-first package history instead of overwriting older entries
@@ -337,20 +344,15 @@ Choosing a NuGet package often happens fast: a developer lands on the README, sc
 - **Preserve the good parts** — keeps accurate badges, docs links, contributing guidance, and license sections when they are already working
 - **Not a changelog in disguise** — uses git history for context but writes adoption-oriented README copy instead of replaying commit subjects
 
-### Why skill-creator-agnostic?
+### Why skill-creator-agnostic is deprecated
 
-Anthropic's `skill-creator` is an excellent base workflow, but the day-to-day friction usually comes from the environment around it: different runners, Windows/PowerShell encoding traps, benchmark layout mistakes, and the temptation to present a synthetic pipeline check as if it were a measured model benchmark.
+`skill-creator-agnostic` is now a legacy compatibility artifact, not an active skill-authoring workflow. It is **⚠️ Deprecated**, no longer maintained, and scheduled for removal in **1.0.0**.
 
-**skill-creator-agnostic** keeps the upstream workflow intact and adds the parts teams actually trip over when they want the same skill to hold up across Codex, GitHub Copilot, Opus, and similar agents.
+For new skill creation, modification, and benchmarking:
 
-- **Overlay, not fork** — treats Anthropic `skill-creator` as the base and layers repo/runtime guardrails on top
-- **Runner-agnostic by design** — chooses from available execution capability instead of assuming one vendor CLI
-- **Benchmark-contract aware** — enforces `iteration-N/eval-name/{config}/run-N/`, valid `grading.json.summary`, and generated `benchmark.json`
-- **Tool-path explicit** — points authors to the installed Anthropic `skill-creator` copy that provides `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`
-- **Honest benchmark modes** — keeps `MEASURED` and `SIMULATED` runs clearly separated so pipeline validation never masquerades as model quality
-- **PowerShell-safe** — calls out UTF-8 no BOM, `PYTHONUTF8`, stable counting, provider-path normalization, prompt-passing pitfalls, and other Windows-specific benchmark traps
-- **Codex-friendly benchmarking** — treats Codex CLI as a valid real runner when present, preserves `MEASURED` parity honestly, uses raw event output as fallback evidence when convenience files are missing, and prefers parallel paired runs when the runner supports sub-agents
-- **Repo-managed discipline** — keeps per-skill evals, local-install sync, and README updates in scope for first-party skills
+- Use Anthropic `skill-creator` directly
+- Apply this repository's skill-authoring, eval, sync, and validation rules from `AGENTS.md`
+- Do not treat `skill-creator-agnostic` as a fallback, overlay, or parallel implementation
 
 ### Why git-repo-digest?
 
