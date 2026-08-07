@@ -1,7 +1,7 @@
 ---
 name: git-visual-squash-summary
 description: >
-  Turn many commits into a curated grouped squash summary compatible with the opinionated wording style of git-visual-commits. Use when the user asks to squash a branch into a concise summary, write a squash-and-merge summary, summarize this branch, summarize a commit range or PR as grouped lines, clean up noisy commit history, or asks for a curated summary without committing. For normal squash-and-merge requests, default to the full current feature branch from merge-base to HEAD against the base branch instead of a same-named tracking remote, include commits from all authors unless the user explicitly narrows by author, and do not ask for yolo because the skill is read-only. Returns grouped lines only, preserves identifiers, merges overlap, drops noise, and avoids changelog wording.
+  Turn many commits into a curated grouped squash summary compatible with the opinionated wording style of git-visual-commits. Use when the user asks to squash a branch into a concise summary, write a squash-and-merge summary, summarize this branch, summarize a commit range or PR as grouped lines, clean up noisy commit history, or asks for a curated summary without committing. For normal squash-and-merge requests, default to the full current feature branch from merge-base to HEAD against the base branch instead of a same-named tracking remote, include commits from all authors unless the user explicitly narrows by author, and do not ask for yolo because the skill is read-only. Returns grouped lines only, resolves the cumulative base-to-HEAD diff first so reverted churn disappears, preserves identifiers, merges overlap, drops noise, and avoids changelog wording.
 ---
 
 # Git Visual Squash Summary
@@ -14,6 +14,39 @@ This skill is non-mutating: it inspects history and diffs, then returns grouped 
 
 This skill has one job: produce a ready-to-paste squash-and-merge summary for the full current feature branch unless the user explicitly asked for a narrower range.
 
+This skill answers one question: **What would this branch effectively do if it were squashed into one commit now?**
+
+## Deterministic Reduction Model
+
+Use this model for every resolved scope:
+
+```text
+Result = semantic_delta(Base, HEAD)
+History = provenance used to explain Result
+```
+
+History is evidence; the resulting state is truth.
+
+Reduce first. Interpret second. Summarize last.
+
+```text
+resolve scope
+    ↓
+compute cumulative delta
+    ↓
+eliminate reverted / cancelled / superseded work
+    ↓
+identify surviving semantic outcomes
+    ↓
+consult history for intent and terminology
+    ↓
+group related surviving outcomes
+    ↓
+render grouped summary lines
+```
+
+Do not classify commit 1, then commit 2, then commit 3 and merge duplicate prose afterward. That approach preserves contradictory intermediate states.
+
 ## Non-Negotiable Rules
 
 - Never stage, commit, amend, rebase, or otherwise mutate git state.
@@ -21,9 +54,12 @@ This skill has one job: produce a ready-to-paste squash-and-merge summary for th
 - Keep `references/commit-language.md` byte-for-byte aligned with the `git-visual-commits` copy; the validator and CI both enforce that sync contract.
 - Preserve technical identifiers exactly where possible.
 - Group by intent, not chronology.
+- Classify only changes that survive between the resolved base and `HEAD`.
 - Retain only distinct high-signal change groups.
 - Merge repetition and overlapping commits into their parent group.
 - Drop low-signal noise such as typo-only, fixup-only, and trivial follow-up commits unless they materially change a retained group.
+- Dependencies and version pins matter only when they survive into the final diff.
+- Do not retain reverted experiments, temporary dependency upgrades, or removed late-stage implementations.
 - Prefer strong concrete verbs and concise phrasing.
 - Favor readable GitHub and terminal output over cleverness.
 - Start the description after the emoji with a lowercase word unless the first word is a case-sensitive technical identifier.
@@ -74,41 +110,50 @@ git merge-base HEAD main
 git merge-base HEAD master
 ```
 
-### Step 2: Inspect the actual changes
+### Step 2: Inspect the cumulative branch delta first
 
-Do not summarize from commit subjects alone when the range is noisy or long. Inspect both history and net effect so the final message reflects what actually changed.
+Do not summarize from commit subjects alone when the range is noisy or long. Inspect the cumulative base-to-`HEAD` delta first so the final message reflects what actually survives.
 
 Helpful read-only commands:
 
 ```bash
+git diff --name-status -M -C <base>..HEAD
+git diff --stat <base>..HEAD
+git diff <base>..HEAD
 git log --reverse --oneline <range>
 git log --reverse --stat --format=medium <range>
 git log --reverse --format="%h %an <%ae> %s" <range>
-git diff --stat <base>..HEAD
-git diff <base>..HEAD
 ```
 
 ### Step 3: Collapse to semantic intent
 
 Before drafting the summary, reduce the range into the smallest truthful set of retained groups:
 
-- First ask: "Does this group contain dependency or version changes?" If yes, preserve that work as its own retained group before running any collapsing logic. This is a hard gate.
-- Collapse repeated fixups into the group they support.
-- Merge overlapping commits into the clearest final intent.
-- Prefer the net effect over the path taken to get there for refactors, documentation, and build-system changes only. This rule does not apply to dependencies.
-- Drop typo-only, whitespace-only, and other low-signal cleanup unless it materially changes a retained group.
-- Treat dependency or version baseline changes as their own semantic intent. This is a hard rule. Do not evaluate whether dependencies were later reverted or adjusted; preserve them as a distinct group in the summary.
-- Do not absorb package version updates into a generic build-system, configuration, or refactor line just because they landed in the same commit.
-- When the diff mixes shared dependency manifests or version pins with build-system metadata or project-structure refactors, keep those as separate retained groups.
+- Start from the cumulative base-to-`HEAD` diff, not from commit labels.
+- For every relevant file, dependency, version pin, config value, API, or behavior, decide what survives at `HEAD`.
+- Eliminate exact reversions, temporary files/features, dependency churn that returned to the base value, and experiments abandoned before `HEAD`.
+- Merge repeated fixes, redesigns, and follow-ups into the one surviving outcome they affected.
+- If a feature or capability was absent at base and present at `HEAD`, describe it once in its final form. Intermediate fixes do not create extra lines.
+- If a feature was added and later removed, omit it.
+- If existing behavior changed and then reverted exactly, omit it.
+- If a file or API was deleted and restored identically, omit it.
+- If a file or API was deleted and recreated differently, usually describe one surviving modification or replacement, not naive removed-plus-added prose, unless the evidence clearly shows a different entity.
+- If a path or entity moved or was renamed, describe it as one rename/move outcome when the cumulative diff supports that, not `Added` plus `Removed`.
+- Dependency and version groups are important when they survive. Keep them separate from build-system/config/refactor groups when the final diff still shows a distinct surviving version change.
+- A dependency or version that returns to the base value does not deserve a retained line.
+- Do not absorb surviving package version updates into a generic build-system, configuration, or refactor line just because they landed in the same commit.
+- When the diff mixes shared dependency manifests or version pins with build-system metadata or project-structure refactors, keep those as separate retained groups when both survive in the final diff.
 - Keep documentation-only work separate in your reasoning, but include it only when it represents a meaningful unique change.
 - Treat late changelog, version-bump, or release-finalization commits as part of the branch by default, then decide here whether they deserve a retained summary line or should be merged into a stronger parent group.
 - Highlight distinct meaningful efforts instead of forcing one dominant umbrella theme.
+- Use chronological history after this reduction to confirm rename intent, extract accurate terminology, understand bug context, and explain why the surviving outcome matters. Never let an intermediate commit override contradictory final-state evidence.
 
-Collapsing checklist:
+Reduction checklist:
 
-- Do not collapse if the group contains dependencies.
-- Do not collapse if the group contains version pins.
-- Only collapse pure refactors, docs, or config changes with no dependency component.
+- Does this exact change survive from base to `HEAD`?
+- If several commits touched the same surviving outcome, can one line describe its final form truthfully?
+- Are dependency/version changes still distinct in the final diff from build/config/refactor work?
+- Does any candidate line rely on a commit message the final diff contradicts? If yes, trust the final diff.
 
 Ask yourself: "If I had to explain the real work in 2-5 compact lines, what are the distinct changes that mattered?"
 
@@ -156,7 +201,7 @@ Formatting rules:
   - 🐛 bug is for fixes to broken behavior
   - ✅ check mark is for new test coverage
   - If an emoji doesn't fit the actual change, **swap it before presenting the summary**. Do not let the user catch emoji mistakes.
-- If a retained line is primarily dependency or version-alignment work, prefer the dependency emoji from the shared reference such as `⬆️`, `⬇️`, `➕`, `➖`, or `📌` rather than a generic config or refactor emoji.
+- If a retained line is primarily dependency or version-alignment work that still survives in the final diff, prefer the dependency emoji from the shared reference such as `⬆️`, `⬇️`, `➕`, `➖`, or `📌` rather than a generic config or refactor emoji.
 - If a retained line is mainly changelog, community-health, or release-status communication, prefer `💬` from the shared reference rather than a generic docs emoji.
 - Do not add bullets, numbering, a body, rationale paragraph, or chronology recap.
 - Do not append weak glue like "with", "plus", or "and" just to force several top-level intents into one line.
@@ -170,10 +215,13 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 ## Good Output Characteristics
 
 - Reads like a curated grouped summary, not a stitched list of commits.
+- Answers "what would this branch do if squashed now?" rather than "what happened along the way?"
 - Reads like a curated, human-written condensed history.
 - Uses the same emoji-first language as `git-visual-commits`, with prefixes only on explicit request.
 - Starts descriptions lowercase after the emoji unless preserving a leading technical identifier requires original casing.
 - Keeps distinct meaningful efforts on separate lines.
+- Describes only surviving base-to-`HEAD` outcomes; temporary churn disappears.
+- Describes one surviving outcome once, even if many commits touched it.
 - Drops noisy fixups and typo-only churn instead of preserving them.
 - Fits naturally beneath a PR title or in compact GitHub and terminal views.
 - Includes only claims supported by the inspected diff.
@@ -188,14 +236,17 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Changelog-like wording or release-note phrasing.
 - Chronological narration of each commit in order.
 - Dumping raw commit subjects line by line.
+- Preserving reverted dependency or version churn just because it happened in history.
 - Asking the user to choose among commits that are all on the current feature branch when they asked for a squash summary of that branch.
 - Presenting commit-selection widgets or multiple-choice prompts for ordinary branch-level squash requests.
 - Filtering the branch to the current user's or current contributor's commits, or treating "my changes" as the default scope.
 - Collapsing several unique top-level efforts into one stitched sentence.
+- Describing a rename/move or delete-and-recreate outcome as naive `Added` plus `Removed` duplication when one surviving outcome is clearer.
 - Collapsing dependency updates into the same line as build-system configuration or refactor work when the diff shows separate intents.
 - Starting normal descriptions with uppercase verbs such as `Add`, `Update`, `Refresh`, or `Preserve`.
 - Filler such as "misc cleanup", "various improvements", or "updates".
 - Losing or renaming important technical identifiers unnecessarily.
 - Inventing refactors, fixes, or docs changes not supported by the diff.
+- Counting commits instead of surviving outcomes.
 - Adding a title, body, bullets, or numbered outline.
 - Exceeding 72 characters on any output line.
