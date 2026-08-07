@@ -1,7 +1,7 @@
 ---
 name: git-nuget-release-notes
 description: >
-  Create or update per-package NuGet release notes from git history for .NET repositories that store cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Use this skill whenever the user asks for NuGet release notes, `PackageReleaseNotes.txt`, per-assembly or per-package release notes, or wants git commits turned into package release notes instead of a repo-wide changelog. Treat requests like "update PackageReleaseNotes.txt", "write NuGet release notes from git", "summarize this release per assembly", or "create missing package release notes under .nuget" as automatic triggers. The skill discovers packable `src/` projects, resolves concrete release version and availability per package, creates missing files when needed, preserves cumulative newest-first history, and avoids raw commit-log dumps or unsupported claims.
+  Create or update per-package NuGet release notes from git history for .NET repositories that store cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Use this skill whenever the user asks for NuGet release notes, `PackageReleaseNotes.txt`, per-assembly or per-package release notes, or wants git commits turned into package release notes instead of a repo-wide changelog. Treat requests like "update PackageReleaseNotes.txt", "write NuGet release notes from git", "summarize this release per assembly", or "create missing package release notes under .nuget" as automatic triggers. The skill discovers packable `src/` projects, resolves concrete release version and availability per package, creates missing files when needed, preserves cumulative newest-first history, reduces each package to its surviving base-to-HEAD delta before using history as context, and avoids raw commit-log dumps or unsupported claims.
 ---
 
 # Git NuGet Release Notes
@@ -18,6 +18,9 @@ Read `references/package-release-notes-format.md` before writing any release-not
 - Discover packable projects under `src/`; ignore `test/`, `tuning/`, `tooling/`, and projects that are explicitly non-packable.
 - Prefer an existing `.nuget/{ProjectName}/` folder when one already exists for the packable project. If none exists, create `.nuget/<MSBuildProjectName>/PackageReleaseNotes.txt`.
 - For repo-wide requests, every packable `src/` project should end up represented by a corresponding `PackageReleaseNotes.txt` file.
+- Treat the package's base-to-`HEAD` state as truth; chronological history is supporting provenance.
+- Inspect cumulative package, API, manifest, version, and metadata deltas before classifying the package history.
+- Describe only surviving package outcomes. Do not preserve intermediate upgrades, removals, renames, or bug fixes that do not survive into `HEAD`.
 - Read full commit subjects and bodies before writing the package notes.
 - Inspect the net diff too; do not classify a package from commit subjects alone.
 - Use cumulative newest-first history.
@@ -32,6 +35,44 @@ Read `references/package-release-notes-format.md` before writing any release-not
 - Do not dump commit subjects verbatim into the release notes.
 - Do not invent unsupported changes, package references, or availability.
 - Ignore odd historical spacing such as non-breaking spaces in older entries; normalize only the block you are writing unless the user asks for a larger cleanup.
+
+## Deterministic Package Delta Model
+
+When a scope is resolved, use this model for each target package:
+
+```text
+Result = semantic_delta(PackageBase, PackageHEAD)
+History = provenance used to explain Result
+```
+
+History is evidence; the resulting state is truth.
+
+Reduce first. Interpret second. Summarize last.
+
+1. Inspect cumulative manifest, property, version, and metadata deltas that affect the package.
+2. Inspect the cumulative base-to-`HEAD` diff for the package and its shared packaging files.
+3. Determine which package changes actually survive at `HEAD`.
+4. Read chronological commit subjects and bodies as supporting context.
+5. Use history to explain the surviving outcomes, then map them into the package-note sections.
+
+Do not accumulate bullets from individual commits and deduplicate them afterward.
+
+Reconciliation rules:
+
+- Base state and `HEAD` state are identical -> no entry.
+- Dependency, API, metadata, or TFM value that returns to the base state -> no entry.
+- Base absent and `HEAD` present -> one surviving added capability or surface area outcome.
+- Base present and `HEAD` absent -> one surviving removal.
+- Base present and changed `HEAD` state -> one surviving modification, fix, rename, or move derived from the final delta.
+- Equivalent entity/path/name moved or renamed -> one rename/move outcome when the cumulative diff supports it, not add plus remove.
+
+Examples:
+
+- `Newtonsoft.Json 13.0.3 -> 14.0.0 -> 13.0.3` -> no `# ALM` bullet.
+- `Newtonsoft.Json 13.0.3 -> 14.0.0 -> 14.0.2` -> one surviving upgrade from `13.0.3` to `14.0.2`.
+- Public API removed and later restored unchanged -> no `# Breaking Changes` bullet.
+- Feature added, fixed several times, then removed -> no package-note entry for that feature.
+- One capability added, reworked, and still present -> usually one final `ADDED`, `CHANGED`, or `EXTENDED` bullet describing what shipped.
 
 ## Workflow
 
@@ -103,22 +144,25 @@ Examples:
 
 Do not guess availability from memory if the project file or evaluated MSBuild properties can answer it.
 
-### Step 5: Inspect the actual package changes
+### Step 5: Inspect the cumulative package delta first
 
-For each target package, read enough history and diff to understand the real release story for that package.
+For each target package, use this order to understand the real release story.
 
-- Read the full commit bodies for the selected range.
-- Inspect the net diff for the package's project folder plus shared packaging/build files that materially affect that package.
-- Include shared files such as `Directory.Packages.props`, `Directory.Build.props`, `Directory.Build.targets`, and `.nuget/{ProjectName}/` when they affect the package.
-- Prefer the net effect over the implementation path when there are fixups or reversals.
+- Build the package-specific path set: the package project, its source folder, any package-specific `.nuget/{ProjectName}/` files, and shared packaging/build files that materially affect it.
+- Inspect cumulative manifest, property, version, and metadata deltas first. This includes `Directory.Packages.props`, package references in project files, `TargetFramework` / `TargetFrameworks`, package metadata, and other shared packaging files that affect the package.
+- Inspect the cumulative base-to-`HEAD` diff for the package paths.
+- Determine which package changes survive at `HEAD`: public APIs, dependency versions, TFMs, package metadata, types/members, renames/moves, removals, and bug fixes that still exist.
+- Eliminate exact reversions, temporary features, reverted dependency churn, and restored APIs or metadata that match the base state.
+- Read the full commit bodies only after the cumulative delta is clear. Use history to explain the surviving outcomes, confirm rename intent, understand migration context, and choose accurate user-facing terminology. Never let an intermediate commit override contradictory final-state evidence.
 
 Helpful commands:
 
 ```bash
-git log --reverse --format=medium <range> -- <paths>
-git log --reverse --stat --format=medium <range> -- <paths>
+git diff --name-status -M -C <base>..HEAD -- <paths>
 git diff --stat <base>..HEAD -- <paths>
 git diff <base>..HEAD -- <paths>
+git log --reverse --format=medium <range> -- <paths>
+git log --reverse --stat --format=medium <range> -- <paths>
 ```
 
 ### Step 6: Classify the content into the package-note format
@@ -127,14 +171,15 @@ Use the normalized section order from `references/package-release-notes-format.m
 
 Classification guidance:
 
-- `# ALM`: dependency upgrades, TFM support added/removed, packaging metadata changes, or other release-engineering/package-management changes.
-- `# Breaking Changes`: incompatible renames, removals, moved APIs, changed contracts, or behavior that requires consumer action.
-- `# New Features`: additive new APIs, capabilities, packages, or newly exposed options.
-- `# Improvements`: non-breaking enhancements such as `CHANGED`, `EXTENDED`, `OPTIMIZED`, `DEPRECATED`, or other refinements.
-- `# Bug Fixes`: defects corrected for existing behavior.
+- `# ALM`: only surviving dependency upgrades/downgrades, TFM support changes, packaging metadata changes, or other release-engineering/package-management changes. Use the final before -> after versions that remain at `HEAD`.
+- `# Breaking Changes`: only incompatible renames, removals, moved APIs, changed contracts, or behavior that still requires consumer action at `HEAD`.
+- `# New Features`: only additive APIs, capabilities, packages, or options that are absent at the base state and present at `HEAD`.
+- `# Improvements`: surviving non-breaking enhancements such as `CHANGED`, `EXTENDED`, `OPTIMIZED`, `DEPRECATED`, or other refinements to existing behavior.
+- `# Bug Fixes`: surviving defect corrections for behavior that remains changed versus the base state.
 - `# References`: package IDs only, and only when the package is an umbrella/meta package or the existing file already carries a references section the current release should preserve.
 
 Prefer a minimal truthful block over an inflated one. ALM-only releases are valid when the real change was only dependency or TFM maintenance.
+A restored API or reverted dependency upgrade does not earn a section entry. Use history to help group or explain the surviving outcomes, not to manufacture extra bullets.
 
 ### Step 7: Write or update PackageReleaseNotes.txt
 
@@ -168,6 +213,7 @@ After updating the relevant `PackageReleaseNotes.txt` files, stop and let the us
 
 - Reads like curated package release notes, not a repo-wide changelog.
 - Keeps one truthful release block per package/version.
+- Classifies each package from its surviving base-to-`HEAD` delta; reverted churn disappears.
 - Uses concrete package/type/member names and namespaces.
 - Writes the newest release first while preserving older history.
 - Keeps ALM details explicit when dependencies or TFMs changed.
@@ -180,5 +226,7 @@ After updating the relevant `PackageReleaseNotes.txt` files, stop and let the us
 - Using `Unreleased` or omitting the concrete version line.
 - Guessing availability instead of reading project metadata.
 - Dumping commit subjects line by line into the file.
+- Reporting temporary dependency, API, metadata, or TFM changes that do not survive into `HEAD`.
+- Emitting `# Breaking Changes`, `# New Features`, or `# Bug Fixes` bullets for work that was later restored or removed before release.
 - Creating empty headings or filler bullets like "misc updates".
 - Claiming breaking changes, fixes, or references not supported by git and the project/package metadata.
