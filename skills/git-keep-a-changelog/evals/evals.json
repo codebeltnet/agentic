@@ -178,6 +178,42 @@
         "Uses the same deterministic bleed guard as non-yolo branch-derived releases",
         "Does not contact or switch to main to invent a broader release narrative"
       ]
+    },
+    {
+      "id": 16,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start from a base commit containing `CHANGELOG.md`, `src/Widget.cs`, and `Directory.Packages.props`. On branch `v1.2.3/net-result-changelog`, make these commits in order: add `src/Foo.cs`; revise `src/Foo.cs`; delete `src/Foo.cs`; add `src/Bar.cs`; revise `src/Bar.cs` twice; upgrade `Example.Dependency` from `1.0.0` to `2.0.0`; change it back to `1.0.0`. Update `CHANGELOG.md` for the branch and stop after the edit.",
+      "expected_output": "The changelog entry omits `Foo` and the reverted dependency churn, and contains one surviving added outcome for `Bar` in its final form.",
+      "expectations": [
+        "Omits `Foo` because it leaves no surviving base-to-HEAD change",
+        "Omits the reverted `Example.Dependency` version churn because the final version matches the base state",
+        "Describes `Bar` once in its final added form instead of separate Added, Changed, and Fixed bullets",
+        "Grounds the section content in the cumulative base-to-HEAD result rather than the chronological accumulation of commits",
+        "Updates `CHANGELOG.md` directly in the temp repo and stops after the edit"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start from a base commit containing `CHANGELOG.md`, `src/Service.cs`, `src/Legacy.cs`, and a public API `WidgetClient.Send()`. On branch `v2.0.0/reconcile-api`, make these commits in order: modify `src/Service.cs`; revert that modification exactly; delete `src/Legacy.cs`; restore `src/Legacy.cs` identically; remove `WidgetClient.Send()`; restore `WidgetClient.Send()` unchanged; move `src/Service.cs` to `src/Core/Service.cs` and change its surviving behavior. Update `CHANGELOG.md` and stop after the edit.",
+      "expected_output": "The changelog omits the exact revert, the identically restored file, and the restored API removal, while describing the surviving moved-and-changed service outcome once.",
+      "expectations": [
+        "Omits the reverted `Service` modification because it no longer survives at `HEAD`",
+        "Omits the delete-and-identically-restore `Legacy` file because it matches the base state again",
+        "Does not claim a breaking API removal for `WidgetClient.Send()` because it was restored unchanged",
+        "Avoids naive duplicate Added plus Removed language for the moved `Service` entity and instead describes the surviving modification once",
+        "Keeps the changelog grounded in the surviving final delta"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start from a base commit with `CHANGELOG.md`, `src/Client.cs`, and `Directory.Packages.props`. On branch `v3.1.0/noisy-release`, make these commits in order: add `SendAsync`; fix it twice; replace its first implementation with a second; add a temporary `LegacyMode` feature and later remove it; upgrade `Newtonsoft.Json` from `13.0.3` to `14.0.0` and later to `14.0.2`; finish with a commit message that claims a security change the final diff does not support. Update `CHANGELOG.md` and stop after the edit.",
+      "expected_output": "The changelog describes `SendAsync` once in its final form, records one surviving `Newtonsoft.Json` upgrade to `14.0.2`, omits `LegacyMode`, and does not invent the contradicted security entry.",
+      "expectations": [
+        "Describes the surviving `SendAsync` capability once in its final form",
+        "Records one surviving dependency upgrade from `13.0.3` to `14.0.2`",
+        "Omits the temporary `LegacyMode` feature because it does not survive into `HEAD`",
+        "Does not add a Security or other section entry when the final diff contradicts the commit message claim",
+        "Produces a small set of high-signal release outcomes independent of commit count"
+      ]
     }
   ]
 }

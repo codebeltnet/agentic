@@ -768,6 +768,28 @@ Add-ValidationResult -Results $results -Name 'Repository docs define the local s
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD'
 }
 
+Add-ValidationResult -Results $results -Name 'Deprecated skill-creator-agnostic contract stays explicit' -Action {
+    $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
+    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/skill-creator-agnostic/SKILL.md' -GitRef $Ref
+    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/skill-creator-agnostic/evals/evals.json' -GitRef $Ref
+
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`skill-creator-agnostic` is deprecated, no longer maintained, and retained only for backward compatibility until 1.0.0.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Agents must not use it for new skill creation, skill modification, or benchmarking; use Anthropic''s `skill-creator` directly and apply the repository-specific requirements from this `AGENTS.md`.'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '`skill-creator-agnostic` is intentionally omitted from the recommended always-on install list.'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '| [skill-creator-agnostic](skills/skill-creator-agnostic/SKILL.md) | **⚠️ Deprecated**'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Do not install it for new work; use Anthropic `skill-creator` and apply the repository rules in `AGENTS.md`.'
+    Assert-Contains -Name 'skill-creator-agnostic/SKILL.md' -Content $skill -Needle 'DEPRECATED — no longer maintained and scheduled for removal in 1.0.0.'
+    Assert-Contains -Name 'skill-creator-agnostic/SKILL.md' -Content $skill -Needle '> [!CAUTION]'
+    Assert-Contains -Name 'skill-creator-agnostic/SKILL.md' -Content $skill -Needle 'Use Anthropic `skill-creator` + `AGENTS.md` instead.'
+    Assert-Contains -Name 'skill-creator-agnostic/SKILL.md' -Content $skill -Needle 'Do not continue or recommend the historical `skill-creator-agnostic` workflow as an alternative implementation.'
+    Assert-NotContains -Name 'skill-creator-agnostic/SKILL.md' -Content $skill -Needle '## Workflow'
+    Assert-Contains -Name 'skill-creator-agnostic/evals/evals.json' -Content $evals -Needle 'Anthropic skill-creator'
+    Assert-Contains -Name 'skill-creator-agnostic/evals/evals.json' -Content $evals -Needle 'no longer maintained'
+    Assert-Contains -Name 'skill-creator-agnostic/evals/evals.json' -Content $evals -Needle '1.0.0'
+    Assert-Contains -Name 'skill-creator-agnostic/evals/evals.json' -Content $evals -Needle 'Does not recommend skill-creator-agnostic as a companion or alternative implementation'
+}
+
 Add-ValidationResult -Results $results -Name 'App skill collects target framework and conditional web_variant' -Action {
     $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/FORMS.md' -GitRef $Ref
     Assert-Contains -Name 'dotnet-new-app-slnx/FORMS.md' -Content $forms -Needle '### target_framework'
@@ -1440,6 +1462,45 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     if ([string]::IsNullOrWhiteSpace($Ref)) {
         & (Join-Path $repoRoot 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1') | Out-Null
     }
+}
+
+Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges to surviving final-state outcomes before using history' -Action {
+    $changelogSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/SKILL.md' -GitRef $Ref
+    $changelogEvals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/evals/evals.json' -GitRef $Ref
+    $nugetSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-nuget-release-notes/SKILL.md' -GitRef $Ref
+    $nugetEvals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-nuget-release-notes/evals/evals.json' -GitRef $Ref
+    $squashSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-squash-summary/SKILL.md' -GitRef $Ref
+    $squashEvals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-squash-summary/evals/evals.json' -GitRef $Ref
+    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
+
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'History is evidence; the resulting state is truth.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Reduce first. Interpret second. Summarize last.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Base absent and `HEAD` absent -> omit it.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Do not summarize commits one by one and deduplicate the prose afterward.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Use history only to explain the surviving outcomes'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Omits `Foo` because it leaves no surviving base-to-HEAD change'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not add a Security or other section entry when the final diff contradicts the commit message claim'
+
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'History is evidence; the resulting state is truth.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Do not accumulate bullets from individual commits and deduplicate them afterward.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle '`Newtonsoft.Json 13.0.3 -> 14.0.0 -> 13.0.3` -> no `# ALM` bullet.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Read the full commit bodies only after the cumulative delta is clear.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'A restored API or reverted dependency upgrade does not earn a section entry.'
+    Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Omits the reverted `Newtonsoft.Json` change because the final version matches the base state'
+    Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Does not claim a breaking API removal for `WidgetClient.LegacySend()` because it was restored unchanged'
+
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'This skill answers one question: **What would this branch effectively do if it were squashed into one commit now?**'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'History is evidence; the resulting state is truth.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'Do not classify commit 1, then commit 2, then commit 3 and merge duplicate prose afterward.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'A dependency or version that returns to the base value does not deserve a retained line.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'Does this exact change survive from base to `HEAD`?'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $squashEvals -Needle 'Omits the `Microsoft.NET.Test.Sdk` change because the final version returns to `18.6.0`'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $squashEvals -Needle 'Omits `Foo` entirely because it is absent at both the base and `HEAD` states'
+
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'reduces the selected range to surviving base-to-`HEAD` outcomes before section classification'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'reduces each package to its surviving base-to-`HEAD` delta before classifying history'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'reducing the cumulative base-to-`HEAD` delta first so reverted churn disappears'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '**Final-state first** — computes the cumulative base-to-`HEAD` delta before reading chronology'
 }
 
 Add-ValidationResult -Results $results -Name 'Rendered app worker template leaves no unexpected placeholders' -Action {
