@@ -551,7 +551,6 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.0...HEAD
 [0.8.2]: https://github.com/codebeltnet/agentic/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/codebeltnet/agentic/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/codebeltnet/agentic/compare/v0.7.5...v0.8.0
