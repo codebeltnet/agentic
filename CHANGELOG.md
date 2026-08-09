@@ -4,18 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.9.0 - 2026-08-02
+## [0.9.0] - 2026-08-09
+
+This is a minor release introducing the `dotnet-test` skill, a comprehensive xUnit migration and bootstrapping tool for Codebelt conventions. The release classifies test roles (ordinary unit, ASP.NET Core functional, console/worker functional), preserves host configuration and lifecycle semantics, eliminates legacy `WebApplicationFactory` patterns in favor of role-specific managed fixtures, modernizes xUnit v2 to v3/Microsoft Testing Platform, and includes deterministic project inspection, package-version resolution, eval coverage, and repository validation tooling.
 
 ### Added
 
-- `dotnet-test` skill for classifying, bootstrapping, and refactoring xUnit projects across ordinary unit, ASP.NET Core functional, and console/worker functional roles,
-- Deterministic .NET test inspection and NuGet-backed compatible package-resolution scripts, structured forms, role references, adaptable Codebelt xUnit/Bootstrapper assets, and five paired evaluation fixtures,
-- Repository validation for the `dotnet-test` lifecycle, modernization, Generic Host, fixture, script, asset, and evaluation contracts.
-- Explicit recognition and adaptable assets for Bootstrapper `MinimalConsoleProgram`, `MinimalWorkerProgram`, and `MinimalWebProgram` host families.
-
-### Changed
-
-- Updated the root skill catalogue, install bundle, installation examples, and rationale documentation for `dotnet-test`.
+- `dotnet-test` skill for classifying, bootstrapping, and refactoring xUnit projects across ordinary unit, ASP.NET Core functional, and console/worker functional test roles with refined WebApplicationTestFactory bootstrap pattern documentation ensuring Program composition root preservation without pipeline reconstruction,
+- Deterministic .NET test project inspection via `inspect-dotnet-tests.ps1` extracting target frameworks, test project markers, Generic Host resolution, `WebApplicationFactory` usages, expected application patterns, host test ownerships, and package ownership with additional property discovery for role-specific inspector routing,
+- `resolve-test-package-versions.ps1` NuGet-backed package-version resolver for compatible xUnit, Microsoft Testing Platform, and supporting packages across stable isolated restores,
+- Structured FORMS.md parameter collection for test role selection, operation mode (fresh bootstrap vs. migration), and host ownership determination,
+- Six comprehensive eval scenarios covering fresh unit tests, xUnit v2 modernization, focused web functional tests with `WebApplicationTestFactory`, shared web functional tests with managed fixtures, shared non-web functional tests, and worker-service functional tests, with paired `with_skill` and `without_skill` comparison runs and associated fixture projects, with enhanced prompts and postconditions emphasizing focused-inspector bootstrap contract and managed-fixture presence validation,
+- Role-specific reference documentation (`unit-tests.md`, `web-functional-tests.md`, `application-functional-tests.md`, `bootstrapper-hosts.md`, `migration-invariants.md`, `xunit-v3-modernization.md`) covering test patterns, fixture lifecycle, Generic Host boundaries, and migration guidance with clarified lifecycle semantics, managed-fixture deprecation timeline, and entrypoint-owned composition-root preservation,
+- Codebelt xUnit and bootstrapper asset templates covering focused/shared unit tests, focused/shared web-application tests, ordinary console/worker functional tests, and bootstrapper Program/Startup patterns for `MinimalConsoleProgram`, `MinimalWorkerProgram`, and `MinimalWebProgram` hosts,
+- Entrypoint-owned managed fixture patterns (`ManagedWebApplicationFixture<TEntryPoint>`, `ManagedApplicationFixture<TEntryPoint>`) as permanent replacements for deprecated blocking-fixture patterns,
+- Lifecycle-preserving functional test migration that retains configuration, lazy startup, synchronous/asynchronous disposal, service access, and test isolation while eliminating `WebApplicationFactory` reconstruction patterns,
+- Repository validation rules in `scripts/validate-skill-templates.ps1` for dotnet-test coverage, role-specific encoding, managed-fixture presence, deprecated blocking-fixture rejection, bootstrapper host fidelity, and eval scenario count and content verification; updated to expect six paired eval scenarios and validate managed-fixture references instead of deprecated blocking-fixture patterns,
+- Enhanced README.md skill inventory, installation snippet, and "Why dotnet-test?" motivational section explaining lifecycle sensitivity, test-role classification, entrypoint-owned managed fixture, synchronous/asynchronous disposal, and host-family boundary preservation.
 
 ## [0.8.2] - 2026-08-07
 
@@ -564,7 +569,10 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/codebeltnet/agentic/compare/v0.8.2...v0.9.0
+[0.8.2]: https://github.com/codebeltnet/agentic/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/codebeltnet/agentic/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/codebeltnet/agentic/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/codebeltnet/agentic/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/codebeltnet/agentic/compare/v0.7.3...v0.7.4
