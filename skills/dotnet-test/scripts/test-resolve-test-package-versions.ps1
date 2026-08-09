@@ -11,6 +11,7 @@ $packageBaseAddress = 'https://mock.nuget/flatcontainer/'
 function Reset-ResolverMock {
     $global:DotnetTestResolverVersions = @{}
     $global:DotnetTestResolverRestoreRequests = [System.Collections.Generic.List[object]]::new()
+    $global:DotnetTestResolverHttpRequests = [System.Collections.Generic.List[string]]::new()
     $global:DotnetTestResolverFailureMode = 'Success'
     $global:DotnetTestResolverFailurePackageId = $null
     $global:DotnetTestResolverFailureVersion = $null
@@ -32,6 +33,8 @@ function Set-TestPackageVersions {
 
 function Invoke-RestMethod {
     param([Parameter(Mandatory = $true)][string]$Uri)
+
+    $global:DotnetTestResolverHttpRequests.Add($Uri)
 
     if ($Uri -eq $serviceIndexUri) {
         return [pscustomobject]@{
@@ -101,27 +104,45 @@ function Invoke-TestResolver {
         [Parameter(Mandatory = $true)]
         [string[]]$PackageId,
 
-        [Parameter(Mandatory = $true)]
-        [int]$MaximumCandidates
+        [int]$MaximumCandidates,
+
+        [string]$CacheDirectory,
+
+        [switch]$UseDefaultCandidateLimit
     )
 
     $output = @()
     $caught = $false
     try {
-        $output = @(& $resolver -TargetFramework net10.0 -Role Unit -PackageId $PackageId -MaximumCandidates $MaximumCandidates 2>&1)
+        if ($UseDefaultCandidateLimit) {
+            if ([string]::IsNullOrWhiteSpace($CacheDirectory)) {
+                $output = @(& $resolver -TargetFramework net10.0 -Role Unit -PackageId $PackageId 2>&1)
+            } else {
+                $output = @(& $resolver -TargetFramework net10.0 -Role Unit -PackageId $PackageId -CacheDirectory $CacheDirectory 2>&1)
+            }
+        } elseif ([string]::IsNullOrWhiteSpace($CacheDirectory)) {
+            $output = @(& $resolver -TargetFramework net10.0 -Role Unit -PackageId $PackageId -MaximumCandidates $MaximumCandidates 2>&1)
+        } else {
+            $output = @(& $resolver -TargetFramework net10.0 -Role Unit -PackageId $PackageId -MaximumCandidates $MaximumCandidates -CacheDirectory $CacheDirectory 2>&1)
+        }
     } catch {
         $caught = $true
         $output += $_
     }
 
     $text = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
-    $exitCode = [int]$global:LASTEXITCODE
+    $exitCode = if ($caught -and [int]$global:LASTEXITCODE -eq 0) { 1 } else { [int]$global:LASTEXITCODE }
     $json = $null
-    if (-not $caught -and $exitCode -eq 0) {
+    $jsonText = $null
+    $jsonStart = $text.IndexOf('{')
+    if ($jsonStart -ge 0) {
+        $jsonText = $text.Substring($jsonStart)
         try {
-            $json = $text | ConvertFrom-Json
+            $json = $jsonText | ConvertFrom-Json
         } catch {
-            throw "Resolver returned invalid JSON: $text"
+            if (-not $caught -and $exitCode -eq 0) {
+                throw "Resolver returned invalid JSON: $text"
+            }
         }
     }
 
@@ -130,6 +151,19 @@ function Invoke-TestResolver {
         text = $text
         json = $json
     }
+}
+
+function Get-ResolverJsonObject {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Text
+    )
+
+    $jsonStart = $Text.IndexOf('{')
+    if ($jsonStart -lt 0) {
+        throw "Resolver output did not contain JSON.`n$Text"
+    }
+    return ($Text.Substring($jsonStart) | ConvertFrom-Json)
 }
 
 function Assert-Equal {
@@ -165,13 +199,24 @@ function Assert-ContainsText {
     }
 }
 
+function Assert-False {
+    param(
+        [Parameter(Mandatory = $true)][bool]$Condition,
+        [Parameter(Mandatory = $true)][string]$Because
+    )
+
+    if ($Condition) { throw "Assertion failed: $Because." }
+}
+
 try {
     Reset-ResolverMock
 
     Set-TestPackageVersions -Id 'Stable.Package' -Versions @('11.0.0-rc.1', '10.0.0', '9.99.0', '9.98.0')
     $stable = Invoke-TestResolver -PackageId 'Stable.Package' -MaximumCandidates 2
+    $stableResult = Get-ResolverJsonObject -Text $stable.text
+    $stablePackages = @($stableResult.packages)
     Assert-Equal -Actual $stable.exitCode -Expected 0 -Because 'stable candidate resolution should succeed'
-    Assert-Equal -Actual $stable.json.packages[0].version -Expected '10.0.0' -Because 'stable versions must be numerically ordered and prereleases excluded'
+    Assert-Equal -Actual $stablePackages[0].version -Expected '10.0.0' -Because 'stable versions must be numerically ordered and prereleases excluded'
 
     Reset-ResolverMock
     Set-TestPackageVersions -Id 'Fallback.Package' -Versions @('3.0.0', '2.0.0')
@@ -179,8 +224,10 @@ try {
     $global:DotnetTestResolverFailurePackageId = 'Fallback.Package'
     $global:DotnetTestResolverFailureVersion = '3.0.0'
     $fallback = Invoke-TestResolver -PackageId 'Fallback.Package' -MaximumCandidates 2
+    $fallbackResult = Get-ResolverJsonObject -Text $fallback.text
+    $fallbackPackages = @($fallbackResult.packages)
     Assert-Equal -Actual $fallback.exitCode -Expected 0 -Because 'an older restorable candidate should be selected'
-    Assert-Equal -Actual $fallback.json.packages[0].version -Expected '2.0.0' -Because 'candidate fallback should continue after a restore failure'
+    Assert-Equal -Actual $fallbackPackages[0].version -Expected '2.0.0' -Because 'candidate fallback should continue after a restore failure'
     Assert-Equal -Actual $global:DotnetTestResolverRestoreRequests.Count -Expected 2 -Because 'the failed newest candidate and fallback candidate should both be tested'
 
     Reset-ResolverMock
@@ -189,11 +236,13 @@ try {
     $global:DotnetTestResolverFailureMode = 'FailCombination'
     $global:DotnetTestResolverFailureCombination = 'Package.A=2.0.0;Package.B=2.0.0'
     $combined = Invoke-TestResolver -PackageId @('Package.A', 'Package.B') -MaximumCandidates 2
+    $combinedResult = Get-ResolverJsonObject -Text $combined.text
+    $combinedPackages = @($combinedResult.packages)
     Assert-Equal -Actual $combined.exitCode -Expected 0 -Because 'the resolver should recover from an incompatible combined package set'
-    Assert-Equal -Actual (($combined.json.packages | Where-Object packageId -eq 'Package.A').version) -Expected '2.0.0' -Because 'the compatible first package candidate should be retained'
-    Assert-Equal -Actual (($combined.json.packages | Where-Object packageId -eq 'Package.B').version) -Expected '1.0.0' -Because 'the incompatible newest second package candidate should fall back'
+    Assert-Equal -Actual (($combinedPackages | Where-Object packageId -eq 'Package.A').version) -Expected '2.0.0' -Because 'the compatible first package candidate should be retained'
+    Assert-Equal -Actual (($combinedPackages | Where-Object packageId -eq 'Package.B').version) -Expected '1.0.0' -Because 'the incompatible newest second package candidate should fall back'
     Assert-True -Condition (@($global:DotnetTestResolverRestoreRequests | Where-Object { $_.references.Count -eq 2 }).Count -gt 0) -Because 'compatibility must be tested with the combined package set'
-    Assert-Equal -Actual ($combined.json.packages | Where-Object packageId -eq 'Package.A').compatibility -Expected 'combined restore passed' -Because 'the output must describe the compatibility actually validated'
+    Assert-Equal -Actual ($combinedPackages | Where-Object packageId -eq 'Package.A').compatibility -Expected 'combined restore passed' -Because 'the output must describe the compatibility actually validated'
 
     Reset-ResolverMock
     Set-TestPackageVersions -Id 'Failure.Package' -Versions @('2.0.0', '1.0.0')
@@ -203,11 +252,51 @@ try {
     Assert-ContainsText -Text $failure.text -Expected "No stable 'Failure.Package' version" -Because 'failure output must identify the package and candidate scope'
     Assert-ContainsText -Text $failure.text -Expected 'NU_TEST_RESTORE_FAILURE' -Because 'failure output must preserve restore evidence'
 
+    Reset-ResolverMock
+    Set-TestPackageVersions -Id 'Cached.Package' -Versions @('5.0.0', '4.0.0')
+    $cacheRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-test-resolver-cache-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        $first = Invoke-TestResolver -PackageId 'Cached.Package' -MaximumCandidates 1 -CacheDirectory $cacheRoot
+        $firstResult = Get-ResolverJsonObject -Text $first.text
+        $firstPackages = @($firstResult.packages)
+        Assert-Equal -Actual $first.exitCode -Expected 0 -Because 'cache seed should succeed'
+        Assert-False -Condition ([bool]$firstResult.cache.hit) -Because 'first cached resolution should be live'
+        Assert-Equal -Actual $firstPackages[0].version -Expected '5.0.0' -Because 'cache seed should still expose the resolved package set'
+        $restoreCount = $global:DotnetTestResolverRestoreRequests.Count
+        $httpCount = $global:DotnetTestResolverHttpRequests.Count
+
+        $second = Invoke-TestResolver -PackageId 'Cached.Package' -MaximumCandidates 1 -CacheDirectory $cacheRoot
+        $secondResult = Get-ResolverJsonObject -Text $second.text
+        $secondPackages = @($secondResult.packages)
+        Assert-Equal -Actual $second.exitCode -Expected 0 -Because 'cache reuse should succeed'
+        Assert-True -Condition ([bool]$secondResult.cache.hit) -Because 'second cached resolution should be served from cache'
+        Assert-Equal -Actual $secondPackages[0].version -Expected '5.0.0' -Because 'cache reuse should preserve the cached package data'
+        Assert-Equal -Actual $global:DotnetTestResolverRestoreRequests.Count -Expected $restoreCount -Because 'cache reuse should skip compatibility restores'
+        Assert-Equal -Actual $global:DotnetTestResolverHttpRequests.Count -Expected $httpCount -Because 'cache reuse should skip NuGet HTTP lookups'
+    } finally {
+        if (Test-Path -LiteralPath $cacheRoot) { Remove-Item -LiteralPath $cacheRoot -Recurse -Force }
+    }
+
+    Reset-ResolverMock
+    Set-TestPackageVersions -Id 'Limited.Package' -Versions @('4.0.0', '3.0.0')
+    $global:DotnetTestResolverFailureMode = 'FailPackageVersion'
+    $global:DotnetTestResolverFailurePackageId = 'Limited.Package'
+    $global:DotnetTestResolverFailureVersion = '4.0.0'
+    $env:DOTNET_TEST_MAXIMUM_CANDIDATES = '1'
+    try {
+        $limited = Invoke-TestResolver -PackageId 'Limited.Package' -UseDefaultCandidateLimit
+        Assert-True -Condition ($limited.exitCode -ne 0) -Because 'the env candidate limit should constrain default resolver breadth'
+        Assert-ContainsText -Text $limited.text -Expected "newest 1 candidates" -Because 'failure output should reflect the env-driven candidate limit'
+    } finally {
+        Remove-Item Env:DOTNET_TEST_MAXIMUM_CANDIDATES -ErrorAction SilentlyContinue
+    }
+
     Write-Output 'resolve-test-package-versions.ps1 regression: PASS'
 } finally {
     foreach ($name in @(
         'DotnetTestResolverVersions',
         'DotnetTestResolverRestoreRequests',
+        'DotnetTestResolverHttpRequests',
         'DotnetTestResolverFailureMode',
         'DotnetTestResolverFailurePackageId',
         'DotnetTestResolverFailureVersion',

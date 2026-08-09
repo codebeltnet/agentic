@@ -8,8 +8,11 @@ param(
 
     [string[]]$PackageId,
 
-    [ValidateRange(1, 100)]
-    [int]$MaximumCandidates = 30
+    [int]$MaximumCandidates,
+
+    [string]$CacheDirectory = $env:DOTNET_TEST_RESOLVER_CACHE_DIR,
+
+    [string]$TraceFile = $env:DOTNET_TEST_RESOLVER_TRACE_FILE
 )
 
 Set-StrictMode -Version Latest
@@ -17,6 +20,67 @@ $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
+
+if (-not $PSBoundParameters.ContainsKey('MaximumCandidates')) {
+    if (-not [string]::IsNullOrWhiteSpace($env:DOTNET_TEST_MAXIMUM_CANDIDATES)) {
+        try {
+            $MaximumCandidates = [int]$env:DOTNET_TEST_MAXIMUM_CANDIDATES
+        } catch {
+            throw "DOTNET_TEST_MAXIMUM_CANDIDATES must be an integer. Found '$($env:DOTNET_TEST_MAXIMUM_CANDIDATES)'."
+        }
+    } else {
+        $MaximumCandidates = 30
+    }
+}
+
+if ($MaximumCandidates -lt 1 -or $MaximumCandidates -gt 100) {
+    throw "MaximumCandidates must be between 1 and 100. Found '$MaximumCandidates'."
+}
+
+function Get-ResolverCacheKey {
+    param(
+        [Parameter(Mandatory = $true)] [string]$RoleName,
+        [Parameter(Mandatory = $true)] [string[]]$Frameworks,
+        [Parameter(Mandatory = $true)] [string[]]$Packages,
+        [Parameter(Mandatory = $true)] [int]$CandidateLimit
+    )
+
+    $seed = [ordered]@{
+        role = $RoleName
+        targetFrameworks = @($Frameworks | Sort-Object)
+        packageIds = @($Packages | Sort-Object)
+        maximumCandidates = $CandidateLimit
+    } | ConvertTo-Json -Compress
+    return [System.BitConverter]::ToString(([System.Security.Cryptography.SHA256]::HashData($utf8NoBom.GetBytes($seed)))).Replace('-', '').ToLowerInvariant()
+}
+
+function Write-ResolverTrace {
+    param(
+        [string]$TraceFilePath,
+        [string]$RoleName,
+        [string[]]$Frameworks,
+        [string[]]$Packages,
+        [int]$CandidateLimit,
+        [bool]$CacheHit,
+        [double]$DurationSeconds
+    )
+
+    if ([string]::IsNullOrWhiteSpace($TraceFilePath)) { return }
+    $directory = Split-Path -Path $TraceFilePath -Parent
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    ([ordered]@{
+        role = $RoleName
+        targetFrameworks = @($Frameworks)
+        packageIds = @($Packages)
+        maximumCandidates = $CandidateLimit
+        cacheHit = $CacheHit
+        durationSeconds = [math]::Round($DurationSeconds, 3)
+        timestamp = [DateTimeOffset]::UtcNow.ToString('O')
+    } | ConvertTo-Json -Compress) + [Environment]::NewLine | Add-Content -LiteralPath $TraceFilePath -Encoding utf8
+}
 
 function Get-VersionKey {
     param([string]$Version)
@@ -74,6 +138,28 @@ $packageIds = if ($PackageId -and $PackageId.Count -gt 0) {
 } else {
     $codebeltPackage = if ($Role -eq 'Unit') { 'Codebelt.Extensions.Xunit' } else { 'Codebelt.Extensions.Xunit.App' }
     @('Microsoft.NET.Test.Sdk', 'xunit.v3', 'xunit.v3.runner.console', 'xunit.runner.visualstudio', $codebeltPackage)
+}
+
+$cacheKey = if ([string]::IsNullOrWhiteSpace($CacheDirectory)) { $null } else { Get-ResolverCacheKey -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates }
+$cachePath = if ($null -eq $cacheKey) { $null } else { Join-Path $CacheDirectory ($cacheKey + '.json') }
+$startedAt = [DateTimeOffset]::UtcNow
+
+if ($null -ne $cachePath -and (Test-Path -LiteralPath $cachePath -PathType Leaf)) {
+    $cached = Get-Content -LiteralPath $cachePath -Raw | ConvertFrom-Json
+    $durationSeconds = [math]::Round(([DateTimeOffset]::UtcNow - $startedAt).TotalSeconds, 3)
+    if ($null -eq $cached.cache) {
+        $cached | Add-Member -NotePropertyName cache -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    if ($null -eq $cached.timing) {
+        $cached | Add-Member -NotePropertyName timing -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    $cached.cache | Add-Member -NotePropertyName enabled -NotePropertyValue $true -Force
+    $cached.cache | Add-Member -NotePropertyName hit -NotePropertyValue $true -Force
+    $cached.cache | Add-Member -NotePropertyName key -NotePropertyValue $cacheKey -Force
+    $cached.timing | Add-Member -NotePropertyName durationSeconds -NotePropertyValue $durationSeconds -Force
+    Write-ResolverTrace -TraceFilePath $TraceFile -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates -CacheHit $true -DurationSeconds $durationSeconds
+    $cached | ConvertTo-Json -Depth 8
+    return
 }
 
 $serviceIndex = Invoke-RestMethod -Uri 'https://api.nuget.org/v3/index.json'
@@ -156,11 +242,32 @@ try {
         })
     }
 
-    [ordered]@{
+    $durationSeconds = [math]::Round(([DateTimeOffset]::UtcNow - $startedAt).TotalSeconds, 3)
+    $result = [ordered]@{
         role = $Role
         targetFrameworks = @($TargetFramework)
+        maximumCandidates = $MaximumCandidates
+        cache = [ordered]@{
+            enabled = $null -ne $cachePath
+            hit = $false
+            key = $cacheKey
+        }
+        timing = [ordered]@{
+            durationSeconds = $durationSeconds
+        }
         packages = @($resolved | Sort-Object packageId)
-    } | ConvertTo-Json -Depth 5
+    }
+
+    if ($null -ne $cachePath) {
+        $directory = Split-Path -Path $cachePath -Parent
+        if (-not [string]::IsNullOrWhiteSpace($directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $cachePath -Encoding utf8
+    }
+
+    Write-ResolverTrace -TraceFilePath $TraceFile -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates -CacheHit $false -DurationSeconds $durationSeconds
+    $result | ConvertTo-Json -Depth 8
 } finally {
     if (Test-Path -LiteralPath $workspace) { Remove-Item -LiteralPath $workspace -Recurse -Force }
 }
