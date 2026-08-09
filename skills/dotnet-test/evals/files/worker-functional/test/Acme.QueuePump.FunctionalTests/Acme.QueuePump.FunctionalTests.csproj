@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><RootNamespace>Acme.QueuePump</RootNamespace></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../src/Acme.QueuePump/Acme.QueuePump.csproj" /></ItemGroup>
+</Project>
+

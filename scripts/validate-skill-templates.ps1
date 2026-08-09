@@ -1109,6 +1109,93 @@ Add-ValidationResult -Results $results -Name 'Benchmark runner wildcard is prese
     Assert-Match -Name 'benchmark-program.cs' -Content $program -Pattern 'namespace\s+\{BENCHMARK_RUNNER_NAMESPACE\};'
 }
 
+Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific Codebelt xUnit migration and bootstrap contracts' -Action {
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/SKILL.md' -GitRef $Ref
+    $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/FORMS.md' -GitRef $Ref
+    $web = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/web-functional-tests.md' -GitRef $Ref
+    $application = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/application-functional-tests.md' -GitRef $Ref
+    $bootstrapper = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/bootstrapper-hosts.md' -GitRef $Ref
+    $modernization = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/xunit-v3-modernization.md' -GitRef $Ref
+    $migration = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/migration-invariants.md' -GitRef $Ref
+    $inspect = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/inspect-dotnet-tests.ps1' -GitRef $Ref
+    $resolve = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/resolve-test-package-versions.ps1' -GitRef $Ref
+    $resolveTest = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/test-resolve-test-package-versions.ps1' -GitRef $Ref
+    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/evals/evals.json' -GitRef $Ref
+    $fixtureFiles = Get-RepoFileList -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/evals/files' -GitRef $Ref
+
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Ordinary unit test'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ASP.NET Core functional test'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Console or worker functional test'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'WebApplicationTestFactory.Create<TEntryPoint>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'WebApplicationTest<TEntryPoint, ManagedWebApplicationFixture<TEntryPoint>>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ApplicationTestFactory.Create<TEntryPoint>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ApplicationTest<TEntryPoint, ManagedApplicationFixture<TEntryPoint>>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Never emit them in generated or refactored code.'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Never add a process-launching fallback'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'zero remaining `WebApplicationFactory`'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Do not invent an endpoint, service, configuration key, or expected result.'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'An MTP executable run may supplement that gate but never replaces it'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### project_selection'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### operation_mode'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### test_role'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### host_ownership'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle 'Field: <field-name>'
+    Assert-Contains -Name 'dotnet-test/web-functional-tests.md' -Content $web -Needle 'ManagedWebApplicationFixture<TEntryPoint>'
+    Assert-Contains -Name 'dotnet-test/web-functional-tests.md' -Content $web -Needle 'scheduled for removal'
+    Assert-Contains -Name 'dotnet-test/application-functional-tests.md' -Content $application -Needle 'Do not introduce `Process.Start`'
+    foreach ($program in @('MinimalConsoleProgram', 'MinimalWorkerProgram', 'MinimalWebProgram')) {
+        Assert-Contains -Name 'dotnet-test/bootstrapper-hosts.md' -Content $bootstrapper -Needle $program
+        Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle $program
+    }
+    Assert-Contains -Name 'dotnet-test/xunit-v3-modernization.md' -Content $modernization -Needle '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>'
+    Assert-Contains -Name 'dotnet-test/xunit-v3-modernization.md' -Content $modernization -Needle 'A zero-discovery test command is not a successful test run'
+    Assert-Contains -Name 'dotnet-test/migration-invariants.md' -Content $migration -Needle 'lazy until `CreateClient`, `Server`, or `Services`'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle '-getProperty:TargetFramework,TargetFrameworks,IsTestProject,OutputType,ManagePackageVersionsCentrally,UseMicrosoftTestingPlatformRunner,RootNamespace'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'webApplicationFactoryUsages'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'expectedApplicationPattern'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'hostTestOwnerships'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'packageOwnership'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'https://api.nuget.org/v3/index.json'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'Test-PackageCompatibility -Packages $trial'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'combined restore passed'
+    Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'stable candidate resolution should succeed'
+    Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'combined package set'
+    Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'restore evidence'
+
+    $evalObject = $evals | ConvertFrom-Json
+    if (@($evalObject.evals).Count -ne 6) {
+        throw "dotnet-test must define exactly six requested paired eval scenarios; found $(@($evalObject.evals).Count)"
+    }
+    foreach ($needle in @('attached Acme.Calculator fixture', 'xUnit v2 project', 'web-cdn-origin-style', 'IClassFixture<WebApplicationFactory<Program>>', 'ApplicationTestFactory pattern', 'ApplicationTest<Program, ManagedApplicationFixture<Program>>')) {
+        Assert-Contains -Name 'dotnet-test/evals/evals.json' -Content $evals -Needle $needle
+    }
+    if (@($fixtureFiles | Where-Object { $_ -match '(^|[\\/])(bin|obj)([\\/]|$)' }).Count -gt 0) {
+        throw 'dotnet-test eval fixtures must not include bin/ or obj/ paths'
+    }
+
+    foreach ($asset in @(
+        'skills/dotnet-test/assets/unit/BehaviorTest.cs',
+        'skills/dotnet-test/assets/web/FocusedWebApplicationTest.cs',
+        'skills/dotnet-test/assets/web/SharedWebApplicationTest.cs',
+        'skills/dotnet-test/assets/application/FocusedApplicationTest.cs',
+        'skills/dotnet-test/assets/application/SharedApplicationTest.cs',
+        'skills/dotnet-test/assets/bootstrapper/console/Program.cs',
+        'skills/dotnet-test/assets/bootstrapper/worker/Program.cs',
+        'skills/dotnet-test/assets/bootstrapper/console-minimal/Program.cs',
+        'skills/dotnet-test/assets/bootstrapper/worker-minimal/Program.cs',
+        'skills/dotnet-test/assets/bootstrapper/web-minimal/Program.cs'
+    )) {
+        [void](Get-FileText -RepoRoot $repoRoot -RelativePath $asset -GitRef $Ref)
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        & pwsh -NoProfile -File (Join-Path $repoRoot 'skills/dotnet-test/scripts/validate-skill.ps1')
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet-test skill validation failed with exit code $LASTEXITCODE."
+        }
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, proportionate experiments and preserves honest comparison semantics' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/SKILL.md' -GitRef $Ref
     $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-benchmark/FORMS.md' -GitRef $Ref
@@ -1406,6 +1493,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/evals/evals.json' -GitRef $Ref
     $scopeResolver = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/resolve-release-scope.ps1' -GitRef $Ref
     $scopeResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1' -GitRef $Ref
+    $entityResolver = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/resolve-release-entity.ps1' -GitRef $Ref
+    $entityResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Create or update `CHANGELOG.md` directly, then stop for user review.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` does not exist, create a compliant one before'
@@ -1445,6 +1534,10 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-scope.ps1' -Content $scopeResolver -Needle '$diffRange = "$mergeBase..$headCommit"'
     Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-scope.ps1' -Content $scopeResolver -Needle 'base_history_bleed = $false'
     Assert-Contains -Name 'git-keep-a-changelog/scripts/test-resolve-release-scope.ps1' -Content $scopeResolverTests -Needle 'the tagged previous release bled into the new release scope'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'run `scripts/resolve-release-entity.ps1` with the emitted `merge_base` and `head_commit`'
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-entity.ps1' -Content $entityResolver -Needle "'Added'"
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-entity.ps1' -Content $entityResolver -Needle "'Unchanged'"
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -Content $entityResolverTests -Needle "Assert-Classification -EntityPath 'skills/dotnet-test' -Expected 'Added'"
 
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Updates CHANGELOG.md directly instead of only drafting notes in chat'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Reads full commit subjects and bodies before writing the release entry'
@@ -1458,9 +1551,11 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Inserts the compare-link footer at the bottom when it is missing from an existing changelog'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the merge-base as an excluded boundary rather than the first commit of the concrete release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let yolo mode widen committed history or include the v10.0.9 boundary commit'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Runs scripts/resolve-release-entity.ps1 for the path-backed dotnet-test entity and uses its Added classification'
 
     if ([string]::IsNullOrWhiteSpace($Ref)) {
         & (Join-Path $repoRoot 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1') | Out-Null
+        & (Join-Path $repoRoot 'skills/git-keep-a-changelog/scripts/test-resolve-release-entity.ps1') | Out-Null
     }
 }
 
@@ -1476,18 +1571,26 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'History is evidence; the resulting state is truth.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Reduce first. Interpret second. Summarize last.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Base absent and `HEAD` absent -> omit it.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Classify each user-facing release entity from whether it existed at the resolved base'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'intermediate commits that refine, fix, document, or validate it cannot create `Changed` or `Fixed` outcomes'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'The current contents of the target heading are cached output, not a release baseline.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Do not summarize commits one by one and deduplicate the prose afterward.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Use history only to explain the surviving outcomes'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Omits `Foo` because it leaves no surviving base-to-HEAD change'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not add a Security or other section entry when the final diff contradicts the commit message claim'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not create a Changed section or Changed bullet for dotnet-test refinements made before its first release'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not preserve the earlier draft bullet as a frozen baseline that forces later refinements into `Changed`'
 
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'History is evidence; the resulting state is truth.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Classify each user-facing package capability from whether it existed at the resolved base'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle '`# Improvements` and `# Bug Fixes` require the affected capability or behavior to exist at the resolved base.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Do not accumulate bullets from individual commits and deduplicate them afterward.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle '`Newtonsoft.Json 13.0.3 -> 14.0.0 -> 13.0.3` -> no `# ALM` bullet.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Read the full commit bodies only after the cumulative delta is clear.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'A restored API or reverted dependency upgrade does not earn a section entry.'
     Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Omits the reverted `Newtonsoft.Json` change because the final version matches the base state'
     Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Does not claim a breaking API removal for `WidgetClient.LegacySend()` because it was restored unchanged'
+    Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Does not place RetryPolicy under Improvements because it was refined before its first release'
 
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'This skill answers one question: **What would this branch effectively do if it were squashed into one commit now?**'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'History is evidence; the resulting state is truth.'
@@ -1498,7 +1601,9 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $squashEvals -Needle 'Omits `Foo` entirely because it is absent at both the base and `HEAD` states'
 
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'reduces the selected range to surviving base-to-`HEAD` outcomes before section classification'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'establishes each user-facing release entity against the base'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'reduces each package to its surviving base-to-`HEAD` delta before classifying history'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'establishes each package capability against the base'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'reducing the cumulative base-to-`HEAD` delta first so reverted churn disappears'
     Assert-Contains -Name 'README.md' -Content $readme -Needle '**Final-state first** — computes the cumulative base-to-`HEAD` delta before reading chronology'
 }

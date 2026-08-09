@@ -94,6 +94,19 @@
         "Does not report a dependency change that appears only in the commit body when the final diff contradicts it",
         "Uses history as supporting context only after the final package delta is clear"
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "Create a deterministic temp .NET git repo outside the current repository under `$env:TEMP`, then use git-nuget-release-notes there. Start from a tagged base release with a packable `src/Acme.Core/Acme.Core.csproj`, an existing package release-notes file, and no `RetryPolicy` API. On branch `v2.1.0/retry-policy`, add the public RetryPolicy capability; refine its implementation twice; fix a defect in the new capability; add its tests and documentation; and separately upgrade Newtonsoft.Json from 13.0.3 to 14.0.2. Update the package release notes and stop after the edit.",
+      "expected_output": "The package notes describe RetryPolicy once as an ADDED New Feature despite its pre-release refinements and fix, while the independent surviving dependency upgrade remains in ALM.",
+      "expectations": [
+        "Checks whether RetryPolicy existed at the resolved base before classifying its files or commit verbs",
+        "Places RetryPolicy once under New Features with an ADDED action verb",
+        "Does not place RetryPolicy under Improvements because it was refined before its first release",
+        "Does not place RetryPolicy under Bug Fixes because a defect was fixed during its introduction cycle",
+        "Keeps the independent Newtonsoft.Json 13.0.3 to 14.0.2 upgrade under ALM",
+        "Classifies separately changed pre-existing package capabilities from their own base states"
+      ]
     }
   ]
 }

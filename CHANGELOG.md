@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-08-09
+
+This is a minor release introducing the `dotnet-test` skill for lifecycle-aware xUnit test migration and refactoring across ordinary unit tests, ASP.NET Core functional tests, and console/worker service tests. The release includes comprehensive test-role classification, managed-fixture patterns preserving composition-root control, xUnit v3 modernization guidance, deterministic package-version resolution, and integration-test bootstrapper hosts. Enhanced release-entity classification in `git-keep-a-changelog` and `git-nuget-release-notes` now distinguishes new-capability introductions from pre-existing refinements, preventing mis-categorized changelog entries when unreleased features are refined before first release. Repository validation tooling is strengthened with skill-content validation and resolver script enforcement.
+
+### Added
+
+- `dotnet-test` skill providing lifecycle-aware xUnit test migration and modernization guidance with role-specific patterns for ordinary unit tests, ASP.NET Core WebApplicationFactory elimination, and console/worker service functional-test bootstrapping,
+- Comprehensive test-role classification in `dotnet-test` covering focused vs. shared fixtures, managed-fixture entrypoint composition, Generic Host seam preservation, and WebApplicationFactory elimination patterns without pipeline reconstruction,
+- `dotnet-test` SKILL.md with step-by-step test-project inspection, xUnit v3 modernization paths, managed-fixture bootstrap hosts, role-specific reference-document guidance, structured parameter collection via FORMS.md, and test-package compatibility validation,
+- Role-specific test assets in `dotnet-test/assets/` covering unit-test behavior patterns, focused and shared web-application fixtures, application-focused fixtures, and bootstrapper hosts for console and worker services in both minimal and traditional Program/Startup configurations,
+- Comprehensive `dotnet-test` eval scenarios with paired test cases covering fresh xUnit unit-test projects, ASP.NET Core focused functional tests with managed fixtures, shared web-application functional tests, xUnit v2-to-v3 modernization, and worker service functional tests with GenericHost seams,
+- `dotnet-test` reference documentation covering unit-test fundamentals, web-functional-test patterns, application-functional-test fixtures, bootstrapper-host programs for console and worker services, xUnit v3 modernization guidance, and migration-invariant preservation rules,
+- `dotnet-test` package-compatibility resolver script `resolve-test-package-versions.ps1` validating combined package restore across selected NuGet candidates for multiple target frameworks, preventing incompatible package combinations in managed-fixture test projects,
+- Test coverage for `dotnet-test` package-compatibility resolver via `test-resolve-test-package-versions.ps1` validating resolver behavior, compatibility detection, and framework coverage,
+- `resolve-release-entity.ps1` script for `git-keep-a-changelog` enabling deterministic classification of base-to-HEAD change outcomes (`Added`, `Removed`, `Changed`, or `Unchanged`) at release boundaries, supporting per-entity classification separate from intermediate commit verbs,
+- Test coverage for `git-keep-a-changelog` release-entity classification via `test-resolve-release-entity.ps1` validating classification outcomes and boundary handling.
+
+### Changed
+
+- Enhanced `git-keep-a-changelog` SKILL.md with improved release-entity classification guidance using the new `resolve-release-entity.ps1` helper for deterministic base-state analysis, eliminating mis-categorization of pre-existing capability refinements as `Changed` or `Fixed` when they should remain under `Added` for new capabilities,
+- Updated `git-keep-a-changelog` Step 4e guidance to run the bundled release-entity classifier for path-backed entities, treating its emitted classification as authoritative and avoiding commit-verb-based category inference,
+- Enhanced `git-keep-a-changelog` deterministic reduction model with improved reconciliation rules and examples showing how surviving-outcome classification prevents duplicate changelog entries when unreleased drafts are refined with multiple commits before first release,
+- Improved `git-keep-a-changelog` bad-output-characteristics section with explicit warnings about placing pre-release refinements under `Changed` or `Fixed` instead of preserving them under the initial `Added` outcome,
+- Enhanced `git-nuget-release-notes` SKILL.md with improved release-entity classification guidance aligned with `git-keep-a-changelog` enhancements, including per-package classification and cumulative-package-set reduction patterns,
+- Updated repository validation to enforce `resolve-release-entity.ps1` presence in git-keep-a-changelog and validate adoption of entity-classification patterns in release-notes skills,
+- README.md skill inventory and descriptions updated to reflect `dotnet-test` capability, enhanced release-entity classification in `git-keep-a-changelog` and `git-nuget-release-notes`, and improved validation tooling,
+- Enhanced `scripts/validate-skill-templates.ps1` with deterministic skill-content validation, release-entity classifier enforcement, git-keep-a-changelog trigger validation, and resolver-script presence checks.
+
 ## [0.8.2] - 2026-08-07
 
 This is a patch release focused on skill refinement and documentation hardening. The release significantly expands `git-keep-a-changelog` with step-by-step workflow improvements, strengthens `git-nuget-release-notes` and `git-visual-squash-summary` skills, deprecates `skill-creator-agnostic` in favor of the upstream Anthropic `skill-creator`, enhances skill validation tooling, and improves repository guidance documentation in `AGENTS.md` and `README.md`.
@@ -551,6 +579,8 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.2...HEAD
+[0.9.0]: https://github.com/codebeltnet/agentic/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/codebeltnet/agentic/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/codebeltnet/agentic/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/codebeltnet/agentic/compare/v0.7.5...v0.8.0

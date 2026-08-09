@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>
+  <ItemGroup><PackageVersion Include="Codebelt.Bootstrapper.Worker" Version="5.1.2" /></ItemGroup>
+</Project>
+
