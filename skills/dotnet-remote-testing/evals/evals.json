@@ -1,0 +1,94 @@
+{
+  "skill_name": "dotnet-remote-testing",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "This repo has no testenvironments.json. Remote test this solution using .NET 10 in a container and show me the results.",
+      "expected_output": "The skill runs the bundled deterministic runner (scripts/remote-test.cs) to derive a zero-configuration Microsoft SDK environment from the live release index, executes restore/build/test inside Docker against an mcr.microsoft.com/dotnet/sdk image pinned to a digest, and reports a concise structured result (image, digest, passed/skipped/failed, duration) without creating any Dockerfile or container plumbing.",
+      "expectations": [
+        "Recognizes that an absent testenvironments.json is not an error and uses the zero-configuration path",
+        "Invokes scripts/remote-test.cs (list/plan/run) rather than composing ad-hoc docker commands",
+        "Selects an official mcr.microsoft.com/dotnet/sdk image for a supported .NET 10 channel derived from Microsoft release metadata, not a hardcoded version",
+        "Runs tests inside Docker and does not fall back to running dotnet test on the host",
+        "Does NOT create a Dockerfile, docker-compose.yml, .devcontainer/, .vscode/, or Directory.Build.* file",
+        "Reports a concise result including the image and resolved digest, and the passed/skipped/failed counts"
+      ],
+      "files": [
+        "evals/files/zero-config/Sample.slnx",
+        "evals/files/zero-config/src/Sample/Sample.csproj",
+        "evals/files/zero-config/src/Sample/Calculator.cs",
+        "evals/files/zero-config/test/Sample.Tests/Sample.Tests.csproj",
+        "evals/files/zero-config/test/Sample.Tests/CalculatorTests.cs"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Run my tests remotely and show me the results.",
+      "expected_output": "The skill discovers the repository's testenvironments.json, resolves the single configured Docker environment (linux-dotnet-10) as authoritative, and runs the tests in that container via scripts/remote-test.cs, honoring the configured dockerImage without substituting a different image or generating any plumbing.",
+      "expectations": [
+        "Discovers and honors the existing testenvironments.json version 1 configuration",
+        "Resolves the single configured Docker environment 'linux-dotnet-10' without asking or inventing alternatives",
+        "Uses the configured dockerImage (mcr.microsoft.com/dotnet/sdk:10.0) as written rather than a generated or third-party image",
+        "Executes through scripts/remote-test.cs and returns a structured result",
+        "Does not modify testenvironments.json or add any container/editor plumbing"
+      ],
+      "files": [
+        "evals/files/configured/testenvironments.json",
+        "evals/files/configured/test/Api.Tests/Api.Tests.csproj",
+        "evals/files/configured/test/Api.Tests/HealthTests.cs"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "What remote test environments can I use in this repository?",
+      "expected_output": "The skill runs scripts/remote-test.cs list and reports the Microsoft-derived environments for the currently supported LTS/STS channels plus the current preview channel (names and SDK image tags), all discovered from Microsoft's release metadata at runtime rather than hardcoded.",
+      "expectations": [
+        "Runs the runner's list command instead of guessing environments",
+        "Presents Microsoft-derived environments (e.g. dotnet-<major>-lts, dotnet-<major>-sts, dotnet-<major>-preview) discovered from release metadata",
+        "Does not hardcode specific .NET version numbers as permanent truth",
+        "Associates each environment with an official mcr.microsoft.com/dotnet/sdk image"
+      ],
+      "files": [
+        "evals/files/zero-config/Sample.slnx",
+        "evals/files/zero-config/src/Sample/Sample.csproj",
+        "evals/files/zero-config/src/Sample/Calculator.cs",
+        "evals/files/zero-config/test/Sample.Tests/Sample.Tests.csproj",
+        "evals/files/zero-config/test/Sample.Tests/CalculatorTests.cs"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Remote test using the linux-wsl environment from my testenvironments.json.",
+      "expected_output": "The skill reports that the requested environment type (wsl) is not supported yet (Docker only) rather than silently ignoring it, converting it to Docker, or running the tests locally.",
+      "expectations": [
+        "Reads testenvironments.json and identifies linux-wsl as a wsl-type environment",
+        "Clearly reports the wsl environment as unsupported (Docker only) instead of running it",
+        "Does not convert the wsl environment into a Docker environment or fabricate an image for it",
+        "Does not fall back to running the tests on the local host"
+      ],
+      "files": [
+        "evals/files/unsupported/testenvironments.json",
+        "evals/files/unsupported/test/Worker.Tests/Worker.Tests.csproj",
+        "evals/files/unsupported/test/Worker.Tests/WorkerTests.cs"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Set up remote testing for this repo so I can run the tests in a container, but I don't want a bunch of Docker files added to my repository.",
+      "expected_output": "The skill explains that zero-configuration remote testing needs no files added to the repository: it derives an official Microsoft SDK environment from release metadata and runs through scripts/remote-test.cs. It does not generate a Dockerfile, dev container, compose file, or editor configuration.",
+      "expectations": [
+        "Explains that no files need to be added to the repository to run tests remotely",
+        "Does NOT generate a Dockerfile, docker-compose.yml/compose.yml, .devcontainer/, .vscode/, or Directory.Build.* file",
+        "Uses official mcr.microsoft.com/dotnet/sdk images directly via the deterministic runner",
+        "Optionally notes that an existing configured dockerFile would be honored, but is never generated"
+      ],
+      "files": [
+        "evals/files/zero-config/Sample.slnx",
+        "evals/files/zero-config/src/Sample/Sample.csproj",
+        "evals/files/zero-config/src/Sample/Calculator.cs",
+        "evals/files/zero-config/test/Sample.Tests/Sample.Tests.csproj",
+        "evals/files/zero-config/test/Sample.Tests/CalculatorTests.cs"
+      ]
+    }
+  ]
+}
