@@ -4,7 +4,7 @@ $skillRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 $required = @(
     'SKILL.md', 'FORMS.md', 'evals/evals.json',
-    'scripts/inspect-dotnet-tests.ps1', 'scripts/resolve-test-package-versions.ps1', 'scripts/test-inspect-dotnet-tests.ps1',
+    'scripts/inspect-dotnet-tests.ps1', 'scripts/resolve-test-package-versions.ps1', 'scripts/test-inspect-dotnet-tests.ps1', 'scripts/test-resolve-test-package-versions.ps1',
     'references/unit-tests.md', 'references/web-functional-tests.md', 'references/application-functional-tests.md',
     'references/bootstrapper-hosts.md', 'references/xunit-v3-modernization.md', 'references/migration-invariants.md',
     'assets/unit/BehaviorTest.cs', 'assets/web/FocusedWebApplicationTest.cs', 'assets/web/SharedWebApplicationTest.cs',
@@ -24,6 +24,9 @@ foreach ($needle in @('WebApplicationTestFactory', 'ApplicationTestFactory', 'Ma
     if (-not $skill.Contains($needle, [System.StringComparison]::Ordinal)) { throw "SKILL.md is missing required contract: $needle" }
 }
 if (-not $skill.Contains('An MTP executable run may supplement that gate but never replaces it', [System.StringComparison]::Ordinal)) { throw 'SKILL.md must reject MTP executable substitution for requested dotnet test validation.' }
+
+& pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-resolve-test-package-versions.ps1')
+if ($LASTEXITCODE -ne 0) { throw "Resolver regression failed with exit code $LASTEXITCODE." }
 
 $evals = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'evals/evals.json'))
 foreach ($needle in @('WebApplicationTestFactory.Create<Program>', 'ManagedWebApplicationFixture<Program>', 'WebApplication.CreateBuilder', 'focused inspector postcondition')) {

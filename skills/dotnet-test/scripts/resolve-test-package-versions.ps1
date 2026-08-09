@@ -31,7 +31,7 @@ function Get-VersionKey {
 }
 
 function Test-PackageCompatibility {
-    param([string]$Id, [string]$Version, [string[]]$Frameworks, [string]$Workspace)
+    param([object[]]$Packages, [string[]]$Frameworks, [string]$Workspace)
 
     $projectPath = Join-Path $Workspace 'compatibility.csproj'
     $frameworkElement = if ($Frameworks.Count -eq 1) {
@@ -39,6 +39,11 @@ function Test-PackageCompatibility {
     } else {
         "<TargetFrameworks>$($Frameworks -join ';')</TargetFrameworks>"
     }
+    $packageReferences = @(
+        foreach ($package in @($Packages)) {
+            '    <PackageReference Include="{0}" Version="{1}" />' -f $package.packageId, $package.version
+        }
+    ) -join [Environment]::NewLine
     $xml = @"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -46,7 +51,7 @@ function Test-PackageCompatibility {
     <RestorePackagesPath>$(Join-Path $Workspace 'packages')</RestorePackagesPath>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="$Id" Version="$Version" />
+$packageReferences
   </ItemGroup>
 </Project>
 "@
@@ -81,7 +86,7 @@ $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-test-package-r
 New-Item -ItemType Directory -Path $workspace -Force | Out-Null
 
 try {
-    $resolved = [System.Collections.Generic.List[object]]::new()
+    $packageCandidates = [System.Collections.Generic.List[object]]::new()
     foreach ($id in @($packageIds | Sort-Object -Unique)) {
         $indexUrl = '{0}{1}/index.json' -f $packageBaseAddress, $id.ToLowerInvariant()
         try { $index = Invoke-RestMethod -Uri $indexUrl } catch { throw "NuGet lookup failed for '$id' at '$indexUrl': $($_.Exception.Message)" }
@@ -91,23 +96,64 @@ try {
             Sort-Object major, minor, patch, revision -Descending |
             Select-Object -First $MaximumCandidates)
         if ($candidates.Count -eq 0) { throw "NuGet returned no stable versions for '$id'." }
+        $packageCandidates.Add([pscustomobject]@{ packageId = $id; source = $indexUrl; candidates = $candidates })
+    }
 
-        $selected = $null
+    function Resolve-PackageSet {
+        param([int]$Index, [object[]]$Selected)
+
+        if ($Index -ge $packageCandidates.Count) {
+            return [pscustomobject]@{
+                compatible = $true
+                packages = @($Selected)
+            }
+        }
+
+        $package = $packageCandidates[$Index]
         $lastFailure = $null
-        foreach ($candidate in $candidates) {
+        foreach ($candidate in @($package.candidates)) {
             $packageWorkspace = Join-Path $workspace ([System.IO.Path]::GetRandomFileName())
             New-Item -ItemType Directory -Path $packageWorkspace -Force | Out-Null
-            $compatibility = Test-PackageCompatibility -Id $id -Version $candidate.text -Frameworks $TargetFramework -Workspace $packageWorkspace
-            if ($compatibility.compatible) {
-                $selected = $candidate.text
-                break
+            $selectedPackage = [pscustomobject]@{
+                packageId = $package.packageId
+                version = $candidate.text
+                source = $package.source
             }
-            $lastFailure = $compatibility.output
+            $trial = @($Selected) + $selectedPackage
+            $compatibility = Test-PackageCompatibility -Packages $trial -Frameworks $TargetFramework -Workspace $packageWorkspace
+            if (-not $compatibility.compatible) {
+                $lastFailure = $compatibility.output
+                continue
+            }
+
+            $resolution = Resolve-PackageSet -Index ($Index + 1) -Selected $trial
+            if ($resolution.compatible) {
+                return $resolution
+            }
+            $lastFailure = $resolution.output
         }
-        if ($null -eq $selected) {
-            throw "No stable '$id' version among the newest $($candidates.Count) candidates restored for '$($TargetFramework -join ';')'. Last restore output:`n$lastFailure"
+
+        return [pscustomobject]@{
+            compatible = $false
+            packageId = $package.packageId
+            candidateCount = @($package.candidates).Count
+            output = $lastFailure
         }
-        $resolved.Add([pscustomobject]@{ packageId = $id; version = $selected; source = $indexUrl; compatibility = 'isolated restore passed' })
+    }
+
+    $resolution = Resolve-PackageSet -Index 0 -Selected @()
+    if (-not $resolution.compatible) {
+        throw "No stable '$($resolution.packageId)' version among the newest $($resolution.candidateCount) candidates restored with a compatible package set for '$($TargetFramework -join ';')'. Last restore output:`n$($resolution.output)"
+    }
+
+    $resolved = [System.Collections.Generic.List[object]]::new()
+    foreach ($package in @($resolution.packages)) {
+        $resolved.Add([pscustomobject]@{
+            packageId = $package.packageId
+            version = $package.version
+            source = $package.source
+            compatibility = 'combined restore passed'
+        })
     }
 
     [ordered]@{
@@ -118,4 +164,3 @@ try {
 } finally {
     if (Test-Path -LiteralPath $workspace) { Remove-Item -LiteralPath $workspace -Recurse -Force }
 }
-
