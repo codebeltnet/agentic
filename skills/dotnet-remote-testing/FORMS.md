@@ -27,6 +27,9 @@ Collect only the fields that are still unresolved after inspecting the request a
 
 - **type:** text
 - **prompt:** Which project or solution should be tested (path relative to the source root)?
+- **choices:**
+  - The exact target returned by `remote-test.cs plan` (Recommended)
+  - A custom project or solution path
 - **default:** Auto-resolved (root solution, single solution, or single project)
 - **required:** false
 - **show_when:** `test_scope` is `A specific project`

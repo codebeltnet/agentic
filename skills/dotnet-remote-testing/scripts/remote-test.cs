@@ -1600,7 +1600,15 @@ internal static class ReleaseMetadataStore
             var retrievedAt = root.TryGetProperty("retrievedAt", out var r) && r.ValueKind == JsonValueKind.String
                 ? DateTimeOffset.Parse(r.GetString()!, CultureInfo.InvariantCulture)
                 : File.GetLastWriteTimeUtc(cacheFile);
-            var rawJson = root.GetProperty("releasesIndex").GetRawText();
+            var releasesIndex = root.GetProperty("releasesIndex");
+            if (releasesIndex.ValueKind != JsonValueKind.Array)
+            {
+                throw new JsonException("Cached releasesIndex must be an array.");
+            }
+
+            // The cache stores only the releases-index array, while ReleaseIndexReader consumes the
+            // original object-shaped releases-index.json contract.
+            var rawJson = $$"""{"releases-index":{{releasesIndex.GetRawText()}}}""";
             var channels = ReleaseIndexReader.Parse(rawJson);
             return new ReleaseMetadataResult(new ReleaseMetadata
             {
@@ -2648,6 +2656,34 @@ internal static class SelfTest
             ["dotnet-10-lts", "dotnet-9-sts", "dotnet-8-lts", "dotnet-11-preview"]));
         Check("generated images use mcr sdk repo", generated.All(e => e.DockerImage!.StartsWith("mcr.microsoft.com/dotnet/sdk:")));
         Check("preview env labeled Preview", generated.First(e => e.Name == "dotnet-11-preview").ReleaseType == "Preview");
+
+        var cacheRoot = Path.Combine(Path.GetTempPath(), "dotnet-remote-testing-self-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(cacheRoot);
+            using var indexDocument = JsonDocument.Parse(SampleReleaseIndex);
+            var cachePayload = new
+            {
+                retrievedAt = "2026-08-10T00:00:00.0000000+00:00",
+                source = RemoteTestProgram.ReleasesIndexUrl,
+                releasesIndex = indexDocument.RootElement.GetProperty("releases-index"),
+            };
+            File.WriteAllText(
+                Path.Combine(cacheRoot, "releases-index.cache.json"),
+                JsonSerializer.Serialize(cachePayload, RemoteTestProgram.JsonOut));
+
+            var cached = ReleaseMetadataStore.LoadAsync(
+                Options.Parse(["list", "--offline", "--cache-root", cacheRoot]),
+                CancellationToken.None).GetAwaiter().GetResult();
+            Check("cached release array is parsed as release metadata",
+                cached.Error is null && cached.Metadata is not null && cached.Metadata.IsStale && cached.Metadata.Channels.Count == 6);
+        }
+        finally
+        {
+            try { Directory.Delete(cacheRoot, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     private static void SdkAndImageTagTests()

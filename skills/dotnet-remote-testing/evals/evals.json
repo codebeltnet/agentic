@@ -89,6 +89,20 @@
         "evals/files/zero-config/test/Sample.Tests/Sample.Tests.csproj",
         "evals/files/zero-config/test/Sample.Tests/CalculatorTests.cs"
       ]
+    },
+    {
+      "id": 6,
+      "prompt": "This repo has no testenvironments.json and I am offline. List the remote test environments using cache/releases-index.cache.json with --offline and --cache-root cache.",
+      "expected_output": "The skill invokes the bundled runner in offline mode with the supplied cache root, parses the cached Microsoft release metadata, and lists the generated official SDK environments instead of reporting that discovery produced no environments.",
+      "expectations": [
+        "Recognizes that an absent testenvironments.json is still the zero-configuration path",
+        "Invokes scripts/remote-test.cs list with --offline and --cache-root cache",
+        "Parses the cached releasesIndex array and returns the generated environments from it",
+        "Does not attempt a network fetch, invent release metadata, or add container plumbing"
+      ],
+      "files": [
+        "evals/files/offline-cache/cache/releases-index.cache.json"
+      ]
     }
   ]
 }

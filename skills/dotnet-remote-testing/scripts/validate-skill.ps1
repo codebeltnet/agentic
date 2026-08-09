@@ -40,6 +40,14 @@ if (-not $skill.Contains('orchestration', [System.StringComparison]::Ordinal)) {
     throw 'SKILL.md must describe the skill as the orchestration layer over a deterministic runner.'
 }
 
+$forms = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'FORMS.md'))
+$projectField = [regex]::Match($forms, '(?ms)^### project\s*(?<body>.*?)(?=^### |\z)')
+if (-not $projectField.Success -or
+    -not $projectField.Groups['body'].Value.Contains('- **choices:**', [System.StringComparison]::Ordinal) -or
+    -not $projectField.Groups['body'].Value.Contains('exact target returned by `remote-test.cs plan`', [System.StringComparison]::Ordinal)) {
+    throw 'FORMS.md must expose the computed project target as a selectable choice.'
+}
+
 & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-remote-testing.ps1')
 if ($LASTEXITCODE -ne 0) {
     throw "Runner test harness failed with exit code $LASTEXITCODE."

@@ -1,0 +1,18 @@
+{
+  "retrievedAt": "2026-08-10T00:00:00.0000000+00:00",
+  "source": "https://raw.githubusercontent.com/dotnet/core/refs/heads/main/release-notes/releases-index.json",
+  "releasesIndex": [
+    {
+      "channel-version": "11.0",
+      "latest-sdk": "11.0.100-preview.6.26359.118",
+      "support-phase": "preview",
+      "release-type": "sts"
+    },
+    {
+      "channel-version": "10.0",
+      "latest-sdk": "10.0.302",
+      "support-phase": "active",
+      "release-type": "lts"
+    }
+  ]
+}
