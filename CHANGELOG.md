@@ -4,9 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0] - 2026-08-09
+## [0.9.0] - 2026-08-10
 
-This is a minor release introducing the `dotnet-test` skill for lifecycle-aware xUnit test migration and refactoring across ordinary unit tests, ASP.NET Core functional tests, and console/worker service tests. The release includes comprehensive test-role classification, managed-fixture patterns preserving composition-root control, xUnit v3 modernization guidance, deterministic package-version resolution, and integration-test bootstrapper hosts. Enhanced release-entity classification in `git-keep-a-changelog` and `git-nuget-release-notes` now distinguishes new-capability introductions from pre-existing refinements, preventing mis-categorized changelog entries when unreleased features are refined before first release. Repository validation tooling is strengthened with skill-content validation and resolver script enforcement.
+This is a minor release introducing the `dotnet-test` skill for lifecycle-aware xUnit test migration and the `dotnet-remote-testing` skill for deterministic remote testing in Docker containers, alongside foundational skill-benchmarking infrastructure with caching and workspace management. The release includes comprehensive test-role classification and managed-fixture patterns for `dotnet-test`, offline-safe release discovery for remote testing, deterministic caching and structured tracing in the `dotnet-test` resolver, and cross-platform execution support. Enhanced release-entity classification in `git-keep-a-changelog` and `git-nuget-release-notes` now distinguishes new-capability introductions from pre-existing refinements, preventing mis-categorized changelog entries when unreleased features are refined before first release. Repository validation tooling is strengthened with skill-content validation and resolver script enforcement.
 
 ### Added
 
@@ -19,7 +19,16 @@ This is a minor release introducing the `dotnet-test` skill for lifecycle-aware 
 - `dotnet-test` package-compatibility resolver script `resolve-test-package-versions.ps1` validating combined package restore across selected NuGet candidates for multiple target frameworks, preventing incompatible package combinations in managed-fixture test projects,
 - Test coverage for `dotnet-test` package-compatibility resolver via `test-resolve-test-package-versions.ps1` validating resolver behavior, compatibility detection, and framework coverage,
 - `resolve-release-entity.ps1` script for `git-keep-a-changelog` enabling deterministic classification of base-to-HEAD change outcomes (`Added`, `Removed`, `Changed`, or `Unchanged`) at release boundaries, supporting per-entity classification separate from intermediate commit verbs,
-- Test coverage for `git-keep-a-changelog` release-entity classification via `test-resolve-release-entity.ps1` validating classification outcomes and boundary handling.
+- Test coverage for `git-keep-a-changelog` release-entity classification via `test-resolve-release-entity.ps1` validating classification outcomes and boundary handling,
+- `dotnet-remote-testing` skill enabling deterministic remote testing of .NET projects in Docker containers using Microsoft's official SDK images, with support for `testenvironments.json` configuration or zero-config discovery from official release metadata,
+- Docker-based remote test orchestration infrastructure including container setup, NuGet cache management, test execution, and result parsing transparently behind a reusable runner script,
+- Offline-safe release metadata caching for remote testing: successful release metadata is cached outside the repository for offline reuse, and the form exposes the exact runner-computed target as a recommended option,
+- Cross-platform dotnet execution support in the benchmark runner including a POSIX shell script shim alongside Windows batch files for non-Windows platforms,
+- `run-skill-benchmark.ps1` as the preferred local entry point for skill benchmarking, managing a single persistent temp workspace, sharing benchmark-scoped caches, staging fixtures once, enforcing bounded parallelism and per-run timeouts, and prewarming expensive resolver work,
+- Comprehensive `dotnet-remote-testing` skill documentation with step-by-step workflow guidance covering container selection, test environment configuration, offline discovery, and result parsing,
+- Structured test-environment configuration via `testenvironments.json` support with configuration templates and validation for multiple target frameworks,
+- `dotnet-remote-testing` eval scenarios covering zero-config discovery, configured environments, offline cache behavior, and unsupported-environment handling,
+- Reference documentation for `dotnet-remote-testing` including Docker execution details, release discovery mechanics, and `testenvironments.json` schema and examples.
 
 ### Changed
 
@@ -29,8 +38,9 @@ This is a minor release introducing the `dotnet-test` skill for lifecycle-aware 
 - Improved `git-keep-a-changelog` bad-output-characteristics section with explicit warnings about placing pre-release refinements under `Changed` or `Fixed` instead of preserving them under the initial `Added` outcome,
 - Enhanced `git-nuget-release-notes` SKILL.md with improved release-entity classification guidance aligned with `git-keep-a-changelog` enhancements, including per-package classification and cumulative-package-set reduction patterns,
 - Updated repository validation to enforce `resolve-release-entity.ps1` presence in git-keep-a-changelog and validate adoption of entity-classification patterns in release-notes skills,
-- README.md skill inventory and descriptions updated to reflect `dotnet-test` capability, enhanced release-entity classification in `git-keep-a-changelog` and `git-nuget-release-notes`, and improved validation tooling,
-- Enhanced `scripts/validate-skill-templates.ps1` with deterministic skill-content validation, release-entity classifier enforcement, git-keep-a-changelog trigger validation, and resolver-script presence checks.
+- README.md skill inventory and descriptions updated to reflect `dotnet-test` and `dotnet-remote-testing` capabilities, enhanced release-entity classification in `git-keep-a-changelog` and `git-nuget-release-notes`, and improved validation tooling,
+- Enhanced `scripts/validate-skill-templates.ps1` with deterministic skill-content validation, release-entity classifier enforcement, git-keep-a-changelog trigger validation, and resolver-script presence checks,
+- Enhanced README.md documentation of the benchmark runner as the preferred local workflow, explaining structured result parsing and failure classification.
 
 ## [0.8.2] - 2026-08-07
 
