@@ -1488,6 +1488,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/evals/evals.json' -GitRef $Ref
     $scopeResolver = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/resolve-release-scope.ps1' -GitRef $Ref
     $scopeResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1' -GitRef $Ref
+    $entityResolver = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/resolve-release-entity.ps1' -GitRef $Ref
+    $entityResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Create or update `CHANGELOG.md` directly, then stop for user review.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` does not exist, create a compliant one before'
@@ -1527,6 +1529,10 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-scope.ps1' -Content $scopeResolver -Needle '$diffRange = "$mergeBase..$headCommit"'
     Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-scope.ps1' -Content $scopeResolver -Needle 'base_history_bleed = $false'
     Assert-Contains -Name 'git-keep-a-changelog/scripts/test-resolve-release-scope.ps1' -Content $scopeResolverTests -Needle 'the tagged previous release bled into the new release scope'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'run `scripts/resolve-release-entity.ps1` with the emitted `merge_base` and `head_commit`'
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-entity.ps1' -Content $entityResolver -Needle "'Added'"
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-entity.ps1' -Content $entityResolver -Needle "'Unchanged'"
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -Content $entityResolverTests -Needle "Assert-Classification -EntityPath 'skills/dotnet-test' -Expected 'Added'"
 
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Updates CHANGELOG.md directly instead of only drafting notes in chat'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Reads full commit subjects and bodies before writing the release entry'
@@ -1540,9 +1546,11 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Inserts the compare-link footer at the bottom when it is missing from an existing changelog'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the merge-base as an excluded boundary rather than the first commit of the concrete release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let yolo mode widen committed history or include the v10.0.9 boundary commit'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Runs scripts/resolve-release-entity.ps1 for the path-backed dotnet-test entity and uses its Added classification'
 
     if ([string]::IsNullOrWhiteSpace($Ref)) {
         & (Join-Path $repoRoot 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1') | Out-Null
+        & (Join-Path $repoRoot 'skills/git-keep-a-changelog/scripts/test-resolve-release-entity.ps1') | Out-Null
     }
 }
 
@@ -1558,18 +1566,24 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'History is evidence; the resulting state is truth.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Reduce first. Interpret second. Summarize last.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Base absent and `HEAD` absent -> omit it.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Classify each user-facing release entity from whether it existed at the resolved base'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'intermediate commits that refine, fix, document, or validate it cannot create `Changed` or `Fixed` outcomes'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Do not summarize commits one by one and deduplicate the prose afterward.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Use history only to explain the surviving outcomes'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Omits `Foo` because it leaves no surviving base-to-HEAD change'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not add a Security or other section entry when the final diff contradicts the commit message claim'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not create a Changed section or Changed bullet for dotnet-test refinements made before its first release'
 
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'History is evidence; the resulting state is truth.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Classify each user-facing package capability from whether it existed at the resolved base'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle '`# Improvements` and `# Bug Fixes` require the affected capability or behavior to exist at the resolved base.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Do not accumulate bullets from individual commits and deduplicate them afterward.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle '`Newtonsoft.Json 13.0.3 -> 14.0.0 -> 13.0.3` -> no `# ALM` bullet.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Read the full commit bodies only after the cumulative delta is clear.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'A restored API or reverted dependency upgrade does not earn a section entry.'
     Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Omits the reverted `Newtonsoft.Json` change because the final version matches the base state'
     Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Does not claim a breaking API removal for `WidgetClient.LegacySend()` because it was restored unchanged'
+    Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Does not place RetryPolicy under Improvements because it was refined before its first release'
 
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'This skill answers one question: **What would this branch effectively do if it were squashed into one commit now?**'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'History is evidence; the resulting state is truth.'
@@ -1580,7 +1594,9 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $squashEvals -Needle 'Omits `Foo` entirely because it is absent at both the base and `HEAD` states'
 
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'reduces the selected range to surviving base-to-`HEAD` outcomes before section classification'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'establishes each user-facing release entity against the base'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'reduces each package to its surviving base-to-`HEAD` delta before classifying history'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'establishes each package capability against the base'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'reducing the cumulative base-to-`HEAD` delta first so reverted churn disappears'
     Assert-Contains -Name 'README.md' -Content $readme -Needle '**Final-state first** — computes the cumulative base-to-`HEAD` delta before reading chronology'
 }
