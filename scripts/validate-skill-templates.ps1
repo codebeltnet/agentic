@@ -1573,11 +1573,13 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Base absent and `HEAD` absent -> omit it.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Classify each user-facing release entity from whether it existed at the resolved base'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'intermediate commits that refine, fix, document, or validate it cannot create `Changed` or `Fixed` outcomes'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'The current contents of the target heading are cached output, not a release baseline.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Do not summarize commits one by one and deduplicate the prose afterward.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $changelogSkill -Needle 'Use history only to explain the surviving outcomes'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Omits `Foo` because it leaves no surviving base-to-HEAD change'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not add a Security or other section entry when the final diff contradicts the commit message claim'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not create a Changed section or Changed bullet for dotnet-test refinements made before its first release'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not preserve the earlier draft bullet as a frozen baseline that forces later refinements into `Changed`'
 
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'History is evidence; the resulting state is truth.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Classify each user-facing package capability from whether it existed at the resolved base'
