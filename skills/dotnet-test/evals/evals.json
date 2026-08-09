@@ -4,11 +4,11 @@
     {
       "id": 1,
       "prompt": "In the attached Acme.Calculator fixture, bootstrap the existing test project as an ordinary Codebelt xUnit test project. Add a real behavior test for Calculator.Add, preserve net10.0 and central package management, use xUnit v3 with Microsoft Testing Platform, and run restore/build/test.",
-      "expected_output": "A buildable xUnit v3/MTP unit-test project with Codebelt Test inheritance, ITestOutputHelper, and a source-grounded Add behavior test.",
+      "expected_output": "A buildable xUnit v3/MTP unit-test project with Codebelt Test inheritance, ITestOutputHelper, a source-grounded Add behavior test, and a NuGet-resolved package set that passes combined compatibility restore.",
       "expectations": [
         "Classifies the selected project as an ordinary unit test",
         "Keeps net10.0 and central package management",
-        "Uses xunit.v3, Microsoft Testing Platform, and a compatible Codebelt xUnit package",
+        "Uses xunit.v3, Microsoft Testing Platform, and a compatible Codebelt xUnit package whose selected package set passes combined compatibility restore",
         "Adds a Test-derived class with ITestOutputHelper and file-scoped Acme.Calculator namespace",
         "Adds a ShouldReturnSum_WhenAddingTwoNumbers-style source-grounded behavior test rather than a placeholder",
         "Restore, build, and test succeed"

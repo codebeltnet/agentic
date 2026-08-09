@@ -58,7 +58,7 @@ Run the resolver for the selected target frameworks and role:
 pwsh -NoProfile -File "<skill-root>/scripts/resolve-test-package-versions.ps1" -TargetFramework <tfm> -Role <Unit|WebFunctional|ApplicationFunctional>
 ```
 
-The resolver queries NuGet stable versions and verifies candidate compatibility through an isolated restore. If it fails, report the package, target frameworks, and restore evidence instead of guessing.
+The resolver queries NuGet stable versions, tries newer candidates first, and verifies each candidate against the selected package set through isolated compatibility-project restores; it emits only a set whose combined package restore passes. If it fails, report the package, target frameworks, and restore evidence instead of guessing.
 
 Preserve package ownership:
 
