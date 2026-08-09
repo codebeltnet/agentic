@@ -39,6 +39,7 @@ When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in
 - Never change range inclusivity because the changelog target is a concrete version instead of `[Unreleased]`.
 - Include commits from every author/contributor in the selected scope. Do not filter to the current git user, current contributor, bot identity, configured author, or "my changes" unless the user explicitly asks for an author-filtered changelog.
 - If the current branch starts with a version hint such as `v0.3.0/`, use that to target a concrete release heading.
+- If a concrete target heading already exists but its matching `vX.Y.Z` tag does not, treat that heading as an unreleased draft and regenerate it from the resolved git result instead of preserving stale bullets as a second baseline.
 - Otherwise, target `## [Unreleased]`.
 - Always write a release highlight immediately below the target heading.
 - The release highlight must explicitly classify the release as `major`, `minor`, or `patch`.
@@ -50,6 +51,7 @@ When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in
 - If pending worktree changes exist for a concrete release draft, do not silently include or exclude them. Ask the user first with a short `Yes / No / Custom` prompt. **Exception: in yolo/auto mode, include all pending changes automatically without asking.**
 - Yolo/auto changes pending-worktree handling only. It never widens committed history or includes the comparison boundary.
 - Do not dump commit subjects verbatim into the changelog.
+- Do not treat the current contents of the target heading as a release-classification baseline; git state is the baseline.
 - Do not invent unsupported changes, risks, or migration guidance.
 
 ## Mandatory Checkpoints
@@ -71,6 +73,8 @@ History = provenance used to explain Result
 ```
 
 History is evidence; the resulting state is truth.
+
+The current contents of the target heading are cached output, not a release baseline. When rerunning on an unreleased version branch whose matching tag is absent, discard the prior draft narrative and regenerate the heading from the resolved base-to-`HEAD` result so later refinements to the same new capability remain part of its `Added` outcome.
 
 Reduce first. Interpret second. Summarize last.
 
@@ -102,6 +106,7 @@ Examples:
 - File deleted and recreated identically -> no changelog entry.
 - One capability added, revised, and still present -> usually one `Added` bullet describing its final form, not separate `Added`, `Changed`, and `Fixed` bullets.
 - New `skills/dotnet-test/` capability added, then documented, validated, and refined before release -> `Added` only for the complete shipped capability. README registration and validator/eval wiring whose sole purpose is that introduction stay part of the added outcome.
+- Existing `## [0.9.0]` draft with one `Added` bullet, then more commits refine the same unreleased `dotnet-test` capability -> rewrite the draft so `dotnet-test` stays under `Added`; do not append `Changed` or `Fixed` just because the earlier draft already exists.
 
 ## Release Highlight Contract
 
@@ -194,6 +199,7 @@ Determine whether to write a concrete release section or update `[Unreleased]`.
 
 When the user asks to "finalize", "ready to release", "rtr", "release", "publish", or "ship" (or similar release-intent words):
 - Extract the version from the current branch name if it starts with a version prefix such as `v0.3.0/feature-name`.
+- When the target is `## [X.Y.Z]`, check whether `refs/tags/vX.Y.Z` exists locally. If it does not, any existing `## [X.Y.Z]` section is still a branch draft rather than released history.
 - Target `## [X.Y.Z] - YYYY-MM-DD` (today's date) for that extracted version.
 - This is a strong signal that the user wants to finalize that specific release in the changelog.
 
@@ -202,6 +208,7 @@ Otherwise:
 - Strip the leading `v` from the visible changelog heading, but keep tag comparisons in `vX.Y.Z` form.
 - If no version hint exists, target `## [Unreleased]`.
 - If the target heading already exists, update it in place instead of duplicating it.
+- For an existing concrete heading whose matching tag is absent, replace the release highlight and populated sections wholesale from the current resolved git evidence. Do not preserve an older `Added` bullet and then layer later pre-release refinements into `Changed` or `Fixed`.
 
 ### Step 3: Confirm Pending Worktree Changes (MANDATORY GATE)
 
@@ -352,6 +359,7 @@ Preserve the file's existing structure while editing.
 - Keep the introduction and existing release history intact.
 - If writing a concrete release section, insert it below `## [Unreleased]` and above older releases.
 - If writing to `## [Unreleased]`, keep the heading and update only its content.
+- When updating an existing target heading, rebuild the release highlight and populated sections from the newly resolved surviving outcomes. Delete or rewrite stale bullets that no longer reflect the final release story instead of incrementally patching around them.
 - On every edit, verify that the compare-link footer exists at the bottom of the file. If it is missing or incomplete, insert or repair it instead of leaving the changelog without diff ranges.
 - When adding or updating a concrete version, `[Unreleased]` should compare from the newest released version to `HEAD`, and that released version should compare from the previous version tag to the new tag.
 - Preserve valid historical compare links for older releases. Repair only the links that are missing, incomplete, or wrong.
@@ -374,6 +382,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Treats the selected branch or range as author-agnostic scope and includes every contributor's commits unless the user explicitly narrows by author.
 - Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes (or skips Step 3 entirely and includes all changes when yolo/auto mode is active).
 - Keeps yolo/auto limited to pending-worktree inclusion and never uses autonomy mode to widen committed history.
+- If an unreleased concrete version draft already exists, rewrites that draft from the current git truth so pre-release refinements to a base-absent capability remain under `Added`.
 - Maintains or inserts the compare-link footer at the bottom of the file on both create and update paths.
 - Preserves natural prose wrapping with no fixed column-width target.
 - Keeps bullets specific, concrete, non-repetitive, and consistently punctuated.
@@ -386,6 +395,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Reporting temporary features, files, APIs, or dependencies that leave no surviving base-to-`HEAD` change.
 - Putting one surviving capability under multiple sections because its intermediate commits used different verbs.
 - Putting any part of a base-absent capability under `Changed` or `Fixed` because later commits refined, documented, validated, or fixed it before its first release.
+- Using an older unreleased draft heading as a second baseline, preserving its earlier `Added` bullet and then appending `Changed` / `Fixed` for later commits to the same still-unreleased capability.
 - Omitting the release highlight.
 - Failing to classify the release as major, minor, or patch.
 - Refusing to proceed just because `CHANGELOG.md` does not exist yet.
