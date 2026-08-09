@@ -31,9 +31,11 @@ When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in
 - If `CHANGELOG.md` does not exist, create a compliant one before populating it.
 - Read full commit subjects and bodies before writing the changelog.
 - Inspect the net diff too; do not infer the release from subjects alone.
+- Classify each user-facing release entity from whether it existed at the resolved base before considering intermediate commits or individual files.
 - Treat branch or range topology as the changelog scope source of truth, not author identity.
 - For branch-derived scope, exclude every commit already reachable from the comparison branch. A merge-base is a boundary, not a release commit.
 - Run `scripts/resolve-release-scope.ps1` for branch-derived scope and use its emitted ranges without widening them.
+- For every path-backed release entity, run `scripts/resolve-release-entity.ps1` with the emitted `merge_base` and `head_commit`; use its classification instead of inferring `Added`, `Removed`, or `Changed` from commit verbs.
 - Never change range inclusivity because the changelog target is a concrete version instead of `[Unreleased]`.
 - Include commits from every author/contributor in the selected scope. Do not filter to the current git user, current contributor, bot identity, configured author, or "my changes" unless the user explicitly asks for an author-filtered changelog.
 - If the current branch starts with a version hint such as `v0.3.0/`, use that to target a concrete release heading.
@@ -72,6 +74,8 @@ History is evidence; the resulting state is truth.
 
 Reduce first. Interpret second. Summarize last.
 
+Establish the classification baseline at the user-facing release-entity boundary, not independently for every changed file. For a repo-managed skill, the entity is the skill capability together with its dedicated files and inseparable registration, catalog, documentation, validation, and eval wiring. If that entity is absent at the base and present at `HEAD`, its introduction is `Added`; intermediate commits that refine, fix, document, or validate it cannot create `Changed` or `Fixed` outcomes for that same new entity. A change to a separately pre-existing shared capability remains its own outcome and is classified from its own base state.
+
 1. Inspect cumulative manifest and version deltas across `diff_range`.
 2. Inspect the cumulative base-to-`HEAD` diff.
 3. Inspect any approved pending worktree changes that are part of the draft.
@@ -84,7 +88,7 @@ Do not summarize commits one by one and deduplicate the prose afterward. Classif
 Reconciliation rules:
 
 - Base absent and `HEAD` absent -> omit it.
-- Base absent and `HEAD` present -> one surviving `Added` outcome in its final form.
+- Release entity absent at base and present at `HEAD` -> one surviving `Added` outcome in its final form. Do not emit `Changed` or `Fixed` outcomes for refinements within that same introduction cycle.
 - Base present and `HEAD` absent -> one surviving `Removed` outcome.
 - Base present and identical `HEAD` state -> omit it.
 - Base present and changed `HEAD` state -> one surviving modification whose section is derived from the final delta.
@@ -97,6 +101,7 @@ Examples:
 - Existing behavior changed and then reverted exactly -> no changelog entry.
 - File deleted and recreated identically -> no changelog entry.
 - One capability added, revised, and still present -> usually one `Added` bullet describing its final form, not separate `Added`, `Changed`, and `Fixed` bullets.
+- New `skills/dotnet-test/` capability added, then documented, validated, and refined before release -> `Added` only for the complete shipped capability. README registration and validator/eval wiring whose sole purpose is that introduction stay part of the added outcome.
 
 ## Release Highlight Contract
 
@@ -290,6 +295,14 @@ Pending changes are additive final-state evidence. They never justify widening `
 
 **4e — Determine the surviving outcomes at the final state.**
 
+- Identify each user-facing release entity and test its existence at the resolved base before classifying its child paths or commit verbs.
+- For each path-backed entity, run the bundled classifier. Pass `-IncludeWorktree` only when pending changes for that entity are in the approved scope:
+
+```powershell
+pwsh -NoProfile -File <skill-root>/scripts/resolve-release-entity.ps1 -Repository . -BaseCommit <merge_base> -HeadCommit <head_commit> -EntityPath skills/dotnet-test
+```
+
+- Treat the emitted `classification` as authoritative for `Added`, `Removed`, `Changed`, or `Unchanged`. Use semantic analysis only to group paths into the correct user-facing entity and to choose among non-structural sections such as `Fixed` or `Security` when the entity already existed at the base.
 - Eliminate exact reversions, temporary files/features, and dependency churn that returned to the base value.
 - Merge intermediate add/change/fix churn into the final surviving capability or behavior.
 - Preserve rename/move as one surviving outcome when the cumulative diff supports it.
@@ -323,7 +336,8 @@ Write the release highlight first, then the populated sections.
 - Map only the surviving outcomes into `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 - Keep bullets curated and human-written.
 - Merge overlapping commits into one bullet when they describe the same real outcome.
-- A capability that was added, fixed, and refined but survives usually appears once in the section that best describes its final state.
+- A capability absent at the base and present at the final state appears under `Added`, even when later commits fixed, documented, validated, or refined it before release.
+- Supporting catalog, documentation, validator, and eval changes whose sole purpose is introducing that new capability stay with its `Added` outcome. Classify a shared-file change separately only when it changes a pre-existing capability independently of the new introduction.
 - A capability, file, or dependency change that returned to the base state stays out of the changelog entirely.
 - Drop low-signal churn such as typo-only commits, trivial fixups, or mechanical follow-ups unless they materially change the release story.
 - Use history only for naming, rationale, rename intent, and bug context. Do not let a dramatic commit message manufacture an extra bullet that the final diff does not support.
@@ -371,6 +385,7 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Copying commit subjects line by line into the changelog.
 - Reporting temporary features, files, APIs, or dependencies that leave no surviving base-to-`HEAD` change.
 - Putting one surviving capability under multiple sections because its intermediate commits used different verbs.
+- Putting any part of a base-absent capability under `Changed` or `Fixed` because later commits refined, documented, validated, or fixed it before its first release.
 - Omitting the release highlight.
 - Failing to classify the release as major, minor, or patch.
 - Refusing to proceed just because `CHANGELOG.md` does not exist yet.

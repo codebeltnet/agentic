@@ -20,6 +20,7 @@ Read `references/package-release-notes-format.md` before writing any release-not
 - For repo-wide requests, every packable `src/` project should end up represented by a corresponding `PackageReleaseNotes.txt` file.
 - Treat the package's base-to-`HEAD` state as truth; chronological history is supporting provenance.
 - Inspect cumulative package, API, manifest, version, and metadata deltas before classifying the package history.
+- Classify each user-facing package capability from whether it existed at the resolved base before considering intermediate commits or individual files.
 - Describe only surviving package outcomes. Do not preserve intermediate upgrades, removals, renames, or bug fixes that do not survive into `HEAD`.
 - Read full commit subjects and bodies before writing the package notes.
 - Inspect the net diff too; do not classify a package from commit subjects alone.
@@ -49,6 +50,8 @@ History is evidence; the resulting state is truth.
 
 Reduce first. Interpret second. Summarize last.
 
+Establish the classification baseline at the user-facing package-capability boundary, not independently for every changed file or commit. If a capability is absent at the base and present at `HEAD`, it belongs under `# New Features` with an `ADDED` bullet; intermediate commits that refine, fix, document, or validate that capability cannot move it to `# Improvements` or `# Bug Fixes`. Dependency, TFM, packaging, or separately pre-existing capability changes remain distinct outcomes classified from their own base states.
+
 1. Inspect cumulative manifest, property, version, and metadata deltas that affect the package.
 2. Inspect the cumulative base-to-`HEAD` diff for the package and its shared packaging files.
 3. Determine which package changes actually survive at `HEAD`.
@@ -61,7 +64,7 @@ Reconciliation rules:
 
 - Base state and `HEAD` state are identical -> no entry.
 - Dependency, API, metadata, or TFM value that returns to the base state -> no entry.
-- Base absent and `HEAD` present -> one surviving added capability or surface area outcome.
+- Package capability absent at base and present at `HEAD` -> one surviving `ADDED` outcome under `# New Features`. Do not emit `CHANGED`, `EXTENDED`, or `FIXED` outcomes for refinements within that same introduction cycle.
 - Base present and `HEAD` absent -> one surviving removal.
 - Base present and changed `HEAD` state -> one surviving modification, fix, rename, or move derived from the final delta.
 - Equivalent entity/path/name moved or renamed -> one rename/move outcome when the cumulative diff supports it, not add plus remove.
@@ -72,7 +75,7 @@ Examples:
 - `Newtonsoft.Json 13.0.3 -> 14.0.0 -> 14.0.2` -> one surviving upgrade from `13.0.3` to `14.0.2`.
 - Public API removed and later restored unchanged -> no `# Breaking Changes` bullet.
 - Feature added, fixed several times, then removed -> no package-note entry for that feature.
-- One capability added, reworked, and still present -> usually one final `ADDED`, `CHANGED`, or `EXTENDED` bullet describing what shipped.
+- One capability added, reworked, fixed, documented, and still present -> one final `ADDED` bullet under `# New Features` describing what shipped.
 
 ## Workflow
 
@@ -152,6 +155,7 @@ For each target package, use this order to understand the real release story.
 - Inspect cumulative manifest, property, version, and metadata deltas first. This includes `Directory.Packages.props`, package references in project files, `TargetFramework` / `TargetFrameworks`, package metadata, and other shared packaging files that affect the package.
 - Inspect the cumulative base-to-`HEAD` diff for the package paths.
 - Determine which package changes survive at `HEAD`: public APIs, dependency versions, TFMs, package metadata, types/members, renames/moves, removals, and bug fixes that still exist.
+- Identify each user-facing package capability and test its existence at the resolved base before classifying its child files or commit verbs.
 - Eliminate exact reversions, temporary features, reverted dependency churn, and restored APIs or metadata that match the base state.
 - Read the full commit bodies only after the cumulative delta is clear. Use history to explain the surviving outcomes, confirm rename intent, understand migration context, and choose accurate user-facing terminology. Never let an intermediate commit override contradictory final-state evidence.
 
@@ -180,6 +184,7 @@ Classification guidance:
 
 Prefer a minimal truthful block over an inflated one. ALM-only releases are valid when the real change was only dependency or TFM maintenance.
 A restored API or reverted dependency upgrade does not earn a section entry. Use history to help group or explain the surviving outcomes, not to manufacture extra bullets.
+Refinement or bug-fix commits made after a capability was first added but before its first release remain part of the `ADDED` new-feature outcome. `# Improvements` and `# Bug Fixes` require the affected capability or behavior to exist at the resolved base.
 
 ### Step 7: Write or update PackageReleaseNotes.txt
 
@@ -228,5 +233,6 @@ After updating the relevant `PackageReleaseNotes.txt` files, stop and let the us
 - Dumping commit subjects line by line into the file.
 - Reporting temporary dependency, API, metadata, or TFM changes that do not survive into `HEAD`.
 - Emitting `# Breaking Changes`, `# New Features`, or `# Bug Fixes` bullets for work that was later restored or removed before release.
+- Moving a base-absent capability into `# Improvements` or `# Bug Fixes` because intermediate commits refined or fixed it before its first release.
 - Creating empty headings or filler bullets like "misc updates".
 - Claiming breaking changes, fixes, or references not supported by git and the project/package metadata.
