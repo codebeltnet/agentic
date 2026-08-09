@@ -60,6 +60,8 @@ pwsh -NoProfile -File "<skill-root>/scripts/resolve-test-package-versions.ps1" -
 
 The resolver queries NuGet stable versions, tries newer candidates first, and verifies each candidate against the selected package set through isolated compatibility-project restores; it emits only a set whose combined package restore passes. If it fails, report the package, target frameworks, and restore evidence instead of guessing.
 
+When a benchmark or smoke harness provides `DOTNET_TEST_MAXIMUM_CANDIDATES`, `DOTNET_TEST_RESOLVER_CACHE_DIR`, or `DOTNET_TEST_RESOLVER_TRACE_FILE`, honor that measured scope instead of widening the live search again. Use a small explicit candidate limit for ordinary eval smoke runs; fallback and combined-package behavior stay covered by `scripts/test-resolve-test-package-versions.ps1`.
+
 Preserve package ownership:
 
 - Central Package Management: update or add `PackageVersion` in the owning `Directory.Packages.props`; keep project `PackageReference` items versionless.

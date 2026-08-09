@@ -101,6 +101,14 @@ When creating or modifying a repo-managed skill, the eval workflow must include 
 - Aggregate the results into `benchmark.json`
 - Launch `eval-viewer/generate_review.py` from that installed `skill-creator` copy so a human can review both `Outputs` and `Benchmark`
 
+The preferred local entry point is the repo-owned runner:
+
+```powershell
+pwsh -NoProfile -File .\scripts\run-skill-benchmark.ps1 -SkillPath .\skills\<skill-name> -CompareWithLegacy
+```
+
+That runner keeps one temp workspace, stages shared fixtures once, shares a benchmark-scoped cache, prewarms expensive resolver work where available, enforces bounded parallelism plus per-run timeouts, and still delegates aggregation and static review generation to the installed Anthropic `skill-creator` copy.
+
 This repo treats that paired `with_skill` / `without_skill` comparison as part of the required devex for skill work. The benchmark artifacts live in the temp workspace; do not commit them to this repository unless the change explicitly calls for checked-in examples.
 
 For scaffold/template skills, keep deterministic validators alongside evals. In this repo, `evals/evals.json` is mandatory, and validators like `scripts/validate-skill-templates.ps1` are additional protection.
