@@ -159,17 +159,32 @@ function Initialize-DotnetShim {
         [Parameter(Mandatory = $true)] [string]$RealDotnet
     )
 
-    $shimRoot = Join-Path $Workspace '.benchmark\dotnet'
+    $shimRoot = Join-Path (Join-Path $Workspace '.benchmark') 'dotnet'
     New-Item -ItemType Directory -Path $shimRoot -Force | Out-Null
 
     $shimCommandPath = Join-Path $shimRoot 'dotnet.cmd'
-    $shimScriptPath = Join-Path $PSScriptRoot 'skill-benchmark\log-dotnet.ps1'
+    $shimScriptPath = Join-Path (Join-Path $PSScriptRoot 'skill-benchmark') 'log-dotnet.ps1'
     $shimContent = @"
 @echo off
 pwsh -NoProfile -File "$shimScriptPath" -RealDotnet "%SKILL_BENCHMARK_DOTNET_REAL%" -LogDirectory "%SKILL_BENCHMARK_DOTNET_LOG_DIR%" -StdoutPath "%SKILL_BENCHMARK_DOTNET_STDOUT%" -StderrPath "%SKILL_BENCHMARK_DOTNET_STDERR%" %*
 exit /b %ERRORLEVEL%
 "@
     Write-TextFile -Path $shimCommandPath -Content $shimContent
+
+    $unixShimPath = Join-Path $shimRoot 'dotnet'
+    $posixShimScriptPath = "'" + $shimScriptPath.Replace("'", "'\''", [System.StringComparison]::Ordinal) + "'"
+    $unixShimContent = @'
+#!/usr/bin/env sh
+exec pwsh -NoProfile -File __SHIM_SCRIPT_PATH__ -RealDotnet "$SKILL_BENCHMARK_DOTNET_REAL" -LogDirectory "$SKILL_BENCHMARK_DOTNET_LOG_DIR" -StdoutPath "$SKILL_BENCHMARK_DOTNET_STDOUT" -StderrPath "$SKILL_BENCHMARK_DOTNET_STDERR" "$@"
+'@.Replace('__SHIM_SCRIPT_PATH__', $posixShimScriptPath).Replace("`r`n", "`n")
+    Write-TextFile -Path $unixShimPath -Content $unixShimContent
+
+    if (-not [System.OperatingSystem]::IsWindows()) {
+        & chmod +x -- $unixShimPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to mark the Unix dotnet shim executable: $unixShimPath"
+        }
+    }
 
     return $shimRoot
 }

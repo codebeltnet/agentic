@@ -96,6 +96,27 @@ Answer mock tasks.
         throw "Expected zero cleanup failures, found $($summary.cleanupFailures)."
     }
 
+    $benchmarkRoot = Join-Path $workspace 'benchmark'
+    $shimRoot = Join-Path (Join-Path $benchmarkRoot '.benchmark') 'dotnet'
+    $windowsShimPath = Join-Path $shimRoot 'dotnet.cmd'
+    $unixShimPath = Join-Path $shimRoot 'dotnet'
+    if (-not (Test-Path -LiteralPath $windowsShimPath -PathType Leaf)) {
+        throw "Missing Windows dotnet shim: $windowsShimPath"
+    }
+    if (-not (Test-Path -LiteralPath $unixShimPath -PathType Leaf)) {
+        throw "Missing Unix dotnet shim: $unixShimPath"
+    }
+    $unixShim = Get-Content -LiteralPath $unixShimPath -Raw
+    if ($unixShim -notmatch '(?m)^#!/usr/bin/env sh\s*$' -or $unixShim -notmatch 'exec pwsh -NoProfile -File') {
+        throw 'Unix dotnet shim does not delegate to the logging wrapper.'
+    }
+    if (-not $IsWindows) {
+        $unixMode = (Get-Item -LiteralPath $unixShimPath).UnixFileMode
+        if (($unixMode -band [System.IO.UnixFileMode]::UserExecute) -eq 0) {
+            throw 'Unix dotnet shim is not executable.'
+        }
+    }
+
     $timeoutRunRoot = Join-Path $workspace 'benchmark\iteration-optimized\eval-02-mock-timeout-prompt\with_skill\run-1'
     $childPidPath = Join-Path $timeoutRunRoot 'outputs\child.pid'
     if (-not (Test-Path -LiteralPath $childPidPath)) {
