@@ -11,7 +11,7 @@ using var application = WebApplicationTestFactory.Create<Program>(builder =>
 {
     builder.UseEnvironment(Environments.Production);
     builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(settings));
-});
+}, new ManagedWebApplicationFixture<Program>());
 using var client = application.Host.GetTestClient();
 ```
 
@@ -25,20 +25,24 @@ using var application = WebApplicationTestFactory.Create<Program>(builder =>
 {
     builder.UseEnvironment(Environments.Production);
     builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(CreateSettings(content.Root)));
-});
+}, new ManagedWebApplicationFixture<Program>());
 using var client = application.Host.GetTestClient();
 ```
 
-The test must bootstrap the real `Program` entry point. Do not reproduce `Program` with `WebApplication.CreateBuilder`, `UseTestServer`, copied service registrations, or copied middleware in a test helper. Such a helper tests its own composition root and can remain green when the deployed entry point no longer works. A shared helper may prepare configuration values or temporary resources, but the test remains the visible owner of `WebApplicationTestFactory` and the returned host test.
+Pass `ManagedWebApplicationFixture<Program>` explicitly. Current factory defaults may preserve a deprecated blocking path that does not give `Program.Main` ownership of startup; a passing HTTP assertion does not prove the deployed entry point was exercised.
+
+The test must bootstrap the real `Program` entry point. Do not reproduce `Program` with `WebApplication.CreateBuilder`, `UseTestServer`, copied service registrations, or copied middleware in a test helper. Such a helper tests its own composition root and can remain green when the deployed entry point no longer works.
+
+When setup is repeated across many focused tests, a narrow `Test`-derived harness may own the factory result and temporary resources. Accept `ITestOutputHelper`, keep one harness per intended isolation scope, and expose a client/host rather than a second composition root. Override both `OnDisposeManagedResources` and `OnDisposeManagedResourcesAsync`: dispose the `IHostTest` and owned resources in each matching path, then call the base hook. Overriding only the synchronous hook is insufficient when callers use `await using`.
 
 ## Shared xUnit fixture ownership
 
 Use `WebApplicationTest<TEntryPoint,TFixture>` when all tests in a class share one initialized host:
 
 ```csharp
-public class HealthTest : WebApplicationTest<Program, BlockingManagedWebApplicationFixture<Program>>
+public class HealthTest : WebApplicationTest<Program, ManagedWebApplicationFixture<Program>>
 {
-    public HealthTest(BlockingManagedWebApplicationFixture<Program> hostFixture, ITestOutputHelper output) : base(hostFixture, output)
+    public HealthTest(ManagedWebApplicationFixture<Program> hostFixture, ITestOutputHelper output) : base(hostFixture, output)
     {
     }
 
@@ -49,13 +53,13 @@ public class HealthTest : WebApplicationTest<Program, BlockingManagedWebApplicat
 }
 ```
 
-`BlockingManagedWebApplicationFixture<TEntryPoint>` starts the resolved application host synchronously so `TestServer` is ready after fixture initialization. Configuration must be established before first start; do not rely on per-test mutation of a shared host.
+`ManagedWebApplicationFixture<TEntryPoint>` captures the host created by the application entry point and starts the deferred host when it is consumed. Configuration must be established before first consumption; do not rely on per-test mutation of a shared host. Migrate any deprecated `BlockingManagedWebApplicationFixture<TEntryPoint>` input; it is scheduled for removal and is never a valid generated target.
 
 ## `WebApplicationFactory` mapping
 
 | Existing surface | Codebelt focused mapping | Codebelt shared mapping |
 |---|---|---|
-| `ConfigureWebHost` override | `WebApplicationTestFactory.Create` callback | test `ConfigureWebHost` override or derived blocking fixture |
+| `ConfigureWebHost` override | `WebApplicationTestFactory.Create` callback | test `ConfigureWebHost` override or derived managed fixture |
 | `CreateClient()` | `application.Host.GetTestClient()` | `Host.GetTestClient()` or `Server.CreateClient()` |
 | `Services` | `application.Host.Services` | `Host.Services` / `Server.Services` |
 | factory disposal | dispose returned host test | xUnit disposes the class fixture |

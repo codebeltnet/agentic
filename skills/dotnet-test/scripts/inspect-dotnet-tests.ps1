@@ -2,7 +2,9 @@ param(
     [string]$RepoRoot = (Get-Location).Path,
     [string]$ProjectPath,
     [ValidateSet('Focused', 'Shared')]
-    [string]$ExpectedWebPattern
+    [string]$ExpectedWebPattern,
+    [ValidateSet('Focused', 'Shared')]
+    [string]$ExpectedApplicationPattern
 )
 
 Set-StrictMode -Version Latest
@@ -135,6 +137,12 @@ $repoRootPath = (Resolve-Path -LiteralPath $RepoRoot).Path
 if (-not [string]::IsNullOrWhiteSpace($ExpectedWebPattern) -and [string]::IsNullOrWhiteSpace($ProjectPath)) {
     throw 'ExpectedWebPattern requires one selected ProjectPath so unrelated test projects cannot affect the postcondition.'
 }
+if (-not [string]::IsNullOrWhiteSpace($ExpectedApplicationPattern) -and [string]::IsNullOrWhiteSpace($ProjectPath)) {
+    throw 'ExpectedApplicationPattern requires one selected ProjectPath so unrelated test projects cannot affect the postcondition.'
+}
+if (-not [string]::IsNullOrWhiteSpace($ExpectedWebPattern) -and -not [string]::IsNullOrWhiteSpace($ExpectedApplicationPattern)) {
+    throw 'ExpectedWebPattern and ExpectedApplicationPattern are mutually exclusive.'
+}
 $projects = if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
     @(Get-ChildItem -LiteralPath $repoRootPath -Recurse -File -Filter '*.csproj' |
         Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
@@ -191,9 +199,29 @@ $reports = foreach ($project in $projects) {
     $webUsages = [System.Collections.Generic.List[object]]::new()
     $focusedWebUsages = [System.Collections.Generic.List[object]]::new()
     $sharedWebUsages = [System.Collections.Generic.List[object]]::new()
+    $focusedApplicationUsages = [System.Collections.Generic.List[object]]::new()
+    $sharedApplicationUsages = [System.Collections.Generic.List[object]]::new()
+    $managedWebFixtureUsages = [System.Collections.Generic.List[object]]::new()
+    $blockingWebFixtureUsages = [System.Collections.Generic.List[object]]::new()
+    $managedApplicationFixtureUsages = [System.Collections.Generic.List[object]]::new()
+    $blockingApplicationFixtureUsages = [System.Collections.Generic.List[object]]::new()
+    $hostTestOwnerships = [System.Collections.Generic.List[object]]::new()
     $directWebHostConstructions = [System.Collections.Generic.List[object]]::new()
     $inheritance = [System.Collections.Generic.List[object]]::new()
     foreach ($record in $sourceRecords) {
+        $hostTestFields = [regex]::Matches($record.text, '\bIHostTest\s+(?<name>_[A-Za-z_][A-Za-z0-9_]*)\s*(?:[;=])')
+        foreach ($fieldMatch in $hostTestFields) {
+            $fieldName = $fieldMatch.Groups['name'].Value
+            $escapedFieldName = [regex]::Escape($fieldName)
+            $hostTestOwnerships.Add([pscustomobject]@{
+                path = $record.path
+                field = $fieldName
+                synchronousDispose = $record.text -match "${escapedFieldName}\s*\.\s*Dispose\s*\("
+                asynchronousDispose = $record.text -match "${escapedFieldName}\s*\.\s*DisposeAsync\s*\("
+                synchronousHook = $record.text -match '\bOnDisposeManagedResources\s*\('
+                asynchronousHook = $record.text -match '\bOnDisposeManagedResourcesAsync\s*\('
+            })
+        }
         for ($index = 0; $index -lt $record.lines.Count; $index++) {
             $line = $record.lines[$index]
             if ($line -match '\bWebApplicationFactory(?:\s*<|\b)') {
@@ -204,6 +232,24 @@ $reports = foreach ($project in $projects) {
             }
             if ($line -match ':\s*WebApplicationTest\s*<') {
                 $sharedWebUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match '\bApplicationTestFactory\s*\.\s*Create\s*<') {
+                $focusedApplicationUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match ':\s*ApplicationTest\s*<') {
+                $sharedApplicationUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match '(?<!Blocking)ManagedWebApplicationFixture\s*<') {
+                $managedWebFixtureUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match '\bBlockingManagedWebApplicationFixture\s*<') {
+                $blockingWebFixtureUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match '(?<!Blocking)ManagedApplicationFixture\s*<') {
+                $managedApplicationFixtureUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
+            }
+            if ($line -match '\bBlockingManagedApplicationFixture\s*<') {
+                $blockingApplicationFixtureUsages.Add([pscustomobject]@{ path = $record.path; line = $index + 1; text = $line.Trim() })
             }
             if ($line -match '\bWebApplication\s*\.\s*CreateBuilder\s*\(' -or
                 $line -match '\bWebHost\s*\.\s*CreateDefaultBuilder\s*\(' -or
@@ -237,7 +283,7 @@ $reports = foreach ($project in $projects) {
         $combinedSource -match '\b(WebApplicationTestFactory|WebApplicationTest<|TestServer)\b' -or
         @($referencedHosts | Where-Object webHost).Count -gt 0
     $isApplication = -not $isWeb -and (
-        $combinedSource -match '\b(ApplicationTestFactory|ApplicationTest<|BlockingManagedApplicationFixture)\b' -or
+        $combinedSource -match '\b(ApplicationTestFactory|ApplicationTest<|ManagedApplicationFixture|BlockingManagedApplicationFixture)\b' -or
         @($referencedHosts | Where-Object genericHost).Count -gt 0 -or
         @($referencedHosts | Where-Object executable).Count -gt 0 -or
         $combinedSource -match '\b(IHostedService|BackgroundService)\b'
@@ -275,6 +321,17 @@ $reports = foreach ($project in $projects) {
         if ($directWebHostConstructions.Count -gt 0) {
             $blockers.Add('The selected web migration constructs a replacement host in test code. Bootstrap the production entry point through the selected Codebelt web-test abstraction instead of replaying Program, WebApplication.CreateBuilder, or TestServer setup.')
         }
+        if ($blockingWebFixtureUsages.Count -gt 0) {
+            $blockers.Add('The selected web migration still uses deprecated BlockingManagedWebApplicationFixture. Replace it with entrypoint-owned ManagedWebApplicationFixture; the blocking type is scheduled for removal.')
+        }
+        if ($managedWebFixtureUsages.Count -eq 0) {
+            $blockers.Add('The selected web migration must explicitly use ManagedWebApplicationFixture<TEntryPoint> so the application entry point owns startup.')
+        }
+        foreach ($ownership in $hostTestOwnerships) {
+            if (-not $ownership.synchronousDispose -or -not $ownership.asynchronousDispose -or -not $ownership.synchronousHook -or -not $ownership.asynchronousHook) {
+                $blockers.Add("The focused harness '$($ownership.path)' owns $($ownership.field) but does not dispose it through both synchronous and asynchronous Test disposal hooks.")
+            }
+        }
         if ($ExpectedWebPattern -eq 'Focused' -and $focusedWebUsages.Count -eq 0) {
             $blockers.Add('The focused web postcondition requires at least one WebApplicationTestFactory.Create<TEntryPoint> call in the selected project.')
         }
@@ -282,15 +339,42 @@ $reports = foreach ($project in $projects) {
             $blockers.Add('The shared web postcondition requires a test class derived from WebApplicationTest<TEntryPoint, TFixture> in the selected project.')
         }
     }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedApplicationPattern)) {
+        if ($role -ne 'Console or worker functional test') {
+            $blockers.Add("The requested $ExpectedApplicationPattern application postcondition cannot be applied because the selected project was classified as '$role'.")
+        }
+        if ($directWebHostConstructions.Count -gt 0) {
+            $blockers.Add('The selected application migration constructs a replacement host in test code. Bootstrap the production entry point through the selected Codebelt application-test abstraction instead of replaying Program or Generic Host setup.')
+        }
+        if ($blockingApplicationFixtureUsages.Count -gt 0) {
+            $blockers.Add('The selected application migration still uses deprecated BlockingManagedApplicationFixture. Replace it with entrypoint-owned ManagedApplicationFixture; the blocking type is scheduled for removal.')
+        }
+        if ($managedApplicationFixtureUsages.Count -eq 0) {
+            $blockers.Add('The selected application migration must explicitly use ManagedApplicationFixture<TEntryPoint> so the application entry point owns startup.')
+        }
+        foreach ($ownership in $hostTestOwnerships) {
+            if (-not $ownership.synchronousDispose -or -not $ownership.asynchronousDispose -or -not $ownership.synchronousHook -or -not $ownership.asynchronousHook) {
+                $blockers.Add("The focused harness '$($ownership.path)' owns $($ownership.field) but does not dispose it through both synchronous and asynchronous Test disposal hooks.")
+            }
+        }
+        if ($ExpectedApplicationPattern -eq 'Focused' -and $focusedApplicationUsages.Count -eq 0) {
+            $blockers.Add('The focused application postcondition requires at least one ApplicationTestFactory.Create<TEntryPoint> call in the selected project.')
+        }
+        if ($ExpectedApplicationPattern -eq 'Shared' -and $sharedApplicationUsages.Count -eq 0) {
+            $blockers.Add('The shared application postcondition requires a test class derived from ApplicationTest<TEntryPoint, TFixture> in the selected project.')
+        }
+    }
 
     $recommendations = [System.Collections.Generic.List[string]]::new()
     if ($xunitGeneration -eq 'v2') { $recommendations.Add('Modernize the selected project to xUnit v3 and Microsoft Testing Platform while preserving target frameworks and package ownership.') }
     if ([string]$properties.UseMicrosoftTestingPlatformRunner -ne 'true') { $recommendations.Add('Enable UseMicrosoftTestingPlatformRunner for the selected xUnit v3 test project, preferably in its existing shared test-project property owner.') }
     if ($webUsages.Count -gt 0) { $recommendations.Add('Replace every selected WebApplicationFactory usage and preserve configuration, start behavior, clients, services, disposal, and isolation.') }
+    if ($blockingWebFixtureUsages.Count -gt 0) { $recommendations.Add('Replace deprecated BlockingManagedWebApplicationFixture usage with entrypoint-owned ManagedWebApplicationFixture; the blocking type is scheduled for removal.') }
+    if ($blockingApplicationFixtureUsages.Count -gt 0) { $recommendations.Add('Replace deprecated BlockingManagedApplicationFixture usage with entrypoint-owned ManagedApplicationFixture; the blocking type is scheduled for removal.') }
     switch ($role) {
         'Ordinary unit test' { $recommendations.Add('Use Test or an established Test-derived base with ITestOutputHelper.') }
-        'ASP.NET Core functional test' { $recommendations.Add('Use WebApplicationTestFactory for focused ownership or WebApplicationTest with BlockingManagedWebApplicationFixture for shared fixture ownership.') }
-        'Console or worker functional test' { $recommendations.Add('Use ApplicationTestFactory for focused ownership or ApplicationTest with BlockingManagedApplicationFixture for shared fixture ownership.') }
+        'ASP.NET Core functional test' { $recommendations.Add('Use WebApplicationTestFactory with an explicit ManagedWebApplicationFixture for focused ownership or WebApplicationTest with ManagedWebApplicationFixture for shared fixture ownership.') }
+        'Console or worker functional test' { $recommendations.Add('Use ApplicationTestFactory with an explicit ManagedApplicationFixture for focused ownership or ApplicationTest with ManagedApplicationFixture for shared fixture ownership.') }
     }
 
     [pscustomobject]@{
@@ -310,6 +394,13 @@ $reports = foreach ($project in $projects) {
         webApplicationFactoryUsages = @($webUsages | Sort-Object path, line)
         focusedWebApplicationTestFactoryUsages = @($focusedWebUsages | Sort-Object path, line)
         sharedWebApplicationTestUsages = @($sharedWebUsages | Sort-Object path, line)
+        focusedApplicationTestFactoryUsages = @($focusedApplicationUsages | Sort-Object path, line)
+        sharedApplicationTestUsages = @($sharedApplicationUsages | Sort-Object path, line)
+        managedWebApplicationFixtureUsages = @($managedWebFixtureUsages | Sort-Object path, line)
+        blockingManagedWebApplicationFixtureUsages = @($blockingWebFixtureUsages | Sort-Object path, line)
+        managedApplicationFixtureUsages = @($managedApplicationFixtureUsages | Sort-Object path, line)
+        blockingManagedApplicationFixtureUsages = @($blockingApplicationFixtureUsages | Sort-Object path, line)
+        hostTestOwnerships = @($hostTestOwnerships | Sort-Object path, field)
         directWebHostConstructions = @($directWebHostConstructions | Sort-Object path, line)
         referencedApplications = @($referencedHosts | Sort-Object path)
         recommendations = @($recommendations)
@@ -320,11 +411,12 @@ $reports = foreach ($project in $projects) {
 $result = [ordered]@{
     repoRoot = $repoRootPath
     expectedWebPattern = $ExpectedWebPattern
+    expectedApplicationPattern = $ExpectedApplicationPattern
     projectCount = @($reports).Count
     projects = @($reports)
 }
 
 $result | ConvertTo-Json -Depth 8
-if (-not [string]::IsNullOrWhiteSpace($ExpectedWebPattern) -and @($reports | Where-Object { $_.blockers.Count -gt 0 }).Count -gt 0) {
+if ((-not [string]::IsNullOrWhiteSpace($ExpectedWebPattern) -or -not [string]::IsNullOrWhiteSpace($ExpectedApplicationPattern)) -and @($reports | Where-Object { $_.blockers.Count -gt 0 }).Count -gt 0) {
     exit 2
 }

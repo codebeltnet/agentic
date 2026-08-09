@@ -17,7 +17,7 @@ public class {BEHAVIOR}Test : Test
         using var application = WebApplicationTestFactory.Create<{ENTRY_POINT}>(builder =>
         {
             {PRESERVED_WEB_HOST_CONFIGURATION}
-        });
+        }, new ManagedWebApplicationFixture<{ENTRY_POINT}>());
         using var client = application.Host.GetTestClient();
 
         using var response = await client.GetAsync("{SOURCE_GROUNDED_ROUTE}").ConfigureAwait(false);
@@ -25,4 +25,3 @@ public class {BEHAVIOR}Test : Test
         Assert.Equal({SOURCE_GROUNDED_STATUS}, response.StatusCode);
     }
 }
-

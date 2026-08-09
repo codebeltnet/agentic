@@ -45,10 +45,22 @@ Collect only unresolved fields. Prefer native structured controls when the host 
 - **required:** true
 - **show_when:** `test_role` is `Console or worker functional test`, or auto-classification reports a missing Generic Host blocker
 
+### host_ownership
+
+- **type:** single-choice
+- **prompt:** Which lifecycle should own the functional-test host?
+- **choices:**
+  - Auto-classify from current factory/fixture usage and isolation requirements (Recommended)
+  - Focused ownership per test or narrow test harness
+  - Shared xUnit class fixture
+- **default:** Auto-classify from current factory/fixture usage and isolation requirements (Recommended)
+- **required:** true
+- **show_when:** `test_role` is `ASP.NET Core functional test` or `Console or worker functional test`, and repository evidence does not already decide focused versus shared ownership
+
 ### confirmation
 
 - **type:** single-choice
-- **prompt:** Apply the summarized project, mode, role, package-owner, and application-scope plan?
+- **prompt:** Apply the summarized project, mode, role, host-ownership, package-owner, and application-scope plan?
 - **choices:**
   - Yes (Recommended)
   - No
@@ -62,5 +74,4 @@ Collect only unresolved fields. Prefer native structured controls when the host 
 - Present the recommended/default choice first and suffix it with `(Recommended)`.
 - In plain-text fallback mode, start immediately with `Field: <field-name>` and show numbered choices. Do not add a conversational preamble.
 - If the user leaves a shown computed/default choice blank, accept it and continue.
-- After all fields are resolved, summarize the exact project, mode, role, package owner, detected blockers, and application adaptation scope, then ask `confirmation`.
-
+- After all fields are resolved, summarize the exact project, mode, role, host ownership, package owner, detected blockers, and application adaptation scope, then ask `confirmation`.

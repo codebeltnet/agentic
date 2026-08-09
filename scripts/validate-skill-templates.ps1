@@ -1126,9 +1126,10 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ASP.NET Core functional test'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Console or worker functional test'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'WebApplicationTestFactory.Create<TEntryPoint>'
-    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'WebApplicationTest<TEntryPoint, BlockingManagedWebApplicationFixture<TEntryPoint>>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'WebApplicationTest<TEntryPoint, ManagedWebApplicationFixture<TEntryPoint>>'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ApplicationTestFactory.Create<TEntryPoint>'
-    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ApplicationTest<TEntryPoint, BlockingManagedApplicationFixture<TEntryPoint>>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ApplicationTest<TEntryPoint, ManagedApplicationFixture<TEntryPoint>>'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Never emit them in generated or refactored code.'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Never add a process-launching fallback'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'zero remaining `WebApplicationFactory`'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Do not invent an endpoint, service, configuration key, or expected result.'
@@ -1136,8 +1137,10 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### project_selection'
     Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### operation_mode'
     Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### test_role'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### host_ownership'
     Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle 'Field: <field-name>'
-    Assert-Contains -Name 'dotnet-test/web-functional-tests.md' -Content $web -Needle 'BlockingManagedWebApplicationFixture<TEntryPoint>'
+    Assert-Contains -Name 'dotnet-test/web-functional-tests.md' -Content $web -Needle 'ManagedWebApplicationFixture<TEntryPoint>'
+    Assert-Contains -Name 'dotnet-test/web-functional-tests.md' -Content $web -Needle 'scheduled for removal'
     Assert-Contains -Name 'dotnet-test/application-functional-tests.md' -Content $application -Needle 'Do not introduce `Process.Start`'
     foreach ($program in @('MinimalConsoleProgram', 'MinimalWorkerProgram', 'MinimalWebProgram')) {
         Assert-Contains -Name 'dotnet-test/bootstrapper-hosts.md' -Content $bootstrapper -Needle $program
@@ -1148,15 +1151,17 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'dotnet-test/migration-invariants.md' -Content $migration -Needle 'lazy until `CreateClient`, `Server`, or `Services`'
     Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle '-getProperty:TargetFramework,TargetFrameworks,IsTestProject,OutputType,ManagePackageVersionsCentrally,UseMicrosoftTestingPlatformRunner,RootNamespace'
     Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'webApplicationFactoryUsages'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'expectedApplicationPattern'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'hostTestOwnerships'
     Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'packageOwnership'
     Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'https://api.nuget.org/v3/index.json'
     Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'isolated restore passed'
 
     $evalObject = $evals | ConvertFrom-Json
-    if (@($evalObject.evals).Count -ne 5) {
-        throw "dotnet-test must define exactly five requested paired eval scenarios; found $(@($evalObject.evals).Count)"
+    if (@($evalObject.evals).Count -ne 6) {
+        throw "dotnet-test must define exactly six requested paired eval scenarios; found $(@($evalObject.evals).Count)"
     }
-    foreach ($needle in @('attached Acme.Calculator fixture', 'xUnit v2 project', 'web-cdn-origin-style', 'IClassFixture<WebApplicationFactory<Program>>', 'ApplicationTestFactory pattern')) {
+    foreach ($needle in @('attached Acme.Calculator fixture', 'xUnit v2 project', 'web-cdn-origin-style', 'IClassFixture<WebApplicationFactory<Program>>', 'ApplicationTestFactory pattern', 'ApplicationTest<Program, ManagedApplicationFixture<Program>>')) {
         Assert-Contains -Name 'dotnet-test/evals/evals.json' -Content $evals -Needle $needle
     }
     if (@($fixtureFiles | Where-Object { $_ -match '(^|[\\/])(bin|obj)([\\/]|$)' }).Count -gt 0) {

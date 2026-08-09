@@ -44,13 +44,14 @@
     },
     {
       "id": 3,
-      "prompt": "Migrate the attached lean Acme.Cdn.Origin functional tests from the web-cdn-origin-style CdnOriginTestApplication WebApplicationFactory wrapper to the focused Codebelt WebApplicationTestFactory pattern. Preserve per-test settings, Production environment, temporary content ownership, client behavior, services, disposal, isolation, and existing test names. Keep Program as the composition root under test; do not rebuild its WebApplication or TestServer pipeline in test code. Remove every selected WebApplicationFactory usage and validate restore/build/test.",
-      "expected_output": "Focused Test-derived functional tests bootstrap Program through WebApplicationTestFactory, contain no replacement WebApplication/TestServer composition root or legacy WebApplicationFactory, and retain per-test isolation/configuration.",
+      "prompt": "Migrate the attached lean Acme.Cdn.Origin functional tests from the web-cdn-origin-style CdnOriginTestApplication WebApplicationFactory wrapper to a narrow Test-derived Codebelt harness backed by WebApplicationTestFactory. Preserve the reusable application helper, per-test settings, Production environment, temporary content ownership, client behavior, services, sync/async disposal, isolation, test output, and existing test names. Pass ManagedWebApplicationFixture<Program> explicitly so Program owns startup. Keep Program as the composition root under test; do not rebuild its WebApplication or TestServer pipeline in test code. Remove every selected WebApplicationFactory usage and validate restore/build/test.",
+      "expected_output": "A focused Test-derived harness owns an IHostTest created through WebApplicationTestFactory with an explicit ManagedWebApplicationFixture, contains no replacement WebApplication/TestServer composition root or legacy WebApplicationFactory, and retains per-test isolation/configuration with correct sync/async disposal.",
       "expectations": [
         "Classifies the project as ASP.NET Core functional tests and selects focused ownership",
-        "Replaces CdnOriginTestApplication and all WebApplicationFactory usages with WebApplicationTestFactory.Create<Program>",
+        "Refactors CdnOriginTestApplication into a narrow Test-derived harness that accepts ITestOutputHelper and owns WebApplicationTestFactory.Create<Program>",
+        "Passes ManagedWebApplicationFixture<Program> explicitly so startup remains entrypoint-owned and uses no BlockingManagedWebApplicationFixture",
         "Bootstraps the real Program entry point and does not call WebApplication.CreateBuilder, UseTestServer, new TestServer, or otherwise reconstruct the application pipeline in test source",
-        "Preserves Production environment, in-memory settings, temporary content disposal, and one application per test",
+        "Preserves Production environment, in-memory settings, one application per test, and disposes both IHostTest and temporary content through matching synchronous and asynchronous Test hooks",
         "Keeps CompressionTest and both existing method names unchanged",
         "Removes Microsoft.AspNetCore.Mvc.Testing when no longer needed",
         "The focused inspector postcondition succeeds, search finds no WebApplicationFactory in the selected migration, and restore/build/test succeed"
@@ -68,11 +69,11 @@
     },
     {
       "id": 4,
-      "prompt": "Migrate the attached Acme.Status functional-test class from IClassFixture<WebApplicationFactory<Program>> to the shared Codebelt WebApplicationTest<Program, BlockingManagedWebApplicationFixture<Program>> pattern. Preserve shared fixture lifecycle, Staging environment, configuration, service access, client behavior, and existing test names. Remove every selected WebApplicationFactory usage and run restore/build/test.",
-      "expected_output": "A shared blocking managed web fixture replaces IClassFixture WebApplicationFactory with preserved host customization and passing tests.",
+      "prompt": "Migrate the attached Acme.Status functional-test class from IClassFixture<WebApplicationFactory<Program>> to the shared Codebelt WebApplicationTest<Program, ManagedWebApplicationFixture<Program>> pattern. Preserve shared fixture lifecycle, entrypoint-owned startup, Staging environment, configuration, service access, client behavior, and existing test names. Remove every selected WebApplicationFactory usage and run restore/build/test.",
+      "expected_output": "A shared entrypoint-owned managed web fixture replaces IClassFixture WebApplicationFactory with preserved host customization and passing tests.",
       "expectations": [
         "Selects the shared fixture pattern rather than focused per-test ownership",
-        "Uses WebApplicationTest with BlockingManagedWebApplicationFixture and constructor-injected ITestOutputHelper",
+        "Uses WebApplicationTest with ManagedWebApplicationFixture and constructor-injected ITestOutputHelper, with no BlockingManagedWebApplicationFixture",
         "Moves Staging/configuration customization into the pre-start shared host customization path",
         "Preserves StatusTest and its existing test method names",
         "Removes Microsoft.AspNetCore.Mvc.Testing when unused",
@@ -89,12 +90,12 @@
     },
     {
       "id": 5,
-      "prompt": "Bootstrap the attached Acme.QueuePump worker functional-test project using the focused Codebelt ApplicationTestFactory pattern. The application already follows Codebelt Bootstrapper Worker and must stay in-process; do not launch a process. Add a source-grounded test that resolves QueuePumpMarker from the started host, preserve net10.0 and central package management, and run restore/build/test.",
-      "expected_output": "A buildable focused console/worker functional test uses ApplicationTestFactory against the existing Bootstrapper Generic Host and verifies a real registered service.",
+      "prompt": "Bootstrap the attached Acme.QueuePump worker functional-test project using the focused Codebelt ApplicationTestFactory pattern with an explicit ManagedApplicationFixture<Program>. The application already follows Codebelt Bootstrapper Worker and must stay in-process with entrypoint-owned startup; do not launch a process. Add a source-grounded test that resolves QueuePumpMarker from the started host, preserve net10.0 and central package management, and run restore/build/test.",
+      "expected_output": "A buildable focused console/worker functional test uses ApplicationTestFactory with ManagedApplicationFixture against the existing Bootstrapper Generic Host and verifies a real registered service.",
       "expectations": [
         "Classifies the project as a console or worker functional test",
         "Recognizes the existing Codebelt Bootstrapper Worker Generic Host and does not rewrite production startup unnecessarily",
-        "Uses a Test-derived class with ITestOutputHelper and ApplicationTestFactory",
+        "Uses a Test-derived class with ITestOutputHelper and ApplicationTestFactory, explicitly passing ManagedApplicationFixture<Program> and avoiding BlockingManagedApplicationFixture",
         "Does not use Process.Start, dotnet run, shell execution, or port polling",
         "Adds a ShouldResolveMarker_WhenApplicationStarts-style test grounded in QueuePumpMarker registration",
         "Restore, build, and test succeed"
@@ -108,6 +109,30 @@
         "evals/files/worker-functional/src/Acme.QueuePump/QueuePumpMarker.cs",
         "evals/files/worker-functional/src/Acme.QueuePump/QueuePumpWorker.cs",
         "evals/files/worker-functional/test/Acme.QueuePump.FunctionalTests/Acme.QueuePump.FunctionalTests.csproj"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Refactor the attached Acme.QueuePump shared worker functional test from the deprecated BlockingManagedApplicationFixture<Program>, which is scheduled for removal, to ApplicationTest<Program, ManagedApplicationFixture<Program>>. Preserve the shared xUnit fixture lifecycle, existing Bootstrapper Worker entry point, QueuePumpTest and ShouldResolveMarker_WhenApplicationStarts names, service assertion, net10.0, central package ownership, and in-process execution. Run restore/build/test.",
+      "expected_output": "A shared ApplicationTest uses ManagedApplicationFixture so Program owns startup while the existing worker behavior and lifecycle remain intact.",
+      "expectations": [
+        "Classifies the project as a console or worker functional test with shared ownership",
+        "Uses ApplicationTest<Program, ManagedApplicationFixture<Program>> with constructor-injected fixture and ITestOutputHelper",
+        "Removes BlockingManagedApplicationFixture and does not introduce process launching or a replacement HostBuilder",
+        "Preserves QueuePumpTest and ShouldResolveMarker_WhenApplicationStarts names and the QueuePumpMarker assertion",
+        "Preserves the Bootstrapper Worker production entry point, net10.0, and central package ownership",
+        "The shared application inspector postcondition and restore/build/test succeed"
+      ],
+      "files": [
+        "evals/files/worker-functional/Directory.Build.props",
+        "evals/files/worker-functional/Directory.Packages.props",
+        "evals/files/worker-functional/src/Acme.QueuePump/Acme.QueuePump.csproj",
+        "evals/files/worker-functional/src/Acme.QueuePump/Program.cs",
+        "evals/files/worker-functional/src/Acme.QueuePump/Startup.cs",
+        "evals/files/worker-functional/src/Acme.QueuePump/QueuePumpMarker.cs",
+        "evals/files/worker-functional/src/Acme.QueuePump/QueuePumpWorker.cs",
+        "evals/files/worker-functional/test/Acme.QueuePump.FunctionalTests/Acme.QueuePump.FunctionalTests.csproj",
+        "evals/files/worker-functional/test/Acme.QueuePump.FunctionalTests/QueuePumpTest.cs"
       ]
     }
   ]

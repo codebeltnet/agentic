@@ -17,11 +17,10 @@ public class {BEHAVIOR}Test : Test
         using var application = ApplicationTestFactory.Create<{ENTRY_POINT}>(builder =>
         {
             {PRESERVED_HOST_CONFIGURATION}
-        });
+        }, new ManagedApplicationFixture<{ENTRY_POINT}>());
 
         var actual = application.Host.Services.GetRequiredService<{SOURCE_GROUNDED_SERVICE}>();
 
         Assert.Equal({SOURCE_GROUNDED_EXPECTED}, actual.{SOURCE_GROUNDED_MEMBER});
     }
 }
-

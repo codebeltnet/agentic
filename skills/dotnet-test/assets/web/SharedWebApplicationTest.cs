@@ -5,9 +5,9 @@ using Xunit;
 
 namespace {APPLICATION_NAMESPACE};
 
-public class {BEHAVIOR}Test : WebApplicationTest<{ENTRY_POINT}, BlockingManagedWebApplicationFixture<{ENTRY_POINT}>>
+public class {BEHAVIOR}Test : WebApplicationTest<{ENTRY_POINT}, ManagedWebApplicationFixture<{ENTRY_POINT}>>
 {
-    public {BEHAVIOR}Test(BlockingManagedWebApplicationFixture<{ENTRY_POINT}> hostFixture, ITestOutputHelper output) : base(hostFixture, output)
+    public {BEHAVIOR}Test(ManagedWebApplicationFixture<{ENTRY_POINT}> hostFixture, ITestOutputHelper output) : base(hostFixture, output)
     {
     }
 
@@ -26,4 +26,3 @@ public class {BEHAVIOR}Test : WebApplicationTest<{ENTRY_POINT}, BlockingManagedW
         {PRESERVED_SHARED_WEB_HOST_CONFIGURATION}
     }
 }
-
