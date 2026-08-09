@@ -1119,6 +1119,7 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     $migration = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/references/migration-invariants.md' -GitRef $Ref
     $inspect = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/inspect-dotnet-tests.ps1' -GitRef $Ref
     $resolve = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/resolve-test-package-versions.ps1' -GitRef $Ref
+    $resolveTest = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/test-resolve-test-package-versions.ps1' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/evals/evals.json' -GitRef $Ref
     $fixtureFiles = Get-RepoFileList -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/evals/files' -GitRef $Ref
 
@@ -1155,7 +1156,11 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'hostTestOwnerships'
     Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle 'packageOwnership'
     Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'https://api.nuget.org/v3/index.json'
-    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'isolated restore passed'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'Test-PackageCompatibility -Packages $trial'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'combined restore passed'
+    Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'stable candidate resolution should succeed'
+    Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'combined package set'
+    Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'restore evidence'
 
     $evalObject = $evals | ConvertFrom-Json
     if (@($evalObject.evals).Count -ne 6) {
