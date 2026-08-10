@@ -240,6 +240,17 @@
         "Does not preserve the earlier draft bullet as a frozen baseline that forces later refinements into `Changed`",
         "Does not create a Changed section or Changed bullet for unreleased refinements to the still-unreleased dotnet-test introduction"
       ]
+    },
+    {
+      "id": 21,
+      "prompt": "Please do a git bot commit yolo.",
+      "expected_output": "The changelog skill does not activate because the request contains commit-execution intent but no changelog or release-note intent.",
+      "expectations": [
+        "Does not select git-keep-a-changelog from bare yolo wording inside a git bot commit request",
+        "Does not inspect or edit CHANGELOG.md",
+        "Does not reinterpret yolo as a release or changelog trigger",
+        "Defers the request to the git-visual-commits workflow"
+      ]
     }
   ]
 }

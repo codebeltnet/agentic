@@ -1,7 +1,7 @@
 ---
 name: git-keep-a-changelog
 description: >
-  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user asks to create/update changelog, draft release notes, or mentions SemVer-aware summaries. Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...), "yolo", "auto". Reads full commit bodies and diffs, treats the selected branch or range as author-agnostic scope by default, creates compliant structure with required SemVer highlights, infers versions from branches, must ask a mandatory Yes / No / Custom confirmation question before including pending staged, unstaged, or untracked worktree changes in a concrete release draft (bypassed in yolo/auto mode — all changes included automatically), edits directly for review, preserves prose wrapping, avoids commit-log dumps, and classifies only surviving base-to-HEAD release outcomes.
+  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user explicitly asks to create or update a changelog, draft release notes, prepare or finalize a release changelog, or requests a SemVer-aware release summary. Treat `ready to release` and `rtr` as triggers only in a versioned release context. Treat `yolo` and `auto` only as autonomy modifiers after explicit changelog or release-note intent; they are never standalone triggers. Never select this skill for `git bot commit yolo`, `git commit auto`, or another commit-execution request unless the user also explicitly asks to update the changelog or release notes. Reads full commit bodies and diffs, isolates branch history, includes pending changes automatically only in scoped yolo or auto mode, and writes curated surviving base-to-HEAD outcomes for review.
 compatibility: >
   Requires Git and PowerShell 7+ for deterministic branch-scope resolution.
 ---
@@ -16,7 +16,7 @@ Read `FORMS.md` when pending worktree changes require user confirmation and the 
 
 ## Yolo / Auto Mode
 
-When the user's request contains `yolo` or `auto` (case-insensitive, anywhere in the message), the skill operates in full-autonomy mode:
+Only after this skill has been selected by explicit changelog or release-note intent, `yolo` or `auto` in that same request (case-insensitive) enables full-autonomy mode. Bare `yolo` / `auto`, `git bot commit yolo`, and other commit-execution requests do not activate this skill:
 
 - **Skip Step 3 entirely.** Do not ask the confirmation question. Do not present the `Yes / No / Custom` gate.
 - **Include all pending changes automatically.** Staged, unstaged, and untracked files are all treated as part of the release scope without asking.
@@ -154,7 +154,7 @@ Explicit instructions such as `staged only`, `include unstaged changes`, or `exc
 
 The Step 3 confirmation gate exists to prevent silent inclusion of worktree changes in a permanent release entry. It is a required safety checkpoint, not optional friction.
 
-**Exception — yolo/auto bypasses the gate by design.** When the user explicitly passes `yolo` or `auto`, they are granting full autonomy. That is not a vague hint like `include everything` — it is a deliberate, recognized mode. Skip Step 3, include all pending changes, and proceed.
+**Exception — scoped yolo/auto bypasses the gate by design.** When the user explicitly passes `yolo` or `auto` within an explicit changelog or release-note request, they are granting full autonomy for that changelog task. That is not a vague hint like `include everything` — it is a deliberate, recognized mode. Skip Step 3, include all pending changes, and proceed.
 
 ### Why this matters
 
