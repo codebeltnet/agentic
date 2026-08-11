@@ -4,6 +4,8 @@ Two things happen at deployment: the application-owned static assets are shipped
 
 ## Derived asset image
 
+Name the derived Dockerfile `<something>.Dockerfile` with a PascalCase `<something>` prefix. For this skill the canonical name is `Assets.Dockerfile`. Docker documents this convention for distinct Dockerfiles and the `--file` option for selecting a non-default filename; use `docker build --file Assets.Dockerfile ...` or the equivalent Compose `dockerfile: Assets.Dockerfile` setting. Do not use `Dockerfile.assets` or the lowercase `assets.Dockerfile` form. See the [Dockerfile overview](https://docs.docker.com/build/concepts/dockerfile/).
+
 When application-owned assets ship as a container image, use `web-cdn-origin:2.0.0` as the base. The normal derived image is conceptually no more complicated than copying the final `wwwroot` output into the image's content root:
 
 ```dockerfile

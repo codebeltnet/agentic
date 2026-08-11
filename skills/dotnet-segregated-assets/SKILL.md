@@ -88,6 +88,8 @@ Point CDN asset URLs at that origin locally and at the shared/CDN host in deploy
 
 Add a derived image that ships the **actual final asset output** (run the frontend build first if the app generates its `wwwroot`):
 
+Name the derived Dockerfile `<something>.Dockerfile` with a PascalCase `<something>` prefix. For this skill, use `Assets.Dockerfile`. This follows Docker's documented convention for distinct Dockerfiles; select the non-default file explicitly with `--file` (or the equivalent Compose `dockerfile` property). Do not use `Dockerfile.assets` or the lowercase `assets.Dockerfile` form.
+
 ```dockerfile
 FROM codebeltnet/web-cdn-origin:2.0.0
 
