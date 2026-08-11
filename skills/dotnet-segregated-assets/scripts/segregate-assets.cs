@@ -531,9 +531,9 @@ internal static class Classifier
     {
         if (webProjects.Count == 0) return NotAWebApp;
         if (selected is null) return Ambiguous;
-        if (existing.Complete) return AlreadySegregated;
-        if (!selected.HasWwwroot && risks.Count == 0) return NoWwwroot;
         if (risks.Count > 0) return RiskyGeneratedAssets;
+        if (existing.Complete) return AlreadySegregated;
+        if (!selected.HasWwwroot) return NoWwwroot;
         return Simple;
     }
 
@@ -800,8 +800,10 @@ internal static class Commands
                     compose = ComposeValidator.Validate(File.ReadAllText(composeFile));
             }
 
-            var localOk = (launch is null || (!launch.HasUnsafeProtocol && launch.HasHttpLocalOrigin && launch.IsHttp)) &&
-                          (compose is null || (compose.UsesOriginImage && compose.ReadOnlyMount && compose.NonPrivileged && compose.NoDockerSocket));
+            var localOk = launch is not null &&
+                          !launch.HasUnsafeProtocol && launch.HasHttpLocalOrigin && launch.IsHttp &&
+                          compose is not null &&
+                          compose.UsesOriginImage && compose.ReadOnlyMount && compose.NonPrivileged && compose.NoDockerSocket;
             var ok = leak.Passed && (!options.CheckLocal || localOk);
 
             var payload = new
@@ -864,12 +866,24 @@ internal static class Commands
                 new { step = "escalate", status = "blocked", detail = "Risky Static Web Assets detected. Do not apply a blanket wwwroot publish exclusion or disable StaticWebAssetsEnabled. Request an explicit generated-static-assets segregation design." },
             };
         }
-        if (inspection.Classification is Classifier.NotAWebApp or Classifier.Ambiguous or Classifier.NoWwwroot)
+        if (inspection.Classification is Classifier.NotAWebApp or Classifier.Ambiguous)
         {
             return new List<object>
             {
                 new { step = "resolve", status = "blocked", detail = inspection.Recommendation },
             };
+        }
+        if (inspection.Classification == Classifier.NoWwwroot)
+        {
+            return options.CdnEquivalent
+                ? new List<object>
+                {
+                    new { step = "cdn-equivalent", status = "create", detail = $"Configure shared/CDN asset consumption and provision a local origin on host port {options.CdnPort} from its own shared-asset root." },
+                }
+                : new List<object>
+                {
+                    new { step = "resolve", status = "blocked", detail = inspection.Recommendation },
+                };
         }
 
         var plan = new List<object>
@@ -992,6 +1006,7 @@ internal static class SelfTest
             TestNoWwwroot(root);
             TestIdempotencyDetection(root);
             TestAlreadySegregatedClassification(root);
+            TestAlreadySegregatedRiskIsRisky(root);
             TestLaunchProfileValidatorSafe();
             TestLaunchProfileValidatorRejectsProtocolRelative();
             TestLaunchProfileValidatorRejectsHttpsLocal();
@@ -1149,6 +1164,26 @@ internal static class SelfTest
             "{ \"profiles\": { \"http-segregated-assets\": { \"commandName\": \"Project\" } } }");
         var inspection = Commands.Inspect(dir, null);
         Assert("already: classified AlreadySegregated", inspection.Classification == Classifier.AlreadySegregated);
+    }
+
+    private static void TestAlreadySegregatedRiskIsRisky(string root)
+    {
+        var dir = NewProject(root, "done-risky", webApp: true, wwwroot: true);
+        var csproj = Directory.GetFiles(dir, "*.csproj").First();
+        File.WriteAllText(csproj, """
+        <Project Sdk="Microsoft.NET.Sdk.Web">
+          <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+          <ItemGroup><Content Update="wwwroot/**" CopyToPublishDirectory="Never" /></ItemGroup>
+        </Project>
+        """);
+        Directory.CreateDirectory(Path.Combine(dir, "Properties"));
+        File.WriteAllText(Path.Combine(dir, "Properties", "launchSettings.json"),
+            "{ \"profiles\": { \"http-segregated-assets\": { \"commandName\": \"Project\" } } }");
+        File.WriteAllText(Path.Combine(dir, "Index.cshtml.css"), "h1{color:red}");
+
+        var inspection = Commands.Inspect(dir, null);
+        Assert("already-risky: existing segregation is complete", inspection.ExistingSegregation.Complete);
+        Assert("already-risky: risk takes precedence", inspection.Classification == Classifier.RiskyGeneratedAssets);
     }
 
     private static void TestLaunchProfileValidatorSafe()
