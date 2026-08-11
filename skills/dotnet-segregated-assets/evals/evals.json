@@ -1,0 +1,202 @@
+{
+  "skill_name": "dotnet-segregated-assets",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "This is a conventional ASP.NET Core MVC app (Contoso.Web) with a normal wwwroot folder. We don't have any shared CDN — it's just this app's own CSS, JS, and favicon. Set it up so the deployed app doesn't serve or ship wwwroot itself; the static files should come from Codebelt Static Content Provider instead, but I still want to keep editing files in wwwroot like normal.",
+      "expected_output": "The skill runs segregate-assets.cs inspect, classifies the project as Simple, confirms no CDN equivalent, and applies App-asset segregation: a targeted <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> item, an http-segregated-assets launch profile pointing App URLs at http://localhost:8080, a local codebeltnet/web-cdn-origin:2.0.0 service mounting wwwroot into /cdnroot read-only, a derived FROM codebeltnet/web-cdn-origin:2.0.0 production image, and documentation. wwwroot stays as the authoring root.",
+      "expectations": [
+        "Runs the bundled runner (segregate-assets.cs) to inspect topology instead of guessing",
+        "Keeps wwwroot as the authoring root and does NOT introduce an approot/cdnroot/staticroot source folder",
+        "Adds a targeted <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> item",
+        "Adds a new http-segregated-assets HTTP launch profile without altering the existing Development profile",
+        "Provisions a local codebeltnet/web-cdn-origin:2.0.0 origin mounting wwwroot into /cdnroot read-only",
+        "Adds a derived production image: FROM codebeltnet/web-cdn-origin:2.0.0 + COPY --chown=65532:65532 ./wwwroot/ /cdnroot/",
+        "NEGATIVE: does not set <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>",
+        "NEGATIVE: does not resurrect the 1.4 ADD approot / WORKDIR /cdnroot Dockerfile pattern",
+        "NEGATIVE: does not blindly delete MapStaticAssets"
+      ],
+      "files": [
+        "evals/files/conventional-mvc/Contoso.Web.csproj",
+        "evals/files/conventional-mvc/Program.cs",
+        "evals/files/conventional-mvc/Controllers/HomeController.cs",
+        "evals/files/conventional-mvc/Views/Shared/_Layout.cshtml",
+        "evals/files/conventional-mvc/Properties/launchSettings.json",
+        "evals/files/conventional-mvc/wwwroot/css/site.css",
+        "evals/files/conventional-mvc/wwwroot/js/site.js",
+        "evals/files/conventional-mvc/wwwroot/favicon.ico"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Portal.Web has its own branding CSS in wwwroot, but we also keep a shared design system (fonts, design tokens, vendored libraries) under shared-assets/ that several of our apps use. Segregate the static assets and make sure the shared stuff is treated as reusable CDN content, not copied into the app.",
+      "expected_output": "The skill distinguishes App assets (Portal.Web/wwwroot) from CDN assets (shared-assets/), asks/confirms the CDN equivalent exists, configures App-asset segregation for the app's own wwwroot, provisions a second local origin (host port 8081) from the shared-assets root for CDN content, points CDN URLs at that origin locally and at the shared CDN host in deployment, and never duplicates shared-assets into Portal.Web/wwwroot.",
+      "expectations": [
+        "Explicitly determines that a CDN/shared-asset equivalent exists (shared-assets/)",
+        "Treats shared-assets/ as CDN content with its own source, not part of the app's wwwroot",
+        "Provisions a second local origin on a different host port (e.g. 8081) for the shared/CDN content",
+        "Configures App URLs and CDN URLs against their respective origins locally and hosts in deployment",
+        "NEGATIVE: does not copy or duplicate shared-assets content into Portal.Web/wwwroot",
+        "NEGATIVE: does not conflate App and CDN assets into a single origin/host"
+      ],
+      "files": [
+        "evals/files/with-cdn/src/Portal.Web/Portal.Web.csproj",
+        "evals/files/with-cdn/src/Portal.Web/Program.cs",
+        "evals/files/with-cdn/src/Portal.Web/wwwroot/css/portal.css",
+        "evals/files/with-cdn/shared-assets/README.md",
+        "evals/files/with-cdn/shared-assets/fonts/brand.woff2",
+        "evals/files/with-cdn/shared-assets/vendor/design-tokens.css"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Tolk.Web already uses Cuemon's app-href and cdn-src tag helpers with AppTagHelperOptions and CdnTagHelperOptions. Wire up the segregated topology so App assets come from a local origin during development and from HTTPS asset hosts in production.",
+      "expected_output": "The skill detects the existing Cuemon AppTagHelperOptions/CdnTagHelperOptions, sets App local BaseUrl to localhost:<app-port> with Scheme = Http (never leaving the default Relative scheme against an HTTP-only origin), sets CDN local BaseUrl similarly when applicable, and uses Scheme = Https absolute URLs for deployed configuration, bound from the http-segregated-assets launch profile. It reuses the existing Cuemon abstraction rather than inventing a parallel one.",
+      "expectations": [
+        "Detects and reuses the existing Cuemon AppTagHelperOptions/CdnTagHelperOptions configuration",
+        "Sets the App local Scheme explicitly to Http (not the default Relative) with BaseUrl localhost:<app-port>",
+        "Uses Https absolute base URLs for deployed configuration",
+        "Drives the local values from the http-segregated-assets launch profile environment variables",
+        "NEGATIVE: does not emit a protocol-relative //localhost or https://localhost URL against the HTTP-only local origin",
+        "NEGATIVE: does not introduce a second competing asset-configuration system alongside Cuemon"
+      ],
+      "files": [
+        "evals/files/cuemon-app/Tolk.Web.csproj",
+        "evals/files/cuemon-app/Program.cs",
+        "evals/files/cuemon-app/Views/Shared/_Layout.cshtml",
+        "evals/files/cuemon-app/wwwroot/css/site.css"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Ledger.Web is a plain ASP.NET Core app — no Cuemon, no fancy tag helpers. It already reads an Assets:BaseUrl setting to prefix its asset URLs. Segregate its static assets to the Static Content Provider without adding new dependencies we don't need.",
+      "expected_output": "The skill adapts to the app's existing Assets:BaseUrl abstraction, drives it from the http-segregated-assets launch profile (http://localhost:<app-port>) locally and deployed config in production, and applies the standard App-asset segregation (publish exclusion, local origin, production image) — without adding a Cuemon package reference.",
+      "expectations": [
+        "Reuses the application's own Assets:BaseUrl configuration to prefix asset URLs",
+        "Applies the standard App-asset segregation using the existing abstraction",
+        "NEGATIVE: does not add a Cuemon (Cuemon.AspNetCore.Razor.TagHelpers) dependency to an app that does not already use it",
+        "NEGATIVE: does not introduce a second/competing asset-configuration system"
+      ],
+      "files": [
+        "evals/files/no-cuemon/Ledger.Web.csproj",
+        "evals/files/no-cuemon/Program.cs",
+        "evals/files/no-cuemon/appsettings.json",
+        "evals/files/no-cuemon/wwwroot/css/site.css"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Orders.Web already has a docker-compose.yml with our Postgres dev database. Add the local Static Content Provider for the app's wwwroot without throwing away or rewriting our existing compose setup.",
+      "expected_output": "The skill recognizes the existing docker-compose.yml orchestration and extends it (or adds a dedicated compose overlay) with an app-assets service based on codebeltnet/web-cdn-origin:2.0.0 mounting wwwroot into /cdnroot read-only, preserving the existing db service, instead of replacing the established mechanism.",
+      "expectations": [
+        "Recognizes and preserves the existing docker-compose.yml and its db service",
+        "Extends the existing orchestration mechanism (or adds a clean overlay) rather than replacing it",
+        "Adds a hardened codebeltnet/web-cdn-origin:2.0.0 service mounting wwwroot into /cdnroot read-only",
+        "NEGATIVE: does not delete or overwrite the existing db service / compose conventions"
+      ],
+      "files": [
+        "evals/files/existing-compose/Orders.Web.csproj",
+        "evals/files/existing-compose/Program.cs",
+        "evals/files/existing-compose/docker-compose.yml",
+        "evals/files/existing-compose/wwwroot/css/site.css"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "In this Acme solution, segregate the static assets for our website. There are a few projects in here.",
+      "expected_output": "The skill runs inspect, finds multiple Microsoft.NET.Sdk.Web projects (Acme.Api and Acme.Site), reports the ambiguity, and asks which web project to target (or resolves Acme.Site as the site) before applying changes to only that project — not to Acme.Api or the Acme.Core class library.",
+      "expectations": [
+        "Runs inspect and detects more than one candidate web project",
+        "Resolves the target web project (asks or selects Acme.Site) instead of guessing or acting on all projects",
+        "Does not apply segregation to the Acme.Core class library or the unrelated Acme.Api",
+        "NEGATIVE: does not silently pick the wrong project or modify multiple projects without resolving the target"
+      ],
+      "files": [
+        "evals/files/multi-project/Acme.slnx",
+        "evals/files/multi-project/src/Acme.Api/Acme.Api.csproj",
+        "evals/files/multi-project/src/Acme.Site/Acme.Site.csproj",
+        "evals/files/multi-project/src/Acme.Site/Program.cs",
+        "evals/files/multi-project/src/Acme.Site/wwwroot/css/site.css",
+        "evals/files/multi-project/src/Acme.Core/Acme.Core.csproj"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Storefront.Web builds its final wwwroot with a Vite bundler (npm run build writes into wwwroot). Segregate the static assets and make sure the production asset image ships the built output, not our source inputs.",
+      "expected_output": "The skill detects the frontend build pipeline (package.json + vite), preserves it, and ensures the derived web-cdn-origin image ships the actual generated wwwroot output (build runs before the image is assembled), rather than stale source inputs under assets/. It treats generated output as the artifact and documents the CI integration point.",
+      "expectations": [
+        "Detects the frontend build pipeline (package.json build + bundler) rather than treating wwwroot as static source",
+        "Ensures the production asset image ships the generated wwwroot output, produced by running the build first",
+        "Preserves the existing generation pipeline and documents where it feeds the asset artifact",
+        "NEGATIVE: does not package stale source inputs (assets/) instead of the built output",
+        "NEGATIVE: does not delete or bypass the frontend build"
+      ],
+      "files": [
+        "evals/files/frontend-build/Storefront.Web.csproj",
+        "evals/files/frontend-build/Program.cs",
+        "evals/files/frontend-build/package.json",
+        "evals/files/frontend-build/vite.config.js",
+        "evals/files/frontend-build/assets/main.js"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Segregate the static assets for Northwind.Web. Just exclude wwwroot from publish and point everything at the asset host.",
+      "expected_output": "The skill runs inspect, detects that Northwind.Web references a Razor Class Library (Northwind.DesignSystem) that contributes _content/ static web assets, classifies the scenario as RiskyGeneratedAssets, and refuses to apply a blanket wwwroot exclusion or disable StaticWebAssetsEnabled. It explains that generated/RCL Static Web Assets would break, and either designs an explicit safe segregation or stops and reports that an explicit generated-static-assets segregation design is required.",
+      "expectations": [
+        "Runs inspect and detects the Razor Class Library / generated Static Web Assets scenario (_content assets)",
+        "Classifies as risky and treats it as a compatibility guardrail",
+        "Explains that a blanket exclusion or global disable would break RCL/framework (_content/_framework) assets",
+        "Escalates safely: designs an explicit safe approach or stops and reports that a generated-static-assets segregation design is required (a successful safety outcome)",
+        "NEGATIVE: does not apply a blanket <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\"> as if it were a simple physical wwwroot",
+        "NEGATIVE: does not set <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>",
+        "NEGATIVE: does not blindly delete MapStaticAssets or exclude _content/_framework assets"
+      ],
+      "files": [
+        "evals/files/blazor-rcl/src/Northwind.Web/Northwind.Web.csproj",
+        "evals/files/blazor-rcl/src/Northwind.Web/Program.cs",
+        "evals/files/blazor-rcl/src/Northwind.Web/wwwroot/css/app.css",
+        "evals/files/blazor-rcl/src/Northwind.DesignSystem/Northwind.DesignSystem.csproj",
+        "evals/files/blazor-rcl/src/Northwind.DesignSystem/wwwroot/design-system.css"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Fabrikam.Web has already been set up for segregated assets. Prove that the app-owned wwwroot files really are absent from the published web application.",
+      "expected_output": "The skill runs segregate-assets.cs verify with --run-publish, which publishes Fabrikam.Web to an isolated temporary directory and confirms the application-owned wwwroot files (css/site.css, js/site.js) are ABSENT from the publish artifact, reporting PASS. It does not write verification output into the repository.",
+      "expectations": [
+        "Runs the runner's verify command with --run-publish (isolated temp output) rather than eyeballing the csproj",
+        "Confirms application-owned wwwroot files are absent from the publish artifact and reports the invariant as satisfied",
+        "Allows shared _content/_framework assets to remain (they are not app-owned)",
+        "NEGATIVE: does not write publish/verification output into the repository",
+        "NEGATIVE: does not claim success from the declaration alone without publishing"
+      ],
+      "files": [
+        "evals/files/segregated-app/Fabrikam.Web.csproj",
+        "evals/files/segregated-app/Program.cs",
+        "evals/files/segregated-app/Properties/launchSettings.json",
+        "evals/files/segregated-app/compose.segregated-assets.yml",
+        "evals/files/segregated-app/Assets.Dockerfile",
+        "evals/files/segregated-app/wwwroot/css/site.css",
+        "evals/files/segregated-app/wwwroot/js/site.js"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Run the segregated-assets setup on Fabrikam.Web again — I think someone already did it but I want to be sure it's configured.",
+      "expected_output": "The skill runs inspect, detects existing segregation (publish exclusion + http-segregated-assets profile + compose service + derived Dockerfile), classifies it as AlreadySegregated, and reconciles idempotently — it does not create duplicate MSBuild items, launch profiles, compose services, or Dockerfiles, does not increment ports, and does not overwrite the existing configuration.",
+      "expectations": [
+        "Runs inspect and detects the existing segregation (AlreadySegregated)",
+        "Reconciles idempotently without creating duplicate csproj items, profiles, compose services, or Dockerfiles",
+        "Does not increment ports unnecessarily or overwrite customized URLs",
+        "NEGATIVE: does not add a second competing asset configuration or duplicate the existing setup"
+      ],
+      "files": [
+        "evals/files/segregated-app/Fabrikam.Web.csproj",
+        "evals/files/segregated-app/Properties/launchSettings.json",
+        "evals/files/segregated-app/compose.segregated-assets.yml",
+        "evals/files/segregated-app/Assets.Dockerfile"
+      ]
+    }
+  ]
+}

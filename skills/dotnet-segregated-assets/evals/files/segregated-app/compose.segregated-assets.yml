@@ -1,0 +1,12 @@
+services:
+  app-assets:
+    image: codebeltnet/web-cdn-origin:2.0.0
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./wwwroot:/cdnroot:ro
