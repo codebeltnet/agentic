@@ -31,6 +31,7 @@ internal static class SegregateAssetsProgram
 {
     internal const string ToolName = "dotnet-segregated-assets";
     internal const string OriginImage = "codebeltnet/web-cdn-origin:2.0.0";
+    internal const string DerivedDockerfileName = "Assets.Dockerfile";
     internal const int OriginContainerPort = 8080;
     internal const string OriginContentRoot = "/cdnroot";
     internal const string OriginUser = "65532";
@@ -891,7 +892,7 @@ internal static class Commands
             new { step = "publish-exclusion", status = StatusFor(e.PublishExclusion), detail = "Add <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> to the web project (targeted; do NOT disable StaticWebAssetsEnabled)." },
             new { step = "segregated-launch-profile", status = StatusFor(e.SegregatedLaunchProfile), detail = $"Add the '{SegregateAssetsProgram.SegregatedProfileName}' HTTP launch profile pointing App asset URLs at http://localhost:{options.AppPort}." },
             new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide a local {SegregateAssetsProgram.OriginImage} service mounting wwwroot into /cdnroot read-only on host port {options.AppPort}." },
-            new { step = "production-image", status = StatusFor(e.DerivedDockerfile), detail = $"Add a derived Dockerfile: FROM {SegregateAssetsProgram.OriginImage} + COPY --chown={SegregateAssetsProgram.OriginUser}:{SegregateAssetsProgram.OriginUser} ./wwwroot/ {SegregateAssetsProgram.OriginContentRoot}/." },
+            new { step = "production-image", status = StatusFor(e.DerivedDockerfile), detail = $"Add {SegregateAssetsProgram.DerivedDockerfileName} (PascalCase <something>.Dockerfile) and select it with --file: FROM {SegregateAssetsProgram.OriginImage} + COPY --chown={SegregateAssetsProgram.OriginUser}:{SegregateAssetsProgram.OriginUser} ./wwwroot/ {SegregateAssetsProgram.OriginContentRoot}/." },
             new { step = "documentation", status = "create-or-update", detail = "Document that deployed static content is served by Codebelt Static Content Provider, and that wwwroot remains the authoring root." },
         };
 
@@ -1140,7 +1141,7 @@ internal static class SelfTest
         """);
         File.WriteAllText(Path.Combine(dir, "compose.segregated-assets.yml"),
             "services:\n  app-assets:\n    image: codebeltnet/web-cdn-origin:2.0.0\n");
-        File.WriteAllText(Path.Combine(dir, "Assets.Dockerfile"),
+        File.WriteAllText(Path.Combine(dir, SegregateAssetsProgram.DerivedDockerfileName),
             "FROM codebeltnet/web-cdn-origin:2.0.0\nCOPY --chown=65532:65532 ./wwwroot/ /cdnroot/\n");
         var existing = IdempotencyDetector.Detect(csproj, dir);
         Assert("idem: publish exclusion present", existing.PublishExclusion);

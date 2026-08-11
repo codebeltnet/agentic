@@ -43,6 +43,19 @@ foreach ($needle in $contracts) {
     }
 }
 
+$productionImage = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'references/production-image.md'))
+$dockerfileContracts = @('<something>.Dockerfile', 'PascalCase', 'Assets.Dockerfile', 'Dockerfile.assets', '--file')
+foreach ($source in @(
+    [pscustomobject]@{ Name = 'SKILL.md'; Text = $skill },
+    [pscustomobject]@{ Name = 'references/production-image.md'; Text = $productionImage }
+)) {
+    foreach ($needle in $dockerfileContracts) {
+        if (-not $source.Text.Contains($needle, [System.StringComparison]::Ordinal)) {
+            throw "$($source.Name) is missing Dockerfile naming contract: $needle"
+        }
+    }
+}
+
 # The skill must not *recommend* the removed 1.4 pattern or a blanket kill switch. It may name them only
 # to warn against them, so require the warning framing (a "not"/"Do not"/"Never"/"removed" cue) to be near
 # each anti-pattern rather than forbidding the phrase outright.

@@ -55,6 +55,7 @@ try {
     $plan = Invoke-Runner -RunnerArgs @('plan', '--repo-root', $workspace, '--json')
     Assert-True 'plan exits 0' ($plan.ExitCode -eq 0)
     Assert-True 'plan proposes publish-exclusion' ($plan.Output -match 'publish-exclusion')
+    Assert-True 'plan names the PascalCase derived Dockerfile' ($plan.Output -match 'Assets\.Dockerfile')
     Assert-True 'plan skips CDN equivalent by default' ($plan.Output -match '"cdn-equivalent"[\s\S]*?"status":\s*"skip"')
 
     # An explicitly selected web project without wwwroot can still consume a shared/CDN asset root.
