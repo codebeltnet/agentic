@@ -712,6 +712,7 @@ Cross-platform .NET developers usually get Linux test feedback the slow way: pus
 - **Architectural motivation, stated honestly** — segregation of duties, independent deployment and scaling, explicit cache behavior, and origin/CDN offloading; never justified as HTTP/1.x domain sharding or extra browser connection parallelism
 - **Adapts, never imposes** — it reuses Cuemon `AppTagHelperOptions`/`CdnTagHelperOptions` when already present and the application's own base-URL setting otherwise, and never adds a Cuemon dependency just to migrate
 - **Idempotent and deterministic** — re-running reconciles existing segregation instead of duplicating MSBuild items, launch profiles, Compose services, or Dockerfiles, and the runner ships a built-in `--self-test` plus a PowerShell harness
+- **Fail-closed verification and planning** — local verification requires both the matching HTTP launch profile and origin Compose service, generated-asset risks override existing-segregation detection, and a no-`wwwroot` project can still produce CDN-only work when a shared equivalent exists
 ### Why agent-smith?
 
 **agent-smith** applies one coherent engineering standard — *consistency is key* — across a whole task instead of bolting a review onto the end. Invoke it explicitly as `/agent-smith <task>`; it also auto-triggers for engineering work such as architecture, implementation, code review, public API and compatibility analysis, testing, performance, skill authoring, security and DevSecOps, CI/CD, delivery, and governance.
