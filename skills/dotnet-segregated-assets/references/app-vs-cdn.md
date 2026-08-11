@@ -1,48 +1,73 @@
 # App assets versus CDN assets
 
-This distinction is the heart of the skill. Two static-asset roles look similar on disk but have different owners, lifecycles, and deployment surfaces. Getting the role right determines where an asset is authored, whether it may live in an application's `wwwroot`, and which host serves it in production.
+This distinction is the heart of the skill. Two static-asset roles can look similar on disk but have different owners, lifecycles, and delivery surfaces. Decide ownership before choosing a Razor helper or an origin.
 
 ## App assets
 
-App assets are application-specific files owned by exactly one application: its own CSS and JavaScript, images and branding, favicons, and any application-specific fonts or media. Their source normally stays in the web project's `wwwroot`, because that is the conventional, tooling-friendly authoring location that editors, hot reload, and the SDK already understand. What changes is delivery: after deployment these assets are served from a separately built and deployed static-content image based on `codebeltnet/web-cdn-origin:2.0.0`, on a host tied to that application (for example an assets host). They change on the application's own lifecycle.
+App assets are application-specific files owned by exactly one application: its CSS and JavaScript, images and branding, favicons, manifests, application-specific fonts, and application media. Their source normally stays in that web project's `wwwroot`, because it is the conventional, tooling-friendly authoring location understood by editors, hot reload, and the SDK. After deployment, the files are served from a separately built and deployed `codebeltnet/web-cdn-origin:2.0.0` image on a host tied to that application.
 
-Conceptually this is Cuemon's `AppTagHelperOptions` and the `app-*` tag helpers (`AppImageTagHelper`, `AppLinkTagHelper`, `AppScriptTagHelper`, used through `app-src`/`app-href`): assets that live outside the application process but are tied to that one application.
+When `Cuemon.AspNetCore.Razor.TagHelpers` is already available, use the public Cuemon App helpers and bind `AppTagHelperOptions`:
+
+```html
+<app-link rel="stylesheet" href="css/site.css" />
+<app-link rel="preload" href="fonts/antonio-latin.woff2" as="font" type="font/woff2" crossorigin />
+<app-link rel="icon" href="favicon.svg" type="image/svg+xml" />
+<app-link rel="mask-icon" href="mask-icon.svg" type="image/svg+xml" color="#000000" />
+<app-link rel="apple-touch-icon" href="apple-touch-icon.png" type="image/png" />
+<app-link rel="manifest" href="manifest.json" type="application/json" />
+<app-script src="js/site.js"></app-script>
+<app-image src="images/logo.svg" alt="Logo" />
+```
+
+These elements declare App ownership in Razor. Do not replace them with a custom `GetUrl()` helper, injected `AppAssetOptions`, or an application-specific URL builder when Cuemon is already present.
 
 ## CDN assets
 
-CDN assets are reusable static content consumed by multiple applications: common fonts, icon libraries, JavaScript libraries and packages, CSS frameworks, shared design-system assets, reusable images, and other organization-wide, versioned frontend dependencies. They must **not** be copied into every application's `wwwroot`. They usually have their own source repository or artifact, and they may ultimately be fronted by a true CDN (CloudFront, Cloudflare, Azure Front Door, Google Cloud CDN) with `web-cdn-origin` as the origin behind it.
+CDN assets are reusable static content consumed by multiple applications: common fonts, icon libraries, JavaScript libraries and packages, CSS frameworks, shared design-system assets, reusable images, and other organization-wide, versioned frontend dependencies. They must not be copied into every application's `wwwroot`. They normally have a separate source repository or artifact and may ultimately be fronted by a true CDN, with `web-cdn-origin` as the origin behind it.
 
-Conceptually this is Cuemon's `CdnTagHelperOptions` and the `cdn-*` tag helpers: assets on a surface that has a CDN role.
+When a shared equivalent exists, use Cuemon's CDN helpers and bind `CdnTagHelperOptions`:
 
-Always ask whether a CDN/shared equivalent exists (see `FORMS.md`). If none exists, configure only App-asset segregation. If one exists, find its existing source and configuration and reference it; never duplicate it into the application's `wwwroot`.
+```html
+<cdn-link href="packages/fontawesome/7.0.0/css/all.min.css" />
+<cdn-link href="packages/bootstrap/5.3.3/css/bootstrap.min.css" />
+<cdn-script src="packages/htmx/2.0.4/htmx.min.js"></cdn-script>
+<cdn-image src="shared/brand-mark.svg" alt="Organization mark" />
+```
 
-## Mapping to a URL-generation abstraction
+Use the corresponding CDN helper for the element type. Do not mechanically convert every static reference to an App helper or every external-looking reference to a CDN helper. Determine who owns the file and where its canonical source lives. If no CDN equivalent exists, do not create a CDN origin or manufacture CDN configuration.
 
-The skill only needs an abstraction that turns an asset path into a base-qualified URL whose base differs between local Development and deployment. Adapt to whatever the application already uses. **Do not add a Cuemon dependency to an application that does not already use it** merely to implement this skill.
+## Decision precedence
 
-### When Cuemon tag helpers are already present
+Existing framework and project abstractions are preferred over skill-invented abstractions:
 
-`Cuemon.AspNetCore.Razor.TagHelpers` exposes an abstract `TagHelperOptions` with two properties that matter here:
+1. If Cuemon is already available, reuse its App/CDN helpers and `AppTagHelperOptions`/`CdnTagHelperOptions`. If an earlier migration created `AppAssetOptions`, `SegregatedAssetsOptions`, `GetUrl()`, or similar, migrate its consumers by ownership and remove the abstraction only after proving that no consumers remain.
+2. If Cuemon is absent but a suitable project asset abstraction exists, reuse that abstraction. Do not add Cuemon solely because this skill knows about it.
+3. If neither exists, introduce only the smallest app-owned configuration mechanism required by the repository's existing architecture.
 
-- `Scheme` — a `ProtocolUriScheme` of `None`, `Http`, `Https`, or `Relative`. The default is `Relative`, which formats the base URL as protocol-relative (`//host/…`). `Http` formats as `http://host/…`, `Https` as `https://host/…`, and `None` as a bare `host/…`.
-- `BaseUrl` — the host (and optional path) portion, for example `localhost:8080` or `assets.example.com`.
+The runner reports package/project references, namespace imports, options types, `_ViewImports.cshtml` registrations, actual Cuemon elements, custom option types, URL calls, Razor injections, legacy attribute syntax, and whether Cuemon and a competing abstraction coexist. The runner does not rewrite Razor or C#; the agent performs the semantic migration.
 
-`AppTagHelperOptions` configures the `app-*` helpers and `CdnTagHelperOptions` configures the `cdn-*` helpers. Both default to `Scheme = Relative` and `BaseUrl = null`.
+## Configuration declares location
 
-Configure them like this:
+Razor declares ownership; configuration declares location; `web-cdn-origin` declares delivery of static content only:
 
-- **App, local Development (segregated profile):** `BaseUrl = localhost:<app-port>`, `Scheme = Http`. Setting the scheme explicitly to `Http` is critical: the default `Relative` scheme emits `//localhost:<app-port>/…`, which a browser resolves using the page's scheme. On an HTTPS page that becomes `https://localhost:<app-port>/…` and fails against an HTTP-only local origin. Keep the segregated application profile itself HTTP so there is no mixed-content mismatch.
-- **CDN, local Development:** `BaseUrl = localhost:<cdn-port>`, `Scheme = Http` — but only when a CDN equivalent exists and its content is available locally.
-- **Deployed (App and CDN):** absolute HTTPS URLs — `BaseUrl = assets.example.com` / `cdn.example.com`, `Scheme = Https`.
+```text
+Razor:         app-* or cdn-*
+Configuration: current application, local segregated origin, or deployed host
+Delivery:      web-cdn-origin:2.0.0 serves the static-content root
+```
 
-Bind these from configuration so the launch profile's environment variables drive the local values and deployed configuration supplies the HTTPS values.
+The current public Cuemon API exposes `TagHelperOptions.BaseUrlMode` with `TagHelperBaseUrlMode.Configured` and `TagHelperBaseUrlMode.Automatic`, plus `BaseUrl` and `ProtocolUriScheme`. Set `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic`: an explicit App `BaseUrl` wins; when App `BaseUrl` is absent, Automatic resolves against the active application request. Cuemon does not inspect launch-profile names.
 
-### When Cuemon is not used
+For the segregated local profile, configure the App option with `BaseUrlMode = TagHelperBaseUrlMode.Automatic`, host-only `BaseUrl = localhost:<app-port>`, and explicit `Scheme = ProtocolUriScheme.Http`. Configure the CDN option with `BaseUrlMode = TagHelperBaseUrlMode.Configured`, its own host-only `BaseUrl = localhost:<cdn-port>`, and `Scheme = ProtocolUriScheme.Http` only when a CDN equivalent exists. Never use a protocol-relative or HTTPS URL for an HTTP-only local origin.
 
-Configure the application's own asset base-URL abstraction instead — an options/setting the app already reads to prefix asset URLs (for example a `SegregatedAssets:App:BaseUrl` and `SegregatedAssets:App:Scheme` pair, or the equivalent the app already has). Drive the local value from the segregated launch profile's environment variables (`http://localhost:<app-port>`) and supply the deployed HTTPS value from deployed configuration. Introduce only a minimal app-owned setting; do not add a second competing asset-configuration system.
+For deployment, configure the App option with `BaseUrlMode = TagHelperBaseUrlMode.Automatic`, the external host, and HTTPS scheme, for example `BaseUrl = assets.example.com` and `Scheme = ProtocolUriScheme.Https`. Configure the CDN option with `BaseUrlMode = TagHelperBaseUrlMode.Configured`, the deployed shared host, and `Scheme = ProtocolUriScheme.Https`. CDN helpers must remain explicitly tied to the CDN surface; they must never fall back to the application host.
+
+When Cuemon is absent, apply the same ownership and location rules to the suitable existing project abstraction. Do not create a second configuration hierarchy beside `AppTagHelperOptions`/`CdnTagHelperOptions` or beside a project abstraction that already owns this concern.
+
+## Cache busting
+
+Before changing Razor, inspect whether the application uses Microsoft's `asp-append-version`, Cuemon `ICacheBusting`, content-addressed filenames, or another existing mechanism. Do not assume Microsoft's TagHelper will process `asp-append-version` on a Cuemon custom element, and do not introduce a second cache-busting system. Preserve behavior where the current combination is proven; if migration requires a cache-busting design decision, report it as explicit follow-up rather than silently changing the URL contract.
 
 ## Why segregate at all
 
-The motivation is architectural, not a browser-connection trick. Segregating static delivery gives you segregation of duties (static delivery is isolated from application and business logic and its failure modes), independent deployment and scaling for assets, explicit and correct cache behavior on a dedicated surface, origin/CDN offloading so the application stays small and cheap, reusable shared assets, and a reduced application artifact surface.
-
-The design serves architecture, operability, and edge caching through independent deployment, explicit cache policy, and origin offloading.
+The motivation is architectural, not a browser-connection trick. Segregating static delivery gives static content independent deployment and scaling, explicit cache behavior, origin offloading, reusable shared assets, and a reduced application artifact surface while keeping the developer-friendly `wwwroot` authoring workflow.

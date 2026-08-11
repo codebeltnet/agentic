@@ -2,6 +2,8 @@
 
 A supported simple migration has a physical `wwwroot` served by the application: plain files the developer authored. Projects that produce or contribute generated Static Web Assets require an explicit asset-artifact design. Their framework assets, Razor Class Library content, scoped CSS, component JavaScript modules, and frontend-generated output must remain available to the application.
 
+Cuemon ownership helpers do not change this boundary. Migrate only application-owned references to `app-*` and shared references to `cdn-*` after classifying them. Do not mechanically convert `_framework`, `_content`, generated manifest entries, RCL assets, or component output to a Cuemon App/CDN helper, and do not treat a Cuemon package reference as permission to disable Static Web Assets.
+
 ## Detect before deciding
 
 `segregate-assets.cs inspect` reports risk signals. Treat any of these as `RiskyGeneratedAssets` and preserve the complete generated-asset pipeline:
@@ -20,6 +22,8 @@ You can also inspect manually for the same signals: `_framework`, `_content`, ge
 ## Required handling
 
 The targeted `Content Update="wwwroot/**" CopyToPublishDirectory="Never"` item applies only to application-owned physical `wwwroot` content. Razor Class Library assets, framework assets, generated component assets, and frontend output continue through their respective publish and serving pipelines.
+
+When a project has Cuemon TagHelpers, its `app-*` and `cdn-*` markup still declares ownership only. It does not move or rewrite generated Static Web Assets. Preserve the existing framework and RCL references and verify the publish artifact before making any external-host change.
 
 The empirical evidence in `references/production-image.md` confirms the expected result: application-owned `wwwroot/*` is absent from the web publish artifact while a referenced RCL's `wwwroot/_content/<Lib>/…` remains available. That separation is required for the application to run correctly.
 

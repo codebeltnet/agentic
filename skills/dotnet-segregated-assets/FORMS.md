@@ -1,6 +1,6 @@
 # .NET Segregated Static Assets Input Form
 
-Collect only the fields that are still unresolved after running `segregate-assets.cs inspect` and reading the repository. Most fields have a computed or recommended default — present it first and accept a blank answer as acceptance. Prefer the host's native structured input controls when they are available; otherwise use the deterministic plain-text fallback described under **Presentation rules** without changing field order, defaults, recommended choices, or the final confirmation.
+Collect only the fields that are still unresolved after running `segregate-assets.cs inspect` and reading the repository. Use the runner's Cuemon and custom-abstraction evidence to resolve `asset_configuration`; do not infer an abstraction from a filename alone. Most fields have a computed or recommended default — present it first and accept a blank answer as acceptance. Prefer the host's native structured input controls when they are available; otherwise use the deterministic plain-text fallback described under **Presentation rules** without changing field order, defaults, recommended choices, or the final confirmation.
 
 The single question you must always resolve is `cdn_equivalent`. It changes whether a second local origin is provisioned and how shared assets are referenced, and it must never be assumed.
 
@@ -38,11 +38,13 @@ The single question you must always resolve is `cdn_equivalent`. It changes whet
 - **type:** single-choice
 - **prompt:** How are App/CDN asset URLs generated in this application?
 - **choices:**
-  - Cuemon App/Cdn tag helpers already present (Recommended when detected)
-  - The application's own asset base-URL option/setting
-  - No abstraction yet — introduce a minimal app-owned base-URL setting
-- **default:** Auto-detected from inspection (Cuemon when `AppTagHelperOptions`/`CdnTagHelperOptions` are found; otherwise the app's own setting) (Recommended)
+  - Cuemon App/CDN TagHelpers already present — reuse `AppTagHelperOptions`/`CdnTagHelperOptions` (Recommended when detected)
+  - The application's own suitable asset base-URL option/setting
+  - No suitable abstraction yet — introduce the smallest app-owned setting only if required
+- **default:** Auto-detected from inspection using package/project references, namespace imports, options, `_ViewImports.cshtml`, and actual `app-*`/`cdn-*` markup (Recommended)
 - **required:** true
+
+When Cuemon is detected, do not select the non-Cuemon or new-abstraction choice merely because an earlier `AppAssetOptions`-style abstraction exists. Treat it as a migration input, classify its consumers as App or CDN, and remove it only after proving that no consumers remain.
 
 ### app_origin_port
 
@@ -103,6 +105,7 @@ The single question you must always resolve is `cdn_equivalent`. It changes whet
 ## Presentation rules
 
 - Run `segregate-assets.cs inspect` first and infer explicit answers from its output and the repository; do not ask questions the inspection already answers.
+- Treat `assetAbstractions.cuemon` and `assetAbstractions.custom` as evidence. If both are present, plan a semantic migration and cleanup; do not leave two URL-generation systems behind.
 - Ask one unresolved field at a time. Never bundle multiple questions.
 - Present the recommended/default choice first and suffix it with `(Recommended)`.
 - For `web_project`, offer the discovered project names as selectable choices; when exactly one web project applies, select it without asking.
@@ -110,4 +113,4 @@ The single question you must always resolve is `cdn_equivalent`. It changes whet
 - For `text` fields with a computed default (ports, hosts), offer the computed value as a selectable choice alongside free text, and treat a blank response as accepting the shown value.
 - If native structured input widgets are unavailable, follow this deterministic plain-text fallback instead of improvising your own questioning style: start immediately with `Field: <field-name>`, then a one-line prompt, then numbered choices (recommended first), and accept a blank reply as the default. Do not add a conversational preamble, and do not switch interaction styles mid-collection. Consistency matters more than creativity during parameter collection.
 - Respect `show_when` conditions: skip `cdn_source`, `cdn_origin_port`, and `deployed_cdn_host` entirely when `cdn_equivalent` is `No`; skip `web_project` when only one web project exists.
-- After all fields are resolved, summarize the exact project, App/CDN ports, deployed hosts, asset-configuration approach, and whether a production image will be built, then ask `confirmation`.
+- After all fields are resolved, summarize the exact project, App/CDN ports, deployed hosts, asset-configuration approach, any competing abstraction cleanup, and whether a production image will be built, then ask `confirmation`.

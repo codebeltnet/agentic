@@ -2,6 +2,19 @@
 
 Two things happen at deployment: the application-owned static assets are shipped as their own immutable image based on `codebeltnet/web-cdn-origin:2.0.0`, and the deployed web application stops carrying a duplicate copy of those files.
 
+## Runtime URL configuration
+
+The Razor declaration stays the same across local and deployed topologies. With Cuemon, application-owned references use `app-*` helpers and shared references use `cdn-*` helpers. Deployment configuration supplies location through the already-bound `AppTagHelperOptions` and, when a shared surface exists, `CdnTagHelperOptions`:
+
+```text
+App: BaseUrl = assets.example.com, Scheme = Https
+Cdn: BaseUrl = cdn.example.com, Scheme = Https
+```
+
+Use the exact configuration keys and binding shape already present in the application. Do not encode hostnames or environment names in Razor, create a second options hierarchy, or enable application-host fallback for CDN helpers. If no shared CDN equivalent exists, omit the CDN origin and configuration rather than reclassifying App assets.
+
+In ordinary Development, set `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` and omit App `BaseUrl`, so the current application request supplies the location. In the `http-segregated-assets` profile, keep Automatic mode, provide the explicit host-only local App `BaseUrl`, and use `Scheme = ProtocolUriScheme.Http`; the explicit App host wins. In deployment, keep Automatic mode with the explicit HTTPS App host. Keep `CdnTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Configured` and provide an explicit CDN host wherever shared content exists.
+
 ## Derived asset image
 
 Name the derived Dockerfile `<something>.Dockerfile` with a PascalCase `<something>` prefix. For this skill the canonical name is `Assets.Dockerfile`. Select it with `docker build --file Assets.Dockerfile ...` or the equivalent Compose `dockerfile: Assets.Dockerfile` setting. When a dedicated local Compose file is used, name it `compose.assets.yml`. See the [Dockerfile overview](https://docs.docker.com/build/concepts/dockerfile/).
