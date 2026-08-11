@@ -73,6 +73,7 @@ try {
 using Cuemon.AspNetCore.Razor.TagHelpers;
 builder.Services.Configure<AppTagHelperOptions>(builder.Configuration.GetSection("App"));
 builder.Services.Configure<CdnTagHelperOptions>(builder.Configuration.GetSection("Cdn"));
+builder.Services.AddAssemblyCacheBusting();
 builder.Services.Configure<AppAssetOptions>(builder.Configuration.GetSection("Assets"));
 '@
     Set-Content -LiteralPath (Join-Path $cuemonDir 'AppAssetOptions.cs') -Encoding utf8 -Value 'public sealed class AppAssetOptions { public string GetUrl(string path) => path; }'
@@ -88,6 +89,7 @@ builder.Services.Configure<AppAssetOptions>(builder.Configuration.GetSection("As
     Assert-True 'Cuemon inspect exits 0' ($cuemonInspect.ExitCode -eq 0)
     Assert-True 'Cuemon package is detected' ($cuemonInspect.Output -match '"packageReference":\s*true')
     Assert-True 'Cuemon custom elements are detected' ($cuemonInspect.Output -match '"appLinkMarkup":\s*true')
+    Assert-True 'Cuemon cache-busting registration is detected' ($cuemonInspect.Output -match '"cuemonCacheBusting":\s*true')
     Assert-True 'custom abstraction is detected' ($cuemonInspect.Output -match '"custom"[\s\S]*?"present":\s*true')
     Assert-True 'competing abstractions are reported' ($cuemonInspect.Output -match '"competingAbstractions":\s*true')
     Assert-True 'runner reports legacy attribute syntax without rewriting' ($cuemonInspect.Output -match '"legacyAttributeSyntax":\s*false')

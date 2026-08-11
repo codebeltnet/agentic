@@ -47,6 +47,9 @@ $contracts = @(
     'BaseUrlMode',
     'TagHelperBaseUrlMode',
     'ProtocolUriScheme',
+    'ICacheBusting',
+    'CacheBustingTagHelper',
+    'AddCacheBusting',
     'runner never edits'
 )
 foreach ($needle in $contracts) {
@@ -81,6 +84,7 @@ foreach ($negative in @(
     'does not duplicate shared CDN assets into wwwroot',
     'does not alter the normal Development profile merely to support segregation',
     'does not add Cuemon to a project that otherwise does not use Cuemon',
+    'does not add a Cuemon cache-busting package or registration merely to implement segregation',
     'does not make the deterministic runner rewrite Razor source',
     'does not introduce a second asset configuration hierarchy alongside existing AppTagHelperOptions/CdnTagHelperOptions'
 )) {

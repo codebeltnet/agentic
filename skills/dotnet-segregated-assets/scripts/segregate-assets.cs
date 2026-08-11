@@ -295,6 +295,9 @@ internal sealed record CuemonDetection(
             if (CdnLinkMarkup) evidence.Add("cdn-link markup");
             if (CdnScriptMarkup) evidence.Add("cdn-script markup");
             if (CdnImageMarkup) evidence.Add("cdn-image markup");
+            if (LegacyAttributeSyntax) evidence.Add("legacy attribute-style Cuemon syntax");
+            if (MicrosoftAppendVersion) evidence.Add("asp-append-version");
+            if (CuemonCacheBusting) evidence.Add("Cuemon cache-busting interface/registration");
             return evidence;
         }
     }
@@ -564,7 +567,7 @@ internal static class AssetAbstractionDetector
             Regex.IsMatch(markup, @"<cdn-image\b", RegexOptions.IgnoreCase),
             Regex.IsMatch(markup, @"\b(?:app|cdn)-(?:href|src)\s*=", RegexOptions.IgnoreCase),
             Regex.IsMatch(markup, @"\basp-append-version\b", RegexOptions.IgnoreCase),
-            Regex.IsMatch(all, @"\bICacheBusting\b", RegexOptions.IgnoreCase));
+            Regex.IsMatch(all, @"\b(?:ICacheBusting|Add(?:Assembly|Dynamic)?CacheBusting)\b", RegexOptions.IgnoreCase));
 
         var custom = new CustomAssetDetection(
             Regex.IsMatch(all, @"\b(?:AppAssetOptions|SegregatedAssetsOptions|AssetOptions|AssetsOptions)\b|\b(?:class|record)\s+\w*(?:Asset|Assets)Options\b", RegexOptions.IgnoreCase),
@@ -1299,6 +1302,7 @@ internal static class SelfTest
         var builder = WebApplication.CreateBuilder(args);
         builder.Services.Configure<AppTagHelperOptions>(builder.Configuration.GetSection("App"));
         builder.Services.Configure<CdnTagHelperOptions>(builder.Configuration.GetSection("Cdn"));
+        builder.Services.AddAssemblyCacheBusting();
         builder.Services.Configure<AppAssetOptions>(builder.Configuration.GetSection("Assets"));
         """);
         File.WriteAllText(Path.Combine(dir, "AppAssetOptions.cs"), """
@@ -1336,6 +1340,7 @@ internal static class SelfTest
         Assert("cuemon: cdn-script detected", c.CdnScriptMarkup);
         Assert("cuemon: cdn-image detected", c.CdnImageMarkup);
         Assert("cuemon: legacy attribute syntax reported", c.LegacyAttributeSyntax);
+        Assert("cuemon: cache-busting registration detected", c.CuemonCacheBusting);
         Assert("cuemon: custom options detected", custom.OptionsType);
         Assert("cuemon: custom GetUrl detected", custom.UrlCalls);
         Assert("cuemon: competing abstractions detected", inspection.AssetAbstractions.CompetingAbstractions);
