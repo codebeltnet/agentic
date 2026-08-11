@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="9.0.6" />
+    <PackageReference Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="10.6.0" />
   </ItemGroup>
 
 </Project>
