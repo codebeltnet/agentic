@@ -34,7 +34,20 @@ $contracts = @(
     'orchestrat',
     'segregate-assets.cs',
     'generated-static-assets',
-    'Boundaries'
+    'Boundaries',
+    'AppTagHelperOptions',
+    'CdnTagHelperOptions',
+    'app-link',
+    'app-script',
+    'app-image',
+    'cdn-link',
+    'cdn-script',
+    'cdn-image',
+    'Automatic',
+    'BaseUrlMode',
+    'TagHelperBaseUrlMode',
+    'ProtocolUriScheme',
+    'runner never edits'
 )
 foreach ($needle in $contracts) {
     if (-not $skill.Contains($needle, [System.StringComparison]::Ordinal)) {
@@ -43,6 +56,45 @@ foreach ($needle in $contracts) {
 }
 
 $productionImage = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'references/production-image.md'))
+$appVsCdn = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'references/app-vs-cdn.md'))
+foreach ($staleSyntax in @('app-href', 'cdn-src', 'app-src', 'cdn-href')) {
+    if ($appVsCdn.Contains($staleSyntax, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "references/app-vs-cdn.md contains stale or unverified Cuemon syntax: $staleSyntax"
+    }
+}
+
+$evals = Get-Content -Raw (Join-Path $skillRoot 'evals/evals.json') | ConvertFrom-Json
+$cuemonEval = @($evals.evals | Where-Object { $_.id -eq 3 })[0]
+if ($null -eq $cuemonEval) {
+    throw 'evals/evals.json must retain the Cuemon migration eval with id 3.'
+}
+foreach ($expected in @('app-link', 'app-script', 'app-image', 'cdn-link', 'cdn-script', 'cdn-image', 'AppAssetOptions')) {
+    if (-not ($cuemonEval.expected_output.Contains($expected) -or (@($cuemonEval.expectations) -join "`n").Contains($expected))) {
+        throw "The Cuemon eval is missing the expected contract: $expected"
+    }
+}
+foreach ($negative in @(
+    'does not create AppAssetOptions when Cuemon TagHelpers are available',
+    'does not retain AppAssetOptions after all consumers have migrated',
+    'does not use fictional app-href/cdn-src syntax',
+    'does not configure CDN assets to fall back to the application host',
+    'does not duplicate shared CDN assets into wwwroot',
+    'does not alter the normal Development profile merely to support segregation',
+    'does not add Cuemon to a project that otherwise does not use Cuemon',
+    'does not make the deterministic runner rewrite Razor source',
+    'does not introduce a second asset configuration hierarchy alongside existing AppTagHelperOptions/CdnTagHelperOptions'
+)) {
+    if (-not ((@($cuemonEval.expectations) -join "`n").Contains("NEGATIVE: $negative", [System.StringComparison]::Ordinal))) {
+        throw "The Cuemon eval is missing required negative expectation: $negative"
+    }
+}
+$cuemonFixtureLayout = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'evals/files/cuemon-app/Views/Shared/_Layout.cshtml'))
+foreach ($staleSyntax in @('app-href', 'cdn-src', 'app-src', 'cdn-href')) {
+    if ($cuemonFixtureLayout.Contains($staleSyntax, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The Cuemon eval fixture contains stale or unverified syntax: $staleSyntax"
+    }
+}
+
 $dockerfileContracts = @('<something>.Dockerfile', 'PascalCase', 'Assets.Dockerfile', '--file')
 foreach ($source in @(
     [pscustomobject]@{ Name = 'SKILL.md'; Text = $skill },

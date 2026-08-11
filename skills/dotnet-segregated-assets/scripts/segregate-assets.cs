@@ -248,8 +248,90 @@ internal sealed record ExistingSegregation(
     bool DerivedDockerfile,
     bool CuemonAppOptions)
 {
-    public bool Any => PublishExclusion || SegregatedLaunchProfile || ComposeService || DerivedDockerfile || CuemonAppOptions;
+    // Cuemon options are an application abstraction signal, not evidence that the
+    // segregation topology itself is already present.
+    public bool Any => PublishExclusion || SegregatedLaunchProfile || ComposeService || DerivedDockerfile;
     public bool Complete => PublishExclusion && SegregatedLaunchProfile;
+}
+
+internal sealed record CuemonDetection(
+    bool PackageReference,
+    bool ProjectReference,
+    bool NamespaceUsing,
+    bool AppOptions,
+    bool CdnOptions,
+    bool ViewImportsRegistration,
+    bool AppLinkMarkup,
+    bool AppScriptMarkup,
+    bool AppImageMarkup,
+    bool CdnLinkMarkup,
+    bool CdnScriptMarkup,
+    bool CdnImageMarkup,
+    bool LegacyAttributeSyntax,
+    bool MicrosoftAppendVersion,
+    bool CuemonCacheBusting)
+{
+    // Markup is useful evidence, but by itself it does not prove that the Cuemon
+    // package is available. Availability requires a package/project/options/registration signal.
+    public bool Available => PackageReference || ProjectReference || NamespaceUsing || AppOptions || CdnOptions || ViewImportsRegistration;
+    public bool Present => Available || AppLinkMarkup || AppScriptMarkup || AppImageMarkup || CdnLinkMarkup || CdnScriptMarkup || CdnImageMarkup;
+
+    public bool OptionsDetected => AppOptions || CdnOptions;
+
+    public IReadOnlyList<string> Evidence
+    {
+        get
+        {
+            var evidence = new List<string>();
+            if (PackageReference) evidence.Add("Cuemon.AspNetCore.Razor.TagHelpers package reference");
+            if (ProjectReference) evidence.Add("referenced project uses Cuemon.AspNetCore.Razor.TagHelpers");
+            if (NamespaceUsing) evidence.Add("Cuemon.AspNetCore.Razor.TagHelpers namespace import");
+            if (AppOptions) evidence.Add("AppTagHelperOptions");
+            if (CdnOptions) evidence.Add("CdnTagHelperOptions");
+            if (ViewImportsRegistration) evidence.Add("_ViewImports.cshtml Cuemon tag-helper registration");
+            if (AppLinkMarkup) evidence.Add("app-link markup");
+            if (AppScriptMarkup) evidence.Add("app-script markup");
+            if (AppImageMarkup) evidence.Add("app-image markup");
+            if (CdnLinkMarkup) evidence.Add("cdn-link markup");
+            if (CdnScriptMarkup) evidence.Add("cdn-script markup");
+            if (CdnImageMarkup) evidence.Add("cdn-image markup");
+            return evidence;
+        }
+    }
+}
+
+internal sealed record CustomAssetDetection(
+    bool OptionsType,
+    bool UrlCalls,
+    bool OptionsRegistration,
+    bool RazorInjection)
+{
+    public bool Present => OptionsType || UrlCalls || OptionsRegistration || RazorInjection;
+
+    public IReadOnlyList<string> Evidence
+    {
+        get
+        {
+            var evidence = new List<string>();
+            if (OptionsType) evidence.Add("AppAssetOptions-style type");
+            if (UrlCalls) evidence.Add("custom asset GetUrl/GetAssetUrl call");
+            if (OptionsRegistration) evidence.Add("custom asset options registration");
+            if (RazorInjection) evidence.Add("Razor injection of a custom asset abstraction");
+            return evidence;
+        }
+    }
+}
+
+internal sealed record AssetAbstractionInspection(
+    CuemonDetection Cuemon,
+    CustomAssetDetection Custom)
+{
+    public bool CuemonPresent => Cuemon.Available;
+    public bool CompetingAbstractions => Cuemon.Available && Custom.Present;
+
+    public static AssetAbstractionInspection Empty => new(
+        new CuemonDetection(false, false, false, false, false, false, false, false, false, false, false, false, false, false, false),
+        new CustomAssetDetection(false, false, false, false));
 }
 
 internal sealed record InspectionResult(
@@ -261,6 +343,7 @@ internal sealed record InspectionResult(
     IReadOnlyList<RiskSignal> RiskSignals,
     ExistingSegregation ExistingSegregation,
     bool CuemonPresent,
+    AssetAbstractionInspection AssetAbstractions,
     string Recommendation)
 {
     public bool Ok => true;
@@ -438,9 +521,117 @@ internal static class StaticWebAssetRiskDetector
     }
 }
 
+internal static class AssetAbstractionDetector
+{
+    private const string CuemonPackage = "Cuemon.AspNetCore.Razor.TagHelpers";
+
+    public static AssetAbstractionInspection Detect(string projectPath, string repoRoot)
+    {
+        var projectDirectory = Path.GetDirectoryName(projectPath)!;
+        var files = EnumerateSourceFiles(projectDirectory).ToList();
+        var code = string.Concat(files.Where(IsCodeFile).Select(SafeRead).Select(t => t + "\n"));
+        var markup = string.Concat(files.Where(IsMarkupFile).Select(SafeRead).Select(t => t + "\n"));
+        var all = code + markup;
+        var projectText = SafeRead(projectPath);
+
+        var packageReference = ContainsCuemonPackageReference(projectText) ||
+                               EnumerateAncestorBuildFiles(projectDirectory, repoRoot)
+                                   .Any(f => ContainsCuemonPackageReference(SafeRead(f)));
+        var projectReference = StaticWebAssetRiskDetector.ResolveProjectReferences(projectPath, projectText)
+            .Any(p => ContainsCuemonPackageReference(SafeRead(p)) ||
+                      EnumerateAncestorBuildFiles(Path.GetDirectoryName(p)!, repoRoot)
+                          .Any(f => ContainsCuemonPackageReference(SafeRead(f))));
+        var namespaceUsing = Regex.IsMatch(all, @"\busing\s+(?:global\s+)?Cuemon\.AspNetCore\.Razor\.TagHelpers\b", RegexOptions.IgnoreCase);
+        var appOptions = Regex.IsMatch(all, @"\bAppTagHelperOptions\b", RegexOptions.IgnoreCase);
+        var cdnOptions = Regex.IsMatch(all, @"\bCdnTagHelperOptions\b", RegexOptions.IgnoreCase);
+        var viewImportsRegistration = files
+            .Where(f => string.Equals(Path.GetFileName(f), "_ViewImports.cshtml", StringComparison.OrdinalIgnoreCase))
+            .Select(SafeRead)
+            .Any(t => Regex.IsMatch(t, @"@(?:addTagHelper|using)\b[^\r\n]*Cuemon\.AspNetCore\.Razor\.TagHelpers", RegexOptions.IgnoreCase));
+
+        var cuemon = new CuemonDetection(
+            packageReference,
+            projectReference,
+            namespaceUsing,
+            appOptions,
+            cdnOptions,
+            viewImportsRegistration,
+            Regex.IsMatch(markup, @"<app-link\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"<app-script\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"<app-image\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"<cdn-link\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"<cdn-script\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"<cdn-image\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"\b(?:app|cdn)-(?:href|src)\s*=", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"\basp-append-version\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(all, @"\bICacheBusting\b", RegexOptions.IgnoreCase));
+
+        var custom = new CustomAssetDetection(
+            Regex.IsMatch(all, @"\b(?:AppAssetOptions|SegregatedAssetsOptions|AssetOptions|AssetsOptions)\b|\b(?:class|record)\s+\w*(?:Asset|Assets)Options\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(all, @"\b(?:AppAssets|AssetOptions|Assets|\w*(?:Asset|Assets|Options))\s*(?:\.\s*Value)?\s*\.\s*Get(?:Asset)?Url\s*\(", RegexOptions.IgnoreCase),
+            Regex.IsMatch(code, @"\b(?:Configure|Add(?:Singleton|Scoped|Transient)|TryAdd(?:Singleton|Scoped|Transient))\s*<\s*[^>]*(?:AppAsset|SegregatedAssets|Asset)Options\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"@inject\s+[^\r\n]*(?:AppAssets|AppAssetOptions|AssetOptions|Assets)\b", RegexOptions.IgnoreCase));
+
+        return new AssetAbstractionInspection(cuemon, custom);
+    }
+
+    private static bool ContainsCuemonPackageReference(string text) =>
+        Regex.IsMatch(text, $@"<PackageReference\b[^>]*\b(?:Include|Update)\s*=\s*['""]{Regex.Escape(CuemonPackage)}['""]", RegexOptions.IgnoreCase);
+
+    private static IEnumerable<string> EnumerateAncestorBuildFiles(string directory, string repoRoot)
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(directory));
+        var root = new DirectoryInfo(Path.GetFullPath(repoRoot));
+        while (current is not null)
+        {
+            foreach (var fileName in new[] { "Directory.Build.props", "Directory.Build.targets" })
+            {
+                var buildFile = Path.Combine(current.FullName, fileName);
+                if (File.Exists(buildFile)) yield return buildFile;
+            }
+            if (string.Equals(current.FullName, root.FullName, StringComparison.OrdinalIgnoreCase)) break;
+            current = current.Parent!;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateSourceFiles(string directory)
+    {
+        var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(directory, "*", options); }
+        catch { return Array.Empty<string>(); }
+
+        return files
+            .Where(f =>
+            {
+                var normalized = f.Replace('\\', '/');
+                var name = Path.GetFileName(f);
+                return (IsCodeFile(f) || IsMarkupFile(f)) &&
+                       !normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) &&
+                       !normalized.Contains("/obj/", StringComparison.OrdinalIgnoreCase) &&
+                       !normalized.Contains("/node_modules/", StringComparison.OrdinalIgnoreCase) &&
+                       !name.Equals("Directory.Packages.props", StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCodeFile(string file) =>
+        file.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsMarkupFile(string file) =>
+        file.EndsWith(".cshtml", StringComparison.OrdinalIgnoreCase) ||
+        file.EndsWith(".razor", StringComparison.OrdinalIgnoreCase) ||
+        file.EndsWith(".html", StringComparison.OrdinalIgnoreCase);
+
+    private static string SafeRead(string file)
+    {
+        try { return File.ReadAllText(file); } catch { return string.Empty; }
+    }
+}
+
 internal static class IdempotencyDetector
 {
-    public static ExistingSegregation Detect(string projectPath, string repoRoot)
+    public static ExistingSegregation Detect(string projectPath, string repoRoot, AssetAbstractionInspection? abstractions = null)
     {
         var dir = Path.GetDirectoryName(projectPath)!;
         var csproj = SafeRead(projectPath);
@@ -463,10 +654,7 @@ internal static class IdempotencyDetector
             .Select(SafeRead)
             .Any(t => Regex.IsMatch(t, "^\\s*FROM\\s+codebeltnet/web-cdn-origin", RegexOptions.IgnoreCase | RegexOptions.Multiline));
 
-        var cuemonAppOptions = Regex.IsMatch(
-            string.Concat(SafeFiles(dir, "*.cs").Select(SafeRead)),
-            "AppTagHelperOptions|CdnTagHelperOptions",
-            RegexOptions.IgnoreCase);
+        var cuemonAppOptions = (abstractions ?? AssetAbstractionDetector.Detect(projectPath, repoRoot)).Cuemon.OptionsDetected;
 
         return new ExistingSegregation(publishExclusion, segregatedProfile, composeService, derivedDockerfile, cuemonAppOptions);
     }
@@ -539,18 +727,31 @@ internal static class Classifier
         return Simple;
     }
 
-    public static string Recommend(string classification, ExistingSegregation existing) => classification switch
+    public static string Recommend(string classification, ExistingSegregation existing, AssetAbstractionInspection? abstractions = null)
     {
-        NotAWebApp => "No Microsoft.NET.Sdk.Web project found. Nothing to segregate; confirm the target repository.",
-        Ambiguous => "Multiple web projects found. Ask which web project to segregate (pass --project).",
-        NoWwwroot => "No wwwroot found. Configure only the CDN/shared-asset consumption if a CDN equivalent exists; otherwise nothing to do.",
-        AlreadySegregated => "Segregation is already present. Reconcile existing configuration; do not create duplicate items, profiles, services, or Dockerfiles.",
-        RiskyGeneratedAssets => "Generated/Static Web Assets detected. Preserve the generated-asset pipeline and establish an explicit generated-static-assets segregation design before proceeding.",
-        Simple => existing.Any
-            ? "Simple physical wwwroot with partial existing segregation. Complete the missing pieces idempotently."
-            : "Simple physical wwwroot. Apply App-asset segregation: targeted publish exclusion, segregated launch profile, local origin, derived production image, and documentation.",
-        _ => "Review findings.",
-    };
+        if (classification == Simple && abstractions is not null)
+        {
+            if (abstractions.CompetingAbstractions)
+                return "Cuemon App/CDN TagHelpers and a competing custom asset abstraction coexist. Migrate Razor references by ownership, then remove the custom abstraction only after all consumers are gone.";
+            if (abstractions.CuemonPresent)
+                return "Cuemon App/CDN TagHelpers are available. Reuse AppTagHelperOptions/CdnTagHelperOptions and migrate ownership-aware Razor references to app-* or cdn-* elements; do not create another URL abstraction.";
+            if (abstractions.Custom.Present)
+                return "An existing non-Cuemon asset abstraction is present. Reuse it and do not add Cuemon solely for segregation.";
+        }
+
+        return classification switch
+        {
+            NotAWebApp => "No Microsoft.NET.Sdk.Web project found. Nothing to segregate; confirm the target repository.",
+            Ambiguous => "Multiple web projects found. Ask which web project to segregate (pass --project).",
+            NoWwwroot => "No wwwroot found. Configure only the CDN/shared-asset consumption if a CDN equivalent exists; otherwise nothing to do.",
+            AlreadySegregated => "Segregation is already present. Reconcile existing configuration; do not create duplicate items, profiles, services, or Dockerfiles.",
+            RiskyGeneratedAssets => "Generated/Static Web Assets detected. Preserve the generated-asset pipeline and establish an explicit generated-static-assets segregation design before proceeding.",
+            Simple => existing.Any
+                ? "Simple physical wwwroot with partial existing segregation. Complete the missing pieces idempotently."
+                : "Simple physical wwwroot. Apply App-asset segregation: targeted publish exclusion, segregated launch profile, local origin, derived production image, and documentation.",
+            _ => "Review findings.",
+        };
+    }
 }
 
 internal static class LaunchProfileValidator
@@ -707,11 +908,11 @@ internal static class Commands
         }
 
         var risks = selected is not null ? StaticWebAssetRiskDetector.Detect(selected.Path, repoRoot) : Array.Empty<RiskSignal>();
-        var existing = selected is not null ? IdempotencyDetector.Detect(selected.Path, repoRoot) : new ExistingSegregation(false, false, false, false, false);
+        var abstractions = selected is not null ? AssetAbstractionDetector.Detect(selected.Path, repoRoot) : AssetAbstractionInspection.Empty;
+        var existing = selected is not null ? IdempotencyDetector.Detect(selected.Path, repoRoot, abstractions) : new ExistingSegregation(false, false, false, false, false);
         var classification = Classifier.Classify(webProjects, selected, risks, existing);
-        var cuemonPresent = existing.CuemonAppOptions ||
-            (selected is not null && File.Exists(selected.Path) && File.ReadAllText(selected.Path).Contains("Cuemon.AspNetCore", StringComparison.OrdinalIgnoreCase));
-        var recommendation = Classifier.Recommend(classification, existing);
+        var cuemonPresent = abstractions.CuemonPresent;
+        var recommendation = Classifier.Recommend(classification, existing, abstractions);
 
         return new InspectionResult(
             SegregateAssetsProgram.ToolName,
@@ -722,6 +923,7 @@ internal static class Commands
             risks,
             existing,
             cuemonPresent,
+            abstractions,
             recommendation);
     }
 
@@ -748,6 +950,7 @@ internal static class Commands
             appPort = options.AppPort,
             cdnPort = options.CdnEquivalent ? options.CdnPort : (int?)null,
             originImage = SegregateAssetsProgram.OriginImage,
+            assetAbstractions = inspection.AssetAbstractions,
             decisions,
             recommendation = inspection.Recommendation,
         };
@@ -888,10 +1091,26 @@ internal static class Commands
                 };
         }
 
+        var abstractionStatus = inspection.AssetAbstractions.CompetingAbstractions
+            ? "migrate-and-remove"
+            : inspection.AssetAbstractions.CuemonPresent
+                ? "reuse-cuemon"
+                : inspection.AssetAbstractions.Custom.Present
+                    ? "reuse-existing"
+                    : "introduce-only-if-needed";
+        var abstractionDetail = inspection.AssetAbstractions.CompetingAbstractions
+            ? "Cuemon App/CDN TagHelpers and a custom asset abstraction coexist. Migrate each Razor reference by ownership to app-link/app-script/app-image or cdn-link/cdn-script/cdn-image, remove redundant injections and registrations, and delete the custom abstraction only after no consumers remain. Configure AppTagHelperOptions.BaseUrlMode as TagHelperBaseUrlMode.Automatic and keep CdnTagHelperOptions explicitly Configured."
+            : inspection.AssetAbstractions.CuemonPresent
+                ? "Reuse the referenced Cuemon App/CDN TagHelpers, AppTagHelperOptions, and CdnTagHelperOptions. Use the current public custom-element syntax and BaseUrlMode API; do not invent an attribute or GetUrl abstraction."
+                : inspection.AssetAbstractions.Custom.Present
+                    ? "Reuse the existing non-Cuemon asset abstraction. Do not add Cuemon solely for this migration."
+                    : "No suitable asset abstraction detected. Introduce only the smallest app-owned configuration mechanism required by the existing application.";
+
         var plan = new List<object>
         {
+            new { step = "asset-abstraction", status = abstractionStatus, detail = abstractionDetail },
             new { step = "publish-exclusion", status = StatusFor(e.PublishExclusion), detail = "Add <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> to the web project for application-owned wwwroot content while preserving generated and contributed Static Web Assets." },
-            new { step = "segregated-launch-profile", status = StatusFor(e.SegregatedLaunchProfile), detail = $"Add the '{SegregateAssetsProgram.SegregatedProfileName}' HTTP launch profile pointing App asset URLs at http://localhost:{options.AppPort}." },
+            new { step = "segregated-launch-profile", status = StatusFor(e.SegregatedLaunchProfile), detail = $"Add the '{SegregateAssetsProgram.SegregatedProfileName}' HTTP launch profile with AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic, host-only BaseUrl = localhost:{options.AppPort}, and Scheme = ProtocolUriScheme.Http." },
             new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide {SegregateAssetsProgram.ComposeFileName} with a local {SegregateAssetsProgram.OriginImage} service mounting wwwroot into /cdnroot read-only on host port {options.AppPort}." },
             new { step = "production-image", status = StatusFor(e.DerivedDockerfile), detail = $"Add {SegregateAssetsProgram.DerivedDockerfileName} (PascalCase <something>.Dockerfile) and select it with --file: FROM {SegregateAssetsProgram.OriginImage} + COPY --chown={SegregateAssetsProgram.OriginUser}:{SegregateAssetsProgram.OriginUser} ./wwwroot/ {SegregateAssetsProgram.OriginContentRoot}/." },
             new { step = "documentation", status = "create-or-update", detail = "Document that deployed static content is served by Codebelt Static Content Provider, and that wwwroot remains the authoring root." },
@@ -899,11 +1118,11 @@ internal static class Commands
 
         if (options.CdnEquivalent)
         {
-            plan.Add(new { step = "cdn-equivalent", status = "create", detail = $"A CDN/shared equivalent exists: provision a second local origin on host port {options.CdnPort} from its own shared-asset root; do NOT duplicate CDN assets into the application's wwwroot." });
+            plan.Add(new { step = "cdn-equivalent", status = "create", detail = $"A CDN/shared equivalent exists: provision a second local origin on host port {options.CdnPort} from its own shared-asset root, configure CdnTagHelperOptions with BaseUrlMode = TagHelperBaseUrlMode.Configured and explicit Scheme = ProtocolUriScheme.Http locally, and never fall back to the application host or duplicate CDN assets into the application's wwwroot." });
         }
         else
         {
-            plan.Add(new { step = "cdn-equivalent", status = "skip", detail = "No CDN/shared equivalent: configure only App-asset segregation." });
+            plan.Add(new { step = "cdn-equivalent", status = "skip", detail = "No CDN/shared equivalent: configure only App-asset segregation and do not create CDN origin/configuration." });
         }
 
         return plan;
@@ -916,6 +1135,10 @@ internal static class Commands
         sb.AppendLine($"Classification: {r.Classification}");
         sb.AppendLine($"Selected project: {r.SelectedProject ?? "(none)"}");
         sb.AppendLine($"Cuemon present: {r.CuemonPresent}");
+        var cuemon = r.AssetAbstractions.Cuemon;
+        sb.AppendLine($"Cuemon evidence: available={cuemon.Available} package={cuemon.PackageReference} project={cuemon.ProjectReference} using={cuemon.NamespaceUsing} app-options={cuemon.AppOptions} cdn-options={cuemon.CdnOptions} view-imports={cuemon.ViewImportsRegistration}");
+        sb.AppendLine($"Cuemon markup: app-link={cuemon.AppLinkMarkup} app-script={cuemon.AppScriptMarkup} app-image={cuemon.AppImageMarkup} cdn-link={cuemon.CdnLinkMarkup} cdn-script={cuemon.CdnScriptMarkup} cdn-image={cuemon.CdnImageMarkup}");
+        sb.AppendLine($"Custom asset abstraction: present={r.AssetAbstractions.Custom.Present} competing={r.AssetAbstractions.CompetingAbstractions} legacy-attribute-syntax={cuemon.LegacyAttributeSyntax} asp-append-version={cuemon.MicrosoftAppendVersion} ICacheBusting={cuemon.CuemonCacheBusting}");
         sb.AppendLine();
         sb.AppendLine($"Web projects ({r.WebProjects.Count}):");
         foreach (var p in r.WebProjects)
@@ -930,6 +1153,10 @@ internal static class Commands
         sb.AppendLine();
         sb.AppendLine("Existing segregation:");
         sb.AppendLine($"  publish-exclusion={e.PublishExclusion} launch-profile={e.SegregatedLaunchProfile} compose={e.ComposeService} dockerfile={e.DerivedDockerfile} cuemon={e.CuemonAppOptions}");
+        if (cuemon.Evidence.Count > 0)
+            sb.AppendLine($"  Cuemon signals: {string.Join(", ", cuemon.Evidence)}");
+        if (r.AssetAbstractions.Custom.Evidence.Count > 0)
+            sb.AppendLine($"  custom signals: {string.Join(", ", r.AssetAbstractions.Custom.Evidence)}");
         sb.AppendLine();
         sb.AppendLine($"Recommendation: {r.Recommendation}");
         return sb.ToString().TrimEnd();
@@ -1000,6 +1227,8 @@ internal static class SelfTest
         {
             TestWebSdkDetection();
             TestSimpleWebAppClassification(root);
+            TestCuemonAndCompetingAbstractionDetection(root);
+            TestCentralPackageDefinitionDoesNotImplyCuemonUsage(root);
             TestBlazorWebAssemblyIsRisky(root);
             TestRazorClassLibraryIsRisky(root);
             TestScopedCssIsRisky(root);
@@ -1057,6 +1286,83 @@ internal static class SelfTest
         Assert("simple: classified Simple", inspection.Classification == Classifier.Simple);
         Assert("simple: no risk signals", inspection.RiskSignals.Count == 0);
         Assert("simple: selected resolved", inspection.SelectedProject is not null);
+    }
+
+    private static void TestCuemonAndCompetingAbstractionDetection(string root)
+    {
+        var dir = NewProject(root, "cuemon", webApp: true, wwwroot: true,
+            extraCsproj: "<ItemGroup><PackageReference Include=\"Cuemon.AspNetCore.Razor.TagHelpers\" Version=\"10.6.0\" /></ItemGroup>");
+        var views = Path.Combine(dir, "Views", "Shared");
+        Directory.CreateDirectory(views);
+        File.WriteAllText(Path.Combine(dir, "Program.cs"), """
+        using Cuemon.AspNetCore.Razor.TagHelpers;
+        var builder = WebApplication.CreateBuilder(args);
+        builder.Services.Configure<AppTagHelperOptions>(builder.Configuration.GetSection("App"));
+        builder.Services.Configure<CdnTagHelperOptions>(builder.Configuration.GetSection("Cdn"));
+        builder.Services.Configure<AppAssetOptions>(builder.Configuration.GetSection("Assets"));
+        """);
+        File.WriteAllText(Path.Combine(dir, "AppAssetOptions.cs"), """
+        public sealed class AppAssetOptions
+        {
+            public string GetUrl(string path) => path;
+        }
+        """);
+        File.WriteAllText(Path.Combine(dir, "Views", "_ViewImports.cshtml"), "@addTagHelper *, Cuemon.AspNetCore.Razor.TagHelpers");
+        File.WriteAllText(Path.Combine(views, "_Layout.cshtml"), """
+        @inject Microsoft.Extensions.Options.IOptions<AppAssetOptions> AppAssets
+        <app-link href="css/site.css" />
+        <app-script src="js/site.js"></app-script>
+        <app-image src="images/logo.svg" alt="Logo" />
+        <cdn-link href="packages/bootstrap/5.3.3/css/bootstrap.min.css" />
+        <cdn-script src="packages/htmx/2.0.4/htmx.min.js"></cdn-script>
+        <cdn-image src="packages/icons/logo.svg" alt="Shared logo" />
+        <link app-href="legacy.css" />
+        @AppAssets.Value.GetUrl("~/css/site.css")
+        """);
+
+        var csproj = Directory.GetFiles(dir, "*.csproj").Single();
+        var inspection = Commands.Inspect(dir, null);
+        var c = inspection.AssetAbstractions.Cuemon;
+        var custom = inspection.AssetAbstractions.Custom;
+        Assert("cuemon: package reference detected", c.PackageReference);
+        Assert("cuemon: namespace using detected", c.NamespaceUsing);
+        Assert("cuemon: AppTagHelperOptions detected", c.AppOptions);
+        Assert("cuemon: CdnTagHelperOptions detected", c.CdnOptions);
+        Assert("cuemon: _ViewImports registration detected", c.ViewImportsRegistration);
+        Assert("cuemon: app-link detected", c.AppLinkMarkup);
+        Assert("cuemon: app-script detected", c.AppScriptMarkup);
+        Assert("cuemon: app-image detected", c.AppImageMarkup);
+        Assert("cuemon: cdn-link detected", c.CdnLinkMarkup);
+        Assert("cuemon: cdn-script detected", c.CdnScriptMarkup);
+        Assert("cuemon: cdn-image detected", c.CdnImageMarkup);
+        Assert("cuemon: legacy attribute syntax reported", c.LegacyAttributeSyntax);
+        Assert("cuemon: custom options detected", custom.OptionsType);
+        Assert("cuemon: custom GetUrl detected", custom.UrlCalls);
+        Assert("cuemon: competing abstractions detected", inspection.AssetAbstractions.CompetingAbstractions);
+        Assert("cuemon: existing options do not imply segregation", !inspection.ExistingSegregation.Any);
+        Assert("cuemon: recommendation reports migration", inspection.Recommendation.Contains("competing", StringComparison.OrdinalIgnoreCase));
+        Assert("cuemon: project remains readable", File.Exists(csproj));
+    }
+
+    private static void TestCentralPackageDefinitionDoesNotImplyCuemonUsage(string root)
+    {
+        var dir = NewProject(root, "central-package-only", webApp: true, wwwroot: true);
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
+        <Project>
+          <ItemGroup>
+            <PackageVersion Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="10.6.0" />
+          </ItemGroup>
+        </Project>
+        """);
+        var inspection = Commands.Inspect(dir, null);
+        Assert("cuemon: central package definition without PackageReference is not usage", !inspection.CuemonPresent);
+
+        var markupOnly = NewProject(root, "markup-only", webApp: true, wwwroot: true);
+        var views = Path.Combine(markupOnly, "Views", "Shared");
+        Directory.CreateDirectory(views);
+        File.WriteAllText(Path.Combine(views, "_Layout.cshtml"), "<app-link href=\"css/site.css\" />");
+        var markupInspection = Commands.Inspect(markupOnly, null);
+        Assert("cuemon: markup is reported without proving package availability", markupInspection.AssetAbstractions.Cuemon.AppLinkMarkup && !markupInspection.CuemonPresent);
     }
 
     private static void TestBlazorWebAssemblyIsRisky(string root)

@@ -59,6 +59,39 @@ try {
     Assert-True 'plan names the canonical Compose file' ($plan.Output -match 'compose\.assets\.yml')
     Assert-True 'plan skips CDN equivalent by default' ($plan.Output -match '"cdn-equivalent"[\s\S]*?"status":\s*"skip"')
 
+    # A Cuemon application with a previous custom URL abstraction must be reported as
+    # a competing-abstraction migration; the runner only inspects and never rewrites it.
+    $cuemonDir = Join-Path $workspace 'Cuemon'
+    New-Item -ItemType Directory -Path (Join-Path $cuemonDir 'Views/Shared') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $cuemonDir 'Cuemon.csproj') -Encoding utf8 -Value @'
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="10.6.0" /></ItemGroup>
+</Project>
+'@
+    Set-Content -LiteralPath (Join-Path $cuemonDir 'Program.cs') -Encoding utf8 -Value @'
+using Cuemon.AspNetCore.Razor.TagHelpers;
+builder.Services.Configure<AppTagHelperOptions>(builder.Configuration.GetSection("App"));
+builder.Services.Configure<CdnTagHelperOptions>(builder.Configuration.GetSection("Cdn"));
+builder.Services.Configure<AppAssetOptions>(builder.Configuration.GetSection("Assets"));
+'@
+    Set-Content -LiteralPath (Join-Path $cuemonDir 'AppAssetOptions.cs') -Encoding utf8 -Value 'public sealed class AppAssetOptions { public string GetUrl(string path) => path; }'
+    Set-Content -LiteralPath (Join-Path $cuemonDir 'Views/_ViewImports.cshtml') -Encoding utf8 -Value '@addTagHelper *, Cuemon.AspNetCore.Razor.TagHelpers'
+    Set-Content -LiteralPath (Join-Path $cuemonDir 'Views/Shared/_Layout.cshtml') -Encoding utf8 -Value @'
+@inject Microsoft.Extensions.Options.IOptions<AppAssetOptions> AppAssets
+<app-link href="css/site.css" />
+<cdn-script src="packages/htmx/2.0.4/htmx.min.js"></cdn-script>
+@AppAssets.Value.GetUrl("~/css/site.css")
+'@
+    Write-Host 'inspect: Cuemon and competing custom asset abstraction'
+    $cuemonInspect = Invoke-Runner -RunnerArgs @('inspect', '--repo-root', $cuemonDir, '--json')
+    Assert-True 'Cuemon inspect exits 0' ($cuemonInspect.ExitCode -eq 0)
+    Assert-True 'Cuemon package is detected' ($cuemonInspect.Output -match '"packageReference":\s*true')
+    Assert-True 'Cuemon custom elements are detected' ($cuemonInspect.Output -match '"appLinkMarkup":\s*true')
+    Assert-True 'custom abstraction is detected' ($cuemonInspect.Output -match '"custom"[\s\S]*?"present":\s*true')
+    Assert-True 'competing abstractions are reported' ($cuemonInspect.Output -match '"competingAbstractions":\s*true')
+    Assert-True 'runner reports legacy attribute syntax without rewriting' ($cuemonInspect.Output -match '"legacyAttributeSyntax":\s*false')
+
     # An explicitly selected web project without wwwroot can still consume a shared/CDN asset root.
     $apiDir = Join-Path $workspace 'Api'
     New-Item -ItemType Directory -Path $apiDir -Force | Out-Null
