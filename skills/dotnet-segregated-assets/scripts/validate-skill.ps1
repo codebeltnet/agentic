@@ -29,13 +29,12 @@ $contracts = @(
     'App assets',
     'CDN assets',
     'CopyToPublishDirectory="Never"',
-    'StaticWebAssetsEnabled',
+    'Static Web Assets',
     '65532',
     'orchestrat',
     'segregate-assets.cs',
-    'domain sharding',
     'generated-static-assets',
-    'approot'
+    'Boundaries'
 )
 foreach ($needle in $contracts) {
     if (-not $skill.Contains($needle, [System.StringComparison]::Ordinal)) {
@@ -44,7 +43,7 @@ foreach ($needle in $contracts) {
 }
 
 $productionImage = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'references/production-image.md'))
-$dockerfileContracts = @('<something>.Dockerfile', 'PascalCase', 'Assets.Dockerfile', 'Dockerfile.assets', '--file')
+$dockerfileContracts = @('<something>.Dockerfile', 'PascalCase', 'Assets.Dockerfile', '--file')
 foreach ($source in @(
     [pscustomobject]@{ Name = 'SKILL.md'; Text = $skill },
     [pscustomobject]@{ Name = 'references/production-image.md'; Text = $productionImage }
@@ -56,16 +55,19 @@ foreach ($source in @(
     }
 }
 
-# The skill must not *recommend* the removed 1.4 pattern or a blanket kill switch. It may name them only
-# to warn against them, so require the warning framing (a "not"/"Do not"/"Never"/"removed" cue) to be near
-# each anti-pattern rather than forbidding the phrase outright.
-$antiPatterns = @('approot', 'StaticWebAssetsEnabled')
-foreach ($needle in $antiPatterns) {
-    $idx = $skill.IndexOf($needle, [System.StringComparison]::Ordinal)
-    $window = $skill.Substring([Math]::Max(0, $idx - 160), [Math]::Min(320, $skill.Length - [Math]::Max(0, $idx - 160)))
-    if ($window -notmatch '(?i)\b(do not|don''t|never|not\b|removed|reintroduce|instead of|rather than)') {
-        throw "SKILL.md mentions '$needle' but not in a clear warning/negative context."
+$localDevelopment = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'references/local-development.md'))
+$composeSources = @(
+    [pscustomobject]@{ Name = 'SKILL.md'; Text = $skill },
+    [pscustomobject]@{ Name = 'references/local-development.md'; Text = $localDevelopment },
+    [pscustomobject]@{ Name = 'references/production-image.md'; Text = $productionImage }
+)
+foreach ($source in $composeSources) {
+    if (-not $source.Text.Contains('compose.assets.yml', [System.StringComparison]::Ordinal)) {
+        throw "$($source.Name) is missing Compose naming contract: compose.assets.yml"
     }
+}
+if (-not $localDevelopment.Contains('docker compose -f compose.assets.yml', [System.StringComparison]::Ordinal)) {
+    throw 'references/local-development.md must show the canonical compose.assets.yml invocation.'
 }
 
 $forms = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'FORMS.md'))

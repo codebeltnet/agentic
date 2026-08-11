@@ -9,7 +9,7 @@
 // is the *orchestration layer*: it understands intent, resolves repository conventions, makes the
 // repository-appropriate edits, and resolves the App-vs-CDN semantic choices. Everything that must be
 // deterministic — discovering candidate web projects, classifying the static-asset topology, detecting
-// risky Static Web Assets scenarios that must NOT be blindly excluded, checking idempotency, validating
+// risky Static Web Assets scenarios that require explicit generated-asset handling, checking idempotency, validating
 // the local Static Content Provider topology, and proving that application-owned wwwroot files are absent
 // from the deployed web-application publish artifact — lives here so it is repeatable instead of
 // re-improvised on every call.
@@ -32,6 +32,7 @@ internal static class SegregateAssetsProgram
     internal const string ToolName = "dotnet-segregated-assets";
     internal const string OriginImage = "codebeltnet/web-cdn-origin:2.0.0";
     internal const string DerivedDockerfileName = "Assets.Dockerfile";
+    internal const string ComposeFileName = "compose.assets.yml";
     internal const int OriginContainerPort = 8080;
     internal const string OriginContentRoot = "/cdnroot";
     internal const string OriginUser = "65532";
@@ -388,7 +389,7 @@ internal static class StaticWebAssetRiskDetector
         }
 
         if (Regex.IsMatch(csproj, "<StaticWebAssetsEnabled>\\s*false\\s*</StaticWebAssetsEnabled>", RegexOptions.IgnoreCase))
-            Add("STATIC_WEB_ASSETS_DISABLED", "StaticWebAssetsEnabled is already globally disabled — this can break RCL/framework assets.");
+            Add("STATIC_WEB_ASSETS_CONFIGURATION", "Static Web Assets configuration requires explicit generated-asset review before segregation.");
 
         if (HasFrontendBuildPipeline(dir))
             Add("FRONTEND_BUILD_PIPELINE", "A frontend build (package.json + bundler) generates final wwwroot output; the image must ship generated output, not source inputs.");
@@ -544,7 +545,7 @@ internal static class Classifier
         Ambiguous => "Multiple web projects found. Ask which web project to segregate (pass --project).",
         NoWwwroot => "No wwwroot found. Configure only the CDN/shared-asset consumption if a CDN equivalent exists; otherwise nothing to do.",
         AlreadySegregated => "Segregation is already present. Reconcile existing configuration; do not create duplicate items, profiles, services, or Dockerfiles.",
-        RiskyGeneratedAssets => "Generated/Static Web Assets detected. Do NOT apply a blanket wwwroot publish exclusion or disable StaticWebAssetsEnabled. Escalate: an explicit generated-static-assets segregation design is required.",
+        RiskyGeneratedAssets => "Generated/Static Web Assets detected. Preserve the generated-asset pipeline and establish an explicit generated-static-assets segregation design before proceeding.",
         Simple => existing.Any
             ? "Simple physical wwwroot with partial existing segregation. Complete the missing pieces idempotently."
             : "Simple physical wwwroot. Apply App-asset segregation: targeted publish exclusion, segregated launch profile, local origin, derived production image, and documentation.",
@@ -864,7 +865,7 @@ internal static class Commands
         {
             return new List<object>
             {
-                new { step = "escalate", status = "blocked", detail = "Risky Static Web Assets detected. Do not apply a blanket wwwroot publish exclusion or disable StaticWebAssetsEnabled. Request an explicit generated-static-assets segregation design." },
+                new { step = "escalate", status = "blocked", detail = "Risky Static Web Assets detected. Preserve the generated-asset pipeline and request an explicit generated-static-assets segregation design." },
             };
         }
         if (inspection.Classification is Classifier.NotAWebApp or Classifier.Ambiguous)
@@ -889,9 +890,9 @@ internal static class Commands
 
         var plan = new List<object>
         {
-            new { step = "publish-exclusion", status = StatusFor(e.PublishExclusion), detail = "Add <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> to the web project (targeted; do NOT disable StaticWebAssetsEnabled)." },
+            new { step = "publish-exclusion", status = StatusFor(e.PublishExclusion), detail = "Add <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> to the web project for application-owned wwwroot content while preserving generated and contributed Static Web Assets." },
             new { step = "segregated-launch-profile", status = StatusFor(e.SegregatedLaunchProfile), detail = $"Add the '{SegregateAssetsProgram.SegregatedProfileName}' HTTP launch profile pointing App asset URLs at http://localhost:{options.AppPort}." },
-            new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide a local {SegregateAssetsProgram.OriginImage} service mounting wwwroot into /cdnroot read-only on host port {options.AppPort}." },
+            new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide {SegregateAssetsProgram.ComposeFileName} with a local {SegregateAssetsProgram.OriginImage} service mounting wwwroot into /cdnroot read-only on host port {options.AppPort}." },
             new { step = "production-image", status = StatusFor(e.DerivedDockerfile), detail = $"Add {SegregateAssetsProgram.DerivedDockerfileName} (PascalCase <something>.Dockerfile) and select it with --file: FROM {SegregateAssetsProgram.OriginImage} + COPY --chown={SegregateAssetsProgram.OriginUser}:{SegregateAssetsProgram.OriginUser} ./wwwroot/ {SegregateAssetsProgram.OriginContentRoot}/." },
             new { step = "documentation", status = "create-or-update", detail = "Document that deployed static content is served by Codebelt Static Content Provider, and that wwwroot remains the authoring root." },
         };
@@ -1139,7 +1140,7 @@ internal static class SelfTest
         File.WriteAllText(Path.Combine(dir, "Properties", "launchSettings.json"), """
         { "profiles": { "http-segregated-assets": { "commandName": "Project" } } }
         """);
-        File.WriteAllText(Path.Combine(dir, "compose.segregated-assets.yml"),
+        File.WriteAllText(Path.Combine(dir, SegregateAssetsProgram.ComposeFileName),
             "services:\n  app-assets:\n    image: codebeltnet/web-cdn-origin:2.0.0\n");
         File.WriteAllText(Path.Combine(dir, SegregateAssetsProgram.DerivedDockerfileName),
             "FROM codebeltnet/web-cdn-origin:2.0.0\nCOPY --chown=65532:65532 ./wwwroot/ /cdnroot/\n");
