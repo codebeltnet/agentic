@@ -4,19 +4,19 @@
     {
       "id": 1,
       "prompt": "This is a conventional ASP.NET Core MVC app (Contoso.Web) with a normal wwwroot folder. We don't have any shared CDN — it's just this app's own CSS, JS, and favicon. Set it up so the deployed app doesn't serve or ship wwwroot itself; the static files should come from Codebelt Static Content Provider instead, but I still want to keep editing files in wwwroot like normal.",
-      "expected_output": "The skill runs segregate-assets.cs inspect, classifies the project as Simple, confirms no CDN equivalent, and applies App-asset segregation: a targeted <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> item, an http-segregated-assets launch profile pointing App URLs at http://localhost:8080, a local codebeltnet/web-cdn-origin:2.0.0 service mounting wwwroot into /cdnroot read-only, a derived FROM codebeltnet/web-cdn-origin:2.0.0 production image named Assets.Dockerfile (the PascalCase <something>.Dockerfile convention and explicitly selected with Docker --file), and documentation. wwwroot stays as the authoring root.",
+      "expected_output": "The skill runs segregate-assets.cs inspect, classifies the project as Simple, confirms no CDN equivalent, and applies App-asset segregation: a targeted <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> item, an http-segregated-assets launch profile pointing App URLs at http://localhost:8080, a local codebeltnet/web-cdn-origin:2.0.0 service in the canonical compose.assets.yml file mounting wwwroot into /cdnroot read-only, a derived FROM codebeltnet/web-cdn-origin:2.0.0 production image named Assets.Dockerfile (the PascalCase <something>.Dockerfile convention and explicitly selected with Docker --file), and documentation. wwwroot stays as the authoring root.",
       "expectations": [
         "Runs the bundled runner (segregate-assets.cs) to inspect topology instead of guessing",
-        "Keeps wwwroot as the authoring root and does NOT introduce an approot/cdnroot/staticroot source folder",
+        "Keeps wwwroot as the authoring root and uses /cdnroot as the container content root",
         "Adds a targeted <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> item",
         "Adds a new http-segregated-assets HTTP launch profile without altering the existing Development profile",
         "Provisions a local codebeltnet/web-cdn-origin:2.0.0 origin mounting wwwroot into /cdnroot read-only",
+        "Names the dedicated local Compose file compose.assets.yml to pair with Assets.Dockerfile",
         "Adds a derived production image: FROM codebeltnet/web-cdn-origin:2.0.0 + COPY --chown=65532:65532 ./wwwroot/ /cdnroot/",
         "Names the derived Dockerfile Assets.Dockerfile using the PascalCase <something>.Dockerfile convention and selects it explicitly with --file",
-        "NEGATIVE: does not use Dockerfile.assets or lowercase assets.Dockerfile",
-        "NEGATIVE: does not set <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>",
-        "NEGATIVE: does not resurrect the 1.4 ADD approot / WORKDIR /cdnroot Dockerfile pattern",
-        "NEGATIVE: does not blindly delete MapStaticAssets"
+        "Preserves Razor Class Library (_content) and framework (_framework) asset flow",
+        "Uses the base image's established /cdnroot runtime contract",
+        "Preserves existing static-asset endpoints after inspecting their role"
       ],
       "files": [
         "evals/files/conventional-mvc/Contoso.Web.csproj",
@@ -144,15 +144,14 @@
     {
       "id": 8,
       "prompt": "Segregate the static assets for Northwind.Web. Just exclude wwwroot from publish and point everything at the asset host.",
-      "expected_output": "The skill runs inspect, detects that Northwind.Web references a Razor Class Library (Northwind.DesignSystem) that contributes _content/ static web assets, classifies the scenario as RiskyGeneratedAssets, and refuses to apply a blanket wwwroot exclusion or disable StaticWebAssetsEnabled. It explains that generated/RCL Static Web Assets would break, and either designs an explicit safe segregation or stops and reports that an explicit generated-static-assets segregation design is required.",
+      "expected_output": "The skill runs inspect, detects that Northwind.Web references a Razor Class Library (Northwind.DesignSystem) that contributes _content/ static web assets, classifies the scenario as RiskyGeneratedAssets, preserves the generated/RCL Static Web Assets pipeline, and either designs an explicit safe segregation or stops and reports that an explicit generated-static-assets segregation design is required.",
       "expectations": [
         "Runs inspect and detects the Razor Class Library / generated Static Web Assets scenario (_content assets)",
         "Classifies as risky and treats it as a compatibility guardrail",
-        "Explains that a blanket exclusion or global disable would break RCL/framework (_content/_framework) assets",
+        "Preserves the RCL/framework (_content/_framework) asset flow",
         "Escalates safely: designs an explicit safe approach or stops and reports that a generated-static-assets segregation design is required (a successful safety outcome)",
-        "NEGATIVE: does not apply a blanket <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\"> as if it were a simple physical wwwroot",
-        "NEGATIVE: does not set <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>",
-        "NEGATIVE: does not blindly delete MapStaticAssets or exclude _content/_framework assets"
+        "Keeps generated/RCL assets distinct from application-owned physical wwwroot content",
+        "Inspects and preserves existing MapStaticAssets and _content/_framework serving behavior"
       ],
       "files": [
         "evals/files/blazor-rcl/src/Northwind.Web/Northwind.Web.csproj",
@@ -165,12 +164,13 @@
     {
       "id": 9,
       "prompt": "Fabrikam.Web has already been set up for segregated assets. Prove that the app-owned wwwroot files really are absent from the published web application.",
-      "expected_output": "The skill runs segregate-assets.cs verify with --run-publish, which publishes Fabrikam.Web to an isolated temporary directory and confirms the application-owned wwwroot files (css/site.css, js/site.js) are ABSENT from the publish artifact, reporting PASS. It retains the derived asset image as Assets.Dockerfile under the PascalCase <something>.Dockerfile convention and does not write verification output into the repository.",
+      "expected_output": "The skill runs segregate-assets.cs verify with --run-publish, which publishes Fabrikam.Web to an isolated temporary directory and confirms the application-owned wwwroot files (css/site.css, js/site.js) are ABSENT from the publish artifact, reporting PASS. It retains the canonical compose.assets.yml local topology and derived asset image as Assets.Dockerfile under the PascalCase <something>.Dockerfile convention and does not write verification output into the repository.",
       "expectations": [
         "Runs the runner's verify command with --run-publish (isolated temp output) rather than eyeballing the csproj",
         "Confirms application-owned wwwroot files are absent from the publish artifact and reports the invariant as satisfied",
         "Allows shared _content/_framework assets to remain (they are not app-owned)",
-        "Retains the derived asset image as Assets.Dockerfile, not Dockerfile.assets or lowercase assets.Dockerfile",
+        "Retains the canonical compose.assets.yml local Compose file",
+        "Retains the derived asset image as Assets.Dockerfile",
         "NEGATIVE: does not write publish/verification output into the repository",
         "NEGATIVE: does not claim success from the declaration alone without publishing"
       ],
@@ -178,7 +178,7 @@
         "evals/files/segregated-app/Fabrikam.Web.csproj",
         "evals/files/segregated-app/Program.cs",
         "evals/files/segregated-app/Properties/launchSettings.json",
-        "evals/files/segregated-app/compose.segregated-assets.yml",
+        "evals/files/segregated-app/compose.assets.yml",
         "evals/files/segregated-app/Assets.Dockerfile",
         "evals/files/segregated-app/wwwroot/css/site.css",
         "evals/files/segregated-app/wwwroot/js/site.js"
@@ -187,18 +187,19 @@
     {
       "id": 10,
       "prompt": "Run the segregated-assets setup on Fabrikam.Web again — I think someone already did it but I want to be sure it's configured.",
-      "expected_output": "The skill runs inspect, detects existing segregation (publish exclusion + http-segregated-assets profile + compose service + the existing Assets.Dockerfile), classifies it as AlreadySegregated, and reconciles idempotently — it does not create duplicate MSBuild items, launch profiles, compose services, or Dockerfiles, does not increment ports, and does not overwrite the existing configuration.",
+      "expected_output": "The skill runs inspect, detects existing segregation (publish exclusion + http-segregated-assets profile + canonical compose.assets.yml service + the existing Assets.Dockerfile), classifies it as AlreadySegregated, and reconciles idempotently — it does not create duplicate MSBuild items, launch profiles, compose services, or Dockerfiles, does not increment ports, and does not overwrite the existing configuration.",
       "expectations": [
         "Runs inspect and detects the existing segregation (AlreadySegregated)",
         "Reconciles idempotently without creating duplicate csproj items, profiles, compose services, or Dockerfiles",
         "Does not increment ports unnecessarily or overwrite customized URLs",
-        "Preserves the existing PascalCase Assets.Dockerfile name and does not create Dockerfile.assets or lowercase assets.Dockerfile",
+        "Preserves the existing canonical compose.assets.yml name",
+        "Preserves the existing PascalCase Assets.Dockerfile name",
         "NEGATIVE: does not add a second competing asset configuration or duplicate the existing setup"
       ],
       "files": [
         "evals/files/segregated-app/Fabrikam.Web.csproj",
         "evals/files/segregated-app/Properties/launchSettings.json",
-        "evals/files/segregated-app/compose.segregated-assets.yml",
+        "evals/files/segregated-app/compose.assets.yml",
         "evals/files/segregated-app/Assets.Dockerfile"
       ]
     },

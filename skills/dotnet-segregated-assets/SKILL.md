@@ -1,7 +1,7 @@
 ---
 name: dotnet-segregated-assets
 description: >
-  Migrate or configure an ASP.NET Core web application so developers keep authoring static files in the conventional wwwroot, while deployed static content is served by Codebelt Static Content Provider (codebeltnet/web-cdn-origin:2.0.0), a separate asset host rather than the web app. Use when asked to segregate static assets, move wwwroot off the web app, serve static files from a separate asset host, or stop shipping wwwroot with the app. Distinguishes App assets (app-owned, from wwwroot) from shared CDN assets, adds an http-segregated-assets launch profile, derives a production asset image, and excludes app-owned wwwroot from publish with targeted MSBuild metadata rather than disabling Static Web Assets globally. Escalates risky Blazor, RCL, and generated Static Web Assets scenarios. Do NOT use to build a general-purpose CDN or migrate non-ASP.NET static sites.
+  Migrate or configure an ASP.NET Core web application so developers keep authoring static files in the conventional wwwroot, while deployed static content is served by Codebelt Static Content Provider (codebeltnet/web-cdn-origin:2.0.0), a separate asset host rather than the web app. Use when asked to segregate static assets, move wwwroot off the web app, serve static files from a separate asset host, or stop shipping wwwroot with the app. Distinguishes App assets (app-owned, from wwwroot) from shared CDN assets, adds an http-segregated-assets launch profile, derives a production asset image, and excludes app-owned wwwroot from publish with targeted MSBuild metadata while preserving the framework asset pipeline. Escalates risky Blazor, RCL, and generated Static Web Assets scenarios. Do NOT use to build a general-purpose CDN or migrate non-ASP.NET static sites.
 compatibility: >
   Requires the .NET SDK 10+ and PowerShell 7+. Docker is optional (only for the local origin).
 ---
@@ -26,12 +26,12 @@ Commands: `inspect` (discover web projects, classify static-asset topology, dete
 
 ## Critical
 
-- **Do not replace `wwwroot`.** Developers keep authoring there. Never introduce an `approot`, `cdnroot`, or `staticroot` source folder for app-owned assets, and never resurrect the removed 1.4 `ADD approot` / `WORKDIR /cdnroot` Dockerfile pattern. Version 2.0 owns its `/cdnroot`, port, runtime user, and working directory.
-- **Exclude app-owned `wwwroot` from publish with targeted metadata, not a global kill switch.** Prefer `<Content Update="wwwroot/**" CopyToPublishDirectory="Never" />`. Do **not** default to `StaticWebAssetsEnabled` = false: that also drops Razor Class Library (`_content/…`) and framework (`_framework/…`) assets and can break the app. See `references/static-web-assets-guardrail.md`.
+- **Keep `wwwroot` as the authoring root and `/cdnroot` as the container content root.** Use the base image's established port, runtime user, and working directory.
+- **Exclude app-owned `wwwroot` from publish with targeted metadata.** Use `<Content Update="wwwroot/**" CopyToPublishDirectory="Never" />` and preserve Razor Class Library (`_content/…`) and framework (`_framework/…`) asset flow. See `references/static-web-assets-guardrail.md`.
 - **Never claim a declaration works because it looks right — prove it.** Application-owned files from source `wwwroot` must be absent from the publish artifact. Confirm with `verify --run-publish` against an isolated temp output; never write verification output into the repository.
 - **App is not CDN.** App assets are app-owned and authored in `wwwroot`; CDN assets are shared across applications and must never be duplicated into an application's `wwwroot`. Always ask whether a CDN/shared-asset equivalent exists (`FORMS.md`).
 - **Keep local URLs scheme-safe.** The local origin speaks HTTP on a host port. Point App asset URLs at `http://localhost:<port>` from an HTTP application profile. Never emit a protocol-relative (`//localhost:<port>`) or `https://localhost:<port>` URL that an HTTPS page would turn into an HTTPS request against an HTTP-only origin.
-- **Motivation is architectural, not a connection trick.** The value is segregation of duties, independent deployment and scaling, explicit cache behavior, origin/CDN offloading, and a reduced application artifact — **not** HTTP/1.x domain sharding or extra browser connection parallelism (which is counter-productive on HTTP/2 and HTTP/3).
+- **Motivation is architectural.** The value is segregation of duties, independent deployment and scaling, explicit cache behavior, origin/CDN offloading, and a reduced application artifact.
 
 ## Step 1: Inspect before changing anything
 
@@ -44,7 +44,7 @@ The runner returns candidate web projects, the resolved target, a `classificatio
 | Classification | Meaning | What you do |
 |---|---|---|
 | `Simple` | Physical `wwwroot`, no risky generated assets | Apply App-asset segregation (Steps 3–6). |
-| `RiskyGeneratedAssets` | Blazor/RCL/scoped-CSS/frontend-build/etc. detected | **Stop and escalate** (Step 2 guardrail). Do not blanket-exclude. |
+| `RiskyGeneratedAssets` | Blazor/RCL/scoped-CSS/frontend-build/etc. detected | **Stop and escalate** (Step 2 guardrail). Preserve the generated asset pipeline. |
 | `AlreadySegregated` | Publish exclusion + segregated profile present | Reconcile idempotently — do not duplicate. |
 | `Ambiguous` | Multiple web projects | Ask which project; pass `--project`. |
 | `NoWwwroot` | Web app without `wwwroot` | Only configure CDN consumption if a CDN equivalent exists. |
@@ -54,7 +54,7 @@ The runner returns candidate web projects, the resolved target, a `classificatio
 
 Read `FORMS.md` and infer what you can. The one question you must always resolve is whether a **CDN/shared-asset equivalent exists** — because it changes whether you provision a second origin and how shared assets are referenced. Never assume shared assets belong in the application's `wwwroot`.
 
-If `inspect` reports `RiskyGeneratedAssets`, treat it as a **compatibility guardrail**. A blanket `wwwroot` publish exclusion or a global Static Web Assets disable can break Blazor Web Apps, Blazor WebAssembly, `_framework`/`_content` assets, Razor Class Libraries, scoped CSS, component JS modules, or frontend-generated output. If you cannot establish a safe, deterministic way to materialize the required generated output into the external asset artifact while preserving correct runtime references, **stop and report that the project needs an explicit generated-static-assets segregation design.** That is a successful safety outcome, not a failure. Details: `references/static-web-assets-guardrail.md`.
+If `inspect` reports `RiskyGeneratedAssets`, treat it as a **compatibility guardrail**. Preserve Blazor Web App, Blazor WebAssembly, `_framework`/`_content`, Razor Class Library, scoped CSS, component JS, and frontend-generated output through an explicit asset-artifact design. If you cannot establish a safe, deterministic way to materialize the required generated output while preserving correct runtime references, **stop and report that the project needs an explicit generated-static-assets segregation design.** That is a successful safety outcome, not a failure. Details: `references/static-web-assets-guardrail.md`.
 
 ## Step 3: Segregate App assets
 
@@ -62,7 +62,7 @@ For a `Simple` project, apply these idempotently (skip any the runner already re
 
 1. **Exclude app-owned `wwwroot` from web publish** — add the targeted `Content Update="wwwroot/**" CopyToPublishDirectory="Never"` item to the web project. (`references/production-image.md`)
 2. **Add a segregated launch profile** — a new `http-segregated-assets` profile that keeps the app in Development but points App asset URLs at the local origin over HTTP. Preserve the ordinary Development profile untouched. (`references/local-development.md`)
-3. **Provide a local Static Content Provider** — run `codebeltnet/web-cdn-origin:2.0.0` mounting the app's existing `wwwroot` into `/cdnroot` **read-only**, on a host port, with a hardened posture (non-root, read-only root filesystem where practical, no privileged mode, no Docker socket, no extra capabilities, only the required port). Prefer a tiny dedicated Compose file unless the repo already has an orchestration mechanism to extend. (`references/local-development.md`)
+3. **Provide a local Static Content Provider** — run `codebeltnet/web-cdn-origin:2.0.0` mounting the app's existing `wwwroot` into `/cdnroot` **read-only**, on a host port, with a hardened posture (non-root, read-only root filesystem where practical, no privileged mode, no Docker socket, no extra capabilities, only the required port). Prefer a tiny dedicated Compose file unless the repo already has an orchestration mechanism to extend. Name a dedicated file `compose.assets.yml` to pair the local topology with `Assets.Dockerfile`, and invoke it explicitly with `docker compose -f compose.assets.yml ...`. (`references/local-development.md`)
 
 ## Step 4: Configure App URL generation
 
@@ -88,7 +88,7 @@ Point CDN asset URLs at that origin locally and at the shared/CDN host in deploy
 
 Add a derived image that ships the **actual final asset output** (run the frontend build first if the app generates its `wwwroot`):
 
-Name the derived Dockerfile `<something>.Dockerfile` with a PascalCase `<something>` prefix. For this skill, use `Assets.Dockerfile`. This follows Docker's documented convention for distinct Dockerfiles; select the non-default file explicitly with `--file` (or the equivalent Compose `dockerfile` property). Do not use `Dockerfile.assets` or the lowercase `assets.Dockerfile` form.
+Name the derived Dockerfile `<something>.Dockerfile` with a PascalCase `<something>` prefix. For this skill, use `Assets.Dockerfile`. Select it explicitly with `--file` or the equivalent Compose `dockerfile` property.
 
 ```dockerfile
 FROM codebeltnet/web-cdn-origin:2.0.0
@@ -114,14 +114,14 @@ Update the application's documentation to state that deployed static content is 
 
 Running the skill again on a configured app must not create duplicate MSBuild items, launch profiles, Compose services, Dockerfiles, or documentation sections, must not increment ports unnecessarily, and must not overwrite customized URLs or introduce a competing asset-configuration system. Use `inspect` to detect existing segregation and reconcile it.
 
-## What this skill must never do
+## Boundaries
 
-- Replace `wwwroot` with an `approot`/`cdnroot` source folder, or reintroduce the 1.4 `ADD approot` pattern.
-- Default to `StaticWebAssetsEnabled` = false, or blindly delete `MapStaticAssets`/`UseStaticFiles` without analysis.
-- Duplicate CDN/shared assets into the application's `wwwroot`, or conflate App and CDN assets.
-- Add a Cuemon dependency to a project that does not already use it.
-- Claim a `commandName: Project` launch profile starts sidecar containers, or claim the separation improves performance through domain sharding.
-- Write verification output into the repository, or force a partially broken migration when a generated-static-assets design is required.
+- Keep `wwwroot` as the authoring root and `/cdnroot` as the container content root.
+- Preserve the generated Static Web Assets pipeline and inspect `MapStaticAssets`/`UseStaticFiles` before changing serving behavior.
+- Keep App assets and shared CDN assets separate; never duplicate shared assets into the application's `wwwroot`.
+- Reuse the application's existing asset configuration and Cuemon integration; add no dependency solely for this migration.
+- Keep sidecar startup explicit, and keep verification output in isolated temporary storage.
+- Escalate generated-static-assets projects when a complete, deterministic external-artifact design cannot be proven.
 
 ## References
 

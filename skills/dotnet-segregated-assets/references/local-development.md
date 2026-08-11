@@ -36,11 +36,11 @@ A `commandName: Project` profile only launches the application and sets configur
 
 Use the published image directly for local development — do not rebuild an asset image on every source edit. Mount the application's existing `wwwroot` into `/cdnroot` **read-only** so edits are visible immediately (the image serves physical files from `/cdnroot`, and its `CdnOrigin:ContentRoot` already defaults to `/cdnroot`).
 
-Prefer a tiny dedicated Compose file when repository conventions permit, because relative bind mounts give a cross-platform, repeatable developer command. If the repository already has an established orchestration mechanism that can express the same topology cleanly, extend that instead of adding Compose.
+Prefer a tiny dedicated Compose file when repository conventions permit, because relative bind mounts give a cross-platform, repeatable developer command. Name that dedicated file `compose.assets.yml` so it pairs with the derived `Assets.Dockerfile`. If the repository already has an established orchestration mechanism that can express the same topology cleanly, extend that instead of adding Compose.
 
 Preserve the security posture the image supports wherever Docker permits: non-root runtime (the image already runs as user `65532`), a read-only content mount, a read-only root filesystem where practical, no privileged mode, no Docker socket mount, no unnecessary capabilities, and only the required host port exposed.
 
-Example `compose.segregated-assets.yml` (App only):
+Example `compose.assets.yml` (App only):
 
 ```yaml
 services:
@@ -57,7 +57,7 @@ services:
       - ./src/Web/wwwroot:/cdnroot:ro
 ```
 
-Run it with `docker compose -f compose.segregated-assets.yml up`, then launch the application with the `http-segregated-assets` profile. Adapt the relative `./src/Web/wwwroot` path to the actual web project location.
+Run it with `docker compose -f compose.assets.yml up`, then launch the application with the `http-segregated-assets` profile. Adapt the relative `./src/Web/wwwroot` path to the actual web project location.
 
 ## Second origin for CDN assets
 

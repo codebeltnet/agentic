@@ -4,7 +4,7 @@ Two things happen at deployment: the application-owned static assets are shipped
 
 ## Derived asset image
 
-Name the derived Dockerfile `<something>.Dockerfile` with a PascalCase `<something>` prefix. For this skill the canonical name is `Assets.Dockerfile`. Docker documents this convention for distinct Dockerfiles and the `--file` option for selecting a non-default filename; use `docker build --file Assets.Dockerfile ...` or the equivalent Compose `dockerfile: Assets.Dockerfile` setting. Do not use `Dockerfile.assets` or the lowercase `assets.Dockerfile` form. See the [Dockerfile overview](https://docs.docker.com/build/concepts/dockerfile/).
+Name the derived Dockerfile `<something>.Dockerfile` with a PascalCase `<something>` prefix. For this skill the canonical name is `Assets.Dockerfile`. Select it with `docker build --file Assets.Dockerfile ...` or the equivalent Compose `dockerfile: Assets.Dockerfile` setting. When a dedicated local Compose file is used, name it `compose.assets.yml`. See the [Dockerfile overview](https://docs.docker.com/build/concepts/dockerfile/).
 
 When application-owned assets ship as a container image, use `web-cdn-origin:2.0.0` as the base. The normal derived image is conceptually no more complicated than copying the final `wwwroot` output into the image's content root:
 
@@ -16,7 +16,7 @@ COPY --chown=65532:65532 ./wwwroot/ /cdnroot/
 
 Version 2.0 owns its `/cdnroot`, its port (`8080`), its runtime user (`65532`), and its application working directory. Do not override them without a demonstrated requirement, and prefer `COPY` over `ADD` when no `ADD` behavior is needed. Adapt only the source path and ownership when actual build conventions require it.
 
-Do **not** reintroduce the old 1.4 pattern (setting `ASPNETCORE_HTTP_PORTS`, `WORKDIR /cdnroot`, and `ADD approot .`). Version 2.0 already establishes those conventions, and re-declaring them fights the base image.
+Use the base image's established port, `/cdnroot`, runtime user, and working directory so the derived asset image remains compatible with the published origin contract.
 
 If the application's frontend build generates the final files rather than storing them directly in source `wwwroot`, identify and preserve that generation pipeline and build it before the image is assembled: the image must contain the **actual final asset output**, not stale source inputs.
 
@@ -34,7 +34,7 @@ The deployed web application must not carry a duplicate copy of its application-
 </ItemGroup>
 ```
 
-Do **not** default to `<StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>`. That global switch disables the entire Static Web Assets system, which also drops assets supplied by Razor Class Libraries (`_content/…`) and framework assets (`_framework/…`) and can break application or framework functionality. The targeted `Content Update` item only affects the application's own `wwwroot`; Razor Class Library and framework static web assets keep flowing to publish through their own items.
+Keep the Static Web Assets pipeline active for Razor Class Library (`_content/…`) and framework (`_framework/…`) content. The targeted `Content Update` item affects only the application's own `wwwroot`; contributed and framework static web assets continue through their own publish items.
 
 Do not assume the declaration is sufficient merely because it looks correct — the interaction between the `Content` items and the Static Web Assets publish pipeline must be confirmed empirically.
 
@@ -42,9 +42,9 @@ Do not assume the declaration is sufficient merely because it looks correct — 
 
 Against a conventional `Microsoft.NET.Sdk.Web` application on .NET 10 that calls `MapStaticAssets`:
 
-- **Baseline (no exclusion):** `dotnet publish` produces `publish/wwwroot/…` containing every `wwwroot` file plus pre-compressed `.br`/`.gz` variants and a `*.staticwebassets.endpoints.json` manifest — the duplicate copy to eliminate.
-- **With `Content Update="wwwroot/**" CopyToPublishDirectory="Never"`:** `publish/wwwroot` is absent entirely; the endpoints manifest remains but is empty (`{"Version":1,"ManifestType":"Publish","Endpoints":[]}`). App-owned assets are gone, and the Static Web Assets system stays enabled.
-- **Same exclusion with a referenced Razor Class Library:** the app's own `wwwroot/*` is absent, while the RCL's `wwwroot/_content/<Lib>/…` (and its `.br`/`.gz`) **survives** in publish. This is exactly the outcome the global disable would wrongly destroy.
+- `Content Update="wwwroot/**" CopyToPublishDirectory="Never"` removes application-owned files from the publish artifact while leaving the Static Web Assets manifest available.
+- A referenced Razor Class Library's `wwwroot/_content/<Lib>/…` assets and their compressed variants remain in publish.
+- Framework assets remain available through the framework Static Web Assets pipeline.
 
 ## Verifying the publish invariant
 

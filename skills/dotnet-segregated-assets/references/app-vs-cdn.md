@@ -45,4 +45,4 @@ Configure the application's own asset base-URL abstraction instead — an option
 
 The motivation is architectural, not a browser-connection trick. Segregating static delivery gives you segregation of duties (static delivery is isolated from application and business logic and its failure modes), independent deployment and scaling for assets, explicit and correct cache behavior on a dedicated surface, origin/CDN offloading so the application stays small and cheap, reusable shared assets, and a reduced application artifact surface.
 
-Do **not** justify the design as HTTP/1.x domain sharding or claim that additional domains improve modern browser performance through extra connection parallelism. On HTTP/2 and HTTP/3 that technique is usually counter-productive because it prevents connection coalescing. The benefits above are about architecture, operability, and edge caching — not connection count.
+The design serves architecture, operability, and edge caching through independent deployment, explicit cache policy, and origin offloading.
