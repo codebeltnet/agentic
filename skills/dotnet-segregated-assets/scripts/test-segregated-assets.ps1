@@ -57,6 +57,21 @@ try {
     Assert-True 'plan proposes publish-exclusion' ($plan.Output -match 'publish-exclusion')
     Assert-True 'plan skips CDN equivalent by default' ($plan.Output -match '"cdn-equivalent"[\s\S]*?"status":\s*"skip"')
 
+    # An explicitly selected web project without wwwroot can still consume a shared/CDN asset root.
+    $apiDir = Join-Path $workspace 'Api'
+    New-Item -ItemType Directory -Path $apiDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $apiDir 'Api.csproj') -Encoding utf8 -Value @'
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+</Project>
+'@
+    Set-Content -LiteralPath (Join-Path $apiDir 'Program.cs') -Encoding utf8 -Value '// entrypoint'
+    Write-Host 'plan: no wwwroot with CDN equivalent'
+    $cdnOnlyPlan = Invoke-Runner -RunnerArgs @('plan', '--repo-root', $workspace, '-p', 'Api/Api.csproj', '--cdn-equivalent', '--json')
+    Assert-True 'CDN-only plan exits 0' ($cdnOnlyPlan.ExitCode -eq 0)
+    Assert-True 'CDN-only plan creates CDN-equivalent work' ($cdnOnlyPlan.Output -match '"step":\s*"cdn-equivalent"[\s\S]*?"status":\s*"create"')
+    Assert-True 'CDN-only plan is not blocked' ($cdnOnlyPlan.Output -notmatch '"status":\s*"blocked"')
+
     # verify against a fabricated publish output that leaked app assets => must fail.
     $leakedPub = Join-Path $workspace 'pub-leak'
     New-Item -ItemType Directory -Path (Join-Path $leakedPub 'wwwroot/css') -Force | Out-Null
@@ -74,6 +89,11 @@ try {
     $verifyClean = Invoke-Runner -RunnerArgs @('verify', '--repo-root', $workspace, '-p', 'Web/Web.csproj', '--publish-dir', $cleanPub, '--json')
     Assert-True 'verify passes on clean publish (exit 0)' ($verifyClean.ExitCode -eq 0)
     Assert-True 'verify preserves shared _content asset' ($verifyClean.Output -match '_content/Lib/shared\.css')
+
+    Write-Host 'verify: incomplete local topology'
+    $verifyIncompleteLocal = Invoke-Runner -RunnerArgs @('verify', '--repo-root', $workspace, '-p', 'Web/Web.csproj', '--publish-dir', $cleanPub, '--check-local', '--json')
+    Assert-True 'verify rejects missing local topology (exit 66)' ($verifyIncompleteLocal.ExitCode -eq 66)
+    Assert-True 'verify reports incomplete local topology as not ok' ($verifyIncompleteLocal.Output -match '"ok":\s*false')
 }
 finally {
     if (Test-Path -LiteralPath $workspace) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }

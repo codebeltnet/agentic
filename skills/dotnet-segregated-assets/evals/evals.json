@@ -197,6 +197,60 @@
         "evals/files/segregated-app/compose.segregated-assets.yml",
         "evals/files/segregated-app/Assets.Dockerfile"
       ]
+    },
+    {
+      "id": 11,
+      "prompt": "Ledger.Web has a clean isolated publish directory, but it has no matching http-segregated-assets launch profile and no Static Content Provider Compose service. Run verify with --check-local and report the result. Missing local topology must not be treated as valid just because the publish invariant passes.",
+      "expected_output": "The runner reports the publish invariant as clean but returns a failed verification result because the required segregated launch profile and origin Compose service are missing.",
+      "expectations": [
+        "Runs verify with --check-local against the selected Ledger.Web project",
+        "Requires both the matching HTTP launch profile and a matching Static Content Provider Compose service for localOk",
+        "Reports verification failure when either local topology component is absent, even when no app-owned files leaked",
+        "NEGATIVE: does not treat missing launch/Compose validation results as a passing local topology"
+      ],
+      "files": [
+        "evals/files/no-cuemon/Ledger.Web.csproj",
+        "evals/files/no-cuemon/Program.cs",
+        "evals/files/no-cuemon/appsettings.json",
+        "evals/files/no-cuemon/wwwroot/css/site.css"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Risky.Web already has a publish exclusion and an http-segregated-assets profile, but it also contains generated static-asset risk. Inspect it and decide whether it is safe to reconcile.",
+      "expected_output": "The runner classifies Risky.Web as RiskyGeneratedAssets and keeps the escalation guardrail ahead of AlreadySegregated, so the plan blocks and requests an explicit generated-static-assets design.",
+      "expectations": [
+        "Detects the generated/static-asset risk in the already partially segregated project",
+        "Classifies the project as RiskyGeneratedAssets even though existing segregation is complete",
+        "Blocks reconciliation with the explicit generated-static-assets escalation",
+        "NEGATIVE: does not return AlreadySegregated before evaluating risk"
+      ],
+      "files": [
+        "evals/files/already-segregated-risk/Risky.Web.csproj",
+        "evals/files/already-segregated-risk/Program.cs",
+        "evals/files/already-segregated-risk/Index.cshtml.css",
+        "evals/files/already-segregated-risk/Properties/launchSettings.json",
+        "evals/files/already-segregated-risk/wwwroot/css/site.css"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "The selected Acme.Api web project has no wwwroot, but the application consumes an explicit shared CDN asset source. Run plan with the CDN-equivalent choice and produce the CDN-only work instead of blocking on the missing local wwwroot.",
+      "expected_output": "The runner classifies Acme.Api as NoWwwroot and returns a create cdn-equivalent decision for a local origin from the shared-asset root; it does not return a blocked resolve step.",
+      "expectations": [
+        "Selects Acme.Api explicitly rather than planning against the other web project",
+        "Recognizes the NoWwwroot classification",
+        "With the CDN-equivalent option enabled, creates the CDN-only local-origin decision",
+        "NEGATIVE: does not return the no-wwwroot resolve blocker when a CDN equivalent exists"
+      ],
+      "files": [
+        "evals/files/multi-project/Acme.slnx",
+        "evals/files/multi-project/src/Acme.Api/Acme.Api.csproj",
+        "evals/files/multi-project/src/Acme.Api/Program.cs",
+        "evals/files/multi-project/src/Acme.Site/Acme.Site.csproj",
+        "evals/files/multi-project/src/Acme.Site/Program.cs",
+        "evals/files/multi-project/src/Acme.Site/wwwroot/css/site.css"
+      ]
     }
   ]
 }

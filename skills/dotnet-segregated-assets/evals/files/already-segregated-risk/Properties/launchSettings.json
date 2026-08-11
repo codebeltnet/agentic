@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "http-segregated-assets": {
+      "commandName": "Project"
+    }
+  }
+}
