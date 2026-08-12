@@ -65,7 +65,7 @@ Classify every static reference by ownership before changing it.
 
 App assets are owned by exactly one application: its CSS, JavaScript, branding, images, favicons, manifest, application fonts, and application-specific media. Shared CDN assets are reusable across applications: Bootstrap, Font Awesome, shared fonts, design-system packages, reusable JavaScript/CSS libraries, and common images. A file's current directory or URL shape does not establish ownership.
 
-When Cuemon is available, use its current public custom-element syntax:
+When Cuemon is available, treat each TagHelper class's `HtmlTargetElement` attribute as the selector contract; never infer a selector from the class name. The current public selectors are `app-link`, `app-script`, `app-img`, `cdn-link`, `cdn-script`, and `cdn-img`:
 
 ```html
 <app-link rel="icon" href="favicon.svg" type="image/svg+xml" />
@@ -74,12 +74,12 @@ When Cuemon is available, use its current public custom-element syntax:
 <app-link rel="manifest" href="manifest.json" type="application/json" />
 <app-link href="css/site.css" />
 <app-script src="js/site.js"></app-script>
-<app-image src="images/logo.svg" alt="Logo" />
+<app-img src="images/logo.svg" alt="Logo" />
 
 <cdn-link href="packages/fontawesome/7.0.0/css/all.min.css" />
 <cdn-link href="packages/bootstrap/5.3.3/css/bootstrap.min.css" />
 <cdn-script src="packages/htmx/2.0.4/htmx.min.js"></cdn-script>
-<cdn-image src="packages/shared/logo.svg" alt="Shared logo" />
+<cdn-img src="packages/shared/logo.svg" alt="Shared logo" />
 ```
 
 These elements preserve meaningful attributes such as `as`, `crossorigin`, `color`, `rel`, and `type`. Do not document or emit attribute-style substitutes that the referenced package does not expose. Never mechanically convert every reference to App or every external-looking reference to CDN; determine ownership and use the corresponding helper.
@@ -96,7 +96,7 @@ Configuration declares location; Razor declares ownership. Do not encode deploym
 
 ### Ordinary Development
 
-Do not modify the existing ordinary Development profile merely to support segregation. For Cuemon App assets, set `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` through normal application configuration and leave App `BaseUrl` absent. The same `<app-link>`, `<app-script>`, and `<app-image>` markup then resolves against the application itself:
+Do not modify the existing ordinary Development profile merely to support segregation. For Cuemon App assets, set `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` through normal application configuration and leave App `BaseUrl` absent. The same `<app-link>`, `<app-script>`, and `<app-img>` markup then resolves against the application itself:
 
 ```text
 browser -> application -> normal wwwroot

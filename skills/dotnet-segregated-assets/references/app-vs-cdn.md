@@ -6,7 +6,7 @@ This distinction is the heart of the skill. Two static-asset roles can look simi
 
 App assets are application-specific files owned by exactly one application: its CSS and JavaScript, images and branding, favicons, manifests, application-specific fonts, and application media. Their source normally stays in that web project's `wwwroot`, because it is the conventional, tooling-friendly authoring location understood by editors, hot reload, and the SDK. After deployment, the files are served from a separately built and deployed `codebeltnet/web-cdn-origin:2.0.0` image on a host tied to that application.
 
-When `Cuemon.AspNetCore.Razor.TagHelpers` is already available, use the public Cuemon App helpers and bind `AppTagHelperOptions`:
+When `Cuemon.AspNetCore.Razor.TagHelpers` is already available, use the public Cuemon App helpers and bind `AppTagHelperOptions`. Treat each helper's `HtmlTargetElement` attribute as authoritative: the current App selectors are `app-link`, `app-script`, and `app-img`.
 
 ```html
 <app-link rel="stylesheet" href="css/site.css" />
@@ -16,7 +16,7 @@ When `Cuemon.AspNetCore.Razor.TagHelpers` is already available, use the public C
 <app-link rel="apple-touch-icon" href="apple-touch-icon.png" type="image/png" />
 <app-link rel="manifest" href="manifest.json" type="application/json" />
 <app-script src="js/site.js"></app-script>
-<app-image src="images/logo.svg" alt="Logo" />
+<app-img src="images/logo.svg" alt="Logo" />
 ```
 
 These elements declare App ownership in Razor. Do not replace them with a custom `GetUrl()` helper, injected `AppAssetOptions`, or an application-specific URL builder when Cuemon is already present.
@@ -25,13 +25,13 @@ These elements declare App ownership in Razor. Do not replace them with a custom
 
 CDN assets are reusable static content consumed by multiple applications: common fonts, icon libraries, JavaScript libraries and packages, CSS frameworks, shared design-system assets, reusable images, and other organization-wide, versioned frontend dependencies. They must not be copied into every application's `wwwroot`. They normally have a separate source repository or artifact and may ultimately be fronted by a true CDN, with `web-cdn-origin` as the origin behind it.
 
-When a shared equivalent exists, use Cuemon's CDN helpers and bind `CdnTagHelperOptions`:
+When a shared equivalent exists, use Cuemon's CDN helpers and bind `CdnTagHelperOptions`. The current CDN selectors are `cdn-link`, `cdn-script`, and `cdn-img`.
 
 ```html
 <cdn-link href="packages/fontawesome/7.0.0/css/all.min.css" />
 <cdn-link href="packages/bootstrap/5.3.3/css/bootstrap.min.css" />
 <cdn-script src="packages/htmx/2.0.4/htmx.min.js"></cdn-script>
-<cdn-image src="shared/brand-mark.svg" alt="Organization mark" />
+<cdn-img src="shared/brand-mark.svg" alt="Organization mark" />
 ```
 
 Use the corresponding CDN helper for the element type. Do not mechanically convert every static reference to an App helper or every external-looking reference to a CDN helper. Determine who owns the file and where its canonical source lives. If no CDN equivalent exists, do not create a CDN origin or manufacture CDN configuration.

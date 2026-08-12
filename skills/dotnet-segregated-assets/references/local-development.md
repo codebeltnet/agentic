@@ -4,7 +4,7 @@ The goal is to preserve the ordinary fast edit/run/debug loop and add a second, 
 
 ## Two profiles, one source folder
 
-Keep the application's existing Development launch profile exactly as it is. For a Cuemon application, configure `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` in ordinary Development and do not provide an external App `BaseUrl`. The same `<app-link>`, `<app-script>`, and `<app-image>` markup then resolves against the application that is serving the page. Cuemon does not inspect launch-profile names.
+Keep the application's existing Development launch profile exactly as it is. For a Cuemon application, configure `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` in ordinary Development and do not provide an external App `BaseUrl`. The same `<app-link>`, `<app-script>`, and `<app-img>` markup then resolves against the application that is serving the page. Cuemon does not inspect launch-profile names.
 
 Add a new profile — `http-segregated-assets` (or the repository's established equivalent) — that keeps `ASPNETCORE_ENVIRONMENT` set to `Development` but changes only the values that distinguish the segregated topology. In a Cuemon application, bind the existing `AppTagHelperOptions` with `BaseUrlMode = TagHelperBaseUrlMode.Automatic`, host-only `BaseUrl = localhost:<app-port>`, and `Scheme = ProtocolUriScheme.Http`. Bind `CdnTagHelperOptions` with `BaseUrlMode = TagHelperBaseUrlMode.Configured`, a separate host-only `BaseUrl = localhost:<cdn-port>`, and `Scheme = ProtocolUriScheme.Http` only when a shared CDN equivalent exists. Do not create a second asset configuration section when the application already binds these options.
 
