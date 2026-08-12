@@ -39,10 +39,10 @@ $contracts = @(
     'CdnTagHelperOptions',
     'app-link',
     'app-script',
-    'app-image',
+    'app-img',
     'cdn-link',
     'cdn-script',
-    'cdn-image',
+    'cdn-img',
     'Automatic',
     'BaseUrlMode',
     'TagHelperBaseUrlMode',
@@ -80,7 +80,7 @@ foreach ($needle in @('resolvedNuGetPackages', 'Directory.Packages.props', 'prer
         throw "references/app-vs-cdn.md is missing package-version guidance: $needle"
     }
 }
-foreach ($staleSyntax in @('app-href', 'cdn-src', 'app-src', 'cdn-href')) {
+foreach ($staleSyntax in @('app-href', 'cdn-src', 'app-src', 'cdn-href', 'app-image', 'cdn-image')) {
     if ($appVsCdn.Contains($staleSyntax, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "references/app-vs-cdn.md contains stale or unverified Cuemon syntax: $staleSyntax"
     }
@@ -91,7 +91,7 @@ $cuemonEval = @($evals.evals | Where-Object { $_.id -eq 3 })[0]
 if ($null -eq $cuemonEval) {
     throw 'evals/evals.json must retain the Cuemon migration eval with id 3.'
 }
-foreach ($expected in @('app-link', 'app-script', 'app-image', 'cdn-link', 'cdn-script', 'cdn-image', 'AppAssetOptions', 'latest stable', 'NuGet.org', 'PackageVersion')) {
+foreach ($expected in @('app-link', 'app-script', 'app-img', 'cdn-link', 'cdn-script', 'cdn-img', 'AppAssetOptions', 'latest stable', 'NuGet.org', 'PackageVersion')) {
     if (-not ($cuemonEval.expected_output.Contains($expected) -or (@($cuemonEval.expectations) -join "`n").Contains($expected))) {
         throw "The Cuemon eval is missing the expected contract: $expected"
     }
@@ -107,16 +107,27 @@ foreach ($negative in @(
     'does not add a Cuemon cache-busting package or registration merely to implement segregation',
     'does not reuse the obsolete 6.1.0 version or fall back to a version from templates, fixtures, examples, or memory when NuGet resolution fails',
     'does not make the deterministic runner rewrite Razor source',
-    'does not introduce a second asset configuration hierarchy alongside existing AppTagHelperOptions/CdnTagHelperOptions'
+    'does not introduce a second asset configuration hierarchy alongside existing AppTagHelperOptions/CdnTagHelperOptions',
+    'does not infer app-image or cdn-image from TagHelper class names instead of using HtmlTargetElement selectors'
 )) {
     if (-not ((@($cuemonEval.expectations) -join "`n").Contains("NEGATIVE: $negative", [System.StringComparison]::Ordinal))) {
         throw "The Cuemon eval is missing required negative expectation: $negative"
     }
 }
 $cuemonFixtureLayout = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'evals/files/cuemon-app/Views/Shared/_Layout.cshtml'))
-foreach ($staleSyntax in @('app-href', 'cdn-src', 'app-src', 'cdn-href')) {
+foreach ($staleSyntax in @('app-href', 'cdn-src', 'app-src', 'cdn-href', 'app-image', 'cdn-image')) {
     if ($cuemonFixtureLayout.Contains($staleSyntax, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The Cuemon eval fixture contains stale or unverified syntax: $staleSyntax"
+    }
+}
+foreach ($selector in @('app-link', 'app-script', 'app-img', 'cdn-link', 'cdn-script', 'cdn-img')) {
+    if (-not $runner.Contains("<$selector\b", [System.StringComparison]::Ordinal)) {
+        throw "segregate-assets.cs does not detect the public Cuemon selector: $selector"
+    }
+}
+foreach ($invalidSelector in @('app-image', 'cdn-image')) {
+    if ($runner.Contains("<$invalidSelector\b", [System.StringComparison]::Ordinal)) {
+        throw "segregate-assets.cs detects a class-name-inferred selector that Cuemon does not expose: $invalidSelector"
     }
 }
 $cuemonFixturePackages = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'evals/files/cuemon-app/Directory.Packages.props'))

@@ -294,10 +294,10 @@ internal sealed record CuemonDetection(
             if (ViewImportsRegistration) evidence.Add("_ViewImports.cshtml Cuemon tag-helper registration");
             if (AppLinkMarkup) evidence.Add("app-link markup");
             if (AppScriptMarkup) evidence.Add("app-script markup");
-            if (AppImageMarkup) evidence.Add("app-image markup");
+            if (AppImageMarkup) evidence.Add("app-img markup");
             if (CdnLinkMarkup) evidence.Add("cdn-link markup");
             if (CdnScriptMarkup) evidence.Add("cdn-script markup");
-            if (CdnImageMarkup) evidence.Add("cdn-image markup");
+            if (CdnImageMarkup) evidence.Add("cdn-img markup");
             if (LegacyAttributeSyntax) evidence.Add("legacy attribute-style Cuemon syntax");
             if (MicrosoftAppendVersion) evidence.Add("asp-append-version");
             if (CuemonCacheBusting) evidence.Add("Cuemon cache-busting interface/registration");
@@ -720,10 +720,10 @@ internal static class AssetAbstractionDetector
             viewImportsRegistration,
             Regex.IsMatch(markup, @"<app-link\b", RegexOptions.IgnoreCase),
             Regex.IsMatch(markup, @"<app-script\b", RegexOptions.IgnoreCase),
-            Regex.IsMatch(markup, @"<app-image\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"<app-img\b", RegexOptions.IgnoreCase),
             Regex.IsMatch(markup, @"<cdn-link\b", RegexOptions.IgnoreCase),
             Regex.IsMatch(markup, @"<cdn-script\b", RegexOptions.IgnoreCase),
-            Regex.IsMatch(markup, @"<cdn-image\b", RegexOptions.IgnoreCase),
+            Regex.IsMatch(markup, @"<cdn-img\b", RegexOptions.IgnoreCase),
             Regex.IsMatch(markup, @"\b(?:app|cdn)-(?:href|src)\s*=", RegexOptions.IgnoreCase),
             Regex.IsMatch(markup, @"\basp-append-version\b", RegexOptions.IgnoreCase),
             Regex.IsMatch(all, @"\b(?:ICacheBusting|Add(?:Assembly|Dynamic)?CacheBusting)\b", RegexOptions.IgnoreCase));
@@ -1289,7 +1289,7 @@ internal static class Commands
                     ? "reuse-existing"
                     : "introduce-only-if-needed";
         var abstractionDetail = inspection.AssetAbstractions.CompetingAbstractions
-            ? "Cuemon App/CDN TagHelpers and a custom asset abstraction coexist. Migrate each Razor reference by ownership to app-link/app-script/app-image or cdn-link/cdn-script/cdn-image, remove redundant injections and registrations, and delete the custom abstraction only after no consumers remain. Configure AppTagHelperOptions.BaseUrlMode as TagHelperBaseUrlMode.Automatic and keep CdnTagHelperOptions explicitly Configured."
+            ? "Cuemon App/CDN TagHelpers and a custom asset abstraction coexist. Migrate each Razor reference by ownership to app-link/app-script/app-img or cdn-link/cdn-script/cdn-img, remove redundant injections and registrations, and delete the custom abstraction only after no consumers remain. Configure AppTagHelperOptions.BaseUrlMode as TagHelperBaseUrlMode.Automatic and keep CdnTagHelperOptions explicitly Configured."
             : inspection.AssetAbstractions.CuemonPresent
                 ? "Reuse the referenced Cuemon App/CDN TagHelpers, AppTagHelperOptions, and CdnTagHelperOptions. Use the current public custom-element syntax and BaseUrlMode API; do not invent an attribute or GetUrl abstraction."
                 : inspection.AssetAbstractions.Custom.Present
@@ -1338,7 +1338,7 @@ internal static class Commands
         sb.AppendLine($"Cuemon present: {r.CuemonPresent}");
         var cuemon = r.AssetAbstractions.Cuemon;
         sb.AppendLine($"Cuemon evidence: available={cuemon.Available} package={cuemon.PackageReference} project={cuemon.ProjectReference} using={cuemon.NamespaceUsing} app-options={cuemon.AppOptions} cdn-options={cuemon.CdnOptions} view-imports={cuemon.ViewImportsRegistration}");
-        sb.AppendLine($"Cuemon markup: app-link={cuemon.AppLinkMarkup} app-script={cuemon.AppScriptMarkup} app-image={cuemon.AppImageMarkup} cdn-link={cuemon.CdnLinkMarkup} cdn-script={cuemon.CdnScriptMarkup} cdn-image={cuemon.CdnImageMarkup}");
+        sb.AppendLine($"Cuemon markup: app-link={cuemon.AppLinkMarkup} app-script={cuemon.AppScriptMarkup} app-img={cuemon.AppImageMarkup} cdn-link={cuemon.CdnLinkMarkup} cdn-script={cuemon.CdnScriptMarkup} cdn-img={cuemon.CdnImageMarkup}");
         sb.AppendLine($"Custom asset abstraction: present={r.AssetAbstractions.Custom.Present} competing={r.AssetAbstractions.CompetingAbstractions} legacy-attribute-syntax={cuemon.LegacyAttributeSyntax} asp-append-version={cuemon.MicrosoftAppendVersion} ICacheBusting={cuemon.CuemonCacheBusting}");
         sb.AppendLine();
         sb.AppendLine($"Web projects ({r.WebProjects.Count}):");
@@ -1573,10 +1573,10 @@ internal static class SelfTest
         @inject Microsoft.Extensions.Options.IOptions<AppAssetOptions> AppAssets
         <app-link href="css/site.css" />
         <app-script src="js/site.js"></app-script>
-        <app-image src="images/logo.svg" alt="Logo" />
+        <app-img src="images/logo.svg" alt="Logo" />
         <cdn-link href="packages/bootstrap/5.3.3/css/bootstrap.min.css" />
         <cdn-script src="packages/htmx/2.0.4/htmx.min.js"></cdn-script>
-        <cdn-image src="packages/icons/logo.svg" alt="Shared logo" />
+        <cdn-img src="packages/icons/logo.svg" alt="Shared logo" />
         <link app-href="legacy.css" />
         @AppAssets.Value.GetUrl("~/css/site.css")
         """);
@@ -1592,10 +1592,10 @@ internal static class SelfTest
         Assert("cuemon: _ViewImports registration detected", c.ViewImportsRegistration);
         Assert("cuemon: app-link detected", c.AppLinkMarkup);
         Assert("cuemon: app-script detected", c.AppScriptMarkup);
-        Assert("cuemon: app-image detected", c.AppImageMarkup);
+        Assert("cuemon: app-img detected", c.AppImageMarkup);
         Assert("cuemon: cdn-link detected", c.CdnLinkMarkup);
         Assert("cuemon: cdn-script detected", c.CdnScriptMarkup);
-        Assert("cuemon: cdn-image detected", c.CdnImageMarkup);
+        Assert("cuemon: cdn-img detected", c.CdnImageMarkup);
         Assert("cuemon: legacy attribute syntax reported", c.LegacyAttributeSyntax);
         Assert("cuemon: cache-busting registration detected", c.CuemonCacheBusting);
         Assert("cuemon: custom options detected", custom.OptionsType);
@@ -1625,6 +1625,13 @@ internal static class SelfTest
         File.WriteAllText(Path.Combine(views, "_Layout.cshtml"), "<app-link href=\"css/site.css\" />");
         var markupInspection = Commands.Inspect(markupOnly, null);
         Assert("cuemon: markup is reported without proving package availability", markupInspection.AssetAbstractions.Cuemon.AppLinkMarkup && !markupInspection.CuemonPresent);
+
+        var inferredImageAliases = NewProject(root, "inferred-image-aliases", webApp: true, wwwroot: true);
+        var aliasViews = Path.Combine(inferredImageAliases, "Views", "Shared");
+        Directory.CreateDirectory(aliasViews);
+        File.WriteAllText(Path.Combine(aliasViews, "_Layout.cshtml"), "<app-image src=\"logo.svg\" /><cdn-image src=\"shared.svg\" />");
+        var aliasInspection = Commands.Inspect(inferredImageAliases, null).AssetAbstractions.Cuemon;
+        Assert("cuemon: class-name-inferred image aliases are not reported as public selectors", !aliasInspection.AppImageMarkup && !aliasInspection.CdnImageMarkup);
     }
 
     private static void TestBlazorWebAssemblyIsRisky(string root)

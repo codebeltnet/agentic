@@ -81,7 +81,9 @@ builder.Services.Configure<AppAssetOptions>(builder.Configuration.GetSection("As
     Set-Content -LiteralPath (Join-Path $cuemonDir 'Views/Shared/_Layout.cshtml') -Encoding utf8 -Value @'
 @inject Microsoft.Extensions.Options.IOptions<AppAssetOptions> AppAssets
 <app-link href="css/site.css" />
+<app-img src="images/logo.svg" alt="Logo" />
 <cdn-script src="packages/htmx/2.0.4/htmx.min.js"></cdn-script>
+<cdn-img src="packages/icons/logo.svg" alt="Shared logo" />
 @AppAssets.Value.GetUrl("~/css/site.css")
 '@
     Write-Host 'inspect: Cuemon and competing custom asset abstraction'
@@ -89,6 +91,7 @@ builder.Services.Configure<AppAssetOptions>(builder.Configuration.GetSection("As
     Assert-True 'Cuemon inspect exits 0' ($cuemonInspect.ExitCode -eq 0)
     Assert-True 'Cuemon package is detected' ($cuemonInspect.Output -match '"packageReference":\s*true')
     Assert-True 'Cuemon custom elements are detected' ($cuemonInspect.Output -match '"appLinkMarkup":\s*true')
+    Assert-True 'Cuemon HtmlTargetElement image selectors are detected' ($cuemonInspect.Output -match '"appImageMarkup":\s*true' -and $cuemonInspect.Output -match '"cdnImageMarkup":\s*true')
     Assert-True 'Cuemon cache-busting registration is detected' ($cuemonInspect.Output -match '"cuemonCacheBusting":\s*true')
     Assert-True 'custom abstraction is detected' ($cuemonInspect.Output -match '"custom"[\s\S]*?"present":\s*true')
     Assert-True 'competing abstractions are reported' ($cuemonInspect.Output -match '"competingAbstractions":\s*true')
