@@ -25,7 +25,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
-return SegregateAssetsProgram.Run(args);
+return await SegregateAssetsProgram.RunAsync(args);
 
 internal static class SegregateAssetsProgram
 {
@@ -37,6 +37,8 @@ internal static class SegregateAssetsProgram
     internal const string OriginContentRoot = "/cdnroot";
     internal const string OriginUser = "65532";
     internal const string SegregatedProfileName = "http-segregated-assets";
+    internal const string CuemonPackageId = "Cuemon.AspNetCore.Razor.TagHelpers";
+    internal const string NuGetServiceIndex = "https://api.nuget.org/v3/index.json";
 
     internal static readonly JsonSerializerOptions JsonOut = new()
     {
@@ -45,7 +47,7 @@ internal static class SegregateAssetsProgram
         WriteIndented = true
     };
 
-    public static int Run(string[] args)
+    public static async Task<int> RunAsync(string[] args)
     {
         Options options;
         try
@@ -69,9 +71,9 @@ internal static class SegregateAssetsProgram
         {
             return options.Command switch
             {
-                Command.SelfTest => SelfTest.Run(options),
+                Command.SelfTest => await SelfTest.RunAsync(options),
                 Command.Inspect => Commands.Inspect(options),
-                Command.Plan => Commands.Plan(options),
+                Command.Plan => await Commands.PlanAsync(options),
                 Command.Verify => Commands.Verify(options),
                 _ => Fail(options, ExitCode.InvalidArguments, "No command specified. Use inspect, plan, verify, or --self-test."),
             };
@@ -116,6 +118,7 @@ internal enum ExitCode
     VerificationFailed = 66,
     RiskyStaticAssets = 67,
     PublishError = 68,
+    DependencyResolutionFailed = 69,
     SelfTestFailed = 70,
     UnexpectedError = 71,
 }
@@ -206,8 +209,8 @@ internal sealed class Options
         Commands:
           inspect    Discover candidate web projects, classify static-asset topology, detect risky
                      Static Web Assets scenarios, and report existing segregation (idempotency).
-          plan       Resolve the target project, ports, and the ordered set of segregation decisions
-                     without writing any files.
+          plan       Resolve the target project, ports, latest stable version of an existing Cuemon
+                     package from NuGet.org, and the ordered decisions without writing files.
           verify     Prove application-owned wwwroot files are absent from the publish artifact and,
                      with --check-local, validate the local Static Content Provider topology.
           --self-test  Run the built-in deterministic tests (no dotnet/docker/network required).
@@ -350,6 +353,164 @@ internal sealed record InspectionResult(
     string Recommendation)
 {
     public bool Ok => true;
+}
+
+internal sealed record ResolvedNuGetPackage(
+    string PackageId,
+    string Version,
+    string Policy,
+    string Source);
+
+internal sealed class NuGetResolutionException(string message, Exception? innerException = null)
+    : Exception(message, innerException);
+
+// ---------------------------------------------------------------------------
+// NuGet resolution (networked in plan; fake-handler covered in --self-test)
+// ---------------------------------------------------------------------------
+
+internal static class NuGetVersionResolver
+{
+    internal const string LatestStablePolicy = "latest-stable";
+
+    public static async Task<ResolvedNuGetPackage> ResolveLatestStableAsync(
+        string packageId,
+        HttpClient? httpClient = null,
+        Uri? serviceIndexUri = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(packageId))
+            throw new ArgumentException("A NuGet package ID is required.", nameof(packageId));
+
+        using var ownedClient = httpClient is null
+            ? new HttpClient { Timeout = TimeSpan.FromSeconds(30) }
+            : null;
+        var client = httpClient ?? ownedClient!;
+        if (httpClient is null)
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("dotnet-segregated-assets/1.0");
+
+        var resolvedServiceIndex = serviceIndexUri ?? new Uri(SegregateAssetsProgram.NuGetServiceIndex);
+        try
+        {
+            using var serviceIndex = await GetJsonAsync(client, resolvedServiceIndex, cancellationToken);
+            var packageBaseAddress = FindPackageBaseAddress(serviceIndex.RootElement);
+            var packageIndexUri = new Uri(
+                packageBaseAddress.ToString().TrimEnd('/') + "/" +
+                Uri.EscapeDataString(packageId.ToLowerInvariant()) + "/index.json");
+
+            using var packageIndex = await GetJsonAsync(client, packageIndexUri, cancellationToken);
+            var version = SelectLatestStable(packageId, packageIndex.RootElement);
+            return new ResolvedNuGetPackage(packageId, version, LatestStablePolicy, packageIndexUri.AbsoluteUri);
+        }
+        catch (NuGetResolutionException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or UriFormatException)
+        {
+            throw new NuGetResolutionException(
+                $"Could not resolve the latest stable version of '{packageId}' from NuGet.org: {ex.Message}", ex);
+        }
+    }
+
+    private static async Task<JsonDocument> GetJsonAsync(
+        HttpClient client,
+        Uri uri,
+        CancellationToken cancellationToken)
+    {
+        using var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new NuGetResolutionException(
+                $"NuGet returned HTTP {(int)response.StatusCode} ({response.ReasonPhrase}) for {uri}.");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+    }
+
+    private static Uri FindPackageBaseAddress(JsonElement serviceIndex)
+    {
+        if (!serviceIndex.TryGetProperty("resources", out var resources) || resources.ValueKind != JsonValueKind.Array)
+            throw new NuGetResolutionException("NuGet service index did not contain a resources array.");
+
+        foreach (var resource in resources.EnumerateArray())
+        {
+            if (!resource.TryGetProperty("@type", out var type) || !HasPackageBaseAddressType(type)) continue;
+            if (!resource.TryGetProperty("@id", out var id) || id.ValueKind != JsonValueKind.String) continue;
+            if (Uri.TryCreate(id.GetString(), UriKind.Absolute, out var packageBaseAddress))
+                return packageBaseAddress;
+        }
+
+        throw new NuGetResolutionException("NuGet service index did not expose PackageBaseAddress/3.0.0.");
+    }
+
+    private static bool HasPackageBaseAddressType(JsonElement type) => type.ValueKind switch
+    {
+        JsonValueKind.String => string.Equals(type.GetString(), "PackageBaseAddress/3.0.0", StringComparison.Ordinal),
+        JsonValueKind.Array => type.EnumerateArray().Any(item =>
+            item.ValueKind == JsonValueKind.String &&
+            string.Equals(item.GetString(), "PackageBaseAddress/3.0.0", StringComparison.Ordinal)),
+        _ => false,
+    };
+
+    private static string SelectLatestStable(string packageId, JsonElement packageIndex)
+    {
+        if (!packageIndex.TryGetProperty("versions", out var versions) || versions.ValueKind != JsonValueKind.Array)
+            throw new NuGetResolutionException($"NuGet returned no version list for '{packageId}'.");
+
+        string? latest = null;
+        string[]? latestKey = null;
+        foreach (var item in versions.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String) continue;
+            var candidate = item.GetString();
+            if (!TryGetStableVersionKey(candidate, out var candidateKey)) continue;
+            if (latestKey is null || CompareVersionKeys(candidateKey, latestKey) > 0 ||
+                (CompareVersionKeys(candidateKey, latestKey) == 0 && string.CompareOrdinal(candidate, latest) > 0))
+            {
+                latest = candidate;
+                latestKey = candidateKey;
+            }
+        }
+
+        return latest ?? throw new NuGetResolutionException(
+            $"NuGet returned no stable versions for '{packageId}'; prerelease versions are not selected automatically.");
+    }
+
+    private static bool TryGetStableVersionKey(string? version, out string[] key)
+    {
+        key = Array.Empty<string>();
+        if (string.IsNullOrWhiteSpace(version) || version.Contains('-', StringComparison.Ordinal)) return false;
+
+        var core = version.Split('+', 2)[0];
+        var parts = core.Split('.');
+        if (parts.Length is < 1 or > 4 || parts.Any(part => part.Length == 0 || part.Any(ch => !char.IsAsciiDigit(ch))))
+            return false;
+
+        key = parts.Select(NormalizeNumericIdentifier).ToArray();
+        return true;
+    }
+
+    private static string NormalizeNumericIdentifier(string value)
+    {
+        var normalized = value.TrimStart('0');
+        return normalized.Length == 0 ? "0" : normalized;
+    }
+
+    private static int CompareVersionKeys(IReadOnlyList<string> left, IReadOnlyList<string> right)
+    {
+        var count = Math.Max(left.Count, right.Count);
+        for (var i = 0; i < count; i++)
+        {
+            var leftPart = i < left.Count ? left[i] : "0";
+            var rightPart = i < right.Count ? right[i] : "0";
+            var lengthComparison = leftPart.Length.CompareTo(rightPart.Length);
+            if (lengthComparison != 0) return lengthComparison;
+            var valueComparison = string.CompareOrdinal(leftPart, rightPart);
+            if (valueComparison != 0) return valueComparison;
+        }
+        return 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -526,8 +687,6 @@ internal static class StaticWebAssetRiskDetector
 
 internal static class AssetAbstractionDetector
 {
-    private const string CuemonPackage = "Cuemon.AspNetCore.Razor.TagHelpers";
-
     public static AssetAbstractionInspection Detect(string projectPath, string repoRoot)
     {
         var projectDirectory = Path.GetDirectoryName(projectPath)!;
@@ -579,7 +738,7 @@ internal static class AssetAbstractionDetector
     }
 
     private static bool ContainsCuemonPackageReference(string text) =>
-        Regex.IsMatch(text, $@"<PackageReference\b[^>]*\b(?:Include|Update)\s*=\s*['""]{Regex.Escape(CuemonPackage)}['""]", RegexOptions.IgnoreCase);
+        Regex.IsMatch(text, $@"<PackageReference\b[^>]*\b(?:Include|Update)\s*=\s*['""]{Regex.Escape(SegregateAssetsProgram.CuemonPackageId)}['""]", RegexOptions.IgnoreCase);
 
     private static IEnumerable<string> EnumerateAncestorBuildFiles(string directory, string repoRoot)
     {
@@ -939,10 +1098,32 @@ internal static class Commands
         return (int)ExitCode.Success;
     }
 
-    public static int Plan(Options options)
+    public static async Task<int> PlanAsync(Options options)
     {
         var inspection = Inspect(options.RepoRoot, options.Project);
-        var decisions = BuildPlan(inspection, options);
+        ResolvedNuGetPackage? resolvedCuemonPackage = null;
+        var canPlanPackageChanges = inspection.SelectedProject is not null &&
+                                    inspection.Classification is not Classifier.RiskyGeneratedAssets and
+                                        not Classifier.NotAWebApp and
+                                        not Classifier.Ambiguous and
+                                        not Classifier.NoWwwroot;
+        if (canPlanPackageChanges && inspection.AssetAbstractions.Cuemon.PackageReference)
+        {
+            try
+            {
+                resolvedCuemonPackage = await NuGetVersionResolver.ResolveLatestStableAsync(
+                    SegregateAssetsProgram.CuemonPackageId);
+            }
+            catch (NuGetResolutionException ex)
+            {
+                return SegregateAssetsProgram.Fail(
+                    options,
+                    ExitCode.DependencyResolutionFailed,
+                    $"{ex.Message} No package version was planned; retry when NuGet.org is reachable.");
+            }
+        }
+
+        var decisions = BuildPlan(inspection, options, resolvedCuemonPackage);
         var payload = new
         {
             tool = SegregateAssetsProgram.ToolName,
@@ -953,11 +1134,14 @@ internal static class Commands
             appPort = options.AppPort,
             cdnPort = options.CdnEquivalent ? options.CdnPort : (int?)null,
             originImage = SegregateAssetsProgram.OriginImage,
+            resolvedNuGetPackages = resolvedCuemonPackage is null
+                ? Array.Empty<ResolvedNuGetPackage>()
+                : new[] { resolvedCuemonPackage },
             assetAbstractions = inspection.AssetAbstractions,
             decisions,
             recommendation = inspection.Recommendation,
         };
-        SegregateAssetsProgram.Emit(options, payload, () => RenderPlan(inspection, options, decisions));
+        SegregateAssetsProgram.Emit(options, payload, () => RenderPlan(inspection, options, decisions, resolvedCuemonPackage));
         return (int)ExitCode.Success;
     }
 
@@ -1062,7 +1246,10 @@ internal static class Commands
         return (proc.ExitCode, stdout + stderr);
     }
 
-    private static List<object> BuildPlan(InspectionResult inspection, Options options)
+    internal static List<object> BuildPlan(
+        InspectionResult inspection,
+        Options options,
+        ResolvedNuGetPackage? resolvedCuemonPackage = null)
     {
         var e = inspection.ExistingSegregation;
         string StatusFor(bool present) => present ? "already-present" : "create";
@@ -1109,7 +1296,18 @@ internal static class Commands
                     ? "Reuse the existing non-Cuemon asset abstraction. Do not add Cuemon solely for this migration."
                     : "No suitable asset abstraction detected. Introduce only the smallest app-owned configuration mechanism required by the existing application.";
 
-        var plan = new List<object>
+        var plan = new List<object>();
+        if (resolvedCuemonPackage is not null)
+        {
+            plan.Add(new
+            {
+                step = "nuget-package-version",
+                status = "update-or-confirm",
+                detail = $"Use {resolvedCuemonPackage.PackageId} {resolvedCuemonPackage.Version}, resolved as the latest stable version from NuGet.org during this plan. Preserve the repository's package-management convention: update the existing PackageVersion when Central Package Management owns the version; otherwise update the existing PackageReference. Do not reuse a version from templates, fixtures, examples, or memory.",
+            });
+        }
+
+        plan.AddRange(new object[]
         {
             new { step = "asset-abstraction", status = abstractionStatus, detail = abstractionDetail },
             new { step = "publish-exclusion", status = StatusFor(e.PublishExclusion), detail = "Add <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> to the web project for application-owned wwwroot content while preserving generated and contributed Static Web Assets." },
@@ -1117,7 +1315,7 @@ internal static class Commands
             new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide {SegregateAssetsProgram.ComposeFileName} with a local {SegregateAssetsProgram.OriginImage} service mounting wwwroot into /cdnroot read-only on host port {options.AppPort}." },
             new { step = "production-image", status = StatusFor(e.DerivedDockerfile), detail = $"Add {SegregateAssetsProgram.DerivedDockerfileName} (PascalCase <something>.Dockerfile) and select it with --file: FROM {SegregateAssetsProgram.OriginImage} + COPY --chown={SegregateAssetsProgram.OriginUser}:{SegregateAssetsProgram.OriginUser} ./wwwroot/ {SegregateAssetsProgram.OriginContentRoot}/." },
             new { step = "documentation", status = "create-or-update", detail = "Document that deployed static content is served by Codebelt Static Content Provider, and that wwwroot remains the authoring root." },
-        };
+        });
 
         if (options.CdnEquivalent)
         {
@@ -1165,11 +1363,17 @@ internal static class Commands
         return sb.ToString().TrimEnd();
     }
 
-    private static string RenderPlan(InspectionResult r, Options o, List<object> decisions)
+    private static string RenderPlan(
+        InspectionResult r,
+        Options o,
+        List<object> decisions,
+        ResolvedNuGetPackage? resolvedCuemonPackage)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Plan for {r.SelectedProject ?? "(unresolved)"} [{r.Classification}]");
         sb.AppendLine($"App origin port: {o.AppPort}" + (o.CdnEquivalent ? $"  CDN origin port: {o.CdnPort}" : "  (no CDN equivalent)"));
+        if (resolvedCuemonPackage is not null)
+            sb.AppendLine($"NuGet: {resolvedCuemonPackage.PackageId} {resolvedCuemonPackage.Version} ({resolvedCuemonPackage.Policy})");
         sb.AppendLine();
         foreach (var d in decisions)
         {
@@ -1222,13 +1426,14 @@ internal static class SelfTest
     private static int _passed;
     private static readonly List<string> _failures = new();
 
-    public static int Run(Options options)
+    public static async Task<int> RunAsync(Options options)
     {
         var root = Path.Combine(Path.GetTempPath(), $"segregated-selftest-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
         {
             TestWebSdkDetection();
+            await TestNuGetVersionResolverSelectsLatestStable(root);
             TestSimpleWebAppClassification(root);
             TestCuemonAndCompetingAbstractionDetection(root);
             TestCentralPackageDefinitionDoesNotImplyCuemonUsage(root);
@@ -1282,6 +1487,58 @@ internal static class SelfTest
         Assert("razor SDK not web", !ProjectScanner.IsWebSdk(ProjectScanner.ReadSdk("<Project Sdk=\"Microsoft.NET.Sdk.Razor\">")));
     }
 
+    private static async Task TestNuGetVersionResolverSelectsLatestStable(string root)
+    {
+        var serviceIndexUri = new Uri("https://unit.test/v3/index.json");
+        var packageIndexUri = "https://unit.test/v3-flatcontainer/cuemon.aspnetcore.razor.taghelpers/index.json";
+        using var client = new HttpClient(new StaticJsonHandler(new Dictionary<string, string>
+        {
+            [serviceIndexUri.AbsoluteUri] = """
+            {
+              "resources": [
+                {
+                  "@id": "https://unit.test/v3-flatcontainer/",
+                  "@type": "PackageBaseAddress/3.0.0"
+                }
+              ]
+            }
+            """,
+            [packageIndexUri] = """
+            {
+              "versions": [
+                "99.0.0-preview.1",
+                "6.1.0",
+                "42.3.7",
+                "42.3.7-rc.1"
+              ]
+            }
+            """,
+        }));
+
+        var resolved = await NuGetVersionResolver.ResolveLatestStableAsync(
+            SegregateAssetsProgram.CuemonPackageId,
+            client,
+            serviceIndexUri);
+        Assert("nuget: latest stable selected instead of stale or prerelease", resolved.Version == "42.3.7");
+        Assert("nuget: stable policy reported", resolved.Policy == NuGetVersionResolver.LatestStablePolicy);
+        Assert("nuget: package index source reported", resolved.Source == packageIndexUri);
+
+        var dir = NewProject(root, "nuget-plan", webApp: true, wwwroot: true,
+            extraCsproj: $"<ItemGroup><PackageReference Include=\"{SegregateAssetsProgram.CuemonPackageId}\" /></ItemGroup>");
+        File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), $"""
+        <Project>
+          <PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>
+          <ItemGroup><PackageVersion Include="{SegregateAssetsProgram.CuemonPackageId}" Version="6.1.0" /></ItemGroup>
+        </Project>
+        """);
+        var inspection = Commands.Inspect(dir, null);
+        var decisions = Commands.BuildPlan(inspection, new Options(), resolved);
+        var planJson = JsonSerializer.Serialize(decisions, SegregateAssetsProgram.JsonOut);
+        Assert("nuget: plan includes resolved package-version step", planJson.Contains("nuget-package-version", StringComparison.Ordinal));
+        Assert("nuget: plan emits latest stable version", planJson.Contains("42.3.7", StringComparison.Ordinal));
+        Assert("nuget: plan preserves Central Package Management", planJson.Contains("Central Package Management", StringComparison.Ordinal));
+    }
+
     private static void TestSimpleWebAppClassification(string root)
     {
         var dir = NewProject(root, "simple", webApp: true, wwwroot: true);
@@ -1294,7 +1551,7 @@ internal static class SelfTest
     private static void TestCuemonAndCompetingAbstractionDetection(string root)
     {
         var dir = NewProject(root, "cuemon", webApp: true, wwwroot: true,
-            extraCsproj: "<ItemGroup><PackageReference Include=\"Cuemon.AspNetCore.Razor.TagHelpers\" Version=\"10.6.0\" /></ItemGroup>");
+            extraCsproj: "<ItemGroup><PackageReference Include=\"Cuemon.AspNetCore.Razor.TagHelpers\" Version=\"1.0.0\" /></ItemGroup>");
         var views = Path.Combine(dir, "Views", "Shared");
         Directory.CreateDirectory(views);
         File.WriteAllText(Path.Combine(dir, "Program.cs"), """
@@ -1355,7 +1612,7 @@ internal static class SelfTest
         File.WriteAllText(Path.Combine(dir, "Directory.Packages.props"), """
         <Project>
           <ItemGroup>
-            <PackageVersion Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="10.6.0" />
+            <PackageVersion Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="1.0.0" />
           </ItemGroup>
         </Project>
         """);
@@ -1645,5 +1902,23 @@ internal static class SelfTest
     {
         if (condition) _passed++;
         else _failures.Add(name);
+    }
+
+    private sealed class StaticJsonHandler(IReadOnlyDictionary<string, string> responses) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not null && responses.TryGetValue(request.RequestUri.AbsoluteUri, out var json))
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json"),
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        }
     }
 }

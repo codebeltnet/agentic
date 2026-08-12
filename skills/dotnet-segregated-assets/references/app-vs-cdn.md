@@ -46,6 +46,12 @@ Existing framework and project abstractions are preferred over skill-invented ab
 
 The runner reports package/project references, namespace imports, options types, `_ViewImports.cshtml` registrations, actual Cuemon elements, custom option types, URL calls, Razor injections, legacy attribute syntax, and whether Cuemon and a competing abstraction coexist. The runner does not rewrite Razor or C#; the agent performs the semantic migration.
 
+## NuGet package version policy
+
+An existing `Cuemon.AspNetCore.Razor.TagHelpers` package reference is a live dependency, so its migration version comes from NuGet.org at plan time rather than from a repository example or previously observed value. The runner discovers `PackageBaseAddress/3.0.0` through `https://api.nuget.org/v3/index.json`, reads the package version index once, excludes prereleases, selects the highest stable semantic version, and records the exact version and source under `resolvedNuGetPackages` and the `nuget-package-version` plan decision.
+
+Preserve the repository's package-version owner. When Central Package Management is active, update the existing `PackageVersion` in `Directory.Packages.props` and keep the project `PackageReference` versionless. Otherwise, update the existing `PackageReference`. A project-reference-only Cuemon setup has no NuGet version to resolve. If NuGet resolution fails or returns no stable version, stop without proposing a package edit; do not fall back to a literal from a template, fixture, example, or memory. The later restore/publish verification remains responsible for proving that the current package is compatible with the selected project.
+
 ## Configuration declares location
 
 Razor declares ownership; configuration declares location; `web-cdn-origin` declares delivery of static content only:

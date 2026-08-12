@@ -3,7 +3,7 @@ name: dotnet-segregated-assets
 description: >
   Migrate or configure an ASP.NET Core web application so developers keep authoring static files in the conventional wwwroot while deployed static content is served by Codebelt Static Content Provider (codebeltnet/web-cdn-origin:2.0.0), a separate asset host rather than the web app. Use when asked to segregate static assets, move wwwroot off the web app, stop shipping wwwroot with the app, or reconcile Cuemon App/CDN TagHelpers with a segregated topology. Reuse existing Cuemon or project abstractions, distinguish App assets from shared CDN assets, preserve Static Web Assets, and verify publish/local invariants deterministically. Do NOT use to build a general-purpose CDN or migrate non-ASP.NET static sites.
 compatibility: >
-  Requires the .NET SDK 10+ and PowerShell 7+. Docker is optional (only for the local origin).
+  Requires the .NET SDK 10+ and PowerShell 7+. NuGet.org access is required when plan resolves an existing Cuemon package reference. Docker is optional (only for the local origin).
 ---
 
 # .NET Segregated Static Assets
@@ -26,7 +26,7 @@ The bundled .NET file-based program `scripts/segregate-assets.cs` is the determi
 dotnet run --file "<skill-root>/scripts/segregate-assets.cs" -- <command> [options]
 ```
 
-Use `inspect` before changing anything, `plan` for a read-only ordered decision list, `verify` to publish into an isolated temporary directory and check local topology, and `--self-test` for the hermetic runner tests. Add `--json` when consuming results mechanically.
+Use `inspect` before changing anything, `plan` for a read-only ordered decision list, `verify` to publish into an isolated temporary directory and check local topology, and `--self-test` for the hermetic runner tests. When the selected project has an actual `Cuemon.AspNetCore.Razor.TagHelpers` package reference, `plan` discovers NuGet's package-content endpoint through the V3 service index, selects the highest stable version, and emits it in `resolvedNuGetPackages` plus the `nuget-package-version` decision. Prereleases are excluded. If NuGet cannot be queried, planning fails instead of copying a version from repository fixtures, examples, templates, or memory. Add `--json` when consuming results mechanically.
 
 `inspect` reports candidate projects, risk signals, existing segregation, and asset-abstraction evidence including:
 
@@ -47,12 +47,13 @@ Use these facts to decide what the agent should edit. Do not turn the runner int
 - Preserve ordinary Development. Segregated Development is opt-in through `http-segregated-assets`.
 - Verification is deterministic and re-running the skill is idempotent. Never claim the publish invariant from an MSBuild declaration alone; run `verify --run-publish`.
 - Do not add Cuemon merely to implement this skill when the application otherwise does not use it.
+- When an existing NuGet package must be updated for the migration, use the exact latest-stable version emitted by the current `plan` run. Preserve Central Package Management by updating its existing `PackageVersion`; otherwise update the existing `PackageReference`. Never introduce an inline version beside CPM or fall back to a stale literal when NuGet resolution fails.
 
 ## Decision hierarchy for asset URL abstractions
 
 Existing framework and project abstractions are preferred over skill-invented abstractions. Resolve the following order after `inspect`:
 
-1. **Cuemon is already available.** Reuse `Cuemon.AspNetCore.Razor.TagHelpers`, `AppTagHelperOptions`, and `CdnTagHelperOptions`. Do not create `AppAssetOptions`, `SegregatedAssetsOptions`, another `GetAssetUrl()` abstraction, or a second configuration hierarchy. If a previous migration created a custom abstraction, migrate it away as described below.
+1. **Cuemon is already available.** Reuse `Cuemon.AspNetCore.Razor.TagHelpers`, `AppTagHelperOptions`, and `CdnTagHelperOptions`. For an actual package reference, take its version only from the current runner plan's NuGet-backed `resolvedNuGetPackages` result; a project-reference-only setup needs no NuGet version. Do not create `AppAssetOptions`, `SegregatedAssetsOptions`, another `GetAssetUrl()` abstraction, or a second configuration hierarchy. If a previous migration created a custom abstraction, migrate it away as described below.
 2. **A suitable non-Cuemon abstraction exists.** Reuse it. Do not add Cuemon solely because the skill knows about it.
 3. **No suitable abstraction exists.** Introduce only the smallest app-owned configuration mechanism needed by the existing application, and only after confirming that no framework/project abstraction is available.
 
@@ -141,10 +142,11 @@ Do not override the base image's `/cdnroot`, port, runtime user (`65532`), or wo
 
 1. Run `inspect --repo-root <root> --json` and read `FORMS.md` plus the relevant references. Resolve ambiguous projects and the required CDN-equivalent question.
 2. Stop for `RiskyGeneratedAssets` unless a complete generated-output design and runtime URL behavior can be established. Never bypass the guardrail to make the simple template fit.
-3. Resolve the abstraction hierarchy and classify App versus CDN references. Use the agent to edit source/configuration; the runner remains non-mutating.
-4. Apply targeted publish metadata, the opt-in local profile, the local read-only origin(s), production asset image, and documentation idempotently.
-5. Run `verify --run-publish --check-local --json` against the selected project. It must prove application-owned `wwwroot` files are absent from the web publish artifact while permitted `_content`/`_framework` assets remain and local origins are scheme-safe/hardened.
-6. Re-run `inspect`/`plan` to confirm no duplicate items, profiles, services, Dockerfiles, ports, or competing asset configuration were introduced.
+3. Run `plan --repo-root <root> --project <project> --json`, adding `--cdn-equivalent` when selected. For an existing Cuemon package reference, require the NuGet-backed latest-stable result and use its exact version; stop on dependency-resolution failure.
+4. Resolve the abstraction hierarchy and classify App versus CDN references. Use the agent to edit source/configuration; the runner remains non-mutating.
+5. Apply targeted publish metadata, the opt-in local profile, the local read-only origin(s), production asset image, and documentation idempotently.
+6. Run `verify --run-publish --check-local --json` against the selected project. It must prove application-owned `wwwroot` files are absent from the web publish artifact while permitted `_content`/`_framework` assets remain and local origins are scheme-safe/hardened.
+7. Re-run `inspect`/`plan` to confirm no duplicate items, profiles, services, Dockerfiles, ports, competing asset configuration, or stale package versions were introduced.
 
 ## Boundaries
 
@@ -152,6 +154,7 @@ Do not override the base image's `/cdnroot`, port, runtime user (`65532`), or wo
 - Preserve the framework, RCL, generated, scoped-CSS, component-JavaScript, and frontend Static Web Assets pipeline.
 - Keep App and shared CDN ownership explicit; never duplicate shared content into an application's `wwwroot`.
 - Reuse existing Cuemon or project abstractions, and add no dependency solely for this migration.
+- Resolve versions for existing package references from NuGet.org during the current plan, exclude prereleases, preserve the repository's package-management owner, and fail closed rather than guessing.
 - Keep sidecar startup explicit, verification output isolated, and runner behavior deterministic and non-mutating.
 - Escalate generated-static-assets scenarios when a complete external artifact and runtime URL design cannot be proven.
 

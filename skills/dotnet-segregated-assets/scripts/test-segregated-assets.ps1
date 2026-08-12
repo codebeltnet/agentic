@@ -66,7 +66,7 @@ try {
     Set-Content -LiteralPath (Join-Path $cuemonDir 'Cuemon.csproj') -Encoding utf8 -Value @'
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
-  <ItemGroup><PackageReference Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="10.6.0" /></ItemGroup>
+  <ItemGroup><PackageReference Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="1.0.0" /></ItemGroup>
 </Project>
 '@
     Set-Content -LiteralPath (Join-Path $cuemonDir 'Program.cs') -Encoding utf8 -Value @'

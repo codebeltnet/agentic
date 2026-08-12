@@ -50,7 +50,10 @@ $contracts = @(
     'ICacheBusting',
     'CacheBustingTagHelper',
     'AddCacheBusting',
-    'runner never edits'
+    'runner never edits',
+    'NuGet.org',
+    'resolvedNuGetPackages',
+    'latest-stable'
 )
 foreach ($needle in $contracts) {
     if (-not $skill.Contains($needle, [System.StringComparison]::Ordinal)) {
@@ -60,6 +63,23 @@ foreach ($needle in $contracts) {
 
 $productionImage = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'references/production-image.md'))
 $appVsCdn = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'references/app-vs-cdn.md'))
+$runner = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'scripts/segregate-assets.cs'))
+foreach ($needle in @(
+    'https://api.nuget.org/v3/index.json',
+    'PackageBaseAddress/3.0.0',
+    'latest-stable',
+    'DependencyResolutionFailed',
+    'nuget-package-version'
+)) {
+    if (-not $runner.Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "segregate-assets.cs is missing deterministic NuGet contract: $needle"
+    }
+}
+foreach ($needle in @('resolvedNuGetPackages', 'Directory.Packages.props', 'prerelease', 'stop without proposing a package edit')) {
+    if (-not $appVsCdn.Contains($needle, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "references/app-vs-cdn.md is missing package-version guidance: $needle"
+    }
+}
 foreach ($staleSyntax in @('app-href', 'cdn-src', 'app-src', 'cdn-href')) {
     if ($appVsCdn.Contains($staleSyntax, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "references/app-vs-cdn.md contains stale or unverified Cuemon syntax: $staleSyntax"
@@ -71,7 +91,7 @@ $cuemonEval = @($evals.evals | Where-Object { $_.id -eq 3 })[0]
 if ($null -eq $cuemonEval) {
     throw 'evals/evals.json must retain the Cuemon migration eval with id 3.'
 }
-foreach ($expected in @('app-link', 'app-script', 'app-image', 'cdn-link', 'cdn-script', 'cdn-image', 'AppAssetOptions')) {
+foreach ($expected in @('app-link', 'app-script', 'app-image', 'cdn-link', 'cdn-script', 'cdn-image', 'AppAssetOptions', 'latest stable', 'NuGet.org', 'PackageVersion')) {
     if (-not ($cuemonEval.expected_output.Contains($expected) -or (@($cuemonEval.expectations) -join "`n").Contains($expected))) {
         throw "The Cuemon eval is missing the expected contract: $expected"
     }
@@ -85,6 +105,7 @@ foreach ($negative in @(
     'does not alter the normal Development profile merely to support segregation',
     'does not add Cuemon to a project that otherwise does not use Cuemon',
     'does not add a Cuemon cache-busting package or registration merely to implement segregation',
+    'does not reuse the obsolete 6.1.0 version or fall back to a version from templates, fixtures, examples, or memory when NuGet resolution fails',
     'does not make the deterministic runner rewrite Razor source',
     'does not introduce a second asset configuration hierarchy alongside existing AppTagHelperOptions/CdnTagHelperOptions'
 )) {
@@ -97,6 +118,14 @@ foreach ($staleSyntax in @('app-href', 'cdn-src', 'app-src', 'cdn-href')) {
     if ($cuemonFixtureLayout.Contains($staleSyntax, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The Cuemon eval fixture contains stale or unverified syntax: $staleSyntax"
     }
+}
+$cuemonFixturePackages = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'evals/files/cuemon-app/Directory.Packages.props'))
+$cuemonFixtureProject = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'evals/files/cuemon-app/Tolk.Web.csproj'))
+if (-not $cuemonFixturePackages.Contains('<PackageVersion Include="Cuemon.AspNetCore.Razor.TagHelpers" Version="6.1.0" />', [System.StringComparison]::Ordinal)) {
+    throw 'The Cuemon eval must retain the stale Central Package Management version that reproduces the regression.'
+}
+if (-not $cuemonFixtureProject.Contains('<PackageReference Include="Cuemon.AspNetCore.Razor.TagHelpers" />', [System.StringComparison]::Ordinal)) {
+    throw 'The Cuemon eval project must keep its centrally managed PackageReference versionless.'
 }
 
 $dockerfileContracts = @('<something>.Dockerfile', 'PascalCase', 'Assets.Dockerfile', '--file')
