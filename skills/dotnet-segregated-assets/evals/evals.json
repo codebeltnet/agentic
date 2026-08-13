@@ -347,6 +347,52 @@
         "evals/files/conventional-mvc/Properties/launchSettings.json",
         "evals/files/conventional-mvc/wwwroot/css/site.css"
       ]
+    },
+    {
+      "id": 15,
+      "prompt": "Segregate the static assets for Fabrikam.WebApp. The solution is Fabrikam.slnx, the web project lives under src/Fabrikam.WebApp, and its ordinary Project launch profile serves https://localhost:51641;http://localhost:51642. I want to keep pressing F5 in Visual Studio.",
+      "expected_output": "The skill writes Dockerfile, LocalDevelopment.Dockerfile, and Assets.Dockerfile into src/Fabrikam.WebApp beside the .csproj and the wwwroot they relate to, and leaves the repository root free of any Dockerfile. It writes compose.assets.yml, .dockerignore, docker-compose.dcproj, and launchSettings.json at the repository root. Every one of these files is produced from the corresponding literal template under assets/ with placeholders substituted, not reconstructed from memory. Both application Dockerfiles are artifact-first: Dockerfile pins the newest compatible shell-less dhi.io/aspnetcore Alpine runtime and LocalDevelopment.Dockerfile the matching dhi.io/aspnetcore:10-alpine3.23-dev image, each consisting of FROM, WORKDIR, COPY --chown=65532:65532 artifacts/publish/ ., and ENTRYPOINT. Neither declares an SDK stage, runs dotnet restore/build/publish, creates a user with RUN adduser, or uses an mcr.microsoft.com runtime tag. The web project gains LocalPublishDirectory, DockerfileContext, DockerComposeProjectPath, and DockerDefaultTargetOS; a guarded non-CI, non-design-time post-build target publishes into artifacts/publish; artifacts/ is added to .gitignore but deliberately not to .dockerignore. compose.assets.yml declares services web-app and app-assets with different build contexts — repository root with dockerfile src/Fabrikam.WebApp/LocalDevelopment.Dockerfile for the web service, ./src/Fabrikam.WebApp with dockerfile Assets.Dockerfile for the asset service — publishes the web service on the ordinary profile's HTTP port 51642 rather than an invented 5000, publishes the asset origin on 8080, hardens app-assets with read_only, cap_drop ALL, and no-new-privileges, sets com.microsoft.visual-studio.project-name to an empty string on it, omits the obsolete top-level version key, and adds no custom networks block. The root Fabrikam.WebApp.Assets profile uses commandName DockerCompose with composeLaunchUrl http://localhost:51642, starts web-app with debugging and app-assets without debugging, and the ordinary Fabrikam.WebApp Project profile is left untouched. Because the repository CI pipeline has no producer for artifacts/publish, the skill extends .github/workflows/ci-pipeline.yml with a publish job and a docker-build job that builds both Dockerfile and Assets.Dockerfile from the same commit. Cuemon AppTagHelperOptions is bound from SegregatedAssets:App with BaseUrlMode Automatic, an empty BaseUrl, and Scheme Https in appsettings.json, and the Compose environment supplies SegregatedAssets__App__BaseUrl localhost:8080 with Scheme Http. Razor moves to app-link and app-script helpers. verify --run-publish --check-local is run and reports the artifact-first topology as satisfied.",
+      "expectations": [
+        "Writes Dockerfile, LocalDevelopment.Dockerfile, and Assets.Dockerfile into src/Fabrikam.WebApp beside the .csproj",
+        "Leaves the repository root free of Dockerfile, LocalDevelopment.Dockerfile, and Assets.Dockerfile",
+        "Places compose.assets.yml, .dockerignore, docker-compose.dcproj, and launchSettings.json at the repository root",
+        "Produces each generated file from the corresponding literal template under assets/ with placeholders substituted",
+        "Uses artifact-first application Dockerfiles that only FROM, WORKDIR, COPY artifacts/publish/, and ENTRYPOINT",
+        "Pins the shell-less dhi.io/aspnetcore Alpine runtime for production and the matching dhi.io/aspnetcore:10-alpine3.23-dev runtime for local development",
+        "Adds LocalPublishDirectory and DockerfileContext to the web csproj plus a guarded non-CI, non-design-time post-build publish target",
+        "Adds artifacts/ to .gitignore while keeping it out of .dockerignore so the image can copy artifacts/publish/",
+        "Gives the web service the repository-root build context and the asset service the project-directory build context",
+        "Publishes the Compose web service on the ordinary Project profile's HTTP port 51642",
+        "Publishes the local asset origin on 8080 and hardens it with read_only, cap_drop ALL, and no-new-privileges",
+        "Sets com.microsoft.visual-studio.project-name to an empty string on the app-assets service",
+        "Omits the obsolete top-level Compose version key and adds no custom networks block",
+        "Creates the root Fabrikam.WebApp.Assets DockerCompose profile with composeLaunchUrl http://localhost:51642 and leaves the ordinary Project profile untouched",
+        "Registers a Microsoft.Docker.Sdk docker-compose.dcproj with DockerComposeBaseFilePath compose.assets and associates the web project through DockerComposeProjectPath",
+        "Extends the existing CI pipeline with a publish job producing artifacts/publish and a docker-build job that builds both Dockerfile and Assets.Dockerfile from the same commit",
+        "Binds Cuemon AppTagHelperOptions from a single configuration section reused by appsettings.json, the Compose environment, and the documentation",
+        "Runs verify --run-publish --check-local and reports the artifact-first topology result",
+        "NEGATIVE: does not place any Dockerfile at the repository root",
+        "NEGATIVE: does not emit a multi-stage SDK build that compiles the application inside Dockerfile or LocalDevelopment.Dockerfile",
+        "NEGATIVE: does not use mcr.microsoft.com/dotnet/sdk or mcr.microsoft.com/dotnet/aspnetcore images for this topology",
+        "NEGATIVE: does not create the runtime user with RUN addgroup or RUN adduser",
+        "NEGATIVE: does not invent Compose host ports such as 5000 and 5001 instead of deriving 51642 from the ordinary Project profile",
+        "NEGATIVE: does not emit the obsolete top-level Compose version key or a custom networks block",
+        "NEGATIVE: does not omit .dockerignore, docker-compose.dcproj, or the root DockerCompose launchSettings.json when Visual Studio F5 is requested",
+        "NEGATIVE: does not leave the artifact-first Dockerfile without a CI job that publishes artifacts/publish",
+        "NEGATIVE: does not treat LocalPublishDirectory and the guarded publish target as optional once compose.assets.yml exists"
+      ],
+      "files": [
+        "evals/files/src-layout-webapp/Fabrikam.slnx",
+        "evals/files/src-layout-webapp/Directory.Build.targets",
+        "evals/files/src-layout-webapp/.github/workflows/ci-pipeline.yml",
+        "evals/files/src-layout-webapp/src/Fabrikam.WebApp/Fabrikam.WebApp.csproj",
+        "evals/files/src-layout-webapp/src/Fabrikam.WebApp/Program.cs",
+        "evals/files/src-layout-webapp/src/Fabrikam.WebApp/Properties/launchSettings.json",
+        "evals/files/src-layout-webapp/src/Fabrikam.WebApp/Pages/_ViewImports.cshtml",
+        "evals/files/src-layout-webapp/src/Fabrikam.WebApp/Pages/Shared/_Layout.cshtml",
+        "evals/files/src-layout-webapp/src/Fabrikam.WebApp/wwwroot/css/site.css",
+        "evals/files/src-layout-webapp/src/Fabrikam.WebApp/wwwroot/js/site.js"
+      ]
     }
   ]
 }

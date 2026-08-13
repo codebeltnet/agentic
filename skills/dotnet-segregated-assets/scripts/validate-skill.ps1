@@ -11,7 +11,10 @@ $required = @(
     'SKILL.md', 'FORMS.md', 'evals/evals.json',
     'scripts/segregate-assets.cs', 'scripts/test-segregated-assets.ps1', 'scripts/validate-skill.ps1',
     'references/app-vs-cdn.md', 'references/local-development.md',
-    'references/production-image.md', 'references/static-web-assets-guardrail.md'
+    'references/production-image.md', 'references/static-web-assets-guardrail.md',
+    'assets/Dockerfile', 'assets/LocalDevelopment.Dockerfile', 'assets/Assets.Dockerfile',
+    'assets/compose.assets.yml', 'assets/.dockerignore', 'assets/docker-compose.dcproj',
+    'assets/launchSettings.json', 'assets/LocalPublishTarget.targets', 'assets/ci-artifact-jobs.yml'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $skillRoot $relative) -PathType Leaf)) {
@@ -201,6 +204,96 @@ foreach ($negative in @(
     }
 }
 
+# The artifact-first templates are the fix for agents reconstructing Dockerfiles from memory.
+# Keep them literal, artifact-first, and free of the SDK multi-stage pattern they replace.
+$assetRoot = Join-Path $skillRoot 'assets'
+foreach ($applicationDockerfile in @('Dockerfile', 'LocalDevelopment.Dockerfile')) {
+    $text = [System.IO.File]::ReadAllText((Join-Path $assetRoot $applicationDockerfile))
+    if (-not $text.Contains('COPY --chown=65532:65532 artifacts/publish/ .', [System.StringComparison]::Ordinal)) {
+        throw "assets/$applicationDockerfile must package the published artifact with COPY --chown=65532:65532 artifacts/publish/ ."
+    }
+    if (-not $text.Contains('dhi.io/aspnetcore:', [System.StringComparison]::Ordinal)) {
+        throw "assets/$applicationDockerfile must use the shell-less dhi.io/aspnetcore runtime family."
+    }
+    foreach ($forbidden in @('dotnet/sdk', 'dotnet publish', 'dotnet build', 'dotnet restore', 'adduser', 'addgroup', 'mcr.microsoft.com')) {
+        if ($text.Contains($forbidden, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "assets/$applicationDockerfile must stay artifact-first but contains: $forbidden"
+        }
+    }
+}
+$assetsDockerfile = [System.IO.File]::ReadAllText((Join-Path $assetRoot 'Assets.Dockerfile'))
+if (-not $assetsDockerfile.Contains('FROM codebeltnet/web-cdn-origin:2.0.0', [System.StringComparison]::Ordinal)) {
+    throw 'assets/Assets.Dockerfile must derive from codebeltnet/web-cdn-origin:2.0.0.'
+}
+$assetCompose = [System.IO.File]::ReadAllText((Join-Path $assetRoot 'compose.assets.yml'))
+foreach ($needle in @('web-app:', 'app-assets:', 'com.microsoft.visual-studio.project-name: ""', 'read_only: true', 'no-new-privileges:true', 'LocalDevelopment.Dockerfile', 'Assets.Dockerfile')) {
+    if (-not $assetCompose.Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "assets/compose.assets.yml is missing required Compose contract: $needle"
+    }
+}
+foreach ($forbidden in @('version:', 'networks:')) {
+    if ($assetCompose.Contains($forbidden, [System.StringComparison]::Ordinal)) {
+        throw "assets/compose.assets.yml must not declare: $forbidden"
+    }
+}
+$assetDockerIgnore = [System.IO.File]::ReadAllText((Join-Path $assetRoot '.dockerignore'))
+if ($assetDockerIgnore -match '(?m)^\s*(\*\*/)?artifacts') {
+    throw 'assets/.dockerignore must not exclude artifacts/ — both application Dockerfiles copy artifacts/publish/.'
+}
+foreach ($needle in @('Microsoft.Docker.Sdk', '<DockerComposeBaseFilePath>compose.assets<', '<DockerDevelopmentMode>Regular<')) {
+    if (-not ([System.IO.File]::ReadAllText((Join-Path $assetRoot 'docker-compose.dcproj'))).Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "assets/docker-compose.dcproj is missing required contract: $needle"
+    }
+}
+foreach ($needle in @('"commandName": "DockerCompose"', '"web-app": "StartDebugging"', '"app-assets": "StartWithoutDebugging"')) {
+    if (-not ([System.IO.File]::ReadAllText((Join-Path $assetRoot 'launchSettings.json'))).Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "assets/launchSettings.json is missing required contract: $needle"
+    }
+}
+$assetCiJobs = [System.IO.File]::ReadAllText((Join-Path $assetRoot 'ci-artifact-jobs.yml'))
+foreach ($needle in @('--output artifacts/publish', 'Assets.Dockerfile', 'docker/build-push-action')) {
+    if (-not $assetCiJobs.Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "assets/ci-artifact-jobs.yml is missing required contract: $needle"
+    }
+}
+$assetPublishTarget = [System.IO.File]::ReadAllText((Join-Path $assetRoot 'LocalPublishTarget.targets'))
+foreach ($needle in @('$(LocalPublishDirectory)', "'`$(CI)' != 'true'", "'`$(DesignTimeBuild)' != 'true'")) {
+    if (-not $assetPublishTarget.Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "assets/LocalPublishTarget.targets is missing required contract: $needle"
+    }
+}
+
+# File placement and the artifact-first contract are the regression this skill version fixes.
+foreach ($needle in @('beside the web `.csproj`', 'Never place a Dockerfile at the repository root', 'assets/', 'artifact-first')) {
+    if (-not ($skill.Contains($needle, [System.StringComparison]::Ordinal) -or $localDevelopment.Contains($needle, [System.StringComparison]::Ordinal))) {
+        throw "The file-placement contract is missing from SKILL.md and references/local-development.md: $needle"
+    }
+}
+foreach ($needle in @('ArtifactFirstValidator', 'UnsafeOriginDetector', 'NoObsoleteVersionKey', 'DockerfilesColocated', 'NoSourceCompilation', 'CiPublishesArtifact')) {
+    if (-not $runner.Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "segregate-assets.cs is missing the artifact-first verification contract: $needle"
+    }
+}
+$placementEval = @($evals.evals | Where-Object { $_.id -eq 15 })[0]
+if ($null -eq $placementEval) {
+    throw 'evals/evals.json must include the Dockerfile-placement and artifact-first regression with id 15.'
+}
+foreach ($negative in @(
+    'does not place any Dockerfile at the repository root',
+    'does not emit a multi-stage SDK build that compiles the application inside Dockerfile or LocalDevelopment.Dockerfile',
+    'does not use mcr.microsoft.com/dotnet/sdk or mcr.microsoft.com/dotnet/aspnetcore images for this topology',
+    'does not create the runtime user with RUN addgroup or RUN adduser',
+    'does not invent Compose host ports such as 5000 and 5001 instead of deriving 51642 from the ordinary Project profile',
+    'does not emit the obsolete top-level Compose version key or a custom networks block',
+    'does not omit .dockerignore, docker-compose.dcproj, or the root DockerCompose launchSettings.json when Visual Studio F5 is requested',
+    'does not leave the artifact-first Dockerfile without a CI job that publishes artifacts/publish',
+    'does not treat LocalPublishDirectory and the guarded publish target as optional once compose.assets.yml exists'
+)) {
+    if (-not ((@($placementEval.expectations) -join "`n").Contains("NEGATIVE: $negative", [System.StringComparison]::Ordinal))) {
+        throw "The placement/artifact-first eval is missing required negative expectation: $negative"
+    }
+}
+
 $forms = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'FORMS.md'))
 if (-not $forms.Contains('### cdn_equivalent', [System.StringComparison]::Ordinal)) {
     throw 'FORMS.md must define the cdn_equivalent field (the required CDN/shared-asset question).'
@@ -210,6 +303,9 @@ if (-not $forms.Contains('plain-text', [System.StringComparison]::Ordinal)) {
 }
 if (-not $forms.Contains('### visual_studio_compose', [System.StringComparison]::Ordinal)) {
     throw 'FORMS.md must define the conditional Visual Studio Compose orchestration field.'
+}
+if (-not $forms.Contains('### web_host_port', [System.StringComparison]::Ordinal)) {
+    throw 'FORMS.md must define web_host_port so the Compose web service reuses the ordinary profile HTTP port.'
 }
 
 & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-segregated-assets.ps1')
