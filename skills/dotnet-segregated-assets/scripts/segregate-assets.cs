@@ -36,7 +36,7 @@ internal static class SegregateAssetsProgram
     internal const int OriginContainerPort = 8080;
     internal const string OriginContentRoot = "/cdnroot";
     internal const string OriginUser = "65532";
-    internal const string SegregatedProfileName = "http-segregated-assets";
+    internal const string AssetsProfileSuffix = ".Assets";
     internal const string CuemonPackageId = "Cuemon.AspNetCore.Razor.TagHelpers";
     internal const string NuGetServiceIndex = "https://api.nuget.org/v3/index.json";
 
@@ -685,6 +685,94 @@ internal static class StaticWebAssetRiskDetector
     }
 }
 
+internal static class AssetSourceVersioningDetector
+{
+    public static IReadOnlyList<RiskSignal> Detect(string projectPath, string repoRoot)
+    {
+        var assetRoot = Path.Combine(Path.GetDirectoryName(projectPath)!, "wwwroot");
+        if (!Directory.Exists(assetRoot) || !Directory.EnumerateFiles(assetRoot, "*", SearchOption.AllDirectories).Any())
+            return Array.Empty<RiskSignal>();
+
+        var (rootExitCode, gitRootOutput) = RunGit(repoRoot, "rev-parse", "--show-toplevel");
+        if (rootExitCode != 0) return Array.Empty<RiskSignal>();
+
+        var gitRoot = gitRootOutput.Trim();
+        if (string.IsNullOrWhiteSpace(gitRoot)) return Array.Empty<RiskSignal>();
+        var relativeAssetRoot = Path.GetRelativePath(gitRoot, assetRoot).Replace('\\', '/');
+        if (relativeAssetRoot.StartsWith("../", StringComparison.Ordinal)) return Array.Empty<RiskSignal>();
+
+        var (ignoreExitCode, _) = RunGit(gitRoot, "check-ignore", "--quiet", "--", relativeAssetRoot);
+        var (_, trackedOutput) = RunGit(gitRoot, "ls-files", "--", relativeAssetRoot);
+        var hasTrackedAssets = !string.IsNullOrWhiteSpace(trackedOutput);
+        if (hasTrackedAssets) return Array.Empty<RiskSignal>();
+
+        var reason = ignoreExitCode == 0
+            ? $"Asset source '{relativeAssetRoot}' is ignored by Git"
+            : $"Asset source '{relativeAssetRoot}' has no Git-tracked files";
+        return new[]
+        {
+            new RiskSignal(
+                "ASSET_SOURCE_NOT_VERSIONED",
+                $"{reason}. A clean checkout cannot reproduce Assets.Dockerfile; track the source, use Git LFS, or materialize it from a pinned immutable artifact before building the asset image."),
+        };
+    }
+
+    private static (int ExitCode, string Output) RunGit(string workingDirectory, params string[] arguments)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
+            using var process = Process.Start(startInfo);
+            if (process is null) return (-1, string.Empty);
+            var standardOutput = process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return (process.ExitCode, standardOutput);
+        }
+        catch
+        {
+            return (-1, string.Empty);
+        }
+    }
+}
+
+internal static class AssetImageCiDetector
+{
+    public static IReadOnlyList<RiskSignal> Detect(string repoRoot)
+    {
+        var hasAssetDockerfile = IdempotencyDetector.EnumerateDockerfiles(repoRoot)
+            .Any(path => Path.GetFileName(path).Equals(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase));
+        if (!hasAssetDockerfile) return Array.Empty<RiskSignal>();
+
+        var workflowRoot = Path.Combine(repoRoot, ".github", "workflows");
+        if (!Directory.Exists(workflowRoot)) return Array.Empty<RiskSignal>();
+
+        var workflows = Directory.EnumerateFiles(workflowRoot, "*.y*ml", SearchOption.TopDirectoryOnly)
+            .Select(File.ReadAllText)
+            .ToList();
+        var buildsContainerImages = workflows.Any(text =>
+            text.Contains("docker/build-push-action", StringComparison.OrdinalIgnoreCase) ||
+            Regex.IsMatch(text, "\\bdocker\\s+build\\b", RegexOptions.IgnoreCase));
+        var buildsAssetImage = workflows.Any(text =>
+            text.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase));
+        if (!buildsContainerImages || buildsAssetImage) return Array.Empty<RiskSignal>();
+
+        return new[]
+        {
+            new RiskSignal(
+                "ASSET_IMAGE_NOT_VALIDATED_IN_CI",
+                $"The repository builds container images in GitHub Actions but no workflow references {SegregateAssetsProgram.DerivedDockerfileName}. Build or validate the asset image from the same commit as the web image so a clean hosted run proves the deployment pair."),
+        };
+    }
+}
+
 internal static class AssetAbstractionDetector
 {
     public static AssetAbstractionInspection Detect(string projectPath, string repoRoot)
@@ -806,9 +894,10 @@ internal static class IdempotencyDetector
 
         var projectLaunchSettings = Path.Combine(dir, "Properties", "launchSettings.json");
         var composeLaunchSettings = Path.Combine(repoRoot, "launchSettings.json");
+        var segregatedProfileName = LaunchProfileNaming.Resolve(projectPath);
         var segregatedProfile = new[] { composeLaunchSettings, projectLaunchSettings }
             .Any(path => File.Exists(path) &&
-                         SafeRead(path).Contains(SegregateAssetsProgram.SegregatedProfileName, StringComparison.OrdinalIgnoreCase));
+                         SafeRead(path).Contains(segregatedProfileName, StringComparison.OrdinalIgnoreCase));
 
         var composeService = EnumerateComposeFiles(repoRoot)
             .Select(SafeRead)
@@ -910,12 +999,42 @@ internal static class Classifier
             Ambiguous => "Multiple web projects found. Ask which web project to segregate (pass --project).",
             NoWwwroot => "No wwwroot found. Configure only the CDN/shared-asset consumption if a CDN equivalent exists; otherwise nothing to do.",
             AlreadySegregated => "Segregation is already present. Reconcile existing configuration; do not create duplicate items, profiles, services, or Dockerfiles.",
-            RiskyGeneratedAssets => "Generated/Static Web Assets detected. Preserve the generated-asset pipeline and establish an explicit generated-static-assets segregation design before proceeding.",
+            RiskyGeneratedAssets => "Generated, contributed, or unreproducible asset sources detected. Preserve the asset pipeline and establish a reproducible versioned or pinned input before proceeding.",
             Simple => existing.Any
                 ? "Simple physical wwwroot with partial existing segregation. Complete the missing pieces idempotently."
                 : "Simple physical wwwroot. Apply App-asset segregation: targeted publish exclusion, segregated launch profile, local origin, derived production image, and documentation.",
             _ => "Review findings.",
         };
+    }
+}
+
+internal static class LaunchProfileNaming
+{
+    public static string Resolve(string projectPath)
+    {
+        var projectName = Path.GetFileNameWithoutExtension(projectPath);
+        var launchSettings = Path.Combine(Path.GetDirectoryName(projectPath)!, "Properties", "launchSettings.json");
+        if (!File.Exists(launchSettings)) return projectName + SegregateAssetsProgram.AssetsProfileSuffix;
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(launchSettings));
+            if (!document.RootElement.TryGetProperty("profiles", out var profiles) || profiles.ValueKind != JsonValueKind.Object)
+                return projectName + SegregateAssetsProgram.AssetsProfileSuffix;
+
+            var projectProfiles = profiles.EnumerateObject()
+                .Where(profile => profile.Value.TryGetProperty("commandName", out var command) &&
+                                  string.Equals(command.GetString(), "Project", StringComparison.OrdinalIgnoreCase))
+                .Select(profile => profile.Name)
+                .ToList();
+            var exact = projectProfiles.FirstOrDefault(name => string.Equals(name, projectName, StringComparison.OrdinalIgnoreCase));
+            var ordinaryProfile = exact ?? (projectProfiles.Count == 1 ? projectProfiles[0] : projectName);
+            return ordinaryProfile + SegregateAssetsProgram.AssetsProfileSuffix;
+        }
+        catch
+        {
+            return projectName + SegregateAssetsProgram.AssetsProfileSuffix;
+        }
     }
 }
 
@@ -980,7 +1099,7 @@ internal static class LaunchProfileValidator
 
 internal static class ComposeValidator
 {
-    public sealed record Result(bool UsesOriginImage, bool HasAssetContent, bool UsesLocalDevelopmentImage, bool HasHttpLocalOrigin, bool HasUnsafeProtocol, bool ReadOnlyRootFs, bool NonPrivileged, bool NoDockerSocket, IReadOnlyList<string> Findings);
+    public sealed record Result(bool UsesOriginImage, bool HasAssetContent, bool UsesLocalDevelopmentImage, bool HasVisualStudioProjectOptOut, bool HasHttpLocalOrigin, bool HasUnsafeProtocol, bool ReadOnlyRootFs, bool NonPrivileged, bool NoDockerSocket, IReadOnlyList<string> Findings);
 
     // Lightweight, line-oriented validation of the local origin service posture.
     public static Result Validate(string composeText)
@@ -998,6 +1117,14 @@ internal static class ComposeValidator
 
         var usesLocalDevelopmentImage = composeText.Contains("LocalDevelopment.Dockerfile", StringComparison.OrdinalIgnoreCase);
         if (!usesLocalDevelopmentImage) findings.Add("Compose should build the web application with LocalDevelopment.Dockerfile.");
+
+        var assetService = FindAssetService(composeText);
+        var hasVisualStudioProjectOptOut = assetService is not null && Regex.IsMatch(
+            assetService,
+            "(?m)^\\s+com\\.microsoft\\.visual-studio\\.project-name:\\s*(?:\"\"|'')\\s*$",
+            RegexOptions.IgnoreCase);
+        if (!hasVisualStudioProjectOptOut)
+            findings.Add("The asset service must set com.microsoft.visual-studio.project-name: \"\" so Visual Studio does not inject the web project's debugger bootstrap into it.");
 
         var hasExplicitHttpLocalOrigin = Regex.IsMatch(composeText, "http://localhost:\\d+", RegexOptions.IgnoreCase);
         var hasHostOnlyLocalOrigin = Regex.IsMatch(composeText, "__BaseUrl\\s*:\\s*[\\\"']?localhost:\\d+/?[\\\"']?", RegexOptions.IgnoreCase);
@@ -1018,7 +1145,40 @@ internal static class ComposeValidator
         var noDockerSocket = !composeText.Contains("docker.sock", StringComparison.OrdinalIgnoreCase);
         if (!noDockerSocket) findings.Add("Do not mount the Docker socket into the origin container.");
 
-        return new Result(usesOrigin, hasAssetContent, usesLocalDevelopmentImage, hasHttpLocalOrigin, hasUnsafeProtocol, readOnlyRootFs, nonPrivileged, noDockerSocket, findings);
+        return new Result(usesOrigin, hasAssetContent, usesLocalDevelopmentImage, hasVisualStudioProjectOptOut, hasHttpLocalOrigin, hasUnsafeProtocol, readOnlyRootFs, nonPrivileged, noDockerSocket, findings);
+    }
+
+    private static string? FindAssetService(string composeText)
+    {
+        var lines = composeText.Replace("\r\n", "\n").Split('\n');
+        var services = new List<string>();
+        StringBuilder? current = null;
+        var insideServices = false;
+
+        foreach (var line in lines)
+        {
+            if (!insideServices)
+            {
+                insideServices = Regex.IsMatch(line, "^services:\\s*$", RegexOptions.IgnoreCase);
+                continue;
+            }
+
+            if (line.Length > 0 && !char.IsWhiteSpace(line[0])) break;
+            if (Regex.IsMatch(line, "^  [A-Za-z0-9_.-]+:\\s*$"))
+            {
+                if (current is not null) services.Add(current.ToString());
+                current = new StringBuilder().AppendLine(line);
+            }
+            else
+            {
+                current?.AppendLine(line);
+            }
+        }
+        if (current is not null) services.Add(current.ToString());
+
+        return services.FirstOrDefault(service =>
+            service.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase) ||
+            service.Contains(SegregateAssetsProgram.OriginImage, StringComparison.OrdinalIgnoreCase));
     }
 }
 
@@ -1097,7 +1257,12 @@ internal static class Commands
             selected = webProjects[0];
         }
 
-        var risks = selected is not null ? StaticWebAssetRiskDetector.Detect(selected.Path, repoRoot) : Array.Empty<RiskSignal>();
+        IReadOnlyList<RiskSignal> risks = selected is not null
+            ? StaticWebAssetRiskDetector.Detect(selected.Path, repoRoot)
+                .Concat(AssetSourceVersioningDetector.Detect(selected.Path, repoRoot))
+                .Concat(AssetImageCiDetector.Detect(repoRoot))
+                .ToList()
+            : Array.Empty<RiskSignal>();
         var abstractions = selected is not null ? AssetAbstractionDetector.Detect(selected.Path, repoRoot) : AssetAbstractionInspection.Empty;
         var existing = selected is not null ? IdempotencyDetector.Detect(selected.Path, repoRoot, abstractions) : new ExistingSegregation(false, false, false, false, false);
         var classification = Classifier.Classify(webProjects, selected, risks, existing);
@@ -1185,6 +1350,7 @@ internal static class Commands
 
         var projectPath = Path.GetFullPath(Path.Combine(options.RepoRoot, selected));
         var sourceWwwroot = Path.Combine(Path.GetDirectoryName(projectPath)!, "wwwroot");
+        var segregatedProfileName = LaunchProfileNaming.Resolve(projectPath);
 
         string? publishDir = options.PublishDir is not null ? Path.GetFullPath(options.PublishDir) : null;
         string? tempDir = null;
@@ -1214,7 +1380,7 @@ internal static class Commands
                 var projectLaunchSettings = Path.Combine(Path.GetDirectoryName(projectPath)!, "Properties", "launchSettings.json");
                 var launchSettings = File.Exists(rootLaunchSettings) ? rootLaunchSettings : projectLaunchSettings;
                 if (File.Exists(launchSettings))
-                    launch = LaunchProfileValidator.Validate(File.ReadAllText(launchSettings), SegregateAssetsProgram.SegregatedProfileName);
+                    launch = LaunchProfileValidator.Validate(File.ReadAllText(launchSettings), segregatedProfileName);
 
                 var composeFile = IdempotencyDetector.EnumerateComposeFiles(options.RepoRoot)
                     .FirstOrDefault(f =>
@@ -1232,9 +1398,12 @@ internal static class Commands
                           compose is not null &&
                           (launch.HasHttpLocalOrigin || compose.HasHttpLocalOrigin) &&
                           (!launch.IsDockerCompose || compose.UsesLocalDevelopmentImage) &&
+                          (!launch.IsDockerCompose || compose.HasVisualStudioProjectOptOut) &&
                           compose.UsesOriginImage && compose.HasAssetContent && !compose.HasUnsafeProtocol &&
                           compose.NonPrivileged && compose.NoDockerSocket;
-            var ok = leak.Passed && (!options.CheckLocal || localOk);
+            var sourceReproducible = !inspection.RiskSignals.Any(signal => signal.Code == "ASSET_SOURCE_NOT_VERSIONED");
+            var assetImageValidatedInCi = !inspection.RiskSignals.Any(signal => signal.Code == "ASSET_IMAGE_NOT_VALIDATED_IN_CI");
+            var ok = leak.Passed && sourceReproducible && assetImageValidatedInCi && (!options.CheckLocal || localOk);
 
             var payload = new
             {
@@ -1243,12 +1412,14 @@ internal static class Commands
                 selectedProject = selected,
                 publishInspected = publishDir,
                 publishInvariant = leak.Passed ? "application-owned wwwroot is ABSENT from the publish artifact" : "application-owned wwwroot LEAKED into the publish artifact",
+                sourceReproducible,
+                assetImageValidatedInCi,
                 leakedAppAssets = leak.LeakedAppAssets,
                 preservedSharedAssets = leak.PreservedSharedAssets,
                 launch,
                 compose,
             };
-            SegregateAssetsProgram.Emit(options, payload, () => RenderVerify(selected, publishDir!, leak, launch, compose, ok));
+            SegregateAssetsProgram.Emit(options, payload, () => RenderVerify(selected, publishDir!, leak, sourceReproducible, assetImageValidatedInCi, launch, compose, ok));
             return ok ? (int)ExitCode.Success : (int)ExitCode.VerificationFailed;
         }
         finally
@@ -1291,12 +1462,18 @@ internal static class Commands
     {
         var e = inspection.ExistingSegregation;
         string StatusFor(bool present) => present ? "already-present" : "create";
+        var projectPath = inspection.SelectedProject is null
+            ? null
+            : Path.GetFullPath(Path.Combine(inspection.RepoRoot, inspection.SelectedProject));
+        var segregatedProfileName = projectPath is null
+            ? "<ordinary-project-profile>.Assets"
+            : LaunchProfileNaming.Resolve(projectPath);
 
         if (inspection.Classification == Classifier.RiskyGeneratedAssets)
         {
             return new List<object>
             {
-                new { step = "escalate", status = "blocked", detail = "Risky Static Web Assets detected. Preserve the generated-asset pipeline and request an explicit generated-static-assets segregation design." },
+                new { step = "escalate", status = "blocked", detail = "Risky or unreproducible Static Web Assets detected. Preserve the asset pipeline and establish a reproducible versioned or pinned input before proceeding." },
             };
         }
         if (inspection.Classification is Classifier.NotAWebApp or Classifier.Ambiguous)
@@ -1349,8 +1526,8 @@ internal static class Commands
         {
             new { step = "asset-abstraction", status = abstractionStatus, detail = abstractionDetail },
             new { step = "publish-exclusion", status = StatusFor(e.PublishExclusion), detail = "Add <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> to the web project for application-owned wwwroot content while preserving generated and contributed Static Web Assets." },
-            new { step = "segregated-launch-profile", status = StatusFor(e.SegregatedLaunchProfile), detail = $"Keep the ordinary project profile unchanged and add the root '{SegregateAssetsProgram.SegregatedProfileName}' DockerCompose profile for the full segregated topology. Put the host-only App BaseUrl localhost:{options.AppPort}, BaseUrlMode=Automatic, and Scheme=Http in the Compose web service environment." },
-            new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide {SegregateAssetsProgram.ComposeFileName}: build the web service directly with LocalDevelopment.Dockerfile and build the asset service directly with {SegregateAssetsProgram.DerivedDockerfileName}. Do not add a redundant project-level segregated profile. If Visual Studio injects the web debugger bootstrap into the build-backed asset service, use docker-compose.vs.release.yml only to restore dotnet Codebelt.Cdn.Origin.dll, never to select Dockerfiles." },
+            new { step = "segregated-launch-profile", status = StatusFor(e.SegregatedLaunchProfile), detail = $"Keep the ordinary project profile unchanged and add the root '{segregatedProfileName}' DockerCompose profile for the full segregated topology. Derive the name by appending .Assets to the ordinary commandName Project profile. Put the host-only App BaseUrl localhost:{options.AppPort}, BaseUrlMode=Automatic, and Scheme=Http in the Compose web service environment." },
+            new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide {SegregateAssetsProgram.ComposeFileName}: build the web service directly with LocalDevelopment.Dockerfile and build the asset service directly with {SegregateAssetsProgram.DerivedDockerfileName}. Set com.microsoft.visual-studio.project-name: \"\" on the asset service so Visual Studio does not associate it with the web project or inject the web debugger bootstrap. Do not add a redundant project-level segregated profile or docker-compose.vs.release.yml." },
             new { step = "production-image", status = StatusFor(e.DerivedDockerfile), detail = $"Add {SegregateAssetsProgram.DerivedDockerfileName} (PascalCase <something>.Dockerfile) and select it with --file: FROM {SegregateAssetsProgram.OriginImage} + COPY --chown={SegregateAssetsProgram.OriginUser}:{SegregateAssetsProgram.OriginUser} ./wwwroot/ {SegregateAssetsProgram.OriginContentRoot}/." },
             new { step = "documentation", status = "create-or-update", detail = "Document that deployed static content is served by Codebelt Static Content Provider, and that wwwroot remains the authoring root." },
         });
@@ -1385,7 +1562,7 @@ internal static class Commands
         if (r.RiskSignals.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("Risk signals (do NOT blindly exclude):");
+            sb.AppendLine("Risk signals (do NOT blindly exclude or package):");
             foreach (var s in r.RiskSignals) sb.AppendLine($"  ! {s.Code}: {s.Detail}");
         }
         var e = r.ExistingSegregation;
@@ -1425,7 +1602,7 @@ internal static class Commands
         return sb.ToString().TrimEnd();
     }
 
-    private static string RenderVerify(string project, string publishDir, PublishLeakDetector.Result leak,
+    private static string RenderVerify(string project, string publishDir, PublishLeakDetector.Result leak, bool sourceReproducible, bool assetImageValidatedInCi,
         LaunchProfileValidator.Result? launch, ComposeValidator.Result? compose, bool ok)
     {
         var sb = new StringBuilder();
@@ -1435,6 +1612,12 @@ internal static class Commands
             ? "PASS  application-owned wwwroot is ABSENT from the publish artifact."
             : "FAIL  application-owned wwwroot LEAKED into the publish artifact:");
         foreach (var f in leak.LeakedAppAssets) sb.AppendLine($"    leaked: {f}");
+        sb.AppendLine(sourceReproducible
+            ? "PASS  asset-image source is reproducible from Git-tracked input."
+            : "FAIL  asset-image source is ignored or wholly untracked; a clean checkout cannot reproduce it.");
+        sb.AppendLine(assetImageValidatedInCi
+            ? "PASS  repository CI does not omit Assets.Dockerfile from its container-image build surface."
+            : "FAIL  repository CI builds container images but does not build or validate Assets.Dockerfile.");
         if (leak.PreservedSharedAssets.Count > 0)
             sb.AppendLine($"  preserved shared/framework assets: {leak.PreservedSharedAssets.Count} (e.g. {leak.PreservedSharedAssets[0]})");
         if (launch is not null)
@@ -1445,7 +1628,7 @@ internal static class Commands
         }
         if (compose is not null)
         {
-            sb.AppendLine($"Local origin compose: originImage={compose.UsesOriginImage} assetContent={compose.HasAssetContent} localDevelopmentImage={compose.UsesLocalDevelopmentImage} httpLocalOrigin={compose.HasHttpLocalOrigin} unsafeProtocol={compose.HasUnsafeProtocol} roRootFs={compose.ReadOnlyRootFs} nonPrivileged={compose.NonPrivileged} noDockerSocket={compose.NoDockerSocket}");
+            sb.AppendLine($"Local origin compose: originImage={compose.UsesOriginImage} assetContent={compose.HasAssetContent} localDevelopmentImage={compose.UsesLocalDevelopmentImage} vsProjectOptOut={compose.HasVisualStudioProjectOptOut} httpLocalOrigin={compose.HasHttpLocalOrigin} unsafeProtocol={compose.HasUnsafeProtocol} roRootFs={compose.ReadOnlyRootFs} nonPrivileged={compose.NonPrivileged} noDockerSocket={compose.NoDockerSocket}");
             foreach (var f in compose.Findings) sb.AppendLine($"    - {f}");
         }
         sb.AppendLine();
@@ -1481,6 +1664,7 @@ internal static class SelfTest
             TestFrontendBuildIsRisky(root);
             TestAmbiguousMultiProject(root);
             TestNoWwwroot(root);
+            TestLaunchProfileNaming(root);
             TestIdempotencyDetection(root);
             TestAlreadySegregatedClassification(root);
             TestAlreadySegregatedRiskIsRisky(root);
@@ -1738,6 +1922,18 @@ internal static class SelfTest
         Assert("no-wwwroot: classified NoWwwroot", inspection.Classification == Classifier.NoWwwroot);
     }
 
+    private static void TestLaunchProfileNaming(string root)
+    {
+        var dir = NewProject(root, "named-profile", webApp: true, wwwroot: true);
+        var properties = Path.Combine(dir, "Properties");
+        Directory.CreateDirectory(properties);
+        File.WriteAllText(Path.Combine(properties, "launchSettings.json"), """
+        { "profiles": { "Friendly.Web": { "commandName": "Project" } } }
+        """);
+        var project = Directory.GetFiles(dir, "*.csproj").Single();
+        Assert("profile-name: follows ordinary Project profile", LaunchProfileNaming.Resolve(project) == "Friendly.Web.Assets");
+    }
+
     private static void TestIdempotencyDetection(string root)
     {
         var dir = NewProject(root, "idem", webApp: true, wwwroot: true);
@@ -1751,7 +1947,7 @@ internal static class SelfTest
         </Project>
         """);
         File.WriteAllText(Path.Combine(dir, "launchSettings.json"), """
-        { "profiles": { "http-segregated-assets": { "commandName": "DockerCompose" } } }
+        { "profiles": { "idem.Assets": { "commandName": "DockerCompose" } } }
         """);
         File.WriteAllText(Path.Combine(dir, SegregateAssetsProgram.ComposeFileName),
             "services:\n  web-app:\n    build:\n      dockerfile: LocalDevelopment.Dockerfile\n  app-assets:\n    build:\n      dockerfile: Assets.Dockerfile\n");
@@ -1775,7 +1971,7 @@ internal static class SelfTest
         </Project>
         """);
         File.WriteAllText(Path.Combine(dir, "launchSettings.json"),
-            "{ \"profiles\": { \"http-segregated-assets\": { \"commandName\": \"DockerCompose\" } } }");
+            "{ \"profiles\": { \"done.Assets\": { \"commandName\": \"DockerCompose\" } } }");
         var inspection = Commands.Inspect(dir, null);
         Assert("already: classified AlreadySegregated", inspection.Classification == Classifier.AlreadySegregated);
     }
@@ -1791,7 +1987,7 @@ internal static class SelfTest
         </Project>
         """);
         File.WriteAllText(Path.Combine(dir, "launchSettings.json"),
-            "{ \"profiles\": { \"http-segregated-assets\": { \"commandName\": \"DockerCompose\" } } }");
+            "{ \"profiles\": { \"done-risky.Assets\": { \"commandName\": \"DockerCompose\" } } }");
         File.WriteAllText(Path.Combine(dir, "Index.cshtml.css"), "h1{color:red}");
 
         var inspection = Commands.Inspect(dir, null);
@@ -1802,12 +1998,12 @@ internal static class SelfTest
     private static void TestLaunchProfileValidatorSafe()
     {
         var json = """
-        { "profiles": { "http-segregated-assets": {
+        { "profiles": { "Contoso.Web.Assets": {
             "commandName": "DockerCompose",
             "composeLaunchUrl": "http://localhost:5080"
           } } }
         """;
-        var r = LaunchProfileValidator.Validate(json, "http-segregated-assets");
+        var r = LaunchProfileValidator.Validate(json, "Contoso.Web.Assets");
         Assert("launch-safe: profile exists", r.ProfileExists);
         Assert("launch-safe: docker compose", r.IsDockerCompose);
         Assert("launch-safe: http", r.IsHttp);
@@ -1818,37 +2014,37 @@ internal static class SelfTest
     private static void TestLaunchProfileValidatorRejectsHostOnlyWithoutScheme()
     {
         var json = """
-        { "profiles": { "http-segregated-assets": {
+        { "profiles": { "Contoso.Web.Assets": {
             "commandName": "Project",
             "applicationUrl": "http://localhost:5080",
             "environmentVariables": { "SegregatedAssets__App__BaseUrl": "localhost:8080" }
           } } }
         """;
-        var r = LaunchProfileValidator.Validate(json, "http-segregated-assets");
+        var r = LaunchProfileValidator.Validate(json, "Contoso.Web.Assets");
         Assert("launch-hostonly-noscheme: local origin not proven", !r.HasHttpLocalOrigin);
     }
 
     private static void TestLaunchProfileValidatorRejectsProtocolRelative()
     {
         var json = """
-        { "profiles": { "http-segregated-assets": {
+        { "profiles": { "Contoso.Web.Assets": {
             "applicationUrl": "http://localhost:5080",
             "environmentVariables": { "SegregatedAssets__App__BaseUrl": "//localhost:8080" }
           } } }
         """;
-        var r = LaunchProfileValidator.Validate(json, "http-segregated-assets");
+        var r = LaunchProfileValidator.Validate(json, "Contoso.Web.Assets");
         Assert("launch-protorel: flagged unsafe", r.HasUnsafeProtocol);
     }
 
     private static void TestLaunchProfileValidatorRejectsHttpsLocal()
     {
         var json = """
-        { "profiles": { "http-segregated-assets": {
+        { "profiles": { "Contoso.Web.Assets": {
             "applicationUrl": "https://localhost:5443",
             "environmentVariables": { "SegregatedAssets__App__BaseUrl": "https://localhost:8080" }
           } } }
         """;
-        var r = LaunchProfileValidator.Validate(json, "http-segregated-assets");
+        var r = LaunchProfileValidator.Validate(json, "Contoso.Web.Assets");
         Assert("launch-httpslocal: not http", !r.IsHttp);
         Assert("launch-httpslocal: flagged unsafe", r.HasUnsafeProtocol);
     }
@@ -1867,6 +2063,8 @@ internal static class SelfTest
             build:
               context: ./src/Web
               dockerfile: Assets.Dockerfile
+            labels:
+              com.microsoft.visual-studio.project-name: ""
             read_only: true
             cap_drop: [ALL]
             ports: ["8080:8080"]
@@ -1875,6 +2073,7 @@ internal static class SelfTest
         Assert("compose-safe: origin image", r.UsesOriginImage);
         Assert("compose-safe: asset content", r.HasAssetContent);
         Assert("compose-safe: local development image", r.UsesLocalDevelopmentImage);
+        Assert("compose-safe: Visual Studio project opt-out", r.HasVisualStudioProjectOptOut);
         Assert("compose-safe: http local origin", r.HasHttpLocalOrigin);
         Assert("compose-safe: safe protocol", !r.HasUnsafeProtocol);
         Assert("compose-safe: read-only rootfs", r.ReadOnlyRootFs);
@@ -1894,6 +2093,7 @@ internal static class SelfTest
               - /var/run/docker.sock:/var/run/docker.sock
         """;
         var r = ComposeValidator.Validate(compose);
+        Assert("compose-bad: missing Visual Studio project opt-out flagged", !r.HasVisualStudioProjectOptOut);
         Assert("compose-bad: privileged flagged", !r.NonPrivileged);
         Assert("compose-bad: docker socket flagged", !r.NoDockerSocket);
     }

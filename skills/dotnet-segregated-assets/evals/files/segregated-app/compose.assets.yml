@@ -17,6 +17,8 @@ services:
     build:
       context: .
       dockerfile: Assets.Dockerfile
+    labels:
+      com.microsoft.visual-studio.project-name: ""
     read_only: true
     cap_drop:
       - ALL

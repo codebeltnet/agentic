@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "http-segregated-assets": {
+    "Risky.Web.Assets": {
       "commandName": "Project"
     }
   }

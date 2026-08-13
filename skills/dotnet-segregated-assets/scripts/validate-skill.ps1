@@ -25,7 +25,7 @@ $contracts = @(
     '/cdnroot',
     'wwwroot',
     'authoring root',
-    'http-segregated-assets',
+    '<ordinary-project-profile>.Assets',
     'App assets',
     'CDN assets',
     'CopyToPublishDirectory="Never"',
@@ -73,6 +73,11 @@ foreach ($needle in @(
 )) {
     if (-not $runner.Contains($needle, [System.StringComparison]::Ordinal)) {
         throw "segregate-assets.cs is missing deterministic NuGet contract: $needle"
+    }
+}
+foreach ($needle in @('AssetsProfileSuffix', 'LaunchProfileNaming.Resolve', 'ASSET_SOURCE_NOT_VERSIONED', 'ASSET_IMAGE_NOT_VALIDATED_IN_CI', 'com.microsoft.visual-studio.project-name', 'HasVisualStudioProjectOptOut')) {
+    if (-not $runner.Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "segregate-assets.cs is missing the profile/source/Visual Studio contract: $needle"
     }
 }
 foreach ($needle in @('resolvedNuGetPackages', 'Directory.Packages.props', 'prerelease', 'stop without proposing a package edit')) {
@@ -165,7 +170,7 @@ foreach ($source in $composeSources) {
 if (-not $localDevelopment.Contains('docker compose -f compose.assets.yml', [System.StringComparison]::Ordinal)) {
     throw 'references/local-development.md must show the canonical compose.assets.yml invocation.'
 }
-foreach ($needle in @('Microsoft.Docker.Sdk', 'DockerComposeBaseFilePath', 'DockerDevelopmentMode', 'DockerComposeProjectPath', 'commandName: DockerCompose', 'StartDebugging', 'StartWithoutDebugging', 'dhi.io/aspnetcore', 'Dockerfile', 'LocalDevelopment.Dockerfile', 'LocalPublishDirectory', 'artifacts/publish/', 'dhi.io/aspnetcore:<channel>-alpine<version>-dev', '/remote_debugger/linux-musl-x64/vsdbg', 'vsdbg --interpreter=vscode', 'A `.dcproj` build or Compose CLI smoke test is not proof of debugger attachment', 'directly builds the web service with `LocalDevelopment.Dockerfile`', 'do not add `DockerfileFile` or `BuildingInsideVisualStudio`', 'docker-compose.vs.release.yml', 'Codebelt.Cdn.Origin.dll', 'not an image selector')) {
+foreach ($needle in @('Microsoft.Docker.Sdk', 'DockerComposeBaseFilePath', 'DockerDevelopmentMode', 'DockerComposeProjectPath', 'commandName: DockerCompose', 'StartDebugging', 'StartWithoutDebugging', 'dhi.io/aspnetcore', 'Dockerfile', 'LocalDevelopment.Dockerfile', 'LocalPublishDirectory', 'artifacts/publish/', 'dhi.io/aspnetcore:<channel>-alpine<version>-dev', '/remote_debugger/linux-musl-x64/vsdbg', 'vsdbg --interpreter=vscode', 'A `.dcproj` build or Compose CLI smoke test is not proof of debugger attachment', 'directly builds the web service with `LocalDevelopment.Dockerfile`', 'do not add `DockerfileFile` or `BuildingInsideVisualStudio`', 'com.microsoft.visual-studio.project-name', 'do not add `docker-compose.vs.release.yml`')) {
     if (-not ($skill.Contains($needle, [System.StringComparison]::Ordinal) -or $localDevelopment.Contains($needle, [System.StringComparison]::Ordinal) -or $productionImage.Contains($needle, [System.StringComparison]::Ordinal))) {
         throw "The Visual Studio Compose guidance is missing required contract: $needle"
     }
@@ -174,7 +179,7 @@ $visualStudioComposeEval = @($evals.evals | Where-Object { $_.id -eq 14 })[0]
 if ($null -eq $visualStudioComposeEval) {
     throw 'evals/evals.json must include the Visual Studio Docker Compose orchestration regression with id 14.'
 }
-foreach ($needle in @('commandName DockerCompose', 'Microsoft.Docker.Sdk', 'DockerComposeBaseFilePath', 'DockerDevelopmentMode', 'DockerComposeProjectPath', 'dhi.io/aspnetcore', 'LocalDevelopment.Dockerfile', 'dhi.io/aspnetcore:10-alpine3.23-dev', 'LocalPublishDirectory', 'COPY artifacts/publish/ .', 'web-app with debugging', 'app-assets without debugging', 'Assets.Dockerfile', '65532', 'docker-compose.vs.release.yml', 'Codebelt.Cdn.Origin.dll', 'never to select Dockerfiles', '/remote_debugger/linux-musl-x64/vsdbg', 'actual F5', 'vsdbg --interpreter=vscode')) {
+foreach ($needle in @('commandName DockerCompose', 'Microsoft.Docker.Sdk', 'DockerComposeBaseFilePath', 'DockerDevelopmentMode', 'DockerComposeProjectPath', 'dhi.io/aspnetcore', 'LocalDevelopment.Dockerfile', 'dhi.io/aspnetcore:10-alpine3.23-dev', 'LocalPublishDirectory', 'COPY artifacts/publish/ .', 'web-app with debugging', 'app-assets without debugging', 'Assets.Dockerfile', 'same commit', '65532', 'Contoso.Web.Assets', 'com.microsoft.visual-studio.project-name', '/remote_debugger/linux-musl-x64/vsdbg', 'actual F5', 'vsdbg --interpreter=vscode')) {
     if (-not ($visualStudioComposeEval.expected_output.Contains($needle) -or (@($visualStudioComposeEval.expectations) -join "`n").Contains($needle))) {
         throw "The Visual Studio Compose eval is missing the expected contract: $needle"
     }
@@ -187,7 +192,8 @@ foreach ($negative in @(
     'does not claim Visual Studio F5 debugging was tested from a dcproj build or Docker Compose CLI smoke test alone',
     'does not describe the ASP.NET -dev runtime as a .NET SDK image',
     'does not add DockerfileFile or BuildingInsideVisualStudio image-switching properties',
-    'does not retain a project-level http-segregated-assets profile beside the root DockerCompose profile',
+    'does not retain the legacy project-level segregated profile beside the root Contoso.Web.Assets DockerCompose profile',
+    'does not add or retain docker-compose.vs.release.yml for debugger injection repair',
     'does not add a custom vsdbg volume mapping when LocalDevelopment.Dockerfile provides the supported development image'
 )) {
     if (-not ((@($visualStudioComposeEval.expectations) -join "`n").Contains("NEGATIVE: $negative", [System.StringComparison]::Ordinal))) {

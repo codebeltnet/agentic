@@ -6,7 +6,7 @@ Preserve the ordinary fast edit/run/debug loop and add a second, opt-in, product
 
 Keep the application's existing `commandName: Project` profile unchanged. In ordinary Development, the web application serves `wwwroot` directly. For Cuemon, use `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` with no external App `BaseUrl`, so the current request supplies the location.
 
-The segregated launch surface owns the whole topology. Add a root `launchSettings.json` profile named `http-segregated-assets` with `commandName: DockerCompose`; do not add a second project-level profile with the same name. Put the segregated App/CDN settings in the Compose web service environment. For Cuemon App assets, use `BaseUrlMode=Automatic`, host-only `BaseUrl=localhost:<app-port>`, and `Scheme=Http`. Configure a separate CDN origin only when a shared equivalent exists.
+The segregated launch surface owns the whole topology. Add a root `launchSettings.json` profile named `<ordinary-project-profile>.Assets` with `commandName: DockerCompose`; for example, `BingeKinLanding.WebApp` becomes `BingeKinLanding.WebApp.Assets`. Prefer the exact project-name `commandName: Project` profile, otherwise use the sole Project profile, and fall back to the `.csproj` stem when no unambiguous ordinary profile exists. Do not add a second project-level profile with the same name. Put the segregated App/CDN settings in the Compose web service environment. For Cuemon App assets, use `BaseUrlMode=Automatic`, host-only `BaseUrl=localhost:<app-port>`, and `Scheme=Http`. Configure a separate CDN origin only when a shared equivalent exists.
 
 The local application and asset origin are HTTP. Never use protocol-relative `//localhost:<port>` or `https://localhost:<port>` values for an HTTP-only origin.
 
@@ -45,6 +45,8 @@ services:
     build:
       context: ./src/Web
       dockerfile: Assets.Dockerfile
+    labels:
+      com.microsoft.visual-studio.project-name: ""
     read_only: true
     cap_drop:
       - ALL
@@ -65,7 +67,7 @@ Root launch settings:
 ```json
 {
   "profiles": {
-    "http-segregated-assets": {
+    "Web.Assets": {
       "commandName": "DockerCompose",
       "commandVersion": "1.0",
       "composeLaunchAction": "LaunchBrowser",
@@ -80,19 +82,9 @@ Root launch settings:
 }
 ```
 
-Set the Compose project as the startup project and select `http-segregated-assets` for segregated F5. Set the web project as the startup project for ordinary non-containerized Development. Do not add a custom `vsdbg` volume when the development image lets Visual Studio resolve `/remote_debugger/linux-musl-x64/vsdbg` itself.
+Set the Compose project as the startup project and select the derived `.Assets` profile for segregated F5. Set the web project as the startup project for ordinary non-containerized Development. Do not add a custom `vsdbg` volume when the development image lets Visual Studio resolve `/remote_debugger/linux-musl-x64/vsdbg` itself.
 
-Inspect Visual Studio's generated resolved Compose file under `obj/Docker`. Visual Studio can inject the web project's debugger bootstrap into every service with `build:`, even an asset service configured as `StartWithoutDebugging`. For a read-only Static Content Provider this fails while writing the helper PID under `/tmp`, and Visual Studio subsequently reports that it cannot find the container to attach. In that proven case, add `docker-compose.vs.release.yml` with only the asset service's original entrypoint and include it in the `.dcproj`:
-
-```yaml
-services:
-  app-assets:
-    entrypoint:
-      - dotnet
-      - Codebelt.Cdn.Origin.dll
-```
-
-The override is a Visual Studio debugger-injection repair, not an image selector. `compose.assets.yml` remains the owner of both Dockerfile choices.
+The empty `com.microsoft.visual-studio.project-name` label deliberately prevents Visual Studio from associating `app-assets` with the web project. Without it, Visual Studio can apply the web project's debugger bootstrap to every build-backed service, including one marked `StartWithoutDebugging`; a read-only Static Content Provider can then fail while the helper writes under `/tmp`, followed by a misleading attach error. Inspect the generated resolved Compose file under `obj/Docker` and confirm it contains the web service's debugger configuration but no generated override for `app-assets`. Do not add `docker-compose.vs.release.yml` for this topology.
 
 Validate with a normal project build, `docker compose -f compose.assets.yml config`, installed Visual Studio MSBuild, and a two-container smoke test. For one-click debugging, also run F5 and require Visual Studio Run mode, `vsdbg --interpreter=vscode` with the application as its child, and HTTP 200 from both the web app and asset origin. A `.dcproj` build or Compose CLI smoke test alone is not IDE proof.
 
@@ -112,4 +104,4 @@ When a shared/CDN equivalent exists locally, build or mount it through a second 
 
 ## Deterministic verification
 
-`segregate-assets.cs verify --check-local` reads the root Docker Compose launch profile when present and validates `compose.assets.yml`. It proves that the launch URL is HTTP, Compose supplies a scheme-safe localhost asset origin, the web service builds `LocalDevelopment.Dockerfile`, the asset service uses `Assets.Dockerfile` or an explicit read-only `/cdnroot` source, and the origin is non-privileged without a Docker socket. It does not rewrite project or Compose files.
+`segregate-assets.cs verify --check-local` derives the root Docker Compose launch profile name from the ordinary Project profile and validates `compose.assets.yml`. It proves that the launch URL is HTTP, Compose supplies a scheme-safe localhost asset origin, the web service builds `LocalDevelopment.Dockerfile`, the asset service uses `Assets.Dockerfile` or an explicit read-only `/cdnroot` source, the asset service has the empty Visual Studio project-association label, and the origin is non-privileged without a Docker socket. `inspect` also reports when the only `wwwroot` source is ignored or untracked, because a clean checkout could not reproduce the asset image. The runner does not rewrite project or Compose files.

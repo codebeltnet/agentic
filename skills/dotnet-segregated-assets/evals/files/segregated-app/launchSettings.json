@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "http-segregated-assets": {
+    "Fabrikam.Web.Assets": {
       "commandName": "DockerCompose",
       "composeLaunchUrl": "http://localhost:5100",
       "serviceActions": {
