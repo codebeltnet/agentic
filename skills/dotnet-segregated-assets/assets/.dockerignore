@@ -1,0 +1,10 @@
+# Do not exclude artifacts/ — Dockerfile and LocalDevelopment.Dockerfile copy artifacts/publish/.
+.git
+.vs
+.vscode
+.idea
+**/bin
+**/obj
+**/node_modules
+TestResults
+test

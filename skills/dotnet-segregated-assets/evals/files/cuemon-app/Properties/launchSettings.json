@@ -1,0 +1,24 @@
+{
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "applicationUrl": "http://localhost:5080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "http-segregated-assets": {
+      "commandName": "Project",
+      "applicationUrl": "http://localhost:5080",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "App__BaseUrlMode": "Automatic",
+        "App__BaseUrl": "localhost:8080",
+        "App__Scheme": "Http",
+        "Cdn__BaseUrlMode": "Configured",
+        "Cdn__BaseUrl": "localhost:8081",
+        "Cdn__Scheme": "Http"
+      }
+    }
+  }
+}

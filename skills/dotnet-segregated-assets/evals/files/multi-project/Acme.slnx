@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/Acme.Api/Acme.Api.csproj" />
+  <Project Path="src/Acme.Site/Acme.Site.csproj" />
+  <Project Path="src/Acme.Core/Acme.Core.csproj" />
+</Solution>

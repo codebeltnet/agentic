@@ -1,0 +1,7 @@
+<Project>
+
+  <Target Name="PublishRunnerArtifacts" AfterTargets="Build" Condition="'$(CI)' != 'true' and '$(DesignTimeBuild)' != 'true' and '$(IsPublishingRunnerArtifacts)' != 'true' and '$(IsTestProject)' != 'true' and '$(LocalPublishDirectory)' != ''">
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Publish" Properties="Configuration=$(Configuration);NoBuild=true;PublishDir=$(LocalPublishDirectory);IsPublishingRunnerArtifacts=true" />
+  </Target>
+
+</Project>

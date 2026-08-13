@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "Fabrikam.Web.Assets": {
+      "commandName": "DockerCompose",
+      "composeLaunchUrl": "http://localhost:5100",
+      "serviceActions": {
+        "web-app": "StartDebugging",
+        "app-assets": "StartWithoutDebugging"
+      }
+    }
+  }
+}

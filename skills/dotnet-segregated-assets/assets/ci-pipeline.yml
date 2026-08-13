@@ -1,0 +1,63 @@
+name: CI Pipeline
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish-web-app
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: codebeltnet/git-checkout@v1
+
+      - name: Install .NET
+        uses: codebeltnet/install-dotnet@v3
+
+      - name: Publish
+        run: dotnet publish {ProjectDirectory}/{ProjectName}.csproj --configuration Release --output artifacts/publish --self-contained false
+
+      - name: Upload Publish Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-Release
+          path: artifacts/publish
+          if-no-files-found: error
+          include-hidden-files: true
+
+  docker-build:
+    name: build-web-app-image
+    needs: [publish]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: codebeltnet/git-checkout@v1
+
+      - name: Download Publish Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: publish-Release
+          path: artifacts/publish
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Application Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: {ProjectDirectory}/Dockerfile
+          push: false
+          tags: {WebImageName}:ci-${{ github.run_id }}
+
+      - name: Build Asset Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./{ProjectDirectory}
+          file: {ProjectDirectory}/Assets.Dockerfile
+          push: false
+          tags: {AssetImageName}:ci-${{ github.run_id }}

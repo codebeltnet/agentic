@@ -1,7 +1,7 @@
 ---
 name: git-visual-commits
 description: >
-  Structured git commit workflow with deterministically validated emoji-first subjects and identity-aware modes: `git bot commit`, regular `git commit`, and `git our commit`. Use it when the user asks to commit or stage changes, write or review a commit message, or invokes one of those commit commands. Treat `yolo` and `auto` as auto-approval modifiers only within an explicit commit request, never as standalone triggers for unrelated work. Treat commit wording as an automatic trigger for this skill, not as a casual hint. Require a full read through EOF, semantic grouping, an approved emoji, exactly one following space, a lowercase description beginning, at most 70 characters, and post-commit verification. Default to emoji-only subjects; allow conventional-commit prefixes only on explicit request. For multi-file changes that initially collapse to one category, require a visible full-context quality gate; single-file changes may skip it.
+  Execute the structured git commit workflow whenever the user says `git bot commit`, `git commit`, or `git our commit`; asks the agent to commit or stage changes; or asks to write or review a commit message. Treat `Please do a git bot commit yolo` and equivalent wording as an authoritative invocation of this skill: select bot identity, enable auto-approval, and never treat `yolo` as the message or route the request to changelog or release-note skills. Treat commit wording as an automatic trigger for this skill, not as a casual hint. `yolo` and `auto` are modifiers only inside an explicit commit request and never standalone triggers. Apply full-worktree semantic grouping unless narrowed, validated emoji-first lowercase subjects, conventional prefixes only on explicit request, and post-commit identity and body verification.
 ---
 
 # Git Visual Commits
@@ -11,6 +11,13 @@ description: >
 This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji, and only adding a conventional prefix when the user explicitly asks for that combo. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
 
 ## Critical Rules
+
+### Invocation Routing Lock
+
+- An explicit `git bot commit`, `git commit`, or `git our commit` phrase is an authoritative request to use this skill. Do not substitute a changelog, release-note, squash-summary, or generic commit workflow.
+- Interpret `Please do a git bot commit yolo` as `git bot commit` identity plus auto-approval for the full current worktree. `yolo` is not the commit message, and it does not request a changelog.
+- Equivalent word order and punctuation, such as `git bot commit, yolo` or `yolo — do a git bot commit`, preserve the same routing when both the explicit commit command and modifier are present.
+- A competing skill may run only when the user also explicitly requests its distinct output, such as updating `CHANGELOG.md`, drafting release notes, or producing a squash summary.
 
 ### Full-Skill Read and Subject Lock
 
@@ -211,7 +218,7 @@ Anchor emoji, prefix, and grouping explanations to sources inspected in the curr
 
 ## Auto-Approval Mode
 
-`yolo` or `auto` in a request skips the Step 4 approval wait for that request. `enable yolo mode` or `enable auto mode` keeps it active until the user disables it. Auto-approval applies to all identity modes and skips confirmation only; every classification, grouping, subject-validation, identity, and post-commit check still runs. Show the plan before proceeding:
+`yolo` or `auto` inside an explicit commit request skips the Step 4 approval wait for that request. `enable yolo mode` or `enable auto mode` keeps it active until the user disables it. Auto-approval applies to all identity modes and skips confirmation only; every classification, grouping, subject-validation, identity, and post-commit check still runs. Show the plan before proceeding:
 
 ```
 Auto-committing: 🔧 build/toolchain → 🚚 moved types → 💥 breaking shim removal → 💬 release notes

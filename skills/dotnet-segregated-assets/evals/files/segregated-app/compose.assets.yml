@@ -1,0 +1,28 @@
+services:
+  web-app:
+    build:
+      context: .
+      dockerfile: LocalDevelopment.Dockerfile
+    depends_on:
+      - app-assets
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: 8080
+      SegregatedAssets__App__BaseUrl: localhost:8080
+      SegregatedAssets__App__Scheme: Http
+    ports:
+      - "5100:8080"
+
+  app-assets:
+    build:
+      context: .
+      dockerfile: Assets.Dockerfile
+    labels:
+      com.microsoft.visual-studio.project-name: ""
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "8080:8080"

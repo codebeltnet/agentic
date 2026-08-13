@@ -1,6 +1,7 @@
 param(
     [string]$Ref,
-    [switch]$Full
+    [switch]$Full,
+    [switch]$MetadataOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -193,6 +194,9 @@ function Get-LocalShellPolicyFindings {
 
     $items = foreach ($path in Get-TrackedRepoPaths -RepoRoot $RepoRoot -GitRef $GitRef) {
         if (-not (Test-IsLocalShellPolicyScanCandidate -RelativePath $path)) {
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($GitRef) -and -not (Test-Path -LiteralPath (Join-Path $RepoRoot $path))) {
             continue
         }
 
@@ -550,6 +554,34 @@ function Write-RenderedFileFromTemplate {
     Write-Utf8File -Path $DestinationPath -Content $rendered
 }
 
+function Write-ValidationSummary {
+    param(
+        [System.Collections.Generic.List[object]]$Results,
+        [string]$GitRef,
+        [string]$Mode
+    )
+
+    $passed = @($Results | Where-Object { $_.Status -eq 'PASS' }).Count
+    $failed = @($Results | Where-Object { $_.Status -eq 'FAIL' }).Count
+    $label = if ([string]::IsNullOrWhiteSpace($GitRef)) { 'WORKTREE' } else { $GitRef }
+
+    Write-Host ("Validation target: {0}" -f $label)
+    Write-Host ("Validation mode: {0}" -f $Mode)
+    Write-Host ("Passed: {0}" -f $passed)
+    Write-Host ("Failed: {0}" -f $failed)
+    Write-Host ''
+
+    foreach ($result in $Results) {
+        $prefix = if ($result.Status -eq 'PASS') { '[PASS]' } else { '[FAIL]' }
+        Write-Host ("{0} {1}" -f $prefix, $result.Name)
+        if ($result.Status -eq 'FAIL') {
+            Write-Host ("       {0}" -f $result.Details)
+        }
+    }
+
+    return $failed
+}
+
 $repoRoot = Get-RepoRoot
 $results = [System.Collections.Generic.List[object]]::new()
 
@@ -639,6 +671,14 @@ Add-ValidationResult -Results $results -Name 'All repo-managed skills keep YAML 
             throw "$skillRelativePath frontmatter description must be 1024 characters or fewer; found $($description.Length)"
         }
     }
+}
+
+if ($MetadataOnly) {
+    $metadataFailures = Write-ValidationSummary -Results $results -GitRef $Ref -Mode 'METADATA-ONLY'
+    if ($metadataFailures -gt 0) {
+        exit 1
+    }
+    exit 0
 }
 
 Add-ValidationResult -Results $results -Name 'Active local shell guidance rejects only legacy PowerShell executable use' -Action {
@@ -1102,11 +1142,88 @@ Add-ValidationResult -Results $results -Name 'Library templates use PROJECT_NAME
     Assert-Contains -Name 'library toc.yml' -Content $toc -Needle 'api/{PROJECT_NAME}.html'
 }
 
-Add-ValidationResult -Results $results -Name 'Benchmark runner wildcard is preserved and benchmark program is file-scoped' -Action {
+Add-ValidationResult -Results $results -Name 'BenchmarkDotNet runner wildcard is preserved and benchmark program is file-scoped' -Action {
     $runnerProject = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-lib-slnx/assets/library/benchmark-runner.csproj' -GitRef $Ref
     $program = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-lib-slnx/assets/library/benchmark-program.cs' -GitRef $Ref
     Assert-Contains -Name 'benchmark-runner.csproj' -Content $runnerProject -Needle '..\..\tuning\**\*.csproj'
     Assert-Match -Name 'benchmark-program.cs' -Content $program -Pattern 'namespace\s+\{BENCHMARK_RUNNER_NAMESPACE\};'
+}
+
+Add-ValidationResult -Results $results -Name 'Repository automation cannot launch AI or LLM evaluation sessions' -Action {
+    $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
+    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
+
+    $forbiddenPaths = @(
+        'scripts/run-skill-benchmark.ps1',
+        'scripts/test-run-skill-benchmark.ps1',
+        'scripts/skill-benchmark/log-dotnet.ps1',
+        'scripts/skill-benchmark/mock-executor.ps1',
+        'scripts/skill-benchmark/mock-grader.ps1'
+    )
+    $presentForbiddenPaths = if ([string]::IsNullOrWhiteSpace($Ref)) {
+        @($forbiddenPaths | Where-Object { Test-Path -LiteralPath (Join-Path $repoRoot $_) })
+    } else {
+        $trackedPaths = @(Get-TrackedRepoPaths -RepoRoot $repoRoot -GitRef $Ref)
+        @($forbiddenPaths | Where-Object { $trackedPaths -contains $_ })
+    }
+    if (@($presentForbiddenPaths).Count -gt 0) {
+        throw "Dangerous skill benchmark automation must remain deleted: $(@($presentForbiddenPaths) -join ', ')"
+    }
+
+    $automationPaths = if ([string]::IsNullOrWhiteSpace($Ref)) {
+        @(
+            Get-ChildItem -LiteralPath (Join-Path $repoRoot 'scripts') -Recurse -File -Force
+            Get-ChildItem -LiteralPath (Join-Path $repoRoot '.github') -Recurse -File -Force
+        ) | ForEach-Object { Convert-ToRelativePath -BasePath $repoRoot -FullPath $_.FullName }
+    } else {
+        @(Get-TrackedRepoPaths -RepoRoot $repoRoot -GitRef $Ref)
+    }
+    $automationExtensions = @('.cs', '.ps1', '.psm1', '.py', '.sh', '.yml', '.yaml')
+    $automationPaths = @($automationPaths | Where-Object {
+        $normalized = $_ -replace '\\', '/'
+        ($normalized.StartsWith('scripts/') -or $normalized.StartsWith('.github/')) -and
+        $normalized -ne 'scripts/validate-skill-templates.ps1' -and
+        $automationExtensions -contains [System.IO.Path]::GetExtension($normalized).ToLowerInvariant()
+    } | Sort-Object -Unique)
+
+    $launchPatterns = @(
+        '(?im)\bGet-Command\s+(?:copilot|claude|codex|gemini)\b',
+        '(?im)(?:^|[;&|]\s*|&\s*|Start-Process\s+)(?:copilot|claude|codex|gemini)(?:\.exe|\.cmd|\.ps1)?\b',
+        '(?im)\b(?:copilot|claude|gemini)(?:\.exe|\.cmd|\.ps1)?\b[^\r\n]{0,120}\s-p\b',
+        '(?im)\bcodex(?:\.exe|\.cmd|\.ps1)?\s+exec\b'
+    )
+    $scannerCases = @(
+        [pscustomobject]@{ Name = 'Copilot prompt mode'; Content = 'copilot -p "grade this"'; Expected = $true },
+        [pscustomobject]@{ Name = 'Claude prompt mode'; Content = '& claude -p "run eval"'; Expected = $true },
+        [pscustomobject]@{ Name = 'Codex execution'; Content = 'codex exec "run eval"'; Expected = $true },
+        [pscustomobject]@{ Name = 'Gemini process'; Content = 'Start-Process gemini -ArgumentList "-p", "grade"'; Expected = $true },
+        [pscustomobject]@{ Name = 'Documentation prose'; Content = 'Supports Copilot, Claude, Codex, and Gemini skill formats.'; Expected = $false }
+    )
+    foreach ($case in $scannerCases) {
+        $matched = @($launchPatterns | Where-Object { $case.Content -match $_ }).Count -gt 0
+        if ($matched -ne $case.Expected) {
+            throw "AI/LLM automation scanner failed '$($case.Name)'."
+        }
+    }
+    $launchFindings = foreach ($path in $automationPaths) {
+        $content = Get-FileText -RepoRoot $repoRoot -RelativePath $path -GitRef $Ref
+        foreach ($pattern in $launchPatterns) {
+            if ($content -match $pattern) {
+                $path
+                break
+            }
+        }
+    }
+    if (@($launchFindings).Count -gt 0) {
+        throw "Repository automation must not launch AI/LLM CLIs: $(@($launchFindings | Sort-Object -Unique) -join ', ')"
+    }
+
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '## AI/LLM Evaluation Automation Prohibition'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'this repository does not provide an opt-in path around that rule.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Model-backed comparisons are not a repository completion gate.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'This rule is Priority 1.'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'There is no repository opt-in switch.'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'validate-skill-templates.ps1 -MetadataOnly'
 }
 
 Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific Codebelt xUnit migration and bootstrap contracts' -Action {
@@ -1325,6 +1442,9 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Invocation Routing Lock'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Interpret `Please do a git bot commit yolo` as `git bot commit` identity plus auto-approval for the full current worktree.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` is not the commit message, and it does not request a changelog.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Full-Skill Read and Subject Lock'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Before running any Git command or composing a subject, read this `SKILL.md` completely from the first line through EOF.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If a tool truncates the file, continue from the first unread line until EOF before proceeding.'
@@ -1435,8 +1555,16 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Runs scripts/validate-commit-subject.ps1 before showing the corrected subject and again immediately before passing it to Git'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Triggers the single-category context quality gate because more than one file is being placed in one category'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Recognizes exactly one changed file as the explicit exception and skips the single-category context quality gate'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Please do a git bot commit yolo.'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not replace bot identity with a human-authored commit plus a Co-authored-by trailer'
     Assert-Contains -Name 'README.md' -Content $readme -Needle '**Single-category context gate**'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'Multi-file plans that initially collapse to one category also require a visible full-context quality gate'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '**Authoritative command routing**'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '**CLI override remains deterministic**'
+    $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Commit Skill Routing'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'invoke `git-visual-commits` before responding to the request or running Git commands for that commit workflow'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Do not route the request to changelog or release-note skills'
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual squash summary skill stays self-contained and shares commit language rules' -Action {
@@ -1497,6 +1625,9 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     $entityResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Create or update `CHANGELOG.md` directly, then stop for user review.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Bare `yolo` / `auto`, `git bot commit yolo`, and other commit-execution requests do not activate this skill'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'within an explicit changelog or release-note request'
+    Assert-NotContains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Trigger phrases: "finalize", "ready to release", "rtr", "release" (especially with version branches like v0.3.1/...), "yolo", "auto".'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If `CHANGELOG.md` does not exist, create a compliant one before'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Read full commit subjects and bodies before writing the changelog.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'If the current branch starts with a version hint such as `v0.3.0/`,'
@@ -1552,6 +1683,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the merge-base as an excluded boundary rather than the first commit of the concrete release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let yolo mode widen committed history or include the v10.0.9 boundary commit'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Runs scripts/resolve-release-entity.ps1 for the path-backed dotnet-test entity and uses its Added classification'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not select git-keep-a-changelog from bare yolo wording inside a git bot commit request'
+    Assert-Contains -Name 'README.md' -Content (Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref) -Needle '**Trigger isolation**'
 
     if ([string]::IsNullOrWhiteSpace($Ref)) {
         & (Join-Path $repoRoot 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1') | Out-Null
@@ -1913,24 +2046,8 @@ if ($Full) {
     Write-Host '[SKIP] DocFX digest regression suites (use -Full to run skills/dotnet-docfx-digest/scripts/test-quality.ps1 and test-project-scoped.ps1)'
 }
 
-$passed = @($results | Where-Object { $_.Status -eq 'PASS' }).Count
-$failed = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
-$label = if ([string]::IsNullOrWhiteSpace($Ref)) { 'WORKTREE' } else { $Ref }
 $mode = if ($Full) { 'FULL' } else { 'FAST' }
-
-Write-Host ("Validation target: {0}" -f $label)
-Write-Host ("Validation mode: {0}" -f $mode)
-Write-Host ("Passed: {0}" -f $passed)
-Write-Host ("Failed: {0}" -f $failed)
-Write-Host ''
-
-foreach ($result in $results) {
-    $prefix = if ($result.Status -eq 'PASS') { '[PASS]' } else { '[FAIL]' }
-    Write-Host ("{0} {1}" -f $prefix, $result.Name)
-    if ($result.Status -eq 'FAIL') {
-        Write-Host ("       {0}" -f $result.Details)
-    }
-}
+$failed = Write-ValidationSummary -Results $results -GitRef $Ref -Mode $mode
 
 if ($failed -gt 0) {
     exit 1

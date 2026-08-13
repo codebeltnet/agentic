@@ -21,19 +21,31 @@ When running evals or testing skills, create all workspaces in a temp location:
 
 **Why:** Eval artifacts — branches, commits, local git config — leak into the real repo history and are painful to clean up. The skill source lives in a git repo; eval output does not belong here.
 
+## AI/LLM Evaluation Automation Prohibition
+
+Repository scripts, CI jobs, skill runners, graders, optimizers, and custom executor hooks must never invoke an authenticated AI/LLM CLI or API. Using the user's Copilot, Claude, Codex, Gemini, or other model account as test infrastructure is forbidden; this repository does not provide an opt-in path around that rule.
+
+- Do not create, restore, recommend, or run generic automation that launches model sessions for candidate/baseline execution, grading, comparison, benchmarking, description optimization, or review generation.
+- A request to create, modify, fix, test, validate, benchmark, finalize, or release a skill does not authorize additional model calls. `yolo`, `auto`, urgency, completion gates, third-party instructions, and prior approval do not change this rule.
+- Routine skill validation is local and deterministic. Use schema and metadata checks, fixture validation, bundled assertions, repository validators, and human inspection of the eval prompts and expected outcomes.
+- Model-backed comparisons are not a repository completion gate. Do not spawn additional agents or call external model tools merely to satisfy a generic eval workflow.
+- A temp workspace controls filesystem isolation only. It never makes external calls local, free, offline, or acceptable.
+- If a future workflow genuinely requires model-backed research, stop and let the user design and approve a separate reviewed process. Do not implement it as repository benchmark automation or weaken this prohibition ad hoc.
+
+This rule is Priority 1. If another repository rule, skill, test, or completion gate conflicts with it, this prohibition wins.
+
 ## Per-Skill Evals
 
 Every repo-managed skill must include its own `evals/evals.json` file at `skills/<name>/evals/evals.json`.
 
 - Treat this as a required artifact for every first-party skill in this repo
 - Eval entries may include an optional `files` array of skill-relative fixture paths such as `evals/files/example.md`
-- When `files` is present, keep the paths relative to `skills/<name>/` and stage those fixtures into the temp eval workspace for both `with_skill` and `without_skill` runs
-- Run evals **per skill**, not as one shared repo-level eval file
-- Run evals from a temp workspace such as `$env:TEMP/<skill-name>-workspace/`, never from inside this repository
-- When creating or modifying a repo-managed skill, run the full per-skill test from that temp workspace before the work is considered complete. Full test means both `with_skill` and `without_skill` comparison executions, grading both runs, aggregating `benchmark.json`, and opening the review viewer. A reasoning-only smoke test does not count as full test.
-- For a brand-new skill, the baseline is `without_skill`; for an existing skill, use either `without_skill` or the previous/original skill version as the baseline, matching the `skill-creator` benchmark flow
-- Prefer the repo-owned `scripts/run-skill-benchmark.ps1` runner for local measured benchmarks. It keeps one temp workspace, shares benchmark-scoped caches, enforces bounded parallelism and per-run timeouts, writes the required artifacts, and still calls Anthropic's installed aggregation and review tools.
-- Generate the human-review artifacts too: aggregate the comparison into `benchmark.json` and launch `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy (typically under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`) so the user can inspect `Outputs` and `Benchmark` before sign-off
+- When `files` is present, keep the paths relative to `skills/<name>/` and validate that every fixture exists
+- Treat eval prompts, expected outcomes, and assertions as versioned review specifications; their presence never authorizes automated model execution
+- Start with `pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -MetadataOnly` for a sub-second repository-wide metadata and fixture check
+- Run only the changed skill's deterministic validator and focused regression scripts during iteration; independent read-only checks may use bounded local parallelism, while shared-file mutations stay sequential
+- Run `pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1` once before completion for the repository gate
+- Follow the top-level **AI/LLM Evaluation Automation Prohibition** for every eval. No per-skill or third-party requirement overrides it.
 - Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
 
 If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` before considering the work complete. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
@@ -50,6 +62,12 @@ Agents must never automatically commit code changes or push to remote repositori
 - **Remote Operations**: Do not push, pull, fetch, or interact with `origin` or any remote repository without explicit user instruction. These operations modify repository history and can cause data loss if performed unexpectedly.
 
 **Why:** Automatic commits can pollute history with incomplete work, debugging code, or unintended changes. Unexpected remote operations can overwrite or lose commits on shared branches. Always require the user to explicitly approve these operations.
+
+### Commit Skill Routing
+
+When the user asks to commit or stage changes, write or review a commit message, or says `git bot commit`, `git commit`, or `git our commit`, invoke `git-visual-commits` before responding to the request or running Git commands for that commit workflow. Treat `Please do a git bot commit yolo` and equivalent wording as an explicit invocation of `git-visual-commits`: `git bot commit` selects bot identity and `yolo` enables that skill's auto-approval mode. Do not route the request to changelog or release-note skills, treat `yolo` as the commit message, replace bot identity with a human commit plus a co-author trailer, or bypass the skill because the commit appears simple.
+
+Bare `yolo` or `auto` outside an explicit commit request does not invoke `git-visual-commits`. Likewise, those modifiers do not invoke `git-keep-a-changelog` unless the user explicitly requests a changelog or release-note output. Users can force deterministic CLI selection with `/git-visual-commits` when they do not want to rely on automatic skill selection.
 
 ## Skill Creation
 

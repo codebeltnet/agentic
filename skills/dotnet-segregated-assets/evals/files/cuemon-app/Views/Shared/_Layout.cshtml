@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    @inject Microsoft.Extensions.Options.IOptions<AppAssetOptions> AppAssets
+    <link rel="stylesheet" href="@AppAssets.Value.GetUrl("~/css/site.css")" asp-append-version="true" />
+    <link rel="preload" href="@AppAssets.Value.GetUrl("~/fonts/antonio-latin.woff2")" as="font" type="font/woff2" crossorigin />
+    <link rel="icon" href="@AppAssets.Value.GetUrl("~/favicon.svg")" type="image/svg+xml" />
+    <link rel="mask-icon" href="@AppAssets.Value.GetUrl("~/mask-icon.svg")" type="image/svg+xml" color="#000000" />
+    <link rel="apple-touch-icon" href="@AppAssets.Value.GetUrl("~/apple-touch-icon.png")" type="image/png" />
+    <link rel="manifest" href="@AppAssets.Value.GetUrl("~/manifest.json")" type="application/json" />
+    <script src="@AppAssets.Value.GetUrl("~/js/site.js")"></script>
+    <img src="@AppAssets.Value.GetUrl("~/images/logo.svg")" alt="Logo" />
+    <link rel="stylesheet" href="/packages/bootstrap/5.3.3/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="/packages/fontawesome/7.0.0/css/all.min.css" />
+    <script src="/packages/htmx/2.0.4/htmx.min.js"></script>
+</head>
+<body>@RenderBody()</body>
+</html>

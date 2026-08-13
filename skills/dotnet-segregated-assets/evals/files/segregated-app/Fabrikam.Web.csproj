@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- App-owned wwwroot is served by Codebelt Static Content Provider in deployment; keep it out of the web publish artifact. -->
+    <Content Update="wwwroot/**" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+</Project>

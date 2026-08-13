@@ -1,0 +1,10 @@
+{
+  "name": "storefront-assets",
+  "private": true,
+  "scripts": {
+    "build": "vite build --outDir wwwroot"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
