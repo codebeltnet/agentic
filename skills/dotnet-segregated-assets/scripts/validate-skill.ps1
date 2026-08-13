@@ -165,6 +165,35 @@ foreach ($source in $composeSources) {
 if (-not $localDevelopment.Contains('docker compose -f compose.assets.yml', [System.StringComparison]::Ordinal)) {
     throw 'references/local-development.md must show the canonical compose.assets.yml invocation.'
 }
+foreach ($needle in @('Microsoft.Docker.Sdk', 'DockerComposeBaseFilePath', 'DockerDevelopmentMode', 'DockerComposeProjectPath', 'commandName: DockerCompose', 'StartDebugging', 'StartWithoutDebugging', 'dhi.io/aspnetcore', 'Dockerfile', 'LocalDevelopment.Dockerfile', 'LocalPublishDirectory', 'artifacts/publish/', 'dhi.io/aspnetcore:<channel>-alpine<version>-dev', '/remote_debugger/linux-musl-x64/vsdbg', 'vsdbg --interpreter=vscode', 'A `.dcproj` build or Compose CLI smoke test is not proof of debugger attachment', 'directly builds the web service with `LocalDevelopment.Dockerfile`', 'do not add `DockerfileFile` or `BuildingInsideVisualStudio`', 'docker-compose.vs.release.yml', 'Codebelt.Cdn.Origin.dll', 'not an image selector')) {
+    if (-not ($skill.Contains($needle, [System.StringComparison]::Ordinal) -or $localDevelopment.Contains($needle, [System.StringComparison]::Ordinal) -or $productionImage.Contains($needle, [System.StringComparison]::Ordinal))) {
+        throw "The Visual Studio Compose guidance is missing required contract: $needle"
+    }
+}
+$visualStudioComposeEval = @($evals.evals | Where-Object { $_.id -eq 14 })[0]
+if ($null -eq $visualStudioComposeEval) {
+    throw 'evals/evals.json must include the Visual Studio Docker Compose orchestration regression with id 14.'
+}
+foreach ($needle in @('commandName DockerCompose', 'Microsoft.Docker.Sdk', 'DockerComposeBaseFilePath', 'DockerDevelopmentMode', 'DockerComposeProjectPath', 'dhi.io/aspnetcore', 'LocalDevelopment.Dockerfile', 'dhi.io/aspnetcore:10-alpine3.23-dev', 'LocalPublishDirectory', 'COPY artifacts/publish/ .', 'web-app with debugging', 'app-assets without debugging', 'Assets.Dockerfile', '65532', 'docker-compose.vs.release.yml', 'Codebelt.Cdn.Origin.dll', 'never to select Dockerfiles', '/remote_debugger/linux-musl-x64/vsdbg', 'actual F5', 'vsdbg --interpreter=vscode')) {
+    if (-not ($visualStudioComposeEval.expected_output.Contains($needle) -or (@($visualStudioComposeEval.expectations) -join "`n").Contains($needle))) {
+        throw "The Visual Studio Compose eval is missing the expected contract: $needle"
+    }
+}
+foreach ($negative in @(
+    'does not claim that changing commandName from Project to Docker makes Visual Studio consume compose.assets.yml',
+    'does not replace the asset-only Assets.Dockerfile with the web application Dockerfile',
+    'does not compile the web application inside its Dockerfile',
+    'does not add a second .dcproj when the repository already has a suitable Docker Compose project',
+    'does not claim Visual Studio F5 debugging was tested from a dcproj build or Docker Compose CLI smoke test alone',
+    'does not describe the ASP.NET -dev runtime as a .NET SDK image',
+    'does not add DockerfileFile or BuildingInsideVisualStudio image-switching properties',
+    'does not retain a project-level http-segregated-assets profile beside the root DockerCompose profile',
+    'does not add a custom vsdbg volume mapping when LocalDevelopment.Dockerfile provides the supported development image'
+)) {
+    if (-not ((@($visualStudioComposeEval.expectations) -join "`n").Contains("NEGATIVE: $negative", [System.StringComparison]::Ordinal))) {
+        throw "The Visual Studio Compose eval is missing required negative expectation: $negative"
+    }
+}
 
 $forms = [System.IO.File]::ReadAllText((Join-Path $skillRoot 'FORMS.md'))
 if (-not $forms.Contains('### cdn_equivalent', [System.StringComparison]::Ordinal)) {
@@ -172,6 +201,9 @@ if (-not $forms.Contains('### cdn_equivalent', [System.StringComparison]::Ordina
 }
 if (-not $forms.Contains('plain-text', [System.StringComparison]::Ordinal)) {
     throw 'FORMS.md must define the deterministic plain-text fallback interaction.'
+}
+if (-not $forms.Contains('### visual_studio_compose', [System.StringComparison]::Ordinal)) {
+    throw 'FORMS.md must define the conditional Visual Studio Compose orchestration field.'
 }
 
 & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'test-segregated-assets.ps1')
