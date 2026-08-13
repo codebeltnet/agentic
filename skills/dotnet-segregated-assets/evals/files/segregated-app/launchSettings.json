@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "http-segregated-assets": {
+      "commandName": "DockerCompose",
+      "composeLaunchUrl": "http://localhost:5100",
+      "serviceActions": {
+        "web-app": "StartDebugging",
+        "app-assets": "StartWithoutDebugging"
+      }
+    }
+  }
+}

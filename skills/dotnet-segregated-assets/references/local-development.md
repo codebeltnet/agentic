@@ -1,51 +1,50 @@
 # Local development topology
 
-The goal is to preserve the ordinary fast edit/run/debug loop and add a second, opt-in way to run the application against a segregated production-like topology. Developers keep editing `wwwroot`; ordinary Development must not be changed merely to support segregation.
+Preserve the ordinary fast edit/run/debug loop and add a second, opt-in, production-like topology. Developers keep authoring in `wwwroot`.
 
-## Two profiles, one source folder
+## Two launch surfaces, one source folder
 
-Keep the application's existing Development launch profile exactly as it is. For a Cuemon application, configure `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` in ordinary Development and do not provide an external App `BaseUrl`. The same `<app-link>`, `<app-script>`, and `<app-img>` markup then resolves against the application that is serving the page. Cuemon does not inspect launch-profile names.
+Keep the application's existing `commandName: Project` profile unchanged. In ordinary Development, the web application serves `wwwroot` directly. For Cuemon, use `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` with no external App `BaseUrl`, so the current request supplies the location.
 
-Add a new profile — `http-segregated-assets` (or the repository's established equivalent) — that keeps `ASPNETCORE_ENVIRONMENT` set to `Development` but changes only the values that distinguish the segregated topology. In a Cuemon application, bind the existing `AppTagHelperOptions` with `BaseUrlMode = TagHelperBaseUrlMode.Automatic`, host-only `BaseUrl = localhost:<app-port>`, and `Scheme = ProtocolUriScheme.Http`. Bind `CdnTagHelperOptions` with `BaseUrlMode = TagHelperBaseUrlMode.Configured`, a separate host-only `BaseUrl = localhost:<cdn-port>`, and `Scheme = ProtocolUriScheme.Http` only when a shared CDN equivalent exists. Do not create a second asset configuration section when the application already binds these options.
+The segregated launch surface owns the whole topology. Add a root `launchSettings.json` profile named `http-segregated-assets` with `commandName: DockerCompose`; do not add a second project-level profile with the same name. Put the segregated App/CDN settings in the Compose web service environment. For Cuemon App assets, use `BaseUrlMode=Automatic`, host-only `BaseUrl=localhost:<app-port>`, and `Scheme=Http`. Configure a separate CDN origin only when a shared equivalent exists.
 
-The local App origin is HTTP, so the segregated application profile should also use HTTP. Never use a protocol-relative `//localhost:<port>` or `https://localhost:<port>` URL for an HTTP-only origin.
+The local application and asset origin are HTTP. Never use protocol-relative `//localhost:<port>` or `https://localhost:<port>` values for an HTTP-only origin.
 
-For an application without Cuemon, adapt the keys below to the suitable existing project abstraction. The example is not a reason to introduce this configuration hierarchy when another one already exists:
+## Artifact-first Dockerfiles
 
-```json
-{
-  "profiles": {
-    "http-segregated-assets": {
-      "commandName": "Project",
-      "dotnetRunMessages": true,
-      "launchBrowser": true,
-      "applicationUrl": "http://localhost:5080",
-      "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development",
-        "SegregatedAssets__App__BaseUrl": "http://localhost:8080",
-        "SegregatedAssets__App__Scheme": "Http"
-      }
-    }
-  }
-}
-```
+Use three Dockerfiles with distinct responsibilities:
 
-A `commandName: Project` profile only launches the application and sets configuration; it does not start sidecar containers. Keep process orchestration explicit and deterministic — start the local origin separately below. Do not claim that the profile itself spins up the origin.
+1. `Dockerfile` packages the CI-published application artifact into the newest compatible shell-less `dhi.io/aspnetcore` Alpine runtime. It is the production application image.
+2. `LocalDevelopment.Dockerfile` packages the same artifact into the matching `dhi.io/aspnetcore:<channel>-alpine<version>-dev` runtime. The ASP.NET `-dev` image supplies development utilities and debugger prerequisites but is not a .NET SDK; host publishing is still required.
+3. `Assets.Dockerfile` packages `wwwroot` into `codebeltnet/web-cdn-origin:2.0.0`. It is the asset image for local segregation and deployment.
 
-## Local Static Content Provider
+Neither application Dockerfile compiles source. Define `LocalPublishDirectory` in the web `.csproj` and add or reuse a guarded non-CI, non-design-time post-build publish target. CI publishes to the same artifact path before building `Dockerfile`.
 
-Use the published image directly for local development — do not rebuild an asset image on every source edit. Mount the application's existing `wwwroot` into `/cdnroot` **read-only** so edits are visible immediately. The image serves physical files from `/cdnroot`, and its `CdnOrigin:ContentRoot` already defaults to `/cdnroot`.
+## Compose owns local segregation
 
-Prefer a tiny dedicated Compose file when repository conventions permit, because relative bind mounts provide a cross-platform, repeatable developer command. Name that file `compose.assets.yml` so it pairs with the derived `Assets.Dockerfile`. If the repository already has an orchestration mechanism that expresses the same topology cleanly, extend that instead of adding Compose.
-
-Preserve the security posture the image supports wherever Docker permits: non-root runtime (the image already runs as user `65532`), a read-only content mount, a read-only root filesystem where practical, no privileged mode, no Docker socket mount, no unnecessary capabilities, and only the required host port exposed.
-
-Example `compose.assets.yml` (App only):
+`compose.assets.yml` directly selects the local images. The web service builds `LocalDevelopment.Dockerfile`; the asset service builds `Assets.Dockerfile`. Do not introduce `DockerfileFile` or `BuildingInsideVisualStudio` to switch images indirectly.
 
 ```yaml
 services:
+  web-app:
+    build:
+      context: .
+      dockerfile: src/Web/LocalDevelopment.Dockerfile
+    depends_on:
+      - app-assets
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: 8080
+      SegregatedAssets__App__BaseUrl: localhost:8080
+      SegregatedAssets__App__BaseUrlMode: Automatic
+      SegregatedAssets__App__Scheme: Http
+    ports:
+      - "5080:8080"
+
   app-assets:
-    image: codebeltnet/web-cdn-origin:2.0.0
+    build:
+      context: ./src/Web
+      dockerfile: Assets.Dockerfile
     read_only: true
     cap_drop:
       - ALL
@@ -53,43 +52,64 @@ services:
       - no-new-privileges:true
     ports:
       - "8080:8080"
-    volumes:
-      - ./src/Web/wwwroot:/cdnroot:ro
 ```
 
-Run it with `docker compose -f compose.assets.yml up`, then launch the application with the `http-segregated-assets` profile. Adapt the relative `./src/Web/wwwroot` path to the actual web project location.
+Building `Assets.Dockerfile` deliberately snapshots `wwwroot`; rebuild Compose after asset edits. Use the ordinary Project profile when the fastest live-edit loop matters.
 
-## Second origin for CDN assets
+## Visual Studio Docker Compose launch
 
-When a CDN equivalent exists and its content is available locally, provision a **second** origin instance on a different host port from its own shared-asset root. Point the Cuemon CDN options at this origin explicitly; do not let CDN helpers fall back to the App origin:
+Register the topology with a `Microsoft.Docker.Sdk` `.dcproj`, set `DockerComposeBaseFilePath` to `compose.assets`, set `DockerDevelopmentMode` to `Regular`, associate the web project through `DockerComposeProjectPath`, and add the Compose project to the solution. Preserve an existing Compose project and its conventions rather than adding a second one.
 
-```text
-localhost:8080 -> web-cdn-origin:2.0.0 -> <app>/wwwroot
-localhost:8081 -> web-cdn-origin:2.0.0 -> <shared-cdn-root>
+Root launch settings:
+
+```json
+{
+  "profiles": {
+    "http-segregated-assets": {
+      "commandName": "DockerCompose",
+      "commandVersion": "1.0",
+      "composeLaunchAction": "LaunchBrowser",
+      "composeLaunchServiceName": "web-app",
+      "composeLaunchUrl": "http://localhost:5080",
+      "serviceActions": {
+        "web-app": "StartDebugging",
+        "app-assets": "StartWithoutDebugging"
+      }
+    }
+  }
+}
 ```
+
+Set the Compose project as the startup project and select `http-segregated-assets` for segregated F5. Set the web project as the startup project for ordinary non-containerized Development. Do not add a custom `vsdbg` volume when the development image lets Visual Studio resolve `/remote_debugger/linux-musl-x64/vsdbg` itself.
+
+Inspect Visual Studio's generated resolved Compose file under `obj/Docker`. Visual Studio can inject the web project's debugger bootstrap into every service with `build:`, even an asset service configured as `StartWithoutDebugging`. For a read-only Static Content Provider this fails while writing the helper PID under `/tmp`, and Visual Studio subsequently reports that it cannot find the container to attach. In that proven case, add `docker-compose.vs.release.yml` with only the asset service's original entrypoint and include it in the `.dcproj`:
 
 ```yaml
 services:
   app-assets:
-    image: codebeltnet/web-cdn-origin:2.0.0
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    ports: ["8080:8080"]
-    volumes:
-      - ./src/Web/wwwroot:/cdnroot:ro
-  cdn-assets:
-    image: codebeltnet/web-cdn-origin:2.0.0
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    ports: ["8081:8080"]
-    volumes:
-      - ../shared-assets:/cdnroot:ro
+    entrypoint:
+      - dotnet
+      - Codebelt.Cdn.Origin.dll
 ```
 
-Resolve port collisions from the repository's existing configuration rather than blindly overwriting ports. If `8080`/`8081` are already used, choose free ports and keep the launch profile, Compose file, and documentation consistent. If no shared equivalent exists, omit the second service and all CDN-origin configuration.
+The override is a Visual Studio debugger-injection repair, not an image selector. `compose.assets.yml` remains the owner of both Dockerfile choices.
 
-## Validating the local topology
+Validate with a normal project build, `docker compose -f compose.assets.yml config`, installed Visual Studio MSBuild, and a two-container smoke test. For one-click debugging, also run F5 and require Visual Studio Run mode, `vsdbg --interpreter=vscode` with the application as its child, and HTTP 200 from both the web app and asset origin. A `.dcproj` build or Compose CLI smoke test alone is not IDE proof.
 
-`segregate-assets.cs verify --check-local` parses `launchSettings.json` and the Compose file and reports whether the segregated profile is HTTP, points at an `http://localhost:<port>` origin, avoids protocol-relative/`https://localhost` URLs, and whether the origin service uses the published image, a read-only `/cdnroot` mount, a read-only root filesystem, no privileged mode, and no Docker socket. It does not rewrite the launch profile or Compose file. Fix any finding it reports before considering the local topology done.
+## Command-line use
+
+The same full topology works outside Visual Studio:
+
+```text
+docker compose -f compose.assets.yml up --build
+```
+
+There is no separate project-level segregated profile. The Compose web service carries the required Development and origin configuration.
+
+## Second origin for shared CDN assets
+
+When a shared/CDN equivalent exists locally, build or mount it through a second hardened origin on another host port and configure `CdnTagHelperOptions` explicitly. Never let CDN helpers fall back to the App origin or copy shared content into application `wwwroot`. Resolve port collisions from repository evidence.
+
+## Deterministic verification
+
+`segregate-assets.cs verify --check-local` reads the root Docker Compose launch profile when present and validates `compose.assets.yml`. It proves that the launch URL is HTTP, Compose supplies a scheme-safe localhost asset origin, the web service builds `LocalDevelopment.Dockerfile`, the asset service uses `Assets.Dockerfile` or an explicit read-only `/cdnroot` source, and the origin is non-privileged without a Docker socket. It does not rewrite project or Compose files.

@@ -56,6 +56,17 @@ When Cuemon is detected, do not select the non-Cuemon or new-abstraction choice 
 - **default:** `8080` (Recommended)
 - **required:** true
 
+### visual_studio_compose
+
+- **type:** single-choice
+- **prompt:** Should Visual Studio start the application and asset origins together from one Docker Compose launch profile?
+- **choices:**
+  - Yes — add or reuse Visual Studio Docker Compose orchestration (Recommended when the user requests one-click F5 or the repository already has a `.dcproj`)
+  - No — run the complete `compose.assets.yml` topology from the command line without Visual Studio registration
+- **default:** Resolve from the user's request and existing solution/orchestration files (Recommended)
+- **required:** false
+- **show_when:** A Visual Studio solution is present and the desired launch experience is unresolved
+
 ### cdn_origin_port
 
 - **type:** text
@@ -113,4 +124,4 @@ When Cuemon is detected, do not select the non-Cuemon or new-abstraction choice 
 - For `text` fields with a computed default (ports, hosts), offer the computed value as a selectable choice alongside free text, and treat a blank response as accepting the shown value.
 - If native structured input widgets are unavailable, follow this deterministic plain-text fallback instead of improvising your own questioning style: start immediately with `Field: <field-name>`, then a one-line prompt, then numbered choices (recommended first), and accept a blank reply as the default. Do not add a conversational preamble, and do not switch interaction styles mid-collection. Consistency matters more than creativity during parameter collection.
 - Respect `show_when` conditions: skip `cdn_source`, `cdn_origin_port`, and `deployed_cdn_host` entirely when `cdn_equivalent` is `No`; skip `web_project` when only one web project exists.
-- After all fields are resolved, summarize the exact project, App/CDN ports, deployed hosts, asset-configuration approach, any competing abstraction cleanup, and whether a production image will be built, then ask `confirmation`.
+- After all fields are resolved, summarize the exact project, App/CDN ports, deployed hosts, asset-configuration approach, any competing abstraction cleanup, Visual Studio Compose choice, and whether a production image will be built, then ask `confirmation`.

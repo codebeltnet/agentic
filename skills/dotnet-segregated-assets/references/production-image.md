@@ -35,7 +35,7 @@ If the application's frontend build generates the final files rather than storin
 
 ## CI/CD integration
 
-Where CI/CD already builds once and promotes artifacts, preserve that model. Static assets can be emitted as their own build artifact and subsequently packaged into the Static Content Provider image, rather than being rebuilt during image publication. Document the integration point (where the asset artifact is produced and where it is packaged), but do not redesign CI/CD unless explicitly asked.
+Where CI/CD already builds once and promotes artifacts, preserve that model. Static assets can be emitted as their own build artifact and subsequently packaged into the Static Content Provider image, rather than being rebuilt during image publication. When Visual Studio Compose requires an application container, use the same artifact-first boundary for the application: CI publishes to `artifacts/publish/`, production `Dockerfile` copies that directory into a shell-less DHI ASP.NET Core runtime, and `LocalDevelopment.Dockerfile` copies the same directory into the matching ASP.NET `-dev` runtime for Visual Studio. The `-dev` runtime supplies development utilities but is not an SDK. Neither Dockerfile compiles source; the web project's guarded local build hook supplies the artifact for Visual Studio. Document the integration points, but do not redesign CI/CD unless explicitly asked.
 
 ## Excluding application-owned wwwroot from web publish
 
