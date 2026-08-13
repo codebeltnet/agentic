@@ -804,13 +804,16 @@ internal static class IdempotencyDetector
             RegexOptions.IgnoreCase)
             || Regex.IsMatch(csproj, "CopyToPublishDirectory\\s*=\\s*\"Never\"[^>]*Update\\s*=\\s*\"wwwroot", RegexOptions.IgnoreCase);
 
-        var launchSettings = Path.Combine(dir, "Properties", "launchSettings.json");
-        var segregatedProfile = File.Exists(launchSettings) &&
-            SafeRead(launchSettings).Contains(SegregateAssetsProgram.SegregatedProfileName, StringComparison.OrdinalIgnoreCase);
+        var projectLaunchSettings = Path.Combine(dir, "Properties", "launchSettings.json");
+        var composeLaunchSettings = Path.Combine(repoRoot, "launchSettings.json");
+        var segregatedProfile = new[] { composeLaunchSettings, projectLaunchSettings }
+            .Any(path => File.Exists(path) &&
+                         SafeRead(path).Contains(SegregateAssetsProgram.SegregatedProfileName, StringComparison.OrdinalIgnoreCase));
 
         var composeService = EnumerateComposeFiles(repoRoot)
             .Select(SafeRead)
-            .Any(t => t.Contains("codebeltnet/web-cdn-origin", StringComparison.OrdinalIgnoreCase));
+            .Any(t => t.Contains("codebeltnet/web-cdn-origin", StringComparison.OrdinalIgnoreCase) ||
+                      t.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase));
 
         var derivedDockerfile = EnumerateDockerfiles(repoRoot)
             .Select(SafeRead)
@@ -918,7 +921,7 @@ internal static class Classifier
 
 internal static class LaunchProfileValidator
 {
-    public sealed record Result(bool ProfileExists, bool IsHttp, bool HasHttpLocalOrigin, bool HasUnsafeProtocol, IReadOnlyList<string> Findings);
+    public sealed record Result(bool ProfileExists, bool IsDockerCompose, bool IsHttp, bool HasHttpLocalOrigin, bool HasUnsafeProtocol, IReadOnlyList<string> Findings);
 
     // Validates the segregated launch profile in launchSettings.json JSON text.
     public static Result Validate(string launchSettingsJson, string profileName)
@@ -926,7 +929,7 @@ internal static class LaunchProfileValidator
         var findings = new List<string>();
         JsonDocument doc;
         try { doc = JsonDocument.Parse(launchSettingsJson); }
-        catch (Exception ex) { return new Result(false, false, false, false, new[] { $"launchSettings.json is not valid JSON: {ex.Message}" }); }
+        catch (Exception ex) { return new Result(false, false, false, false, false, new[] { $"launchSettings.json is not valid JSON: {ex.Message}" }); }
 
         using (doc)
         {
@@ -934,25 +937,35 @@ internal static class LaunchProfileValidator
                 !profiles.TryGetProperty(profileName, out var profile))
             {
                 findings.Add($"Profile '{profileName}' is not present.");
-                return new Result(false, false, false, false, findings);
+                return new Result(false, false, false, false, false, findings);
             }
 
-            var appUrl = profile.TryGetProperty("applicationUrl", out var u) ? (u.GetString() ?? string.Empty) : string.Empty;
+            var commandName = profile.TryGetProperty("commandName", out var command) ? (command.GetString() ?? string.Empty) : string.Empty;
+            var isDockerCompose = commandName.Equals("DockerCompose", StringComparison.OrdinalIgnoreCase);
+            var appUrlProperty = isDockerCompose ? "composeLaunchUrl" : "applicationUrl";
+            var appUrl = profile.TryGetProperty(appUrlProperty, out var u) ? (u.GetString() ?? string.Empty) : string.Empty;
             var isHttp = appUrl.Contains("http://", StringComparison.OrdinalIgnoreCase) && !appUrl.Contains("https://", StringComparison.OrdinalIgnoreCase);
             if (!isHttp)
-                findings.Add("Segregated profile applicationUrl should be HTTP-only so an HTTP local origin is not requested from an HTTPS page.");
+                findings.Add($"Segregated profile {appUrlProperty} should be HTTP-only so an HTTP local origin is not requested from an HTTPS page.");
 
-            var envValues = new List<string>();
+            var envValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (profile.TryGetProperty("environmentVariables", out var env) && env.ValueKind == JsonValueKind.Object)
             {
                 foreach (var p in env.EnumerateObject())
-                    envValues.Add($"{p.Name}={p.Value.GetString() ?? string.Empty}");
+                    envValues[p.Name] = p.Value.GetString() ?? string.Empty;
             }
-            var envBlob = string.Join("\n", envValues);
+            var envBlob = string.Join("\n", envValues.Select(p => $"{p.Key}={p.Value}"));
 
-            var hasHttpLocalOrigin = Regex.IsMatch(envBlob, "http://localhost:\\d+", RegexOptions.IgnoreCase);
-            if (!hasHttpLocalOrigin)
-                findings.Add("Segregated profile should point App asset URLs at an http://localhost:<port> origin.");
+            var hasExplicitHttpLocalOrigin = Regex.IsMatch(envBlob, "http://localhost:\\d+", RegexOptions.IgnoreCase);
+            var hasHostOnlyLocalOrigin = envValues.Any(p =>
+                p.Key.EndsWith("__BaseUrl", StringComparison.OrdinalIgnoreCase) &&
+                Regex.IsMatch(p.Value, "^localhost:\\d+/?$", RegexOptions.IgnoreCase));
+            var hasHttpScheme = envValues.Any(p =>
+                p.Key.EndsWith("__Scheme", StringComparison.OrdinalIgnoreCase) &&
+                p.Value.Equals("Http", StringComparison.OrdinalIgnoreCase));
+            var hasHttpLocalOrigin = hasExplicitHttpLocalOrigin || (hasHostOnlyLocalOrigin && hasHttpScheme);
+            if (!hasHttpLocalOrigin && !isDockerCompose)
+                findings.Add("Segregated profile should point App asset URLs at an HTTP localhost origin, either as http://localhost:<port> or host-only localhost:<port> with Scheme=Http.");
 
             var hasUnsafeProtocol =
                 Regex.IsMatch(envBlob, "(^|=)//localhost", RegexOptions.IgnoreCase | RegexOptions.Multiline) ||
@@ -960,26 +973,41 @@ internal static class LaunchProfileValidator
             if (hasUnsafeProtocol)
                 findings.Add("Segregated profile uses a protocol-relative (//localhost) or https://localhost URL that would break an HTTP-only local origin.");
 
-            return new Result(true, isHttp, hasHttpLocalOrigin, hasUnsafeProtocol, findings);
+            return new Result(true, isDockerCompose, isHttp, hasHttpLocalOrigin, hasUnsafeProtocol, findings);
         }
     }
 }
 
 internal static class ComposeValidator
 {
-    public sealed record Result(bool UsesOriginImage, bool ReadOnlyMount, bool ReadOnlyRootFs, bool NonPrivileged, bool NoDockerSocket, IReadOnlyList<string> Findings);
+    public sealed record Result(bool UsesOriginImage, bool HasAssetContent, bool UsesLocalDevelopmentImage, bool HasHttpLocalOrigin, bool HasUnsafeProtocol, bool ReadOnlyRootFs, bool NonPrivileged, bool NoDockerSocket, IReadOnlyList<string> Findings);
 
     // Lightweight, line-oriented validation of the local origin service posture.
     public static Result Validate(string composeText)
     {
         var findings = new List<string>();
 
-        var usesOrigin = composeText.Contains(SegregateAssetsProgram.OriginImage, StringComparison.OrdinalIgnoreCase);
-        if (!usesOrigin) findings.Add($"Compose does not reference {SegregateAssetsProgram.OriginImage}.");
+        var usesDerivedAssetImage = composeText.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase);
+        var usesOrigin = composeText.Contains(SegregateAssetsProgram.OriginImage, StringComparison.OrdinalIgnoreCase) || usesDerivedAssetImage;
+        if (!usesOrigin) findings.Add($"Compose does not reference {SegregateAssetsProgram.OriginImage} or {SegregateAssetsProgram.DerivedDockerfileName}.");
 
         var readOnlyMount = Regex.IsMatch(composeText, ":/cdnroot:ro\\b", RegexOptions.IgnoreCase) ||
                             Regex.IsMatch(composeText, "target:\\s*/cdnroot[\\s\\S]{0,120}read_only:\\s*true", RegexOptions.IgnoreCase);
-        if (!readOnlyMount) findings.Add("wwwroot should be mounted into /cdnroot read-only (':/cdnroot:ro').");
+        var hasAssetContent = usesDerivedAssetImage || readOnlyMount;
+        if (!hasAssetContent) findings.Add($"Compose should build {SegregateAssetsProgram.DerivedDockerfileName} or mount content into /cdnroot read-only.");
+
+        var usesLocalDevelopmentImage = composeText.Contains("LocalDevelopment.Dockerfile", StringComparison.OrdinalIgnoreCase);
+        if (!usesLocalDevelopmentImage) findings.Add("Compose should build the web application with LocalDevelopment.Dockerfile.");
+
+        var hasExplicitHttpLocalOrigin = Regex.IsMatch(composeText, "http://localhost:\\d+", RegexOptions.IgnoreCase);
+        var hasHostOnlyLocalOrigin = Regex.IsMatch(composeText, "__BaseUrl\\s*:\\s*[\\\"']?localhost:\\d+/?[\\\"']?", RegexOptions.IgnoreCase);
+        var hasHttpScheme = Regex.IsMatch(composeText, "__Scheme\\s*:\\s*[\\\"']?Http[\\\"']?", RegexOptions.IgnoreCase);
+        var hasHttpLocalOrigin = hasExplicitHttpLocalOrigin || (hasHostOnlyLocalOrigin && hasHttpScheme);
+        if (!hasHttpLocalOrigin) findings.Add("Compose should configure App asset URLs for an HTTP localhost origin.");
+
+        var hasUnsafeProtocol = Regex.IsMatch(composeText, "(^|:)\\s*[\\\"']?//localhost", RegexOptions.IgnoreCase | RegexOptions.Multiline) ||
+                                Regex.IsMatch(composeText, "https://localhost", RegexOptions.IgnoreCase);
+        if (hasUnsafeProtocol) findings.Add("Compose uses a protocol-relative or HTTPS localhost asset origin that is unsafe for the HTTP-only local origin.");
 
         var readOnlyRootFs = Regex.IsMatch(composeText, "read_only:\\s*true", RegexOptions.IgnoreCase);
         if (!readOnlyRootFs) findings.Add("Prefer a read-only root filesystem (read_only: true) where practical.");
@@ -990,7 +1018,7 @@ internal static class ComposeValidator
         var noDockerSocket = !composeText.Contains("docker.sock", StringComparison.OrdinalIgnoreCase);
         if (!noDockerSocket) findings.Add("Do not mount the Docker socket into the origin container.");
 
-        return new Result(usesOrigin, readOnlyMount, readOnlyRootFs, nonPrivileged, noDockerSocket, findings);
+        return new Result(usesOrigin, hasAssetContent, usesLocalDevelopmentImage, hasHttpLocalOrigin, hasUnsafeProtocol, readOnlyRootFs, nonPrivileged, noDockerSocket, findings);
     }
 }
 
@@ -1182,20 +1210,30 @@ internal static class Commands
             ComposeValidator.Result? compose = null;
             if (options.CheckLocal)
             {
-                var launchSettings = Path.Combine(Path.GetDirectoryName(projectPath)!, "Properties", "launchSettings.json");
+                var rootLaunchSettings = Path.Combine(options.RepoRoot, "launchSettings.json");
+                var projectLaunchSettings = Path.Combine(Path.GetDirectoryName(projectPath)!, "Properties", "launchSettings.json");
+                var launchSettings = File.Exists(rootLaunchSettings) ? rootLaunchSettings : projectLaunchSettings;
                 if (File.Exists(launchSettings))
                     launch = LaunchProfileValidator.Validate(File.ReadAllText(launchSettings), SegregateAssetsProgram.SegregatedProfileName);
 
                 var composeFile = IdempotencyDetector.EnumerateComposeFiles(options.RepoRoot)
-                    .FirstOrDefault(f => File.ReadAllText(f).Contains("codebeltnet/web-cdn-origin", StringComparison.OrdinalIgnoreCase));
+                    .FirstOrDefault(f =>
+                    {
+                        var text = File.ReadAllText(f);
+                        return text.Contains("codebeltnet/web-cdn-origin", StringComparison.OrdinalIgnoreCase) ||
+                               text.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase);
+                    });
                 if (composeFile is not null)
                     compose = ComposeValidator.Validate(File.ReadAllText(composeFile));
             }
 
             var localOk = launch is not null &&
-                          !launch.HasUnsafeProtocol && launch.HasHttpLocalOrigin && launch.IsHttp &&
+                          !launch.HasUnsafeProtocol && launch.IsHttp &&
                           compose is not null &&
-                          compose.UsesOriginImage && compose.ReadOnlyMount && compose.NonPrivileged && compose.NoDockerSocket;
+                          (launch.HasHttpLocalOrigin || compose.HasHttpLocalOrigin) &&
+                          (!launch.IsDockerCompose || compose.UsesLocalDevelopmentImage) &&
+                          compose.UsesOriginImage && compose.HasAssetContent && !compose.HasUnsafeProtocol &&
+                          compose.NonPrivileged && compose.NoDockerSocket;
             var ok = leak.Passed && (!options.CheckLocal || localOk);
 
             var payload = new
@@ -1311,8 +1349,8 @@ internal static class Commands
         {
             new { step = "asset-abstraction", status = abstractionStatus, detail = abstractionDetail },
             new { step = "publish-exclusion", status = StatusFor(e.PublishExclusion), detail = "Add <Content Update=\"wwwroot/**\" CopyToPublishDirectory=\"Never\" /> to the web project for application-owned wwwroot content while preserving generated and contributed Static Web Assets." },
-            new { step = "segregated-launch-profile", status = StatusFor(e.SegregatedLaunchProfile), detail = $"Add the '{SegregateAssetsProgram.SegregatedProfileName}' HTTP launch profile with AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic, host-only BaseUrl = localhost:{options.AppPort}, and Scheme = ProtocolUriScheme.Http." },
-            new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide {SegregateAssetsProgram.ComposeFileName} with a local {SegregateAssetsProgram.OriginImage} service mounting wwwroot into /cdnroot read-only on host port {options.AppPort}." },
+            new { step = "segregated-launch-profile", status = StatusFor(e.SegregatedLaunchProfile), detail = $"Keep the ordinary project profile unchanged and add the root '{SegregateAssetsProgram.SegregatedProfileName}' DockerCompose profile for the full segregated topology. Put the host-only App BaseUrl localhost:{options.AppPort}, BaseUrlMode=Automatic, and Scheme=Http in the Compose web service environment." },
+            new { step = "local-origin", status = StatusFor(e.ComposeService), detail = $"Provide {SegregateAssetsProgram.ComposeFileName}: build the web service directly with LocalDevelopment.Dockerfile and build the asset service directly with {SegregateAssetsProgram.DerivedDockerfileName}. Do not add a redundant project-level segregated profile. If Visual Studio injects the web debugger bootstrap into the build-backed asset service, use docker-compose.vs.release.yml only to restore dotnet Codebelt.Cdn.Origin.dll, never to select Dockerfiles." },
             new { step = "production-image", status = StatusFor(e.DerivedDockerfile), detail = $"Add {SegregateAssetsProgram.DerivedDockerfileName} (PascalCase <something>.Dockerfile) and select it with --file: FROM {SegregateAssetsProgram.OriginImage} + COPY --chown={SegregateAssetsProgram.OriginUser}:{SegregateAssetsProgram.OriginUser} ./wwwroot/ {SegregateAssetsProgram.OriginContentRoot}/." },
             new { step = "documentation", status = "create-or-update", detail = "Document that deployed static content is served by Codebelt Static Content Provider, and that wwwroot remains the authoring root." },
         });
@@ -1402,12 +1440,12 @@ internal static class Commands
         if (launch is not null)
         {
             sb.AppendLine();
-            sb.AppendLine($"Local launch profile: exists={launch.ProfileExists} http={launch.IsHttp} httpLocalOrigin={launch.HasHttpLocalOrigin} unsafeProtocol={launch.HasUnsafeProtocol}");
+            sb.AppendLine($"Local launch profile: exists={launch.ProfileExists} dockerCompose={launch.IsDockerCompose} http={launch.IsHttp} httpLocalOrigin={launch.HasHttpLocalOrigin} unsafeProtocol={launch.HasUnsafeProtocol}");
             foreach (var f in launch.Findings) sb.AppendLine($"    - {f}");
         }
         if (compose is not null)
         {
-            sb.AppendLine($"Local origin compose: originImage={compose.UsesOriginImage} roMount={compose.ReadOnlyMount} roRootFs={compose.ReadOnlyRootFs} nonPrivileged={compose.NonPrivileged} noDockerSocket={compose.NoDockerSocket}");
+            sb.AppendLine($"Local origin compose: originImage={compose.UsesOriginImage} assetContent={compose.HasAssetContent} localDevelopmentImage={compose.UsesLocalDevelopmentImage} httpLocalOrigin={compose.HasHttpLocalOrigin} unsafeProtocol={compose.HasUnsafeProtocol} roRootFs={compose.ReadOnlyRootFs} nonPrivileged={compose.NonPrivileged} noDockerSocket={compose.NoDockerSocket}");
             foreach (var f in compose.Findings) sb.AppendLine($"    - {f}");
         }
         sb.AppendLine();
@@ -1447,6 +1485,7 @@ internal static class SelfTest
             TestAlreadySegregatedClassification(root);
             TestAlreadySegregatedRiskIsRisky(root);
             TestLaunchProfileValidatorSafe();
+            TestLaunchProfileValidatorRejectsHostOnlyWithoutScheme();
             TestLaunchProfileValidatorRejectsProtocolRelative();
             TestLaunchProfileValidatorRejectsHttpsLocal();
             TestComposeValidatorSafe();
@@ -1711,12 +1750,11 @@ internal static class SelfTest
           </ItemGroup>
         </Project>
         """);
-        Directory.CreateDirectory(Path.Combine(dir, "Properties"));
-        File.WriteAllText(Path.Combine(dir, "Properties", "launchSettings.json"), """
-        { "profiles": { "http-segregated-assets": { "commandName": "Project" } } }
+        File.WriteAllText(Path.Combine(dir, "launchSettings.json"), """
+        { "profiles": { "http-segregated-assets": { "commandName": "DockerCompose" } } }
         """);
         File.WriteAllText(Path.Combine(dir, SegregateAssetsProgram.ComposeFileName),
-            "services:\n  app-assets:\n    image: codebeltnet/web-cdn-origin:2.0.0\n");
+            "services:\n  web-app:\n    build:\n      dockerfile: LocalDevelopment.Dockerfile\n  app-assets:\n    build:\n      dockerfile: Assets.Dockerfile\n");
         File.WriteAllText(Path.Combine(dir, SegregateAssetsProgram.DerivedDockerfileName),
             "FROM codebeltnet/web-cdn-origin:2.0.0\nCOPY --chown=65532:65532 ./wwwroot/ /cdnroot/\n");
         var existing = IdempotencyDetector.Detect(csproj, dir);
@@ -1736,9 +1774,8 @@ internal static class SelfTest
           <ItemGroup><Content Update="wwwroot/**" CopyToPublishDirectory="Never" /></ItemGroup>
         </Project>
         """);
-        Directory.CreateDirectory(Path.Combine(dir, "Properties"));
-        File.WriteAllText(Path.Combine(dir, "Properties", "launchSettings.json"),
-            "{ \"profiles\": { \"http-segregated-assets\": { \"commandName\": \"Project\" } } }");
+        File.WriteAllText(Path.Combine(dir, "launchSettings.json"),
+            "{ \"profiles\": { \"http-segregated-assets\": { \"commandName\": \"DockerCompose\" } } }");
         var inspection = Commands.Inspect(dir, null);
         Assert("already: classified AlreadySegregated", inspection.Classification == Classifier.AlreadySegregated);
     }
@@ -1753,9 +1790,8 @@ internal static class SelfTest
           <ItemGroup><Content Update="wwwroot/**" CopyToPublishDirectory="Never" /></ItemGroup>
         </Project>
         """);
-        Directory.CreateDirectory(Path.Combine(dir, "Properties"));
-        File.WriteAllText(Path.Combine(dir, "Properties", "launchSettings.json"),
-            "{ \"profiles\": { \"http-segregated-assets\": { \"commandName\": \"Project\" } } }");
+        File.WriteAllText(Path.Combine(dir, "launchSettings.json"),
+            "{ \"profiles\": { \"http-segregated-assets\": { \"commandName\": \"DockerCompose\" } } }");
         File.WriteAllText(Path.Combine(dir, "Index.cshtml.css"), "h1{color:red}");
 
         var inspection = Commands.Inspect(dir, null);
@@ -1767,20 +1803,29 @@ internal static class SelfTest
     {
         var json = """
         { "profiles": { "http-segregated-assets": {
-            "commandName": "Project",
-            "applicationUrl": "http://localhost:5080",
-            "environmentVariables": {
-              "ASPNETCORE_ENVIRONMENT": "Development",
-              "SegregatedAssets__App__BaseUrl": "http://localhost:8080",
-              "SegregatedAssets__App__Scheme": "Http"
-            }
+            "commandName": "DockerCompose",
+            "composeLaunchUrl": "http://localhost:5080"
           } } }
         """;
         var r = LaunchProfileValidator.Validate(json, "http-segregated-assets");
         Assert("launch-safe: profile exists", r.ProfileExists);
+        Assert("launch-safe: docker compose", r.IsDockerCompose);
         Assert("launch-safe: http", r.IsHttp);
-        Assert("launch-safe: http local origin", r.HasHttpLocalOrigin);
+        Assert("launch-safe: origin belongs to compose", !r.HasHttpLocalOrigin);
         Assert("launch-safe: no unsafe protocol", !r.HasUnsafeProtocol);
+    }
+
+    private static void TestLaunchProfileValidatorRejectsHostOnlyWithoutScheme()
+    {
+        var json = """
+        { "profiles": { "http-segregated-assets": {
+            "commandName": "Project",
+            "applicationUrl": "http://localhost:5080",
+            "environmentVariables": { "SegregatedAssets__App__BaseUrl": "localhost:8080" }
+          } } }
+        """;
+        var r = LaunchProfileValidator.Validate(json, "http-segregated-assets");
+        Assert("launch-hostonly-noscheme: local origin not proven", !r.HasHttpLocalOrigin);
     }
 
     private static void TestLaunchProfileValidatorRejectsProtocolRelative()
@@ -1812,17 +1857,26 @@ internal static class SelfTest
     {
         var compose = """
         services:
+          web-app:
+            build:
+              dockerfile: src/Web/LocalDevelopment.Dockerfile
+            environment:
+              SegregatedAssets__App__BaseUrl: localhost:8080
+              SegregatedAssets__App__Scheme: Http
           app-assets:
-            image: codebeltnet/web-cdn-origin:2.0.0
+            build:
+              context: ./src/Web
+              dockerfile: Assets.Dockerfile
             read_only: true
             cap_drop: [ALL]
             ports: ["8080:8080"]
-            volumes:
-              - ./src/Web/wwwroot:/cdnroot:ro
         """;
         var r = ComposeValidator.Validate(compose);
         Assert("compose-safe: origin image", r.UsesOriginImage);
-        Assert("compose-safe: read-only mount", r.ReadOnlyMount);
+        Assert("compose-safe: asset content", r.HasAssetContent);
+        Assert("compose-safe: local development image", r.UsesLocalDevelopmentImage);
+        Assert("compose-safe: http local origin", r.HasHttpLocalOrigin);
+        Assert("compose-safe: safe protocol", !r.HasUnsafeProtocol);
         Assert("compose-safe: read-only rootfs", r.ReadOnlyRootFs);
         Assert("compose-safe: non-privileged", r.NonPrivileged);
         Assert("compose-safe: no docker socket", r.NoDockerSocket);
