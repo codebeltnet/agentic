@@ -13,11 +13,27 @@ Cdn: BaseUrl = cdn.example.com, Scheme = Https
 
 Use the exact configuration keys and binding shape already present in the application. Do not encode hostnames or environment names in Razor, create a second options hierarchy, or enable application-host fallback for CDN helpers. If no shared CDN equivalent exists, omit the CDN origin and configuration rather than reclassifying App assets.
 
+When the application has no bound section yet, bind Cuemon's `AppTagHelperOptions` from `SegregatedAssets:App` and `CdnTagHelperOptions` from `SegregatedAssets:Cdn`. That section name is a location for the existing Cuemon options types, not a competing abstraction; what the skill forbids is a second options type or a parallel URL-generation hierarchy beside the Cuemon ones. Whichever section is actually bound is then the single source for the Compose environment keys (`<Section>__BaseUrl`, `<Section>__BaseUrlMode`, `<Section>__Scheme`), the deployed configuration, and the documentation, so all three always agree. Write the full shape into `appsettings.json` — `BaseUrlMode`, an empty `BaseUrl`, and `Scheme` — so the deployment knobs are discoverable rather than implied:
+
+```json
+{
+  "SegregatedAssets": {
+    "App": {
+      "BaseUrlMode": "Automatic",
+      "BaseUrl": "",
+      "Scheme": "Https"
+    }
+  }
+}
+```
+
 In ordinary Development, set `AppTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Automatic` and omit App `BaseUrl`, so the current application request supplies the location. In the root `<ordinary-project-profile>.Assets` Docker Compose profile, keep Automatic mode, provide the explicit host-only local App `BaseUrl`, and use `Scheme = ProtocolUriScheme.Http`; the explicit App host wins. In deployment, keep Automatic mode with the explicit HTTPS App host. Keep `CdnTagHelperOptions.BaseUrlMode = TagHelperBaseUrlMode.Configured` and provide an explicit CDN host wherever shared content exists.
 
 ## Derived asset image
 
 Name the derived Dockerfile `<something>.Dockerfile` with a PascalCase `<something>` prefix. For this skill the canonical name is `Assets.Dockerfile`. Select it with `docker build --file Assets.Dockerfile ...` or the equivalent Compose `dockerfile: Assets.Dockerfile` setting. When a dedicated local Compose file is used, name it `compose.assets.yml`. See the [Dockerfile overview](https://docs.docker.com/build/concepts/dockerfile/).
+
+`Assets.Dockerfile` lives **beside the web `.csproj`**, in the same directory as the `wwwroot` it packages, together with `Dockerfile` and `LocalDevelopment.Dockerfile`. Its build context is that project directory, which is what keeps the copy expression the single relative line below instead of a path that reaches across the repository. `references/local-development.md` holds the full placement table; `assets/Assets.Dockerfile` holds the literal template.
 
 When application-owned assets ship as a container image, use `web-cdn-origin:2.0.0` as the base. The normal derived image is conceptually no more complicated than copying the final `wwwroot` output into the image's content root:
 
@@ -38,6 +54,8 @@ The Docker build input must be reproducible from a clean checkout. Do not ignore
 ## CI/CD integration
 
 Where CI/CD already builds once and promotes artifacts, preserve that model. Static assets can be emitted as their own build artifact and subsequently packaged into the Static Content Provider image, rather than being rebuilt during image publication. When repository CI builds the application container, add a separate build or validation for `Assets.Dockerfile` from the same commit; deployment must not depend on an image that only local Compose has ever constructed. When Visual Studio Compose requires an application container, use the same artifact-first boundary for the application: CI publishes to `artifacts/publish/`, production `Dockerfile` copies that directory into a shell-less DHI ASP.NET Core runtime, and `LocalDevelopment.Dockerfile` copies the same directory into the matching ASP.NET `-dev` runtime for Visual Studio. The `-dev` runtime supplies development utilities but is not an SDK. Neither Dockerfile compiles source; the web project's guarded local build hook supplies the artifact for Visual Studio. Document the integration points, but do not redesign CI/CD unless explicitly asked.
+
+Adding the artifact-first `Dockerfile` therefore obliges you to add its producer in the same change. An image whose only instruction is `COPY artifacts/publish/ .` is inert in a clean hosted checkout unless a CI job publishes to that exact path first, so the CI extension is part of the deliverable rather than optional follow-up. Append the two jobs in `assets/ci-artifact-jobs.yml` to the repository's existing workflow: `publish` runs `dotnet publish --output artifacts/publish` and uploads it, and `docker-build` downloads the same artifact and builds **both** `Dockerfile` and `Assets.Dockerfile` from that one commit. Keep the repository's existing reusable `build` and `test` jobs and chain the new jobs behind them with `needs:` rather than replacing anything. If the repository has no CI workflow at all, say so explicitly instead of silently leaving the production image without a producer.
 
 ## Excluding application-owned wwwroot from web publish
 
@@ -90,7 +108,7 @@ Segregated Development
 developer edits wwwroot
         |
         v
-read-only bind mount
+Assets.Dockerfile build (or an explicit read-only /cdnroot mount)
         |
         v
 web-cdn-origin:2.0.0
