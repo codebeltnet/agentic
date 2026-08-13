@@ -1,0 +1,31 @@
+services:
+  web-app:
+    image: ${DOCKER_REGISTRY-}{WebImageName}
+    build:
+      context: .
+      dockerfile: {ProjectDirectory}/LocalDevelopment.Dockerfile
+    depends_on:
+      - app-assets
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: 8080
+      {ConfigSection}__BaseUrl: localhost:{AppOriginPort}
+      {ConfigSection}__BaseUrlMode: Automatic
+      {ConfigSection}__Scheme: Http
+    ports:
+      - "{WebHostPort}:8080"
+
+  app-assets:
+    labels:
+      com.microsoft.visual-studio.project-name: ""
+    image: ${DOCKER_REGISTRY-}{AssetImageName}
+    build:
+      context: ./{ProjectDirectory}
+      dockerfile: Assets.Dockerfile
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "{AppOriginPort}:8080"
