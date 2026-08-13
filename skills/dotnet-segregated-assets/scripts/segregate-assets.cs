@@ -220,7 +220,9 @@ internal sealed class Options
           -p, --project <path>  Target web project (.csproj), relative to repo root or absolute.
           --publish-dir <dir>   Existing publish output to inspect for verify.
           --run-publish         Run `dotnet publish -c Release` into an isolated temp dir for verify.
-          --check-local         Validate launchSettings.json and the local Compose origin topology.
+          --check-local         Validate launchSettings.json, the local Compose origin topology, and
+                                the artifact-first contract (Dockerfile placement, no source
+                                compilation, .dockerignore, LocalPublishDirectory, CI artifact).
           --cdn-equivalent      A shared CDN/asset equivalent exists (affects plan output).
           --app-port <n>        Local App Static Content Provider host port (default: 8080).
           --cdn-port <n>        Local CDN Static Content Provider host port (default: 8081).
@@ -1086,9 +1088,7 @@ internal static class LaunchProfileValidator
             if (!hasHttpLocalOrigin && !isDockerCompose)
                 findings.Add("Segregated profile should point App asset URLs at an HTTP localhost origin, either as http://localhost:<port> or host-only localhost:<port> with Scheme=Http.");
 
-            var hasUnsafeProtocol =
-                Regex.IsMatch(envBlob, "(^|=)//localhost", RegexOptions.IgnoreCase | RegexOptions.Multiline) ||
-                Regex.IsMatch(envBlob, "https://localhost", RegexOptions.IgnoreCase);
+            var hasUnsafeProtocol = UnsafeOriginDetector.Detect(envBlob);
             if (hasUnsafeProtocol)
                 findings.Add("Segregated profile uses a protocol-relative (//localhost) or https://localhost URL that would break an HTTP-only local origin.");
 
@@ -1097,9 +1097,23 @@ internal static class LaunchProfileValidator
     }
 }
 
+// Detects origins that would break the HTTP-only local Static Content Provider: protocol-relative
+// //localhost and https://localhost. The scheme prefixes are neutralized first so a perfectly valid
+// http://localhost:<port> value is not mistaken for a protocol-relative one.
+internal static class UnsafeOriginDetector
+{
+    public static bool Detect(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        if (Regex.IsMatch(text, "https://localhost", RegexOptions.IgnoreCase)) return true;
+        var schemeless = Regex.Replace(text, "https?://", "", RegexOptions.IgnoreCase);
+        return Regex.IsMatch(schemeless, "//localhost", RegexOptions.IgnoreCase);
+    }
+}
+
 internal static class ComposeValidator
 {
-    public sealed record Result(bool UsesOriginImage, bool HasAssetContent, bool UsesLocalDevelopmentImage, bool HasVisualStudioProjectOptOut, bool HasHttpLocalOrigin, bool HasUnsafeProtocol, bool ReadOnlyRootFs, bool NonPrivileged, bool NoDockerSocket, IReadOnlyList<string> Findings);
+    public sealed record Result(bool UsesOriginImage, bool HasAssetContent, bool UsesLocalDevelopmentImage, bool HasVisualStudioProjectOptOut, bool HasHttpLocalOrigin, bool HasUnsafeProtocol, bool ReadOnlyRootFs, bool NonPrivileged, bool NoDockerSocket, bool NoObsoleteVersionKey, IReadOnlyList<string> Findings);
 
     // Lightweight, line-oriented validation of the local origin service posture.
     public static Result Validate(string composeText)
@@ -1132,8 +1146,7 @@ internal static class ComposeValidator
         var hasHttpLocalOrigin = hasExplicitHttpLocalOrigin || (hasHostOnlyLocalOrigin && hasHttpScheme);
         if (!hasHttpLocalOrigin) findings.Add("Compose should configure App asset URLs for an HTTP localhost origin.");
 
-        var hasUnsafeProtocol = Regex.IsMatch(composeText, "(^|:)\\s*[\\\"']?//localhost", RegexOptions.IgnoreCase | RegexOptions.Multiline) ||
-                                Regex.IsMatch(composeText, "https://localhost", RegexOptions.IgnoreCase);
+        var hasUnsafeProtocol = UnsafeOriginDetector.Detect(composeText);
         if (hasUnsafeProtocol) findings.Add("Compose uses a protocol-relative or HTTPS localhost asset origin that is unsafe for the HTTP-only local origin.");
 
         var readOnlyRootFs = Regex.IsMatch(composeText, "read_only:\\s*true", RegexOptions.IgnoreCase);
@@ -1145,7 +1158,10 @@ internal static class ComposeValidator
         var noDockerSocket = !composeText.Contains("docker.sock", StringComparison.OrdinalIgnoreCase);
         if (!noDockerSocket) findings.Add("Do not mount the Docker socket into the origin container.");
 
-        return new Result(usesOrigin, hasAssetContent, usesLocalDevelopmentImage, hasVisualStudioProjectOptOut, hasHttpLocalOrigin, hasUnsafeProtocol, readOnlyRootFs, nonPrivileged, noDockerSocket, findings);
+        var noObsoleteVersionKey = !Regex.IsMatch(composeText, "(?m)^version:\\s*[\\\"']?\\d", RegexOptions.IgnoreCase);
+        if (!noObsoleteVersionKey) findings.Add("Remove the obsolete top-level Compose 'version:' key; current Docker Compose ignores it and warns about it.");
+
+        return new Result(usesOrigin, hasAssetContent, usesLocalDevelopmentImage, hasVisualStudioProjectOptOut, hasHttpLocalOrigin, hasUnsafeProtocol, readOnlyRootFs, nonPrivileged, noDockerSocket, noObsoleteVersionKey, findings);
     }
 
     private static string? FindAssetService(string composeText)
@@ -1179,6 +1195,220 @@ internal static class ComposeValidator
         return services.FirstOrDefault(service =>
             service.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase) ||
             service.Contains(SegregateAssetsProgram.OriginImage, StringComparison.OrdinalIgnoreCase));
+    }
+}
+
+// Proves the artifact-first topology contract once a segregated Compose file exists: the three
+// Dockerfiles sit beside the web project, neither application Dockerfile compiles source, the build
+// context is trimmed by a .dockerignore that still carries the published artifact, the project
+// declares LocalPublishDirectory behind a guarded publish target, CI produces the artifact both
+// application Dockerfiles copy, and a Visual Studio Compose launch surface is registered completely.
+internal static class ArtifactFirstValidator
+{
+    private const string LocalDevelopmentDockerfileName = "LocalDevelopment.Dockerfile";
+
+    public sealed record Result(
+        bool DockerfilesColocated,
+        bool NoRootDockerfile,
+        bool NoSourceCompilation,
+        bool HasDockerIgnore,
+        bool ArtifactsReachable,
+        bool HasLocalPublishDirectory,
+        bool HasGuardedPublishTarget,
+        bool CiPublishesArtifact,
+        bool VisualStudioComposeComplete,
+        IReadOnlyList<string> Findings);
+
+    // composeText drives what is required: a topology that mounts /cdnroot read-only instead of
+    // building Assets.Dockerfile is not asked for an asset image it never uses.
+    public static Result Validate(string repoRoot, string projectPath, string composeText)
+    {
+        var findings = new List<string>();
+        var projectDir = Path.GetDirectoryName(projectPath)!;
+        var projectRelativeDir = Path.GetRelativePath(repoRoot, projectDir).Replace('\\', '/');
+        var projectIsRepoRoot = projectDir.TrimEnd('\\', '/').Equals(repoRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
+        var applicationImageInPlay = composeText.Contains(LocalDevelopmentDockerfileName, StringComparison.OrdinalIgnoreCase);
+        var assetImageInPlay = composeText.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase);
+
+        var applicationDockerfiles = applicationImageInPlay
+            ? new[] { "Dockerfile", LocalDevelopmentDockerfileName }
+            : Array.Empty<string>();
+        var expected = assetImageInPlay
+            ? applicationDockerfiles.Append(SegregateAssetsProgram.DerivedDockerfileName).ToArray()
+            : applicationDockerfiles;
+
+        var misplaced = expected.Where(name => !File.Exists(Path.Combine(projectDir, name))).ToList();
+        var dockerfilesColocated = misplaced.Count == 0;
+        if (!dockerfilesColocated)
+            findings.Add($"Expected {string.Join(", ", misplaced)} beside the web project in '{projectRelativeDir}/'. Dockerfiles for this topology live with the .csproj, not at the repository root.");
+
+        var strayRootDockerfiles = projectIsRepoRoot
+            ? new List<string>()
+            : expected.Where(name => File.Exists(Path.Combine(repoRoot, name))).ToList();
+        var noRootDockerfile = strayRootDockerfiles.Count == 0;
+        if (!noRootDockerfile)
+            findings.Add($"Repository root holds {string.Join(", ", strayRootDockerfiles)}; move them beside the web project so Visual Studio Container Tools discovery and the per-service Compose build contexts stay correct.");
+
+        var compileFindings = new List<string>();
+        foreach (var name in applicationDockerfiles)
+        {
+            foreach (var candidate in new[] { Path.Combine(projectDir, name), Path.Combine(repoRoot, name) })
+            {
+                if (!File.Exists(candidate)) continue;
+                compileFindings.AddRange(InspectApplicationDockerfile(name, SafeRead(candidate)));
+                break;
+            }
+        }
+        var noSourceCompilation = compileFindings.Count == 0;
+        findings.AddRange(compileFindings);
+
+        var dockerIgnorePath = Path.Combine(repoRoot, ".dockerignore");
+        var dockerIgnoreExists = File.Exists(dockerIgnorePath);
+        var hasDockerIgnore = !applicationImageInPlay || dockerIgnoreExists;
+        if (!hasDockerIgnore)
+            findings.Add("Add a repository-root .dockerignore; the web service builds from the repository root and would otherwise send .git, bin, and obj to the daemon.");
+
+        var artifactsReachable = !dockerIgnoreExists || !Regex.IsMatch(
+            SafeRead(dockerIgnorePath),
+            "(?m)^\\s*(\\*\\*[\\\\/])?artifacts([\\\\/][^\\r\\n]*)?\\s*$",
+            RegexOptions.IgnoreCase);
+        if (!artifactsReachable)
+            findings.Add(".dockerignore excludes artifacts/, but Dockerfile and LocalDevelopment.Dockerfile copy artifacts/publish/ from the build context.");
+
+        var csproj = SafeRead(projectPath);
+        var hasLocalPublishDirectory = !applicationImageInPlay || csproj.Contains("<LocalPublishDirectory>", StringComparison.OrdinalIgnoreCase);
+        if (!hasLocalPublishDirectory)
+            findings.Add("The web project does not declare <LocalPublishDirectory>; an ordinary local build then never materializes the artifact both application Dockerfiles copy.");
+
+        var hasGuardedPublishTarget = !applicationImageInPlay || EnumerateBuildFiles(repoRoot, projectDir)
+            .Select(SafeRead)
+            .Any(text => text.Contains("$(LocalPublishDirectory)", StringComparison.OrdinalIgnoreCase) &&
+                         text.Contains("<Target", StringComparison.OrdinalIgnoreCase) &&
+                         Regex.IsMatch(text, "'\\$\\(CI\\)'\\s*!=\\s*'true'", RegexOptions.IgnoreCase) &&
+                         Regex.IsMatch(text, "'\\$\\(DesignTimeBuild\\)'\\s*!=\\s*'true'", RegexOptions.IgnoreCase));
+        if (!hasGuardedPublishTarget)
+            findings.Add("No MSBuild target publishes to $(LocalPublishDirectory) behind non-CI and non-design-time guards. See assets/LocalPublishTarget.targets.");
+
+        var ciPublishesArtifact = !applicationImageInPlay || CiPublishesArtifact(repoRoot);
+        if (!ciPublishesArtifact)
+            findings.Add("No GitHub Actions workflow publishes the application to artifacts/publish. An artifact-first Dockerfile has no producer in a clean hosted checkout. See assets/ci-artifact-jobs.yml.");
+
+        var visualStudioComposeComplete = ValidateVisualStudioCompose(repoRoot, csproj, findings);
+
+        return new Result(
+            dockerfilesColocated,
+            noRootDockerfile,
+            noSourceCompilation,
+            hasDockerIgnore,
+            artifactsReachable,
+            hasLocalPublishDirectory,
+            hasGuardedPublishTarget,
+            ciPublishesArtifact,
+            visualStudioComposeComplete,
+            findings);
+    }
+
+    private static IEnumerable<string> InspectApplicationDockerfile(string name, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) yield break;
+
+        if (Regex.IsMatch(text, "(?im)^\\s*FROM\\s+\\S*dotnet/sdk"))
+            yield return $"{name} declares a .NET SDK stage. Application Dockerfiles in this topology package artifacts/publish/ and never compile source.";
+
+        if (Regex.IsMatch(text, "(?im)^\\s*RUN\\b.*\\bdotnet\\s+(restore|build|publish)\\b"))
+            yield return $"{name} runs dotnet restore/build/publish. The artifact is produced by the guarded local target or CI, not inside the image.";
+
+        if (Regex.IsMatch(text, "(?im)^\\s*RUN\\b.*\\b(adduser|addgroup|useradd|groupadd)\\b"))
+            yield return $"{name} creates a runtime user with RUN. The dhi.io base images already run as UID 65532, and the shell-less production base cannot execute RUN.";
+
+        if (Regex.IsMatch(text, "(?im)^\\s*FROM\\s+mcr\\.microsoft\\.com/dotnet/(aspnetcore|runtime)"))
+            yield return $"{name} uses an mcr.microsoft.com runtime. This topology targets the shell-less dhi.io/aspnetcore Alpine runtime and its matching -dev variant.";
+
+        if (Regex.IsMatch(text, "(?im)^\\s*USER\\s+root\\b"))
+            yield return $"{name} escalates to root. Keep the non-root 65532 runtime user.";
+
+        if (!Regex.IsMatch(text, "(?im)^\\s*COPY\\b.*artifacts/publish/"))
+            yield return $"{name} does not copy artifacts/publish/. Package the already-published artifact instead of rebuilding it.";
+    }
+
+    private static bool ValidateVisualStudioCompose(string repoRoot, string csproj, List<string> findings)
+    {
+        var rootLaunchSettings = Path.Combine(repoRoot, "launchSettings.json");
+        var hasComposeLaunchSurface = File.Exists(rootLaunchSettings) &&
+                                      SafeRead(rootLaunchSettings).Contains("DockerCompose", StringComparison.OrdinalIgnoreCase);
+        var composeProjects = SafeEnumerate(repoRoot, "*.dcproj").ToList();
+        if (!hasComposeLaunchSurface && composeProjects.Count == 0) return true;
+
+        var complete = true;
+        if (!hasComposeLaunchSurface)
+        {
+            findings.Add("A .dcproj exists but no repository-root launchSettings.json declares a commandName: DockerCompose profile, so Visual Studio has nothing to launch.");
+            complete = false;
+        }
+
+        if (composeProjects.Count == 0)
+        {
+            findings.Add("A repository-root DockerCompose launch profile exists but no Microsoft.Docker.Sdk .dcproj registers it with Visual Studio.");
+            complete = false;
+        }
+        else if (!composeProjects.Any(p => SafeRead(p).Contains("<DockerComposeBaseFilePath>compose.assets<", StringComparison.OrdinalIgnoreCase)))
+        {
+            findings.Add("No .dcproj points DockerComposeBaseFilePath at compose.assets, so Visual Studio would not resolve compose.assets.yml.");
+            complete = false;
+        }
+
+        if (!csproj.Contains("<DockerComposeProjectPath>", StringComparison.OrdinalIgnoreCase))
+        {
+            findings.Add("The web project does not declare <DockerComposeProjectPath>, so Visual Studio cannot associate it with the Compose project.");
+            complete = false;
+        }
+
+        return complete;
+    }
+
+    private static bool CiPublishesArtifact(string repoRoot)
+    {
+        var workflowRoot = Path.Combine(repoRoot, ".github", "workflows");
+        if (!Directory.Exists(workflowRoot)) return false;
+
+        return Directory.EnumerateFiles(workflowRoot, "*.y*ml", SearchOption.TopDirectoryOnly)
+            .Select(SafeRead)
+            .Any(text => Regex.IsMatch(text, "dotnet\\s+publish[^\\r\\n]*artifacts[\\\\/]publish", RegexOptions.IgnoreCase));
+    }
+
+    private static IEnumerable<string> EnumerateBuildFiles(string repoRoot, string projectDir)
+    {
+        foreach (var name in new[] { "Directory.Build.targets", "Directory.Build.props" })
+        {
+            var directory = projectDir;
+            while (!string.IsNullOrEmpty(directory))
+            {
+                var candidate = Path.Combine(directory, name);
+                if (File.Exists(candidate)) yield return candidate;
+                if (directory.TrimEnd('\\', '/').Equals(repoRoot.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) break;
+                var parent = Path.GetDirectoryName(directory);
+                if (parent is null || parent == directory) break;
+                directory = parent;
+            }
+        }
+    }
+
+    private static IEnumerable<string> SafeEnumerate(string root, string pattern)
+    {
+        try
+        {
+            var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+            return Directory.EnumerateFiles(root, pattern, options)
+                .Where(f => { var n = f.Replace('\\', '/'); return !n.Contains("/bin/") && !n.Contains("/obj/"); })
+                .ToList();
+        }
+        catch { return Array.Empty<string>(); }
+    }
+
+    private static string SafeRead(string file)
+    {
+        try { return File.ReadAllText(file); } catch { return string.Empty; }
     }
 }
 
@@ -1374,6 +1604,7 @@ internal static class Commands
 
             LaunchProfileValidator.Result? launch = null;
             ComposeValidator.Result? compose = null;
+            ArtifactFirstValidator.Result? artifactFirst = null;
             if (options.CheckLocal)
             {
                 var rootLaunchSettings = Path.Combine(options.RepoRoot, "launchSettings.json");
@@ -1390,9 +1621,19 @@ internal static class Commands
                                text.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase);
                     });
                 if (composeFile is not null)
-                    compose = ComposeValidator.Validate(File.ReadAllText(composeFile));
+                {
+                    var composeText = File.ReadAllText(composeFile);
+                    compose = ComposeValidator.Validate(composeText);
+                    artifactFirst = ArtifactFirstValidator.Validate(options.RepoRoot, projectPath, composeText);
+                }
             }
 
+            var artifactFirstOk = artifactFirst is null ||
+                                  (artifactFirst.DockerfilesColocated && artifactFirst.NoRootDockerfile &&
+                                   artifactFirst.NoSourceCompilation && artifactFirst.HasDockerIgnore &&
+                                   artifactFirst.ArtifactsReachable && artifactFirst.HasLocalPublishDirectory &&
+                                   artifactFirst.HasGuardedPublishTarget && artifactFirst.CiPublishesArtifact &&
+                                   artifactFirst.VisualStudioComposeComplete);
             var localOk = launch is not null &&
                           !launch.HasUnsafeProtocol && launch.IsHttp &&
                           compose is not null &&
@@ -1400,7 +1641,8 @@ internal static class Commands
                           (!launch.IsDockerCompose || compose.UsesLocalDevelopmentImage) &&
                           (!launch.IsDockerCompose || compose.HasVisualStudioProjectOptOut) &&
                           compose.UsesOriginImage && compose.HasAssetContent && !compose.HasUnsafeProtocol &&
-                          compose.NonPrivileged && compose.NoDockerSocket;
+                          compose.NonPrivileged && compose.NoDockerSocket && compose.NoObsoleteVersionKey &&
+                          artifactFirstOk;
             var sourceReproducible = !inspection.RiskSignals.Any(signal => signal.Code == "ASSET_SOURCE_NOT_VERSIONED");
             var assetImageValidatedInCi = !inspection.RiskSignals.Any(signal => signal.Code == "ASSET_IMAGE_NOT_VALIDATED_IN_CI");
             var ok = leak.Passed && sourceReproducible && assetImageValidatedInCi && (!options.CheckLocal || localOk);
@@ -1418,8 +1660,9 @@ internal static class Commands
                 preservedSharedAssets = leak.PreservedSharedAssets,
                 launch,
                 compose,
+                artifactFirst,
             };
-            SegregateAssetsProgram.Emit(options, payload, () => RenderVerify(selected, publishDir!, leak, sourceReproducible, assetImageValidatedInCi, launch, compose, ok));
+            SegregateAssetsProgram.Emit(options, payload, () => RenderVerify(selected, publishDir!, leak, sourceReproducible, assetImageValidatedInCi, launch, compose, artifactFirst, ok));
             return ok ? (int)ExitCode.Success : (int)ExitCode.VerificationFailed;
         }
         finally
@@ -1603,7 +1846,7 @@ internal static class Commands
     }
 
     private static string RenderVerify(string project, string publishDir, PublishLeakDetector.Result leak, bool sourceReproducible, bool assetImageValidatedInCi,
-        LaunchProfileValidator.Result? launch, ComposeValidator.Result? compose, bool ok)
+        LaunchProfileValidator.Result? launch, ComposeValidator.Result? compose, ArtifactFirstValidator.Result? artifactFirst, bool ok)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Verify: {project}");
@@ -1628,8 +1871,13 @@ internal static class Commands
         }
         if (compose is not null)
         {
-            sb.AppendLine($"Local origin compose: originImage={compose.UsesOriginImage} assetContent={compose.HasAssetContent} localDevelopmentImage={compose.UsesLocalDevelopmentImage} vsProjectOptOut={compose.HasVisualStudioProjectOptOut} httpLocalOrigin={compose.HasHttpLocalOrigin} unsafeProtocol={compose.HasUnsafeProtocol} roRootFs={compose.ReadOnlyRootFs} nonPrivileged={compose.NonPrivileged} noDockerSocket={compose.NoDockerSocket}");
+            sb.AppendLine($"Local origin compose: originImage={compose.UsesOriginImage} assetContent={compose.HasAssetContent} localDevelopmentImage={compose.UsesLocalDevelopmentImage} vsProjectOptOut={compose.HasVisualStudioProjectOptOut} httpLocalOrigin={compose.HasHttpLocalOrigin} unsafeProtocol={compose.HasUnsafeProtocol} roRootFs={compose.ReadOnlyRootFs} nonPrivileged={compose.NonPrivileged} noDockerSocket={compose.NoDockerSocket} noVersionKey={compose.NoObsoleteVersionKey}");
             foreach (var f in compose.Findings) sb.AppendLine($"    - {f}");
+        }
+        if (artifactFirst is not null)
+        {
+            sb.AppendLine($"Artifact-first topology: colocated={artifactFirst.DockerfilesColocated} noRootDockerfile={artifactFirst.NoRootDockerfile} noSourceCompilation={artifactFirst.NoSourceCompilation} dockerIgnore={artifactFirst.HasDockerIgnore} artifactsReachable={artifactFirst.ArtifactsReachable} localPublishDirectory={artifactFirst.HasLocalPublishDirectory} guardedPublishTarget={artifactFirst.HasGuardedPublishTarget} ciPublishesArtifact={artifactFirst.CiPublishesArtifact} vsComposeComplete={artifactFirst.VisualStudioComposeComplete}");
+            foreach (var f in artifactFirst.Findings) sb.AppendLine($"    - {f}");
         }
         sb.AppendLine();
         sb.AppendLine(ok ? "RESULT: PASS" : "RESULT: FAIL");
@@ -1674,6 +1922,12 @@ internal static class SelfTest
             TestLaunchProfileValidatorRejectsHttpsLocal();
             TestComposeValidatorSafe();
             TestComposeValidatorRejectsPrivilegedAndSocket();
+            TestComposeValidatorAcceptsHttpLocalhostOrigin();
+            TestComposeValidatorRejectsObsoleteVersionKey();
+            TestArtifactFirstValidatorAcceptsCanonicalLayout(root);
+            TestArtifactFirstValidatorRejectsRootDockerfiles(root);
+            TestArtifactFirstValidatorRejectsSourceCompilingDockerfile(root);
+            TestArtifactFirstValidatorSkipsWhenNoApplicationImage(root);
             TestPublishLeakDetected();
             TestPublishLeakCleanWithPreservedSharedAssets();
         }
@@ -2096,6 +2350,182 @@ internal static class SelfTest
         Assert("compose-bad: missing Visual Studio project opt-out flagged", !r.HasVisualStudioProjectOptOut);
         Assert("compose-bad: privileged flagged", !r.NonPrivileged);
         Assert("compose-bad: docker socket flagged", !r.NoDockerSocket);
+    }
+
+    // Regression: http://localhost:<port> is the canonical safe local origin and must never be
+    // mistaken for the protocol-relative //localhost form.
+    private static void TestComposeValidatorAcceptsHttpLocalhostOrigin()
+    {
+        var compose = """
+        services:
+          web-app:
+            build:
+              dockerfile: src/Web/LocalDevelopment.Dockerfile
+            environment:
+              SegregatedAssets__App__BaseUrl: http://localhost:8080
+          app-assets:
+            build:
+              context: ./src/Web
+              dockerfile: Assets.Dockerfile
+            labels:
+              com.microsoft.visual-studio.project-name: ""
+        """;
+        var r = ComposeValidator.Validate(compose);
+        Assert("compose-http-origin: http local origin accepted", r.HasHttpLocalOrigin);
+        Assert("compose-http-origin: not flagged unsafe", !r.HasUnsafeProtocol);
+        Assert("compose-http-origin: protocol-relative still flagged",
+            ComposeValidator.Validate(compose.Replace("http://localhost:8080", "//localhost:8080")).HasUnsafeProtocol);
+    }
+
+    private static void TestComposeValidatorRejectsObsoleteVersionKey()
+    {
+        var compose = """
+        version: '3.8'
+        services:
+          app-assets:
+            image: codebeltnet/web-cdn-origin:2.0.0
+        """;
+        var r = ComposeValidator.Validate(compose);
+        Assert("compose-version-key: obsolete version flagged", !r.NoObsoleteVersionKey);
+    }
+
+    private static string NewArtifactFirstRepo(string root, string name, bool colocated, string? dockerfileOverride = null)
+    {
+        var repo = Path.Combine(root, name);
+        var projectDir = Path.Combine(repo, "src", "Web");
+        Directory.CreateDirectory(projectDir);
+        File.WriteAllText(Path.Combine(projectDir, "Web.csproj"), """
+        <Project Sdk="Microsoft.NET.Sdk.Web">
+          <PropertyGroup>
+            <TargetFramework>net10.0</TargetFramework>
+            <LocalPublishDirectory>artifacts\publish\</LocalPublishDirectory>
+            <DockerComposeProjectPath>..\..\docker-compose.dcproj</DockerComposeProjectPath>
+          </PropertyGroup>
+        </Project>
+        """);
+
+        var dockerfileHome = colocated ? projectDir : repo;
+        File.WriteAllText(Path.Combine(dockerfileHome, "Dockerfile"), dockerfileOverride ?? """
+        FROM dhi.io/aspnetcore:10-alpine3.23
+        WORKDIR /app
+        COPY --chown=65532:65532 artifacts/publish/ .
+        ENTRYPOINT ["dotnet", "Web.dll"]
+        """);
+        File.WriteAllText(Path.Combine(dockerfileHome, "LocalDevelopment.Dockerfile"), """
+        FROM dhi.io/aspnetcore:10-alpine3.23-dev
+        WORKDIR /app
+        COPY --chown=65532:65532 artifacts/publish/ .
+        USER 65532
+        ENTRYPOINT ["dotnet", "Web.dll"]
+        """);
+        File.WriteAllText(Path.Combine(dockerfileHome, "Assets.Dockerfile"),
+            "FROM codebeltnet/web-cdn-origin:2.0.0\nCOPY --chown=65532:65532 ./wwwroot/ /cdnroot/\n");
+
+        File.WriteAllText(Path.Combine(repo, ".dockerignore"), ".git\n**/bin\n**/obj\n");
+        File.WriteAllText(Path.Combine(repo, "Directory.Build.targets"), """
+        <Project>
+          <Target Name="PublishRunnerArtifacts" AfterTargets="Build" Condition="'$(CI)' != 'true' and '$(DesignTimeBuild)' != 'true' and '$(LocalPublishDirectory)' != ''">
+            <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Publish" Properties="PublishDir=$(LocalPublishDirectory)" />
+          </Target>
+        </Project>
+        """);
+        File.WriteAllText(Path.Combine(repo, "docker-compose.dcproj"), """
+        <Project Sdk="Microsoft.Docker.Sdk">
+          <PropertyGroup Label="Globals">
+            <DockerComposeBaseFilePath>compose.assets</DockerComposeBaseFilePath>
+          </PropertyGroup>
+        </Project>
+        """);
+        File.WriteAllText(Path.Combine(repo, "launchSettings.json"),
+            "{ \"profiles\": { \"Web.Assets\": { \"commandName\": \"DockerCompose\" } } }");
+
+        var workflows = Path.Combine(repo, ".github", "workflows");
+        Directory.CreateDirectory(workflows);
+        File.WriteAllText(Path.Combine(workflows, "ci-pipeline.yml"),
+            "jobs:\n  publish:\n    steps:\n      - run: dotnet publish src/Web/Web.csproj --output artifacts/publish\n");
+
+        return repo;
+    }
+
+    private static string ArtifactFirstCompose(string projectDirectory) => $"""
+        services:
+          web-app:
+            build:
+              context: .
+              dockerfile: {projectDirectory}/LocalDevelopment.Dockerfile
+          app-assets:
+            build:
+              context: ./{projectDirectory}
+              dockerfile: Assets.Dockerfile
+        """;
+
+    private static void TestArtifactFirstValidatorAcceptsCanonicalLayout(string root)
+    {
+        var repo = NewArtifactFirstRepo(root, "artifact-ok", colocated: true);
+        var r = ArtifactFirstValidator.Validate(repo, Path.Combine(repo, "src", "Web", "Web.csproj"), ArtifactFirstCompose("src/Web"));
+        Assert("artifact-ok: dockerfiles colocated", r.DockerfilesColocated);
+        Assert("artifact-ok: no root dockerfile", r.NoRootDockerfile);
+        Assert("artifact-ok: no source compilation", r.NoSourceCompilation);
+        Assert("artifact-ok: dockerignore present", r.HasDockerIgnore);
+        Assert("artifact-ok: artifacts reachable", r.ArtifactsReachable);
+        Assert("artifact-ok: LocalPublishDirectory declared", r.HasLocalPublishDirectory);
+        Assert("artifact-ok: guarded publish target", r.HasGuardedPublishTarget);
+        Assert("artifact-ok: CI publishes artifact", r.CiPublishesArtifact);
+        Assert("artifact-ok: Visual Studio Compose complete", r.VisualStudioComposeComplete);
+        Assert("artifact-ok: no findings", r.Findings.Count == 0);
+    }
+
+    // Regression: the observed failure placed all three Dockerfiles at the repository root.
+    private static void TestArtifactFirstValidatorRejectsRootDockerfiles(string root)
+    {
+        var repo = NewArtifactFirstRepo(root, "artifact-rooted", colocated: false);
+        var r = ArtifactFirstValidator.Validate(repo, Path.Combine(repo, "src", "Web", "Web.csproj"), ArtifactFirstCompose("src/Web"));
+        Assert("artifact-rooted: colocation flagged", !r.DockerfilesColocated);
+        Assert("artifact-rooted: stray root dockerfiles flagged", !r.NoRootDockerfile);
+    }
+
+    // Regression: the observed failure emitted SDK multi-stage builds that compiled the application
+    // inside the image and created the runtime user with RUN.
+    private static void TestArtifactFirstValidatorRejectsSourceCompilingDockerfile(string root)
+    {
+        var repo = NewArtifactFirstRepo(root, "artifact-sdk", colocated: true, dockerfileOverride: """
+        FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine as build
+        WORKDIR /src
+        RUN dotnet publish "src/Web/Web.csproj" -c Release -o /app/publish
+        FROM mcr.microsoft.com/dotnet/aspnetcore:10.0-alpine as final
+        RUN addgroup -g 65532 appuser && adduser -D -u 65532 -G appuser appuser
+        COPY --from=build /app/publish .
+        ENTRYPOINT ["dotnet", "Web.dll"]
+        """);
+        var r = ArtifactFirstValidator.Validate(repo, Path.Combine(repo, "src", "Web", "Web.csproj"), ArtifactFirstCompose("src/Web"));
+        Assert("artifact-sdk: source compilation flagged", !r.NoSourceCompilation);
+        Assert("artifact-sdk: SDK stage reported", r.Findings.Any(f => f.Contains("SDK stage", StringComparison.OrdinalIgnoreCase)));
+        Assert("artifact-sdk: RUN user creation reported", r.Findings.Any(f => f.Contains("RUN", StringComparison.Ordinal) && f.Contains("65532", StringComparison.Ordinal)));
+        Assert("artifact-sdk: mcr runtime reported", r.Findings.Any(f => f.Contains("mcr.microsoft.com", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    // A mount-only topology never builds an application image, so the artifact-first obligations
+    // must not be demanded of it.
+    private static void TestArtifactFirstValidatorSkipsWhenNoApplicationImage(string root)
+    {
+        var repo = Path.Combine(root, "artifact-mount");
+        var projectDir = Path.Combine(repo, "src", "Web");
+        Directory.CreateDirectory(projectDir);
+        File.WriteAllText(Path.Combine(projectDir, "Web.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+        var compose = """
+        services:
+          app-assets:
+            image: codebeltnet/web-cdn-origin:2.0.0
+            volumes:
+              - ./src/Web/wwwroot:/cdnroot:ro
+        """;
+        var r = ArtifactFirstValidator.Validate(repo, Path.Combine(projectDir, "Web.csproj"), compose);
+        Assert("artifact-mount: colocation not demanded", r.DockerfilesColocated);
+        Assert("artifact-mount: dockerignore not demanded", r.HasDockerIgnore);
+        Assert("artifact-mount: LocalPublishDirectory not demanded", r.HasLocalPublishDirectory);
+        Assert("artifact-mount: CI artifact not demanded", r.CiPublishesArtifact);
+        Assert("artifact-mount: no findings", r.Findings.Count == 0);
     }
 
     private static void TestPublishLeakDetected()
