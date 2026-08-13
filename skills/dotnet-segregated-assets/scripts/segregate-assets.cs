@@ -1120,36 +1120,65 @@ internal static class ComposeFileSelector
 
     public static Selection Select(string repoRoot, string projectPath, IEnumerable<string> webProjectRelativePaths)
     {
-        var candidates = IdempotencyDetector.EnumerateComposeFiles(repoRoot)
-            .Select(path => (Path: path, Text: SafeRead(path)))
-            .Where(candidate => IsAssetOrigin(candidate.Text))
-            .OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (candidates.Count == 0) return new Selection(null, false);
-
-        var selectedDirectory = RelativeDirectory(repoRoot, Path.GetDirectoryName(projectPath)!);
+        var projectDirectory = Path.GetDirectoryName(projectPath)!;
+        var selectedDirectory = RelativeDirectory(repoRoot, projectDirectory);
         var otherDirectories = webProjectRelativePaths
             .Select(relative => NormalizeDirectory(Path.GetDirectoryName(relative) ?? string.Empty))
             .Where(directory => directory.Length > 0 && !directory.Equals(selectedDirectory, StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        if (selectedDirectory.Length > 0)
-        {
-            var mine = candidates.FirstOrDefault(candidate => Mentions(candidate.Text, selectedDirectory));
-            if (mine.Path is not null) return new Selection(mine.Path, false);
-        }
+        var assetOriginComposeFiles = IdempotencyDetector.EnumerateComposeFiles(repoRoot)
+            .Select(path => (Path: path, Text: SafeRead(path)))
+            .Where(candidate => IsAssetOrigin(candidate.Text))
+            .OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (assetOriginComposeFiles.Count == 0) return new Selection(null, false);
+
+        // A Compose file only governs this project when it sits where one legitimately can: the
+        // repository root, or the project's own directory. One buried in docs/, samples/, or another
+        // subtree describes something else, and a root-level project must not adopt it just because
+        // it happens to be the only asset-origin topology in the tree.
+        var candidates = assetOriginComposeFiles
+            .Where(candidate => IsSanctionedLocation(repoRoot, projectDirectory, candidate.Path))
+            .ToList();
+        if (candidates.Count == 0) return new Selection(null, true);
+
+        bool NamesAnotherProject(string text) => otherDirectories.Any(directory => Mentions(text, directory));
+
+        var mine = candidates
+            .Where(candidate =>
+                (selectedDirectory.Length > 0 && Mentions(candidate.Text, selectedDirectory)) ||
+                (SameDirectory(Path.GetDirectoryName(candidate.Path)!, projectDirectory) && !NamesAnotherProject(candidate.Text)))
+            .ToList();
+        if (mine.Count > 0) return new Selection(Preferred(mine), false);
 
         // Nothing names the selected project. A file that names a different web project is that
-        // project's topology; anything left is unattributed and safe to use when it is unambiguous.
-        var unattributed = candidates
-            .Where(candidate => !otherDirectories.Any(directory => Mentions(candidate.Text, directory)))
-            .ToList();
-        if (unattributed.Count == 1 || (unattributed.Count > 1 && selectedDirectory.Length == 0))
+        // project's topology; a lone remaining file in a sanctioned location is unattributed and
+        // safe to use when the project directory could not appear in it at all.
+        var unattributed = candidates.Where(candidate => !NamesAnotherProject(candidate.Text)).ToList();
+        if (selectedDirectory.Length > 0 && unattributed.Count == 1)
             return new Selection(unattributed[0].Path, false);
 
-        return new Selection(null, unattributed.Count == 0);
+        return new Selection(null, true);
     }
+
+    // Several Compose files can legitimately govern one project (a base plus an override), so the
+    // canonical name wins and the sorted order breaks any remaining tie deterministically.
+    private static string Preferred(List<(string Path, string Text)> matches) =>
+        matches.FirstOrDefault(match =>
+            Path.GetFileName(match.Path).Equals(SegregateAssetsProgram.ComposeFileName, StringComparison.OrdinalIgnoreCase)).Path
+        ?? matches[0].Path;
+
+    private static bool IsSanctionedLocation(string repoRoot, string projectDirectory, string composeFile)
+    {
+        var composeDirectory = Path.GetDirectoryName(composeFile)!;
+        return SameDirectory(composeDirectory, repoRoot) || SameDirectory(composeDirectory, projectDirectory);
+    }
+
+    private static bool SameDirectory(string left, string right) =>
+        Path.GetFullPath(left).TrimEnd('\\', '/').Equals(
+            Path.GetFullPath(right).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
     private static bool IsAssetOrigin(string text) =>
         text.Contains(SegregateAssetsProgram.OriginImage, StringComparison.OrdinalIgnoreCase) ||
@@ -1700,7 +1729,7 @@ internal static class Commands
                 }
                 else if (selection.BelongsToAnotherProject)
                 {
-                    composeSelection = $"Asset-origin Compose files exist but none reference '{selected}'; they belong to other web projects and were not used to verify this one.";
+                    composeSelection = $"Asset-origin Compose files exist but none govern '{selected}'. They name another web project, or live outside both the repository root and this project's directory, so none was used to verify it.";
                 }
             }
 
@@ -2687,6 +2716,43 @@ internal static class SelfTest
             "services:\n  app-assets:\n    build:\n      dockerfile: Assets.Dockerfile\n");
         Assert("compose-select: root-level project resolves",
             ComposeFileSelector.Select(flat, Path.Combine(flat, "Web.csproj"), new[] { "Web.csproj" }).ComposeFile is not null);
+
+        // Regression: a root-level project must not adopt an asset-origin Compose file that lives in
+        // another subtree just because nothing else in the repository competes with it.
+        var offRoot = Path.Combine(root, "compose-off-root");
+        Directory.CreateDirectory(Path.Combine(offRoot, "docs"));
+        File.WriteAllText(Path.Combine(offRoot, "Web.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(offRoot, "docs", SegregateAssetsProgram.ComposeFileName),
+            "services:\n  docs-assets:\n    build:\n      dockerfile: Assets.Dockerfile\n");
+        Assert("compose-select: root project does not adopt a docs/ topology",
+            ComposeFileSelector.Select(offRoot, Path.Combine(offRoot, "Web.csproj"), new[] { "Web.csproj" }).ComposeFile is null);
+        Assert("compose-select: off-root topology is reported, not silently absent",
+            ComposeFileSelector.Select(offRoot, Path.Combine(offRoot, "Web.csproj"), new[] { "Web.csproj" }).BelongsToAnotherProject);
+
+        // The same guard applies to a nested project: a lone candidate outside the sanctioned
+        // locations is not its topology either.
+        var offRootNested = Path.Combine(root, "compose-off-root-nested");
+        var nestedWeb = Path.Combine(offRootNested, "src", "Web");
+        Directory.CreateDirectory(nestedWeb);
+        Directory.CreateDirectory(Path.Combine(offRootNested, "samples"));
+        File.WriteAllText(Path.Combine(nestedWeb, "Web.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(offRootNested, "samples", "compose.yml"),
+            "services:\n  sample-assets:\n    image: codebeltnet/web-cdn-origin:2.0.0\n");
+        Assert("compose-select: nested project does not adopt a samples/ topology",
+            ComposeFileSelector.Select(offRootNested, Path.Combine(nestedWeb, "Web.csproj"), new[] { "src/Web/Web.csproj" }).ComposeFile is null);
+
+        // A Compose file in the project's own directory is correlated even when the project is the
+        // repository root and no path segment can identify it.
+        var ownDirectory = Path.Combine(root, "compose-own-directory");
+        Directory.CreateDirectory(ownDirectory);
+        File.WriteAllText(Path.Combine(ownDirectory, "Web.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(ownDirectory, "compose.override.yml"),
+            "services:\n  app-assets:\n    build:\n      dockerfile: Assets.Dockerfile\n");
+        File.WriteAllText(Path.Combine(ownDirectory, SegregateAssetsProgram.ComposeFileName),
+            "services:\n  app-assets:\n    build:\n      dockerfile: Assets.Dockerfile\n");
+        var preferred = ComposeFileSelector.Select(ownDirectory, Path.Combine(ownDirectory, "Web.csproj"), new[] { "Web.csproj" });
+        Assert("compose-select: canonical compose.assets.yml wins over a sibling override",
+            preferred.ComposeFile is not null && Path.GetFileName(preferred.ComposeFile).Equals(SegregateAssetsProgram.ComposeFileName, StringComparison.OrdinalIgnoreCase));
 
         // A sole candidate whose paths this runner does not recognize is still unattributed, so it
         // is used rather than reported as another project's topology.
