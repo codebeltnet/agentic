@@ -3,7 +3,7 @@ name: dotnet-segregated-assets
 description: >
   Migrate or configure an ASP.NET Core web application so developers keep authoring static files in the conventional wwwroot while deployed static content is served by Codebelt Static Content Provider (codebeltnet/web-cdn-origin:2.0.0), a separate asset host rather than the web app. Use when asked to segregate static assets, move wwwroot off the web app, stop shipping wwwroot with the app, or reconcile Cuemon App/CDN TagHelpers with a segregated topology. Reuse existing Cuemon or project abstractions, distinguish App assets from shared CDN assets, preserve Static Web Assets, and verify publish/local invariants deterministically. Do NOT use to build a general-purpose CDN or migrate non-ASP.NET static sites.
 compatibility: >
-  Requires the .NET SDK 10+ and PowerShell 7+. NuGet.org access is required when plan resolves an existing Cuemon package reference. Docker is optional (only for the local origin).
+  Requires the .NET SDK 10+ and PowerShell 7+. NuGet.org access is required when plan resolves an existing Cuemon package reference. Docker is optional (only for the local origin). CI guidance targets GitHub Actions, which is the assumed delivery surface.
 ---
 
 # .NET Segregated Static Assets
@@ -46,7 +46,7 @@ Use these facts to decide what the agent should edit. Do not turn the runner int
 - File placement is part of the contract. `Dockerfile`, `LocalDevelopment.Dockerfile`, and `Assets.Dockerfile` live beside the web `.csproj`; `compose.assets.yml`, `.dockerignore`, `docker-compose.dcproj`, and the Compose `launchSettings.json` live at the repository root. Never place a Dockerfile at the repository root for this topology.
 - Write every generated file from the literal template in `assets/`, substituting the documented placeholders. Do not reconstruct a Dockerfile, Compose file, `.dcproj`, or launch profile from memory.
 - Both application Dockerfiles are artifact-first: they package an already-published `artifacts/publish/` directory and never restore, build, or publish source. An SDK stage, a `dotnet build`/`dotnet publish` step, a `RUN adduser` block, or an `mcr.microsoft.com` runtime tag in either file is a defect.
-- When repository CI builds the application container, it must also build or validate `Assets.Dockerfile` from the same commit. A locally working asset image that hosted CI never constructs is not a proven deployment artifact. Adding an artifact-first `Dockerfile` also obliges you to add the CI job that publishes the artifact it copies.
+- When repository CI builds the application container, it must also build or validate `Assets.Dockerfile` from the same commit. A locally working asset image that hosted CI never constructs is not a proven deployment artifact. Adding an artifact-first `Dockerfile` also obliges you to add the CI job that publishes the artifact it copies: extend the existing GitHub Actions workflow, or create one from `assets/ci-pipeline.yml` when the repository has none. Never leave the production image without a producer, and name which one you did.
 - App assets and shared CDN assets are separate concepts. Always determine whether a shared/CDN equivalent exists before deciding origins or markup. Never copy shared content into an application's `wwwroot`.
 - Preserve ordinary Development through the existing Project profile. Name the root Docker Compose profile by appending `.Assets` to that ordinary profile name, for example `BingeKinLanding.WebApp` becomes `BingeKinLanding.WebApp.Assets`.
 - Verification is deterministic and re-running the skill is idempotent. Never claim the publish invariant from an MSBuild declaration alone; run `verify --run-publish`.
@@ -167,11 +167,12 @@ Do not override the base image's `/cdnroot`, port, runtime user (`65532`), or wo
 - Resolve versions for existing package references from NuGet.org during the current plan, exclude prereleases, preserve the repository's package-management owner, and fail closed rather than guessing.
 - Keep sidecar startup explicit, verification output isolated, and runner behavior deterministic and non-mutating.
 - Generate infrastructure files from the `assets/` templates at their fixed locations; never improvise a Dockerfile, Compose file, `.dcproj`, or launch profile, and never let an application Dockerfile compile source.
+- This skill is deliberately opinionated: GitHub Actions is the delivery surface, Visual Studio Docker Compose is the segregated launch surface, and the `assets/` templates are the house shape. Do not add multi-vendor CI abstraction, alternative orchestrators, or configurable variants of the templates to make the skill portable — resolve the opinionated path or report why it does not fit.
 - Escalate generated-static-assets scenarios when a complete external artifact and runtime URL design cannot be proven.
 
 ## References
 
-- `assets/` — literal templates for every generated file: `Dockerfile`, `LocalDevelopment.Dockerfile`, `Assets.Dockerfile`, `compose.assets.yml`, `.dockerignore`, `docker-compose.dcproj`, `launchSettings.json`, `LocalPublishTarget.targets`, and `ci-artifact-jobs.yml`.
+- `assets/` — literal templates for every generated file: `Dockerfile`, `LocalDevelopment.Dockerfile`, `Assets.Dockerfile`, `compose.assets.yml`, `.dockerignore`, `docker-compose.dcproj`, `launchSettings.json`, `LocalPublishTarget.targets`, `ci-artifact-jobs.yml` (jobs to append to an existing workflow), and `ci-pipeline.yml` (a complete workflow when the repository has none).
 - `FORMS.md` — unresolved inputs and deterministic one-field-at-a-time collection.
 - `references/app-vs-cdn.md` — ownership, verified Cuemon custom-element mapping, Automatic/App/CDN configuration semantics, and cache-busting guidance.
 - `references/local-development.md` — ordinary versus opt-in segregated Development and the local Static Content Provider topology.
