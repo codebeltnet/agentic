@@ -1292,7 +1292,7 @@ internal static class ArtifactFirstValidator
 
         var ciPublishesArtifact = !applicationImageInPlay || CiPublishesArtifact(repoRoot);
         if (!ciPublishesArtifact)
-            findings.Add("No GitHub Actions workflow publishes the application to artifacts/publish. An artifact-first Dockerfile has no producer in a clean hosted checkout. See assets/ci-artifact-jobs.yml.");
+            findings.Add("No GitHub Actions workflow publishes the application to artifacts/publish. An artifact-first Dockerfile has no producer in a clean hosted checkout. Extend an existing workflow with assets/ci-artifact-jobs.yml, or create one from assets/ci-pipeline.yml when the repository has none.");
 
         var visualStudioComposeComplete = ValidateVisualStudioCompose(repoRoot, csproj, findings);
 
@@ -1367,14 +1367,15 @@ internal static class ArtifactFirstValidator
         return complete;
     }
 
+    // GitHub Actions is the assumed and only supported delivery surface for these skills, so a
+    // missing producer for the artifact-first image is a failure rather than a portability question.
     private static bool CiPublishesArtifact(string repoRoot)
     {
         var workflowRoot = Path.Combine(repoRoot, ".github", "workflows");
-        if (!Directory.Exists(workflowRoot)) return false;
-
-        return Directory.EnumerateFiles(workflowRoot, "*.y*ml", SearchOption.TopDirectoryOnly)
-            .Select(SafeRead)
-            .Any(text => Regex.IsMatch(text, "dotnet\\s+publish[^\\r\\n]*artifacts[\\\\/]publish", RegexOptions.IgnoreCase));
+        return Directory.Exists(workflowRoot) &&
+            Directory.EnumerateFiles(workflowRoot, "*.y*ml", SearchOption.TopDirectoryOnly)
+                .Select(SafeRead)
+                .Any(text => Regex.IsMatch(text, "dotnet\\s+publish[^\\r\\n]*artifacts[\\\\/]publish", RegexOptions.IgnoreCase));
     }
 
     private static IEnumerable<string> EnumerateBuildFiles(string repoRoot, string projectDir)
@@ -1928,6 +1929,7 @@ internal static class SelfTest
             TestArtifactFirstValidatorRejectsRootDockerfiles(root);
             TestArtifactFirstValidatorRejectsSourceCompilingDockerfile(root);
             TestArtifactFirstValidatorSkipsWhenNoApplicationImage(root);
+            TestArtifactFirstValidatorRequiresCiArtifactProducer(root);
             TestPublishLeakDetected();
             TestPublishLeakCleanWithPreservedSharedAssets();
         }
@@ -2526,6 +2528,24 @@ internal static class SelfTest
         Assert("artifact-mount: LocalPublishDirectory not demanded", r.HasLocalPublishDirectory);
         Assert("artifact-mount: CI artifact not demanded", r.CiPublishesArtifact);
         Assert("artifact-mount: no findings", r.Findings.Count == 0);
+    }
+
+    // GitHub Actions is the only supported delivery surface, so a repository with no workflow that
+    // publishes the artifact leaves the artifact-first image without a producer.
+    private static void TestArtifactFirstValidatorRequiresCiArtifactProducer(string root)
+    {
+        var noCi = NewArtifactFirstRepo(root, "artifact-no-ci", colocated: true);
+        Directory.Delete(Path.Combine(noCi, ".github"), recursive: true);
+        var withoutCi = ArtifactFirstValidator.Validate(noCi, Path.Combine(noCi, "src", "Web", "Web.csproj"), ArtifactFirstCompose("src/Web"));
+        Assert("artifact-no-ci: missing producer flagged", !withoutCi.CiPublishesArtifact);
+        Assert("artifact-no-ci: template referenced in the finding",
+            withoutCi.Findings.Any(f => f.Contains("assets/ci-pipeline.yml", StringComparison.Ordinal)));
+
+        var buildOnlyCi = NewArtifactFirstRepo(root, "artifact-build-only-ci", colocated: true);
+        File.WriteAllText(Path.Combine(buildOnlyCi, ".github", "workflows", "ci-pipeline.yml"),
+            "jobs:\n  build:\n    uses: codebeltnet/jobs-dotnet-build/.github/workflows/default.yml@v3\n");
+        var withoutProducer = ArtifactFirstValidator.Validate(buildOnlyCi, Path.Combine(buildOnlyCi, "src", "Web", "Web.csproj"), ArtifactFirstCompose("src/Web"));
+        Assert("artifact-build-only-ci: build without publish still flagged", !withoutProducer.CiPublishesArtifact);
     }
 
     private static void TestPublishLeakDetected()

@@ -14,7 +14,8 @@ $required = @(
     'references/production-image.md', 'references/static-web-assets-guardrail.md',
     'assets/Dockerfile', 'assets/LocalDevelopment.Dockerfile', 'assets/Assets.Dockerfile',
     'assets/compose.assets.yml', 'assets/.dockerignore', 'assets/docker-compose.dcproj',
-    'assets/launchSettings.json', 'assets/LocalPublishTarget.targets', 'assets/ci-artifact-jobs.yml'
+    'assets/launchSettings.json', 'assets/LocalPublishTarget.targets', 'assets/ci-artifact-jobs.yml',
+    'assets/ci-pipeline.yml'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $skillRoot $relative) -PathType Leaf)) {
@@ -250,10 +251,23 @@ foreach ($needle in @('"commandName": "DockerCompose"', '"web-app": "StartDebugg
         throw "assets/launchSettings.json is missing required contract: $needle"
     }
 }
-$assetCiJobs = [System.IO.File]::ReadAllText((Join-Path $assetRoot 'ci-artifact-jobs.yml'))
-foreach ($needle in @('--output artifacts/publish', 'Assets.Dockerfile', 'docker/build-push-action')) {
-    if (-not $assetCiJobs.Contains($needle, [System.StringComparison]::Ordinal)) {
-        throw "assets/ci-artifact-jobs.yml is missing required contract: $needle"
+foreach ($ciTemplate in @('ci-artifact-jobs.yml', 'ci-pipeline.yml')) {
+    $assetCiJobs = [System.IO.File]::ReadAllText((Join-Path $assetRoot $ciTemplate))
+    foreach ($needle in @('--output artifacts/publish', 'Assets.Dockerfile', 'docker/build-push-action')) {
+        if (-not $assetCiJobs.Contains($needle, [System.StringComparison]::Ordinal)) {
+            throw "assets/$ciTemplate is missing required contract: $needle"
+        }
+    }
+}
+# The CI fallback stays two-tier because GitHub Actions is the assumed delivery surface.
+foreach ($needle in @('assets/ci-pipeline.yml', 'A workflow exists', 'No workflow exists')) {
+    if (-not $productionImage.Contains($needle, [System.StringComparison]::Ordinal)) {
+        throw "references/production-image.md is missing the CI fallback contract: $needle"
+    }
+}
+foreach ($vendor in @('azure-pipelines', 'gitlab-ci', 'Jenkinsfile', 'bitbucket-pipelines', 'circleci', 'teamcity')) {
+    if ($productionImage.Contains($vendor, [System.StringComparison]::OrdinalIgnoreCase) -or $runner.Contains($vendor, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The skill must stay GitHub Actions-opinionated; remove the multi-vendor CI branch for: $vendor"
     }
 }
 $assetPublishTarget = [System.IO.File]::ReadAllText((Join-Path $assetRoot 'LocalPublishTarget.targets'))
