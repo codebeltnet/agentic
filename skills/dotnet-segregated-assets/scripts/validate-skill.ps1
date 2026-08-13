@@ -283,7 +283,7 @@ foreach ($needle in @('beside the web `.csproj`', 'Never place a Dockerfile at t
         throw "The file-placement contract is missing from SKILL.md and references/local-development.md: $needle"
     }
 }
-foreach ($needle in @('ArtifactFirstValidator', 'UnsafeOriginDetector', 'NoObsoleteVersionKey', 'DockerfilesColocated', 'NoSourceCompilation', 'CiPublishesArtifact')) {
+foreach ($needle in @('ArtifactFirstValidator', 'UnsafeOriginDetector', 'NoObsoleteVersionKey', 'DockerfilesColocated', 'NoSourceCompilation', 'CiPublishesArtifact', 'ComposeFileSelector', 'BelongsToAnotherProject')) {
     if (-not $runner.Contains($needle, [System.StringComparison]::Ordinal)) {
         throw "segregate-assets.cs is missing the artifact-first verification contract: $needle"
     }

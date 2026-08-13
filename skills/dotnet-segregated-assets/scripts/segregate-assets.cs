@@ -1111,6 +1111,77 @@ internal static class UnsafeOriginDetector
     }
 }
 
+// Picks the asset-origin Compose file that belongs to the SELECTED project. A repository-wide
+// "first match wins" scan lets a sibling project's healthy topology stand in for the selected
+// project's broken one, so verification would prove something it was never asked about.
+internal static class ComposeFileSelector
+{
+    public sealed record Selection(string? ComposeFile, bool BelongsToAnotherProject);
+
+    public static Selection Select(string repoRoot, string projectPath, IEnumerable<string> webProjectRelativePaths)
+    {
+        var candidates = IdempotencyDetector.EnumerateComposeFiles(repoRoot)
+            .Select(path => (Path: path, Text: SafeRead(path)))
+            .Where(candidate => IsAssetOrigin(candidate.Text))
+            .OrderBy(candidate => candidate.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (candidates.Count == 0) return new Selection(null, false);
+
+        var selectedDirectory = RelativeDirectory(repoRoot, Path.GetDirectoryName(projectPath)!);
+        var otherDirectories = webProjectRelativePaths
+            .Select(relative => NormalizeDirectory(Path.GetDirectoryName(relative) ?? string.Empty))
+            .Where(directory => directory.Length > 0 && !directory.Equals(selectedDirectory, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (selectedDirectory.Length > 0)
+        {
+            var mine = candidates.FirstOrDefault(candidate => Mentions(candidate.Text, selectedDirectory));
+            if (mine.Path is not null) return new Selection(mine.Path, false);
+        }
+
+        // Nothing names the selected project. A file that names a different web project is that
+        // project's topology; anything left is unattributed and safe to use when it is unambiguous.
+        var unattributed = candidates
+            .Where(candidate => !otherDirectories.Any(directory => Mentions(candidate.Text, directory)))
+            .ToList();
+        if (unattributed.Count == 1 || (unattributed.Count > 1 && selectedDirectory.Length == 0))
+            return new Selection(unattributed[0].Path, false);
+
+        return new Selection(null, unattributed.Count == 0);
+    }
+
+    private static bool IsAssetOrigin(string text) =>
+        text.Contains(SegregateAssetsProgram.OriginImage, StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("codebeltnet/web-cdn-origin", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase);
+
+    // Matches a repository-relative directory as a whole path segment so 'src/Acme.Api' never
+    // matches 'src/Acme.ApiGateway'. Backslashes are normalized first.
+    private static bool Mentions(string composeText, string relativeDirectory) =>
+        Regex.IsMatch(
+            composeText.Replace('\\', '/'),
+            $"(?<![A-Za-z0-9_.-]){Regex.Escape(relativeDirectory)}(?![A-Za-z0-9_.-])",
+            RegexOptions.IgnoreCase);
+
+    private static string RelativeDirectory(string repoRoot, string directory)
+    {
+        var relative = Path.GetRelativePath(repoRoot, directory);
+        return NormalizeDirectory(relative);
+    }
+
+    private static string NormalizeDirectory(string value)
+    {
+        var normalized = value.Replace('\\', '/').Trim('/');
+        return normalized is "." or ".." ? string.Empty : normalized;
+    }
+
+    private static string SafeRead(string file)
+    {
+        try { return File.ReadAllText(file); } catch { return string.Empty; }
+    }
+}
+
 internal static class ComposeValidator
 {
     public sealed record Result(bool UsesOriginImage, bool HasAssetContent, bool UsesLocalDevelopmentImage, bool HasVisualStudioProjectOptOut, bool HasHttpLocalOrigin, bool HasUnsafeProtocol, bool ReadOnlyRootFs, bool NonPrivileged, bool NoDockerSocket, bool NoObsoleteVersionKey, IReadOnlyList<string> Findings);
@@ -1606,6 +1677,8 @@ internal static class Commands
             LaunchProfileValidator.Result? launch = null;
             ComposeValidator.Result? compose = null;
             ArtifactFirstValidator.Result? artifactFirst = null;
+            string? composeFile = null;
+            string? composeSelection = null;
             if (options.CheckLocal)
             {
                 var rootLaunchSettings = Path.Combine(options.RepoRoot, "launchSettings.json");
@@ -1614,18 +1687,20 @@ internal static class Commands
                 if (File.Exists(launchSettings))
                     launch = LaunchProfileValidator.Validate(File.ReadAllText(launchSettings), segregatedProfileName);
 
-                var composeFile = IdempotencyDetector.EnumerateComposeFiles(options.RepoRoot)
-                    .FirstOrDefault(f =>
-                    {
-                        var text = File.ReadAllText(f);
-                        return text.Contains("codebeltnet/web-cdn-origin", StringComparison.OrdinalIgnoreCase) ||
-                               text.Contains(SegregateAssetsProgram.DerivedDockerfileName, StringComparison.OrdinalIgnoreCase);
-                    });
+                var selection = ComposeFileSelector.Select(
+                    options.RepoRoot,
+                    projectPath,
+                    inspection.WebProjects.Select(project => project.RelativePath));
+                composeFile = selection.ComposeFile;
                 if (composeFile is not null)
                 {
                     var composeText = File.ReadAllText(composeFile);
                     compose = ComposeValidator.Validate(composeText);
                     artifactFirst = ArtifactFirstValidator.Validate(options.RepoRoot, projectPath, composeText);
+                }
+                else if (selection.BelongsToAnotherProject)
+                {
+                    composeSelection = $"Asset-origin Compose files exist but none reference '{selected}'; they belong to other web projects and were not used to verify this one.";
                 }
             }
 
@@ -1661,9 +1736,11 @@ internal static class Commands
                 preservedSharedAssets = leak.PreservedSharedAssets,
                 launch,
                 compose,
+                composeFile,
+                composeSelection,
                 artifactFirst,
             };
-            SegregateAssetsProgram.Emit(options, payload, () => RenderVerify(selected, publishDir!, leak, sourceReproducible, assetImageValidatedInCi, launch, compose, artifactFirst, ok));
+            SegregateAssetsProgram.Emit(options, payload, () => RenderVerify(selected, publishDir!, leak, sourceReproducible, assetImageValidatedInCi, launch, compose, composeFile, composeSelection, artifactFirst, ok));
             return ok ? (int)ExitCode.Success : (int)ExitCode.VerificationFailed;
         }
         finally
@@ -1847,7 +1924,8 @@ internal static class Commands
     }
 
     private static string RenderVerify(string project, string publishDir, PublishLeakDetector.Result leak, bool sourceReproducible, bool assetImageValidatedInCi,
-        LaunchProfileValidator.Result? launch, ComposeValidator.Result? compose, ArtifactFirstValidator.Result? artifactFirst, bool ok)
+        LaunchProfileValidator.Result? launch, ComposeValidator.Result? compose, string? composeFile, string? composeSelection,
+        ArtifactFirstValidator.Result? artifactFirst, bool ok)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Verify: {project}");
@@ -1870,8 +1948,15 @@ internal static class Commands
             sb.AppendLine($"Local launch profile: exists={launch.ProfileExists} dockerCompose={launch.IsDockerCompose} http={launch.IsHttp} httpLocalOrigin={launch.HasHttpLocalOrigin} unsafeProtocol={launch.HasUnsafeProtocol}");
             foreach (var f in launch.Findings) sb.AppendLine($"    - {f}");
         }
+        if (composeSelection is not null)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Local origin compose: none for this project.");
+            sb.AppendLine($"    - {composeSelection}");
+        }
         if (compose is not null)
         {
+            if (composeFile is not null) sb.AppendLine($"Local origin compose file: {composeFile}");
             sb.AppendLine($"Local origin compose: originImage={compose.UsesOriginImage} assetContent={compose.HasAssetContent} localDevelopmentImage={compose.UsesLocalDevelopmentImage} vsProjectOptOut={compose.HasVisualStudioProjectOptOut} httpLocalOrigin={compose.HasHttpLocalOrigin} unsafeProtocol={compose.HasUnsafeProtocol} roRootFs={compose.ReadOnlyRootFs} nonPrivileged={compose.NonPrivileged} noDockerSocket={compose.NoDockerSocket} noVersionKey={compose.NoObsoleteVersionKey}");
             foreach (var f in compose.Findings) sb.AppendLine($"    - {f}");
         }
@@ -1930,6 +2015,8 @@ internal static class SelfTest
             TestArtifactFirstValidatorRejectsSourceCompilingDockerfile(root);
             TestArtifactFirstValidatorSkipsWhenNoApplicationImage(root);
             TestArtifactFirstValidatorRequiresCiArtifactProducer(root);
+            TestComposeFileSelectorCorrelatesToSelectedProject(root);
+            TestComposeFileSelectorAcceptsUnambiguousLayouts(root);
             TestPublishLeakDetected();
             TestPublishLeakCleanWithPreservedSharedAssets();
         }
@@ -2546,6 +2633,87 @@ internal static class SelfTest
             "jobs:\n  build:\n    uses: codebeltnet/jobs-dotnet-build/.github/workflows/default.yml@v3\n");
         var withoutProducer = ArtifactFirstValidator.Validate(buildOnlyCi, Path.Combine(buildOnlyCi, "src", "Web", "Web.csproj"), ArtifactFirstCompose("src/Web"));
         Assert("artifact-build-only-ci: build without publish still flagged", !withoutProducer.CiPublishesArtifact);
+    }
+
+    // Regression: a repository-wide "first asset-origin Compose file wins" scan let a sibling
+    // project's healthy topology satisfy verification for the selected project.
+    private static void TestComposeFileSelectorCorrelatesToSelectedProject(string root)
+    {
+        var repo = Path.Combine(root, "compose-selection");
+        var site = Path.Combine(repo, "src", "Acme.Site");
+        var api = Path.Combine(repo, "src", "Acme.Api");
+        Directory.CreateDirectory(site);
+        Directory.CreateDirectory(api);
+        File.WriteAllText(Path.Combine(site, "Acme.Site.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(api, "Acme.Api.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        var webProjects = new[] { "src/Acme.Site/Acme.Site.csproj", "src/Acme.Api/Acme.Api.csproj" };
+
+        File.WriteAllText(Path.Combine(repo, "compose.acme-site.yml"),
+            "services:\n  web-app:\n    build:\n      dockerfile: src/Acme.Site/LocalDevelopment.Dockerfile\n  app-assets:\n    build:\n      context: ./src/Acme.Site\n      dockerfile: Assets.Dockerfile\n");
+
+        var withoutOwn = ComposeFileSelector.Select(repo, Path.Combine(api, "Acme.Api.csproj"), webProjects);
+        Assert("compose-select: sibling topology is not borrowed", withoutOwn.ComposeFile is null);
+        Assert("compose-select: reports the topology belongs elsewhere", withoutOwn.BelongsToAnotherProject);
+
+        File.WriteAllText(Path.Combine(repo, "compose.api.assets.yml"),
+            "services:\n  api-app:\n    build:\n      dockerfile: src/Acme.Api/LocalDevelopment.Dockerfile\n  api-assets:\n    build:\n      context: ./src/Acme.Api\n      dockerfile: Assets.Dockerfile\n");
+
+        var apiSelection = ComposeFileSelector.Select(repo, Path.Combine(api, "Acme.Api.csproj"), webProjects);
+        Assert("compose-select: selects the project's own file even when another sorts first",
+            apiSelection.ComposeFile is not null && Path.GetFileName(apiSelection.ComposeFile).Equals("compose.api.assets.yml", StringComparison.OrdinalIgnoreCase));
+        var siteSelection = ComposeFileSelector.Select(repo, Path.Combine(site, "Acme.Site.csproj"), webProjects);
+        Assert("compose-select: each project resolves to its own file",
+            siteSelection.ComposeFile is not null && Path.GetFileName(siteSelection.ComposeFile).Equals("compose.acme-site.yml", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void TestComposeFileSelectorAcceptsUnambiguousLayouts(string root)
+    {
+        // Single project nested under src/: the canonical template names its directory.
+        var nested = Path.Combine(root, "compose-single-nested");
+        var web = Path.Combine(nested, "src", "Web");
+        Directory.CreateDirectory(web);
+        File.WriteAllText(Path.Combine(web, "Web.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(nested, SegregateAssetsProgram.ComposeFileName),
+            "services:\n  web-app:\n    build:\n      dockerfile: src/Web/LocalDevelopment.Dockerfile\n  app-assets:\n    build:\n      context: ./src/Web\n      dockerfile: Assets.Dockerfile\n");
+        Assert("compose-select: nested single project resolves",
+            ComposeFileSelector.Select(nested, Path.Combine(web, "Web.csproj"), new[] { "src/Web/Web.csproj" }).ComposeFile is not null);
+
+        // Project at the repository root: Compose paths are root-relative, so there is nothing to
+        // correlate against and the sole candidate is still correct.
+        var flat = Path.Combine(root, "compose-flat");
+        Directory.CreateDirectory(flat);
+        File.WriteAllText(Path.Combine(flat, "Web.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(flat, SegregateAssetsProgram.ComposeFileName),
+            "services:\n  app-assets:\n    build:\n      dockerfile: Assets.Dockerfile\n");
+        Assert("compose-select: root-level project resolves",
+            ComposeFileSelector.Select(flat, Path.Combine(flat, "Web.csproj"), new[] { "Web.csproj" }).ComposeFile is not null);
+
+        // A sole candidate whose paths this runner does not recognize is still unattributed, so it
+        // is used rather than reported as another project's topology.
+        var opaque = Path.Combine(root, "compose-opaque");
+        var opaqueWeb = Path.Combine(opaque, "app");
+        Directory.CreateDirectory(opaqueWeb);
+        File.WriteAllText(Path.Combine(opaqueWeb, "Web.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(opaque, SegregateAssetsProgram.ComposeFileName),
+            "services:\n  app-assets:\n    image: codebeltnet/web-cdn-origin:2.0.0\n    volumes:\n      - /elsewhere:/cdnroot:ro\n");
+        Assert("compose-select: sole unattributed candidate is used",
+            ComposeFileSelector.Select(opaque, Path.Combine(opaqueWeb, "Web.csproj"), new[] { "app/Web.csproj" }).ComposeFile is not null);
+
+        // Segment-boundary safety: Acme.Api must not match Acme.ApiGateway.
+        var prefix = Path.Combine(root, "compose-prefix");
+        var gateway = Path.Combine(prefix, "src", "Acme.ApiGateway");
+        var apiOnly = Path.Combine(prefix, "src", "Acme.Api");
+        Directory.CreateDirectory(gateway);
+        Directory.CreateDirectory(apiOnly);
+        File.WriteAllText(Path.Combine(gateway, "Acme.ApiGateway.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(apiOnly, "Acme.Api.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(prefix, SegregateAssetsProgram.ComposeFileName),
+            "services:\n  web-app:\n    build:\n      context: ./src/Acme.ApiGateway\n      dockerfile: Assets.Dockerfile\n");
+        var prefixProjects = new[] { "src/Acme.ApiGateway/Acme.ApiGateway.csproj", "src/Acme.Api/Acme.Api.csproj" };
+        Assert("compose-select: prefix name does not match a longer sibling directory",
+            ComposeFileSelector.Select(prefix, Path.Combine(apiOnly, "Acme.Api.csproj"), prefixProjects).ComposeFile is null);
+        Assert("compose-select: the longer sibling still resolves its own file",
+            ComposeFileSelector.Select(prefix, Path.Combine(gateway, "Acme.ApiGateway.csproj"), prefixProjects).ComposeFile is not null);
     }
 
     private static void TestPublishLeakDetected()
