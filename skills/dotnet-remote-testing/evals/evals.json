@@ -103,6 +103,92 @@
       "files": [
         "evals/files/offline-cache/cache/releases-index.cache.json"
       ]
+    },
+    {
+      "id": 7,
+      "prompt": "/dotnet-remote-testing",
+      "expected_output": "The skill treats the bare invocation as a complete request and immediately runs the tests through scripts/remote-test.cs against the single configured Docker environment, reporting the structured result. It does not answer with a menu of capabilities or ask the developer what they would like to do.",
+      "expectations": [
+        "Does NOT respond with a capability menu such as 'list / plan / run / understand your configuration' or 'What would you like me to help you with?'",
+        "Does NOT ask which environment, scope, configuration, or coverage to use, and does not ask for confirmation before running",
+        "Runs the tests immediately via scripts/remote-test.cs run against the single configured Docker environment",
+        "Reports the structured result (environment, image, digest, passed/skipped/failed, durations)",
+        "Asks a question only if the runner exits SelectionRequired, which does not happen with a single configured environment"
+      ],
+      "files": [
+        "evals/files/configured/testenvironments.json",
+        "evals/files/configured/test/Api.Tests/Api.Tests.csproj",
+        "evals/files/configured/test/Api.Tests/HealthTests.cs"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Remote test this repo.",
+      "expected_output": "With no testenvironments.json and several Microsoft-derived channels available, the runner selects the channel matching the repository's own target framework (net10.0) without asking, runs the tests in that container, and relays the reported selection reason so the automatic choice is auditable.",
+      "expectations": [
+        "Does not ask which .NET channel to use even though several are derived from release metadata",
+        "Ends up on the derived environment whose channel major matches the repository's highest .NET target framework (net10.0)",
+        "Relays the runner's selection reason explaining why that environment was chosen automatically",
+        "Executes through scripts/remote-test.cs run rather than composing docker commands or running dotnet test on the host",
+        "Reports both the test duration and the total elapsed time as the runner does"
+      ],
+      "files": [
+        "evals/files/zero-config/Sample.slnx",
+        "evals/files/zero-config/src/Sample/Sample.csproj",
+        "evals/files/zero-config/src/Sample/Calculator.cs",
+        "evals/files/zero-config/test/Sample.Tests/Sample.Tests.csproj",
+        "evals/files/zero-config/test/Sample.Tests/CalculatorTests.cs"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Run my tests in a container.",
+      "expected_output": "Two Docker environments are configured, so the runner exits SelectionRequired and the skill asks exactly one question listing the two candidate names, then reruns with the chosen environment. It does not guess between them and does not expand the interruption into a broader questionnaire.",
+      "expectations": [
+        "Attempts the run first and lets the runner report SelectionRequired rather than pre-emptively interviewing the developer",
+        "Asks exactly one question, offering only the configured candidate names (linux-dotnet-10-noble, linux-dotnet-10-alpine)",
+        "Does not additionally ask about scope, build configuration, coverage, or confirmation",
+        "Does not guess or silently pick one of the two configured environments",
+        "Reruns with -e <chosen name> after the developer picks"
+      ],
+      "files": [
+        "evals/files/multi-configured/testenvironments.json",
+        "evals/files/multi-configured/test/Catalog.Tests/Catalog.Tests.csproj",
+        "evals/files/multi-configured/test/Catalog.Tests/CatalogTests.cs"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Remote test this repo.",
+      "expected_output": "The test project multi-targets net9.0 and net10.0. A Microsoft SDK image ships only one runtime, so the skill resolves a codebeltnet/ubuntu-testrunner multi-SDK environment that provides both majors and runs the entire target-framework matrix in a single container, reporting results for both TFMs.",
+      "expectations": [
+        "Recognizes that the repository multi-targets several .NET majors",
+        "Does not select a single-SDK mcr.microsoft.com/dotnet/sdk image, which could build but not execute the lower target framework",
+        "Resolves a codebeltnet/ubuntu-testrunner environment whose combined tag covers both net9.0 and net10.0",
+        "Runs the whole matrix in one container rather than one container per target framework",
+        "Reports the automatic selection reason and results covering both target frameworks",
+        "Does not ask which environment to use, because the target frameworks determine it"
+      ],
+      "files": [
+        "evals/files/multi-targeted/test/Matrix.Tests/Matrix.Tests.csproj",
+        "evals/files/multi-targeted/test/Matrix.Tests/MatrixTests.cs"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Run only the net10.0 tests in a container.",
+      "expected_output": "The skill passes --framework net10.0, which narrows both the run and the environment choice, so it resolves the ordinary Microsoft SDK channel for .NET 10 rather than a multi-SDK runner, and executes only the net10.0 target framework.",
+      "expectations": [
+        "Passes -f/--framework net10.0 through to the runner rather than filtering results afterwards",
+        "Resolves the single-SDK Microsoft channel for .NET 10 because the run is narrowed to one target framework",
+        "Does not select a multi-SDK runner for a run restricted to a single target framework",
+        "Does not ask which environment to use",
+        "Reports results for the net10.0 target framework only"
+      ],
+      "files": [
+        "evals/files/multi-targeted/test/Matrix.Tests/Matrix.Tests.csproj",
+        "evals/files/multi-targeted/test/Matrix.Tests/MatrixTests.cs"
+      ]
     }
   ]
 }

@@ -37,7 +37,20 @@ The runner prefers an **exact SDK-version image tag** derived from `latest-sdk` 
 
 Because a version string does not always transform mechanically into a valid tag, the selected tag is validated against Microsoft's official SDK image metadata (the `mcr.microsoft.com` registry) before execution. If the exact tag is unavailable, the channel tag (`10.0`) is tried as a fallback candidate.
 
-Third-party images, unofficial Docker Hub images, and locally discovered look-alike images are never substituted for auto-generated environments. An explicit `dockerImage` in `testenvironments.json` is the only exception, because it is deliberate configuration.
+Auto-generated environments use one of the two recommended publishers — `mcr.microsoft.com/dotnet/sdk` for a single .NET major, or `codebeltnet/ubuntu-testrunner` when several majors must be present at once (see below). Other images are not forbidden, but they are never substituted on the runner's own initiative: an image outside those two comes from an explicit `dockerImage` in `testenvironments.json`, which is deliberate configuration and is used as written. `plan` reports `image.recommendedPublisher` so the provenance of any image is visible.
+
+## Multi-SDK runners for multi-targeted repositories
+
+A Microsoft SDK image contains exactly one runtime. `mcr.microsoft.com/dotnet/sdk:10.0` provides `Microsoft.NETCore.App 10.0.x` and nothing else, so a repository targeting `net9.0;net10.0` compiles both target frameworks there and then cannot execute the `net9.0` tests. Building is not running.
+
+`codebeltnet/ubuntu-testrunner` publishes combined tags carrying several SDKs — `8-9-10-11` provides .NET 8, 9, 10 and 11 in a single image — so the whole target-framework matrix runs in one container rather than one container per TFM.
+
+- Tags are discovered at runtime from the publisher's tag feed (`https://hub.docker.com/v2/repositories/codebeltnet/ubuntu-testrunner/tags`), cached outside the repository like release metadata, and overridable with `--multi-sdk-tags-file` for offline or deterministic runs.
+- Only the **major-only combined form** (`8-9-10-11`) is used. Single-major tags are already covered by Microsoft's images, and pinned combination forms move with each patch.
+- The **tightest covering tag wins**: the fewest extra SDKs that still provide every required major, breaking ties on the tag name so resolution is stable.
+- A multi-SDK environment declares its majors explicitly, and compatibility is judged on that list rather than on a single SDK version.
+- Pointing a multi-targeted repository at a single-SDK image is reported as an SDK incompatibility naming the unrunnable target frameworks and the remedy, instead of starting a run that cannot finish.
+- `--framework` narrows the environment choice as well as the run, so restricting to one TFM resolves the ordinary single-SDK channel.
 
 ## Immutable image identity
 
@@ -59,6 +72,29 @@ The runner inspects the solution/projects being tested and will not select an SD
 - An existing `global.json` pin is respected (never modified). If the repository requires an SDK that no supported Microsoft image can satisfy, the incompatibility is reported.
 
 Multi-targeted projects are accounted for. The runner never edits `global.json`, project files, or target frameworks to make remote testing succeed.
+
+### Target frameworks also resolve the environment
+
+Compatibility is not the only use of this inspection. When several environments are derived and the caller named no environment, the repository's own target frameworks select one outright, so zero-configuration testing runs unattended instead of stopping to ask which .NET to use.
+
+- **One .NET major** → the derived channel matching it exactly.
+- **Several .NET majors** → the multi-SDK runner providing all of them, because every runtime must be present for the tests to execute.
+
+The rule is exact-match by design and never approximates:
+
+| Repository targets | Available | Outcome |
+|---|---|---|
+| `net10.0` | channels 8, 9, 10, 11-preview | `dotnet-10-lts` selected automatically |
+| `net11.0` | channels 8, 9, 10, 11-preview | `dotnet-11-preview` selected |
+| `net9.0;net10.0` | channels + runner tags `9-10`, `8-9-10-11` | `ubuntu-testrunner-9-10` selected (tightest cover) |
+| `net8.0;net10.0` | channels + runner tag `8-9-10-11` | `ubuntu-testrunner-8-9-10-11` selected |
+| `net9.0;net10.0` with `-f net10.0` | channels 8, 9, 10, 11-preview | `dotnet-10-lts` — the run was narrowed to one TFM |
+| `net8.0;net10.0` | no covering runner tag | `SelectionRequired` — never a single-SDK image that cannot run both |
+| `net7.0` (EOL) | channels 8, 9, 10, 11-preview | `SelectionRequired` — no matching channel |
+| `netstandard2.0` only | channels 8, 9, 10, 11-preview | `SelectionRequired` — no .NET target to match |
+| `net10.0` | two channels for major 10 | `SelectionRequired` — the match is not unique |
+
+The selection is reported in both human and JSON output (`environment.selectionReason`) so an unattended choice remains auditable. This applies only to derived environments; a `testenvironments.json` with several Docker entries is deliberate developer intent and always asks.
 
 ## Offline behavior and caching
 
