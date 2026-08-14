@@ -1360,6 +1360,12 @@ internal static class ContainerPlanner
         return string.IsNullOrWhiteSpace(test) ? null : $"FullyQualifiedName~{test}";
     }
 
+    // NuGet's package root becomes an MSBuild SourceRoot, and SourceLink rejects a SourceRoot that does
+    // not end in a separator ("SourceRoot paths are required to end with a slash or backslash"). The
+    // mount target stays clean; only the environment value carries the trailing slash.
+    public static string NuGetPackagesPath(string containerDir) =>
+        containerDir.EndsWith('/') ? containerDir : containerDir + "/";
+
     // The in-container script. Phases run in order; each emits a machine-readable end marker with its
     // exit code so the host can classify restore vs build vs test outcomes precisely. restore/build stop
     // the run on failure; test always runs to completion so a TRX is produced even when tests fail.
@@ -1373,7 +1379,7 @@ internal static class ContainerPlanner
 
         var sb = new StringBuilder();
         sb.Append("set -o pipefail\n");
-        sb.Append($"export NUGET_PACKAGES={Shell.Quote(o.NuGetDir)}\n");
+        sb.Append($"export NUGET_PACKAGES={Shell.Quote(NuGetPackagesPath(o.NuGetDir))}\n");
         sb.Append("export DOTNET_CLI_TELEMETRY_OPTOUT=1\n");
         sb.Append("export DOTNET_NOLOGO=1\n");
         sb.Append("export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1\n");
@@ -1396,7 +1402,7 @@ internal static class ContainerPlanner
         {
             ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
             ["DOTNET_NOLOGO"] = "1",
-            ["NUGET_PACKAGES"] = test.NuGetDir,
+            ["NUGET_PACKAGES"] = NuGetPackagesPath(test.NuGetDir),
         };
 
         var entrypoint = BuildEntrypoint(test);
@@ -3131,6 +3137,21 @@ internal static class Commands
         var lines = s.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return string.Join('\n', lines.TakeLast(count));
     }
+
+    // MSBuild/NuGet diagnostics, distilled from the build log so a failure names its cause.
+    private static string ErrorLines(string s, int count)
+    {
+        var lines = s.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.Contains(" error ", StringComparison.OrdinalIgnoreCase)
+                || l.Contains(": error", StringComparison.OrdinalIgnoreCase)
+                || l.StartsWith("error", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return string.Join('\n', lines.TakeLast(count));
+    }
+
+    private static string FirstNonEmpty(params string[] candidates) =>
+        candidates.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c)) ?? "";
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -3157,6 +3178,7 @@ internal static class SelfTest
         UnsupportedEnvironmentTests();
         TargetFrameworkTests();
         CommandPlanningTests();
+        ImagePreparationTests();
         ResultParsingTests();
         FailureClassificationTests();
         CancellationAndCleanupTests();
@@ -3524,7 +3546,11 @@ internal static class SelfTest
         Check("entrypoint runs restore/build/test in order",
             entry.IndexOf("run_phase restore", StringComparison.Ordinal) < entry.IndexOf("run_phase build", StringComparison.Ordinal)
             && entry.IndexOf("run_phase build", StringComparison.Ordinal) < entry.IndexOf("run_phase test", StringComparison.Ordinal));
-        Check("entrypoint sets NUGET_PACKAGES to the cache mount", entry.Contains("export NUGET_PACKAGES='/nuget'"));
+        // Trailing slash is required: NuGet's package root becomes an MSBuild SourceRoot and SourceLink
+        // fails the build without it.
+        Check("entrypoint sets NUGET_PACKAGES to the cache mount", entry.Contains("export NUGET_PACKAGES='/nuget/'"));
+        Check("nuget package root ends with a separator",
+            ContainerPlanner.NuGetPackagesPath("/nuget") == "/nuget/" && ContainerPlanner.NuGetPackagesPath("/nuget/") == "/nuget/");
         Check("entrypoint uses --no-restore/--no-build to reuse phases", entry.Contains("--no-restore") && entry.Contains("--no-build"));
         Check("entrypoint honors configuration/framework/filter/coverage",
             entry.Contains("-c 'Release'") && entry.Contains("--framework 'net10.0'") && entry.Contains("--filter 'Category=Unit'") && entry.Contains("XPlat Code Coverage"));
@@ -3566,6 +3592,28 @@ internal static class SelfTest
         {
             try { Directory.Delete(tempRoot, true); } catch (Exception) { /* best effort */ }
         }
+    }
+
+    private static void ImagePreparationTests()
+    {
+        Section("Image preparation");
+
+        const string digest = "sha256:990d47a4f925dedf27c875271c8b592e201666536f955befef9147745652f29f";
+        var tag = ImageProvisioner.DerivedTag("codebeltnet/ubuntu-testrunner:8-9-10-11", digest);
+        Check("prepared tag is derived from the base digest", tag == "dotnet-remote-testing/prepared:git-990d47a4f925dedf");
+        Check("prepared tag is stable for the same image", ImageProvisioner.DerivedTag("other:tag", digest) == tag);
+        Check("prepared tag changes with the base image",
+            ImageProvisioner.DerivedTag("x:1", "sha256:abcdef0123456789abcdef") != tag);
+        Check("prepared tag needs no digest", ImageProvisioner.DerivedTag("x:1", null).StartsWith("dotnet-remote-testing/prepared:git-", StringComparison.Ordinal));
+
+        Check("probe asks the image for the tooling", ImageProvisioner.ProbeCommand() == "command -v git >/dev/null 2>&1");
+
+        var dockerfile = ImageProvisioner.Dockerfile("codebeltnet/ubuntu-testrunner:8-9-10-11");
+        Check("provisioning layers onto the resolved base image", dockerfile.StartsWith("FROM codebeltnet/ubuntu-testrunner:8-9-10-11", StringComparison.Ordinal));
+        Check("provisioning installs the required tooling", dockerfile.Contains("install -y --no-install-recommends git"));
+        Check("provisioning adapts to the image's package manager",
+            dockerfile.Contains("command -v apt-get") && dockerfile.Contains("command -v apk") && dockerfile.Contains("command -v microdnf"));
+        Check("provisioning fails loudly on an unknown package manager", dockerfile.Contains("No supported package manager"));
     }
 
     private static void ResultParsingTests()
