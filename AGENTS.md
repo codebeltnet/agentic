@@ -88,33 +88,23 @@ Repo-managed skills live in four places that must stay in sync:
 - `~/.agents/skills/<name>/` — local global agent install
 - `~/.gemini/antigravity-cli/skills/<name>/` — local Gemini Antigravity install
 
-Changes often start in `~/.claude/skills/<name>/`, then get mirrored to the repo and the other local installs:
+Sync the **whole skill tree** with the repository as the source of truth, and prove it with hashes:
 
-- **Claude local → repo** (persist changes to source control):
-  ```powershell
-  Copy-Item "$HOME/.claude/skills/<name>/<file>" "skills/<name>/<file>" -Force
-  ```
-- **Claude local → agent installs** (keep `~/.agents` and Gemini current):
-  ```powershell
-  Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
-  Copy-Item "$HOME/.claude/skills/<name>/<file>" "$HOME/.gemini/antigravity-cli/skills/<name>/<file>" -Force
-  ```
-- **Repo → local installs** (after pulling changes or cloning fresh):
-  ```powershell
-  Copy-Item "skills/<name>/<file>" "$HOME/.claude/skills/<name>/<file>" -Force
-  Copy-Item "skills/<name>/<file>" "$HOME/.agents/skills/<name>/<file>" -Force
-  Copy-Item "skills/<name>/<file>" "$HOME/.gemini/antigravity-cli/skills/<name>/<file>" -Force
-  ```
+```
+pwsh -NoProfile -File ./scripts/sync-skill-install.ps1 -Skill <name>
+```
 
-If you edit the `~/.agents/skills/<name>/` copy first, mirror it back to the repo and to `~/.claude/skills/<name>/` and `~/.gemini/antigravity-cli/skills/<name>/` using the same pattern.
+The script copies every file under `skills/<name>/` into all three installs, then compares SHA-256 across all four locations and exits non-zero on any difference. `-VerifyOnly` checks without copying, `-Prune` deletes install files that no longer exist in the repository, and omitting `-Skill` sweeps every repo-managed skill. Generated build output (`bin/`, `obj/`) is excluded because it is regenerated per location and never matches; a file that exists only in an install is drift too, because a rename or deletion otherwise leaves the old one loading forever.
+
+**Run it as the last action before the completion message, after the final edit is in place.** Do not copy a remembered list of touched files: that list goes stale the moment you edit one more file, and a sync performed earlier in the session says nothing about what changed after it. Never report "synced" or "hash-identical" from memory, from an earlier turn, or from a partial per-file copy — the claim must be backed by this command's output in the same response that makes it. This is a [blocking completion gate](#blocking-completion-gates).
+
+If a change starts in `~/.claude/skills/<name>/` or another install, mirror the edited file back into `skills/<name>/` first, then run the script so the repository stays authoritative.
 
 When renaming a skill, update **all four** locations — the repo folder, the local Claude install folder, the local global agent install folder, and the local Gemini Antigravity install folder. The folder name and the `name:` field in the SKILL.md frontmatter must match. A mismatch causes the skill to disappear from tooling or show stale instructions.
 
 A sync mismatch means one side runs a stale version, which leads to confusing eval results and wasted iterations.
 
 After the source copy passes its deterministic tests, SHA-256 identity across the repo and all three local installs is sufficient installation verification. Do not rerun the same deterministic suites from a hash-identical installed copy; that duplicates time, compute, and token use without adding evidence. Run an installed-copy test only when install-path resolution, loader behavior, permissions, or an actual hash mismatch is the subject of the test.
-
-After changing any repo-managed skill, sync the touched files across the repo copy, `~/.claude/skills/<name>/`, `~/.agents/skills/<name>/`, and `~/.gemini/antigravity-cli/skills/<name>/` before considering the task done.
 
 ## Skill Directory Structure
 
@@ -185,6 +175,8 @@ When repository guidance, an active skill, or a conversation summary identifies 
 Before any completion message, reread the skill instructions and the current conversation summary's pending-task or blocker sections. If either one names a required script, validator, or maintenance step, that step is a hard gate, not optional polish.
 
 For script-backed workflows, creating or editing files is not enough on its own. If a skill requires deterministic maintenance or verification commands, run them before completion and report their concrete outcome. For `dotnet-docfx-digest`, `scripts/agents.cs` and `scripts/docfx.cs --build-api-model --validate-samples --verify-docfx-build` are blocking completion gates whenever the skill or task summary says they are required.
+
+Whenever a repo-managed skill was edited, `scripts/sync-skill-install.ps1` is a blocking completion gate in the same sense, and it is the last gate to run because every other step can still change a file. Report its actual output; an earlier run in the same session does not satisfy it. See [Local Install Sync](#local-install-sync).
 
 ## User Input UX
 
