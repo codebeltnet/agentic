@@ -43,7 +43,23 @@ This preparation layer is:
 - **transparent** — the reported `Image`/`Digest` remain the resolved base image (reproducibility identity), with the preparation reported separately;
 - **best effort** — if the tooling cannot be added (no package manager, `--offline`, no network), the base image is used anyway and the reason is reported, because a repository that never invokes `git` runs fine without it.
 
-`.git` itself is not staged into the workspace. Version-deriving tools therefore fall back to their default version (MinVer: `0.0.0-alpha.0`, a warning) instead of failing, which is the right trade for a test run.
+## Git metadata in the workspace
+
+The repository's `.git` directory is copied into the staged workspace alongside the source. The copy is disposable, so the container may write to it freely; the developer's real repository is never mounted and never touched.
+
+This matters because staging the source without its git metadata is not a neutral omission — it changes observable build and test behavior:
+
+| Consumer | Without `.git` |
+|---|---|
+| MinVer / Nerdbank.GitVersioning / GitInfo | Silently fall back to `0.0.0`, so the container builds differently-versioned assemblies than the host |
+| SourceLink | Stops embedding repository information |
+| Repository-root probes (`walk up until a .git directory exists`) | Resolve to a different directory, changing every path derived from them — including paths the tests under it read |
+
+The third row is the subtle one: a suite that passes under Visual Studio's Remote Testing and fails here, for reasons unrelated to the container, is very often a repository-root probe landing somewhere else. Installing `git` into the image (above) and staging `.git` are two halves of one guarantee: the build tooling is present *and* the metadata it reads is present.
+
+A linked worktree or submodule stores `.git` as a `gitdir: <path>` pointer file; the runner resolves the pointer and stages the real directory, because the path it names does not exist inside the container. A source tree with no git metadata at all stages normally and silently — that is an ordinary case, not a degraded one.
+
+`--no-git-metadata` opts out for a repository whose `.git` is large enough that copying it dominates the run. The run then reports the fidelity loss rather than hiding it.
 
 ## Mounts
 
@@ -75,9 +91,17 @@ Supported through options that pass straight into the phases: entire solution, a
 
 ## Result collection and classification
 
-The runner parses every TRX in `/results` (multi-targeted projects emit one per TFM) into a single structured result: passed, skipped, failed counts, duration, and actionable failure detail (test name, class, message, location). It prioritizes machine-readable results and suppresses pull/restore/build noise on success.
+The runner parses every TRX in `/results` into a single structured result, at the granularity `dotnet test` itself reports:
+
+- **Per test assembly and target framework** — a multi-targeted project emits one TRX per TFM, and the assembly path recorded in the TRX is the only thing that distinguishes them. Each becomes its own `Passed!`/`Failed!` line with its own counts and duration, so a failure is attributable to one test project under one TFM instead of a pooled total.
+- **Aggregate counts and duration** across every assembly.
+- **Per failing test**: fully-qualified name, owning class, target framework, elapsed time, assertion message, stack trace, and anything the test wrote to its own output helper. Detail is capped (15 failures, 10 stack frames, 15 output lines) so a wholesale failure stays readable; `--json` always carries the complete set.
+
+Pull/restore/build noise is suppressed on success. `--show-log` prints the container log in full when the summarized detail is not enough.
 
 Failures are classified into distinct kinds so a container/infrastructure problem is never misreported as a failing unit test: `Configuration`, `UnsupportedEnvironment`, `DockerUnavailable`, `ImageResolution`, `SdkIncompatibility`, `SourceStaging`, `Restore`, `Compilation`, `TestHost`, `TestFailure`, `ResultProcessing`, `Cleanup`, `Cancelled`, `ReleaseMetadataUnavailable`. A non-zero `dotnet test` exit with a TRX containing failures is a `TestFailure`; a non-zero exit with no failing results (crash, no discovered tests, missing adapter) is a `TestHost` failure.
+
+Each phase emits a machine-readable end marker, so the log between two markers is exactly that phase's output. An infrastructure failure is reported with *its own* phase's log rather than a tail of everything — a build failure names the offending file and compiler error instead of trailing test-runner chatter. Any failing tests already recorded in a TRX are reported first even when the phase failed for another reason, so an assertion failure followed by a test-host crash does not disappear behind the crash.
 
 ## Cancellation and cleanup
 

@@ -146,6 +146,23 @@ Common scoping options (pass through only what the developer asked for):
 
 The runner establishes an isolated staged workspace (so container builds never leave Linux `bin`/`obj` in the working tree), mounts a persistent NuGet cache outside the repository, pins the image to its digest, runs restore → build → test, collects TRX results, and removes all transient Docker resources afterward. You do not manage any of that.
 
+Two diagnostic options exist for when a result needs explaining, not for routine runs:
+
+- `--show-log` — print the container's full restore/build/test log. Use it when the summarized failure detail is not enough, never by default.
+- `--no-git-metadata` — skip staging `.git` (see [The staged workspace is still a repository](#the-staged-workspace-is-still-a-repository)). Only for a repository whose `.git` is large enough that copying it dominates the run, and only when the developer accepts the fidelity loss.
+
+### The staged workspace is still a repository
+
+The staged copy includes the repository's `.git` directory. This is not incidental: a .NET build and the code under test both read it.
+
+- MinVer, Nerdbank.GitVersioning and GitInfo derive the assembly version from git history. Without `.git` they silently fall back to `0.0.0`, so the container builds a differently-versioned assembly than the host.
+- SourceLink stops embedding repository information.
+- Application and test code commonly locates the repository root by walking up until a `.git` directory exists. Without it, that probe resolves somewhere else — and every path derived from it changes.
+
+That last one is why a suite can pass in Visual Studio's remote testing and fail here for reasons that have nothing to do with the container. If a run reports a failure that looks path-dependent, the staged workspace being a real repository is already accounted for; do not "fix" it by editing the repository.
+
+The runner installs `git` into the image when the image lacks it (see [Build tooling in the image](#build-tooling-in-the-image)) — the two halves belong together: the tooling and the metadata it reads.
+
 ### Build tooling in the image
 
 The container runs the *build*, not just the tests, and a .NET build routinely shells out to `git` — MinVer, Nerdbank.GitVersioning, GitInfo and SourceLink all do. Microsoft's SDK images ship it; a minimal runner image may not, and the build then fails with `MINVER1007: "git" is not present in PATH` even though nothing is wrong with the code.
@@ -156,7 +173,7 @@ Relay that line when present, but do not act on it: it is not a repository probl
 
 ## Step 5: Report results concisely
 
-Lead with the outcome, not the infrastructure. Mirror the runner's concise result and suppress pull/restore/build log noise unless something failed:
+Lead with the outcome, not the infrastructure. Mirror the runner's result and suppress pull/restore/build log noise unless something failed. The runner already reports at the granularity `dotnet test` does — one line per test assembly and target framework, then the totals:
 
 ```
 Remote Test: dotnet-10-lts
@@ -166,6 +183,8 @@ Image:  mcr.microsoft.com/dotnet/sdk:10.0.302
 Digest: sha256:...
 SDK:    10.0.302
 
+Passed!  Cuemon.Core.Tests.dll (net10.0)  —  1842 passed, 3 skipped, 0 failed, 21.8 s
+
 Tests:  1842 passed, 3 skipped, 0 failed
 Time:   21.8 s (tests)
 Total:  96.4 s (including image pull, restore and build)
@@ -173,15 +192,23 @@ Total:  96.4 s (including image pull, restore and build)
 
 Report both durations as the runner does. `Time` is the test execution time from the TRX; `Total` is wall clock for the whole operation. Collapsing them into one number misrepresents a fast suite behind a slow image pull. When the runner explains an automatic environment selection, relay that line — it is what makes an unattended choice auditable.
 
-When tests fail, prioritize actionable detail — the failing test, its class, the expected/actual message, and location — over container startup output:
+When tests fail, relay the runner's failure detail as it stands. It is deliberately shaped like `dotnet test` output — fully-qualified test name, the target framework it failed under, the assertion message, the stack trace and anything the test wrote itself — because that is what makes a red test fixable without a second run:
 
 ```
-3 tests failed
+Failed!  Cuemon.Text.Tests.dll (net10.0)  —  110 passed, 0 skipped, 1 failed, 2.0 s
+Passed!  Cuemon.Text.Tests.dll (net9.0)   —  111 passed, 0 skipped, 0 failed, 1.9 s
 
-Cuemon.Text.Tests.StringUtilityTest
-  Sanitize_WithUnicode_ReturnsExpectedValue
-  Expected: ... Actual: ...
+1 test failed:
+
+  Failed Cuemon.Text.Tests.StringUtilityTest.Sanitize_WithUnicode_ReturnsExpectedValue [net10.0] (314 ms)
+    Assert.Equal() Failure: Values differ
+    Expected: 16
+    Actual:   2
+    Stack trace:
+      at Cuemon.Text.Tests.StringUtilityTest.Sanitize_WithUnicode_ReturnsExpectedValue() in /workspace/test/…/StringUtilityTest.cs:line 321
 ```
+
+Do not compress this into a bare count. "1 test failed" without the name, the TFM and the message forces the developer to rerun the suite to learn what you already know. Note which target framework failed when a multi-targeted project fails under one TFM and passes under another — that asymmetry is usually the diagnosis. If the detail is still not enough, rerun with `--show-log` rather than guessing.
 
 A run is reproducible in terms of environment, requested image, resolved digest, SDK, architecture, and runner version; include the image and digest so the result can be reproduced.
 

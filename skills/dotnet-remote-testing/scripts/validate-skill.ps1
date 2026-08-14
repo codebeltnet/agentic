@@ -38,7 +38,13 @@ $contracts = @(
     # A Microsoft SDK image carries one runtime, so multi-targeted repositories need a multi-SDK runner.
     # Losing this guidance means silently planning runs that build and then cannot execute.
     'codebeltnet/ubuntu-testrunner',
-    'ships exactly **one** runtime'
+    'ships exactly **one** runtime',
+    # A staged workspace without .git stops being a repository: version stamping falls back to 0.0.0 and
+    # repository-root probes resolve elsewhere, which makes a suite fail here that passes in Visual
+    # Studio's remote testing. Losing this guidance sends the agent chasing the repository instead.
+    'The staged workspace is still a repository',
+    # Reporting contract: a red test must be actionable from the report alone.
+    'Do not compress this into a bare count'
 )
 foreach ($needle in $contracts) {
     if (-not $skill.Contains($needle, [System.StringComparison]::Ordinal)) {

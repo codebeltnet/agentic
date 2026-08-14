@@ -189,6 +189,39 @@
         "evals/files/multi-targeted/test/Matrix.Tests/Matrix.Tests.csproj",
         "evals/files/multi-targeted/test/Matrix.Tests/MatrixTests.cs"
       ]
+    },
+    {
+      "id": 12,
+      "prompt": "Remote test this repo.",
+      "expected_output": "The runner exits 1 with real failing tests. The skill reports them the way dotnet test would: which test assembly and target framework failed, the fully-qualified test name, the assertion message and the stack trace — and treats it as a test outcome to report, not an infrastructure problem and not a question.",
+      "expectations": [
+        "Reports exit code 1 as a genuine test failure rather than an infrastructure or container problem",
+        "Names the failing test by its fully-qualified name and the target framework it failed under",
+        "Includes the assertion message and stack trace the runner reported instead of only a failure count",
+        "Distinguishes the failing test assembly/TFM from the ones that passed when a multi-targeted project fails under only one TFM",
+        "Does not rerun on the host, edit the repository, or modify the test to make it pass",
+        "Does not ask a question; a test failure is an outcome to report"
+      ],
+      "files": [
+        "evals/files/multi-targeted/test/Matrix.Tests/Matrix.Tests.csproj",
+        "evals/files/multi-targeted/test/Matrix.Tests/MatrixTests.cs"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "These tests pass under Visual Studio's remote testing against the same Docker image, but fail when I run them through you. Why?",
+      "expected_output": "The skill explains from the runner's own behavior rather than changing the repository: the staged workspace is a disposable copy that includes the repository's .git directory, so repository-root detection, MinVer/Nerdbank version stamping and SourceLink behave as they do on the host. It investigates the actual reported failure instead of assuming the container is at fault, and never edits the repository to force a pass.",
+      "expectations": [
+        "Treats the difference as something to diagnose from the reported failure, not a reason to fall back to the host",
+        "Knows the staged workspace includes .git, so repository-root probes and version-deriving tools behave as on the host",
+        "Does not edit global.json, project files, target frameworks, test packages, or testenvironments.json to force a pass",
+        "Does not create a Dockerfile, dev container, or other repository plumbing",
+        "Offers --show-log for the full container log rather than guessing at the cause"
+      ],
+      "files": [
+        "evals/files/multi-targeted/test/Matrix.Tests/Matrix.Tests.csproj",
+        "evals/files/multi-targeted/test/Matrix.Tests/MatrixTests.cs"
+      ]
     }
   ]
 }

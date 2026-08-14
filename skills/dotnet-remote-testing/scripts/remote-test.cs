@@ -160,6 +160,10 @@ internal sealed class Options
     public bool Coverage { get; private set; }
     public int TimeoutSeconds { get; private set; }
 
+    // Staging/reporting fidelity switches. Defaults reproduce what the developer sees locally.
+    public bool NoGitMetadata { get; private set; }
+    public bool ShowLog { get; private set; }
+
     public static Options Parse(string[] args)
     {
         var o = new Options();
@@ -177,6 +181,8 @@ internal sealed class Options
                 case "--offline": o.Offline = true; break;
                 case "--no-registry-check": o.NoRegistryCheck = true; break;
                 case "--coverage": o.Coverage = true; break;
+                case "--no-git-metadata": o.NoGitMetadata = true; break;
+                case "--show-log": o.ShowLog = true; break;
                 case "--repo-root": o.RepoRoot = Path.GetFullPath(Next(args, ref i, a)); break;
                 case "--config-path": o.ConfigPath = Next(args, ref i, a); break;
                 case "--environment" or "-e": o.EnvironmentName = Next(args, ref i, a); break;
@@ -268,6 +274,9 @@ internal sealed class Options
           -f, --framework <tfm>      Restrict multi-targeted test projects to one TFM.
               --coverage             Collect code coverage (XPlat Code Coverage) when the project supports it.
               --timeout <seconds>    Abort the container run after N seconds (0 = no timeout).
+              --no-git-metadata      Do not stage .git into the workspace (faster for a very large
+                                     repository, but repository-root detection, MinVer/Nerdbank
+                                     versioning and SourceLink will differ from the host).
 
         Release discovery / networking:
               --offline              Use cached release metadata only; never reach the network.
@@ -278,6 +287,7 @@ internal sealed class Options
 
         Output:
               --json                 Emit machine-readable JSON.
+              --show-log             Print the container's restore/build/test log in full.
           -h, --help                 Show this help.
 
         Exit codes: 0 success, 1 test failures, 2 invalid args, 3 configuration, 4 unsupported environment,
@@ -1526,7 +1536,30 @@ internal static class TargetResolver
 // emit one per TFM) into a single structured result, prioritizing actionable failure detail.
 // ---------------------------------------------------------------------------------------------------
 
-internal sealed record TestFailureDetail(string TestName, string? ClassName, string? Message, string? StackTrace);
+// One failing test, with everything `dotnet test` would have printed about it: where it lives, what it
+// asserted, where it threw, and whatever the test itself wrote to the output helper.
+internal sealed record TestFailureDetail(
+    string TestName,
+    string? ClassName,
+    string? Message,
+    string? StackTrace,
+    string? Output = null,
+    string? Assembly = null,
+    string? Framework = null,
+    double DurationSeconds = 0);
+
+// One test assembly/TFM pair — the unit `dotnet test` reports a Passed!/Failed! line for.
+internal sealed record TestAssemblyResult(
+    string Assembly,
+    string? Framework,
+    int Total,
+    int Passed,
+    int Failed,
+    int Skipped,
+    double DurationSeconds)
+{
+    public string Display => Framework is null ? Assembly : $"{Assembly} ({Framework})";
+}
 
 internal sealed record TestRunResult
 {
@@ -1537,6 +1570,7 @@ internal sealed record TestRunResult
     public int NotExecuted { get; init; }
     public double DurationSeconds { get; init; }
     public IReadOnlyList<TestFailureDetail> Failures { get; init; } = [];
+    public IReadOnlyList<TestAssemblyResult> Assemblies { get; init; } = [];
     public int TrxFilesParsed { get; init; }
 
     public static TestRunResult Empty => new();
@@ -1550,32 +1584,91 @@ internal sealed record TestRunResult
         NotExecuted = NotExecuted + other.NotExecuted,
         DurationSeconds = DurationSeconds + other.DurationSeconds,
         Failures = [.. Failures, .. other.Failures],
+        Assemblies = [.. Assemblies, .. other.Assemblies],
         TrxFilesParsed = TrxFilesParsed + other.TrxFilesParsed,
     };
+}
+
+// VSTest records the test assembly's path in lower case, so a TRX alone would report
+// "acme.tests.dll" for an assembly the developer knows as "Acme.Tests.dll". The repository's own
+// project files carry the authoritative casing.
+internal static class AssemblyNameIndex
+{
+    private static readonly string[] ProjectPatterns = ["*.csproj", "*.fsproj", "*.vbproj"];
+
+    public static IReadOnlyDictionary<string, string> Build(string sourceRoot)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!Directory.Exists(sourceRoot))
+        {
+            return map;
+        }
+
+        foreach (var pattern in ProjectPatterns)
+        {
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(sourceRoot, pattern, SearchOption.AllDirectories);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            foreach (var project in files)
+            {
+                var name = Path.GetFileNameWithoutExtension(project) + ".dll";
+                map[name] = name;
+            }
+        }
+
+        return map;
+    }
 }
 
 internal static class TrxParser
 {
     private static readonly XNamespace Ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
 
-    public static TestRunResult ParseFile(string path) => Parse(File.ReadAllText(path));
+    public static TestRunResult ParseFile(string path, IReadOnlyDictionary<string, string>? assemblyNames = null) =>
+        Parse(File.ReadAllText(path), assemblyNames);
 
-    public static TestRunResult Parse(string trxXml)
+    public static TestRunResult Parse(string trxXml, IReadOnlyDictionary<string, string>? assemblyNames = null)
     {
         var doc = XDocument.Parse(trxXml);
         var root = doc.Root ?? throw new InvalidOperationException("TRX has no root element.");
 
-        // Map testId -> class name via TestDefinitions so failures carry their owning class.
+        // Map testId -> class name / storage via TestDefinitions so failures carry their owning class and
+        // the assembly they came from. Multi-targeted projects emit one TRX per TFM, and only the storage
+        // path distinguishes them.
         var classById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string? storage = null;
+        string? classAssembly = null;
         foreach (var ut in root.Descendants(Ns + "UnitTest"))
         {
             var id = ut.Attribute("id")?.Value;
             var className = ut.Element(Ns + "TestMethod")?.Attribute("className")?.Value;
-            if (id is not null && className is not null)
+            if (className is not null)
             {
-                classById[id] = className.Split(',')[0];
+                var parts = className.Split(',', 2);
+                if (id is not null)
+                {
+                    classById[id] = parts[0];
+                }
+
+                if (classAssembly is null && parts.Length == 2)
+                {
+                    classAssembly = parts[1].Trim();
+                }
             }
+
+            storage ??= ut.Attribute("storage")?.Value
+                ?? ut.Element(Ns + "TestMethod")?.Attribute("codeBase")?.Value;
         }
+
+        var assemblyName = AssemblyDisplayName(storage, classAssembly, assemblyNames);
+        var framework = FrameworkFrom(storage);
 
         int passed = 0, failed = 0, skipped = 0, notExecuted = 0, total = 0;
         var failures = new List<TestFailureDetail>();
@@ -1593,18 +1686,24 @@ internal static class TrxParser
         foreach (var r in root.Descendants(Ns + "UnitTestResult"))
         {
             var outcome = r.Attribute("outcome")?.Value ?? "";
-            duration += ParseDuration(r.Attribute("duration")?.Value);
+            var testDuration = ParseDuration(r.Attribute("duration")?.Value);
+            duration += testDuration;
 
             if (string.Equals(outcome, "Failed", StringComparison.OrdinalIgnoreCase))
             {
                 var testId = r.Attribute("testId")?.Value;
                 var testName = r.Attribute("testName")?.Value ?? "(unknown test)";
-                var error = r.Element(Ns + "Output")?.Element(Ns + "ErrorInfo");
+                var output = r.Element(Ns + "Output");
+                var error = output?.Element(Ns + "ErrorInfo");
                 failures.Add(new TestFailureDetail(
                     testName,
                     testId is not null && classById.TryGetValue(testId, out var cls) ? cls : null,
                     error?.Element(Ns + "Message")?.Value?.Trim(),
-                    error?.Element(Ns + "StackTrace")?.Value?.Trim()));
+                    error?.Element(Ns + "StackTrace")?.Value?.Trim(),
+                    output?.Element(Ns + "StdOut")?.Value?.Trim(),
+                    assemblyName,
+                    framework,
+                    Math.Round(testDuration, 3)));
             }
             else if (outcome is "NotExecuted" or "Skipped")
             {
@@ -1632,11 +1731,14 @@ internal static class TrxParser
             NotExecuted = notExecuted,
             DurationSeconds = Math.Round(duration, 3),
             Failures = failures,
+            Assemblies = assemblyName is null
+                ? []
+                : [new TestAssemblyResult(assemblyName, framework, total, passed, failed, skipped, Math.Round(duration, 3))],
             TrxFilesParsed = 1,
         };
     }
 
-    public static TestRunResult ParseDirectory(string directory)
+    public static TestRunResult ParseDirectory(string directory, IReadOnlyDictionary<string, string>? assemblyNames = null)
     {
         var result = TestRunResult.Empty;
         if (!Directory.Exists(directory))
@@ -1648,7 +1750,7 @@ internal static class TrxParser
         {
             try
             {
-                result = result.Merge(ParseFile(file));
+                result = result.Merge(ParseFile(file, assemblyNames));
             }
             catch (Exception)
             {
@@ -1656,7 +1758,61 @@ internal static class TrxParser
             }
         }
 
-        return result;
+        return result with
+        {
+            Assemblies = [.. result.Assemblies.OrderBy(a => a.Assembly, StringComparer.OrdinalIgnoreCase).ThenBy(a => a.Framework, StringComparer.OrdinalIgnoreCase)],
+        };
+    }
+
+    // "/workspace/test/Acme.Tests/bin/Debug/net10.0/Acme.Tests.dll" -> "Acme.Tests.dll".
+    internal static string? AssemblyNameFrom(string? storage) =>
+        string.IsNullOrWhiteSpace(storage) ? null : Path.GetFileName(storage.Replace('\\', '/'));
+
+    // VSTest lower-cases the storage path it records, which would report "acme.tests.dll" for an assembly
+    // the developer knows as "Acme.Tests.dll". Two sources restore the real casing, in order of
+    // authority: the repository's own project files, then the class name's assembly part
+    // ("Namespace.Type, Acme.Tests"), which some loggers include and which keeps its casing.
+    internal static string? AssemblyDisplayName(
+        string? storage, string? classAssembly, IReadOnlyDictionary<string, string>? assemblyNames = null)
+    {
+        var fromStorage = AssemblyNameFrom(storage);
+        if (fromStorage is not null && assemblyNames is not null && assemblyNames.TryGetValue(fromStorage, out var known))
+        {
+            return known;
+        }
+
+        var simpleName = classAssembly?.Split(',')[0].Trim();
+        if (string.IsNullOrWhiteSpace(simpleName))
+        {
+            return fromStorage;
+        }
+
+        var candidate = simpleName + ".dll";
+        return fromStorage is null || string.Equals(candidate, fromStorage, StringComparison.OrdinalIgnoreCase)
+            ? candidate
+            : fromStorage;
+    }
+
+    // The TFM is the output folder the test assembly was built into; it is the only place a TRX records
+    // which target framework produced it.
+    internal static string? FrameworkFrom(string? storage)
+    {
+        if (string.IsNullOrWhiteSpace(storage))
+        {
+            return null;
+        }
+
+        var segments = storage.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = segments.Length - 2; i >= 0; i--)
+        {
+            if (Regex.IsMatch(segments[i], @"^net(standard|coreapp|framework)?\d+(\.\d+)*(-[a-z0-9.]+)?$", RegexOptions.IgnoreCase)
+                || Regex.IsMatch(segments[i], @"^net\d{2,3}$", RegexOptions.IgnoreCase))
+            {
+                return segments[i];
+            }
+        }
+
+        return null;
     }
 
     private static int IntAttr(XElement e, string name) =>
@@ -1776,14 +1932,42 @@ internal static class FailureClassifier
     public static IReadOnlyDictionary<string, int> ParsePhaseMarkers(string output)
     {
         var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match m in Regex.Matches(output,
-            Regex.Escape(ContainerPlanner.PhaseMarkerPrefix) + @"(?<name>[a-zA-Z]+):(?<code>-?\d+)##"))
+        foreach (Match m in MarkerPattern.Matches(output))
         {
             map[m.Groups["name"].Value] = int.Parse(m.Groups["code"].Value, CultureInfo.InvariantCulture);
         }
 
         return map;
     }
+
+    // The container emits one marker per phase, so the text between two markers is exactly that phase's
+    // log. Reporting the failing phase's own output — instead of a tail of everything — is what turns
+    // "the build failed" into "this file, this line, this compiler error".
+    public static string PhaseOutput(string output, string phase)
+    {
+        if (string.IsNullOrEmpty(output))
+        {
+            return "";
+        }
+
+        var start = 0;
+        foreach (Match m in MarkerPattern.Matches(output))
+        {
+            if (string.Equals(m.Groups["name"].Value, phase, StringComparison.OrdinalIgnoreCase))
+            {
+                return output[start..m.Index].Trim('\r', '\n');
+            }
+
+            start = m.Index + m.Length;
+        }
+
+        // The phase never completed (crash, cancellation): everything after the last marker is its log.
+        return output[start..].Trim('\r', '\n');
+    }
+
+    private static readonly Regex MarkerPattern = new(
+        Regex.Escape(ContainerPlanner.PhaseMarkerPrefix) + @"(?<name>[a-zA-Z]+):(?<code>-?\d+)##",
+        RegexOptions.Compiled);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -2218,15 +2402,28 @@ internal static class ImageProvisioner
 // ---------------------------------------------------------------------------------------------------
 // Source staging — copy the source into an isolated, disposable workspace so container builds never
 // pollute the developer's working tree with Linux bin/obj artifacts.
+//
+// The staged copy must still *be* a repository. Dropping .git changes observable behavior: MinVer and
+// Nerdbank.GitVersioning fall back to 0.0.0, SourceLink stops embedding, and any repository-root probe
+// ("walk up until a .git directory exists") resolves somewhere else entirely — which silently changes
+// what the tests under it see. That is the difference between "it passes in Visual Studio's remote
+// testing and fails here", so .git is staged too, as a disposable copy the container may freely write.
 // ---------------------------------------------------------------------------------------------------
 
-internal sealed record StagingResult(string? StagedPath, string? Error, int FileCount);
+internal sealed record StagingResult(
+    string? StagedPath,
+    string? Error,
+    int FileCount,
+    bool GitMetadataStaged = false,
+    long GitMetadataBytes = 0,
+    string? GitMetadataNote = null);
 
 internal static class SourceStager
 {
     private static readonly string[] ExcludedDirs = ["bin", "obj", ".git", ".vs", ".vscode", "node_modules", "TestResults"];
 
-    public static async Task<StagingResult> StageAsync(string sourceRoot, string stagingRoot, CancellationToken ct)
+    public static async Task<StagingResult> StageAsync(
+        string sourceRoot, string stagingRoot, CancellationToken ct, bool includeGitMetadata = true)
     {
         if (!Directory.Exists(sourceRoot))
         {
@@ -2244,12 +2441,107 @@ internal static class SourceStager
                 ? CopyEnumerated(sourceRoot, stagingRoot, files)
                 : CopyRecursive(sourceRoot, stagingRoot);
 
-            return new StagingResult(stagingRoot, null, count);
+            var git = includeGitMetadata
+                ? StageGitMetadata(sourceRoot, stagingRoot)
+                : new GitStagingResult(false, 0, "Git metadata staging disabled; repository-root detection and version stamping will differ from the host.");
+
+            return new StagingResult(stagingRoot, null, count, git.Staged, git.Bytes, git.Note);
         }
         catch (Exception ex)
         {
             return new StagingResult(null, $"Failed to stage source: {ex.Message}", 0);
         }
+    }
+
+    private sealed record GitStagingResult(bool Staged, long Bytes, string? Note);
+
+    // Copy the repository's git directory verbatim into the staged workspace. Best-effort by design: a
+    // missing or unreadable .git is a fidelity note, never a reason to fail a run that can still execute.
+    private static GitStagingResult StageGitMetadata(string sourceRoot, string stagingRoot)
+    {
+        var gitDir = ResolveGitDirectory(sourceRoot);
+        if (gitDir is null)
+        {
+            return new GitStagingResult(false, 0, null);
+        }
+
+        var destination = Path.Combine(stagingRoot, ".git");
+        try
+        {
+            // A linked worktree stages its "gitdir:" pointer file as ordinary content; the real git
+            // directory has to replace it, because the path it points at does not exist in the container.
+            if (File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+
+            var bytes = CopyDirectory(gitDir, destination);
+            return new GitStagingResult(true, bytes, null);
+        }
+        catch (Exception ex)
+        {
+            return new GitStagingResult(false, 0,
+                $"Git metadata could not be staged ({ex.Message}); repository-root detection and version stamping may differ from the host.");
+        }
+    }
+
+    // .git is a directory in an ordinary clone and a "gitdir: <path>" pointer file in a linked worktree
+    // or submodule. Both resolve to a real directory that carries the repository state.
+    private static string? ResolveGitDirectory(string sourceRoot)
+    {
+        var candidate = Path.Combine(sourceRoot, ".git");
+        if (Directory.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        if (!File.Exists(candidate))
+        {
+            return null;
+        }
+
+        var pointer = File.ReadAllText(candidate).Trim();
+        const string Prefix = "gitdir:";
+        if (!pointer.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var target = pointer[Prefix.Length..].Trim();
+        if (!Path.IsPathRooted(target))
+        {
+            target = Path.GetFullPath(Path.Combine(sourceRoot, target));
+        }
+
+        return Directory.Exists(target) ? target : null;
+    }
+
+    private static long CopyDirectory(string source, string destination)
+    {
+        long bytes = 0;
+        var stack = new Stack<(string Source, string Destination)>();
+        stack.Push((source, destination));
+        while (stack.Count > 0)
+        {
+            var (from, to) = stack.Pop();
+            Directory.CreateDirectory(to);
+            foreach (var file in Directory.EnumerateFiles(from))
+            {
+                var target = Path.Combine(to, Path.GetFileName(file));
+                File.Copy(file, target, overwrite: true);
+                // The source .git may be read-only in places (packed objects); the staged copy is
+                // disposable and the container must be able to write to it.
+                new FileInfo(target).IsReadOnly = false;
+                bytes += new FileInfo(target).Length;
+            }
+
+            foreach (var dir in Directory.EnumerateDirectories(from))
+            {
+                stack.Push((dir, Path.Combine(to, Path.GetFileName(dir))));
+            }
+        }
+
+        return bytes;
     }
 
     private static async Task<IReadOnlyList<string>?> TryGitEnumerateAsync(string sourceRoot, CancellationToken ct)
@@ -2831,7 +3123,7 @@ internal static class Commands
             stagingRoot = Path.Combine(runRoot, "workspace");
             Directory.CreateDirectory(resultsRoot);
 
-            var staging = await SourceStager.StageAsync(sourceRoot, stagingRoot, cts.Token);
+            var staging = await SourceStager.StageAsync(sourceRoot, stagingRoot, cts.Token, includeGitMetadata: !options.NoGitMetadata);
             if (staging.Error is not null || staging.StagedPath is null)
             {
                 return Error(options, FailureKind.SourceStaging, staging.Error ?? "Source staging produced no workspace.");
@@ -2863,7 +3155,7 @@ internal static class Commands
 
             cancelled |= proc.TimedOut;
 
-            var results = TrxParser.ParseDirectory(resultsRoot);
+            var results = TrxParser.ParseDirectory(resultsRoot, AssemblyNameIndex.Build(sourceRoot));
             var phaseMarkers = FailureClassifier.ParsePhaseMarkers(proc.StdOut);
             var outcome = FailureClassifier.Classify(phaseMarkers, proc.ExitCode, cancelled, results);
 
@@ -2871,7 +3163,7 @@ internal static class Commands
 
             return EmitRunResult(
                 options, env, image, tfmInfo, results, outcome, proc, cleanup,
-                ctx.Resolution.SelectionReason, wallClock.Elapsed.TotalSeconds);
+                ctx.Resolution.SelectionReason, wallClock.Elapsed.TotalSeconds, staging);
         }
         catch (OperationCanceledException)
         {
@@ -2982,7 +3274,8 @@ internal static class Commands
         ProcessResult proc,
         CleanupReport cleanup,
         string? selectionReason = null,
-        double? elapsedSeconds = null)
+        double? elapsedSeconds = null,
+        StagingResult? staging = null)
     {
         var exit = FailureClassifier.ToExitCode(outcome.Kind);
         if (outcome.Kind == FailureKind.None && cleanup.Leftovers.Count > 0)
@@ -3017,11 +3310,16 @@ internal static class Commands
                     provisioning = image.ProvisionNote,
                 },
                 targetFrameworks = tfmInfo.TargetFrameworks,
+                workspace = new { gitMetadataStaged = staging?.GitMetadataStaged, gitMetadataNote = staging?.GitMetadataNote },
                 tests = new { results.Total, results.Passed, results.Skipped, results.Failed, results.DurationSeconds, trxFiles = results.TrxFilesParsed },
+                testAssemblies = results.Assemblies.Select(a => new { a.Assembly, a.Framework, a.Total, a.Passed, a.Failed, a.Skipped, a.DurationSeconds }),
                 elapsedSeconds = elapsedSeconds is null ? (double?)null : Math.Round(elapsedSeconds.Value, 1),
-                failures = results.Failures.Select(f => new { f.TestName, f.ClassName, f.Message, f.StackTrace }),
+                failures = results.Failures.Select(f => new { f.TestName, f.ClassName, f.Assembly, f.Framework, f.DurationSeconds, f.Message, f.StackTrace, f.Output }),
                 cleanup = new { cleanup.ContainerRemoved, cleanup.WorkspaceRemoved, cleanup.Leftovers },
-                diagnostics = status == "error" ? new { containerExitCode = proc.ExitCode, stdoutTail = LastLines(proc.StdOut, 30), stderrTail = LastLines(proc.StdErr, 20) } : null,
+                diagnostics = status == "error"
+                    ? new { containerExitCode = proc.ExitCode, phaseLogTail = LastLines(FailureClassifier.PhaseOutput(proc.StdOut, outcome.Phase), 40), stderrTail = LastLines(proc.StdErr, 20) }
+                    : null,
+                containerLog = options.ShowLog ? proc.StdOut : null,
             }, RemoteTestProgram.JsonOut));
             return (int)exit;
         }
@@ -3050,44 +3348,65 @@ internal static class Commands
             Console.WriteLine($"Tools:  {image.ProvisionNote}");
         }
 
+        if (staging?.GitMetadataNote is not null)
+        {
+            Console.WriteLine($"Note:   {staging.GitMetadataNote}");
+        }
+
         Console.WriteLine();
 
         if (outcome.Kind is FailureKind.None or FailureKind.TestFailure)
         {
+            // Per assembly/TFM first — the same unit `dotnet test` reports on, so a failure is
+            // immediately attributable to one test project and one target framework.
+            var width = results.Assemblies.Count == 0 ? 0 : results.Assemblies.Max(a => a.Display.Length);
+            foreach (var a in results.Assemblies)
+            {
+                var verdict = a.Failed > 0 ? "Failed!" : "Passed!";
+                Console.WriteLine(
+                    $"{verdict,-8} {a.Display.PadRight(width)}  —  {a.Passed} passed, {a.Skipped} skipped, {a.Failed} failed, {a.DurationSeconds.ToString("0.0", CultureInfo.InvariantCulture)} s");
+            }
+
+            if (results.Assemblies.Count > 0)
+            {
+                Console.WriteLine();
+            }
+
             Console.WriteLine($"Tests:  {results.Passed} passed, {results.Skipped} skipped, {results.Failed} failed");
             Console.WriteLine($"Time:   {results.DurationSeconds.ToString("0.0", CultureInfo.InvariantCulture)} s (tests)");
             if (elapsedSeconds is not null)
             {
                 Console.WriteLine($"Total:  {elapsedSeconds.Value.ToString("0.0", CultureInfo.InvariantCulture)} s (including image pull, restore and build)");
             }
-            if (results.Failed > 0)
-            {
-                Console.WriteLine();
-                Console.WriteLine($"{results.Failed} test(s) failed:");
-                foreach (var f in results.Failures)
-                {
-                    Console.WriteLine();
-                    Console.WriteLine($"  {f.ClassName}");
-                    Console.WriteLine($"    {f.TestName}");
-                    if (f.Message is not null)
-                    {
-                        Console.WriteLine($"    {f.Message}");
-                    }
-                }
-            }
+
+            WriteFailureDetail(results);
         }
         else
         {
             Console.Error.WriteLine($"{outcome.Kind}: {outcome.Message}");
-            // The container writes compiler/restore diagnostics to stdout, so a stderr-only tail would
-            // leave the developer with a verdict and no cause. Prefer the actual error lines.
+
+            // Any TRX that was produced before the failure still names real failing tests; report those
+            // first so a test-host crash after a genuine assertion failure is not reduced to a log tail.
+            WriteFailureDetail(results);
+
+            // The container writes compiler/restore/test diagnostics to stdout, so a stderr-only tail
+            // would leave the developer with a verdict and no cause. Prefer the failing phase's own log.
+            var phaseLog = FailureClassifier.PhaseOutput(proc.StdOut, outcome.Phase);
             var detail = FirstNonEmpty(
-                ErrorLines(proc.StdOut, 20), LastLines(proc.StdErr, 20), LastLines(proc.StdOut, 20));
+                ErrorLines(phaseLog, 20), LastLines(phaseLog, 40), LastLines(proc.StdErr, 20), LastLines(proc.StdOut, 40));
             if (!string.IsNullOrWhiteSpace(detail))
             {
                 Console.Error.WriteLine();
+                Console.Error.WriteLine($"--- {outcome.Phase} output ---");
                 Console.Error.WriteLine(detail);
             }
+        }
+
+        if (options.ShowLog && !string.IsNullOrWhiteSpace(proc.StdOut))
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- container log ---");
+            Console.WriteLine(proc.StdOut.TrimEnd());
         }
 
         if (cleanup.Leftovers.Count > 0)
@@ -3096,6 +3415,75 @@ internal static class Commands
         }
 
         return (int)exit;
+    }
+
+    // Caps so a suite that fails wholesale stays readable; the counts above remain authoritative and the
+    // full detail is always available in --json.
+    private const int MaxReportedFailures = 15;
+    private const int MaxStackFrames = 10;
+    private const int MaxOutputLines = 15;
+
+    // The detail a developer actually needs to fix a red test: fully-qualified name, which TFM, the
+    // assertion message, the stack, and whatever the test wrote to its output helper.
+    private static void WriteFailureDetail(TestRunResult results)
+    {
+        if (results.Failures.Count == 0)
+        {
+            return;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(results.Failures.Count == 1 ? "1 test failed:" : $"{results.Failures.Count} tests failed:");
+
+        foreach (var f in results.Failures.Take(MaxReportedFailures))
+        {
+            var name = f.ClassName is not null && !f.TestName.StartsWith(f.ClassName, StringComparison.Ordinal)
+                ? $"{f.ClassName}.{f.TestName}"
+                : f.TestName;
+            var where = f.Framework is null ? "" : $" [{f.Framework}]";
+            var took = f.DurationSeconds > 0 ? $" ({(f.DurationSeconds * 1000).ToString("0", CultureInfo.InvariantCulture)} ms)" : "";
+
+            Console.WriteLine();
+            Console.WriteLine($"  Failed {name}{where}{took}");
+            WriteIndented(f.Message, "    ", int.MaxValue);
+
+            if (!string.IsNullOrWhiteSpace(f.StackTrace))
+            {
+                Console.WriteLine("    Stack trace:");
+                WriteIndented(f.StackTrace, "      ", MaxStackFrames);
+            }
+
+            if (!string.IsNullOrWhiteSpace(f.Output))
+            {
+                Console.WriteLine("    Output:");
+                WriteIndented(f.Output, "      ", MaxOutputLines);
+            }
+        }
+
+        if (results.Failures.Count > MaxReportedFailures)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  … and {results.Failures.Count - MaxReportedFailures} more failing test(s); rerun with --json for the full list.");
+        }
+    }
+
+    private static void WriteIndented(string? text, string indent, int maxLines)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        foreach (var line in lines.Take(maxLines))
+        {
+            Console.WriteLine(indent + line.TrimEnd());
+        }
+
+        if (lines.Length > maxLines)
+        {
+            Console.WriteLine($"{indent}… {lines.Length - maxLines} more line(s)");
+        }
     }
 
     private static int Error(Options options, FailureKind kind, string message)
@@ -3179,6 +3567,7 @@ internal static class SelfTest
         TargetFrameworkTests();
         CommandPlanningTests();
         ImagePreparationTests();
+        SourceStagingTests();
         ResultParsingTests();
         FailureClassificationTests();
         CancellationAndCleanupTests();
@@ -3616,6 +4005,68 @@ internal static class SelfTest
         Check("provisioning fails loudly on an unknown package manager", dockerfile.Contains("No supported package manager"));
     }
 
+    private static void SourceStagingTests()
+    {
+        Section("Source staging");
+
+        var root = Path.Combine(Path.GetTempPath(), "rt-stage-" + Guid.NewGuid().ToString("N")[..8]);
+        var source = Path.Combine(root, "repo");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(source, "src"));
+            Directory.CreateDirectory(Path.Combine(source, "bin"));
+            Directory.CreateDirectory(Path.Combine(source, ".git", "refs"));
+            File.WriteAllText(Path.Combine(source, "src", "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(source, "bin", "stale.dll"), "x");
+            File.WriteAllText(Path.Combine(source, ".git", "HEAD"), "ref: refs/heads/main");
+
+            var staged = Path.Combine(root, "staged");
+            var result = SourceStager.StageAsync(source, staged, CancellationToken.None).GetAwaiter().GetResult();
+
+            Check("staging succeeds", result.Error is null && result.StagedPath == staged);
+            Check("sources are staged", File.Exists(Path.Combine(staged, "src", "App.csproj")));
+
+            var index = AssemblyNameIndex.Build(source);
+            Check("project files provide the authoritative assembly casing", index["app.dll"] == "App.dll");
+            Check("host build output is not staged", !Directory.Exists(Path.Combine(staged, "bin")));
+
+            // Without .git the staged workspace stops being a repository: MinVer/Nerdbank fall back to
+            // 0.0.0, SourceLink stops embedding, and any "walk up to the .git directory" repository-root
+            // probe resolves elsewhere — which silently changes what the tests under it observe.
+            Check("git metadata is staged", result.GitMetadataStaged && Directory.Exists(Path.Combine(staged, ".git")));
+            Check("git metadata is staged verbatim",
+                File.ReadAllText(Path.Combine(staged, ".git", "HEAD")) == "ref: refs/heads/main"
+                && Directory.Exists(Path.Combine(staged, ".git", "refs")));
+            Check("git metadata size is reported", result.GitMetadataBytes > 0);
+
+            var without = Path.Combine(root, "staged-no-git");
+            var opted = SourceStager.StageAsync(source, without, CancellationToken.None, includeGitMetadata: false).GetAwaiter().GetResult();
+            Check("git metadata can be opted out", !opted.GitMetadataStaged && !Directory.Exists(Path.Combine(without, ".git")));
+            Check("opting out is explained, not silent", opted.GitMetadataNote is not null);
+
+            // A linked worktree or submodule stores .git as a "gitdir:" pointer file, not a directory.
+            var linked = Path.Combine(root, "linked");
+            Directory.CreateDirectory(linked);
+            File.WriteAllText(Path.Combine(linked, "a.txt"), "a");
+            File.WriteAllText(Path.Combine(linked, ".git"), $"gitdir: {Path.Combine(source, ".git")}");
+            var linkedStaged = Path.Combine(root, "staged-linked");
+            var linkedResult = SourceStager.StageAsync(linked, linkedStaged, CancellationToken.None).GetAwaiter().GetResult();
+            Check("gitdir pointer file is resolved to the real git directory",
+                linkedResult.GitMetadataStaged && File.Exists(Path.Combine(linkedStaged, ".git", "HEAD")));
+
+            // A repository with no git metadata at all is ordinary, not an error.
+            var plain = Path.Combine(root, "plain");
+            Directory.CreateDirectory(plain);
+            File.WriteAllText(Path.Combine(plain, "a.txt"), "a");
+            var plainResult = SourceStager.StageAsync(plain, Path.Combine(root, "staged-plain"), CancellationToken.None).GetAwaiter().GetResult();
+            Check("a non-git source stages without a note", plainResult.Error is null && !plainResult.GitMetadataStaged && plainResult.GitMetadataNote is null);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (Exception) { /* temp cleanup is best-effort */ }
+        }
+    }
+
     private static void ResultParsingTests()
     {
         Section("Result parsing");
@@ -3626,12 +4077,12 @@ internal static class SelfTest
           <Results>
             <UnitTestResult testId="id1" testName="StringUtilityTest.Passes" outcome="Passed" duration="00:00:00.1000000" />
             <UnitTestResult testId="id2" testName="Sanitize_WithUnicode_ReturnsExpectedValue" outcome="Failed" duration="00:00:00.2000000">
-              <Output><ErrorInfo><Message>Expected: foo Actual: bar</Message><StackTrace>at StringUtilityTest.cs:line 142</StackTrace></ErrorInfo></Output>
+              <Output><StdOut>probing /workspace/tuning</StdOut><ErrorInfo><Message>Expected: foo Actual: bar</Message><StackTrace>at StringUtilityTest.cs:line 142</StackTrace></ErrorInfo></Output>
             </UnitTestResult>
             <UnitTestResult testId="id3" testName="StringUtilityTest.Skipped" outcome="NotExecuted" />
           </Results>
           <TestDefinitions>
-            <UnitTest id="id2" name="Sanitize"><TestMethod className="Cuemon.Text.Tests.StringUtilityTest, Cuemon.Text.Tests" name="Sanitize" /></UnitTest>
+            <UnitTest id="id2" name="Sanitize" storage="/workspace/test/Cuemon.Text.Tests/bin/Debug/net10.0/Cuemon.Text.Tests.dll"><TestMethod className="Cuemon.Text.Tests.StringUtilityTest, Cuemon.Text.Tests" name="Sanitize" /></UnitTest>
           </TestDefinitions>
           <ResultSummary outcome="Failed"><Counters total="3" executed="2" passed="1" failed="1" notExecuted="1" /></ResultSummary>
         </TestRun>
@@ -3643,9 +4094,41 @@ internal static class SelfTest
         Check("failure detail captured", result.Failures.Count == 1 && result.Failures[0].TestName == "Sanitize_WithUnicode_ReturnsExpectedValue");
         Check("failure class resolved from TestDefinitions", result.Failures[0].ClassName == "Cuemon.Text.Tests.StringUtilityTest");
         Check("failure message captured", result.Failures[0].Message == "Expected: foo Actual: bar");
+        Check("failure stack trace captured", result.Failures[0].StackTrace == "at StringUtilityTest.cs:line 142");
+        Check("test-written output captured", result.Failures[0].Output == "probing /workspace/tuning");
+        Check("failure carries its assembly and framework",
+            result.Failures[0].Assembly == "Cuemon.Text.Tests.dll" && result.Failures[0].Framework == "net10.0");
+
+        Check("per-assembly summary produced",
+            result.Assemblies.Count == 1 && result.Assemblies[0] is { Assembly: "Cuemon.Text.Tests.dll", Framework: "net10.0", Failed: 1 });
+        Check("assembly summary displays framework", result.Assemblies[0].Display == "Cuemon.Text.Tests.dll (net10.0)");
+
+        Check("framework derived from the output path",
+            TrxParser.FrameworkFrom("/w/bin/Debug/net9.0/A.dll") == "net9.0"
+            && TrxParser.FrameworkFrom(@"C:\w\bin\Release\net10.0-windows\A.dll") == "net10.0-windows"
+            && TrxParser.FrameworkFrom("/w/bin/Debug/netstandard2.0/A.dll") == "netstandard2.0");
+        Check("framework absent when the path has none", TrxParser.FrameworkFrom("/w/A.dll") is null);
+        Check("assembly name derived from the storage path", TrxParser.AssemblyNameFrom(@"C:\w\bin\Debug\net10.0\A.Tests.dll") == "A.Tests.dll");
+
+        // VSTest lower-cases the storage path; the developer knows the assembly by its real casing.
+        var known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Acme.Tests.dll"] = "Acme.Tests.dll" };
+        Check("assembly casing recovered from the repository's project files",
+            TrxParser.AssemblyDisplayName("/w/bin/debug/net10.0/acme.tests.dll", null, known) == "Acme.Tests.dll");
+        Check("an unknown assembly keeps the name the TRX recorded",
+            TrxParser.AssemblyDisplayName("/w/bin/debug/net10.0/other.tests.dll", null, known) == "other.tests.dll");
+        Check("assembly casing recovered from the class name",
+            TrxParser.AssemblyDisplayName("/w/bin/debug/net10.0/acme.tests.dll", "Acme.Tests") == "Acme.Tests.dll");
+        Check("a qualified display name is reduced to its simple name",
+            TrxParser.AssemblyDisplayName("/w/bin/debug/net10.0/acme.tests.dll", "Acme.Tests, Version=1.0.0.0, Culture=neutral") == "Acme.Tests.dll");
+        Check("a class name from another assembly never overrides storage",
+            TrxParser.AssemblyDisplayName("/w/bin/Debug/net10.0/Acme.Tests.dll", "Shared.Fixtures") == "Acme.Tests.dll");
+        Check("class name alone still names the assembly",
+            TrxParser.AssemblyDisplayName(null, "Acme.Tests") == "Acme.Tests.dll");
+        Check("neither source yields no assembly name", TrxParser.AssemblyDisplayName(null, null) is null);
 
         var merged = result.Merge(TrxParser.Parse(trx));
         Check("multiple trx files aggregate", merged is { Total: 6, Failed: 2, TrxFilesParsed: 2 });
+        Check("assembly summaries aggregate too", merged.Assemblies.Count == 2);
     }
 
     private static void FailureClassificationTests()
@@ -3673,6 +4156,15 @@ internal static class SelfTest
 
         var markers = FailureClassifier.ParsePhaseMarkers("noise\n##RT_PHASE_END:restore:0##\nmore\n##RT_PHASE_END:build:2##\n");
         Check("phase markers parsed from output", markers["restore"] == 0 && markers["build"] == 2);
+
+        // Reporting the failing phase's own log — not a tail of everything — is what makes a build
+        // failure name the offending file instead of trailing test-runner chatter.
+        const string log = "restoring\n##RT_PHASE_END:restore:0##\nApp.cs(3,5): error CS1002: ; expected\n##RT_PHASE_END:build:1##\ntest chatter\n";
+        Check("phase log isolates restore", FailureClassifier.PhaseOutput(log, "restore") == "restoring");
+        Check("phase log isolates build", FailureClassifier.PhaseOutput(log, "build") == "App.cs(3,5): error CS1002: ; expected");
+        Check("an incomplete phase yields everything after the last marker",
+            FailureClassifier.PhaseOutput(log, "test") == "test chatter");
+        Check("phase log is empty when there is no output", FailureClassifier.PhaseOutput("", "build") == "");
     }
 
     private static void CancellationAndCleanupTests()
