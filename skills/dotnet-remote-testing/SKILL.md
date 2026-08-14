@@ -61,7 +61,7 @@ These are your commands, not a menu for the developer. Never present them as opt
 
 - **Never run tests on the host and never silently fall back to local.** If remote testing was requested, tests must execute in the resolved Docker environment. If Docker is unavailable, report that (the runner exits `DockerUnavailable`) — do not run `dotnet test` locally instead.
 - **`testenvironments.json` is the configuration contract.** Honor Microsoft's existing version-1 schema. Do not invent a competing format, and do not modify `testenvironments.json` unless explicitly asked.
-- **Do not generate container plumbing.** Never create a `Dockerfile`, `docker-compose.yml`/`compose.yml`, `.devcontainer/`, `.vscode/`, `Directory.Build.*`, or throwaway scripts to make remote testing work. Zero-configuration testing uses official Microsoft SDK images directly. An *existing* configured `dockerFile` is honored because it is deliberate repository intent.
+- **Do not generate container plumbing.** Never create a `Dockerfile`, `docker-compose.yml`/`compose.yml`, `.devcontainer/`, `.vscode/`, `Directory.Build.*`, or throwaway scripts to make remote testing work. Zero-configuration testing uses official Microsoft SDK images directly. An *existing* configured `dockerFile` is honored because it is deliberate repository intent. The runner may derive a cached preparation layer for build tooling the image lacks (see [Build tooling in the image](#build-tooling-in-the-image)) — that happens inside the runner, outside the repository, and is never something you author.
 - **Do not hardcode .NET versions.** Supported LTS/STS channels and the current preview channel are discovered from Microsoft's release metadata at runtime. `.NET 10`/`.NET 11` are examples, never constants.
 - **Do not modify the repository to make tests pass.** Never edit `global.json`, project files, target frameworks, or test packages. Report incompatibilities instead.
 - **Report infrastructure failures as infrastructure, not as failing unit tests.** The runner classifies each phase distinctly; preserve that distinction when you summarize.
@@ -146,6 +146,14 @@ Common scoping options (pass through only what the developer asked for):
 
 The runner establishes an isolated staged workspace (so container builds never leave Linux `bin`/`obj` in the working tree), mounts a persistent NuGet cache outside the repository, pins the image to its digest, runs restore → build → test, collects TRX results, and removes all transient Docker resources afterward. You do not manage any of that.
 
+### Build tooling in the image
+
+The container runs the *build*, not just the tests, and a .NET build routinely shells out to `git` — MinVer, Nerdbank.GitVersioning, GitInfo and SourceLink all do. Microsoft's SDK images ship it; a minimal runner image may not, and the build then fails with `MINVER1007: "git" is not present in PATH` even though nothing is wrong with the code.
+
+The runner handles this: it probes the resolved image and, when the tooling is missing, layers it on in a cached image tagged `dotnet-remote-testing/prepared:git-<base-digest>` — built in the runner's own temp directory, never in the repository, and reused by every later run against the same base image. The reported `Image`/`Digest` stay the base image; preparation is reported on its own `Tools:` line. If it cannot be added (no package manager, `--offline`), the run proceeds on the base image and says so.
+
+Relay that line when present, but do not act on it: it is not a repository problem and never a reason to edit `testenvironments.json`, author a `Dockerfile`, or fall back to the host. A recurring `Added git to the image` for a repository's own image is worth mentioning once — the durable fix belongs in that image, not here.
+
 ## Step 5: Report results concisely
 
 Lead with the outcome, not the infrastructure. Mirror the runner's concise result and suppress pull/restore/build log noise unless something failed:
@@ -209,7 +217,7 @@ A run is reproducible in terms of environment, requested image, resolved digest,
 
 ## What this skill must never do
 
-- Generate a `Dockerfile`, dev container, editor config, or any repository-specific plumbing. (Honor an *existing* configured `dockerFile`; never create one.)
+- Generate a `Dockerfile`, dev container, editor config, or any repository-specific plumbing. (Honor an *existing* configured `dockerFile`; never create one. The runner's own cached preparation layer is not repository plumbing and is not yours to write.)
 - Run privileged containers, mount the Docker socket, mount the whole user profile, forward host credentials indiscriminately, disable TLS validation, expose ports, or print secrets. The runner already avoids these; do not add them.
 - Answer an invocation with a menu of its own capabilities, a "what would you like me to help you with?" opener, or a confirmation prompt for a run the developer already asked for.
 - Reach for an arbitrary image when a recommended one fits. Auto-generated environments use `mcr.microsoft.com/dotnet/sdk` for a single .NET major and `codebeltnet/ubuntu-testrunner` for several; an explicit `dockerImage` in `testenvironments.json` is deliberate intent and is used exactly as written. Other images are permitted but must be a deliberate, stated choice — never a substitution you make on your own.
