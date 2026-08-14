@@ -147,6 +147,97 @@ try {
     $badJson = Get-Json $bad.Output
     $codes = @($badJson.configDiagnostics | ForEach-Object { $_.Code })
     Write-Result ($codes -contains 'CONFLICTING_DOCKER_SOURCE') 'reports CONFLICTING_DOCKER_SOURCE' ($codes -join ',')
+
+    Write-Host ''
+    Write-Host '== 8. Unattended selection: the repository answers the environment question =='
+    # $emptyRoot already contains a net10.0 project from section 6, and the injected index derives four
+    # channels. Resolution must land on the matching channel without -e and without asking.
+    $auto = Invoke-Runner @('plan', '--repo-root', $emptyRoot, '--offline', '--releases-index-file', $indexPath, '--json')
+    $autoJson = Get-Json $auto.Output
+    Write-Result ($auto.ExitCode -eq 0 -and $autoJson.environment.name -eq 'dotnet-10-lts') `
+        'target framework selects the channel with no --environment' ("exit=$($auto.ExitCode) env=$($autoJson.environment.name)")
+    Write-Result ([string]::IsNullOrWhiteSpace($autoJson.environment.selectionReason) -eq $false -and $autoJson.environment.selectionReason -match 'net10\.0') `
+        'automatic selection is explained in the output' $autoJson.environment.selectionReason
+
+    Write-Host ''
+    Write-Host '== 9. Genuine ambiguity still stops with SelectionRequired and candidates =='
+    $twoRoot = Join-Path $workspace 'two-docker'
+    New-Item -ItemType Directory -Path $twoRoot -Force | Out-Null
+    @'
+{
+  "version": "1",
+  "environments": [
+    { "name": "noble", "type": "docker", "dockerImage": "mcr.microsoft.com/dotnet/sdk:10.0-noble" },
+    { "name": "alpine", "type": "docker", "dockerImage": "mcr.microsoft.com/dotnet/sdk:10.0-alpine" }
+  ]
+}
+'@ | Set-Content -Path (Join-Path $twoRoot 'testenvironments.json') -Encoding utf8
+    $twoPlan = Invoke-Runner @('plan', '--repo-root', $twoRoot, '--offline', '--json')
+    $twoJson = Get-Json $twoPlan.Output
+    Write-Result ($twoPlan.ExitCode -eq 16 -and $twoJson.failureKind -eq 'SelectionRequired') `
+        'two configured docker envs exit SelectionRequired (16)' ("exit=$($twoPlan.ExitCode) kind=$($twoJson.failureKind)")
+    $twoCandidates = @($twoJson.candidates)
+    Write-Result ($twoCandidates -contains 'noble' -and $twoCandidates -contains 'alpine') `
+        'SelectionRequired returns the candidate names to ask about' ($twoCandidates -join ',')
+
+    Write-Host ''
+    Write-Host '== 10. No .NET target framework means ask, never guess =='
+    $nsRoot = Join-Path $workspace 'netstandard-only'
+    $nsProj = Join-Path $nsRoot 'src\Lib'
+    New-Item -ItemType Directory -Path $nsProj -Force | Out-Null
+    '<Project><PropertyGroup><TargetFramework>netstandard2.0</TargetFramework></PropertyGroup></Project>' | Set-Content -Path (Join-Path $nsProj 'Lib.csproj') -Encoding utf8
+    $ns = Invoke-Runner @('plan', '--repo-root', $nsRoot, '--offline', '--releases-index-file', $indexPath, '--json')
+    $nsJson = Get-Json $ns.Output
+    Write-Result ($ns.ExitCode -eq 16 -and $nsJson.failureKind -eq 'SelectionRequired') `
+        'netstandard-only repository does not get a guessed channel' ("exit=$($ns.ExitCode) kind=$($nsJson.failureKind)")
+
+    Write-Host ''
+    Write-Host '== 11. Multi-targeted repositories resolve to a multi-SDK runner =='
+    # A Microsoft SDK image carries one runtime, so a repository spanning majors must not be pointed at
+    # a single-SDK image: it would build and then fail for want of a runtime.
+    $tagsPath = Join-Path $workspace 'multi-sdk-tags.json'
+    @'
+{
+  "count": 4,
+  "results": [
+    { "name": "10" },
+    { "name": "9-10" },
+    { "name": "8-9-10-11" },
+    { "name": "8.0-9.0-10.0-11.0" }
+  ]
+}
+'@ | Set-Content -Path $tagsPath -Encoding utf8
+
+    $multiRoot = Join-Path $workspace 'multi-targeted'
+    $multiProj = Join-Path $multiRoot 'test\Multi'
+    New-Item -ItemType Directory -Path $multiProj -Force | Out-Null
+    '<Project><PropertyGroup><TargetFrameworks>net9.0;net10.0</TargetFrameworks></PropertyGroup></Project>' | Set-Content -Path (Join-Path $multiProj 'Multi.csproj') -Encoding utf8
+
+    $multi = Invoke-Runner @('plan', '--repo-root', $multiRoot, '--offline', '--releases-index-file', $indexPath, '--multi-sdk-tags-file', $tagsPath, '--json')
+    $multiJson = Get-Json $multi.Output
+    Write-Result ($multi.ExitCode -eq 0 -and $multiJson.environment.name -eq 'ubuntu-testrunner-9-10') `
+        'multi-targeted repo selects the tightest covering runner' ("exit=$($multi.ExitCode) env=$($multiJson.environment.name)")
+    Write-Result ($multiJson.image.reference -eq 'codebeltnet/ubuntu-testrunner:9-10') `
+        'runner image reference comes from the publisher feed' $multiJson.image.reference
+    Write-Result ($multiJson.compatibility.Compatible -eq $true) `
+        'every target framework is compatible with the runner'
+
+    Write-Host ''
+    Write-Host '== 12. --framework narrows the environment choice too =='
+    $narrowed = Invoke-Runner @('plan', '--repo-root', $multiRoot, '-f', 'net10.0', '--offline', '--releases-index-file', $indexPath, '--multi-sdk-tags-file', $tagsPath, '--json')
+    $narrowedJson = Get-Json $narrowed.Output
+    Write-Result ($narrowed.ExitCode -eq 0 -and $narrowedJson.environment.name -eq 'dotnet-10-lts') `
+        'restricting to one TFM resolves the matching single-SDK channel' ("exit=$($narrowed.ExitCode) env=$($narrowedJson.environment.name)")
+
+    Write-Host ''
+    Write-Host '== 13. A single-SDK image is reported incompatible with a multi-targeted repo =='
+    $forced = Invoke-Runner @('plan', '--repo-root', $multiRoot, '-e', 'dotnet-10-lts', '--offline', '--releases-index-file', $indexPath, '--json')
+    $forcedJson = Get-Json $forced.Output
+    # plan emits the full plan payload and signals the verdict through the exit code plus compatibility.
+    Write-Result ($forced.ExitCode -eq 7 -and $forcedJson.compatibility.Compatible -eq $false) `
+        'naming a single-SDK env for a multi-targeted repo exits SdkIncompatibility (7)' ("exit=$($forced.ExitCode) compatible=$($forcedJson.compatibility.Compatible)")
+    Write-Result ($forcedJson.compatibility.Reason -match 'ubuntu-testrunner') `
+        'the incompatibility points at the multi-SDK remedy' $forcedJson.compatibility.Reason
 }
 finally {
     Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
