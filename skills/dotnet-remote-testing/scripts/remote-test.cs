@@ -36,6 +36,14 @@ internal static class RemoteTestProgram
     internal const string ReleasesIndexUrl =
         "https://raw.githubusercontent.com/dotnet/core/refs/heads/main/release-notes/releases-index.json";
 
+    // Microsoft's SDK images carry exactly one runtime, so a repository that multi-targets several .NET
+    // majors cannot execute its lower target frameworks there — it builds, then fails for want of a
+    // runtime. The Codebelt test runner ships several SDKs in one image (tags such as "8-9-10-11"), so
+    // one container covers every target framework in a single run.
+    internal const string MultiSdkRepository = "codebeltnet/ubuntu-testrunner";
+    internal const string MultiSdkTagsUrl =
+        "https://hub.docker.com/v2/repositories/codebeltnet/ubuntu-testrunner/tags?page_size=100";
+
     internal static readonly JsonSerializerOptions JsonOut = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -140,6 +148,7 @@ internal sealed class Options
     public string? ConfigPath { get; private set; }
     public string? EnvironmentName { get; private set; }
     public string? ReleasesIndexFile { get; private set; }
+    public string? MultiSdkTagsFile { get; private set; }
     public string? CacheRoot { get; private set; }
 
     // Test scoping. These flow into the container command plan; they never mutate the repository.
@@ -172,6 +181,7 @@ internal sealed class Options
                 case "--config-path": o.ConfigPath = Next(args, ref i, a); break;
                 case "--environment" or "-e": o.EnvironmentName = Next(args, ref i, a); break;
                 case "--releases-index-file": o.ReleasesIndexFile = Next(args, ref i, a); break;
+                case "--multi-sdk-tags-file": o.MultiSdkTagsFile = Next(args, ref i, a); break;
                 case "--cache-root": o.CacheRoot = Next(args, ref i, a); break;
                 case "--project" or "-p": o.Project = Next(args, ref i, a); break;
                 case "--filter": o.Filter = Next(args, ref i, a); break;
@@ -263,6 +273,7 @@ internal sealed class Options
               --offline              Use cached release metadata only; never reach the network.
               --no-registry-check    Skip Docker registry tag validation and digest pre-resolution.
               --releases-index-file <path>  Load Microsoft release metadata from a local file instead of the network.
+              --multi-sdk-tags-file <path>  Load Codebelt multi-SDK runner tags from a local file instead of the network.
               --cache-root <path>    Override the metadata/NuGet cache root (outside the repository).
 
         Output:
@@ -611,6 +622,181 @@ internal static class ImageTagResolver
 }
 
 // ---------------------------------------------------------------------------------------------------
+// Multi-SDK runner discovery (codebeltnet/ubuntu-testrunner).
+//
+// A Microsoft SDK image contains one runtime. That is fine for a single-target repository, but a
+// repository multi-targeting several .NET majors can only *build* the lower targets there — executing
+// their tests needs the matching runtimes. The Codebelt runner publishes combined tags ("8-9-10-11")
+// carrying several SDKs, so the whole target-framework matrix runs in one container.
+//
+// The available tags are discovered from the published tag feed at runtime. Nothing here is hardcoded:
+// when a new major joins the combined tags, it is picked up without a skill change.
+// ---------------------------------------------------------------------------------------------------
+
+internal sealed record MultiSdkRunner
+{
+    public required string Tag { get; init; }
+    public IReadOnlyList<int> Majors { get; init; } = [];
+
+    public string Reference => $"{RemoteTestProgram.MultiSdkRepository}:{Tag}";
+
+    public bool Covers(IReadOnlyList<int> requiredMajors) => requiredMajors.All(Majors.Contains);
+}
+
+internal static class MultiSdkTagReader
+{
+    // Only the major-only combined form ("8-9-10-11") is used. It is a moving tag that tracks the
+    // current patch of each major, and it is the form the publisher documents for consumers. Single
+    // majors ("10"), channel forms ("10.0"), and fully pinned combinations are deliberately ignored
+    // here — single majors are already covered by Microsoft's images.
+    private static readonly Regex CombinedMajorTag = new(@"^\d+(?:-\d+)+$", RegexOptions.Compiled);
+
+    public static IReadOnlyList<MultiSdkRunner> Parse(string json)
+    {
+        var runners = new List<MultiSdkRunner>();
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(json);
+        }
+        catch (JsonException)
+        {
+            return runners;
+        }
+
+        using (document)
+        {
+            if (!document.RootElement.TryGetProperty("results", out var results) ||
+                results.ValueKind != JsonValueKind.Array)
+            {
+                return runners;
+            }
+
+            foreach (var entry in results.EnumerateArray())
+            {
+                if (!entry.TryGetProperty("name", out var nameElement) ||
+                    nameElement.GetString() is not { } name ||
+                    !CombinedMajorTag.IsMatch(name))
+                {
+                    continue;
+                }
+
+                var majors = new List<int>();
+                var usable = true;
+                foreach (var part in name.Split('-'))
+                {
+                    if (int.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out var major) && major > 0)
+                    {
+                        majors.Add(major);
+                    }
+                    else
+                    {
+                        usable = false;
+                        break;
+                    }
+                }
+
+                if (usable && majors.Count > 1)
+                {
+                    runners.Add(new MultiSdkRunner { Tag = name, Majors = [.. majors.Distinct().OrderBy(m => m)] });
+                }
+            }
+        }
+
+        return runners;
+    }
+
+    // Tightest fit wins: the fewest extra SDKs that still cover every required major. Ties break on the
+    // tag name so the same repository always resolves to the same image.
+    public static MultiSdkRunner? Select(IReadOnlyList<MultiSdkRunner> runners, IReadOnlyList<int> requiredMajors)
+    {
+        if (requiredMajors.Count < 2)
+        {
+            return null;
+        }
+
+        return runners
+            .Where(r => r.Covers(requiredMajors))
+            .OrderBy(r => r.Majors.Count)
+            .ThenBy(r => r.Tag, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+}
+
+internal sealed record MultiSdkResult(IReadOnlyList<MultiSdkRunner> Runners, string? Error);
+
+internal static class MultiSdkRunnerStore
+{
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
+
+    private static string CacheFile(string cacheRoot) => Path.Combine(cacheRoot, "multi-sdk-tags.cache.json");
+
+    public static async Task<MultiSdkResult> LoadAsync(Options options, CancellationToken ct)
+    {
+        // An explicit local file is a deliberate input (used by the deterministic test harness).
+        if (!string.IsNullOrWhiteSpace(options.MultiSdkTagsFile))
+        {
+            return File.Exists(options.MultiSdkTagsFile)
+                ? new MultiSdkResult(MultiSdkTagReader.Parse(await File.ReadAllTextAsync(options.MultiSdkTagsFile, ct)), null)
+                : new MultiSdkResult([], $"multi-SDK tags file not found: {options.MultiSdkTagsFile}");
+        }
+
+        var cacheFile = CacheFile(options.CacheDirectory);
+        if (options.Offline)
+        {
+            return LoadFromCache(cacheFile, "Offline mode: ");
+        }
+
+        try
+        {
+            var json = await Http.GetStringAsync(RemoteTestProgram.MultiSdkTagsUrl, ct);
+            var runners = MultiSdkTagReader.Parse(json);
+            if (runners.Count == 0)
+            {
+                return LoadFromCache(cacheFile, "Multi-SDK tag feed returned no combined tags: ");
+            }
+
+            TryWriteCache(cacheFile, json);
+            return new MultiSdkResult(runners, null);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+        {
+            return LoadFromCache(cacheFile, $"Could not reach the multi-SDK tag feed ({ex.Message}); ");
+        }
+    }
+
+    private static MultiSdkResult LoadFromCache(string cacheFile, string prefix)
+    {
+        if (!File.Exists(cacheFile))
+        {
+            return new MultiSdkResult([], prefix + "no cached multi-SDK runner tags are available.");
+        }
+
+        try
+        {
+            return new MultiSdkResult(MultiSdkTagReader.Parse(File.ReadAllText(cacheFile)), null);
+        }
+        catch (IOException ex)
+        {
+            return new MultiSdkResult([], prefix + $"the cached multi-SDK runner tags could not be read ({ex.Message}).");
+        }
+    }
+
+    private static void TryWriteCache(string cacheFile, string json)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(cacheFile)!);
+            File.WriteAllText(cacheFile, json);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Caching is an optimization; never fail discovery because the cache could not be written.
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Environment resolution.
 // A resolved environment is what the runner actually executes against, whether it came from
 // testenvironments.json or was generated from Microsoft release metadata.
@@ -632,9 +818,34 @@ internal sealed record ResolvedEnvironment
 
     public string? LocalRoot { get; init; }
 
-    // Whether this environment's image is exempt from the Microsoft-only restriction (configured images
-    // are deliberate; generated images must come from mcr.microsoft.com/dotnet/sdk).
+    // The .NET majors this environment can both build and *run*. Empty means "single SDK, inferred from
+    // Channel/Sdk". A multi-SDK runner states them explicitly, which is what makes it usable for a
+    // repository whose target frameworks span several majors.
+    public IReadOnlyList<int> SupportedMajors { get; init; } = [];
+
+    public bool IsMultiSdk => SupportedMajors.Count > 1;
+
+    // Whether this environment's image came from the repository's own configuration rather than being
+    // generated. Configured images are deliberate intent and are always used exactly as written.
     public bool ImageIsConfigured => Origin == EnvironmentOrigin.Configured;
+
+    // The .NET major version this environment's channel represents ("10.0" -> 10), or 0 when the channel
+    // is unknown (configured environments carry no channel).
+    public int ChannelMajor
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Channel))
+            {
+                return 0;
+            }
+
+            var head = Channel.Split('.')[0];
+            return int.TryParse(head, NumberStyles.Integer, CultureInfo.InvariantCulture, out var major) && major > 0
+                ? major
+                : 0;
+        }
+    }
 }
 
 internal static class GeneratedEnvironments
@@ -677,6 +888,17 @@ internal static class GeneratedEnvironments
         return result;
     }
 
+    // A multi-SDK runner environment. It carries no single channel: its value is that every listed major
+    // is present, so a multi-targeted repository runs its whole matrix in one container.
+    public static ResolvedEnvironment FromMultiSdkRunner(MultiSdkRunner runner) => new()
+    {
+        Name = $"ubuntu-testrunner-{runner.Tag}",
+        Origin = EnvironmentOrigin.Generated,
+        ReleaseType = "Multi-SDK",
+        DockerImage = runner.Reference,
+        SupportedMajors = runner.Majors,
+    };
+
     public static ResolvedEnvironment FromConfigured(EnvironmentDefinition def) => new()
     {
         Name = def.Name,
@@ -695,6 +917,10 @@ internal sealed record EnvironmentResolution
     public ResolvedEnvironment? Environment { get; init; }
     public IReadOnlyList<string> Candidates { get; init; } = [];
     public string? Message { get; init; }
+
+    // Why this environment was chosen when the caller did not name one. Surfaced so an automatic
+    // selection is always explainable rather than looking arbitrary.
+    public string? SelectionReason { get; init; }
 }
 
 internal static class EnvironmentResolver
@@ -702,11 +928,14 @@ internal static class EnvironmentResolver
     // Deterministic precedence:
     //   1. An environment explicitly named by the user (configured first, then generated).
     //   2. An applicable Docker environment from testenvironments.json (authoritative when present).
-    //   3. Microsoft-derived environments when no testenvironments.json exists.
+    //   3. Microsoft-derived environments when no testenvironments.json exists. When several are
+    //      derived, the repository's own highest .NET target framework picks exactly one of them
+    //      (see SelectByTargetFramework) so "run my tests" does not need a question to answer.
     public static EnvironmentResolution Resolve(
         TestEnvironmentsConfig? config,
         IReadOnlyList<ResolvedEnvironment> generated,
-        string? requestedName)
+        string? requestedName,
+        TargetFrameworkInfo? repoTargets = null)
     {
         var configured = config?.SupportedDockerEnvironments ?? [];
 
@@ -789,11 +1018,81 @@ internal static class EnvironmentResolver
             return Resolved(generated[0]);
         }
 
+        // Several channels are available. The repository already states which .NET it targets, so use
+        // that instead of asking a question the source code has already answered.
+        var byTargetFramework = SelectByTargetFramework(generated, repoTargets);
+        if (byTargetFramework is not null)
+        {
+            return byTargetFramework;
+        }
+
         return new EnvironmentResolution
         {
             Status = ResolutionStatus.Ambiguous,
             Candidates = [.. generated.Select(e => e.Name)],
             Message = "Multiple Microsoft-derived environments are available. Select one with --environment <name>.",
+        };
+    }
+
+    // Deterministic tie-break: the repository's highest .NET target framework major must match exactly
+    // one derived channel. Highest wins because an SDK builds its own major and every lower one, so the
+    // newest target is the only channel guaranteed to build the whole repository.
+    //
+    // This deliberately does not "pick something close". No target frameworks, no .NET target (only
+    // netstandard/net48), or more than one channel for the same major all fall through to a question —
+    // guessing an SDK the repository never asked for is worse than asking once.
+    private static EnvironmentResolution? SelectByTargetFramework(
+        IReadOnlyList<ResolvedEnvironment> generated,
+        TargetFrameworkInfo? repoTargets)
+    {
+        if (repoTargets is null)
+        {
+            return null;
+        }
+
+        var majors = repoTargets.NetCoreMajors;
+        if (majors.Count == 0)
+        {
+            return null;
+        }
+
+        // Multi-targeted repositories need every runtime present, not just the newest SDK, so a runner
+        // covering the whole matrix wins outright when one is available.
+        if (majors.Count > 1)
+        {
+            var covering = generated.Where(e => e.IsMultiSdk && majors.All(e.SupportedMajors.Contains)).ToList();
+            if (covering.Count == 0)
+            {
+                return null;
+            }
+
+            var runner = covering
+                .OrderBy(e => e.SupportedMajors.Count)
+                .ThenBy(e => e.Name, StringComparer.Ordinal)
+                .First();
+
+            var targeted = string.Join(", ", majors.Select(m => $"net{m}.0"));
+            return Resolved(runner) with
+            {
+                SelectionReason =
+                    $"Selected automatically: the repository targets {targeted}, and this runner provides every one of them, "
+                    + "so the whole target-framework matrix runs in a single container.",
+            };
+        }
+
+        var targetMajor = majors.Max();
+        var matches = generated.Where(e => !e.IsMultiSdk && e.ChannelMajor == targetMajor).ToList();
+        if (matches.Count != 1)
+        {
+            return null;
+        }
+
+        var tfm = repoTargets.TargetFrameworks
+            .FirstOrDefault(t => TargetFrameworkInspector.NetMajor(t) == targetMajor) ?? $"net{targetMajor}.0";
+
+        return Resolved(matches[0]) with
+        {
+            SelectionReason = $"Selected automatically: the only environment matching the repository's target framework '{tfm}'.",
         };
     }
 
@@ -925,17 +1224,31 @@ internal static class TargetFrameworkInspector
     // Can a channel (identified by its SDK version) build these target frameworks? An SDK builds its own
     // major and every lower one; it cannot build a newer runtime major, and the Linux SDK cannot build
     // .NET Framework (net4x) targets.
-    public static SdkCompatibility CanBuild(SdkVersion? channelSdk, TargetFrameworkInfo tfms)
+    public static SdkCompatibility CanBuild(
+        SdkVersion? channelSdk,
+        TargetFrameworkInfo tfms,
+        IReadOnlyList<int>? supportedMajors = null)
     {
-        if (channelSdk is null)
-        {
-            return new SdkCompatibility(false, "The environment SDK version could not be determined.");
-        }
-
         if (tfms.HasNetFramework)
         {
             return new SdkCompatibility(false,
                 "The project targets .NET Framework (net4x), which cannot be built by a Linux .NET SDK container.");
+        }
+
+        // An environment that states its majors explicitly (a multi-SDK runner) is judged on that list:
+        // every target framework must be present, because presence is what allows the tests to run.
+        if (supportedMajors is { Count: > 0 })
+        {
+            var missing = tfms.NetCoreMajors.Where(m => !supportedMajors.Contains(m)).ToList();
+            return missing.Count == 0
+                ? new SdkCompatibility(true, null)
+                : new SdkCompatibility(false,
+                    $"The project targets {string.Join(", ", missing.Select(m => $"net{m}.0"))}, which the selected image does not provide.");
+        }
+
+        if (channelSdk is null)
+        {
+            return new SdkCompatibility(false, "The environment SDK version could not be determined.");
         }
 
         foreach (var major in tfms.NetCoreMajors)
@@ -945,6 +1258,18 @@ internal static class TargetFrameworkInspector
                 return new SdkCompatibility(false,
                     $"The project targets net{major}.0 but the selected SDK is {channelSdk.Major}.x and cannot build a newer runtime.");
             }
+        }
+
+        // A single-SDK image ships exactly one runtime. Lower target frameworks compile there but have
+        // no runtime to execute on, so a multi-targeted repository needs a multi-SDK runner instead of
+        // a silently doomed run.
+        var unrunnable = tfms.NetCoreMajors.Where(m => m != channelSdk.Major).ToList();
+        if (unrunnable.Count > 0)
+        {
+            return new SdkCompatibility(false,
+                $"The project targets {string.Join(", ", unrunnable.Select(m => $"net{m}.0"))} in addition to net{channelSdk.Major}.0, "
+                + $"but the selected image ships only the {channelSdk.Major}.x runtime. Use a multi-SDK runner image "
+                + $"({RemoteTestProgram.MultiSdkRepository}) or restrict the run with --framework.");
         }
 
         // Honor an explicit global.json pin: the container SDK major must satisfy it.
@@ -1774,6 +2099,117 @@ internal static class DockerClient
 }
 
 // ---------------------------------------------------------------------------------------------------
+// Image preparation — a .NET build routinely shells out to host tooling: MinVer, Nerdbank.GitVersioning,
+// GitInfo and SourceLink all invoke `git` while building. An image without it fails the build (MinVer
+// reports MINVER1007) even though the code compiles fine, which reads as a repository problem when it is
+// really a missing tool in the image. Microsoft's SDK images ship git; a minimal runner image may not.
+// When it is missing, one thin layer is derived from the resolved base image and cached under a
+// digest-addressed tag, so the cost is paid once per image and never inside the repository.
+// ---------------------------------------------------------------------------------------------------
+
+internal sealed record PreparedImage(string Reference, bool Provisioned, string? Note = null);
+
+internal static class ImageProvisioner
+{
+    // Tooling the container must expose on PATH for a build to behave the way it does on the host.
+    public static readonly string[] RequiredTools = ["git"];
+
+    private const string TagPrefix = "dotnet-remote-testing/prepared";
+
+    public static string ToolList => string.Join(", ", RequiredTools);
+
+    // Content-addressed tag: the same base image and tool set always produce the same prepared image,
+    // so a later run reuses the cached layer instead of rebuilding it.
+    public static string DerivedTag(string baseReference, string? digest)
+    {
+        var key = digest is not null && digest.Contains(':', StringComparison.Ordinal)
+            ? digest[(digest.IndexOf(':', StringComparison.Ordinal) + 1)..]
+            : StableHash(baseReference);
+        var shortKey = key.Length > 16 ? key[..16] : key;
+        return $"{TagPrefix}:{string.Join('-', RequiredTools)}-{shortKey}";
+    }
+
+    // Verifies the tools are on PATH inside the image, without assuming a specific shell or entrypoint.
+    public static string ProbeCommand() =>
+        string.Join(" && ", RequiredTools.Select(t => $"command -v {t} >/dev/null 2>&1"));
+
+    // A single RUN that adapts to whichever package manager the base image ships. The Dockerfile is
+    // written to the run's own temporary directory — never into the repository being tested.
+    public static string Dockerfile(string baseReference)
+    {
+        var tools = string.Join(' ', RequiredTools);
+        return $"""
+        FROM {baseReference}
+        USER root
+        RUN set -e; \
+            if command -v apt-get >/dev/null 2>&1; then \
+                apt-get update && apt-get install -y --no-install-recommends {tools} && rm -rf /var/lib/apt/lists/*; \
+            elif command -v apk >/dev/null 2>&1; then \
+                apk add --no-cache {tools}; \
+            elif command -v microdnf >/dev/null 2>&1; then \
+                microdnf install -y {tools} && microdnf clean all; \
+            elif command -v dnf >/dev/null 2>&1; then \
+                dnf install -y {tools} && dnf clean all; \
+            elif command -v yum >/dev/null 2>&1; then \
+                yum install -y {tools} && yum clean all; \
+            else \
+                echo 'No supported package manager in the base image.' >&2; exit 1; \
+            fi
+
+        """;
+    }
+
+    // Best effort by design: when the tooling cannot be added, the base image is used anyway and the
+    // reason is reported, because a repository that never invokes git still runs perfectly well there.
+    public static async Task<PreparedImage> EnsureAsync(
+        string baseReference, string? digest, string workRoot, bool offline, CancellationToken ct)
+    {
+        var tag = DerivedTag(baseReference, digest);
+
+        if (await DockerClient.ResolveImageIdAsync(tag, ct) is not null)
+        {
+            return new PreparedImage(tag, true, $"Reused prepared image providing {ToolList}.");
+        }
+
+        var probe = await DockerClient.RunAsync(
+            ["run", "--rm", "--entrypoint", "sh", baseReference, "-c", ProbeCommand()], ct);
+        if (probe.ExitCode == 0)
+        {
+            return new PreparedImage(baseReference, false);
+        }
+
+        if (offline)
+        {
+            return new PreparedImage(baseReference, false,
+                $"The image does not provide {ToolList} and adding it needs network access (--offline). "
+                + "A build that invokes it will fail.");
+        }
+
+        var contextDir = Path.Combine(workRoot, "image-prep");
+        Directory.CreateDirectory(contextDir);
+        var dockerfile = Path.Combine(contextDir, "Dockerfile");
+        await File.WriteAllTextAsync(dockerfile, Dockerfile(baseReference), ct);
+
+        var build = await DockerClient.BuildAsync(dockerfile, contextDir, tag, ct);
+        if (build.ExitCode != 0)
+        {
+            var reason = build.StdErr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .LastOrDefault() ?? "docker build failed.";
+            return new PreparedImage(baseReference, false,
+                $"The image does not provide {ToolList} and it could not be added: {reason}");
+        }
+
+        return new PreparedImage(tag, true, $"Added {ToolList} to the image (cached for later runs).");
+    }
+
+    private static string StableHash(string value)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexStringLower(bytes);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Source staging — copy the source into an isolated, disposable workspace so container builds never
 // pollute the developer's working tree with Linux bin/obj artifacts.
 // ---------------------------------------------------------------------------------------------------
@@ -1895,7 +2331,8 @@ internal sealed record ResolveContext(
     ReleaseMetadata? Metadata,
     string? MetadataError,
     IReadOnlyList<ResolvedEnvironment> Generated,
-    EnvironmentResolution Resolution);
+    EnvironmentResolution Resolution,
+    string? MultiSdkError = null);
 
 internal static class Commands
 {
@@ -1928,8 +2365,47 @@ internal static class Commands
             }
         }
 
-        var resolution = EnvironmentResolver.Resolve(config, generated, options.EnvironmentName);
-        return new ResolveContext(config, metadata, metadataError, generated, resolution);
+        // Generated environments are resolved against the repository's own target frameworks. Configured
+        // environments never need this (they are deliberate intent), and a named environment short-circuits
+        // before it is used, so the inspection only runs when it can actually decide something.
+        TargetFrameworkInfo? repoTargets = null;
+        string? multiSdkError = null;
+        if (options.EnvironmentName is null && config?.SourcePath is null && generated.Count > 1)
+        {
+            repoTargets = NarrowToRequestedFramework(
+                TargetFrameworkInspector.Inspect(options.RepoRoot, options.Project), options.Framework);
+
+            // Only a genuinely multi-targeted repository needs the multi-SDK runner feed; do not spend a
+            // network call to answer a question a single target framework already answers.
+            if (repoTargets.NetCoreMajors.Count > 1)
+            {
+                var multi = await MultiSdkRunnerStore.LoadAsync(options, ct);
+                multiSdkError = multi.Error;
+                var runner = MultiSdkTagReader.Select(multi.Runners, repoTargets.NetCoreMajors);
+                if (runner is not null)
+                {
+                    generated = [.. generated, GeneratedEnvironments.FromMultiSdkRunner(runner)];
+                }
+            }
+        }
+
+        var resolution = EnvironmentResolver.Resolve(config, generated, options.EnvironmentName, repoTargets);
+        return new ResolveContext(config, metadata, metadataError, generated, resolution, multiSdkError);
+    }
+
+    // --framework narrows what actually runs, so it must narrow what the environment is chosen for too.
+    // Without this, "-f net10.0" on a multi-targeted repository would still be resolved as multi-targeted.
+    private static TargetFrameworkInfo NarrowToRequestedFramework(TargetFrameworkInfo info, string? framework)
+    {
+        if (string.IsNullOrWhiteSpace(framework))
+        {
+            return info;
+        }
+
+        var match = info.TargetFrameworks.FirstOrDefault(
+            t => string.Equals(t, framework, StringComparison.OrdinalIgnoreCase));
+
+        return info with { TargetFrameworks = match is null ? [framework] : [match] };
     }
 
     public static async Task<int> ListAsync(Options options)
@@ -1956,6 +2432,20 @@ internal static class Commands
             metadata = result.Metadata;
             metadataError = result.Error;
             environments = metadata is not null ? GeneratedEnvironments.FromMetadata(metadata) : [];
+
+            // A multi-targeted repository cannot execute its lower target frameworks on a single-SDK
+            // image, so offer the runner that can — listing only what cannot work would be misleading.
+            var repoMajors = NarrowToRequestedFramework(
+                TargetFrameworkInspector.Inspect(options.RepoRoot, options.Project), options.Framework).NetCoreMajors;
+            if (repoMajors.Count > 1)
+            {
+                var multi = await MultiSdkRunnerStore.LoadAsync(options, cts.Token);
+                var runner = MultiSdkTagReader.Select(multi.Runners, repoMajors);
+                if (runner is not null)
+                {
+                    environments = [GeneratedEnvironments.FromMultiSdkRunner(runner), .. environments];
+                }
+            }
         }
 
         if (options.Json)
@@ -1970,6 +2460,7 @@ internal static class Commands
                 {
                     e.Name, origin = e.Origin.ToString(), e.Channel, e.ReleaseType, e.Sdk,
                     image = e.DockerImage, dockerFile = e.DockerFile,
+                    supportedMajors = e.SupportedMajors.Count > 0 ? e.SupportedMajors : null,
                 }),
                 unsupported = unsupported.Select(e => new { e.Name, type = e.RawType }),
                 configDiagnostics = config?.Diagnostics.Select(d => new { d.Code, d.Message, environment = d.EnvironmentName }),
@@ -1997,6 +2488,11 @@ internal static class Commands
             if (e.ReleaseType is not null)
             {
                 Console.WriteLine($"  {e.ReleaseType}");
+            }
+
+            if (e.SupportedMajors.Count > 0)
+            {
+                Console.WriteLine($"  Provides .NET {string.Join(", ", e.SupportedMajors)} in one image");
             }
 
             if (e.Sdk is not null)
@@ -2046,7 +2542,8 @@ internal static class Commands
 
         var env = ctx.Resolution.Environment!;
         var sourceRoot = ResolveSourceRoot(options, env);
-        var tfmInfo = TargetFrameworkInspector.Inspect(sourceRoot, options.Project);
+        var tfmInfo = NarrowToRequestedFramework(
+            TargetFrameworkInspector.Inspect(sourceRoot, options.Project), options.Framework);
 
         // Image identity: for generated environments, validate candidate tags against MCR and pre-resolve
         // the digest without pulling. Offline / --no-registry-check skips the network probe.
@@ -2059,6 +2556,14 @@ internal static class Commands
         if (env.DockerFile is not null)
         {
             imageNote = $"Configured Dockerfile '{env.DockerFile}' will be built into a local image.";
+        }
+        else if (env.IsMultiSdk)
+        {
+            // The tag came from the publisher's own tag feed, so it exists by construction. Its digest is
+            // resolved at pull time in `run`; there is no Microsoft registry probe to make here.
+            requestedTag = env.DockerImage?.Split(':').Last();
+            imageNote = $"Multi-SDK runner providing .NET {string.Join(", ", env.SupportedMajors)}; "
+                + "the whole target-framework matrix runs in one container.";
         }
         else if (env.Origin == EnvironmentOrigin.Generated && channelSdk is not null)
         {
@@ -2087,7 +2592,7 @@ internal static class Commands
             }
         }
 
-        var compatibility = TargetFrameworkInspector.CanBuild(channelSdk, tfmInfo);
+        var compatibility = TargetFrameworkInspector.CanBuild(channelSdk, tfmInfo, env.SupportedMajors);
         var compatibilityBlocking = SdkCompatibilityPolicy.IsBlocking(env.Origin, compatibility.Compatible);
         // Configured environments trust their image SDK (validated at run time); do not present or fail
         // them as incompatible just because the SDK could not be determined statically.
@@ -2110,7 +2615,15 @@ internal static class Commands
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 tool = RemoteTestProgram.ToolName,
-                environment = new { env.Name, origin = env.Origin.ToString(), env.Channel, env.ReleaseType, env.Sdk },
+                environment = new
+                {
+                    env.Name,
+                    origin = env.Origin.ToString(),
+                    env.Channel,
+                    env.ReleaseType,
+                    env.Sdk,
+                    selectionReason = ctx.Resolution.SelectionReason,
+                },
                 image = new
                 {
                     requested = env.DockerImage ?? reference,
@@ -2119,7 +2632,7 @@ internal static class Commands
                     dockerFile = env.DockerFile,
                     digest,
                     digestResolved = digest is not null,
-                    microsoftOnlyEnforced = env.Origin == EnvironmentOrigin.Generated,
+                    recommendedPublisher = IsRecommendedPublisher(env.DockerImage ?? reference),
                     note = imageNote,
                 },
                 targetFrameworks = new
@@ -2138,6 +2651,11 @@ internal static class Commands
         else
         {
             Console.WriteLine($"Plan: {env.Name}");
+            if (ctx.Resolution.SelectionReason is not null)
+            {
+                Console.WriteLine($"  Selection:   {ctx.Resolution.SelectionReason}");
+            }
+
             Console.WriteLine($"  Image:       {env.DockerImage ?? reference ?? "(from Dockerfile)"}");
             if (requestedTag is not null)
             {
@@ -2170,6 +2688,14 @@ internal static class Commands
         Filter = ContainerPlanner.ResolveFilter(options.Filter, options.Test),
         Coverage = options.Coverage,
     };
+
+    // Recommended publishers for auto-generated environments: Microsoft's official SDK images and the
+    // Codebelt multi-SDK test runner. This is reported, not enforced — an image from anywhere else is
+    // allowed (a configured dockerImage is deliberate intent), it simply is not one we vouch for.
+    private static bool IsRecommendedPublisher(string? reference) =>
+        reference is not null
+        && (reference.StartsWith(RemoteTestProgram.SdkRepository + ":", StringComparison.Ordinal)
+            || reference.StartsWith(RemoteTestProgram.MultiSdkRepository + ":", StringComparison.Ordinal));
 
     private static string ResolveSourceRoot(Options options, ResolvedEnvironment env)
     {
@@ -2206,6 +2732,7 @@ internal static class Commands
                 message,
                 candidates = res.Candidates,
                 metadataError = ctx.MetadataError,
+                multiSdkError = ctx.MultiSdkError,
             }, RemoteTestProgram.JsonOut));
         }
         else
@@ -2214,6 +2741,11 @@ internal static class Commands
             if (res.Candidates.Count > 0)
             {
                 Console.Error.WriteLine("Available: " + string.Join(", ", res.Candidates));
+            }
+
+            if (ctx.MultiSdkError is not null)
+            {
+                Console.Error.WriteLine($"Multi-SDK runner discovery: {ctx.MultiSdkError}");
             }
         }
 
@@ -2226,7 +2758,9 @@ internal static class Commands
         string? RequestedTag = null,
         string? Sdk = null,
         FailureKind Kind = FailureKind.None,
-        string? Error = null);
+        string? Error = null,
+        string? PreparedReference = null,
+        string? ProvisionNote = null);
 
     private sealed record CleanupReport(bool ContainerRemoved, bool WorkspaceRemoved, IReadOnlyList<string> Leftovers);
 
@@ -2241,6 +2775,10 @@ internal static class Commands
         var cancelled = false;
         void OnCancel(object? _, ConsoleCancelEventArgs e) { e.Cancel = true; cancelled = true; cts.Cancel(); }
         Console.CancelKeyPress += OnCancel;
+
+        // Wall clock for the whole operation. Reported alongside the test duration from the TRX so a
+        // fast test suite behind a slow image pull never looks like the run itself took no time.
+        var wallClock = Stopwatch.StartNew();
 
         var containerName = ContainerPlanner.ContainerName(Guid.NewGuid().ToString("N")[..8]);
         var runRoot = Path.Combine(Path.GetTempPath(), "dotnet-remote-testing", containerName);
@@ -2263,9 +2801,10 @@ internal static class Commands
             }
 
             var sourceRoot = ResolveSourceRoot(options, env);
-            var tfmInfo = TargetFrameworkInspector.Inspect(sourceRoot, options.Project);
+            var tfmInfo = NarrowToRequestedFramework(
+                TargetFrameworkInspector.Inspect(sourceRoot, options.Project), options.Framework);
             var channelSdk = SdkVersion.TryParse(env.Sdk);
-            var compat = TargetFrameworkInspector.CanBuild(channelSdk, tfmInfo);
+            var compat = TargetFrameworkInspector.CanBuild(channelSdk, tfmInfo, env.SupportedMajors);
             if (SdkCompatibilityPolicy.IsBlocking(env.Origin, compat.Compatible))
             {
                 return Error(options, FailureKind.SdkIncompatibility, compat.Reason ?? "The selected SDK cannot build the requested target framework.");
@@ -2276,6 +2815,11 @@ internal static class Commands
             {
                 return Error(options, image.Kind, image.Error);
             }
+
+            // The image runs the build, not just the tests, so it must carry what the build shells out to.
+            var prepared = await ImageProvisioner.EnsureAsync(
+                image.Reference!, image.Digest, runRoot, options.Offline, cts.Token);
+            image = image with { PreparedReference = prepared.Provisioned ? prepared.Reference : null, ProvisionNote = prepared.Note };
 
             var resultsRoot = Path.Combine(runRoot, "results");
             stagingRoot = Path.Combine(runRoot, "workspace");
@@ -2298,7 +2842,7 @@ internal static class Commands
                 new ContainerMount(nugetCache, "/nuget", ReadOnly: false),
                 new ContainerMount(resultsRoot, "/results", ReadOnly: false),
             };
-            var plan = ContainerPlanner.Build(image.Reference!, containerName, mounts, testOptions);
+            var plan = ContainerPlanner.Build(prepared.Reference, containerName, mounts, testOptions);
 
             ProcessResult proc;
             try
@@ -2319,7 +2863,9 @@ internal static class Commands
 
             var cleanup = await CleanupAsync(containerName, runRoot, cts.Token);
 
-            return EmitRunResult(options, env, image, tfmInfo, results, outcome, proc, cleanup);
+            return EmitRunResult(
+                options, env, image, tfmInfo, results, outcome, proc, cleanup,
+                ctx.Resolution.SelectionReason, wallClock.Elapsed.TotalSeconds);
         }
         catch (OperationCanceledException)
         {
@@ -2377,7 +2923,9 @@ internal static class Commands
         }
         else
         {
-            // Configured dockerImage is deliberate repository intent — exempt from the Microsoft-only rule.
+            // A configured dockerImage (deliberate repository intent) or a multi-SDK runner tag taken
+            // from the publisher's tag feed. Both are used exactly as written; the digest is resolved
+            // from the pulled image below.
             reference = env.DockerImage!;
         }
 
@@ -2426,7 +2974,9 @@ internal static class Commands
         TestRunResult results,
         ExecutionOutcome outcome,
         ProcessResult proc,
-        CleanupReport cleanup)
+        CleanupReport cleanup,
+        string? selectionReason = null,
+        double? elapsedSeconds = null)
     {
         var exit = FailureClassifier.ToExitCode(outcome.Kind);
         if (outcome.Kind == FailureKind.None && cleanup.Leftovers.Count > 0)
@@ -2450,10 +3000,19 @@ internal static class Commands
                 failureKind = outcome.Kind == FailureKind.None ? null : outcome.Kind.ToString(),
                 phase = outcome.Phase,
                 message = outcome.Message,
-                environment = new { env.Name, origin = env.Origin.ToString(), env.Channel, env.ReleaseType },
-                image = new { requested = image.RequestedTag, reference = image.Reference, digest = image.Digest, sdk = image.Sdk },
+                environment = new { env.Name, origin = env.Origin.ToString(), env.Channel, env.ReleaseType, selectionReason },
+                image = new
+                {
+                    requested = image.RequestedTag,
+                    reference = image.Reference,
+                    digest = image.Digest,
+                    sdk = image.Sdk,
+                    prepared = image.PreparedReference,
+                    provisioning = image.ProvisionNote,
+                },
                 targetFrameworks = tfmInfo.TargetFrameworks,
                 tests = new { results.Total, results.Passed, results.Skipped, results.Failed, results.DurationSeconds, trxFiles = results.TrxFilesParsed },
+                elapsedSeconds = elapsedSeconds is null ? (double?)null : Math.Round(elapsedSeconds.Value, 1),
                 failures = results.Failures.Select(f => new { f.TestName, f.ClassName, f.Message, f.StackTrace }),
                 cleanup = new { cleanup.ContainerRemoved, cleanup.WorkspaceRemoved, cleanup.Leftovers },
                 diagnostics = status == "error" ? new { containerExitCode = proc.ExitCode, stdoutTail = LastLines(proc.StdOut, 30), stderrTail = LastLines(proc.StdErr, 20) } : null,
@@ -2463,6 +3022,11 @@ internal static class Commands
 
         // Concise human result: environment → image/digest/sdk → tests → duration, actionable on failure.
         Console.WriteLine($"Remote Test: {env.Name}");
+        if (selectionReason is not null)
+        {
+            Console.WriteLine(selectionReason);
+        }
+
         Console.WriteLine();
         Console.WriteLine($"Image:  {image.Reference}");
         if (image.Digest is not null)
@@ -2475,12 +3039,21 @@ internal static class Commands
             Console.WriteLine($"SDK:    {image.Sdk}");
         }
 
+        if (image.ProvisionNote is not null)
+        {
+            Console.WriteLine($"Tools:  {image.ProvisionNote}");
+        }
+
         Console.WriteLine();
 
         if (outcome.Kind is FailureKind.None or FailureKind.TestFailure)
         {
             Console.WriteLine($"Tests:  {results.Passed} passed, {results.Skipped} skipped, {results.Failed} failed");
-            Console.WriteLine($"Time:   {results.DurationSeconds.ToString("0.0", CultureInfo.InvariantCulture)} s");
+            Console.WriteLine($"Time:   {results.DurationSeconds.ToString("0.0", CultureInfo.InvariantCulture)} s (tests)");
+            if (elapsedSeconds is not null)
+            {
+                Console.WriteLine($"Total:  {elapsedSeconds.Value.ToString("0.0", CultureInfo.InvariantCulture)} s (including image pull, restore and build)");
+            }
             if (results.Failed > 0)
             {
                 Console.WriteLine();
@@ -2500,10 +3073,14 @@ internal static class Commands
         else
         {
             Console.Error.WriteLine($"{outcome.Kind}: {outcome.Message}");
-            var tail = LastLines(proc.StdErr, 20);
-            if (!string.IsNullOrWhiteSpace(tail))
+            // The container writes compiler/restore diagnostics to stdout, so a stderr-only tail would
+            // leave the developer with a verdict and no cause. Prefer the actual error lines.
+            var detail = FirstNonEmpty(
+                ErrorLines(proc.StdOut, 20), LastLines(proc.StdErr, 20), LastLines(proc.StdOut, 20));
+            if (!string.IsNullOrWhiteSpace(detail))
             {
-                Console.Error.WriteLine(tail);
+                Console.Error.WriteLine();
+                Console.Error.WriteLine(detail);
             }
         }
 
@@ -2576,6 +3153,7 @@ internal static class SelfTest
         ReleaseMetadataTests();
         SdkAndImageTagTests();
         EnvironmentSelectionTests();
+        MultiSdkRunnerTests();
         UnsupportedEnvironmentTests();
         TargetFrameworkTests();
         CommandPlanningTests();
@@ -2740,6 +3318,135 @@ internal static class SelfTest
 
         var notFound = EnvironmentResolver.Resolve(config, generated, "does-not-exist");
         Check("unknown name reported as not found", notFound.Status == ResolutionStatus.NotFound);
+
+        // Deterministic tie-break: the repository's own target framework answers the question.
+        var net10 = new TargetFrameworkInfo { TargetFrameworks = ["net10.0"] };
+        var byTfm = EnvironmentResolver.Resolve(null, generated, null, net10);
+        Check("target framework selects the matching channel without asking",
+            byTfm.Status == ResolutionStatus.Resolved && byTfm.Environment!.Name == "dotnet-10-lts");
+        Check("automatic selection explains itself", byTfm.SelectionReason is not null && byTfm.SelectionReason.Contains("net10.0"));
+
+        // A single-SDK image ships one runtime, so a multi-targeted repository must not be silently
+        // pointed at the newest channel — those lower target frameworks would build and then fail to run.
+        var multiTargeted = new TargetFrameworkInfo { TargetFrameworks = ["net8.0", "net9.0", "net10.0"] };
+        Check("multi-targeted repository is not sent to a single-SDK image",
+            EnvironmentResolver.Resolve(null, generated, null, multiTargeted).Status == ResolutionStatus.Ambiguous);
+
+        var runner = GeneratedEnvironments.FromMultiSdkRunner(
+            new MultiSdkRunner { Tag = "8-9-10-11", Majors = [8, 9, 10, 11] });
+        var withRunner = EnvironmentResolver.Resolve(null, [.. generated, runner], null, multiTargeted);
+        Check("multi-targeted repository selects the covering multi-SDK runner",
+            withRunner.Status == ResolutionStatus.Resolved && withRunner.Environment!.Name == "ubuntu-testrunner-8-9-10-11");
+        Check("multi-SDK selection explains the whole-matrix benefit",
+            withRunner.SelectionReason is not null && withRunner.SelectionReason.Contains("single container"));
+
+        Check("single-target repository still prefers the matching single-SDK channel",
+            EnvironmentResolver.Resolve(null, [.. generated, runner], null, net10).Environment!.Name == "dotnet-10-lts");
+
+        var uncovered = new TargetFrameworkInfo { TargetFrameworks = ["net7.0", "net10.0"] };
+        Check("a runner that does not cover every target framework is not selected",
+            EnvironmentResolver.Resolve(null, [.. generated, runner], null, uncovered).Status == ResolutionStatus.Ambiguous);
+
+        var previewOnly = new TargetFrameworkInfo { TargetFrameworks = ["net11.0"] };
+        Check("preview channel is selectable by target framework",
+            EnvironmentResolver.Resolve(null, generated, null, previewOnly).Environment!.Name == "dotnet-11-preview");
+
+        var unsupportedMajor = new TargetFrameworkInfo { TargetFrameworks = ["net7.0"] };
+        Check("target framework with no supported channel still asks",
+            EnvironmentResolver.Resolve(null, generated, null, unsupportedMajor).Status == ResolutionStatus.Ambiguous);
+
+        var noNetTarget = new TargetFrameworkInfo { TargetFrameworks = ["netstandard2.0"] };
+        Check("non-.NET target framework does not guess a channel",
+            EnvironmentResolver.Resolve(null, generated, null, noNetTarget).Status == ResolutionStatus.Ambiguous);
+
+        Check("empty target framework info does not guess a channel",
+            EnvironmentResolver.Resolve(null, generated, null, new TargetFrameworkInfo()).Status == ResolutionStatus.Ambiguous);
+
+        var duplicateMajor = new List<ResolvedEnvironment>(generated)
+        {
+            generated.First(e => e.ChannelMajor == 10) with { Name = "dotnet-10-alt" },
+        };
+        Check("two channels for the same major stay ambiguous",
+            EnvironmentResolver.Resolve(null, duplicateMajor, null, net10).Status == ResolutionStatus.Ambiguous);
+
+        Check("configured environments are never auto-selected by target framework",
+            EnvironmentResolver.Resolve(twoConfig, generated, null, net10).Status == ResolutionStatus.Ambiguous);
+
+        Check("channel major parsed from channel version",
+            generated.First(e => e.Name == "dotnet-10-lts").ChannelMajor == 10);
+        Check("configured environment has no channel major",
+            GeneratedEnvironments.FromConfigured(config.SupportedDockerEnvironments[0]).ChannelMajor == 0);
+    }
+
+    private const string SampleMultiSdkTags = """
+    {
+      "count": 8,
+      "results": [
+        { "name": "11.0.100-preview.7" },
+        { "name": "10" },
+        { "name": "10.0" },
+        { "name": "8-9-10-11" },
+        { "name": "8.0-9.0-10.0-11.0" },
+        { "name": "9-10" },
+        { "name": "8.0.421-9.0.314-10.0.300-11.0.100-preview.4" },
+        { "name": "mono-net8.0.418-9.0.311-10.0.103" }
+      ]
+    }
+    """;
+
+    private static void MultiSdkRunnerTests()
+    {
+        Section("Multi-SDK runner discovery");
+
+        var runners = MultiSdkTagReader.Parse(SampleMultiSdkTags);
+        var tags = runners.Select(r => r.Tag).ToList();
+        Check("combined major tags are discovered", tags.Contains("8-9-10-11") && tags.Contains("9-10"));
+        Check("single-major tags are ignored", !tags.Contains("10") && !tags.Contains("10.0"));
+        Check("channel and pinned combination forms are ignored",
+            !tags.Contains("8.0-9.0-10.0-11.0") && !tags.Contains("8.0.421-9.0.314-10.0.300-11.0.100-preview.4"));
+        Check("prefixed tags are ignored", !tags.Any(t => t.StartsWith("mono", StringComparison.Ordinal)));
+        Check("majors parsed from the tag",
+            runners.Single(r => r.Tag == "8-9-10-11").Majors.SequenceEqual([8, 9, 10, 11]));
+        Check("image reference built from the publisher repository",
+            runners.Single(r => r.Tag == "9-10").Reference == "codebeltnet/ubuntu-testrunner:9-10");
+
+        Check("malformed feed yields no runners", MultiSdkTagReader.Parse("not json").Count == 0);
+        Check("feed without results yields no runners", MultiSdkTagReader.Parse("""{ "count": 0 }""").Count == 0);
+
+        // Tightest fit: cover every required major without dragging in SDKs the repository never asked for.
+        Check("tightest covering tag wins",
+            MultiSdkTagReader.Select(runners, [9, 10])!.Tag == "9-10");
+        Check("wider tag used when the tight one does not cover",
+            MultiSdkTagReader.Select(runners, [8, 10])!.Tag == "8-9-10-11");
+        Check("no covering tag returns null",
+            MultiSdkTagReader.Select(runners, [7, 10]) is null);
+        Check("single major never selects a multi-SDK runner",
+            MultiSdkTagReader.Select(runners, [10]) is null);
+
+        var env = GeneratedEnvironments.FromMultiSdkRunner(runners.Single(r => r.Tag == "8-9-10-11"));
+        Check("runner environment is named after its tag", env.Name == "ubuntu-testrunner-8-9-10-11");
+        Check("runner environment is multi-SDK", env.IsMultiSdk && env.SupportedMajors.SequenceEqual([8, 9, 10, 11]));
+        Check("runner environment carries no single channel", env.Channel is null && env.ChannelMajor == 0);
+
+        // Compatibility is judged on declared majors, because presence is what lets the tests run.
+        var spread = new TargetFrameworkInfo { TargetFrameworks = ["net8.0", "net10.0"] };
+        Check("multi-SDK image is compatible with every provided target",
+            TargetFrameworkInspector.CanBuild(null, spread, env.SupportedMajors).Compatible);
+        Check("multi-SDK image rejects a target it does not provide",
+            !TargetFrameworkInspector.CanBuild(null, new TargetFrameworkInfo { TargetFrameworks = ["net7.0"] }, env.SupportedMajors).Compatible);
+        Check("multi-SDK image still cannot build .NET Framework",
+            !TargetFrameworkInspector.CanBuild(null, new TargetFrameworkInfo { TargetFrameworks = ["net48"] }, env.SupportedMajors).Compatible);
+
+        // The runtime gap that motivates the multi-SDK runner in the first place.
+        var sdk10 = SdkVersion.TryParse("10.0.302");
+        var singleSdkSpread = TargetFrameworkInspector.CanBuild(sdk10, spread);
+        Check("single-SDK image is incompatible with a multi-targeted repository", !singleSdkSpread.Compatible);
+        Check("the incompatibility names the missing runtime and the remedy",
+            singleSdkSpread.Reason is not null
+            && singleSdkSpread.Reason.Contains("net8.0")
+            && singleSdkSpread.Reason.Contains(RemoteTestProgram.MultiSdkRepository));
+        Check("single-SDK image remains compatible with its own single target",
+            TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net10.0"] }).Compatible);
     }
 
     private static void UnsupportedEnvironmentTests()
@@ -2783,7 +3490,11 @@ internal static class SelfTest
         Check("global.json parsed", sdk == "10.0.302" && roll == "latestFeature");
 
         var sdk10 = SdkVersion.TryParse("10.0.302");
-        Check("sdk builds equal/lower target", TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net8.0", "net10.0"] }).Compatible);
+        Check("sdk builds and runs its own target", TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net10.0"] }).Compatible);
+        // A lower target compiles on a newer SDK but has no runtime in that image, so it is not runnable
+        // there. This is why a multi-targeted repository needs a multi-SDK runner.
+        Check("sdk alone cannot run a lower target it can build",
+            !TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net8.0", "net10.0"] }).Compatible);
         Check("sdk cannot build newer target", !TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net11.0"] }).Compatible);
         Check("linux sdk cannot build net framework", !TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net48"] }).Compatible);
         Check("global.json disable pin mismatch is incompatible", !TargetFrameworkInspector.CanBuild(sdk10,
