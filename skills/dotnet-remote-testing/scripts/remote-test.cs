@@ -2268,6 +2268,19 @@ internal static class DockerClient
         return r.ExitCode == 0 ? r.StdOut.Trim() : null;
     }
 
+    // The user an image is configured to run as. Empty means the image sets none, i.e. root.
+    public static async Task<string?> ResolveUserAsync(string image, CancellationToken ct)
+    {
+        var r = await ProcessRunner.RunAsync("docker", ["inspect", "--format", "{{.Config.User}}", image], null, ct);
+        if (r.ExitCode != 0)
+        {
+            return null;
+        }
+
+        var user = r.StdOut.Trim();
+        return user.Length == 0 ? null : user;
+    }
+
     public static Task<ProcessResult> BuildAsync(string dockerfile, string context, string tag, CancellationToken ct) =>
         ProcessRunner.RunAsync("docker", ["build", "-f", dockerfile, "-t", tag, context], null, ct);
 
@@ -2325,9 +2338,15 @@ internal static class ImageProvisioner
 
     // A single RUN that adapts to whichever package manager the base image ships. The Dockerfile is
     // written to the run's own temporary directory — never into the repository being tested.
-    public static string Dockerfile(string baseReference)
+    //
+    // Installing packages needs root, but the identity the tests run under is part of the environment
+    // being reproduced: a base image that runs as a non-root user must keep doing so, or the prepared
+    // image writes build and test output with different ownership than the configured image would.
+    // baseUser is that image's configured user, or null when it sets none (already root).
+    public static string Dockerfile(string baseReference, string? baseUser = null)
     {
         var tools = string.Join(' ', RequiredTools);
+        var restore = string.IsNullOrWhiteSpace(baseUser) ? string.Empty : $"USER {baseUser.Trim()}\n";
         return $"""
         FROM {baseReference}
         USER root
@@ -2345,7 +2364,7 @@ internal static class ImageProvisioner
             else \
                 echo 'No supported package manager in the base image.' >&2; exit 1; \
             fi
-
+        {restore}
         """;
     }
 
@@ -2375,10 +2394,14 @@ internal static class ImageProvisioner
                 + "A build that invokes it will fail.");
         }
 
+        // Read the identity off the base image before deriving from it, so the prepared image keeps
+        // running as whoever the configured image runs as instead of silently switching to root.
+        var baseUser = await DockerClient.ResolveUserAsync(baseReference, ct);
+
         var contextDir = Path.Combine(workRoot, "image-prep");
         Directory.CreateDirectory(contextDir);
         var dockerfile = Path.Combine(contextDir, "Dockerfile");
-        await File.WriteAllTextAsync(dockerfile, Dockerfile(baseReference), ct);
+        await File.WriteAllTextAsync(dockerfile, Dockerfile(baseReference, baseUser), ct);
 
         var build = await DockerClient.BuildAsync(dockerfile, contextDir, tag, ct);
         if (build.ExitCode != 0)
@@ -2475,7 +2498,37 @@ internal static class SourceStager
                 File.Delete(destination);
             }
 
+            // A linked worktree's git directory holds only per-worktree state (HEAD, index, logs). The
+            // objects, refs and config live in the shared directory its "commondir" points at, outside
+            // the staged copy. Staging the worktree half alone produces a git directory git cannot read,
+            // so versioning falls back to 0.0.0 and SourceLink stops embedding — the exact fidelity loss
+            // staging .git exists to prevent. The shared half is copied first and the per-worktree files
+            // are layered over it, which collapses the pair into an ordinary standalone repository.
+            var commonDir = ResolveCommonDirectory(gitDir);
+            if (commonDir is not null)
+            {
+                // "worktrees/" only registers linked worktrees by host path; none of them exist in the
+                // container, and this worktree's own entry is exactly what is being flattened here.
+                CopyDirectory(commonDir, destination, excludeTopLevelDirectory: "worktrees");
+            }
+
             var bytes = CopyDirectory(gitDir, destination);
+            if (commonDir is not null)
+            {
+                // The staged repository is standalone now; leaving the pointers behind would send git
+                // back out to host paths that do not exist in the container.
+                foreach (var pointer in new[] { "commondir", "gitdir" })
+                {
+                    var stale = Path.Combine(destination, pointer);
+                    if (File.Exists(stale))
+                    {
+                        File.Delete(stale);
+                    }
+                }
+
+                bytes = MeasureDirectory(destination);
+            }
+
             return new GitStagingResult(true, bytes, null);
         }
         catch (Exception ex)
@@ -2516,7 +2569,34 @@ internal static class SourceStager
         return Directory.Exists(target) ? target : null;
     }
 
-    private static long CopyDirectory(string source, string destination)
+    // A linked worktree's git directory carries a "commondir" file naming the shared repository
+    // directory that actually holds objects, refs and config. An ordinary clone has no such file.
+    private static string? ResolveCommonDirectory(string gitDir)
+    {
+        var marker = Path.Combine(gitDir, "commondir");
+        if (!File.Exists(marker))
+        {
+            return null;
+        }
+
+        var target = File.ReadAllText(marker).Trim();
+        if (target.Length == 0)
+        {
+            return null;
+        }
+
+        if (!Path.IsPathRooted(target))
+        {
+            target = Path.GetFullPath(Path.Combine(gitDir, target));
+        }
+
+        return Directory.Exists(target) ? target : null;
+    }
+
+    private static long MeasureDirectory(string root) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length);
+
+    private static long CopyDirectory(string source, string destination, string? excludeTopLevelDirectory = null)
     {
         long bytes = 0;
         var stack = new Stack<(string Source, string Destination)>();
@@ -2537,7 +2617,15 @@ internal static class SourceStager
 
             foreach (var dir in Directory.EnumerateDirectories(from))
             {
-                stack.Push((dir, Path.Combine(to, Path.GetFileName(dir))));
+                var name = Path.GetFileName(dir);
+                if (excludeTopLevelDirectory is not null
+                    && string.Equals(from, source, StringComparison.Ordinal)
+                    && string.Equals(name, excludeTopLevelDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                stack.Push((dir, Path.Combine(to, name)));
             }
         }
 
@@ -2546,7 +2634,10 @@ internal static class SourceStager
 
     private static async Task<IReadOnlyList<string>?> TryGitEnumerateAsync(string sourceRoot, CancellationToken ct)
     {
-        if (!Directory.Exists(Path.Combine(sourceRoot, ".git")))
+        // .git is a directory in an ordinary clone and a "gitdir:" pointer file in a linked worktree;
+        // git enumerates both, and skipping the pointer form would stage ignored build output.
+        var marker = Path.Combine(sourceRoot, ".git");
+        if (!Directory.Exists(marker) && !File.Exists(marker))
         {
             return null;
         }
@@ -4003,6 +4094,15 @@ internal static class SelfTest
         Check("provisioning adapts to the image's package manager",
             dockerfile.Contains("command -v apt-get") && dockerfile.Contains("command -v apk") && dockerfile.Contains("command -v microdnf"));
         Check("provisioning fails loudly on an unknown package manager", dockerfile.Contains("No supported package manager"));
+
+        // Installing needs root, but the prepared image must still run as whoever the base image runs
+        // as; switching the image to root changes file ownership and permission-sensitive results.
+        Check("provisioning does not leave a root-only image as root", !dockerfile.TrimEnd().EndsWith("USER root", StringComparison.Ordinal));
+        var nonRoot = ImageProvisioner.Dockerfile("acme/runner:1", "app");
+        Check("provisioning restores the base image's user", nonRoot.TrimEnd().EndsWith("USER app", StringComparison.Ordinal));
+        Check("provisioning still installs as root", nonRoot.Contains("USER root", StringComparison.Ordinal));
+        Check("provisioning adds no user line when the base image sets none",
+            !ImageProvisioner.Dockerfile("acme/runner:1", "  ").Contains("USER app", StringComparison.Ordinal));
     }
 
     private static void SourceStagingTests()
@@ -4053,6 +4153,43 @@ internal static class SelfTest
             var linkedResult = SourceStager.StageAsync(linked, linkedStaged, CancellationToken.None).GetAwaiter().GetResult();
             Check("gitdir pointer file is resolved to the real git directory",
                 linkedResult.GitMetadataStaged && File.Exists(Path.Combine(linkedStaged, ".git", "HEAD")));
+
+            // A real linked worktree splits its git directory in two: per-worktree state here, objects
+            // and refs in the shared "commondir". Staging only the near half leaves a git directory git
+            // cannot read, so MinVer/Nerdbank fall back to 0.0.0 and SourceLink stops embedding.
+            var common = Path.Combine(root, "main", ".git");
+            var worktreeGit = Path.Combine(common, "worktrees", "wt");
+            Directory.CreateDirectory(Path.Combine(common, "objects", "pack"));
+            Directory.CreateDirectory(Path.Combine(common, "refs", "heads"));
+            Directory.CreateDirectory(worktreeGit);
+            File.WriteAllText(Path.Combine(common, "HEAD"), "ref: refs/heads/main");
+            File.WriteAllText(Path.Combine(common, "config"), "[core]\n\tbare = false");
+            File.WriteAllText(Path.Combine(common, "objects", "pack", "pack-1.pack"), "objects");
+            File.WriteAllText(Path.Combine(common, "refs", "heads", "main"), "0123456789abcdef");
+            File.WriteAllText(Path.Combine(worktreeGit, "HEAD"), "ref: refs/heads/feature");
+            File.WriteAllText(Path.Combine(worktreeGit, "commondir"), "../..");
+            File.WriteAllText(Path.Combine(worktreeGit, "gitdir"), Path.Combine(root, "wt", ".git"));
+
+            var worktree = Path.Combine(root, "wt");
+            Directory.CreateDirectory(worktree);
+            File.WriteAllText(Path.Combine(worktree, "a.txt"), "a");
+            File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {worktreeGit}");
+
+            var worktreeStaged = Path.Combine(root, "staged-worktree");
+            var worktreeResult = SourceStager.StageAsync(worktree, worktreeStaged, CancellationToken.None).GetAwaiter().GetResult();
+            var stagedGit = Path.Combine(worktreeStaged, ".git");
+
+            Check("worktree staging carries the shared objects and refs",
+                worktreeResult.GitMetadataStaged
+                && File.Exists(Path.Combine(stagedGit, "objects", "pack", "pack-1.pack"))
+                && File.Exists(Path.Combine(stagedGit, "refs", "heads", "main"))
+                && File.Exists(Path.Combine(stagedGit, "config")));
+            Check("worktree staging keeps the worktree's own HEAD",
+                File.ReadAllText(Path.Combine(stagedGit, "HEAD")) == "ref: refs/heads/feature");
+            Check("worktree staging drops pointers to host paths",
+                !File.Exists(Path.Combine(stagedGit, "commondir")) && !File.Exists(Path.Combine(stagedGit, "gitdir")));
+            Check("worktree staging does not register host worktrees", !Directory.Exists(Path.Combine(stagedGit, "worktrees")));
+            Check("worktree staging reports the merged size", worktreeResult.GitMetadataBytes > 0);
 
             // A repository with no git metadata at all is ordinary, not an error.
             var plain = Path.Combine(root, "plain");

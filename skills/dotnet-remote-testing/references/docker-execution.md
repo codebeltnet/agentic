@@ -34,6 +34,7 @@ Microsoft's SDK images ship `git`; a minimal runner image may not. So after the 
 FROM <resolved base image>
 USER root
 RUN … install git with whichever package manager the base image ships (apt-get / apk / microdnf / dnf / yum)
+USER <the base image's configured user, when it sets one>
 ```
 
 This preparation layer is:
@@ -41,6 +42,7 @@ This preparation layer is:
 - **outside the repository** — the Dockerfile is written into the run's own temporary directory, never into the working tree, so the "never generate container plumbing" rule is intact;
 - **content-addressed and cached** — tagged `dotnet-remote-testing/prepared:git-<base-digest>`, so it is built once per base image and reused by every later run (`Reused prepared image providing git.`);
 - **transparent** — the reported `Image`/`Digest` remain the resolved base image (reproducibility identity), with the preparation reported separately;
+- **identity-preserving** — installing packages needs root, but the image's own `USER` is restored afterwards, so a base image that runs as a non-root user keeps doing so and file ownership and permission-sensitive tests behave as they do in the configured image;
 - **best effort** — if the tooling cannot be added (no package manager, `--offline`, no network), the base image is used anyway and the reason is reported, because a repository that never invokes `git` runs fine without it.
 
 ## Git metadata in the workspace
@@ -57,7 +59,7 @@ This matters because staging the source without its git metadata is not a neutra
 
 The third row is the subtle one: a suite that passes under Visual Studio's Remote Testing and fails here, for reasons unrelated to the container, is very often a repository-root probe landing somewhere else. Installing `git` into the image (above) and staging `.git` are two halves of one guarantee: the build tooling is present *and* the metadata it reads is present.
 
-A linked worktree or submodule stores `.git` as a `gitdir: <path>` pointer file; the runner resolves the pointer and stages the real directory, because the path it names does not exist inside the container. A source tree with no git metadata at all stages normally and silently — that is an ordinary case, not a degraded one.
+A linked worktree or submodule stores `.git` as a `gitdir: <path>` pointer file; the runner resolves the pointer and stages the real directory, because the path it names does not exist inside the container. A linked worktree's git directory is only half a repository — it holds per-worktree state (`HEAD`, `index`, logs) and points at a shared `commondir` that holds the objects, refs and config — so the runner stages the shared half first, layers the per-worktree files over it, and drops the `commondir`/`gitdir` pointers. The staged copy is then an ordinary standalone repository, which is what git-based versioning and SourceLink need; staging the near half alone would leave a git directory git cannot read, and versioning would fall back to `0.0.0` exactly as if `.git` had been skipped. A source tree with no git metadata at all stages normally and silently — that is an ordinary case, not a degraded one.
 
 `--no-git-metadata` opts out for a repository whose `.git` is large enough that copying it dominates the run. The run then reports the fidelity loss rather than hiding it.
 
