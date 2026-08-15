@@ -21,14 +21,16 @@ function Get-RepoRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 }
 
+# HostRoot is the tool's own directory. Its absence means the tool is not installed on this machine and
+# there is genuinely nothing to sync; a missing skill directory *under* an installed tool is drift.
 function Get-InstallRoot {
     param([string]$SkillName)
 
     $home_ = [Environment]::GetFolderPath('UserProfile')
     return @(
-        (Join-Path $home_ ".claude/skills/$SkillName"),
-        (Join-Path $home_ ".agents/skills/$SkillName"),
-        (Join-Path $home_ ".gemini/antigravity-cli/skills/$SkillName")
+        [pscustomobject]@{ HostRoot = (Join-Path $home_ '.claude'); Path = (Join-Path $home_ ".claude/skills/$SkillName") },
+        [pscustomobject]@{ HostRoot = (Join-Path $home_ '.agents'); Path = (Join-Path $home_ ".agents/skills/$SkillName") },
+        [pscustomobject]@{ HostRoot = (Join-Path $home_ '.gemini/antigravity-cli'); Path = (Join-Path $home_ ".gemini/antigravity-cli/skills/$SkillName") }
     )
 }
 
@@ -121,10 +123,24 @@ foreach ($name in $Skill) {
 
     $relativeFile = Get-RelativeFile -Root $sourceRoot
 
-    foreach ($installRoot in (Get-InstallRoot -SkillName $name)) {
-        if (-not (Test-Path -LiteralPath $installRoot)) {
-            Write-Host "[SKIP] $name -> $installRoot (not installed)"
+    foreach ($install in (Get-InstallRoot -SkillName $name)) {
+        $installRoot = $install.Path
+
+        if (-not (Test-Path -LiteralPath $install.HostRoot)) {
+            Write-Host "[SKIP] $name -> $installRoot (host tool not installed)"
             continue
+        }
+
+        # An installed host with no copy of the skill used to be skipped, which let a run where nothing
+        # was ever installed still report "verified, 0 drift". A sync creates the install; a verify fails.
+        if (-not (Test-Path -LiteralPath $installRoot)) {
+            if ($VerifyOnly) {
+                Write-Host "[FAIL] $name -> $installRoot (not installed)"
+                $totalDrift += 1
+                continue
+            }
+
+            New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
         }
 
         if (-not $VerifyOnly) {
