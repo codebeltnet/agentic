@@ -211,6 +211,18 @@
         "Produces a small number of high-signal lines independent of commit count",
         "Does not emit one line per fixup or implementation swap"
       ]
+    },
+    {
+      "id": 19,
+      "prompt": "/git-visual-squash-summary",
+      "expected_output": "The very first response contains the grouped summary lines for the current branch, with no instruction recap and no request for permission to begin.",
+      "expectations": [
+        "Runs the read-only git resolution commands before composing any user-facing reply",
+        "Does not restate the skill's rules as an `I understand the instructions` or `I will ...` preamble",
+        "Does not ask `Would you like me to generate a squash summary of your current branch now?` or any equivalent offer to proceed",
+        "Does not announce a plan and stop before any git command has run",
+        "Returns one of only three permitted response shapes: the grouped lines, `No branch changes to summarize.`, or a single base-branch question after every Step 1 fallback failed"
+      ]
     }
   ]
 }
