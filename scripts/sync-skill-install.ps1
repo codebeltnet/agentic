@@ -115,6 +115,14 @@ if (-not $Skill -or $Skill.Count -eq 0) {
 $totalDrift = 0
 
 foreach ($name in $Skill) {
+    # Both roots are built by joining this name onto a trusted prefix, so a separator or `..` in it walks
+    # the sync out of the skill tree: the source becomes the repo and the install becomes the skills root,
+    # where -Prune would delete every other installed skill. Skill directories are kebab-case by
+    # convention, so anything else is malformed input rather than a skill that is merely missing.
+    if ($name -notmatch '^[a-z0-9]+(-[a-z0-9]+)*$') {
+        throw "Invalid skill name: '$name'. Expected a kebab-case skill directory name."
+    }
+
     $sourceRoot = Join-Path $skillsRoot $name
     if (-not (Test-Path -LiteralPath $sourceRoot)) {
         Write-Host "[SKIP] $name (not a repo-managed skill)"
