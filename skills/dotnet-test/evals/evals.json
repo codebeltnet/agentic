@@ -53,6 +53,7 @@
         "Bootstraps the real Program entry point and does not call WebApplication.CreateBuilder, UseTestServer, new TestServer, or otherwise reconstruct the application pipeline in test source",
         "Preserves Production environment, in-memory settings, one application per test, and disposes both IHostTest and temporary content through matching synchronous and asynchronous Test hooks",
         "Keeps CompressionTest and both existing method names unchanged",
+        "Raises Codebelt.Extensions.Xunit.App above the 11.1.0 managed-fixture floor in the owning props file, without bumping unrelated pinned packages",
         "Removes Microsoft.AspNetCore.Mvc.Testing when no longer needed",
         "The focused inspector postcondition succeeds, search finds no WebApplicationFactory in the selected migration, and restore/build/test succeed"
       ],
@@ -133,6 +134,28 @@
         "evals/files/worker-functional/src/Acme.QueuePump/QueuePumpWorker.cs",
         "evals/files/worker-functional/test/Acme.QueuePump.FunctionalTests/Acme.QueuePump.FunctionalTests.csproj",
         "evals/files/worker-functional/test/Acme.QueuePump.FunctionalTests/QueuePumpTest.cs"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "/dotnet-test",
+      "expected_output": "The first action is scripts/inspect-dotnet-tests.ps1 against the repository, followed immediately by the migration work its evidence implies. No menu, capability list, questionnaire, or plan-then-stop response is produced.",
+      "expectations": [
+        "Runs inspect-dotnet-tests.ps1 as the first action rather than replying with a question",
+        "Does not present a numbered menu of modes such as bootstrap versus refactor versus improve coverage",
+        "Does not ask which project, role, or host ownership to use when the inspector evidence already resolves them",
+        "Proceeds to classify and migrate using the inspector output without an intervening confirmation round-trip",
+        "Asks a single scoped question only if the inspector reports a real blocker or its evidence contradicts the request"
+      ],
+      "files": [
+        "evals/files/focused-web/Directory.Build.props",
+        "evals/files/focused-web/Directory.Packages.props",
+        "evals/files/focused-web/src/Acme.Cdn.Origin/Acme.Cdn.Origin.csproj",
+        "evals/files/focused-web/src/Acme.Cdn.Origin/Program.cs",
+        "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/Acme.Cdn.Origin.FunctionalTests.csproj",
+        "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/CdnOriginTestApplication.cs",
+        "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/CompressionTest.cs",
+        "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/TempContent.cs"
       ]
     }
   ]

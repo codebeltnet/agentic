@@ -1,7 +1,7 @@
 ---
 name: dotnet-test
 description: >
-  Bootstrap or refactor .NET xUnit test projects to Codebelt conventions. Use for unit-test setup, xUnit v2-to-v3 modernization, Microsoft Testing Platform adoption, ASP.NET Core WebApplicationFactory migration, entrypoint-owned managed fixtures, reusable functional-test harnesses, and in-process console or worker tests. Classify the selected project, preserve behavior and test names, resolve compatible stable packages from NuGet, and validate restore/build/test. Do not use for NUnit/MSTest-only work, production refactoring without a test-project goal, or process-launching end-to-end harnesses.
+  Move .NET xUnit test projects onto Codebelt's entrypoint-owned test hosts, replacing Microsoft's WebApplicationFactory and hand-rolled host plumbing with WebApplicationTestFactory, WebApplicationTest, ApplicationTestFactory, and ApplicationTest — for ASP.NET Core, console, and worker applications alike. Invoking this skill IS the request: inspect the repository and refactor immediately, never opening with a menu, a capability list, or a questionnaire. Use for WebApplicationFactory migration, xUnit v2-to-v3 modernization, Microsoft Testing Platform adoption, managed fixtures, reusable functional-test harnesses, in-process console or worker tests, and unit-test bootstrap. Preserve behavior, test names, and package ownership, then validate restore/build/test. Do NOT use for NUnit/MSTest-only work, production refactoring without a test-project goal, or process-launching end-to-end harnesses.
 compatibility: >
   Requires .NET SDK, PowerShell 7+, and network access to NuGet for dynamic package resolution.
 ---
@@ -9,6 +9,31 @@ compatibility: >
 # .NET Test
 
 Bootstrap and refactor xUnit projects using the tested patterns from [Codebelt xUnit](https://github.com/codebeltnet/xunit) and the matching application-host patterns from [Codebelt Bootstrapper](https://github.com/codebeltnet/bootstrapper).
+
+## This skill has one job
+
+**The test host comes from Codebelt, not from Microsoft, and not from a builder you write in the test project.**
+
+Microsoft ships `WebApplicationFactory<TEntryPoint>`, and it only covers ASP.NET Core. Everything else — console apps, workers, hosted services — has no Microsoft equivalent, so teams hand-roll a `HostBuilder` in the test project and end up testing a composition root that no deployed process ever runs. Codebelt xUnit closes both gaps with one family of abstractions where the application's own entry point owns startup:
+
+| What the test needs | Codebelt gives you | Instead of |
+|---|---|---|
+| One host per test / per narrow harness (web) | `WebApplicationTestFactory.Create<TEntryPoint>(..., new ManagedWebApplicationFixture<TEntryPoint>())` | `new MyFactory() : WebApplicationFactory<Program>` |
+| One host shared by a test class (web) | `WebApplicationTest<TEntryPoint, ManagedWebApplicationFixture<TEntryPoint>>` | `IClassFixture<WebApplicationFactory<Program>>` |
+| One host per test / per narrow harness (console, worker) | `ApplicationTestFactory.Create<TEntryPoint>(..., new ManagedApplicationFixture<TEntryPoint>())` | a hand-built `HostBuilder` in the test project |
+| One host shared by a test class (console, worker) | `ApplicationTest<TEntryPoint, ManagedApplicationFixture<TEntryPoint>>` | a static host cached in a test helper |
+
+That substitution is the deliverable. A run that leaves `WebApplicationFactory` in place, or that swaps the type while quietly rebuilding the host in test code, has not done the job no matter how green the test run looks.
+
+## Do this now
+
+**You were invoked. That is the request.** Your first action is the inspector in [Step 1](#step-1-gather-evidence-before-asking-anything) — not a question, not a menu, not a plan.
+
+The inspector answers, from the repository itself, essentially every question you might be tempted to ask: which test projects exist, what role each one plays, whether it is already on xUnit v3 and Microsoft Testing Platform, who owns each package version, every `WebApplicationFactory` and managed-fixture usage with file and line, whether the referenced application has a Generic Host seam, and what the recommended migration is. Asking the developer to hand-type answers the JSON already contains costs them a turn and tells you nothing new.
+
+**Forbidden as a first response:** a numbered menu of things this skill could do; "bootstrap vs refactor vs improve coverage"; "would you like me to run a diagnostic scan first?"; listing capabilities; asking which project, role, or host ownership to use before the inspector has run. If you are about to write "What do you want to do?", run the inspector instead — its output makes the question obsolete.
+
+There is exactly one shape of legitimate question, and it comes *after* the evidence: the inspector reported a real blocker, or its evidence genuinely contradicts what the request asked for. See [Step 1](#step-1-gather-evidence-before-asking-anything).
 
 ## Critical
 
@@ -18,25 +43,37 @@ Bootstrap and refactor xUnit projects using the tested patterns from [Codebelt x
 - Use entrypoint-owned `ManagedWebApplicationFixture<TEntryPoint>` and `ManagedApplicationFixture<TEntryPoint>` for new and migrated functional tests. Do not emit their deprecated blocking variants; they are scheduled for removal.
 - Do not reconstruct an application entry point inside test code with `WebApplication.CreateBuilder`, `WebHostBuilder`, `HostBuilder`, `UseTestServer`, copied service registrations, or copied middleware. That creates a second composition root which can pass while the real `Program` is broken.
 - Preserve target frameworks, central package management, unrelated MSBuild configuration, existing test names, and test isolation.
+- Edit files you are actually changing, in place. Rewriting a file wholesale flips its line endings and makes `git status` report churn that reviewers must read to discover it means nothing; a file with no semantic change must not appear in the diff at all.
 - Replace every selected `WebApplicationFactory` usage. A partial migration that leaves a selected usage or package reference behind is incomplete.
 - Keep functional testing in-process. Never add a process-launching fallback for console or worker applications.
 - If a selected executable has no Generic Host, adapt production startup only when application adaptation is explicitly in scope. Otherwise report the exact missing host seam and stop before changing production startup.
 - During bootstrap, add at least one test derived from real source behavior. Placeholder assertions such as `Assert.True(true)` do not satisfy the task.
 - When the request requires restore/build/test, `dotnet test` must discover the expected non-zero test count and report zero failures. An MTP executable run may supplement that gate but never replaces it; if `dotnet test` discovers zero tests, add or restore the repository-appropriate `xunit.runner.visualstudio` adapter and rerun.
 
-## Step 1: Resolve scope and inputs
+## Step 1: Gather evidence before asking anything
 
-Read `FORMS.md`. Infer fields already answered by the request or repository. Ask only for unresolved fields, one at a time, and confirm the final summary before mutation.
-
-Resolve the repository root and selected `.csproj` path. Do not broaden a single-project request to every test project.
-
-Run:
+Run the inspector first. Omit `-ProjectPath` when the request did not name a project — the inspector then discovers and classifies every test project itself:
 
 ```powershell
-pwsh -NoProfile -File "<skill-root>/scripts/inspect-dotnet-tests.ps1" -RepoRoot "<repo-root>" -ProjectPath "<project-path>"
+pwsh -NoProfile -File "<skill-root>/scripts/inspect-dotnet-tests.ps1" -RepoRoot "<repo-root>" [-ProjectPath "<project-path>"]
 ```
 
-Keep stdout as JSON. Treat a non-zero exit or a reported blocker as a real stop condition.
+`<skill-root>` is the directory containing this `SKILL.md`; quote both paths. Keep stdout as JSON. A non-zero exit or a reported blocker is a real stop condition.
+
+Now read the JSON and resolve the `FORMS.md` fields from it. Almost always, all of them resolve and you proceed straight to Step 2 without asking anything:
+
+| `FORMS.md` field | Resolved by | Ask only when |
+|---|---|---|
+| `project_selection` | the request naming a project, or `projects[]` containing exactly one | `projects[]` has several and the request does not narrow them |
+| `operation_mode` | tests present in the selected project → refactor; none → bootstrap | never — this is a fact about the repository, not a preference |
+| `test_role` | `projects[].role` | `role` contradicts what the request explicitly asked for |
+| `application_adaptation` | `referencedApplications[].genericHost` is `true` → not applicable | a missing-Generic-Host blocker is reported |
+| `host_ownership` | a factory constructed per test method → focused; `IClassFixture` or one shared host → shared | usage is genuinely mixed and the request does not say |
+| `confirmation` | the request itself | mutation would exceed the scope the request authorized |
+
+Read `FORMS.md` only when a row above actually lands in its "ask" column; it is the fallback for genuine ambiguity, not an intake wizard to run up front. When you do ask, ask that one field alone, state the evidence that made it ambiguous, and carry every already-resolved field forward silently.
+
+Do not broaden a single-project request to every test project.
 
 ## Step 2: Classify the project
 
@@ -61,6 +98,10 @@ pwsh -NoProfile -File "<skill-root>/scripts/resolve-test-package-versions.ps1" -
 The resolver queries NuGet stable versions, tries newer candidates first, and verifies each candidate against the selected package set through isolated compatibility-project restores; it emits only a set whose combined package restore passes. If it fails, report the package, target frameworks, and restore evidence instead of guessing.
 
 When a benchmark or smoke harness provides `DOTNET_TEST_MAXIMUM_CANDIDATES`, `DOTNET_TEST_RESOLVER_CACHE_DIR`, or `DOTNET_TEST_RESOLVER_TRACE_FILE`, honor that measured scope instead of widening the live search again. Use a small explicit candidate limit for ordinary eval smoke runs; fallback and combined-package behavior stay covered by `scripts/test-resolve-test-package-versions.ps1`.
+
+The managed fixtures this skill targets do not exist below Codebelt xUnit **11.1.0**. A project pinned under that floor restores and builds fine today and then fails to compile the moment you write the pattern, so treat the inspector's version-floor recommendation as a prerequisite edit rather than advice — raise it in the owning props file before Step 4.
+
+Apply the smallest change that makes the target pattern compile. The resolver returns a complete latest-compatible set because it verifies the set as a whole, not because every member needs to move; adopting all of it turns a test-host migration into a repo-wide dependency bump the request never asked for. Bump what the pattern requires, leave working pins alone, and mention the rest as available rather than applying it.
 
 Preserve package ownership:
 

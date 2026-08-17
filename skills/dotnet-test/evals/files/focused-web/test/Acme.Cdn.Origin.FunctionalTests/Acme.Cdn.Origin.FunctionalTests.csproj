@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><RootNamespace>Acme.Cdn.Origin</RootNamespace></PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Codebelt.Extensions.Xunit.App" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
