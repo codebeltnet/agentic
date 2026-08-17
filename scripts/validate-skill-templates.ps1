@@ -1252,6 +1252,15 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'zero remaining `WebApplicationFactory`'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Do not invent an endpoint, service, configuration key, or expected result.'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'An MTP executable run may supplement that gate but never replaces it'
+    # The skill once answered a bare invocation with a capability menu and inspected nothing; these lock the evidence-first contract.
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'You were invoked. That is the request.'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Forbidden as a first response:'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'The test host comes from Codebelt, not from Microsoft'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'it is the fallback for genuine ambiguity, not an intake wizard'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'do not exist below Codebelt xUnit **11.1.0**'
+    Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle 'This form is a fallback for genuine ambiguity, not an intake step.'
+    Assert-Contains -Name 'inspect-dotnet-tests.ps1' -Content $inspect -Needle '$managedFixtureFloor = [version]'
+    Assert-Contains -Name 'dotnet-test/web-functional-tests.md' -Content $web -Needle 'Probing with `if (_application is IAsyncDisposable d)` is dead defensive code'
     Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### project_selection'
     Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### operation_mode'
     Assert-Contains -Name 'dotnet-test/FORMS.md' -Content $forms -Needle '### test_role'
@@ -1280,10 +1289,14 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'restore evidence'
 
     $evalObject = $evals | ConvertFrom-Json
-    if (@($evalObject.evals).Count -ne 6) {
-        throw "dotnet-test must define exactly six requested paired eval scenarios; found $(@($evalObject.evals).Count)"
+    if (@($evalObject.evals).Count -lt 7) {
+        throw "dotnet-test must define the six paired role scenarios plus the bare-invocation immediate-action scenario; found $(@($evalObject.evals).Count)"
     }
     foreach ($needle in @('attached Acme.Calculator fixture', 'xUnit v2 project', 'web-cdn-origin-style', 'IClassFixture<WebApplicationFactory<Program>>', 'ApplicationTestFactory pattern', 'ApplicationTest<Program, ManagedApplicationFixture<Program>>')) {
+        Assert-Contains -Name 'dotnet-test/evals/evals.json' -Content $evals -Needle $needle
+    }
+    # A bare invocation must act on inspector evidence instead of answering with a menu; that regression shipped once, so it stays covered.
+    foreach ($needle in @('Does not present a numbered menu of modes', 'Runs inspect-dotnet-tests.ps1 as the first action')) {
         Assert-Contains -Name 'dotnet-test/evals/evals.json' -Content $evals -Needle $needle
     }
     if (@($fixtureFiles | Where-Object { $_ -match '(^|[\\/])(bin|obj)([\\/]|$)' }).Count -gt 0) {
