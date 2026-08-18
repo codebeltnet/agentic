@@ -1249,7 +1249,20 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'ApplicationTest<TEntryPoint, ManagedApplicationFixture<TEntryPoint>>'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Never emit them in generated or refactored code.'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Never add a process-launching fallback'
-    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'zero remaining `WebApplicationFactory`'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'verify-dotnet-test-migration.ps1'
+    # A wrapped, renamed, or repackaged factory once shipped as a completed migration. The named failure
+    # modes and the script-produced verdict are what stop that from reading as success again.
+    foreach ($needle in @('What finishing looks like', 'Wrapping the factory', 'Renaming the seam', 'Bumping packages instead', 'a verdict a script produces rather than a summary you write')) {
+        Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle $needle
+    }
+    $verify = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/verify-dotnet-test-migration.ps1' -GitRef $Ref
+    $verifyTest = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/scripts/test-verify-dotnet-test-migration.ps1' -GitRef $Ref
+    foreach ($needle in @('LAUNDERED-FACADE', 'LEGACY-PACKAGE-RETAINED', 'XUNIT-ANCHOR-BREACH', 'CHURN-WITHOUT-CONVERSION', 'project.assets.json')) {
+        Assert-Contains -Name 'verify-dotnet-test-migration.ps1' -Content $verify -Needle $needle
+    }
+    # A gate that only ever fails is noise, so the positive control is part of the contract.
+    Assert-Contains -Name 'test-verify-dotnet-test-migration.ps1' -Content $verifyTest -Needle 'Positive control'
+    Assert-Contains -Name 'test-verify-dotnet-test-migration.ps1' -Content $verifyTest -Needle 'completed migration'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Do not invent an endpoint, service, configuration key, or expected result.'
     Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'An MTP executable run may supplement that gate but never replaces it'
     # The skill once answered a bare invocation with a capability menu and inspected nothing; these lock the evidence-first contract.
@@ -1296,14 +1309,19 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'restore evidence'
 
     $evalObject = $evals | ConvertFrom-Json
-    if (@($evalObject.evals).Count -lt 7) {
-        throw "dotnet-test must define the six paired role scenarios plus the bare-invocation immediate-action scenario; found $(@($evalObject.evals).Count)"
+    if (@($evalObject.evals).Count -lt 8) {
+        throw "dotnet-test must define the six paired role scenarios, the bare-invocation immediate-action scenario, and the laundered-migration recovery scenario; found $(@($evalObject.evals).Count)"
     }
     foreach ($needle in @('attached Acme.Calculator fixture', 'xUnit v2 project', 'web-cdn-origin-style', 'IClassFixture<WebApplicationFactory<Program>>', 'ApplicationTestFactory pattern', 'ApplicationTest<Program, ManagedApplicationFixture<Program>>')) {
         Assert-Contains -Name 'dotnet-test/evals/evals.json' -Content $evals -Needle $needle
     }
     # A bare invocation must act on inspector evidence instead of answering with a menu; that regression shipped once, so it stays covered.
     foreach ($needle in @('Does not present a numbered menu of modes', 'Runs inspect-dotnet-tests.ps1 as the first action')) {
+        Assert-Contains -Name 'dotnet-test/evals/evals.json' -Content $evals -Needle $needle
+    }
+    # A run once wrapped WebApplicationFactory in a private nested class and reported the migration done;
+    # the recovery scenario keeps that exact outcome in the eval set rather than only in a postmortem.
+    foreach ($needle in @('nested private CdnOriginApplicationFactory', 'including nested, private, and renamed facades', 'verify-dotnet-test-migration.ps1')) {
         Assert-Contains -Name 'dotnet-test/evals/evals.json' -Content $evals -Needle $needle
     }
     if (@($fixtureFiles | Where-Object { $_ -match '(^|[\\/])(bin|obj)([\\/]|$)' }).Count -gt 0) {
