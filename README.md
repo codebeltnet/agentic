@@ -650,6 +650,8 @@ The skill has one job: the test host comes from Codebelt, not from Microsoft, an
 
 **dotnet-test** begins with machine-readable inspection, then chooses the Codebelt pattern that matches the selected project's role and ownership model. Because that inspection already answers which project, role, and ownership apply, the skill acts on the evidence instead of asking the developer to retype what the JSON says. It preserves package ownership and frameworks, migrates xUnit v2 to v3/Microsoft Testing Platform when needed, and makes the chosen focused/shared web or application pattern, entrypoint-owned managed fixture, zero remaining selected `WebApplicationFactory` usages, zero deprecated blocking fixtures, zero replacement composition roots, and restore/build/test explicit gates.
 
+The hardest failure to catch is the migration that only looks like one. Wrapping `WebApplicationFactory` in a private nested class, renaming a constructor to a static `Create`, or bumping package pins all produce a substantial diff while Microsoft's host still starts the application and every test stays green. `verify-dotnet-test-migration.ps1` closes the run with a verdict instead of a self-assessment: it re-checks the expected pattern and adds the post-edit checks for a surviving factory base type, a retained `Microsoft.AspNetCore.Mvc.Testing` reference, `xunit*` pins past the major the restored Codebelt package declares, and files changed under the project while the target pattern appears nowhere in it.
+
 - **Evidence before questions** — the bundled inspector resolves project, role, mode, host ownership, and package owner, so a bare invocation starts working instead of returning a capability menu,
 - **Managed-fixture version floor** — inspection flags a Codebelt xUnit package pinned below 11.1.0, where the managed fixtures do not exist yet, before the pattern is written rather than after it fails to compile,
 - **Three explicit roles** — ordinary unit, ASP.NET Core functional, and console/worker functional tests route to separate references and assets,
@@ -659,7 +661,9 @@ The skill has one job: the test host comes from Codebelt, not from Microsoft, an
 - **Bootstrapper host fidelity** — Startup-based hosts and `MinimalConsoleProgram`, `MinimalWorkerProgram`, or `MinimalWebProgram` hosts remain in their established family instead of being rewritten for test convenience,
 - **Dynamic compatibility** — stable package versions come from NuGet and must pass isolated compatibility-project restores, including the selected combined package set and target frameworks,
 - **Source-grounded bootstrap** — new projects receive at least one behavior test derived from real source instead of a placeholder,
-- **Deterministic evidence** — inspection JSON reports roles, frameworks, xUnit generation, package owners, inheritance, migrations, recommendations, and blockers before mutation.
+- **Deterministic evidence** — inspection JSON reports roles, frameworks, xUnit generation, package owners, inheritance, migrations, recommendations, and blockers before mutation,
+- **A verdict, not a summary** — the migration gate exits `PASSED` or `FAILED` with numbered violations and their file and line, so a wrapped, renamed, or repackaged factory is reported as an unfinished migration rather than a completed one,
+- **Anchored xUnit versions** — the gate reads the restored Codebelt package's own declared dependencies from `project.assets.json`, so an after-the-fact bump past that xUnit generation is caught offline instead of at the next compile.
 
 ### Why dotnet-benchmark?
 
