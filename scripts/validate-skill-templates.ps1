@@ -1284,6 +1284,13 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'https://api.nuget.org/v3/index.json'
     Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'Test-PackageCompatibility -Packages $trial'
     Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'combined restore passed'
+    # xunit.v3 and xunit.runner.visualstudio shipped stable 4.0.0 releases ahead of Codebelt xUnit; "newest stable" must
+    # never be allowed to outrun the Codebelt package the skill targets.
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'Resolve-XunitAnchor -BaseAddress'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'Select-AnchoredCandidate -PackageId'
+    Assert-Contains -Name 'resolve-test-package-versions.ps1' -Content $resolve -Needle 'at or below major'
+    Assert-Contains -Name 'dotnet-test/SKILL.md' -Content $skill -Needle 'Newest is not the ceiling for `xunit*`.'
+    Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'no candidate above the anchored major may reach a restore'
     Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'stable candidate resolution should succeed'
     Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'combined package set'
     Assert-Contains -Name 'test-resolve-test-package-versions.ps1' -Content $resolveTest -Needle 'restore evidence'
