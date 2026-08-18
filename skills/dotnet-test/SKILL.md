@@ -25,6 +25,19 @@ Microsoft ships `WebApplicationFactory<TEntryPoint>`, and it only covers ASP.NET
 
 That substitution is the deliverable. A run that leaves `WebApplicationFactory` in place, or that swaps the type while quietly rebuilding the host in test code, has not done the job no matter how green the test run looks.
 
+### What finishing looks like
+
+One thing has to be true at the end: the Codebelt abstraction constructs the host, and nothing in the selected project derives from `WebApplicationFactory` any more. How you get there — file names, helper shapes, where settings come from — is yours to choose.
+
+These rewrites feel like migrations and change nothing:
+
+- **Wrapping the factory.** Keeping `WebApplicationFactory<Program>` as a private nested class, a renamed facade, or a field inside a new `...TestApplication` type. Microsoft's host still starts the application; the wrapper only hides that from the diff.
+- **Renaming the seam.** Turning `new CdnOriginTestApplication()` into `CdnOriginTestApplication.Create()` across every test file. Every call site changes and the composition root does not.
+- **Importing the namespace.** Adding `using Codebelt.Extensions.Xunit;` without ever calling `WebApplicationTestFactory.Create<TEntryPoint>` or deriving from `WebApplicationTest<,>`.
+- **Bumping packages instead.** Raising `xunit*` or unrelated pins produces a busy diff that reads as effort. It is not the deliverable, and moving `xunit*` past the anchor in [Step 3](#step-3-resolve-packages-without-hardcoding-latest) breaks the very API you are migrating onto.
+
+Every one of these shipped from a real run of this skill and was reported back as a successful migration, which is the point: from inside the run, a wrapper looks like progress, and the tests stay green because the host never changed. That is why [Step 7](#step-7-validate-and-loop) ends in a verdict a script produces rather than a summary you write. Either `WebApplicationTestFactory`, `WebApplicationTest<,>`, `ApplicationTestFactory`, or `ApplicationTest<,>` appears in the project's own source, or the migration did not happen.
+
 ## Do this now
 
 **You were invoked. That is the request.** Your first action is the inspector in [Step 1](#step-1-gather-evidence-before-asking-anything) — not a question, not a menu, not a plan.
@@ -45,7 +58,8 @@ There is exactly one shape of legitimate question, and it comes *after* the evid
 - Preserve target frameworks, central package management, unrelated MSBuild configuration, existing test names, and test isolation.
 - Never take an `xunit*` package past the major the Codebelt xUnit release depends on. The resolver anchors that ceiling in [Step 3](#step-3-resolve-packages-without-hardcoding-latest); newest-on-NuGet is not it.
 - Edit files you are actually changing, in place. Rewriting a file wholesale flips its line endings and makes `git status` report churn that reviewers must read to discover it means nothing; a file with no semantic change must not appear in the diff at all.
-- Replace every selected `WebApplicationFactory` usage. A partial migration that leaves a selected usage or package reference behind is incomplete.
+- Replace every selected `WebApplicationFactory` usage. A partial migration that leaves a selected usage or package reference behind is incomplete, and a usage moved inside a wrapper type is still a usage.
+- Finish on the verdict from `scripts/verify-dotnet-test-migration.ps1`, quoted as it printed. Reporting a migration complete without it leaves the one claim that matters unverified.
 - Keep functional testing in-process. Never add a process-launching fallback for console or worker applications.
 - If a selected executable has no Generic Host, adapt production startup only when application adaptation is explicitly in scope. Otherwise report the exact missing host seam and stop before changing production startup.
 - During bootstrap, add at least one test derived from real source behavior. Placeholder assertions such as `Assert.True(true)` do not satisfy the task.
@@ -192,14 +206,23 @@ Replace every placeholder with repository evidence. Do not invent an endpoint, s
 
 ## Step 7: Validate and loop
 
-Run the narrowest authoritative sequence that covers the selected change:
+For a migration, run the gate before anything expensive — it is static analysis and it fails in seconds, so there is no reason to spend a restore and a full test run discovering that the host never moved:
 
-1. rerun `inspect-dotnet-tests.ps1`; for a web migration, pass `-ExpectedWebPattern Focused` or `-ExpectedWebPattern Shared`; for a console/worker migration, pass `-ExpectedApplicationPattern Focused` or `-ExpectedApplicationPattern Shared`. These gates require the selected Codebelt pattern with an entrypoint-owned managed fixture and reject legacy factories, deprecated blocking fixtures, and direct replacement-host construction;
-2. restore the selected test project;
-3. build the selected test project;
-4. run `dotnet test` when restore/build/test was requested and confirm the expected non-zero test count with zero failures; a zero-discovery exit code is a failure and `dotnet run` is not a substitute;
-5. for migrations, search the selected scope and confirm zero remaining `WebApplicationFactory` usages; do not treat that zero count as sufficient without the expected-pattern postcondition;
-6. inspect the final diff for target-framework, package-owner, test-name, and unrelated-change drift.
+```powershell
+pwsh -NoProfile -File "<skill-root>/scripts/verify-dotnet-test-migration.ps1" -RepoRoot "<repo-root>" -ProjectPath "<project-path>" -ExpectedWebPattern <Focused|Shared>
+```
+
+Use `-ExpectedApplicationPattern <Focused|Shared>` instead for a console or worker migration. The gate reruns the inspector under that postcondition and adds the checks that can only exist once the edits do: a type still deriving from `WebApplicationFactory`, a retained `Microsoft.AspNetCore.Mvc.Testing` reference, `xunit*` pins past the major the restored Codebelt package declares, and files changed under the project while the target pattern appears zero times. Exit 0 prints `PASSED`, exit 1 prints `FAILED` with numbered violations and their file and line, and exit 2 means the gate itself could not run.
+
+Treat `FAILED` as the answer to "is this done", not as advice. Each violation names what to change; fix them and rerun. Do not restate the verdict in your own words, and do not move on to the completion report while it still says `FAILED`.
+
+Then run the narrowest authoritative sequence that covers the selected change:
+
+1. restore the selected test project;
+2. build the selected test project;
+3. run `dotnet test` when restore/build/test was requested and confirm the expected non-zero test count with zero failures; a zero-discovery exit code is a failure and `dotnet run` is not a substitute;
+4. inspect the final diff for target-framework, package-owner, test-name, and unrelated-change drift;
+5. rerun the gate as the last action, after the final edit. An earlier `PASSED` describes an earlier state of the files, and the verdict you quote has to describe the ones you are handing over.
 
 If tests expose a migration regression, repair the preserved lifecycle or configuration behavior rather than weakening assertions.
 
@@ -212,5 +235,6 @@ Report:
 - package ownership and resolved versions, including the Codebelt xUnit anchor that bounded the `xunit*` versions;
 - preserved migration invariants;
 - behavior test added or existing tests retained;
-- exact restore/build/test and zero-usage-search results;
+- exact restore/build/test results;
+- the verdict block from the final `verify-dotnet-test-migration.ps1` run, pasted as it printed. It is the evidence for the migration claim, so a paraphrase or a remembered result from earlier in the session does not stand in for it;
 - blockers or validation limits.

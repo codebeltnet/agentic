@@ -87,4 +87,4 @@ public class HealthTest : WebApplicationTest<Program, ManagedWebApplicationFixtu
 
 Do not force a shared fixture onto tests whose isolation depends on a fresh host or fresh temporary resource per method.
 
-After migration, run `inspect-dotnet-tests.ps1` with `-ExpectedWebPattern Focused` or `-ExpectedWebPattern Shared` for the selected project. A non-zero exit is a migration failure even when restore, build, and tests pass.
+After migration, run `verify-dotnet-test-migration.ps1` for the selected project with `-ExpectedWebPattern Focused` or `-ExpectedWebPattern Shared`. A `FAILED` verdict is a migration failure even when restore, build, and tests all pass, because green tests only prove the host that ran still works, not that it is the one you were asked to move to.

@@ -55,7 +55,7 @@
         "Keeps CompressionTest and both existing method names unchanged",
         "Raises Codebelt.Extensions.Xunit.App above the 11.1.0 managed-fixture floor in the owning props file, without bumping unrelated pinned packages",
         "Removes Microsoft.AspNetCore.Mvc.Testing when no longer needed",
-        "The focused inspector postcondition succeeds, search finds no WebApplicationFactory in the selected migration, and restore/build/test succeed"
+        "verify-dotnet-test-migration.ps1 with -ExpectedWebPattern Focused reports PASSED, and restore/build/test succeed"
       ],
       "files": [
         "evals/files/focused-web/Directory.Build.props",
@@ -156,6 +156,31 @@
         "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/CdnOriginTestApplication.cs",
         "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/CompressionTest.cs",
         "evals/files/focused-web/test/Acme.Cdn.Origin.FunctionalTests/TempContent.cs"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "A previous run reported the attached Acme.Cdn.Origin functional tests as migrated off WebApplicationFactory, but the tests still exercise Microsoft's host. Finish the migration onto the focused Codebelt pattern: CdnOriginTestApplication must stop wrapping WebApplicationFactory, WebApplicationTestFactory.Create<Program> with an explicit ManagedWebApplicationFixture<Program> must own the host, Microsoft.AspNetCore.Mvc.Testing must go, and the xunit pins must return to the generation the referenced Codebelt release declares. Preserve the Production environment, per-test settings, temporary content ownership, and both existing test names.",
+      "expected_output": "A focused Test-derived harness owns an IHostTest created through WebApplicationTestFactory with an explicit ManagedWebApplicationFixture, no type derives from WebApplicationFactory, Microsoft.AspNetCore.Mvc.Testing is gone, xunit* is back inside the Codebelt anchor major, and verify-dotnet-test-migration.ps1 reports PASSED.",
+      "expectations": [
+        "Recognizes that the nested private CdnOriginApplicationFactory means the migration never happened, rather than accepting the prior run's report",
+        "Leaves no type deriving from WebApplicationFactory, including nested, private, and renamed facades",
+        "Adds WebApplicationTestFactory.Create<Program> with an explicit ManagedWebApplicationFixture<Program> so Program owns startup",
+        "Does not keep the static Create factory method as the only change, and does not reconstruct the pipeline with WebApplication.CreateBuilder, UseTestServer, or new TestServer",
+        "Removes the Microsoft.AspNetCore.Mvc.Testing package reference and its version entry",
+        "Returns xunit.v3 and xunit.v3.runner.console to the major that Codebelt.Extensions.Xunit.App 11.2.1 declares instead of leaving them on 4.0.0",
+        "Preserves Production environment, per-test settings, one application per test, temporary content disposal through matching synchronous and asynchronous Test hooks, and both existing method names",
+        "Runs verify-dotnet-test-migration.ps1 with -ExpectedWebPattern Focused and quotes the PASSED verdict block rather than paraphrasing it"
+      ],
+      "files": [
+        "evals/files/laundered-web/Directory.Build.props",
+        "evals/files/laundered-web/Directory.Packages.props",
+        "evals/files/laundered-web/src/Acme.Cdn.Origin/Acme.Cdn.Origin.csproj",
+        "evals/files/laundered-web/src/Acme.Cdn.Origin/Program.cs",
+        "evals/files/laundered-web/test/Acme.Cdn.Origin.FunctionalTests/Acme.Cdn.Origin.FunctionalTests.csproj",
+        "evals/files/laundered-web/test/Acme.Cdn.Origin.FunctionalTests/CdnOriginTestApplication.cs",
+        "evals/files/laundered-web/test/Acme.Cdn.Origin.FunctionalTests/CompressionTest.cs",
+        "evals/files/laundered-web/test/Acme.Cdn.Origin.FunctionalTests/TempContent.cs"
       ]
     }
   ]
