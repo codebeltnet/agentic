@@ -43,6 +43,7 @@ There is exactly one shape of legitimate question, and it comes *after* the evid
 - Use entrypoint-owned `ManagedWebApplicationFixture<TEntryPoint>` and `ManagedApplicationFixture<TEntryPoint>` for new and migrated functional tests. Do not emit their deprecated blocking variants; they are scheduled for removal.
 - Do not reconstruct an application entry point inside test code with `WebApplication.CreateBuilder`, `WebHostBuilder`, `HostBuilder`, `UseTestServer`, copied service registrations, or copied middleware. That creates a second composition root which can pass while the real `Program` is broken.
 - Preserve target frameworks, central package management, unrelated MSBuild configuration, existing test names, and test isolation.
+- Never take an `xunit*` package past the major the Codebelt xUnit release depends on. The resolver anchors that ceiling in [Step 3](#step-3-resolve-packages-without-hardcoding-latest); newest-on-NuGet is not it.
 - Edit files you are actually changing, in place. Rewriting a file wholesale flips its line endings and makes `git status` report churn that reviewers must read to discover it means nothing; a file with no semantic change must not appear in the diff at all.
 - Replace every selected `WebApplicationFactory` usage. A partial migration that leaves a selected usage or package reference behind is incomplete.
 - Keep functional testing in-process. Never add a process-launching fallback for console or worker applications.
@@ -92,10 +93,18 @@ If the evidence conflicts with the requested role, report the conflict and ask b
 Run the resolver for the selected target frameworks and role:
 
 ```powershell
-pwsh -NoProfile -File "<skill-root>/scripts/resolve-test-package-versions.ps1" -TargetFramework <tfm> -Role <Unit|WebFunctional|ApplicationFunctional>
+pwsh -NoProfile -File "<skill-root>/scripts/resolve-test-package-versions.ps1" -TargetFramework <tfm> -Role <Unit|WebFunctional|ApplicationFunctional> [-XunitAnchorVersion <codebelt-xunit-version>]
 ```
 
 The resolver queries NuGet stable versions, tries newer candidates first, and verifies each candidate against the selected package set through isolated compatibility-project restores; it emits only a set whose combined package restore passes. If it fails, report the package, target frameworks, and restore evidence instead of guessing.
+
+**Newest is not the ceiling for `xunit*`.** xUnit versions its own packages on its own schedule — `xunit.v3` and `xunit.runner.visualstudio` are both past 4.0.0 while [Codebelt xUnit](https://github.com/codebeltnet/xunit) still builds against the 3.x line — so "latest stable" would push a test project a whole xUnit generation past the Codebelt API it is supposed to use. The resolver therefore anchors every `xunit*` id to the Codebelt package for the role (`Codebelt.Extensions.Xunit` for `Unit`, `Codebelt.Extensions.Xunit.App` otherwise), reading the anchor's own published nuspec dependencies:
+
+- an id the anchor declares — today `xunit.v3.assert` and `xunit.v3.extensibility.core` — resolves **1:1** to the exact version the anchor declares;
+- every other `xunit*` id resolves to the newest minor/patch **at or below the anchor's major**;
+- nothing else is capped, and the anchored evidence is reported back under `xunitAnchor` plus a per-package `constraint`.
+
+Pass `-XunitAnchorVersion` with the `Codebelt.Extensions.Xunit*` version the repository already references — the inspector reports it under `packageOwnership` — whenever that pin is being kept, so the resolved xUnit generation matches the Codebelt release actually in use rather than the newest one on NuGet. Omit it to anchor on the newest Codebelt release. Never hand-pick an `xunit*` version above the reported anchor major; if a project genuinely needs the next xUnit generation, the Codebelt package has to move there first.
 
 When a benchmark or smoke harness provides `DOTNET_TEST_MAXIMUM_CANDIDATES`, `DOTNET_TEST_RESOLVER_CACHE_DIR`, or `DOTNET_TEST_RESOLVER_TRACE_FILE`, honor that measured scope instead of widening the live search again. Use a small explicit candidate limit for ordinary eval smoke runs; fallback and combined-package behavior stay covered by `scripts/test-resolve-test-package-versions.ps1`.
 
@@ -200,7 +209,7 @@ Report:
 
 - selected project and classified role;
 - mode and whether production application adaptation was in scope;
-- package ownership and resolved versions;
+- package ownership and resolved versions, including the Codebelt xUnit anchor that bounded the `xunit*` versions;
 - preserved migration invariants;
 - behavior test added or existing tests retained;
 - exact restore/build/test and zero-usage-search results;

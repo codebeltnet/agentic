@@ -4,7 +4,7 @@ Modernize the selected project without rewriting unrelated project infrastructur
 
 ## Required project shape
 
-- Replace xUnit v2 packages with `xunit.v3` and the repository's runner packages.
+- Replace xUnit v2 packages with `xunit.v3` and the repository's runner packages, at the versions the Step 3 resolver anchored to the Codebelt xUnit release. "v3" names the package, not the version: `xunit.v3` has its own majors above 3, and this modernization targets the one Codebelt xUnit depends on.
 - Set test projects to executable output when not inherited: `<OutputType>Exe</OutputType>`.
 - Enable Microsoft Testing Platform: `<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>`.
 - Remove `Xunit.Abstractions`; import `Xunit` for `ITestOutputHelper`.
