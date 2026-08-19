@@ -76,19 +76,18 @@ Generate the package with the repository script rather than by hand:
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>
 ```
 
-It reads `skills/<name>/evals/evals.json` and writes one directory per eval into `.bot/<name>-workspace/iteration-<n>/`:
+It reads `skills/<name>/evals/evals.json` and writes one directory per eval into `.bot/<name>-workspace/iteration-<n>/`. The grading key and result stubs stay at the eval-case level, outside the two hermetic run directories a worker actually sees:
 
-- `with-skill.prompt.md` — the eval task, the same input context and fixtures as the baseline, the same response contract as the baseline, and the effective skill instructions inlined so the prompt is self-contained. It must not assume the target harness resolves Anthropic skill paths or loads skills natively. Resources too large or too binary to inline are bundled under `skill/<name>/` and listed in the prompt as such.
-- `without-skill.prompt.md` — the same task, the same inputs, the same response contract, no skill instructions and no mention of which skill is under test, plus an instruction to solve the task with normal capabilities.
-- `eval-metadata.json` — eval id and name, original prompt, expected output, assertions, required fixtures, and the assumptions needed to reproduce the run.
-- `files/` — the eval fixtures, attached identically to both configurations.
-- `results/` — one prefilled result stub per configuration.
+- `eval-metadata.json` — eval id and name, original prompt, expected output, assertions, required fixtures, fixture and skill hashes, and the assumptions needed to reproduce the run. This is the grading key and lives outside every run directory.
+- `results/` — one prefilled result stub per configuration, also outside the run directories.
+- `with_skill/` — a hermetic run directory that is the worker's sandbox root. It holds `prompt.md` (the task with the effective skill instructions inlined, plus the same input context and response contract as the baseline), `run.json` (a harness-neutral contract naming only paths inside the run directory), `repo/` (the fixtures materialized as real files, which is the worker's working directory), an isolated empty `home/`, and `skill/<name>/` (the exact candidate skill revision, so nothing falls back to a globally installed copy).
+- `without_skill/` — the same run directory without any `skill/` directory and with no skill instructions or mention of the skill under test. Its `repo/` is byte-identical to the with_skill one.
 
-At the iteration root it also writes `RUN-THIS.prompt.md`, the single prompt that hands the whole package to an agent of the user's choosing. The one-file path requires a harness that can create isolated workers or sessions. A plain single-context client runs one prompt file directly per fresh session instead.
+At the iteration root it also writes `manifest.json` and `RUN-THIS.prompt.md`, the single prompt that hands the whole package to an agent of the user's choosing. The one-file path requires a harness that can create isolated workers or sessions, each launched from its run directory with `repo/` as the working directory and `home/` as an isolated profile. A plain single-context client runs one prompt file directly per fresh session instead.
 
 Useful switches: `-Eval <id...>` to prepare a subset, `-Iteration <n>` plus `-Force` to replace an iteration, `-OutputRoot <path>` to relocate the workspace, and `-MaxInlineBytes <n>` to trim what gets inlined for a smaller context window.
 
-The expected output and the assertions are the grading key. They belong in `eval-metadata.json` and must never appear in either prompt — a baseline handed the answer key is not a baseline.
+The expected output and the assertions are the grading key. They belong in `eval-metadata.json`, outside every run directory, and must never appear in either prompt — a baseline handed the answer key is not a baseline.
 
 ### Eval preparation is a completion gate
 
@@ -135,9 +134,9 @@ Four things still hold while you execute:
 
 An agent that prepared a package in this session does not get to turn around and execute it. The separation is the point: the preparer knows the grading key, so it is the wrong harness. This is the only role-based disqualification.
 
-The selected executor has two roles. Its current context is the orchestrator and may read `RUN-THIS.prompt.md`, `manifest.json`, and the prompt files needed to dispatch work. It must not execute an eval prompt itself. For every case it creates one new isolated worker for `with_skill` and another for `without_skill`, then sends each worker only the matching prompt and required inputs. Workers never see the runner, manifest, grading key, sibling results, or orchestration commentary. Never reuse a worker or session between runs.
+The selected executor has two roles. Its current context is the orchestrator and may read `RUN-THIS.prompt.md`, `manifest.json`, and the prompt files needed to dispatch work. It must not execute an eval prompt itself. For every case it creates one new isolated worker for `with_skill` and another for `without_skill`, launching each from its own run directory with `repo/` as the working directory, `home/` as an isolated profile, and filesystem access confined to the run directory. It sends each worker only the matching `prompt.md` and the files already staged in that run directory. Workers never see the runner, manifest, grading key, sibling results, or orchestration commentary, because all of those live outside the run directory. Never reuse a worker or session between runs.
 
-The candidate instructions are already inlined in `with-skill.prompt.md`; the orchestrator does not load or summarize them for the worker. The baseline prompt contains no candidate instructions, and the orchestrator must not expose the candidate skill through another route. The generated prompt files also omit eval identifiers and configuration labels so workers receive an ordinary task rather than an announcement that they are under evaluation.
+The candidate instructions are already inlined in the with_skill run's `prompt.md` and staged under its `skill/<name>/` directory; the orchestrator does not load or summarize them for the worker. The baseline run has no `skill/` directory and no candidate instructions, and the orchestrator must not expose the candidate skill through another route, including a globally installed copy. The generated prompt files and the baseline `run.json` also omit the skill name, eval identifiers, and configuration labels so workers receive an ordinary task rather than an announcement that they are under evaluation.
 
 Use the same model, model version, configuration, tools, and limits for every worker. Disable persistent memory and cross-session recall. Independent runs may execute concurrently when the selected harness and the user's token budget allow it, but every run still gets a distinct context and no shared mutable workspace.
 
@@ -149,7 +148,7 @@ An `output` is the model's own message in full, including questions, caveats, ex
 
 A fresh context is fresh of memory as well as of transcript. A harness with persistent memory, saved project instructions, or cross-session recall can carry into a nominally new session what it learned while running the previous one, which makes that session a continuation wearing a new name. Runs made under such a harness need that memory disabled, or a profile without it.
 
-An evaluated context sees the prompt file and the files it names, and nothing else - not `RUN-THIS.prompt.md`, not the assertions, not another case's output, not a note that an experiment is underway. Anything added on top is a second variable in a comparison meant to differ in exactly one.
+An evaluated context sees its `prompt.md` and the files staged in its run directory, and nothing else - not `RUN-THIS.prompt.md`, not `run.json` from the paired run, not the assertions, not another case's output, not a note that an experiment is underway. Anything added on top is a second variable in a comparison meant to differ in exactly one.
 
 A meaningful A/B result requires both configurations to run on the same model, the same version, and the same configuration, varying only whether the skill is present. Running the with-skill case on one model and the baseline on another measures the model and the skill together; that is not a skill-effectiveness benchmark and must not be reported as one. When models are deliberately mixed, say so and treat the comparison as directional only.
 
