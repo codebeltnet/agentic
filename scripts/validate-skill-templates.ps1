@@ -639,6 +639,15 @@ Add-ValidationResult -Results $results -Name 'All repo-managed skills include va
                     [void](Get-FileText -RepoRoot $repoRoot -RelativePath $skillRelativeFixturePath -GitRef $Ref)
                 }
             }
+
+            if ($eval.PSObject.Properties.Name -contains 'workspace' -and $null -ne $eval.workspace) {
+                if ($eval.workspace -isnot [System.Management.Automation.PSCustomObject]) {
+                    throw "$relativeEvalPath eval $($eval.id) has a non-object 'workspace'"
+                }
+                if ($eval.workspace.PSObject.Properties.Name -contains 'git' -and $eval.workspace.git -isnot [bool]) {
+                    throw "$relativeEvalPath eval $($eval.id) must declare 'workspace.git' as a boolean"
+                }
+            }
         }
     }
 }
@@ -1290,6 +1299,14 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         if (@($manifest.evals).Count -lt 1) {
             throw 'The prepared package must contain at least one eval case.'
         }
+        if ([string]$manifest.schema -ne 'codebeltnet/agentic/eval-package/2') {
+            throw "The package manifest must declare schema eval-package/2; got '$($manifest.schema)'."
+        }
+        foreach ($isolationField in @('fresh_context_required', 'isolated_home_required', 'isolated_cwd_required')) {
+            if (-not [bool]$manifest.isolation.$isolationField) {
+                throw "manifest.isolation.$isolationField must be true so a harness knows the run is hermetic."
+            }
+        }
 
         $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
         if (-not (Test-Path -LiteralPath $runnerPath)) {
@@ -1300,9 +1317,10 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'You are the eval orchestrator.',
             'Do not execute evaluation prompts in the current agent context.',
             'create one isolated fresh-context worker for `with_skill` and a second isolated fresh-context worker for `without_skill`',
-            'Never reuse a worker or session between runs.',
+            'Never reuse a worker or session between runs',
             'Do not expose this runner',
-            'The candidate skill is already inlined in `with-skill.prompt.md`.',
+            'The candidate skill is already inlined in the with_skill run',
+            'Launch each worker from its own run directory',
             'Use the same model, version, configuration, tools, and limits for every worker.',
             'Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count.',
             'Do not grade or compare the runs.',
@@ -1330,20 +1348,89 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
 
         foreach ($entry in @($manifest.evals)) {
             $evalDirectory = Join-Path $iterationDirectory $entry.directory
-            foreach ($pathProperty in @('with_skill_prompt', 'with_skill_result', 'without_skill_prompt', 'without_skill_result')) {
-                if ($entry.PSObject.Properties.Name -notcontains $pathProperty) {
-                    throw "$($entry.eval_name) manifest entry must declare '$pathProperty'."
+
+            # Manifest run wiring resolves to real files inside each run directory.
+            foreach ($configuration in @('with_skill', 'without_skill')) {
+                $run = $entry.runs.$configuration
+                foreach ($pathProperty in @('prompt', 'run_manifest', 'result', 'working_directory', 'home_directory')) {
+                    if ($run.PSObject.Properties.Name -notcontains $pathProperty) {
+                        throw "$($entry.eval_name)/$configuration manifest entry must declare '$pathProperty'."
+                    }
                 }
-                if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory $entry.$pathProperty))) {
-                    throw "$($entry.eval_name) manifest path '$pathProperty' does not exist."
+                foreach ($mustExist in @($run.prompt, $run.run_manifest, $run.working_directory, $run.home_directory)) {
+                    if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory $mustExist))) {
+                        throw "$($entry.eval_name)/$configuration manifest path '$mustExist' does not exist."
+                    }
                 }
             }
-            $withSkill = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'with-skill.prompt.md'), $utf8NoBom)
-            $withoutSkill = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'without-skill.prompt.md'), $utf8NoBom)
+
+            $withRunDir = Join-Path $evalDirectory 'with_skill'
+            $withoutRunDir = Join-Path $evalDirectory 'without_skill'
+
+            # 2. with_skill stages the candidate skill; 3. without_skill carries no copy of it.
+            if (-not (Test-Path -LiteralPath (Join-Path $withRunDir 'skill/dotnet-strong-name-signing/SKILL.md'))) {
+                throw "$($entry.eval_name)/with_skill must stage the candidate skill under skill/dotnet-strong-name-signing/."
+            }
+            if (Test-Path -LiteralPath (Join-Path $withoutRunDir 'skill')) {
+                throw "$($entry.eval_name)/without_skill must not contain a skill/ directory."
+            }
+            if (Test-Path -LiteralPath (Join-Path $withoutRunDir 'SKILL.md')) {
+                throw "$($entry.eval_name)/without_skill must not contain a SKILL.md."
+            }
+
+            # 1. Each run is a self-contained sandbox root with its own repo/, home/, prompt.md, run.json.
+            foreach ($runDir in @($withRunDir, $withoutRunDir)) {
+                foreach ($required in @('repo', 'home', 'prompt.md', 'run.json')) {
+                    if (-not (Test-Path -LiteralPath (Join-Path $runDir $required))) {
+                        throw "$($entry.eval_name) run directory '$runDir' is missing '$required'."
+                    }
+                }
+            }
+
+            # 10. run.json requires fresh context and isolation; 6/7. it references nothing outside the run package.
+            $withRunJson = [System.IO.File]::ReadAllText((Join-Path $withRunDir 'run.json'), $utf8NoBom)
+            $withoutRunJson = [System.IO.File]::ReadAllText((Join-Path $withoutRunDir 'run.json'), $utf8NoBom)
+            $withRun = $withRunJson | ConvertFrom-Json
+            $withoutRun = $withoutRunJson | ConvertFrom-Json
+            foreach ($run in @($withRun, $withoutRun)) {
+                if (-not [bool]$run.freshContextRequired -or -not [bool]$run.filesystemIsolationRequired -or -not [bool]$run.isolatedHomeRequired) {
+                    throw "$($entry.eval_name) run.json must require fresh context, filesystem, and home isolation."
+                }
+                if ([string]$run.workingDirectory -ne 'repo' -or [string]$run.homeDirectory -ne 'home') {
+                    throw "$($entry.eval_name) run.json must set workingDirectory=repo and homeDirectory=home."
+                }
+            }
+            if ([string]$withRun.skillDirectory -ne 'skill/dotnet-strong-name-signing') {
+                throw "$($entry.eval_name)/with_skill run.json must point skillDirectory at the staged candidate skill."
+            }
+            if ($null -ne $withoutRun.skillDirectory -or $null -ne $withoutRun.skillName) {
+                throw "$($entry.eval_name)/without_skill run.json must not name a skill or skill directory."
+            }
+            foreach ($runJson in @($withRunJson, $withoutRunJson)) {
+                foreach ($leak in @('skills/dotnet-strong-name-signing', '.agents', '.claude', '.codex')) {
+                    if ($runJson.Contains($leak)) {
+                        throw "$($entry.eval_name) run.json references '$leak', which points outside the run package."
+                    }
+                }
+            }
+            if ($withoutRunJson.Contains([string]$manifest.skill_name)) {
+                throw "$($entry.eval_name)/without_skill run.json must not name the skill under test."
+            }
+
+            # 9. The with_skill and without_skill repositories are identical (proven by fixture hash).
+            if ([string]$withRun.fixtureHash -ne [string]$withoutRun.fixtureHash) {
+                throw "$($entry.eval_name) with_skill and without_skill fixture hashes differ; the repositories must match."
+            }
+
+            $withSkill = [System.IO.File]::ReadAllText((Join-Path $withRunDir 'prompt.md'), $utf8NoBom)
+            $withoutSkill = [System.IO.File]::ReadAllText((Join-Path $withoutRunDir 'prompt.md'), $utf8NoBom)
             $metadata = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'eval-metadata.json'), $utf8NoBom) | ConvertFrom-Json
 
             if (-not $withSkill.Contains([string]$metadata.prompt) -or -not $withoutSkill.Contains([string]$metadata.prompt)) {
                 throw "$($entry.eval_name) must put the same task prompt in both configurations."
+            }
+            if (-not $withSkill.Contains('# Working environment') -or -not $withoutSkill.Contains('# Working environment')) {
+                throw "$($entry.eval_name) must give both configurations the working-environment boundary."
             }
             if ($withSkill.Contains('codebeltnet/agentic portable eval prompt') -or $withoutSkill.Contains('codebeltnet/agentic portable eval prompt')) {
                 throw "$($entry.eval_name) worker prompts must not announce that they are part of an evaluation."
@@ -1385,9 +1472,14 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                 if (@($stub.grading).Count -ne @($metadata.assertions).Count) {
                     throw "$($entry.eval_name) result stub $resultFile must carry one grading entry per assertion."
                 }
-                foreach ($propertyName in @('transcript', 'duration_seconds', 'total_tokens', 'tool_calls')) {
+                foreach ($propertyName in @('transcript', 'shell_commands', 'files_read', 'files_written', 'exit_status', 'duration_seconds', 'total_tokens', 'tool_calls', 'isolation')) {
                     if ($stub.PSObject.Properties.Name -notcontains $propertyName) {
-                        throw "$($entry.eval_name) result stub $resultFile must expose optional run field '$propertyName'."
+                        throw "$($entry.eval_name) result stub $resultFile must expose optional field '$propertyName'."
+                    }
+                }
+                foreach ($isolationField in @('fresh_context', 'isolated_home', 'isolated_cwd', 'filesystem_sandbox', 'candidate_skill_exposed', 'transcript_captured')) {
+                    if ($stub.isolation.PSObject.Properties.Name -notcontains $isolationField) {
+                        throw "$($entry.eval_name) result stub $resultFile must expose isolation flag '$isolationField'."
                     }
                 }
             }
@@ -1415,6 +1507,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             $result.duration_seconds = 1.25
             $result.total_tokens = 123
             $result.tool_calls = 2
+            $result.isolation.fresh_context = $true
+            $result.isolation.isolated_home = $true
+            $result.isolation.isolated_cwd = $true
+            $result.isolation.filesystem_sandbox = $true
+            $result.isolation.candidate_skill_exposed = $true
+            $result.isolation.transcript_captured = $true
             [System.IO.File]::WriteAllText($resultPath, (($result | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
         }
         $metricsOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
@@ -1422,7 +1520,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw "prepare-skill-evals.ps1 -CollectResults failed on recorded metrics: $($metricsOutput -join [Environment]::NewLine)"
         }
         $comparison = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'comparison.md'), $utf8NoBom)
-        foreach ($needle in @('## Run metrics', '| 1.25 | 123 | 2 | recorded |')) {
+        foreach ($needle in @('## Run metrics', '| 1.25 | 123 | 2 | recorded |', '## Isolation reported', 'fresh=Y home=Y cwd=Y fs=Y skill=Y tx=Y')) {
             if (-not $comparison.Contains($needle)) {
                 throw "comparison.md must report available run metric '$needle'."
             }

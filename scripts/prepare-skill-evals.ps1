@@ -7,12 +7,17 @@
     It turns skills/<name>/evals/evals.json into a paste-ready evaluation package that a human can run in whatever
     harness, provider, and model they choose, then validates the results that come back.
 
-    Prepare mode writes one directory per eval containing:
-      with-skill.prompt.md      the task with the effective skill instructions inlined
-      without-skill.prompt.md   the same task, same inputs, same response contract, no skill
-      eval-metadata.json        id, name, prompt, expected output, assertions, fixtures, assumptions
-      files/                    the eval fixtures, copied verbatim
+    Prepare mode writes one directory per eval. The grading key and result stubs stay at the eval-case level, outside
+    the two hermetic run directories a worker actually sees:
+      eval-metadata.json        id, name, prompt, expected output, assertions, fixtures, hashes, assumptions
       results/                  one prefilled result stub per configuration
+      with_skill/               a hermetic run: prompt.md, run.json, repo/ (materialized fixtures), home/, skill/<name>/
+      without_skill/            the same run without any skill/ directory and no skill instructions
+
+    Each run directory is the worker's sandbox root: repo/ is the working tree, home/ is an isolated profile, and skill/
+    (with_skill only) holds the candidate skill revision. run.json is a harness-neutral contract naming only paths inside
+    the run directory. Preparation validates the isolation invariants and fails early if a package would let a baseline
+    reach the skill, let a worker reach the source repository, or stage mismatched fixtures.
 
     Collect mode reads a prepared package plus whatever result files were filled in, validates them, and writes a
     deterministic comparison. Grading stays deterministic or human; nothing here grades with a model.
@@ -99,10 +104,27 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
 
-$packageSchema = 'codebeltnet/agentic/eval-package/1'
-$metadataSchema = 'codebeltnet/agentic/eval-metadata/1'
-$resultSchema = 'codebeltnet/agentic/eval-result/1'
+$packageSchema = 'codebeltnet/agentic/eval-package/2'
+$metadataSchema = 'codebeltnet/agentic/eval-metadata/2'
+$resultSchema = 'codebeltnet/agentic/eval-result/2'
+$runSchema = 'codebeltnet/agentic/eval-run/1'
 $maxFixtureInlineBytes = 32768
+
+# A materialized run is hermetic: the harness treats the run directory as the worker's sandbox root, mounts repo/ as
+# the working directory and home/ as the isolated user profile, and exposes skill/ only for a with_skill run. Nothing
+# else in the package - the grading key, the paired run, other evals, or results - lives inside a run directory, so a
+# worker confined to its run directory cannot reach any of it.
+$runDirectoryNames = [ordered]@{
+    Working = 'repo'
+    Home = 'home'
+    Skill = 'skill'
+    Prompt = 'prompt.md'
+    Run = 'run.json'
+}
+
+# These directory names are generated build state or harness bookkeeping. They must never be staged into a run's
+# repository, and their presence (other than an intentional .git) means a fixture leaked build output.
+$forbiddenFixtureSegments = @('bin', 'obj', '.vs', '.bot', '__pycache__', 'BenchmarkDotNet.Artifacts', 'TestResults')
 
 $responseContract = @'
 # Response contract
@@ -124,6 +146,17 @@ $withoutSkillPreamble = @'
 # Operating instructions
 
 You have no special instructions for this task beyond your normal capabilities. Solve the task in this message the way you normally would.
+'@
+
+# Identical for both configurations, and placed before the task so it never disturbs the task-and-inputs invariant that
+# a with_skill and a without_skill prompt share. It reinforces, in prose, the boundary the harness enforces for real:
+# operate on the staged files, not on anything discovered elsewhere on the machine.
+$workingEnvironmentSection = @'
+# Working environment
+
+Your working directory is a repository that was staged for this task. Treat it as the project root. The files under it are real, complete, and the only source of truth. Read and edit those files directly.
+
+Do not look for the project anywhere else on the machine, and do not reconstruct it from the text of this prompt. This is a disposable copy prepared for a single run. Your home and configuration directories are isolated to this run as well, so anything you install, configure, or discover stays local to it. Work only inside your run package; nothing outside it is part of this task.
 '@
 
 function Get-RepoRoot {
@@ -370,7 +403,7 @@ function New-SkillInstructionSection {
     if ($Inventory.Bundled.Count -gt 0) {
         [void]$builder.AppendLine('## Skill resources that are not inlined')
         [void]$builder.AppendLine()
-        [void]$builder.AppendLine("These files belong to the skill but are too large, not text, or not referenced from its main instructions. They are bundled in the eval package under ``skill/$SkillName/``. Use them only if your environment can read that directory; otherwise work from the instructions above and say what you could not reach.")
+        [void]$builder.AppendLine("These files belong to the skill but are too large, not text, or not referenced from its main instructions. The complete skill tree, including these, is staged in your run package under ``skill/$SkillName/`` (a sibling of your working directory). Read them from there when your environment allows it; otherwise work from the instructions above and say what you could not reach.")
         [void]$builder.AppendLine()
         foreach ($item in $Inventory.Bundled) {
             [void]$builder.AppendLine("- ``skill/$SkillName/$($item.Path)`` ($($item.Bytes) bytes)")
@@ -391,11 +424,11 @@ function New-InputFilesSection {
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine('# Input files')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('These files are the input for the task. They are also bundled next to this prompt under `files/` in the eval package.')
+    [void]$builder.AppendLine('These files already exist as real files in your working directory, at the paths shown. They are the input for the task. Read and edit them there; the copies below are only for reference.')
     [void]$builder.AppendLine()
 
     foreach ($fixture in $Fixtures) {
-        [void]$builder.AppendLine("## ``$($fixture.PackagePath)``")
+        [void]$builder.AppendLine("## ``$($fixture.RepoRelative)``")
         [void]$builder.AppendLine()
         if ($fixture.Inlined) {
             $fixtureText = $fixture.Content.TrimEnd()
@@ -404,7 +437,7 @@ function New-InputFilesSection {
             [void]$builder.AppendLine($fixtureText)
             [void]$builder.AppendLine($fence)
         } else {
-            [void]$builder.AppendLine("Not inlined ($($fixture.Bytes) bytes, $($fixture.SkipReason)). Attach ``$($fixture.PackagePath)`` from the eval package.")
+            [void]$builder.AppendLine("Present in your working directory at ``$($fixture.RepoRelative)`` ($($fixture.Bytes) bytes, $($fixture.SkipReason)); read it there.")
         }
         [void]$builder.AppendLine()
     }
@@ -421,6 +454,7 @@ function New-PromptDocument {
 
     $sections = [System.Collections.Generic.List[string]]::new()
     $sections.Add($InstructionSection)
+    $sections.Add($workingEnvironmentSection)
     $sections.Add("# Task`n`n$(([string]$EvalEntry.prompt).Trim())")
     if (-not [string]::IsNullOrWhiteSpace($InputFilesSection)) {
         $sections.Add($InputFilesSection)
@@ -462,9 +496,23 @@ function New-ResultStub {
         output = ''
         output_files = @()
         transcript = ''
+        shell_commands = @()
+        files_read = @()
+        files_written = @()
+        stdout = ''
+        stderr = ''
+        exit_status = $null
         duration_seconds = $null
         total_tokens = $null
         tool_calls = $null
+        isolation = [ordered]@{
+            fresh_context = $null
+            isolated_home = $null
+            isolated_cwd = $null
+            filesystem_sandbox = $null
+            candidate_skill_exposed = $null
+            transcript_captured = $null
+        }
         grading = @($grading)
         notes = ''
     }
@@ -484,6 +532,32 @@ function Get-JsonProperty {
     return $Default
 }
 
+# Render a run's self-reported isolation guarantees as a compact Y/N/? line. A missing object reads as "not reported",
+# which tells the grader the harness did not confirm any boundary and that process-dependent assertions are suspect.
+function Format-IsolationReport {
+    param([object]$Isolation)
+
+    if ($null -eq $Isolation) {
+        return 'not reported'
+    }
+
+    $flags = [ordered]@{
+        fresh = 'fresh_context'
+        home = 'isolated_home'
+        cwd = 'isolated_cwd'
+        fs = 'filesystem_sandbox'
+        skill = 'candidate_skill_exposed'
+        tx = 'transcript_captured'
+    }
+    $parts = foreach ($key in $flags.Keys) {
+        $value = Get-JsonProperty -Object $Isolation -Name $flags[$key]
+        $mark = if ($null -eq $value) { '?' } elseif ([bool]$value) { 'Y' } else { 'N' }
+        "$key=$mark"
+    }
+
+    return ($parts -join ' ')
+}
+
 function Get-Assertions {
     param([object]$EvalEntry)
 
@@ -492,6 +566,383 @@ function Get-Assertions {
     }
 
     return @()
+}
+
+function Get-Sha256Hex {
+    param([byte[]]$Bytes)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([System.BitConverter]::ToString($sha.ComputeHash($Bytes)) -replace '-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-FileSha256 {
+    param([string]$Path)
+
+    return Get-Sha256Hex -Bytes ([System.IO.File]::ReadAllBytes($Path))
+}
+
+# A stable fingerprint of a directory tree: every file's forward-slashed relative path and its content hash, sorted,
+# hashed again. Two trees with byte-identical files produce the same value regardless of enumeration order or platform.
+function Get-TreeHash {
+    param(
+        [string]$Root,
+        [string[]]$ExcludeSegments = @()
+    )
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        return $null
+    }
+
+    $entries = [System.Collections.Generic.List[string]]::new()
+    foreach ($file in (Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Sort-Object FullName)) {
+        $relative = Get-RelativePath -BasePath $Root -FullPath $file.FullName
+        $segments = $relative.Split('/')
+        if ($ExcludeSegments.Count -gt 0 -and (@($segments | Where-Object { $ExcludeSegments -contains $_ }).Count -gt 0)) {
+            continue
+        }
+        $entries.Add("$relative`:$(Get-FileSha256 -Path $file.FullName)")
+    }
+
+    $joined = [string]::Join("`n", @($entries | Sort-Object))
+    return Get-Sha256Hex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($joined))
+}
+
+function Get-EvalWorkspaceOption {
+    param([object]$EvalEntry)
+
+    $wantsGit = $false
+    if ($EvalEntry.PSObject.Properties.Name -contains 'workspace' -and $null -ne $EvalEntry.workspace) {
+        $workspace = $EvalEntry.workspace
+        if ($workspace.PSObject.Properties.Name -contains 'git' -and $null -ne $workspace.git) {
+            $wantsGit = [bool]$workspace.git
+        }
+    }
+
+    return [pscustomobject]@{
+        Git = $wantsGit
+    }
+}
+
+# The fixtures for one eval share a scenario directory under evals/files/ (for example evals/files/zero-config/...). That
+# scenario directory is the repository root the worker should see, so it is stripped when a fixture is materialized:
+# evals/files/zero-config/src/App.cs becomes repo/src/App.cs. Flat fixtures placed directly under evals/files/ (a single
+# document, say) keep their own name at the repository root.
+function Resolve-FixtureLayout {
+    param([string[]]$FixturePaths)
+
+    $normalized = @($FixturePaths | ForEach-Object { ([string]$_).Trim() -replace '\\', '/' } | Where-Object { $_ -ne '' })
+    $underFiles = @(foreach ($path in $normalized) {
+        if ($path -notmatch '^evals/files/.+') {
+            throw "Fixture '$path' must live under evals/files/."
+        }
+        $path.Substring('evals/files/'.Length)
+    })
+
+    $firstSegments = @($underFiles | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique)
+    $scenario = $null
+    if ($firstSegments.Count -eq 1) {
+        $candidate = $firstSegments[0]
+        # A shared first segment is the scenario root only when it is a directory, meaning at least one fixture has a
+        # path below it. A lone file such as report.md keeps its name at the repository root instead.
+        if (@($underFiles | Where-Object { $_ -like "$candidate/*" }).Count -gt 0) {
+            $scenario = $candidate
+        }
+    }
+
+    $map = [System.Collections.Generic.List[object]]::new()
+    for ($index = 0; $index -lt $normalized.Count; $index++) {
+        $evalRelative = $underFiles[$index]
+        $repoRelative = if ($null -ne $scenario -and $evalRelative -like "$scenario/*") {
+            $evalRelative.Substring($scenario.Length + 1)
+        } else {
+            $evalRelative
+        }
+        if ([string]::IsNullOrWhiteSpace($repoRelative)) {
+            throw "Fixture '$($normalized[$index])' resolves to an empty repository path."
+        }
+        $map.Add([pscustomobject]@{
+            EvalPath = $normalized[$index]
+            RepoRelative = $repoRelative
+        })
+    }
+
+    return [pscustomobject]@{
+        Scenario = $scenario
+        Files = @($map)
+    }
+}
+
+function Assert-RepoRelativeIsSafe {
+    param([string]$RepoRelative)
+
+    $segments = $RepoRelative.Split('/')
+    if ($segments -contains '..') {
+        throw "Fixture path '$RepoRelative' escapes the repository root."
+    }
+    foreach ($segment in $segments) {
+        if ($forbiddenFixtureSegments -contains $segment) {
+            throw "Fixture path '$RepoRelative' includes generated build state ('$segment'); eval fixtures must not carry $($forbiddenFixtureSegments -join ', ')."
+        }
+    }
+}
+
+# Copy an eval's fixtures into a run's repo/ as real files, preserving structure and returning the repo-relative paths so
+# the manifest and run.json can describe exactly what the worker received.
+function Copy-FixtureRepo {
+    param(
+        [string]$SkillDirectory,
+        [object]$Layout,
+        [string]$RepoDirectory,
+        [int]$EvalId
+    )
+
+    New-Item -ItemType Directory -Path $RepoDirectory -Force | Out-Null
+    foreach ($file in $Layout.Files) {
+        Assert-RepoRelativeIsSafe -RepoRelative $file.RepoRelative
+        $sourcePath = Join-Path $SkillDirectory ($file.EvalPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            throw "Missing fixture 'skills/*/$($file.EvalPath)' referenced by eval $EvalId."
+        }
+        $destination = Join-Path $RepoDirectory ($file.RepoRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        $destinationDirectory = Split-Path -Parent $destination
+        if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+            New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $sourcePath -Destination $destination -Force
+    }
+}
+
+# Stage a real, disposable git repository so tools that probe for a repository root or derive a version from git history
+# (MinVer, Nerdbank.GitVersioning, SourceLink) behave exactly as they do on a developer's machine. Fixed identity and
+# timestamps keep the two paired runs byte-identical; nothing is written to the caller's global or local git config.
+function Initialize-GitWorkspace {
+    param([string]$RepoDirectory)
+
+    $identity = @(
+        '-c', 'user.name=Eval Harness',
+        '-c', 'user.email=eval-harness@localhost',
+        '-c', 'commit.gpgsign=false',
+        '-c', 'core.autocrlf=false'
+    )
+    $env:GIT_AUTHOR_DATE = '2020-01-01T00:00:00Z'
+    $env:GIT_COMMITTER_DATE = '2020-01-01T00:00:00Z'
+    try {
+        & git @identity init -b main --quiet -- $RepoDirectory 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            & git @identity init --quiet -- $RepoDirectory 2>$null | Out-Null
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "git init failed while staging a workspace at '$RepoDirectory'."
+        }
+        & git @identity -C $RepoDirectory add -A 2>$null | Out-Null
+        & git @identity -C $RepoDirectory commit -m 'Staged eval workspace' --quiet 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "git commit failed while staging a workspace at '$RepoDirectory'."
+        }
+        & git @identity -C $RepoDirectory tag 'v1.0.0' 2>$null | Out-Null
+    } finally {
+        Remove-Item Env:GIT_AUTHOR_DATE -ErrorAction SilentlyContinue
+        Remove-Item Env:GIT_COMMITTER_DATE -ErrorAction SilentlyContinue
+    }
+}
+
+# Stage the exact candidate skill revision the worker is meant to evaluate. The whole tree ships (minus evals and build
+# output) so the SKILL.md and everything it references - scripts, references, assets - are present without any fallback
+# to a globally installed copy.
+function Copy-SkillTree {
+    param(
+        [string]$SkillDirectory,
+        [string]$DestinationSkillRoot
+    )
+
+    New-Item -ItemType Directory -Path $DestinationSkillRoot -Force | Out-Null
+    $files = Get-ChildItem -LiteralPath $SkillDirectory -Recurse -File -Force |
+        ForEach-Object { Get-RelativePath -BasePath $SkillDirectory -FullPath $_.FullName } |
+        Where-Object {
+            -not $_.StartsWith('evals/') -and
+            $_ -notmatch '(^|/)(bin|obj)/' -and
+            $_ -notmatch '(^|/)__pycache__/'
+        } |
+        Sort-Object
+
+    foreach ($relative in $files) {
+        $sourcePath = Join-Path $SkillDirectory ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        $destination = Join-Path $DestinationSkillRoot ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        $destinationDirectory = Split-Path -Parent $destination
+        if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+            New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $sourcePath -Destination $destination -Force
+    }
+
+    return @($files)
+}
+
+# The candidate skill's fingerprint, computed from the source over exactly the files Copy-SkillTree stages. The staged
+# copy in each with_skill run must reproduce this value, which is how preparation proves the worker received the
+# revision under development rather than a globally installed one.
+function Get-CandidateSkillHash {
+    param([string]$SkillDirectory)
+
+    $files = Get-ChildItem -LiteralPath $SkillDirectory -Recurse -File -Force |
+        ForEach-Object { Get-RelativePath -BasePath $SkillDirectory -FullPath $_.FullName } |
+        Where-Object {
+            -not $_.StartsWith('evals/') -and
+            $_ -notmatch '(^|/)(bin|obj)/' -and
+            $_ -notmatch '(^|/)__pycache__/'
+        } |
+        Sort-Object
+
+    $entries = foreach ($relative in $files) {
+        $fullPath = Join-Path $SkillDirectory ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        "$relative`:$(Get-FileSha256 -Path $fullPath)"
+    }
+
+    $joined = [string]::Join("`n", @($entries | Sort-Object))
+    return Get-Sha256Hex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($joined))
+}
+
+function New-RunManifest {
+    param(
+        [string]$SkillName,
+        [int]$IterationNumber,
+        [object]$EvalEntry,
+        [string]$EvalName,
+        [string]$Configuration,
+        [string[]]$RepoFiles,
+        [string]$FixtureHash,
+        [string]$SkillHash,
+        [bool]$GitWorkspace
+    )
+
+    $skillDirectory = if ($Configuration -eq 'with_skill') { "$($runDirectoryNames.Skill)/$SkillName" } else { $null }
+
+    return [ordered]@{
+        schema = $runSchema
+        evalId = [int]$EvalEntry.id
+        evalName = $EvalName
+        skillName = if ($Configuration -eq 'with_skill') { $SkillName } else { $null }
+        iteration = $IterationNumber
+        mode = $Configuration
+        promptFile = $runDirectoryNames.Prompt
+        workingDirectory = $runDirectoryNames.Working
+        homeDirectory = $runDirectoryNames.Home
+        skillDirectory = $skillDirectory
+        freshContextRequired = $true
+        filesystemIsolationRequired = $true
+        isolatedHomeRequired = $true
+        gitWorkspace = $GitWorkspace
+        inputFiles = @($RepoFiles)
+        fixtureHash = $FixtureHash
+        skillHash = if ($Configuration -eq 'with_skill') { $SkillHash } else { $null }
+        contract = [ordered]@{
+            sandboxRoot = '.'
+            workingDirectory = $runDirectoryNames.Working
+            homeDirectory = $runDirectoryNames.Home
+            mustNotReadOutsideSandbox = $true
+            mustNotExposeGlobalSkillsOrConfig = $true
+        }
+    }
+}
+
+# Fail package generation the moment a run violates an isolation invariant, so a contaminated package never reaches a
+# harness. These checks operate on the materialized run directories, not on prose.
+function Assert-RunIsolation {
+    param(
+        [string]$EvalName,
+        [string]$SkillName,
+        [string]$EvalCaseDirectory,
+        [string]$SkillHash,
+        [bool]$GitWorkspace
+    )
+
+    $withSkillDir = Join-Path $EvalCaseDirectory 'with_skill'
+    $withoutSkillDir = Join-Path $EvalCaseDirectory 'without_skill'
+
+    foreach ($configuration in @('with_skill', 'without_skill')) {
+        $runDir = Join-Path $EvalCaseDirectory $configuration
+        $repoDir = Join-Path $runDir $runDirectoryNames.Working
+        $homeDir = Join-Path $runDir $runDirectoryNames.Home
+        $promptPath = Join-Path $runDir $runDirectoryNames.Prompt
+        $runJsonPath = Join-Path $runDir $runDirectoryNames.Run
+
+        # 1. Every run has its own materialized repository, and 3. it holds no build state.
+        if (-not (Test-Path -LiteralPath $repoDir)) {
+            throw "$EvalName/$configuration is missing its materialized repo/."
+        }
+        foreach ($directory in (Get-ChildItem -LiteralPath $repoDir -Recurse -Directory -Force -ErrorAction SilentlyContinue)) {
+            if ($forbiddenFixtureSegments -contains $directory.Name) {
+                throw "$EvalName/$configuration staged generated build state under repo/ ('$($directory.Name)')."
+            }
+            if ($directory.Name -eq '.git' -and -not $GitWorkspace) {
+                throw "$EvalName/$configuration staged an unexpected .git directory."
+            }
+        }
+        if ($GitWorkspace -and -not (Test-Path -LiteralPath (Join-Path $repoDir '.git'))) {
+            throw "$EvalName/$configuration declared a git workspace but no .git was staged."
+        }
+
+        # 5. Prompt path and manifest resolve only to staged resources, and 10. fresh context is declared.
+        if (-not (Test-Path -LiteralPath $promptPath)) {
+            throw "$EvalName/$configuration is missing prompt.md."
+        }
+        if (-not (Test-Path -LiteralPath $runJsonPath)) {
+            throw "$EvalName/$configuration is missing run.json."
+        }
+        if (-not (Test-Path -LiteralPath $homeDir)) {
+            throw "$EvalName/$configuration is missing its isolated home/."
+        }
+
+        $runJsonText = [System.IO.File]::ReadAllText($runJsonPath, $utf8NoBom)
+        $runManifest = $runJsonText | ConvertFrom-Json
+        if (-not [bool]$runManifest.freshContextRequired) {
+            throw "$EvalName/$configuration run.json must require fresh context."
+        }
+        if (-not [bool]$runManifest.filesystemIsolationRequired -or -not [bool]$runManifest.isolatedHomeRequired) {
+            throw "$EvalName/$configuration run.json must require filesystem and home isolation."
+        }
+
+        # 6. No run manifest references the source repository, and 7. none references a global skill install.
+        foreach ($needle in @('skills/', '.agents', '.claude', '.codex', '.gemini', ':\', ':/')) {
+            if ($configuration -eq 'with_skill' -and $needle -eq 'skills/') {
+                # with_skill legitimately names skill/<name>; only reject an out-of-package skills/ reference.
+                continue
+            }
+            if ($runJsonText.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw "$EvalName/$configuration run.json references '$needle', which points outside the run package."
+            }
+        }
+    }
+
+    # 2. with_skill contains the candidate skill; 4. required skill files are staged and match the source revision.
+    $stagedSkillRoot = Join-Path (Join-Path $withSkillDir $runDirectoryNames.Skill) $SkillName
+    if (-not (Test-Path -LiteralPath (Join-Path $stagedSkillRoot 'SKILL.md'))) {
+        throw "$EvalName/with_skill is missing the candidate skill (skill/$SkillName/SKILL.md)."
+    }
+    $stagedSkillHash = Get-TreeHash -Root $stagedSkillRoot
+    if ($stagedSkillHash -ne $SkillHash) {
+        throw "$EvalName/with_skill staged a candidate skill that does not match the source revision."
+    }
+
+    # 3 (baseline). without_skill contains no copy of the candidate skill by any name.
+    $baselineSkillDir = Join-Path $withoutSkillDir $runDirectoryNames.Skill
+    if (Test-Path -LiteralPath $baselineSkillDir) {
+        throw "$EvalName/without_skill must not contain a skill/ directory."
+    }
+    if (Test-Path -LiteralPath (Join-Path $withoutSkillDir 'SKILL.md')) {
+        throw "$EvalName/without_skill must not contain a SKILL.md."
+    }
+
+    # 9. The with_skill and without_skill repositories are otherwise identical.
+    $withHash = Get-TreeHash -Root (Join-Path $withSkillDir $runDirectoryNames.Working) -ExcludeSegments @('.git')
+    $withoutHash = Get-TreeHash -Root (Join-Path $withoutSkillDir $runDirectoryNames.Working) -ExcludeSegments @('.git')
+    if ($withHash -ne $withoutHash) {
+        throw "$EvalName repositories differ between with_skill and without_skill; the only difference must be the skill."
+    }
 }
 
 function Invoke-PrepareMode {
@@ -562,18 +1013,7 @@ function Invoke-PrepareMode {
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
 
     $inventory = Get-SkillFileInventory -SkillDirectory $skillDirectory -SkillBody $skillBody -Budget $MaxInlineBytes
-
-    $bundledSkillDirectory = Join-Path (Join-Path $iterationDirectory 'skill') $Skill
-    New-Item -ItemType Directory -Path $bundledSkillDirectory -Force | Out-Null
-    Copy-Item -LiteralPath $skillMarkdownPath -Destination (Join-Path $bundledSkillDirectory 'SKILL.md') -Force
-    foreach ($item in @($inventory.Inlined) + @($inventory.Bundled)) {
-        $destination = Join-Path $bundledSkillDirectory ($item.Path -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-        $destinationDirectory = Split-Path -Parent $destination
-        if (-not (Test-Path -LiteralPath $destinationDirectory)) {
-            New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
-        }
-        Copy-Item -LiteralPath $item.FullPath -Destination $destination -Force
-    }
+    $skillHash = Get-CandidateSkillHash -SkillDirectory $skillDirectory
 
     $generatedUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     $withSkillInstructions = New-SkillInstructionSection -SkillName $Skill -SkillBody $skillBody -Inventory $inventory
@@ -584,30 +1024,28 @@ function Invoke-PrepareMode {
         $evalDirectory = Join-Path $iterationDirectory $evalName
         New-Item -ItemType Directory -Path $evalDirectory -Force | Out-Null
 
-        $fixtures = [System.Collections.Generic.List[object]]::new()
+        $workspaceOption = Get-EvalWorkspaceOption -EvalEntry $evalEntry
+
+        $fixturePaths = @()
         if ($evalEntry.PSObject.Properties.Name -contains 'files' -and $null -ne $evalEntry.files) {
-            foreach ($fixturePath in @($evalEntry.files)) {
-                $normalized = ([string]$fixturePath).Trim() -replace '\\', '/'
-                $sourcePath = Join-Path $skillDirectory ($normalized -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+            $fixturePaths = @($evalEntry.files)
+        }
+
+        $fixtures = [System.Collections.Generic.List[object]]::new()
+        $layout = $null
+        if (@($fixturePaths).Count -gt 0) {
+            $layout = Resolve-FixtureLayout -FixturePaths $fixturePaths
+            foreach ($file in $layout.Files) {
+                $sourcePath = Join-Path $skillDirectory ($file.EvalPath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
                 if (-not (Test-Path -LiteralPath $sourcePath)) {
-                    throw "Missing fixture 'skills/$Skill/$normalized' referenced by eval $($evalEntry.id)."
+                    throw "Missing fixture 'skills/$Skill/$($file.EvalPath)' referenced by eval $($evalEntry.id)."
                 }
-
-                $packageRelative = 'files/' + ($normalized -replace '^evals/files/', '')
-                $destination = Join-Path $evalDirectory ($packageRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-                $destinationDirectory = Split-Path -Parent $destination
-                if (-not (Test-Path -LiteralPath $destinationDirectory)) {
-                    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
-                }
-                Copy-Item -LiteralPath $sourcePath -Destination $destination -Force
-
                 $bytes = (Get-Item -LiteralPath $sourcePath).Length
                 $isBinary = Test-IsBinaryFile -Path $sourcePath
                 $skipReason = if ($isBinary) { 'not text' } elseif ($bytes -gt $maxFixtureInlineBytes) { "over the $maxFixtureInlineBytes-byte inline cap" } else { $null }
-
                 $fixtures.Add([pscustomobject]@{
-                    EvalPath = $normalized
-                    PackagePath = $packageRelative
+                    EvalPath = $file.EvalPath
+                    RepoRelative = $file.RepoRelative
                     Bytes = $bytes
                     Inlined = $null -eq $skipReason
                     SkipReason = $skipReason
@@ -617,27 +1055,63 @@ function Invoke-PrepareMode {
             }
         }
 
+        $repoFiles = @($fixtures | ForEach-Object { $_.RepoRelative } | Sort-Object)
+
+        # Materialize both runs. Each run directory is the worker's sandbox root: repo/ is the working tree, home/ is an
+        # isolated profile, and skill/ (with_skill only) holds the candidate. The grading key and results live one level
+        # up, outside every run directory, so a worker confined to its run directory can never reach them.
+        foreach ($configuration in @('with_skill', 'without_skill')) {
+            $runDir = Join-Path $evalDirectory $configuration
+            New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+
+            $repoDir = Join-Path $runDir $runDirectoryNames.Working
+            if ($null -ne $layout) {
+                Copy-FixtureRepo -SkillDirectory $skillDirectory -Layout $layout -RepoDirectory $repoDir -EvalId ([int]$evalEntry.id)
+            } else {
+                New-Item -ItemType Directory -Path $repoDir -Force | Out-Null
+            }
+            if ($workspaceOption.Git) {
+                Initialize-GitWorkspace -RepoDirectory $repoDir
+            }
+
+            $homeDir = Join-Path $runDir $runDirectoryNames.Home
+            New-Item -ItemType Directory -Path $homeDir -Force | Out-Null
+            Write-Utf8File -Path (Join-Path $homeDir 'README.txt') -Content "This is an isolated, deliberately empty home directory for one eval run. A harness sets HOME - and the platform-equivalent profile and config roots - here so the worker cannot see the machine's global agent configuration, skills, plugins, MCP servers, or memories.`n"
+
+            if ($configuration -eq 'with_skill') {
+                $stagedSkillRoot = Join-Path (Join-Path $runDir $runDirectoryNames.Skill) $Skill
+                [void](Copy-SkillTree -SkillDirectory $skillDirectory -DestinationSkillRoot $stagedSkillRoot)
+            }
+        }
+
+        # Identical between runs by construction; validated below. The .git directory is excluded because two git init
+        # runs would otherwise differ, while the tracked fixture content is the same.
+        $fixtureHash = Get-TreeHash -Root (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Working) -ExcludeSegments @('.git')
+
         $inputFilesSection = New-InputFilesSection -Fixtures @($fixtures)
         $assertions = Get-Assertions -EvalEntry $evalEntry
 
         $withSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withSkillInstructions -InputFilesSection $inputFilesSection
         $withoutSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withoutSkillPreamble -InputFilesSection $inputFilesSection
 
-        Write-Utf8File -Path (Join-Path $evalDirectory 'with-skill.prompt.md') -Content $withSkillPrompt
-        Write-Utf8File -Path (Join-Path $evalDirectory 'without-skill.prompt.md') -Content $withoutSkillPrompt
+        Write-Utf8File -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Prompt) -Content $withSkillPrompt
+        Write-Utf8File -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Prompt) -Content $withoutSkillPrompt
+
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git)
 
         $assumptions = [System.Collections.Generic.List[string]]::new()
         $assumptions.Add('Run with_skill and without_skill on the same model, same version, and same configuration. Different models measure the model, not the skill.')
-        $assumptions.Add('Both prompts carry the same task, the same input files, and the same response contract. Only the operating-instructions section differs.')
-        $assumptions.Add("The with_skill prompt inlines skills/$Skill/SKILL.md plus $(@($inventory.Inlined).Count) referenced resource file(s).")
-        if (@($inventory.Bundled).Count -gt 0) {
-            $assumptions.Add("$(@($inventory.Bundled).Count) skill file(s) are bundled under skill/$Skill/ instead of inlined; a harness without filesystem access to the package cannot reach them.")
-        }
+        $assumptions.Add('Each run is hermetic: launch a fresh worker with its run directory as the sandbox root, its repo/ as the working directory, and its home/ as the isolated profile.')
+        $assumptions.Add("Both runs share an identical materialized repository. Only the with_skill run exposes the candidate skill under skill/$Skill/.")
         $notInlinedFixtures = @($fixtures | Where-Object { -not $_.Inlined })
         if ($notInlinedFixtures.Count -gt 0) {
-            $assumptions.Add("$($notInlinedFixtures.Count) input file(s) are attached under files/ rather than inlined; attach them identically to both configurations.")
+            $assumptions.Add("$($notInlinedFixtures.Count) input file(s) are large or binary; they are materialized in repo/ but not inlined in the prompt.")
         }
-        $assumptions.Add('The expected output and assertions in this file are the grading key. Do not paste them into either prompt.')
+        if ($workspaceOption.Git) {
+            $assumptions.Add('This eval stages a real .git in repo/ so repository-root detection and version-deriving tools behave as on a developer machine.')
+        }
+        $assumptions.Add('The expected output and assertions in this file are the grading key. They live outside every run directory and must never reach a worker.')
 
         $metadata = [ordered]@{
             schema = $metadataSchema
@@ -648,21 +1122,28 @@ function Invoke-PrepareMode {
             prompt = [string]$evalEntry.prompt
             expected_output = [string]$evalEntry.expected_output
             assertions = @($assertions)
+            fixture_hash = $fixtureHash
+            skill_hash = $skillHash
+            git_workspace = $workspaceOption.Git
             input_files = @($fixtures | ForEach-Object {
                 [ordered]@{
                     eval_path = $_.EvalPath
-                    package_path = $_.PackagePath
+                    repo_path = $_.RepoRelative
                     bytes = $_.Bytes
                     inlined = $_.Inlined
                 }
             })
             configurations = [ordered]@{
                 with_skill = [ordered]@{
-                    prompt_file = 'with-skill.prompt.md'
+                    run_directory = 'with_skill'
+                    prompt_file = "with_skill/$($runDirectoryNames.Prompt)"
+                    run_manifest = "with_skill/$($runDirectoryNames.Run)"
                     result_file = 'results/with-skill.result.json'
                 }
                 without_skill = [ordered]@{
-                    prompt_file = 'without-skill.prompt.md'
+                    run_directory = 'without_skill'
+                    prompt_file = "without_skill/$($runDirectoryNames.Prompt)"
+                    run_manifest = "without_skill/$($runDirectoryNames.Run)"
                     result_file = 'results/without-skill.result.json'
                 }
             }
@@ -673,16 +1154,39 @@ function Invoke-PrepareMode {
         ConvertTo-JsonFile -Path (Join-Path $evalDirectory 'results/with-skill.result.json') -Value (New-ResultStub -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -Assertions $assertions)
         ConvertTo-JsonFile -Path (Join-Path $evalDirectory 'results/without-skill.result.json') -Value (New-ResultStub -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -Assertions $assertions)
 
+        Assert-RunIsolation -EvalName $evalName -SkillName $Skill -EvalCaseDirectory $evalDirectory -SkillHash $skillHash -GitWorkspace $workspaceOption.Git
+
         $manifestEvals.Add([ordered]@{
             eval_id = [int]$evalEntry.id
             eval_name = $evalName
             directory = $evalName
-            with_skill_prompt = "$evalName/with-skill.prompt.md"
-            with_skill_result = "$evalName/results/with-skill.result.json"
-            without_skill_prompt = "$evalName/without-skill.prompt.md"
-            without_skill_result = "$evalName/results/without-skill.result.json"
             metadata = "$evalName/eval-metadata.json"
-            input_files = @($fixtures | ForEach-Object { $_.PackagePath })
+            fixture_hash = $fixtureHash
+            skill_hash = $skillHash
+            git_workspace = $workspaceOption.Git
+            input_files = @($repoFiles)
+            runs = [ordered]@{
+                with_skill = [ordered]@{
+                    mode = 'with_skill'
+                    directory = "$evalName/with_skill"
+                    run_manifest = "$evalName/with_skill/$($runDirectoryNames.Run)"
+                    prompt = "$evalName/with_skill/$($runDirectoryNames.Prompt)"
+                    working_directory = "$evalName/with_skill/$($runDirectoryNames.Working)"
+                    home_directory = "$evalName/with_skill/$($runDirectoryNames.Home)"
+                    skill_directory = "$evalName/with_skill/$($runDirectoryNames.Skill)/$Skill"
+                    result = "$evalName/results/with-skill.result.json"
+                }
+                without_skill = [ordered]@{
+                    mode = 'without_skill'
+                    directory = "$evalName/without_skill"
+                    run_manifest = "$evalName/without_skill/$($runDirectoryNames.Run)"
+                    prompt = "$evalName/without_skill/$($runDirectoryNames.Prompt)"
+                    working_directory = "$evalName/without_skill/$($runDirectoryNames.Working)"
+                    home_directory = "$evalName/without_skill/$($runDirectoryNames.Home)"
+                    skill_directory = $null
+                    result = "$evalName/results/without-skill.result.json"
+                }
+            }
         })
     }
 
@@ -696,10 +1200,30 @@ function Invoke-PrepareMode {
         execution = 'manual'
         runner_prompt = 'RUN-THIS.prompt.md'
         max_inline_bytes = $MaxInlineBytes
+        skill_hash = $skillHash
+        isolation = [ordered]@{
+            fresh_context_required = $true
+            isolated_home_required = $true
+            isolated_cwd_required = $true
+            filesystem_sandbox_recommended = $true
+            candidate_skill_exposure = 'run_directory'
+            transcript_capture_requested = $true
+            sandbox_root = 'each run directory'
+            working_directory = $runDirectoryNames.Working
+            home_directory = $runDirectoryNames.Home
+        }
+        harness_contract = @(
+            'fresh context',
+            'isolated HOME/config',
+            'isolated CWD',
+            'filesystem sandbox',
+            'candidate skill exposure',
+            'transcript capture'
+        )
         skill_instructions = [ordered]@{
             inlined = @('SKILL.md') + @($inventory.Inlined | ForEach-Object { $_.Path })
             inlined_resource_bytes = $inventory.InlinedBytes
-            bundled_only = @($inventory.Bundled | ForEach-Object { $_.Path })
+            staged_full_tree = $true
         }
         evals = @($manifestEvals)
     }
@@ -709,8 +1233,12 @@ function Invoke-PrepareMode {
     $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
     Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals))
 
-    Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber), $($manifestEvals.Count * 2) prompts in total."
+    Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber) as $($manifestEvals.Count * 2) hermetic run package(s)."
     Write-Host "Package: $iterationDirectory"
+    Write-Host ''
+    Write-Host 'Every run is a self-contained directory: repo/ is the working tree, home/ is an isolated'
+    Write-Host 'profile, and skill/ (with_skill only) holds the candidate. A harness runs a worker from that'
+    Write-Host 'directory alone and never needs the source repository or a globally installed skill.'
     Write-Host ''
     Write-Host 'Hand this one file to the agent of your choice. It drives the whole package:'
     Write-Host "  $runnerPath"
@@ -720,8 +1248,6 @@ function Invoke-PrepareMode {
     Write-Host ''
     Write-Host 'The runner makes the selected agent an orchestrator. It must create one isolated fresh'
     Write-Host 'worker per run and must not execute an eval prompt in its own context.'
-    Write-Host 'A plain single-context client cannot use the one-file runner; open each prompt directly'
-    Write-Host 'as the first message of a separate fresh session instead.'
     Write-Host ''
     Write-Host 'This script prepared prompts only. It did not run them, and nothing here will.'
     Write-Host 'When that agent reports back, collect and compare with:'
@@ -746,27 +1272,32 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("This file is `"$(Join-Path $IterationDirectory 'RUN-THIS.prompt.md')`". Read it from that path. If either path above is not absolute, ask for the file itself before running anything.")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s), each with a `with_skill` and `without_skill` run. The prompts differ only in whether the candidate skill instructions are present. You run the experiment and record it. You do not grade it.")
+    [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s), each with a `with_skill` and `without_skill` run. Every run is a self-contained directory that holds a `prompt.md`, a `run.json` contract, a `repo/` working tree, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate. The runs differ only in whether that candidate skill is present. You run the experiment and record it. You do not grade it.")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A person selected this harness and handed you this package. That authorizes these runs. The repository prohibition on automated model evaluation binds repository scripts and the agent that prepared the package. It does not bind the user-selected external orchestrator executing this specific package.')
     [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Harness requirements')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('This package assumes the harness can give each run a fresh context, an isolated HOME/config root, an isolated working directory, and ideally a filesystem sandbox scoped to the run directory. A harness that cannot provide fresh, independent sessions is incompatible with these evals. Report, per run, which of these guarantees you satisfied - fresh context, isolated HOME/config, isolated CWD, filesystem sandbox, candidate skill exposure, transcript capture - so the grader knows which process-dependent assertions it can trust.')
+    [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Orchestration contract')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. For every eval case, create one isolated fresh-context worker for `with_skill` and a second isolated fresh-context worker for `without_skill`. Never reuse a worker or session between runs.')
-    [void]$builder.AppendLine('2. Give each worker only its prompt file and the input files that prompt names. Do not expose this runner, `manifest.json`, `eval-metadata.json`, `comparison.md`, result files, grading criteria, expectations, another run''s output, or any note that an experiment is underway.')
-    [void]$builder.AppendLine('3. The candidate skill is already inlined in `with-skill.prompt.md`. Do not load, summarize, or add it yourself. `without-skill.prompt.md` contains no candidate instructions. Do not expose the candidate skill to that worker by any other route.')
-    [void]$builder.AppendLine('4. Send each prompt unchanged as the worker''s first message. Attach any non-inlined file from that case''s `files/` directory.')
-    [void]$builder.AppendLine('5. Use the same model, version, configuration, tools, and limits for every worker. Disable persistent memory or cross-session recall. Independent runs may execute concurrently when the selected harness and token budget allow it.')
-    [void]$builder.AppendLine('6. Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count. Record refusals, questions, and failures as results. Do not retry to improve an answer.')
-    [void]$builder.AppendLine('7. Work only inside this package directory. Do not read or modify the source repository around it. Do not grade or compare the runs.')
+    [void]$builder.AppendLine('1. For every eval case, create one isolated fresh-context worker for `with_skill` and a second isolated fresh-context worker for `without_skill`. Never reuse a worker or session between runs, between cases, or between iterations.')
+    [void]$builder.AppendLine('2. Launch each worker from its own run directory, which is the worker''s sandbox root. Set the working directory to that run''s `repo/`, set HOME and the platform-equivalent profile and config roots to its `home/`, and confine filesystem access to the run directory. Read the run''s `run.json` for the exact contract: `workingDirectory`, `homeDirectory`, `skillDirectory`, and the fresh-context, filesystem, and home isolation flags.')
+    [void]$builder.AppendLine('3. Give each worker only its `prompt.md` and the files already staged in its run directory. Do not expose this runner, `manifest.json`, any `eval-metadata.json`, `comparison.md`, result files, grading criteria, expectations, the paired run, another case''s output, or any note that an experiment is underway. All of those live outside the run directory, so keeping the worker inside it keeps them hidden.')
+    [void]$builder.AppendLine('4. The candidate skill is already inlined in the with_skill run''s `prompt.md` and staged under its `skill/` directory. Do not load, summarize, or add it yourself. The without_skill run carries no skill instructions and no `skill/` directory; do not expose the candidate skill to that worker by any route, including a globally installed copy.')
+    [void]$builder.AppendLine('5. Send each `prompt.md` unchanged as the worker''s first message. The input files are already real files in the worker''s `repo/`; the worker reads and edits them there rather than from attachments.')
+    [void]$builder.AppendLine('6. Use the same model, version, configuration, tools, and limits for every worker. Disable persistent memory or cross-session recall. Independent runs may execute concurrently when the selected harness and token budget allow it.')
+    [void]$builder.AppendLine('7. Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count. When the harness exposes them, also record the shell commands, files read and written, stdout and stderr, and exit status, and which isolation guarantees you satisfied. Record refusals, questions, and failures as results. Do not retry to improve an answer.')
+    [void]$builder.AppendLine('8. Work only inside this package. Do not read or modify the source repository around it. Do not grade or compare the runs.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('For each case listed in `manifest.json`, use `with_skill_prompt` with `with_skill_result` and `without_skill_prompt` with `without_skill_result`. Run the prompts in separate workers, then overwrite the matching result file without reading its existing contents. A partial package is valid; record every completed run before stopping.')
+    [void]$builder.AppendLine('For each case in `manifest.json`, the `runs.with_skill` and `runs.without_skill` entries give each run''s directory, its `prompt`, its `run_manifest` (`run.json`), and the `result` file to write. Run the two prompts in separate workers, then overwrite the matching result file without reading its existing contents. A partial package is valid; record every completed run before stopping.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Result shape')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('```json')
     [void]$builder.AppendLine('{')
-    [void]$builder.AppendLine('  "schema": "codebeltnet/agentic/eval-result/1",')
+    [void]$builder.AppendLine('  "schema": "codebeltnet/agentic/eval-result/2",')
     [void]$builder.AppendLine("  `"iteration`": $IterationNumber,")
     [void]$builder.AppendLine('  "eval_id": 1,')
     [void]$builder.AppendLine('  "eval_name": "the directory name",')
@@ -778,14 +1309,26 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('  "output": "the complete response the run produced",')
     [void]$builder.AppendLine('  "output_files": ["paths of any files the run wrote"],')
     [void]$builder.AppendLine('  "transcript": "the complete worker transcript when the harness exposes it",')
+    [void]$builder.AppendLine('  "shell_commands": ["commands the run executed, when exposed"],')
+    [void]$builder.AppendLine('  "files_read": ["paths the run read, when exposed"],')
+    [void]$builder.AppendLine('  "files_written": ["paths the run wrote, when exposed"],')
+    [void]$builder.AppendLine('  "exit_status": 0,')
     [void]$builder.AppendLine('  "duration_seconds": 12.5,')
     [void]$builder.AppendLine('  "total_tokens": 1234,')
     [void]$builder.AppendLine('  "tool_calls": 6,')
+    [void]$builder.AppendLine('  "isolation": {')
+    [void]$builder.AppendLine('    "fresh_context": true,')
+    [void]$builder.AppendLine('    "isolated_home": true,')
+    [void]$builder.AppendLine('    "isolated_cwd": true,')
+    [void]$builder.AppendLine('    "filesystem_sandbox": true,')
+    [void]$builder.AppendLine('    "candidate_skill_exposed": true,')
+    [void]$builder.AppendLine('    "transcript_captured": true')
+    [void]$builder.AppendLine('  },')
     [void]$builder.AppendLine('  "notes": "anything that would change how this result reads"')
     [void]$builder.AppendLine('}')
     [void]$builder.AppendLine('```')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`transcript`, `duration_seconds`, `total_tokens`, and `tool_calls` are optional. Include each field when the harness exposes it and omit it otherwise. Never estimate a missing metric.')
+    [void]$builder.AppendLine('`transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls`, and every `isolation` flag are optional. Include each when the harness exposes it and omit it otherwise. Never estimate a missing value. For `with_skill`, set `isolation.candidate_skill_exposed` to how the skill actually reached the worker.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`configuration` is `with_skill` or `without_skill` and must match the prompt you ran. Read `eval_id` and `eval_name` from `manifest.json`; do not send them to the worker. Put the full model response in `output`. If it is very long, write it beside the result file and list that path in `output_files` with a summary in `output`.')
     [void]$builder.AppendLine()
@@ -839,20 +1382,26 @@ function New-PackageReadme {
         [void]$builder.AppendLine("- ``$($entry.eval_name)/`` - eval $($entry.eval_id)")
     }
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Each eval directory holds `with-skill.prompt.md`, `without-skill.prompt.md`, `eval-metadata.json`, the input files under `files/`, and result stubs under `results/`. The complete skill tree is bundled under `skill/` for harnesses that can read files.')
+    [void]$builder.AppendLine('Each eval directory holds the grading key (`eval-metadata.json`), result stubs under `results/`, and two hermetic run directories: `with_skill/` and `without_skill/`. A run directory holds `prompt.md`, a `run.json` contract, a `repo/` working tree materialized from the fixtures, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate skill. The grading key and results sit outside both run directories, so a worker confined to its run directory never sees them.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Isolation model')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('The package guarantees what a generator can: identical materialized repositories for both runs, the candidate skill staged only under `with_skill/skill/`, an empty isolated `home/` per run, and a `run.json` that names only paths inside the run directory. Fixture and skill hashes are recorded so you can prove what each worker received.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('The harness must supply the rest at runtime: a fresh context per run, the run directory as the working and config root (working directory `repo/`, HOME `home/`), and a filesystem sandbox that keeps the worker inside its run directory so global skills, global config, the source repository, the paired run, and the grading key stay out of reach. Prompt wording alone does not enforce this; the sandbox does.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## How to run')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Pick one model and one configuration. Use the same one for every prompt in this iteration.')
-    [void]$builder.AppendLine('2. Paste `with-skill.prompt.md` as the first message of a fresh session. Attach any file listed under `files/` that the prompt says is not inlined.')
-    [void]$builder.AppendLine('3. Paste `without-skill.prompt.md` in a separate fresh session, with the same attachments.')
+    [void]$builder.AppendLine('1. Pick one model and configuration. Use the same one for every run in this iteration.')
+    [void]$builder.AppendLine('2. For each eval, launch a fresh worker for `with_skill/` with its run directory as the sandbox root, `repo/` as the working directory, and `home/` as HOME. Send `prompt.md` as the first message. Read `run.json` for the contract.')
+    [void]$builder.AppendLine('3. Launch a second fresh worker for `without_skill/` the same way. Never reuse a worker between runs.')
     [void]$builder.AppendLine('4. Save each response into the matching file under the eval''s `results/` directory.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`RUN-THIS.prompt.md` turns a harness that can create isolated workers or sessions into the eval orchestrator. The orchestrator reads the package, creates one new worker per run, and keeps runner instructions and grading data out of every worker. It never executes an eval prompt in its own context.')
+    [void]$builder.AppendLine('`RUN-THIS.prompt.md` turns a harness that can create isolated workers or sessions into the eval orchestrator. The orchestrator reads the package, creates one new worker per run from its run directory, and keeps runner instructions and grading data out of every worker. It never executes an eval prompt in its own context.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('A plain single-context client cannot use the one-file orchestrator. Open each prompt file directly as the first message of a separate fresh session instead, keep `RUN-THIS.prompt.md` out of those sessions, and bring each reply back to the repository session. `-CollectResults` accepts a partial iteration and reports unfilled runs as missing.')
+    [void]$builder.AppendLine('A harness that cannot provide fresh, independent sessions with isolated working and config roots is incompatible with these evals. `-CollectResults` accepts a partial iteration and reports unfilled runs as missing.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('A with-skill run on one model compared against a baseline on another measures both the model and the skill. That is not a skill-effectiveness result, so do not report it as one. If you do mix models, say so explicitly and treat the comparison as directional only.')
+    [void]$builder.AppendLine('A with_skill run on one model compared against a baseline on another measures both the model and the skill. That is not a skill-effectiveness result, so do not report it as one. If you do mix models, say so explicitly and treat the comparison as directional only.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Reporting results back')
     [void]$builder.AppendLine()
@@ -861,7 +1410,8 @@ function New-PackageReadme {
     [void]$builder.AppendLine('- `model`, `provider`, `harness` - what actually ran it, as specifically as you know')
     [void]$builder.AppendLine('- `executed_utc` - when')
     [void]$builder.AppendLine('- `output` - the produced output, or a summary plus paths in `output_files`')
-    [void]$builder.AppendLine('- `transcript`, `duration_seconds`, `total_tokens`, and `tool_calls` - include the values the harness exposes; omit unavailable values rather than estimating them')
+    [void]$builder.AppendLine('- `transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls` - include the values the harness exposes; omit unavailable values rather than estimating them')
+    [void]$builder.AppendLine('- `isolation` - the guarantees the harness satisfied for this run; process-dependent assertions can only be graded from a run that captured the needed evidence')
     [void]$builder.AppendLine('- `grading[].passed` - `true` or `false` per assertion once you or a deterministic script has checked it, with `evidence`')
     [void]$builder.AppendLine('- `notes` - anything that would change how the result reads')
     [void]$builder.AppendLine()
@@ -1048,13 +1598,27 @@ function Invoke-CollectMode {
                 $warnings.Add("$($entry.eval_name)/$configuration - ran but nothing is graded yet; $total assertion(s) still need a deterministic check or human judgement.")
             }
 
+            $transcriptText = [string](Get-JsonProperty -Object $result -Name 'transcript' -Default '')
+            $shellCommands = @(Get-JsonProperty -Object $result -Name 'shell_commands' -Default @())
+            $filesRead = @(Get-JsonProperty -Object $result -Name 'files_read' -Default @())
+            $filesWritten = @(Get-JsonProperty -Object $result -Name 'files_written' -Default @())
+            $hasProcessEvidence = (-not [string]::IsNullOrWhiteSpace($transcriptText)) -or $shellCommands.Count -gt 0 -or $filesRead.Count -gt 0 -or $filesWritten.Count -gt 0
+            if (-not $hasProcessEvidence) {
+                $warnings.Add("$($entry.eval_name)/$configuration - no transcript or process evidence recorded; assertions about tool, shell, or file behavior are ungradeable for this run and must not be inferred from the model's self-report.")
+            }
+
+            $isolation = Get-JsonProperty -Object $result -Name 'isolation' -Default $null
+            $isolationReport = Format-IsolationReport -Isolation $isolation
+
             $observed[$configuration] = [pscustomobject]@{
                 Model = $model
                 Provider = [string](Get-JsonProperty -Object $result -Name 'provider' -Default '')
                 Graded = $graded.Count
                 Passed = $passed
                 Total = $total
-                TranscriptRecorded = -not [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $result -Name 'transcript' -Default ''))
+                TranscriptRecorded = -not [string]::IsNullOrWhiteSpace($transcriptText)
+                ProcessEvidence = $hasProcessEvidence
+                IsolationReport = $isolationReport
                 DurationSeconds = Get-JsonProperty -Object $result -Name 'duration_seconds'
                 TotalTokens = Get-JsonProperty -Object $result -Name 'total_tokens'
                 ToolCalls = Get-JsonProperty -Object $result -Name 'tool_calls'
@@ -1109,6 +1673,22 @@ function Invoke-CollectMode {
             $toolCalls = if ($null -ne $run -and $null -ne $run.ToolCalls -and -not [string]::IsNullOrWhiteSpace([string]$run.ToolCalls)) { [string]$run.ToolCalls } else { '-' }
             $transcript = if ($null -ne $run -and $run.TranscriptRecorded) { 'recorded' } else { '-' }
             [void]$builder.AppendLine("| $($row.EvalName) | $configuration | $duration | $tokens | $toolCalls | $transcript |")
+        }
+    }
+
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Isolation reported')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('Flags each run''s harness confirmed: fresh context, isolated home, isolated cwd, filesystem sandbox, candidate skill exposure, transcript capture (Y/N, ? unknown). Process-dependent assertions are only gradeable from a run with process evidence.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('| Eval | Configuration | Isolation | Process evidence |')
+    [void]$builder.AppendLine('| --- | --- | --- | --- |')
+    foreach ($row in $rows) {
+        foreach ($configuration in @('with_skill', 'without_skill')) {
+            $run = if ($configuration -eq 'with_skill') { $row.WithSkill } else { $row.WithoutSkill }
+            $isolationReport = if ($null -ne $run) { $run.IsolationReport } else { '-' }
+            $evidence = if ($null -ne $run -and $run.ProcessEvidence) { 'yes' } elseif ($null -ne $run) { 'none' } else { '-' }
+            [void]$builder.AppendLine("| $($row.EvalName) | $configuration | $isolationReport | $evidence |")
         }
     }
 
