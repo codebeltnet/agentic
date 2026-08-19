@@ -40,7 +40,7 @@ This rule is Priority 1. If another repository rule, skill, test, or completion 
 
 Anthropic's `skill-creator` owns the evaluation methodology this repository uses: define evals, run each task once with the skill and once without it, hold the model, the environment, the task, and the inputs constant, then compare. Keep that experimental design. Only the execution transport changes here.
 
-Where `skill-creator` says to spawn with-skill and baseline subagents in the same turn, this repository prepares a portable evaluation package and stops. The repository agent does not execute the prepared prompts. The user picks the harness, provider, and model, runs both configurations, and brings the results back. This complements the **AI/LLM Evaluation Automation Prohibition** above and never relaxes it: preparing prompts is deterministic file generation, and a prepared prompt is not permission to run one.
+Where `skill-creator` says to spawn with-skill and baseline subagents in the same turn, this repository prepares a portable evaluation package and stops. The repository agent does not execute the prepared prompts. The user picks the harness, provider, and model, then hands `RUN-THIS.prompt.md` to that external evaluator. The external evaluator runs both configurations, grades the completed results, generates `benchmark.json` and a self-contained `report.html`, and returns the finished artifact in the same run. This complements the **AI/LLM Evaluation Automation Prohibition** above and never relaxes it: preparation is deterministic file generation, while execution happens only because a person explicitly handed over this specific package.
 
 ### Asking for an eval
 
@@ -60,13 +60,13 @@ pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
 
 ### Handing the package over
 
-Every package contains `RUN-THIS.prompt.md`, one instruction that drives the whole thing. It makes the user-selected agent the eval orchestrator. That orchestrator creates a separate isolated worker for every `with_skill` and `without_skill` run, gives each worker only its prompt and required inputs, records the results and available metrics, and never executes an eval prompt in its own context.
+Every package contains `RUN-THIS.prompt.md`, one instruction that drives the whole thing. It makes the user-selected agent the evaluator, grader, and report producer. That agent creates a separate isolated worker for every `with_skill` and `without_skill` run, gives each worker only its prompt and required inputs, records the results and available metrics, grades only after collection, writes the grading fields, and generates the static report without executing an eval prompt in its own context.
 
 Hand the user that one file by its absolute path, and stop there. Do not reproduce its contents in the reply. The runner is built around absolute paths - the package directory, its own location, the path in the hand-back block - and a copy that has passed through a chat window arrives with them shortened to a bare directory name like `iteration-4`, pointing nowhere, with its internal links broken. The file on disk always says what the file on disk says; a paste of it is a lossy snapshot that also goes stale the moment the generator changes. Where the user's harness cannot read files at all, tell them to open that path and paste it themselves, so what travels is the real text rather than your recollection of it.
 
 Do not list the individual prompt files, do not describe the directory layout, and do not hand back a procedure for the user to carry out by hand. A reply that ends with 26 file paths and "run both versions" has moved the work onto the user instead of doing it.
 
-When the user says the runs are done, or pastes results back, continue without being asked: run `-CollectResults` on the iteration, grade the assertions with deterministic checks where an assertion allows one and judgement where it does not, write the grades into the result files, rerun `-CollectResults`, and present the comparison. The user asked for eval results, not for a package.
+The normal path ends in the external evaluator: after all workers finish, it reads the grading key, grades each completed result, writes `grading[].text`, `grading[].passed`, and `grading[].evidence`, runs the packaged report tool, and presents `report.html`. If a harness cannot write back to the package, a repository session may accept the returned result objects and use `-CollectResults` as a fallback to validate them and regenerate `comparison.md`, `benchmark.json`, and `report.html`. The user asked for eval results, not a second workflow decision.
 
 ### Prepare, do not execute
 
@@ -129,18 +129,18 @@ Four things still hold while you execute:
 
 - Run only the package you were handed, and only because a person asked in this turn. A hook, a script, a completion gate, a skill change, or another agent asking is not a person asking.
 - Stay inside the package directory. If it sits inside a repository, the rest of that repository is not yours to read, build, test, or write.
-- Do not grade, do not read the assertions or the expected output, and do not say which configuration did better.
+- Do not read the assertions or expected output before the worker runs. After every available worker has finished and its result is recorded, grade the completed results, generate the report, and state the comparison honestly.
 - Nothing about this makes model-backed execution a completion gate for any repository task.
 
 An agent that prepared a package in this session does not get to turn around and execute it. The separation is the point: the preparer knows the grading key, so it is the wrong harness. This is the only role-based disqualification.
 
-The selected executor has two roles. Its current context is the orchestrator and may read `RUN-THIS.prompt.md`, `manifest.json`, and the prompt files needed to dispatch work. It must not execute an eval prompt itself. For every case it creates one new isolated worker for `with_skill` and another for `without_skill`, launching each from its own run directory with `repo/` as the working directory, `home/` as an isolated profile, and filesystem access confined to the run directory. It sends each worker only the matching `prompt.md` and the files already staged in that run directory. Workers never see the runner, manifest, grading key, sibling results, or orchestration commentary, because all of those live outside the run directory. Never reuse a worker or session between runs.
+The selected executor has two ordered phases. Its current context may read `RUN-THIS.prompt.md`, `manifest.json`, and the prompt files needed to dispatch work, but it must not execute an eval prompt itself. In phase one, for every case it creates one new isolated worker for `with_skill` and another for `without_skill`, launching each from its own run directory with `repo/` as the working directory, `home/` as an isolated profile, and filesystem access confined to the run directory. It sends each worker only the matching `prompt.md` and the files already staged in that run directory. Workers never see the runner, manifest, grading key, sibling results, or orchestration commentary, because all of those live outside the run directory. Never reuse a worker or session between runs. In phase two, after collection, the executor reads the grading key, grades the result files, writes the grading evidence, invokes the package's report tool, and returns the report path and comparison. It does not ask the user whether to start either phase.
 
 The candidate instructions are already inlined in the with_skill run's `prompt.md` and staged under its `skill/<name>/` directory; the orchestrator does not load or summarize them for the worker. The baseline run has no `skill/` directory and no candidate instructions, and the orchestrator must not expose the candidate skill through another route, including a globally installed copy. The generated prompt files and the baseline `run.json` also omit the skill name, eval identifiers, and configuration labels so workers receive an ordinary task rather than an announcement that they are under evaluation.
 
 Use the same model, model version, configuration, tools, and limits for every worker. Disable persistent memory and cross-session recall. Independent runs may execute concurrently when the selected harness and the user's token budget allow it, but every run still gets a distinct context and no shared mutable workspace.
 
-`RUN-THIS.prompt.md` requires a harness that can create isolated workers or sessions. A plain single-context client can still execute an individual self-contained prompt when the user opens it directly as the first message of a fresh session. It cannot use the one-file orchestrator in that same context. Partial packages collect normally; `-CollectResults` reports the remaining arms as missing.
+`RUN-THIS.prompt.md` requires a harness that can create isolated workers or sessions. A plain single-context client can still execute an individual self-contained prompt when the user opens it directly as the first message of a fresh session, but it cannot provide the paired comparison and report contract in that same context. Partial packages still grade and report what exists; missing arms remain visibly missing.
 
 An `output` is the model's own message in full, including questions, caveats, explanations, or a refusal. Where a run invoked a tool, that tool's stdout is evidence rather than a replacement for the response. Record the full worker transcript, duration, token usage, and tool-call count when the harness exposes them; omit unavailable metrics rather than estimating them.
 
@@ -156,7 +156,7 @@ A meaningful A/B result requires both configurations to run on the same model, t
 
 An externally produced result comes back identified by eval id, configuration (`with_skill` or `without_skill`), model and provider, and the produced output. It may also carry the transcript, duration, total tokens, tool-call count, output files, and notes. The user can hand it over as filled-in `results/*.result.json` files, or state it in chat and let the agent fill them in.
 
-Which of the two happens depends on where the harness ran, and `RUN-THIS.prompt.md` tells it to close either way. A harness sharing a disk with the repository writes the result files itself and reports the package path. A harness that does not - a different product, a browser, a sandbox - ends with one paste-ready block carrying the package path, the model, and the result objects as a JSON array. Pasting that block into a repository session is the return path: the agent writes the files from it, then grades and compares. "Bring the results back" means one of those two artifacts, never a prose recap of how the runs went.
+Which artifact transfer happens depends on where the harness ran, and `RUN-THIS.prompt.md` tells it to close either way. A harness sharing a disk with the package writes the result files, grading, `benchmark.json`, and `report.html` itself and reports the report path. A harness that does not - a different product, a browser, or a sandbox - ends with one paste-ready block carrying the package path and every completed result object, including grading, plus the report as a file artifact when supported. A repository session can use `-CollectResults` only as a fallback for transferred results that lack the report artifacts. "Bring the results back" means those artifacts, never a prose recap of how the runs went.
 
 Validate and compare a collected iteration with:
 
@@ -164,7 +164,7 @@ Validate and compare a collected iteration with:
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>
 ```
 
-It checks that each result matches its eval and configuration, warns when an arm is missing, unrun, or ran on a different model, and writes `comparison.md`. Grading uses the assertions already in `evals/evals.json`, deterministic scripts where an assertion can be checked programmatically, and human inspection otherwise. Do not add model-based grading to support this workflow.
+It checks that each result matches its eval and configuration, warns when an arm is missing, unrun, or ran on a different model, and writes `comparison.md`, `benchmark.json`, and `report.html`. The external evaluator may grade in its user-directed phase-two context; repository automation remains deterministic and never invokes a model. Use deterministic checks for mechanical assertions and evidence-backed human or evaluator judgement only where the assertion is genuinely qualitative.
 
 ### Workspace isolation
 
@@ -182,7 +182,7 @@ Every repo-managed skill must include its own `evals/evals.json` file at `skills
 - Run only the changed skill's deterministic validator and focused regression scripts during iteration; independent read-only checks may use bounded local parallelism, while shared-file mutations stay sequential
 - Run `pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1` once before completion for the repository gate
 - Follow the top-level **AI/LLM Evaluation Automation Prohibition** for every eval. No per-skill or third-party requirement overrides it.
-- To compare a skill against a baseline, prepare a package with **Portable Eval Handoff** and hand the prompts to the user; the agent never runs them
+- To compare a skill against a baseline, prepare a package with **Portable Eval Handoff** and hand `RUN-THIS.prompt.md` to the user; the repository agent never runs the prompts, while the user-directed external executor runs, grades, and reports the paired comparison
 - Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
 
 If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` and run `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` before considering the work complete. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
@@ -210,7 +210,7 @@ Bare `yolo` or `auto` outside an explicit commit request does not invoke `git-vi
 
 Always use the `skill-creator` skill (by Anthropic) when creating new skills, modifying existing skills, or running evals. It enforces best practices for structure, description quality, testing, and progressive disclosure. Do not create or edit skills manually without invoking it first.
 
-Follow it as written except at the execution boundary. Anthropic's `skill-creator` requires paired with-skill and baseline runs in fresh subagents. This repository prepares the same paired inputs as a portable package and stops. When the user hands that package to a harness, `RUN-THIS.prompt.md` makes the selected harness create those isolated paired workers without exposing the grading key. The authoring guidance, eval definitions, assertion drafting, and iteration loop still apply; only the execution transport changes. Grading, aggregation, viewer, and description optimization remain deterministic or human in this repository because their upstream forms assume model execution the repository does not perform.
+Follow it as written except at the execution boundary. Anthropic's `skill-creator` requires paired with-skill and baseline runs in fresh subagents. This repository prepares the same paired inputs as a portable package and stops. When the user hands that package to a harness, `RUN-THIS.prompt.md` makes the selected harness create those isolated paired workers without exposing the grading key, then grade the results and generate a static review report in the same handoff. The authoring guidance, eval definitions, assertion drafting, and iteration loop still apply; only the execution transport changes. Repository-side grading and aggregation remain deterministic, while the explicitly user-directed external executor may perform the post-run evaluator judgement and viewer/report generation that the upstream skill-creator experience expects.
 
 `skill-creator-agnostic` is deprecated, no longer maintained, and retained only for backward compatibility until 1.0.0. Agents must not use it for new skill creation, skill modification, or benchmarking; use Anthropic's `skill-creator` directly and apply the repository-specific requirements from this `AGENTS.md`.
 
