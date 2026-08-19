@@ -1242,6 +1242,16 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Do not add model-based grading to support this workflow.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Asking for an eval'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`eval <skill>`, `evaluate <skill>`'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Run the script immediately when asked. Do not reply with a plan, a menu of options'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Eval preparation is a completion gate'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Adding or modifying any repo-managed skill triggers this workflow.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Preparing and reporting satisfies this gate. Executing a prompt never does'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`scripts/sync-skill-install.ps1` runs last'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'a completion gate an agent cannot skip'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares a portable evaluation package and stops'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>'
     Assert-NotContains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'run-skill-benchmark.ps1'
@@ -1322,6 +1332,14 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'comparison.md'))) {
             throw 'prepare-skill-evals.ps1 -CollectResults must write comparison.md.'
+        }
+
+        $changedOutput = & pwsh -NoProfile -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "prepare-skill-evals.ps1 -Changed failed: $($changedOutput -join [Environment]::NewLine)"
+        }
+        if (($changedOutput -join ' ') -notmatch 'Changed repo-managed skills in') {
+            throw 'prepare-skill-evals.ps1 -Changed must report the scope it resolved.'
         }
 
         $insideRepo = Join-Path $repoRoot 'agentic-eval-isolation-check'

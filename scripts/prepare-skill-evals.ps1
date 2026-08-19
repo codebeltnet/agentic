@@ -825,7 +825,8 @@ function Get-ChangedSkillNames {
 function Invoke-ChangedMode {
     $repoRoot = Get-RepoRoot
     $baseRef = Get-BaseRef -RepoRoot $repoRoot
-    $changedSkills = Get-ChangedSkillNames -RepoRoot $repoRoot -BaseRef $baseRef
+    # An empty pipeline result unrolls to $null on assignment, so keep the array wrapper here.
+    $changedSkills = @(Get-ChangedSkillNames -RepoRoot $repoRoot -BaseRef $baseRef)
 
     $scope = if ([string]::IsNullOrWhiteSpace($baseRef)) { 'the working tree' } else { "$baseRef...HEAD plus the working tree" }
     Write-Host "Changed repo-managed skills in $scope"
