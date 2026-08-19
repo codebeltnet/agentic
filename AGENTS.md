@@ -40,7 +40,23 @@ Anthropic's `skill-creator` owns the evaluation methodology this repository uses
 
 Where `skill-creator` says to spawn with-skill and baseline subagents in the same turn, this repository prepares a portable evaluation package and stops. The repository agent does not execute the prepared prompts. The user picks the harness, provider, and model, runs both configurations, and brings the results back. This complements the **AI/LLM Evaluation Automation Prohibition** above and never relaxes it: preparing prompts is deterministic file generation, and a prepared prompt is not permission to run one.
 
-`Evaluate <skill> using the existing evals` means prepare the package, not run it.
+### Asking for an eval
+
+`eval <skill>`, `evaluate <skill>`, `eval this skill`, `prepare evals for <skill>`, and `evaluate <skill> using the existing evals` are all requests for this workflow. Treat them as instructions to prepare the package, never to run it, and never as a request to write new eval cases unless the user asks for that too.
+
+Run the script immediately when asked. Do not reply with a plan, a menu of options, or a question about which harness or model the user wants; the harness and model are chosen after the package exists, by the user, outside this repository.
+
+```
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-test
+```
+
+`eval` with no skill named, or `eval changed`, means the whole changed set:
+
+```
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
+```
+
+Then report the prepared prompt paths and stop.
 
 ### Prepare, do not execute
 
@@ -61,6 +77,22 @@ It reads `skills/<name>/evals/evals.json` and writes one directory per eval into
 Useful switches: `-Eval <id...>` to prepare a subset, `-Iteration <n>` plus `-Force` to replace an iteration, `-OutputRoot <path>` to relocate the workspace, and `-MaxInlineBytes <n>` to trim what gets inlined for a smaller context window.
 
 The expected output and the assertions are the grading key. They belong in `eval-metadata.json` and must never appear in either prompt — a baseline handed the answer key is not a baseline.
+
+### Eval preparation is a completion gate
+
+Adding or modifying any repo-managed skill triggers this workflow. It is not something the user asks for separately, and "the change is small" or "the evals did not change" does not exempt it. Touching `SKILL.md`, `FORMS.md`, `references/`, `scripts/`, `assets/`, or `evals/` under `skills/<name>/` is a skill change.
+
+After the final skill edit is in place, run:
+
+```
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
+```
+
+It resolves every repo-managed skill this branch changed, uncommitted work included, and prepares a package for each. With no skill changed it says so and exits clean, which satisfies the gate.
+
+Then name the prepared prompt paths in the completion message so the user knows what is waiting for them. Preparing and reporting satisfies this gate. Executing a prompt never does, and an agent that runs one has broken the Priority 1 rule rather than completed the gate.
+
+Run it before `scripts/sync-skill-install.ps1`, which stays the last gate because it must observe the final state of every file. See [Blocking Completion Gates](#blocking-completion-gates).
 
 ### Manual execution boundary
 
@@ -109,7 +141,7 @@ Every repo-managed skill must include its own `evals/evals.json` file at `skills
 - To compare a skill against a baseline, prepare a package with **Portable Eval Handoff** and hand the prompts to the user; the agent never runs them
 - Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
 
-If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` before considering the work complete. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
+If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` and run `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` before considering the work complete. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
 
 ## Git Identity
 
@@ -239,7 +271,7 @@ Before any completion message, reread the skill instructions and the current con
 
 For script-backed workflows, creating or editing files is not enough on its own. If a skill requires deterministic maintenance or verification commands, run them before completion and report their concrete outcome. For `dotnet-docfx-digest`, `scripts/agents.cs` and `scripts/docfx.cs --build-api-model --validate-samples --verify-docfx-build` are blocking completion gates whenever the skill or task summary says they are required.
 
-Whenever a repo-managed skill was edited, `scripts/sync-skill-install.ps1` is a blocking completion gate in the same sense, and it is the last gate to run because every other step can still change a file. Report its actual output; an earlier run in the same session does not satisfy it. See [Local Install Sync](#local-install-sync).
+Whenever a repo-managed skill was edited, two gates apply in a fixed order. `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` runs first and prepares the eval packages for the changed skills, reporting the prompt paths. `scripts/sync-skill-install.ps1` runs last, because every other step can still change a file. Report the actual output of both; an earlier run in the same session satisfies neither. See [Eval preparation is a completion gate](#eval-preparation-is-a-completion-gate) and [Local Install Sync](#local-install-sync).
 
 ## User Input UX
 
