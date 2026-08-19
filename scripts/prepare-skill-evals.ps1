@@ -27,7 +27,7 @@
     Iteration number to write. Defaults to the next unused iteration in the workspace.
 
 .PARAMETER OutputRoot
-    Workspace root. Defaults to <temp>/<skill>-workspace. Must be outside this repository.
+    Workspace root. Defaults to .bot/<skill>-workspace. A path inside this repository must stay under .bot/.
 
 .PARAMETER MaxInlineBytes
     Budget for inlining referenced skill resources beyond SKILL.md, which is always inlined. Anything over budget is
@@ -414,31 +414,12 @@ function New-InputFilesSection {
 
 function New-PromptDocument {
     param(
-        [int]$IterationNumber,
         [object]$EvalEntry,
-        [string]$EvalName,
-        [string]$Configuration,
         [string]$InstructionSection,
-        [string]$InputFilesSection,
-        [string]$GeneratedUtc
+        [string]$InputFilesSection
     )
 
-    # The skill name is deliberately absent from this header. Naming it would tell a baseline run which skill it is
-    # being compared against, and the baseline must reach the task with nothing but its normal capabilities.
-    $header = @"
-<!--
-codebeltnet/agentic portable eval prompt
-iteration: $IterationNumber
-eval_id: $($EvalEntry.id)
-eval_name: $EvalName
-configuration: $Configuration
-generated_utc: $GeneratedUtc
-Paste this entire file as the first message to the model under test.
--->
-"@
-
     $sections = [System.Collections.Generic.List[string]]::new()
-    $sections.Add($header)
     $sections.Add($InstructionSection)
     $sections.Add("# Task`n`n$(([string]$EvalEntry.prompt).Trim())")
     if (-not [string]::IsNullOrWhiteSpace($InputFilesSection)) {
@@ -480,6 +461,10 @@ function New-ResultStub {
         executed_utc = ''
         output = ''
         output_files = @()
+        transcript = ''
+        duration_seconds = $null
+        total_tokens = $null
+        tool_calls = $null
         grading = @($grading)
         notes = ''
     }
@@ -635,8 +620,8 @@ function Invoke-PrepareMode {
         $inputFilesSection = New-InputFilesSection -Fixtures @($fixtures)
         $assertions = Get-Assertions -EvalEntry $evalEntry
 
-        $withSkillPrompt = New-PromptDocument -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -InstructionSection $withSkillInstructions -InputFilesSection $inputFilesSection -GeneratedUtc $generatedUtc
-        $withoutSkillPrompt = New-PromptDocument -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -InstructionSection $withoutSkillPreamble -InputFilesSection $inputFilesSection -GeneratedUtc $generatedUtc
+        $withSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withSkillInstructions -InputFilesSection $inputFilesSection
+        $withoutSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withoutSkillPreamble -InputFilesSection $inputFilesSection
 
         Write-Utf8File -Path (Join-Path $evalDirectory 'with-skill.prompt.md') -Content $withSkillPrompt
         Write-Utf8File -Path (Join-Path $evalDirectory 'without-skill.prompt.md') -Content $withoutSkillPrompt
@@ -693,7 +678,9 @@ function Invoke-PrepareMode {
             eval_name = $evalName
             directory = $evalName
             with_skill_prompt = "$evalName/with-skill.prompt.md"
+            with_skill_result = "$evalName/results/with-skill.result.json"
             without_skill_prompt = "$evalName/without-skill.prompt.md"
+            without_skill_result = "$evalName/results/without-skill.result.json"
             metadata = "$evalName/eval-metadata.json"
             input_files = @($fixtures | ForEach-Object { $_.PackagePath })
         })
@@ -731,9 +718,10 @@ function Invoke-PrepareMode {
     Write-Host 'Point the harness at that path. Do not reproduce its contents in chat: a pasted copy'
     Write-Host 'loses the absolute paths it depends on, and the harness then cannot find the package.'
     Write-Host ''
-    Write-Host 'That file suits a harness that can open fresh contexts of its own. With a plain chat'
-    Write-Host 'client, skip it and paste one with-skill/without-skill prompt per fresh session instead;'
-    Write-Host 'bring each reply back here and this repository session records and grades it.'
+    Write-Host 'The runner makes the selected agent an orchestrator. It must create one isolated fresh'
+    Write-Host 'worker per run and must not execute an eval prompt in its own context.'
+    Write-Host 'A plain single-context client cannot use the one-file runner; open each prompt directly'
+    Write-Host 'as the first message of a separate fresh session instead.'
     Write-Host ''
     Write-Host 'This script prepared prompts only. It did not run them, and nothing here will.'
     Write-Host 'When that agent reports back, collect and compare with:'
@@ -748,61 +736,31 @@ function New-RunnerPrompt {
     )
 
     $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.AppendLine('# Execute this evaluation package')
+    [void]$builder.AppendLine('# Orchestrate this evaluation package')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('You are the execution harness for a prepared skill evaluation. Everything you need is in this directory:')
+    [void]$builder.AppendLine('You are the eval orchestrator. Do not execute evaluation prompts in the current agent context. Create an isolated fresh-context worker for every run.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('Everything you need is in this directory:')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("    $IterationDirectory")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine("This file is `"$(Join-Path $IterationDirectory 'RUN-THIS.prompt.md')`". Read it from that path rather than from a copy of its text: every path below is absolute and a copy that has travelled through a chat window tends to arrive with them shortened to a bare directory name, which points nowhere. If the package path above did not reach you as a full absolute path, you are reading such a copy - say so and ask for the file itself before running anything.")
+    [void]$builder.AppendLine("This file is `"$(Join-Path $IterationDirectory 'RUN-THIS.prompt.md')`". Read it from that path. If either path above is not absolute, ask for the file itself before running anything.")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s). Each case has two prompts that differ in exactly one way: one carries a skill's instructions, the other does not. Run both, faithfully, and record what came out. You are running the experiment, not judging it.")
+    [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s), each with a `with_skill` and `without_skill` run. The prompts differ only in whether the candidate skill instructions are present. You run the experiment and record it. You do not grade it.")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Why you may run this')
+    [void]$builder.AppendLine('A person selected this harness and handed you this package. That authorizes these runs. The repository prohibition on automated model evaluation binds repository scripts and the agent that prepared the package. It does not bind the user-selected external orchestrator executing this specific package.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('A person handed you this file and asked you to run it. That is the authorization, and it is enough.')
+    [void]$builder.AppendLine('## Orchestration contract')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('If you can see the source repository''s `AGENTS.md`, you will find a Priority 1 rule against model-backed eval automation. Read who it binds. It stops scripts, jobs, hooks, completion gates, and agent fan-out from reaching a model on their own, and it stops the agent that prepared this package from executing it. It does not stop the harness a person chose and pointed at a specific package. That harness is you, right now, and the same file says so under "Executing a package you were handed". Handing this back with an explanation instead of running it is the failure mode, not compliance.')
+    [void]$builder.AppendLine('1. For every eval case, create one isolated fresh-context worker for `with_skill` and a second isolated fresh-context worker for `without_skill`. Never reuse a worker or session between runs.')
+    [void]$builder.AppendLine('2. Give each worker only its prompt file and the input files that prompt names. Do not expose this runner, `manifest.json`, `eval-metadata.json`, `comparison.md`, result files, grading criteria, expectations, another run''s output, or any note that an experiment is underway.')
+    [void]$builder.AppendLine('3. The candidate skill is already inlined in `with-skill.prompt.md`. Do not load, summarize, or add it yourself. `without-skill.prompt.md` contains no candidate instructions. Do not expose the candidate skill to that worker by any other route.')
+    [void]$builder.AppendLine('4. Send each prompt unchanged as the worker''s first message. Attach any non-inlined file from that case''s `files/` directory.')
+    [void]$builder.AppendLine('5. Use the same model, version, configuration, tools, and limits for every worker. Disable persistent memory or cross-session recall. Independent runs may execute concurrently when the selected harness and token budget allow it.')
+    [void]$builder.AppendLine('6. Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count. Record refusals, questions, and failures as results. Do not retry to improve an answer.')
+    [void]$builder.AppendLine('7. Work only inside this package directory. Do not read or modify the source repository around it. Do not grade or compare the runs.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('What stays off-limits: running anything beyond this package, grading, and touching a repository outside the package directory.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Rules that keep the experiment valid')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Run every prompt in a fresh context. Nothing from one run may carry into another, in either direction. A separate chat session is a fresh context; so is a spawned subagent. Neither is required over the other, and see [If you can only hold one context](#if-you-can-only-hold-one-context) if you cannot open a second one.')
-    [void]$builder.AppendLine('2. Fresh means fresh of memory too, not just of transcript. A harness with persistent memory, saved project instructions, or recall across sessions can hand a "new" session everything it learned while running the last one - that this is an evaluation, what the other arm did, what the person seemed to want. If yours does, turn it off for these runs or use a profile that has none. A session that remembers the previous case is a second run in the same context wearing a new name.')
-    [void]$builder.AppendLine('3. An evaluated context sees the prompt file and the files it names. Nothing else: not this file, not the assertions, not another case''s output, not your summary of what went wrong last time, not a note that an experiment is underway. Everything the run legitimately needs is already inside the prompt, and anything you add on top is a variable you have introduced into a comparison that is supposed to differ in exactly one thing.')
-    [void]$builder.AppendLine('4. Do not read `eval-metadata.json`, `comparison.md`, or any existing file under `results/` before or while running. Those hold the grading key, and a run that has seen the answer proves nothing.')
-    [void]$builder.AppendLine('5. Use one model, one version, one configuration for every run in this package. Mixing models measures the model instead of the skill.')
-    [void]$builder.AppendLine('6. Paste each prompt file as the first message of its run, unchanged. Do not shorten it, summarize it, fix it, or add your own framing.')
-    [void]$builder.AppendLine('7. Attach any file the prompt says is not inlined, from the case''s `files/` directory.')
-    [void]$builder.AppendLine('8. Record what the run actually produced, including a refusal, a clarifying question, or a failure. Those are results too. Do not retry to get a nicer answer.')
-    [void]$builder.AppendLine('9. Do every bit of work inside the package directory above, and treat it as the whole world. The input files there are disposable copies. If that directory sits inside a source repository, nothing outside it is yours: do not read the skill from its source folder, do not resolve the task against the real project, and do not build, test, or write anywhere else in that repository.')
-    [void]$builder.AppendLine('10. Take this file as your only operating instructions. It is self-contained, so do not load a skill, template, or workflow of your own to decide how to run the package; whatever a prompt file needs is already inside it.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Procedure')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('For each `eval-*` directory, in order:')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Read `with-skill.prompt.md` and run it in a fresh context.')
-    [void]$builder.AppendLine('2. Overwrite `results/with-skill.result.json` with the shape below. Overwrite it without reading it first.')
-    [void]$builder.AppendLine('3. Read `without-skill.prompt.md` and run it in a fresh context.')
-    [void]$builder.AppendLine('4. Overwrite `results/without-skill.result.json` the same way.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Get through as many cases as you can. The package is not all-or-nothing: a partially filled one is collected exactly like a complete one, and the validator reports whatever is still empty as missing. Stopping partway with real runs recorded is a useful result; stopping at the start with none is not.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## If you can only hold one context')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('You do not need subagents, background jobs, or the ability to drive yourself in a loop to be useful here. Every prompt file is self-contained - the skill is inlined for harnesses that cannot read files - so one file pasted into one fresh session is a complete, valid run, whether that session comes from a spawned agent or from a person opening a new chat. What you do need is to know which of the two roles you are in.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Reading this file has put you in the coordinator role. You now know an experiment is running, that there are two arms, and what the rules are - and that knowledge is exactly what these prompts must not carry. Most of them measure how a model behaves on a request that looks ordinary: whether it acts, asks first, hesitates, or refuses. A run that knows an evaluator is watching leans toward acting decisively, which is the behavior under measurement. So this context is spent as a subject. It can still coordinate.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('First make sure you actually cannot. A subagent, a spawned task, a fresh session you can open yourself - any of these clears it, and this file is written for a harness that has one, because that is what makes twenty-six runs cost a single handover. Conclude that you are stuck only after looking.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('If you truly cannot, this package is not for you, and the useful thing you can do is say so in a couple of sentences and get out of the way. Tell the person: this context has read the runner instructions and can no longer produce a clean run; a harness that can open fresh contexts runs the whole package unattended; without one, the way through is to paste the individual `with-skill.prompt.md` and `without-skill.prompt.md` files into fresh sessions and take each reply to a session working in the source repository, which knows the real case names and writes and grades the results.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Do not appoint yourself coordinator on the way out. Do not name which case to run next, do not reconstruct a path to a prompt file, and do not offer to record replies. A context that cannot open a fresh session generally cannot list the package either, so a case name it produces is a guess - and a plausible wrong path costs the person more than no path at all. The repository session has the directory in front of it and does this correctly.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('If the person weighs the tradeoff and tells you to run a prompt in this context anyway, run it, and say so in that result''s `notes` so grading can discount it. What you must never do is run a prompt in a context that has read these instructions and record it as a clean run.')
+    [void]$builder.AppendLine('For each case listed in `manifest.json`, use `with_skill_prompt` with `with_skill_result` and `without_skill_prompt` with `without_skill_result`. Run the prompts in separate workers, then overwrite the matching result file without reading its existing contents. A partial package is valid; record every completed run before stopping.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Result shape')
     [void]$builder.AppendLine()
@@ -819,18 +777,19 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('  "executed_utc": "2026-01-01T00:00:00Z",')
     [void]$builder.AppendLine('  "output": "the complete response the run produced",')
     [void]$builder.AppendLine('  "output_files": ["paths of any files the run wrote"],')
-    [void]$builder.AppendLine('  "duration_seconds": 0,')
-    [void]$builder.AppendLine('  "total_tokens": 0,')
-    [void]$builder.AppendLine('  "tool_calls": 0,')
+    [void]$builder.AppendLine('  "transcript": "the complete worker transcript when the harness exposes it",')
+    [void]$builder.AppendLine('  "duration_seconds": 12.5,')
+    [void]$builder.AppendLine('  "total_tokens": 1234,')
+    [void]$builder.AppendLine('  "tool_calls": 6,')
     [void]$builder.AppendLine('  "notes": "anything that would change how this result reads"')
     [void]$builder.AppendLine('}')
     [void]$builder.AppendLine('```')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`duration_seconds`, `total_tokens`, and `tool_calls` are optional: fill them in if your harness reports them, and leave them out entirely if it does not rather than guessing. They are worth capturing when available because a skill that lifts the pass rate while tripling the tokens or the tool calls is a different proposition from one that lifts it for free, and that only shows up if someone wrote the numbers down while the run was still in front of them.')
+    [void]$builder.AppendLine('`transcript`, `duration_seconds`, `total_tokens`, and `tool_calls` are optional. Include each field when the harness exposes it and omit it otherwise. Never estimate a missing metric.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`configuration` is `with_skill` or `without_skill` and must match the prompt you ran. `eval_id` and `eval_name` are in the prompt header comment. Put the full response in `output`; if it is very long, write it beside the result file and list that path in `output_files` with a summary in `output`.')
+    [void]$builder.AppendLine('`configuration` is `with_skill` or `without_skill` and must match the prompt you ran. Read `eval_id` and `eval_name` from `manifest.json`; do not send them to the worker. Put the full model response in `output`. If it is very long, write it beside the result file and list that path in `output_files` with a summary in `output`.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`output` means the message the model wrote, in its own words and in full - every question it asked, every caveat, every line of explanation, and its refusal if it refused. If the run invoked a tool or a script, that tool''s stdout is evidence the model quoted, not the response: dropping the model''s own words and pasting only a command''s output deletes the part the assertions are written against, because they usually turn on whether the run acted, asked, hedged, or explained rather than on an exit code. Include both when a run did both.')
+    [void]$builder.AppendLine('`output` is the model''s message in full, including questions, caveats, explanations, or a refusal. Tool output is evidence from the run, not a replacement for the model response. Put the full worker event history in `transcript` when the harness exposes it.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Do not grade')
     [void]$builder.AppendLine()
@@ -889,9 +848,9 @@ function New-PackageReadme {
     [void]$builder.AppendLine('3. Paste `without-skill.prompt.md` in a separate fresh session, with the same attachments.')
     [void]$builder.AppendLine('4. Save each response into the matching file under the eval''s `results/` directory.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`RUN-THIS.prompt.md` is worth handing over only to a harness that can open fresh contexts of its own - a subagent, a spawned task, a new session it controls - because that is what turns twenty-six runs into one handover. Give it to a plain chat client and you get a coordinator that cannot run anything and can only name the next file for you, which is slower than doing it yourself.')
+    [void]$builder.AppendLine('`RUN-THIS.prompt.md` turns a harness that can create isolated workers or sessions into the eval orchestrator. The orchestrator reads the package, creates one new worker per run, and keeps runner instructions and grading data out of every worker. It never executes an eval prompt in its own context.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('With a single-context harness, skip the runner and use the four steps above directly: paste one prompt file per fresh session, keep `RUN-THIS.prompt.md` out of those sessions since a run that knows it is being evaluated stops being an ordinary request, and bring each reply to a session working in the source repository, which writes the result files and grades. Fill in as many as you get to: `-CollectResults` validates whatever is present and reports the rest as missing, so a partial iteration is still worth collecting.')
+    [void]$builder.AppendLine('A plain single-context client cannot use the one-file orchestrator. Open each prompt file directly as the first message of a separate fresh session instead, keep `RUN-THIS.prompt.md` out of those sessions, and bring each reply back to the repository session. `-CollectResults` accepts a partial iteration and reports unfilled runs as missing.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A with-skill run on one model compared against a baseline on another measures both the model and the skill. That is not a skill-effectiveness result, so do not report it as one. If you do mix models, say so explicitly and treat the comparison as directional only.')
     [void]$builder.AppendLine()
@@ -902,6 +861,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine('- `model`, `provider`, `harness` - what actually ran it, as specifically as you know')
     [void]$builder.AppendLine('- `executed_utc` - when')
     [void]$builder.AppendLine('- `output` - the produced output, or a summary plus paths in `output_files`')
+    [void]$builder.AppendLine('- `transcript`, `duration_seconds`, `total_tokens`, and `tool_calls` - include the values the harness exposes; omit unavailable values rather than estimating them')
     [void]$builder.AppendLine('- `grading[].passed` - `true` or `false` per assertion once you or a deterministic script has checked it, with `evidence`')
     [void]$builder.AppendLine('- `notes` - anything that would change how the result reads')
     [void]$builder.AppendLine()
@@ -1094,6 +1054,10 @@ function Invoke-CollectMode {
                 Graded = $graded.Count
                 Passed = $passed
                 Total = $total
+                TranscriptRecorded = -not [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $result -Name 'transcript' -Default ''))
+                DurationSeconds = Get-JsonProperty -Object $result -Name 'duration_seconds'
+                TotalTokens = Get-JsonProperty -Object $result -Name 'total_tokens'
+                ToolCalls = Get-JsonProperty -Object $result -Name 'tool_calls'
             }
         }
 
@@ -1130,6 +1094,22 @@ function Invoke-CollectMode {
         $withoutModel = if ($null -ne $row.WithoutSkill) { $row.WithoutSkill.Model } else { '-' }
         $withoutGraded = if ($null -ne $row.WithoutSkill) { "$($row.WithoutSkill.Passed)/$($row.WithoutSkill.Graded) of $($row.WithoutSkill.Total)" } else { 'not run' }
         [void]$builder.AppendLine("| $($row.EvalName) | $($row.Assertions) | $withModel | $withGraded | $withoutModel | $withoutGraded |")
+    }
+
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Run metrics')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('| Eval | Configuration | Duration (s) | Tokens | Tool calls | Transcript |')
+    [void]$builder.AppendLine('| --- | --- | --- | --- | --- | --- |')
+    foreach ($row in $rows) {
+        foreach ($configuration in @('with_skill', 'without_skill')) {
+            $run = if ($configuration -eq 'with_skill') { $row.WithSkill } else { $row.WithoutSkill }
+            $duration = if ($null -ne $run -and $null -ne $run.DurationSeconds -and -not [string]::IsNullOrWhiteSpace([string]$run.DurationSeconds)) { [string]$run.DurationSeconds } else { '-' }
+            $tokens = if ($null -ne $run -and $null -ne $run.TotalTokens -and -not [string]::IsNullOrWhiteSpace([string]$run.TotalTokens)) { [string]$run.TotalTokens } else { '-' }
+            $toolCalls = if ($null -ne $run -and $null -ne $run.ToolCalls -and -not [string]::IsNullOrWhiteSpace([string]$run.ToolCalls)) { [string]$run.ToolCalls } else { '-' }
+            $transcript = if ($null -ne $run -and $run.TranscriptRecorded) { 'recorded' } else { '-' }
+            [void]$builder.AppendLine("| $($row.EvalName) | $configuration | $duration | $tokens | $toolCalls | $transcript |")
+        }
     }
 
     if ($warnings.Count -gt 0) {

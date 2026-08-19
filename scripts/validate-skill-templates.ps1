@@ -1248,7 +1248,10 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'citing it to refuse is a misreading'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'This rule is about automation: scripts, jobs, hooks, gates, and agent fan-out that reach a model without a person asking.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'An agent that prepared a package in this session does not get to turn around and execute it.'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Hand the user that one prompt.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Hand the user that one file by its absolute path'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Its current context is the orchestrator'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'It must not execute an eval prompt itself.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Never reuse a worker or session between runs.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'The user asked for eval results, not for a package.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Asking for an eval'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`eval <skill>`, `evaluate <skill>`'
@@ -1260,7 +1263,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`scripts/sync-skill-install.ps1` runs last'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'a completion gate an agent cannot skip'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed'
-    Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares a portable evaluation package and stops'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares the paired candidate and baseline inputs as a portable package and stops'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>'
     Assert-NotContains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'run-skill-benchmark.ps1'
     Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'Eval packages inside this repository must live under .bot/.'
@@ -1294,16 +1297,28 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         $runner = [System.IO.File]::ReadAllText($runnerPath, $utf8NoBom)
         foreach ($needle in @(
-            'Run every prompt in a fresh context.',
-            'Do not read `eval-metadata.json`',
-            'Use one model, one version, one configuration for every run',
-            '## Do not grade',
-            '## Why you may run this',
-            'It does not stop the harness a person chose and pointed at a specific package.',
-            'nothing outside it is yours'
+            'You are the eval orchestrator.',
+            'Do not execute evaluation prompts in the current agent context.',
+            'create one isolated fresh-context worker for `with_skill` and a second isolated fresh-context worker for `without_skill`',
+            'Never reuse a worker or session between runs.',
+            'Do not expose this runner',
+            'The candidate skill is already inlined in `with-skill.prompt.md`.',
+            'Use the same model, version, configuration, tools, and limits for every worker.',
+            'Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count.',
+            'Do not grade or compare the runs.',
+            '## Do not grade'
         )) {
             if (-not $runner.Contains($needle)) {
                 throw "RUN-THIS.prompt.md must state '$needle'."
+            }
+        }
+        foreach ($forbidden in @(
+            'this context has read the runner instructions and can no longer produce a clean run',
+            '## If you can only hold one context',
+            'If you truly cannot, this package is not for you'
+        )) {
+            if ($runner.Contains($forbidden)) {
+                throw "RUN-THIS.prompt.md must not contain the refusal path '$forbidden'."
             }
         }
         foreach ($entry in @($manifest.evals)) {
@@ -1315,12 +1330,23 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
 
         foreach ($entry in @($manifest.evals)) {
             $evalDirectory = Join-Path $iterationDirectory $entry.directory
+            foreach ($pathProperty in @('with_skill_prompt', 'with_skill_result', 'without_skill_prompt', 'without_skill_result')) {
+                if ($entry.PSObject.Properties.Name -notcontains $pathProperty) {
+                    throw "$($entry.eval_name) manifest entry must declare '$pathProperty'."
+                }
+                if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory $entry.$pathProperty))) {
+                    throw "$($entry.eval_name) manifest path '$pathProperty' does not exist."
+                }
+            }
             $withSkill = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'with-skill.prompt.md'), $utf8NoBom)
             $withoutSkill = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'without-skill.prompt.md'), $utf8NoBom)
             $metadata = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'eval-metadata.json'), $utf8NoBom) | ConvertFrom-Json
 
             if (-not $withSkill.Contains([string]$metadata.prompt) -or -not $withoutSkill.Contains([string]$metadata.prompt)) {
                 throw "$($entry.eval_name) must put the same task prompt in both configurations."
+            }
+            if ($withSkill.Contains('codebeltnet/agentic portable eval prompt') -or $withoutSkill.Contains('codebeltnet/agentic portable eval prompt')) {
+                throw "$($entry.eval_name) worker prompts must not announce that they are part of an evaluation."
             }
             if (-not $withSkill.Contains('# Response contract') -or -not $withoutSkill.Contains('# Response contract')) {
                 throw "$($entry.eval_name) must give both configurations a response contract."
@@ -1359,6 +1385,11 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                 if (@($stub.grading).Count -ne @($metadata.assertions).Count) {
                     throw "$($entry.eval_name) result stub $resultFile must carry one grading entry per assertion."
                 }
+                foreach ($propertyName in @('transcript', 'duration_seconds', 'total_tokens', 'tool_calls')) {
+                    if ($stub.PSObject.Properties.Name -notcontains $propertyName) {
+                        throw "$($entry.eval_name) result stub $resultFile must expose optional run field '$propertyName'."
+                    }
+                }
             }
         }
 
@@ -1368,6 +1399,33 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'comparison.md'))) {
             throw 'prepare-skill-evals.ps1 -CollectResults must write comparison.md.'
+        }
+
+        $firstEntry = @($manifest.evals)[0]
+        $firstEvalDirectory = Join-Path $iterationDirectory $firstEntry.directory
+        foreach ($resultFile in @('with-skill.result.json', 'without-skill.result.json')) {
+            $resultPath = Join-Path (Join-Path $firstEvalDirectory 'results') $resultFile
+            $result = [System.IO.File]::ReadAllText($resultPath, $utf8NoBom) | ConvertFrom-Json
+            $result.model = 'validator-model'
+            $result.provider = 'validator-provider'
+            $result.harness = 'validator-harness'
+            $result.executed_utc = '2026-01-01T00:00:00Z'
+            $result.output = 'validator output'
+            $result.transcript = 'validator transcript'
+            $result.duration_seconds = 1.25
+            $result.total_tokens = 123
+            $result.tool_calls = 2
+            [System.IO.File]::WriteAllText($resultPath, (($result | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+        }
+        $metricsOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "prepare-skill-evals.ps1 -CollectResults failed on recorded metrics: $($metricsOutput -join [Environment]::NewLine)"
+        }
+        $comparison = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'comparison.md'), $utf8NoBom)
+        foreach ($needle in @('## Run metrics', '| 1.25 | 123 | 2 | recorded |')) {
+            if (-not $comparison.Contains($needle)) {
+                throw "comparison.md must report available run metric '$needle'."
+            }
         }
 
         $changedOutput = & pwsh -NoProfile -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot 2>&1
