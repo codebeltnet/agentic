@@ -110,7 +110,7 @@ Record each external result in the matching `results/*.result.json`: `model`, `p
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>
 ```
 
-That writes `comparison.md` plus the upstream `skill-creator` `benchmark.json`, `benchmark.md`, and `report.html`, and flags missing arms, unrun configurations, and mixed models. The normal external evaluator grades in the same handoff using deterministic checks for mechanical assertions and evidence-backed judgement where an assertion is genuinely qualitative. Repository automation remains deterministic and never invokes a model.
+That writes `comparison.md`, the first-party side-by-side `report.html`, the exact upstream `skill-creator-report.html`, and the upstream `benchmark.json`/`benchmark.md`, while flagging missing arms, unrun configurations, and mixed models. The normal external evaluator grades in the same handoff using deterministic checks for mechanical assertions and evidence-backed judgement where an assertion is genuinely qualitative. Repository automation remains deterministic and never invokes a model.
 
 The eval package is a temp artifact. Do not commit it, its prompts, or its results unless the change explicitly calls for checked-in examples.
 
@@ -148,7 +148,7 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD
 - [ ] The skill's `evals/evals.json` exists and its `skill_name` matches the folder/frontmatter name
 - [ ] Any optional `files` entries in `evals/evals.json` point to real fixture files under the same skill folder
 - [ ] `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` was run after the last skill edit, and the prepared prompt paths were reported
-- [ ] If an external evaluation was run, each result includes the producing model and the package contains the upstream `report.html`, `benchmark.json`, and `benchmark.md`; use `-CollectResults` only when transferred results need the repository-side fallback
+- [ ] If an external evaluation was run, each result includes the producing model and the package contains the first-party `report.html`, exact upstream `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`; use `-CollectResults` only when transferred results need the repository-side fallback
 - [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior
 - [ ] If CI is enabled for the branch, the GitHub Actions validation job passes too
 - [ ] Eval packages live in `.bot/<skill-name>-workspace/` or a temp path, never anywhere else in the working tree
