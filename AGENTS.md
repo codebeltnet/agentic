@@ -62,7 +62,9 @@ pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
 
 Every package contains `RUN-THIS.prompt.md`, one instruction that drives the whole thing. It tells a capable agent with filesystem access to run both configurations of every case in fresh contexts, on one model, without reading the grading key, and to write each result back into the package.
 
-Hand the user that one prompt. Paste its full contents into the reply so it can be copied in a single action, and give its path underneath. Do not list the individual prompt files, do not describe the directory layout, and do not hand back a procedure for the user to carry out by hand. A reply that ends with 26 file paths and "run both versions" has moved the work onto the user instead of doing it.
+Hand the user that one file by its absolute path, and stop there. Do not reproduce its contents in the reply. The runner is built around absolute paths - the package directory, its own location, the path in the hand-back block - and a copy that has passed through a chat window arrives with them shortened to a bare directory name like `iteration-4`, pointing nowhere, with its internal links broken. The file on disk always says what the file on disk says; a paste of it is a lossy snapshot that also goes stale the moment the generator changes. Where the user's harness cannot read files at all, tell them to open that path and paste it themselves, so what travels is the real text rather than your recollection of it.
+
+Do not list the individual prompt files, do not describe the directory layout, and do not hand back a procedure for the user to carry out by hand. A reply that ends with 26 file paths and "run both versions" has moved the work onto the user instead of doing it.
 
 When the user says the runs are done, or pastes results back, continue without being asked: run `-CollectResults` on the iteration, grade the assertions with deterministic checks where an assertion allows one and judgement where it does not, write the grades into the result files, rerun `-CollectResults`, and present the comparison. The user asked for eval results, not for a package.
 
@@ -133,13 +135,29 @@ Four things still hold while you execute:
 
 An agent that prepared a package in this session does not get to turn around and execute it. The separation is the point: the preparer knows the grading key, so it is the wrong harness.
 
+That bar is about knowing the grading key, not about capability, and it is the only thing that disqualifies the preparer. A preparer citing the Priority 1 prohibition or its own lack of subagents has reached the right answer through the wrong reasoning, and that reasoning is what makes chosen executors refuse packages they were handed.
+
+For an executor, capability is likewise not a disqualifier. A harness that cannot spawn subagents is still a harness: every prompt file is self-contained, so a fresh chat session satisfies the fresh-context requirement exactly as a spawned agent does. Partial packages collect fine - `-CollectResults` reports the unfilled ones as missing - so "I cannot loop over all of it myself" is a reason to fill one case, never a reason to decline the package. None of this reaches the preparer, which stays out regardless of how many contexts it can open.
+
+`RUN-THIS.prompt.md` is worth handing to a harness that can open fresh contexts of its own, since that is what turns twenty-six runs into one handover. A single-context harness is served by the prompt files directly - one per fresh session, each reply brought to a repository session that records and grades it - and saying which of the two the user has is part of handing the package over. Handing the runner to a harness that cannot spawn produces nothing runnable, and asking that harness to name the next case produces invented paths, because a context that cannot open a session usually cannot list the package either. The repository session has the directory in front of it; naming cases is its job.
+
+What an executor limited to a single context must not do is run a prompt in the context that read `RUN-THIS.prompt.md`. That context knows an experiment is running and what the two arms are, and these prompts measure how a model behaves on a request that looks ordinary - whether it acts, asks first, hesitates, or refuses. Knowing an evaluator is watching moves exactly that. Such an executor names the next unfilled prompt, has the person paste it into a session that has seen nothing else, and records the returned response; the person supplies the fresh contexts and the agent supplies the bookkeeping. A run made in a context that had read the runner instructions is recorded with that fact in `notes`.
+
+An `output` is the model's own message in full - its questions, caveats, explanations, or refusal. Where a run invoked a tool, that tool's stdout is evidence the model quoted rather than the response itself; a result holding only a command's output has dropped what most assertions are written against.
+
 ### Same model on both sides
+
+A fresh context is fresh of memory as well as of transcript. A harness with persistent memory, saved project instructions, or cross-session recall can carry into a nominally new session what it learned while running the previous one, which makes that session a continuation wearing a new name. Runs made under such a harness need that memory disabled, or a profile without it.
+
+An evaluated context sees the prompt file and the files it names, and nothing else - not `RUN-THIS.prompt.md`, not the assertions, not another case's output, not a note that an experiment is underway. Anything added on top is a second variable in a comparison meant to differ in exactly one.
 
 A meaningful A/B result requires both configurations to run on the same model, the same version, and the same configuration, varying only whether the skill is present. Running the with-skill case on one model and the baseline on another measures the model and the skill together; that is not a skill-effectiveness benchmark and must not be reported as one. When models are deliberately mixed, say so and treat the comparison as directional only.
 
 ### Result handoff
 
 An externally produced result comes back identified by four things: eval id, configuration (`with_skill` or `without_skill`), model and provider if known, and the produced output. That is the whole contract. The user can hand it over as filled-in `results/*.result.json` files, or state it in chat and let the agent fill them in.
+
+Which of the two happens depends on where the harness ran, and `RUN-THIS.prompt.md` tells it to close either way. A harness sharing a disk with the repository writes the result files itself and reports the package path. A harness that does not - a different product, a browser, a sandbox - ends with one paste-ready block carrying the package path, the model, and the result objects as a JSON array. Pasting that block into a repository session is the return path: the agent writes the files from it, then grades and compares. "Bring the results back" means one of those two artifacts, never a prose recap of how the runs went.
 
 Validate and compare a collected iteration with:
 
