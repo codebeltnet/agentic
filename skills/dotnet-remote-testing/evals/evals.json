@@ -203,8 +203,8 @@
         "Does not ask a question; a test failure is an outcome to report"
       ],
       "files": [
-        "evals/files/multi-targeted/test/Matrix.Tests/Matrix.Tests.csproj",
-        "evals/files/multi-targeted/test/Matrix.Tests/MatrixTests.cs"
+        "evals/files/multi-targeted-failing/test/Matrix.Tests/Matrix.Tests.csproj",
+        "evals/files/multi-targeted-failing/test/Matrix.Tests/MatrixTests.cs"
       ]
     },
     {
@@ -218,9 +218,12 @@
         "Does not create a Dockerfile, dev container, or other repository plumbing",
         "Offers --show-log for the full container log rather than guessing at the cause"
       ],
+      "workspace": {
+        "git": true
+      },
       "files": [
-        "evals/files/multi-targeted/test/Matrix.Tests/Matrix.Tests.csproj",
-        "evals/files/multi-targeted/test/Matrix.Tests/MatrixTests.cs"
+        "evals/files/multi-targeted-failing/test/Matrix.Tests/Matrix.Tests.csproj",
+        "evals/files/multi-targeted-failing/test/Matrix.Tests/MatrixTests.cs"
       ]
     }
   ]
