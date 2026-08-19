@@ -1248,7 +1248,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'never call an LLM API or an authenticated AI CLI'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'the same model, the same version, and the same configuration'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'a baseline handed the answer key is not a baseline'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Do not add model-based grading to support this workflow.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'repository automation remains deterministic and never invokes a model.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Handing the package over'
@@ -1258,10 +1258,10 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'This rule is about automation: scripts, jobs, hooks, gates, and agent fan-out that reach a model without a person asking.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'An agent that prepared a package in this session does not get to turn around and execute it.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Hand the user that one file by its absolute path'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Its current context is the orchestrator'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'It must not execute an eval prompt itself.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Its current context may read `RUN-THIS.prompt.md`'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'but it must not execute an eval prompt itself.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Never reuse a worker or session between runs.'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'The user asked for eval results, not for a package.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'The user asked for eval results, not a second workflow decision.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Asking for an eval'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`eval <skill>`, `evaluate <skill>`'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Run the script immediately when asked. Do not reply with a plan, a menu of options'
@@ -1302,6 +1302,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         if ([string]$manifest.schema -ne 'codebeltnet/agentic/eval-package/2') {
             throw "The package manifest must declare schema eval-package/2; got '$($manifest.schema)'."
         }
+        if ([string]$manifest.report.tool -ne 'tools/generate-eval-report.ps1' -or [string]$manifest.report.html -ne 'report.html' -or [string]$manifest.report.benchmark -ne 'benchmark.json') {
+            throw 'The prepared package manifest must declare the self-contained report tool and output artifacts.'
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'tools/generate-eval-report.ps1'))) {
+            throw 'The prepared package must carry tools/generate-eval-report.ps1.'
+        }
         foreach ($isolationField in @('fresh_context_required', 'isolated_home_required', 'isolated_cwd_required')) {
             if (-not [bool]$manifest.isolation.$isolationField) {
                 throw "manifest.isolation.$isolationField must be true so a harness knows the run is hermetic."
@@ -1314,7 +1320,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         $runner = [System.IO.File]::ReadAllText($runnerPath, $utf8NoBom)
         foreach ($needle in @(
-            'You are the eval orchestrator.',
+            'START NOW. You are the evaluator, grader, and report producer',
             'Do not execute evaluation prompts in the current agent context.',
             'create one isolated fresh-context worker for `with_skill` and a second isolated fresh-context worker for `without_skill`',
             'Never reuse a worker or session between runs',
@@ -1323,8 +1329,11 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'Launch each worker from its own run directory',
             'Use the same model, version, configuration, tools, and limits for every worker.',
             'Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count.',
-            'Do not grade or compare the runs.',
-            '## Do not grade'
+            'Do not begin grading until every available worker has completed or failed',
+            '## Grade and report immediately',
+            'grading[].text',
+            'tools/generate-eval-report.ps1',
+            'report.html'
         )) {
             if (-not $runner.Contains($needle)) {
                 throw "RUN-THIS.prompt.md must state '$needle'."
@@ -1492,6 +1501,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'comparison.md'))) {
             throw 'prepare-skill-evals.ps1 -CollectResults must write comparison.md.'
         }
+        if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'report.html'))) {
+            throw 'prepare-skill-evals.ps1 -CollectResults must write report.html.'
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'benchmark.json'))) {
+            throw 'prepare-skill-evals.ps1 -CollectResults must write benchmark.json.'
+        }
 
         $firstEntry = @($manifest.evals)[0]
         $firstEvalDirectory = Join-Path $iterationDirectory $firstEntry.directory
@@ -1524,6 +1539,15 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             if (-not $comparison.Contains($needle)) {
                 throw "comparison.md must report available run metric '$needle'."
             }
+        }
+        $report = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'report.html'), $utf8NoBom)
+        if (-not $report.Contains('validator output') -or -not $report.Contains('Formal grades') -or -not $report.Contains('Benchmark')) {
+            throw 'report.html must include captured output, formal-grade sections, and benchmark navigation.'
+        }
+        $benchmark = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'benchmark.json'), $utf8NoBom) | ConvertFrom-Json
+        $expectedEvalCount = @($manifest.evals).Count
+        if ([int]$benchmark.summary.completed_runs -ne 2 -or [int]$benchmark.summary.evals -ne $expectedEvalCount) {
+            throw "benchmark.json must summarize the recorded paired run set (completed_runs=$($benchmark.summary.completed_runs), evals=$($benchmark.summary.evals), expected_evals=$expectedEvalCount)."
         }
 
         $changedOutput = & pwsh -NoProfile -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot 2>&1

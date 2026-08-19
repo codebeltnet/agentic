@@ -20,7 +20,8 @@
     reach the skill, let a worker reach the source repository, or stage mismatched fixtures.
 
     Collect mode reads a prepared package plus whatever result files were filled in, validates them, and writes a
-    deterministic comparison. Grading stays deterministic or human; nothing here grades with a model.
+    deterministic comparison and static HTML report. The selected external evaluator owns model-backed execution and
+    grading; nothing in this repository launches a model.
 
 .PARAMETER Skill
     Name of the repo-managed skill under skills/.
@@ -49,7 +50,8 @@
     Base ref for -Changed. Defaults to origin/main, then main, then the working tree alone.
 
 .PARAMETER CollectResults
-    Path to a prepared iteration directory. Validates the result files in it and writes comparison.md.
+    Path to a prepared iteration directory. Validates the result files in it and writes comparison.md, benchmark.json,
+    and report.html. This is the fallback for results that were not finalized by the external evaluator.
 
 .EXAMPLE
     pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing
@@ -121,6 +123,7 @@ $runDirectoryNames = [ordered]@{
     Prompt = 'prompt.md'
     Run = 'run.json'
 }
+$reportToolRelativePath = 'tools/generate-eval-report.ps1'
 
 # These directory names are generated build state or harness bookkeeping. They must never be staged into a run's
 # repository, and their presence (other than an intentional .git) means a fixture leaked build output.
@@ -782,6 +785,26 @@ function Copy-SkillTree {
     return @($files)
 }
 
+# Carry the dependency-free report writer with the package so the external evaluator can finish the complete
+# execute -> grade -> report workflow without reaching back into this repository or relying on a user-specific install.
+function Copy-ReportTool {
+    param(
+        [string]$RepoRoot,
+        [string]$IterationDirectory
+    )
+
+    $source = Join-Path (Join-Path $RepoRoot 'scripts') 'generate-eval-report.ps1'
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Missing report tool '$source'."
+    }
+
+    $destination = Join-Path $IterationDirectory $reportToolRelativePath
+    $destinationDirectory = Split-Path -Parent $destination
+    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+    Copy-Item -LiteralPath $source -Destination $destination -Force
+    return $destination
+}
+
 # The candidate skill's fingerprint, computed from the source over exactly the files Copy-SkillTree stages. The staged
 # copy in each with_skill run must reproduce this value, which is how preparation proves the worker received the
 # revision under development rather than a globally installed one.
@@ -1008,6 +1031,7 @@ function Invoke-PrepareMode {
         Remove-Item -LiteralPath $iterationDirectory -Recurse -Force
     }
     New-Item -ItemType Directory -Path $iterationDirectory -Force | Out-Null
+    [void](Copy-ReportTool -RepoRoot $repoRoot -IterationDirectory $iterationDirectory)
 
     $skillText = [System.IO.File]::ReadAllText($skillMarkdownPath, $utf8NoBom)
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
@@ -1197,8 +1221,13 @@ function Invoke-PrepareMode {
         iteration = $iterationNumber
         generated_utc = $generatedUtc
         configurations = @('with_skill', 'without_skill')
-        execution = 'manual'
+        execution = 'external_handoff'
         runner_prompt = 'RUN-THIS.prompt.md'
+        report = [ordered]@{
+            tool = $reportToolRelativePath
+            html = 'report.html'
+            benchmark = 'benchmark.json'
+        }
         max_inline_bytes = $MaxInlineBytes
         skill_hash = $skillHash
         isolation = [ordered]@{
@@ -1246,11 +1275,12 @@ function Invoke-PrepareMode {
     Write-Host 'Point the harness at that path. Do not reproduce its contents in chat: a pasted copy'
     Write-Host 'loses the absolute paths it depends on, and the harness then cannot find the package.'
     Write-Host ''
-    Write-Host 'The runner makes the selected agent an orchestrator. It must create one isolated fresh'
-    Write-Host 'worker per run and must not execute an eval prompt in its own context.'
+    Write-Host 'The runner makes the selected agent the evaluator, grader, and report producer. It must create'
+    Write-Host 'one isolated fresh worker per run, then grade the collected results and generate report.html.'
     Write-Host ''
     Write-Host 'This script prepared prompts only. It did not run them, and nothing here will.'
-    Write-Host 'When that agent reports back, collect and compare with:'
+    Write-Host 'The selected evaluator should finish the package in one run. If it cannot write back to this package,'
+    Write-Host 'bring back the result objects and use the repository collector as a fallback:'
     Write-Host ("  pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults `"$iterationDirectory`"")
 }
 
@@ -1262,23 +1292,25 @@ function New-RunnerPrompt {
     )
 
     $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.AppendLine('# Orchestrate this evaluation package')
+    [void]$builder.AppendLine('# Run, grade, and report this evaluation package')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('You are the eval orchestrator. Do not execute evaluation prompts in the current agent context. Create an isolated fresh-context worker for every run.')
+    [void]$builder.AppendLine('START NOW. You are the evaluator, grader, and report producer for this package. Do not ask me which role to perform, whether to run the workers, or whether to continue to grading. Execute the complete workflow in this one handoff and return the finished report.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('Do not execute evaluation prompts in the current agent context. Create an isolated fresh-context worker for every run, then continue in this coordinator context with grading and report generation after all workers finish.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Everything you need is in this directory:')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("    $IterationDirectory")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine("This file is `"$(Join-Path $IterationDirectory 'RUN-THIS.prompt.md')`". Read it from that path. If either path above is not absolute, ask for the file itself before running anything.")
+    [void]$builder.AppendLine("This file is `"$(Join-Path $IterationDirectory 'RUN-THIS.prompt.md')`". Use that package path as authoritative. If the package is inaccessible, report the concrete access failure; do not ask the user to choose another workflow.")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s), each with a `with_skill` and `without_skill` run. Every run is a self-contained directory that holds a `prompt.md`, a `run.json` contract, a `repo/` working tree, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate. The runs differ only in whether that candidate skill is present. You run the experiment and record it. You do not grade it.")
+    [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s), each with a `with_skill` and `without_skill` run. Every run is a self-contained directory that holds a `prompt.md`, a `run.json` contract, a `repo/` working tree, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate. The runs differ only in whether that candidate skill is present. You run the experiment, grade the completed results, and generate the report.")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('A person selected this harness and handed you this package. That authorizes these runs. The repository prohibition on automated model evaluation binds repository scripts and the agent that prepared the package. It does not bind the user-selected external orchestrator executing this specific package.')
+    [void]$builder.AppendLine('A person selected this harness and handed you this package. That authorizes these runs, grading, aggregation, and report generation. The repository prohibition on automated model evaluation binds repository scripts and the agent that prepared the package; it does not bind the user-directed external executor completing this specific handoff.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Harness requirements')
+    [void]$builder.AppendLine('## Execute now')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('This package assumes the harness can give each run a fresh context, an isolated HOME/config root, an isolated working directory, and ideally a filesystem sandbox scoped to the run directory. A harness that cannot provide fresh, independent sessions is incompatible with these evals. Report, per run, which of these guarantees you satisfied - fresh context, isolated HOME/config, isolated CWD, filesystem sandbox, candidate skill exposure, transcript capture - so the grader knows which process-dependent assertions it can trust.')
+    [void]$builder.AppendLine('This package assumes the harness can give each run a fresh context, an isolated HOME/config root, an isolated working directory, and a filesystem sandbox scoped to the run directory. A harness that cannot provide fresh, independent sessions is incompatible with these evals. Continue without asking for role clarification, and report per run which guarantees you satisfied - fresh context, isolated HOME/config, isolated CWD, filesystem sandbox, candidate skill exposure, and transcript capture.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Orchestration contract')
     [void]$builder.AppendLine()
@@ -1289,9 +1321,9 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('5. Send each `prompt.md` unchanged as the worker''s first message. The input files are already real files in the worker''s `repo/`; the worker reads and edits them there rather than from attachments.')
     [void]$builder.AppendLine('6. Use the same model, version, configuration, tools, and limits for every worker. Disable persistent memory or cross-session recall. Independent runs may execute concurrently when the selected harness and token budget allow it.')
     [void]$builder.AppendLine('7. Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count. When the harness exposes them, also record the shell commands, files read and written, stdout and stderr, and exit status, and which isolation guarantees you satisfied. Record refusals, questions, and failures as results. Do not retry to improve an answer.')
-    [void]$builder.AppendLine('8. Work only inside this package. Do not read or modify the source repository around it. Do not grade or compare the runs.')
+    [void]$builder.AppendLine('8. Work only inside this package. Do not read or modify the source repository around it. Do not begin grading until every available worker has completed or failed and its result is recorded.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('For each case in `manifest.json`, the `runs.with_skill` and `runs.without_skill` entries give each run''s directory, its `prompt`, its `run_manifest` (`run.json`), and the `result` file to write. Run the two prompts in separate workers, then overwrite the matching result file without reading its existing contents. A partial package is valid; record every completed run before stopping.')
+    [void]$builder.AppendLine('For each case in `manifest.json`, the `runs.with_skill` and `runs.without_skill` entries give each run''s directory, its `prompt`, its `run_manifest` (`run.json`), and the `result` file to write. Run the two prompts in separate workers, then overwrite the matching result file without reading its existing contents. A partial package is valid: record every completed run, continue to grading/reporting, and mark missing arms honestly instead of asking what to do next.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Result shape')
     [void]$builder.AppendLine()
@@ -1324,6 +1356,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('    "candidate_skill_exposed": true,')
     [void]$builder.AppendLine('    "transcript_captured": true')
     [void]$builder.AppendLine('  },')
+    [void]$builder.AppendLine('  "grading": [],')
     [void]$builder.AppendLine('  "notes": "anything that would change how this result reads"')
     [void]$builder.AppendLine('}')
     [void]$builder.AppendLine('```')
@@ -1334,20 +1367,27 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`output` is the model''s message in full, including questions, caveats, explanations, or a refusal. Tool output is evidence from the run, not a replacement for the model response. Put the full worker event history in `transcript` when the harness exposes it.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Do not grade')
+    [void]$builder.AppendLine('## Grade and report immediately')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Leave scoring alone. Do not add a `grading` field, do not say which configuration did better, and do not read the assertions. Grading happens back in the source repository, against assertions you were never shown.')
+    [void]$builder.AppendLine('After all available workers finish, read each eval''s `eval-metadata.json`. Only now may you read `expected_output` and `assertions`; they are the grading key and were intentionally hidden from the workers.')
+    [void]$builder.AppendLine('1. Grade every completed result against every assertion. Use deterministic checks for mechanical assertions and concrete output, transcript, and file evidence for process assertions. Use judgement only where the assertion is genuinely qualitative, and say so in the evidence. Never infer a tool or file action from the model''s self-report when process evidence is absent.')
+    [void]$builder.AppendLine('2. Write grading back into the matching result file using exactly `grading[].text`, `grading[].passed`, and `grading[].evidence`. Use `passed: null` when an assertion cannot be judged from captured evidence. Do not grade a missing run as passed.')
+    [void]$builder.AppendLine(('The package-relative report tool is `' + $reportToolRelativePath + '`. Invoke that staged copy so this handoff stays self-contained.'))
+    [void]$builder.AppendLine("3. Run the packaged report tool now; do not ask the user to run a second command: `pwsh -NoProfile -File `"$(Join-Path $IterationDirectory $reportToolRelativePath)`" -IterationDirectory `"$IterationDirectory`"`. It writes `report.html` and `benchmark.json` at the package root, including partial-run status, formal grades, outputs, model/runtime telemetry, isolation evidence, and reviewer notes.")
+    [void]$builder.AppendLine('4. If the harness can open local files, open `report.html` after it is written. Otherwise return its absolute path as the primary artifact. Do not wait for browser feedback before finishing the handoff.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Handing the results back')
+    [void]$builder.AppendLine('The report is the completion artifact. Do not stop after worker execution, do not return a prose-only recap, and do not ask whether grading or HTML generation is wanted.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Grading happens in a session back in the source repository, the one holding the assertions you were never shown. It needs four things per run - eval id, configuration, model and provider, and the output - and it does not care how they reach it. Your last message is what carries them, so make it the thing the person can act on rather than a description of work you did.')
+    [void]$builder.AppendLine('## Final handoff')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('If you wrote the result files on the machine the repository lives on, they are already where the grader looks. Say so, give the package path, and list the cases you filled. Nothing needs pasting.')
+    [void]$builder.AppendLine('The finished artifact is the report, not a request for another command. If you can write to the package machine, leave every result, grading field, `benchmark.json`, and `report.html` in place. Return the absolute report path, the completed/expected run count, any missing arms, the model/provider, and a concise quality summary.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('If you cannot write to the package machine, return one fenced JSON block containing every completed result object, including its `grading` array, plus the generated report as an artifact when the harness supports file handoff. Do not return separate blocks or a human summary in place of the result objects. State any missing arms and the concrete artifact-transfer limitation.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('If you cannot write to that machine - a different product, a browser, a sandbox that shares no disk with it - the results have to travel as text. End with one fenced block, and say plainly that it is meant to be pasted into the repository session as-is:')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('```')
-    [void]$builder.AppendLine('Eval results to collect and compare.')
+    [void]$builder.AppendLine('Eval results, grading, and report artifact.')
     [void]$builder.AppendLine("Package: $IterationDirectory")
     [void]$builder.AppendLine('Model: <exact id> via <provider>, harness <what you are>')
     [void]$builder.AppendLine()
@@ -1356,9 +1396,9 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('Still unfilled: <the cases and configurations nobody has run yet>')
     [void]$builder.AppendLine('```')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('One block covering everything you ran, not one per case, and the outputs go in it verbatim - a summary written for a human to skim cannot be graded against assertions. The repository session writes those objects into the matching `results/*.result.json`, grades them, and produces the comparison.')
+    [void]$builder.AppendLine('One block covering everything you ran, not one per case, and the outputs go in it verbatim - a summary written for a human to skim cannot be graded against assertions.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('When you stop - whether the package is finished or not - report how many runs you completed, which cases are still unfilled, and which model you used, and hand back the results one of the two ways above. That is all.')
+    [void]$builder.AppendLine('The repository collector is only a fallback when result files were transferred without the report artifacts: `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>`. It validates the returned files and regenerates the deterministic comparison and HTML report; it is not the normal next step after this prompt.')
 
     return $builder.ToString()
 }
@@ -1374,7 +1414,7 @@ function New-PackageReadme {
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine("# Eval package: $SkillName (iteration $IterationNumber)")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. You choose the harness, provider, and model, and you run both configurations.')
+    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. You choose the harness, provider, and model; the selected external evaluator runs both configurations, grades them, and generates the report.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## What is here')
     [void]$builder.AppendLine()
@@ -1395,15 +1435,15 @@ function New-PackageReadme {
     [void]$builder.AppendLine('1. Pick one model and configuration. Use the same one for every run in this iteration.')
     [void]$builder.AppendLine('2. For each eval, launch a fresh worker for `with_skill/` with its run directory as the sandbox root, `repo/` as the working directory, and `home/` as HOME. Send `prompt.md` as the first message. Read `run.json` for the contract.')
     [void]$builder.AppendLine('3. Launch a second fresh worker for `without_skill/` the same way. Never reuse a worker between runs.')
-    [void]$builder.AppendLine('4. Save each response into the matching file under the eval''s `results/` directory.')
+    [void]$builder.AppendLine('4. Save each response into the matching file under the eval''s `results/` directory, then grade every completed result and run `tools/generate-eval-report.ps1`.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`RUN-THIS.prompt.md` turns a harness that can create isolated workers or sessions into the eval orchestrator. The orchestrator reads the package, creates one new worker per run from its run directory, and keeps runner instructions and grading data out of every worker. It never executes an eval prompt in its own context.')
+    [void]$builder.AppendLine('`RUN-THIS.prompt.md` turns a harness that can create isolated workers or sessions into the evaluator, grader, and report producer. It reads the package, creates one new worker per run from its run directory, keeps runner instructions and grading data out of every worker, records results, grades after collection, and writes `report.html` plus `benchmark.json`. It never executes an eval prompt in its own context.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A harness that cannot provide fresh, independent sessions with isolated working and config roots is incompatible with these evals. `-CollectResults` accepts a partial iteration and reports unfilled runs as missing.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A with_skill run on one model compared against a baseline on another measures both the model and the skill. That is not a skill-effectiveness result, so do not report it as one. If you do mix models, say so explicitly and treat the comparison as directional only.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Reporting results back')
+    [void]$builder.AppendLine('## Report artifacts')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Fill in each `results/*.result.json`:')
     [void]$builder.AppendLine()
@@ -1412,18 +1452,19 @@ function New-PackageReadme {
     [void]$builder.AppendLine('- `output` - the produced output, or a summary plus paths in `output_files`')
     [void]$builder.AppendLine('- `transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls` - include the values the harness exposes; omit unavailable values rather than estimating them')
     [void]$builder.AppendLine('- `isolation` - the guarantees the harness satisfied for this run; process-dependent assertions can only be graded from a run that captured the needed evidence')
-    [void]$builder.AppendLine('- `grading[].passed` - `true` or `false` per assertion once you or a deterministic script has checked it, with `evidence`')
+    [void]$builder.AppendLine('- `grading[].passed` - `true`, `false`, or `null` per assertion once the external evaluator or a deterministic script has checked it, with `evidence`')
     [void]$builder.AppendLine('- `notes` - anything that would change how the result reads')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Then validate and compare:')
+    [void]$builder.AppendLine('The normal handoff finishes with these package-root artifacts:')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('```console')
-    [void]$builder.AppendLine("pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults `"$IterationDirectory`"")
+    [void]$builder.AppendLine('```text')
+    [void]$builder.AppendLine('report.html     interactive static review with outputs, formal grades, telemetry, and reviewer notes')
+    [void]$builder.AppendLine('benchmark.json  machine-readable quality and runtime summary')
     [void]$builder.AppendLine('```')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('If the harness ran somewhere that shares no disk with this repository, it has nothing to fill in. `RUN-THIS.prompt.md` tells it to end with a single paste-ready block instead - the package path, the model, and the result objects as a JSON array. Paste that block into a session working in this repository and it writes the files for you, then grades and compares. Asking the harness for "the results" in prose gets you something unusable, so ask for that block.')
+    [void]$builder.AppendLine('If the harness cannot write to the package machine, its final handoff should contain one paste-ready JSON array of completed result objects including grading, plus the report as a file artifact when supported. A prose-only recap is not sufficient.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('You can also hand the filled-in result files straight to an agent working in the repository. It reads `eval_id`, `configuration`, `model`, and `output`, and grades against the assertions in `eval-metadata.json` using deterministic checks and human judgment.')
+    [void]$builder.AppendLine('For transferred results without report artifacts, the repository-side fallback is `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>`, which validates the files and regenerates `comparison.md`, `benchmark.json`, and `report.html`.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('This workspace is temporary. Do not commit it to the repository unless someone explicitly asks for a checked-in example.')
 
@@ -1588,8 +1629,8 @@ function Invoke-CollectMode {
                 $warnings.Add("$($entry.eval_name)/$configuration - no model recorded, so this arm cannot back a controlled comparison.")
             }
 
-            # An executing harness is told not to grade, so a result often arrives with no grading at all. Fall back to
-            # the assertion count from the package so the row still shows how much is left to check.
+            # A transferred or partial result may arrive without grading. Fall back to the assertion count from the
+            # package so the row still shows how much is left to check.
             $grading = @(Get-JsonProperty -Object $result -Name 'grading' -Default @())
             $graded = @($grading | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'passed') })
             $passed = @($graded | Where-Object { [bool]$_.passed }).Count
@@ -1647,7 +1688,7 @@ function Invoke-CollectMode {
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine("# Eval comparison: $($manifest.skill_name) (iteration $($manifest.iteration))")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Assertion grading is deterministic or human. No model graded anything here.')
+    [void]$builder.AppendLine('This repository-side comparison validates recorded grading and never invokes a model. Grading may have been performed by the user-directed external evaluator before this report was generated.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('| Eval | Assertions | with_skill model | with_skill graded | without_skill model | without_skill graded |')
     [void]$builder.AppendLine('| --- | --- | --- | --- | --- | --- |')
@@ -1707,6 +1748,16 @@ function Invoke-CollectMode {
     Write-Host $builder.ToString().TrimEnd()
     Write-Host ''
     Write-Host "Wrote $comparisonPath"
+
+    $reportScript = Join-Path (Join-Path (Get-RepoRoot) 'scripts') 'generate-eval-report.ps1'
+    $reportOutput = & pwsh -NoProfile -File $reportScript -IterationDirectory $iterationDirectory 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $errors.Add("Report generation failed: $($reportOutput -join [Environment]::NewLine)")
+    } else {
+        foreach ($line in @($reportOutput)) {
+            Write-Host $line
+        }
+    }
 
     if ($errors.Count -gt 0) {
         Write-Host ''
