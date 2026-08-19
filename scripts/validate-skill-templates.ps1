@@ -1242,6 +1242,9 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Do not add model-based grading to support this workflow.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Handing the package over'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Hand the user that one prompt.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'The user asked for eval results, not for a package.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Asking for an eval'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`eval <skill>`, `evaluate <skill>`'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Run the script immediately when asked. Do not reply with a plan, a menu of options'
@@ -1275,6 +1278,29 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         $manifest = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'manifest.json'), $utf8NoBom) | ConvertFrom-Json
         if (@($manifest.evals).Count -lt 1) {
             throw 'The prepared package must contain at least one eval case.'
+        }
+
+        $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
+        if (-not (Test-Path -LiteralPath $runnerPath)) {
+            throw 'The prepared package must carry RUN-THIS.prompt.md so the handoff is one paste.'
+        }
+        $runner = [System.IO.File]::ReadAllText($runnerPath, $utf8NoBom)
+        foreach ($needle in @(
+            'Run every prompt in a fresh context.',
+            'Do not read `eval-metadata.json`',
+            'Use one model, one version, one configuration for every run',
+            '## Do not grade',
+            'Never resolve a task against the source repository these fixtures came from'
+        )) {
+            if (-not $runner.Contains($needle)) {
+                throw "RUN-THIS.prompt.md must state '$needle'."
+            }
+        }
+        foreach ($entry in @($manifest.evals)) {
+            $metadataForLeak = [System.IO.File]::ReadAllText((Join-Path (Join-Path $iterationDirectory $entry.directory) 'eval-metadata.json'), $utf8NoBom) | ConvertFrom-Json
+            if ($runner.Contains([string]$metadataForLeak.expected_output)) {
+                throw 'RUN-THIS.prompt.md must not carry an expected output; the executing harness never sees the grading key.'
+            }
         }
 
         foreach ($entry in @($manifest.evals)) {

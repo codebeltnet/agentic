@@ -461,6 +461,20 @@ function New-ResultStub {
     }
 }
 
+function Get-JsonProperty {
+    param(
+        [object]$Object,
+        [string]$Name,
+        [object]$Default = $null
+    )
+
+    if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name -and $null -ne $Object.$Name) {
+        return $Object.$Name
+    }
+
+    return $Default
+}
+
 function Get-Assertions {
     param([object]$EvalEntry)
 
@@ -671,6 +685,7 @@ function Invoke-PrepareMode {
         generated_utc = $generatedUtc
         configurations = @('with_skill', 'without_skill')
         execution = 'manual'
+        runner_prompt = 'RUN-THIS.prompt.md'
         max_inline_bytes = $MaxInlineBytes
         skill_instructions = [ordered]@{
             inlined = @('SKILL.md') + @($inventory.Inlined | ForEach-Object { $_.Path })
@@ -682,20 +697,83 @@ function Invoke-PrepareMode {
     ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'manifest.json') -Value $manifest
 
     Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals))
+    $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
+    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals))
 
-    Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber)."
+    Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber), $($manifestEvals.Count * 2) prompts in total."
     Write-Host "Package: $iterationDirectory"
     Write-Host ''
-    Write-Host 'Ready for external execution:'
-    foreach ($entry in $manifestEvals) {
-        Write-Host ("  {0}" -f $entry.eval_name)
-        Write-Host ("    with_skill    {0}" -f (Join-Path $iterationDirectory ($entry.with_skill_prompt -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
-        Write-Host ("    without_skill {0}" -f (Join-Path $iterationDirectory ($entry.without_skill_prompt -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
-    }
+    Write-Host 'Hand this one file to the agent of your choice. It drives the whole package:'
+    Write-Host "  $runnerPath"
     Write-Host ''
     Write-Host 'This script prepared prompts only. It did not run them, and nothing here will.'
-    Write-Host 'Run both configurations yourself on the same model and configuration, record each result in the matching results/*.result.json, then run:'
+    Write-Host 'When that agent reports back, collect and compare with:'
     Write-Host ("  pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults `"$iterationDirectory`"")
+}
+
+function New-RunnerPrompt {
+    param(
+        [string]$IterationDirectory,
+        [int]$IterationNumber,
+        [object[]]$ManifestEvals
+    )
+
+    $builder = [System.Text.StringBuilder]::new()
+    [void]$builder.AppendLine('# Execute this evaluation package')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('You are the execution harness for a prepared skill evaluation. Everything you need is in this directory:')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine("    $IterationDirectory")
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s). Each case has two prompts that differ in exactly one way: one carries a skill's instructions, the other does not. Run both, faithfully, and record what came out. You are running the experiment, not judging it.")
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Rules that keep the experiment valid')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('1. Run every prompt in a fresh context. Nothing from one run may carry into another, in either direction.')
+    [void]$builder.AppendLine('2. Do not read `eval-metadata.json`, `comparison.md`, or any existing file under `results/` before or while running. Those hold the grading key, and a run that has seen the answer proves nothing.')
+    [void]$builder.AppendLine('3. Use one model, one version, one configuration for every run in this package. Mixing models measures the model instead of the skill.')
+    [void]$builder.AppendLine('4. Paste each prompt file as the first message of its run, unchanged. Do not shorten it, summarize it, fix it, or add your own framing.')
+    [void]$builder.AppendLine('5. Attach any file the prompt says is not inlined, from the case''s `files/` directory.')
+    [void]$builder.AppendLine('6. Record what the run actually produced, including a refusal, a clarifying question, or a failure. Those are results too. Do not retry to get a nicer answer.')
+    [void]$builder.AppendLine('7. Do every bit of work inside the package directory above. The input files there are disposable copies. Never resolve a task against the source repository these fixtures came from, and never build, test, or write anything into it.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Procedure')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('For each `eval-*` directory, in order:')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('1. Read `with-skill.prompt.md` and run it in a fresh context.')
+    [void]$builder.AppendLine('2. Overwrite `results/with-skill.result.json` with the shape below. Overwrite it without reading it first.')
+    [void]$builder.AppendLine('3. Read `without-skill.prompt.md` and run it in a fresh context.')
+    [void]$builder.AppendLine('4. Overwrite `results/without-skill.result.json` the same way.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Result shape')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('```json')
+    [void]$builder.AppendLine('{')
+    [void]$builder.AppendLine('  "schema": "codebeltnet/agentic/eval-result/1",')
+    [void]$builder.AppendLine("  `"iteration`": $IterationNumber,")
+    [void]$builder.AppendLine('  "eval_id": 1,')
+    [void]$builder.AppendLine('  "eval_name": "the directory name",')
+    [void]$builder.AppendLine('  "configuration": "with_skill",')
+    [void]$builder.AppendLine('  "model": "the exact model id you used",')
+    [void]$builder.AppendLine('  "provider": "who served it",')
+    [void]$builder.AppendLine('  "harness": "what you are",')
+    [void]$builder.AppendLine('  "executed_utc": "2026-01-01T00:00:00Z",')
+    [void]$builder.AppendLine('  "output": "the complete response the run produced",')
+    [void]$builder.AppendLine('  "output_files": ["paths of any files the run wrote"],')
+    [void]$builder.AppendLine('  "notes": "anything that would change how this result reads"')
+    [void]$builder.AppendLine('}')
+    [void]$builder.AppendLine('```')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('`configuration` is `with_skill` or `without_skill` and must match the prompt you ran. `eval_id` and `eval_name` are in the prompt header comment. Put the full response in `output`; if it is very long, write it beside the result file and list that path in `output_files` with a summary in `output`.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Do not grade')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('Leave scoring alone. Do not add a `grading` field, do not say which configuration did better, and do not read the assertions. Grading happens back in the source repository, against assertions you were never shown.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('When every case is done, report how many runs you completed and which model you used. That is all.')
+
+    return $builder.ToString()
 }
 
 function New-PackageReadme {
@@ -896,22 +974,32 @@ function Invoke-CollectMode {
                 continue
             }
 
-            $hasOutput = -not [string]::IsNullOrWhiteSpace([string]$result.output) -or @($result.output_files).Count -gt 0
+            $outputText = [string](Get-JsonProperty -Object $result -Name 'output' -Default '')
+            $outputFiles = @(Get-JsonProperty -Object $result -Name 'output_files' -Default @())
+            $hasOutput = -not [string]::IsNullOrWhiteSpace($outputText) -or $outputFiles.Count -gt 0
             if (-not $hasOutput) {
                 $warnings.Add("$($entry.eval_name)/$configuration - not run yet (empty output and no output_files).")
                 continue
             }
-            if ([string]::IsNullOrWhiteSpace([string]$result.model)) {
+
+            $model = [string](Get-JsonProperty -Object $result -Name 'model' -Default '')
+            if ([string]::IsNullOrWhiteSpace($model)) {
                 $warnings.Add("$($entry.eval_name)/$configuration - no model recorded, so this arm cannot back a controlled comparison.")
             }
 
-            $graded = @($result.grading | Where-Object { $null -ne $_.passed })
+            # An executing harness is told not to grade, so a result often arrives with no grading at all. Fall back to
+            # the assertion count from the package so the row still shows how much is left to check.
+            $grading = @(Get-JsonProperty -Object $result -Name 'grading' -Default @())
+            $graded = @($grading | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'passed') })
             $passed = @($graded | Where-Object { [bool]$_.passed }).Count
-            $total = @($result.grading).Count
+            $total = if ($grading.Count -gt 0) { $grading.Count } else { @($metadata.assertions).Count }
+            if ($graded.Count -eq 0) {
+                $warnings.Add("$($entry.eval_name)/$configuration - ran but nothing is graded yet; $total assertion(s) still need a deterministic check or human judgement.")
+            }
 
             $observed[$configuration] = [pscustomobject]@{
-                Model = [string]$result.model
-                Provider = [string]$result.provider
+                Model = $model
+                Provider = [string](Get-JsonProperty -Object $result -Name 'provider' -Default '')
                 Graded = $graded.Count
                 Passed = $passed
                 Total = $total
