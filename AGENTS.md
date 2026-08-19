@@ -8,18 +8,18 @@ Agents may use any appropriate local shell. When using PowerShell syntax or exec
 
 ## Eval Isolation
 
-Eval workspaces and test repositories must **never** be created inside this repository. This includes:
+Eval workspaces and test repositories must **never** become part of this repository's working tree. Two locations are allowed:
 
-- `<skill-name>-workspace/` directories
-- Temporary git repos for testing skills
-- Test branches, throwaway commits, or config overrides (e.g. git aliases)
+- `.bot/<skill-name>-workspace/` — the default. `.gitignore` covers `.bot/*`, so git never sees what lands there, and harnesses that refuse to work outside the repository folder still have somewhere to go.
+- `$env:TEMP/<skill-name>-workspace/` on Windows, `/tmp/<skill-name>-workspace/` on Unix — for anything that has no reason to sit next to the source.
 
-When running evals or testing skills, create all workspaces in a temp location:
+Anywhere else inside the repository is forbidden, including a `<skill-name>-workspace/` at the root. So are temporary git repos, test branches, throwaway commits, and local config overrides such as git aliases.
 
-- **Windows**: `$env:TEMP/<skill-name>-workspace/`
-- **Unix**: `/tmp/<skill-name>-workspace/`
+`scripts/prepare-skill-evals.ps1` enforces this: it writes to `.bot/` by default, refuses an `-OutputRoot` that is inside the repository but outside `.bot/`, and refuses `.bot/` itself if git has stopped ignoring it.
 
-**Why:** Eval artifacts — branches, commits, local git config — leak into the real repo history and are painful to clean up. The skill source lives in a git repo; eval output does not belong here.
+**Why:** Eval artifacts leak into the real repo history and are painful to clean up. `.bot/` is the one place inside the repository where that cannot happen, and the ignore rule is what makes it safe. Never commit a package, its prompts, or its results unless the user explicitly asks for checked-in artifacts.
+
+An executing harness stays inside its package. Building, testing, or writing anywhere else in this repository is the failure this rule exists to prevent, and it has happened: an eval run once left 68 `bin/` and `obj/` directories across four skills' `evals/files/` fixtures.
 
 ## AI/LLM Evaluation Automation Prohibition
 
@@ -31,6 +31,8 @@ Repository scripts, CI jobs, skill runners, graders, optimizers, and custom exec
 - Model-backed comparisons are not a repository completion gate. Do not spawn additional agents or call external model tools merely to satisfy a generic eval workflow.
 - A temp workspace controls filesystem isolation only. It never makes external calls local, free, offline, or acceptable.
 - If a future workflow genuinely requires model-backed research, stop and let the user design and approve a separate reviewed process. Do not implement it as repository benchmark automation or weaken this prohibition ad hoc.
+
+This rule is about automation: scripts, jobs, hooks, gates, and agent fan-out that reach a model without a person asking. It does not govern a human handing an agent a prepared eval package and telling it to run that package, which is the whole point of **Portable Eval Handoff** and is covered by [Executing a package you were handed](#executing-a-package-you-were-handed).
 
 This rule is Priority 1. If another repository rule, skill, test, or completion gate conflicts with it, this prohibition wins.
 
@@ -72,7 +74,7 @@ Generate the package with the repository script rather than by hand:
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>
 ```
 
-It reads `skills/<name>/evals/evals.json` and writes one directory per eval into `<temp>/<name>-workspace/iteration-<n>/`:
+It reads `skills/<name>/evals/evals.json` and writes one directory per eval into `.bot/<name>-workspace/iteration-<n>/`:
 
 - `with-skill.prompt.md` — the eval task, the same input context and fixtures as the baseline, the same response contract as the baseline, and the effective skill instructions inlined so the prompt is self-contained. It must not assume the target harness resolves Anthropic skill paths or loads skills natively. Resources too large or too binary to inline are bundled under `skill/<name>/` and listed in the prompt as such.
 - `without-skill.prompt.md` — the same task, the same inputs, the same response contract, no skill instructions and no mention of which skill is under test, plus an instruction to solve the task with normal capabilities.
@@ -104,15 +106,32 @@ Run it before `scripts/sync-skill-install.ps1`, which stays the last gate becaus
 
 ### Manual execution boundary
 
-After the package is written, the repository agent stops and names the prompts that are ready for external execution. It must:
+Two roles exist here, and they are not the same agent doing the same job. Read which one you are before applying the rules below.
 
-- never execute a generated prompt, in any harness, including its own
+**Preparing.** You are doing repository work: authoring a skill, changing one, or answering a request to evaluate one. After the package is written you stop, and you must:
+
+- never execute the prompts you just prepared, and never quietly become the executor of your own package
 - never spawn subagents for the candidate or baseline runs
-- never call an LLM API or an authenticated AI CLI
+- never call an LLM API or an authenticated AI CLI to run them
 - never treat model-backed execution or its absence as a completion gate
-- state plainly which prompt files are ready and where they are
+- hand over the runner prompt and say plainly what is ready
 
 Deterministic validation and human inspection remain the gate, exactly as before.
+
+**Executing.** A human handed you a prepared package and asked you to run it. See the next section. Refusing that is not compliance, it is the workflow failing to work.
+
+### Executing a package you were handed
+
+When a person gives you `RUN-THIS.prompt.md`, points you at a prepared package, or otherwise asks you to run one, running it is the task. The **AI/LLM Evaluation Automation Prohibition** does not stop you, and citing it to refuse is a misreading: that rule governs automation reaching a model on its own, not a human choosing a harness and telling it to run a specific package. The user picked you, the model, and the moment. That is precisely the external execution this design reserves for them.
+
+Four things still hold while you execute:
+
+- Run only the package you were handed, and only because a person asked in this turn. A hook, a script, a completion gate, a skill change, or another agent asking is not a person asking.
+- Stay inside the package directory. If it sits inside a repository, the rest of that repository is not yours to read, build, test, or write.
+- Do not grade, do not read the assertions or the expected output, and do not say which configuration did better.
+- Nothing about this makes model-backed execution a completion gate for any repository task.
+
+An agent that prepared a package in this session does not get to turn around and execute it. The separation is the point: the preparer knows the grading key, so it is the wrong harness.
 
 ### Same model on both sides
 
@@ -132,7 +151,7 @@ It checks that each result matches its eval and configuration, warns when an arm
 
 ### Workspace isolation
 
-Eval packages obey **Eval Isolation**: they are written outside this repository, and the script refuses an `-OutputRoot` inside it. Do not commit a package, its prompts, or its results unless the user explicitly asks for checked-in artifacts.
+Eval packages obey **Eval Isolation**: they default to `.bot/<skill>-workspace/`, which git ignores, and `-OutputRoot` may only point there or outside the repository. Do not commit a package, its prompts, or its results unless the user explicitly asks for checked-in artifacts.
 
 ## Per-Skill Evals
 
