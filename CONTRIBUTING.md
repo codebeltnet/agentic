@@ -82,34 +82,31 @@ Evals let you verify the skill works and measure improvement over a baseline. Ev
 }
 ```
 
-`files` is optional. When present, list one or more fixture files relative to `skills/<name>/`. A common pattern is to store those fixtures under `evals/files/` so benchmark runners can copy or attach the same source inputs for both `with_skill` and `without_skill` runs.
+`files` is optional. When present, list one or more fixture files relative to `skills/<name>/`. A common pattern is to store those fixtures under `evals/files/` so the eval package can attach the same source inputs to both the `with_skill` and `without_skill` prompt.
 
 Aim for 3–5 evals that cover distinct scenarios: happy path, edge cases, and cases where the skill should *not* do something.
 
-Run evals from a temp workspace, not from this repository:
+Evals are prepared, not executed, from this repository. When you create or modify a repo-managed skill, generate a portable evaluation package and run it yourself in whatever harness, provider, and model you choose:
 
-```powershell
-$workspace = Join-Path $env:TEMP '<skill-name>-workspace'
+```console
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>
 ```
 
-When creating or modifying a repo-managed skill, the eval workflow must include a paired comparison:
+The script writes `<temp>/<skill-name>-workspace/iteration-<n>/` with one directory per eval, each containing `with-skill.prompt.md`, `without-skill.prompt.md`, `eval-metadata.json`, the fixtures under `files/`, and result stubs under `results/`. Both prompts carry the same task, the same inputs, and the same response contract; only the operating-instructions section differs, so the comparison isolates the skill. The workspace lives outside this repository, and the script refuses an `-OutputRoot` inside it.
 
-- Resolve the installed Anthropic `skill-creator` path first, usually under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, then run its benchmark scripts from there
-- Run each eval as `with_skill`
-- Run the baseline as `without_skill` for new skills
-- For an existing skill, use either `without_skill` or the previous/original skill version as the baseline, following the `skill-creator` benchmark model
-- Aggregate the results into `benchmark.json`
-- Launch `eval-viewer/generate_review.py` from that installed `skill-creator` copy so a human can review both `Outputs` and `Benchmark`
+Repository scripts, CI jobs, and agents never run those prompts. That boundary is the Priority 1 rule in `AGENTS.md`, and preparing a prompt is not permission to execute one.
 
-The preferred local entry point is the repo-owned runner:
+Run both configurations on the same model, same version, and same configuration. A with-skill run on one model against a baseline on another measures the model as much as the skill and is not a skill-effectiveness result.
 
-```powershell
-pwsh -NoProfile -File .\scripts\run-skill-benchmark.ps1 -SkillPath .\skills\<skill-name> -CompareWithLegacy
+Record each external result in the matching `results/*.result.json` — `model`, `provider`, `harness`, `output`, and `grading[].passed` with evidence — then validate and compare:
+
+```console
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>
 ```
 
-That runner keeps one temp workspace, stages shared fixtures once, shares a benchmark-scoped cache, prewarms expensive resolver work where available, enforces bounded parallelism plus per-run timeouts, and still delegates aggregation and static review generation to the installed Anthropic `skill-creator` copy.
+That writes `comparison.md` and flags missing arms, unrun configurations, and mixed models. Grading is deterministic or human: use the assertions from `evals/evals.json` and write a script wherever an assertion can be checked programmatically. Do not add model-based grading.
 
-This repo treats that paired `with_skill` / `without_skill` comparison as part of the required devex for skill work. The benchmark artifacts live in the temp workspace; do not commit them to this repository unless the change explicitly calls for checked-in examples.
+The eval package is a temp artifact. Do not commit it, its prompts, or its results unless the change explicitly calls for checked-in examples.
 
 For scaffold/template skills, keep deterministic validators alongside evals. In this repo, `evals/evals.json` is mandatory, and validators like `scripts/validate-skill-templates.ps1` are additional protection.
 
@@ -144,8 +141,8 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD
 - [ ] At least one eval in `evals/evals.json`
 - [ ] The skill's `evals/evals.json` exists and its `skill_name` matches the folder/frontmatter name
 - [ ] Any optional `files` entries in `evals/evals.json` point to real fixture files under the same skill folder
-- [ ] Skill changes were benchmarked from a temp workspace with both `with_skill` and `without_skill` runs
-- [ ] `benchmark.json` and `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy were used so a human could compare `Outputs` and `Benchmark`
+- [ ] Skill changes have a prepared eval package with both `with_skill` and `without_skill` prompts, generated outside this repository
+- [ ] Any external results were recorded per configuration with the model that produced them, and `-CollectResults` was run against the iteration
 - [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior
 - [ ] If CI is enabled for the branch, the GitHub Actions validation job passes too
 - [ ] Skill evals are intended to run from `$env:TEMP/<skill-name>-workspace/`, not from inside the repo
