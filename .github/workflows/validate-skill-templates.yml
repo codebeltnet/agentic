@@ -22,6 +22,24 @@ jobs:
           "$HOME/.dotnet/tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           docfx --version
 
+      - name: Install Anthropic skill-creator eval assets
+        shell: pwsh
+        run: |
+          $sourceRoot = Join-Path $env:RUNNER_TEMP 'anthropic-skills'
+          $skillCreatorCommit = '0a64e398ec6bb34a494f0c347e8ccae53a862f8e'
+          git init $sourceRoot
+          git -C $sourceRoot remote add origin https://github.com/anthropics/skills.git
+          git -C $sourceRoot fetch --depth 1 origin $skillCreatorCommit
+          git -C $sourceRoot checkout --detach FETCH_HEAD
+
+          $skillCreatorPath = Join-Path $sourceRoot 'skills/skill-creator'
+          $graderPath = Join-Path $skillCreatorPath 'agents/grader.md'
+          if (-not (Test-Path -LiteralPath $graderPath)) {
+            throw "Anthropic skill-creator eval assets were not found at '$skillCreatorPath'."
+          }
+
+          "SKILL_CREATOR_PATH=$skillCreatorPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
+
       - name: Run validator
         shell: pwsh
         run: pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Full
