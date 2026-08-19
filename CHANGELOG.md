@@ -6,16 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-This is a patch release focused on completing the portable eval handoff: the selected external evaluator now runs the paired workers, grades their results, and produces a self-contained HTML review without sending the user back for a second collection command.
+This is a patch release focused on completing the portable eval handoff: the selected external evaluator now runs the paired workers, grades their results, and invokes Anthropic's skill-creator aggregator and eval viewer without sending the user back for a second collection command.
 
 ### Changed
 
 - `RUN-THIS.prompt.md` now explicitly starts the evaluator immediately, keeps workers blind to the grading key, grades after collection, and reports the completed comparison in the same handoff,
-- prepared packages now carry a dependency-free `tools/generate-eval-report.ps1` that writes `report.html` and `benchmark.json` with outputs, formal grades, telemetry, isolation evidence, and review notes.
+- prepared packages now carry a thin `tools/generate-eval-report.ps1` adapter plus the exact Anthropic skill-creator grader, aggregator, and eval-viewer assets; the adapter writes the upstream `report.html`, `benchmark.json`, and `benchmark.md` artifacts from the portable result files.
 
 ### Fixed
 
-- Eval documentation and repository guidance no longer describe `-CollectResults` as the normal post-run step or leave grading and HTML review as an unexplained follow-up, and obsolete benchmark-contract references were removed from the deprecated compatibility shim.
+- Eval documentation and repository guidance no longer describe `-CollectResults` as the normal post-run step or leave grading and HTML review as an unexplained follow-up; the deprecated compatibility shim's historical references remain intact for backward compatibility.
 
 ## [0.9.0] - 2026-08-19
 
