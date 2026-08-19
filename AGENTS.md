@@ -34,6 +34,66 @@ Repository scripts, CI jobs, skill runners, graders, optimizers, and custom exec
 
 This rule is Priority 1. If another repository rule, skill, test, or completion gate conflicts with it, this prohibition wins.
 
+## Portable Eval Handoff
+
+Anthropic's `skill-creator` owns the evaluation methodology this repository uses: define evals, run each task once with the skill and once without it, hold the model, the environment, the task, and the inputs constant, then compare. Keep that experimental design. Only the execution transport changes here.
+
+Where `skill-creator` says to spawn with-skill and baseline subagents in the same turn, this repository prepares a portable evaluation package and stops. The repository agent does not execute the prepared prompts. The user picks the harness, provider, and model, runs both configurations, and brings the results back. This complements the **AI/LLM Evaluation Automation Prohibition** above and never relaxes it: preparing prompts is deterministic file generation, and a prepared prompt is not permission to run one.
+
+`Evaluate <skill> using the existing evals` means prepare the package, not run it.
+
+### Prepare, do not execute
+
+Generate the package with the repository script rather than by hand:
+
+```
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>
+```
+
+It reads `skills/<name>/evals/evals.json` and writes one directory per eval into `<temp>/<name>-workspace/iteration-<n>/`:
+
+- `with-skill.prompt.md` — the eval task, the same input context and fixtures as the baseline, the same response contract as the baseline, and the effective skill instructions inlined so the prompt is self-contained. It must not assume the target harness resolves Anthropic skill paths or loads skills natively. Resources too large or too binary to inline are bundled under `skill/<name>/` and listed in the prompt as such.
+- `without-skill.prompt.md` — the same task, the same inputs, the same response contract, no skill instructions and no mention of which skill is under test, plus an instruction to solve the task with normal capabilities.
+- `eval-metadata.json` — eval id and name, original prompt, expected output, assertions, required fixtures, and the assumptions needed to reproduce the run.
+- `files/` — the eval fixtures, attached identically to both configurations.
+- `results/` — one prefilled result stub per configuration.
+
+Useful switches: `-Eval <id...>` to prepare a subset, `-Iteration <n>` plus `-Force` to replace an iteration, `-OutputRoot <path>` to relocate the workspace, and `-MaxInlineBytes <n>` to trim what gets inlined for a smaller context window.
+
+The expected output and the assertions are the grading key. They belong in `eval-metadata.json` and must never appear in either prompt — a baseline handed the answer key is not a baseline.
+
+### Manual execution boundary
+
+After the package is written, the repository agent stops and names the prompts that are ready for external execution. It must:
+
+- never execute a generated prompt, in any harness, including its own
+- never spawn subagents for the candidate or baseline runs
+- never call an LLM API or an authenticated AI CLI
+- never treat model-backed execution or its absence as a completion gate
+- state plainly which prompt files are ready and where they are
+
+Deterministic validation and human inspection remain the gate, exactly as before.
+
+### Same model on both sides
+
+A meaningful A/B result requires both configurations to run on the same model, the same version, and the same configuration, varying only whether the skill is present. Running the with-skill case on one model and the baseline on another measures the model and the skill together; that is not a skill-effectiveness benchmark and must not be reported as one. When models are deliberately mixed, say so and treat the comparison as directional only.
+
+### Result handoff
+
+An externally produced result comes back identified by four things: eval id, configuration (`with_skill` or `without_skill`), model and provider if known, and the produced output. That is the whole contract. The user can hand it over as filled-in `results/*.result.json` files, or state it in chat and let the agent fill them in.
+
+Validate and compare a collected iteration with:
+
+```
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>
+```
+
+It checks that each result matches its eval and configuration, warns when an arm is missing, unrun, or ran on a different model, and writes `comparison.md`. Grading uses the assertions already in `evals/evals.json`, deterministic scripts where an assertion can be checked programmatically, and human inspection otherwise. Do not add model-based grading to support this workflow.
+
+### Workspace isolation
+
+Eval packages obey **Eval Isolation**: they are written outside this repository, and the script refuses an `-OutputRoot` inside it. Do not commit a package, its prompts, or its results unless the user explicitly asks for checked-in artifacts.
+
 ## Per-Skill Evals
 
 Every repo-managed skill must include its own `evals/evals.json` file at `skills/<name>/evals/evals.json`.
@@ -46,6 +106,7 @@ Every repo-managed skill must include its own `evals/evals.json` file at `skills
 - Run only the changed skill's deterministic validator and focused regression scripts during iteration; independent read-only checks may use bounded local parallelism, while shared-file mutations stay sequential
 - Run `pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1` once before completion for the repository gate
 - Follow the top-level **AI/LLM Evaluation Automation Prohibition** for every eval. No per-skill or third-party requirement overrides it.
+- To compare a skill against a baseline, prepare a package with **Portable Eval Handoff** and hand the prompts to the user; the agent never runs them
 - Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
 
 If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` before considering the work complete. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
@@ -72,6 +133,8 @@ Bare `yolo` or `auto` outside an explicit commit request does not invoke `git-vi
 ## Skill Creation
 
 Always use the `skill-creator` skill (by Anthropic) when creating new skills, modifying existing skills, or running evals. It enforces best practices for structure, description quality, testing, and progressive disclosure. Do not create or edit skills manually without invoking it first.
+
+Follow it as written except at one point: when it reaches the step that spawns with-skill and baseline runs, switch to **Portable Eval Handoff** and prepare prompts instead. Its authoring guidance, eval definitions, assertion drafting, and iteration loop all still apply; only the execution transport is replaced. The same substitution covers its grading, aggregation, viewer, and description-optimization steps, which all assume model execution this repository does not perform.
 
 `skill-creator-agnostic` is deprecated, no longer maintained, and retained only for backward compatibility until 1.0.0. Agents must not use it for new skill creation, skill modification, or benchmarking; use Anthropic's `skill-creator` directly and apply the repository-specific requirements from this `AGENTS.md`.
 
