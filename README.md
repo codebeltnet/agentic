@@ -14,11 +14,13 @@ Another repo rule is intentionally strict: every repo-managed skill ships with i
 
 Skill validation is local and deterministic. The Priority 1 **AI/LLM Evaluation Automation Prohibition** in `AGENTS.md` forbids repository scripts, CI jobs, runners, graders, optimizers, and custom hooks from using an authenticated Copilot, Claude, Codex, Gemini, or other model account. There is no repository opt-in switch. Model-backed candidate/baseline fan-out is not a completion gate.
 
-Evaluation keeps Anthropic's `skill-creator` methodology and replaces only its execution transport. Instead of spawning candidate and baseline agents, the repository prepares a portable evaluation package and stops:
+Evaluation keeps Anthropic's `skill-creator` methodology and replaces only its execution transport. Instead of spawning candidate and baseline agents, the repository prepares a portable evaluation package and stops. Adding or modifying a skill triggers this automatically, as a completion gate an agent cannot skip:
 
 ```powershell
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
 ```
+
+That resolves every skill the branch changed and prepares a package for each. `-Skill <name>` prepares one on demand.
 
 Each eval gets a `with-skill.prompt.md` with the effective skill instructions inlined, a `without-skill.prompt.md` carrying the identical task, inputs, and response contract with no skill, an `eval-metadata.json` holding the expected output, assertions, fixtures, and reproduction assumptions, and prefilled result stubs. The prompts are self-contained, so they paste into Claude, Codex, Copilot, Gemini, LM Studio, a local Qwen or Gemma harness, or any other capable agent environment — you choose the model and you run them. Feed the results back with `-CollectResults <iteration-path>`, which validates each arm against its eval, warns when the two arms did not run on the same model, and writes a comparison. Grading stays deterministic or human; nothing in this repository grades with a model. Packages are written outside the repository and are not committed.
 
