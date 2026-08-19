@@ -1226,6 +1226,123 @@ Add-ValidationResult -Results $results -Name 'Repository automation cannot launc
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'validate-skill-templates.ps1 -MetadataOnly'
 }
 
+Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Action {
+    $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
+    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
+    $contributing = Get-FileText -RepoRoot $repoRoot -RelativePath 'CONTRIBUTING.md' -GitRef $Ref
+    $prepare = Get-FileText -RepoRoot $repoRoot -RelativePath 'scripts/prepare-skill-evals.ps1' -GitRef $Ref
+
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '## Portable Eval Handoff'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'this repository prepares a portable evaluation package and stops'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'never execute a generated prompt, in any harness, including its own'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'never spawn subagents for the candidate or baseline runs'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'never call an LLM API or an authenticated AI CLI'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'the same model, the same version, and the same configuration'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'a baseline handed the answer key is not a baseline'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Do not add model-based grading to support this workflow.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares a portable evaluation package and stops'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>'
+    Assert-NotContains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'run-skill-benchmark.ps1'
+    Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'Eval workspaces must live outside this repository.'
+    Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'It did not run them, and nothing here will.'
+
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+
+    $scriptPath = Join-Path $repoRoot 'scripts/prepare-skill-evals.ps1'
+    $packageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-package-' + [Guid]::NewGuid().ToString('N'))
+    $taskMarker = "`n# Task`n"
+    try {
+        $prepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "prepare-skill-evals.ps1 failed: $($prepareOutput -join [Environment]::NewLine)"
+        }
+
+        $iterationDirectory = Join-Path $packageRoot 'iteration-1'
+        $manifest = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'manifest.json'), $utf8NoBom) | ConvertFrom-Json
+        if (@($manifest.evals).Count -lt 1) {
+            throw 'The prepared package must contain at least one eval case.'
+        }
+
+        foreach ($entry in @($manifest.evals)) {
+            $evalDirectory = Join-Path $iterationDirectory $entry.directory
+            $withSkill = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'with-skill.prompt.md'), $utf8NoBom)
+            $withoutSkill = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'without-skill.prompt.md'), $utf8NoBom)
+            $metadata = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'eval-metadata.json'), $utf8NoBom) | ConvertFrom-Json
+
+            if (-not $withSkill.Contains([string]$metadata.prompt) -or -not $withoutSkill.Contains([string]$metadata.prompt)) {
+                throw "$($entry.eval_name) must put the same task prompt in both configurations."
+            }
+            if (-not $withSkill.Contains('# Response contract') -or -not $withoutSkill.Contains('# Response contract')) {
+                throw "$($entry.eval_name) must give both configurations a response contract."
+            }
+
+            $withSkillTaskIndex = $withSkill.IndexOf($taskMarker, [System.StringComparison]::Ordinal)
+            $withoutSkillTaskIndex = $withoutSkill.IndexOf($taskMarker, [System.StringComparison]::Ordinal)
+            if ($withSkillTaskIndex -lt 0 -or $withoutSkillTaskIndex -lt 0) {
+                throw "$($entry.eval_name) must open its task with a '# Task' heading in both configurations."
+            }
+            if ($withSkill.Substring($withSkillTaskIndex) -ne $withoutSkill.Substring($withoutSkillTaskIndex)) {
+                throw "$($entry.eval_name) must vary only the operating-instructions section; the task, inputs, or response contract differ."
+            }
+
+            if ($withoutSkill.Contains([string]$manifest.skill_name)) {
+                throw "$($entry.eval_name) baseline prompt must not name the skill under test."
+            }
+            foreach ($prompt in @($withSkill, $withoutSkill)) {
+                if ($prompt.Contains([string]$metadata.expected_output)) {
+                    throw "$($entry.eval_name) prompts must not carry the expected output; that is the grading key."
+                }
+                foreach ($assertion in @($metadata.assertions)) {
+                    if ($prompt.Contains([string]$assertion)) {
+                        throw "$($entry.eval_name) prompts must not carry assertion '$assertion'; that is the grading key."
+                    }
+                }
+            }
+
+            foreach ($configuration in @('with_skill', 'without_skill')) {
+                $resultFile = if ($configuration -eq 'with_skill') { 'with-skill.result.json' } else { 'without-skill.result.json' }
+                $stubPath = Join-Path (Join-Path $evalDirectory 'results') $resultFile
+                $stub = [System.IO.File]::ReadAllText($stubPath, $utf8NoBom) | ConvertFrom-Json
+                if ([string]$stub.configuration -ne $configuration) {
+                    throw "$($entry.eval_name) result stub $resultFile must declare configuration '$configuration'."
+                }
+                if (@($stub.grading).Count -ne @($metadata.assertions).Count) {
+                    throw "$($entry.eval_name) result stub $resultFile must carry one grading entry per assertion."
+                }
+            }
+        }
+
+        $collectOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "prepare-skill-evals.ps1 -CollectResults failed on an unrun package: $($collectOutput -join [Environment]::NewLine)"
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'comparison.md'))) {
+            throw 'prepare-skill-evals.ps1 -CollectResults must write comparison.md.'
+        }
+
+        $insideRepo = Join-Path $repoRoot 'agentic-eval-isolation-check'
+        $isolationOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            throw 'prepare-skill-evals.ps1 must refuse an output root inside this repository.'
+        }
+        if (Test-Path -LiteralPath $insideRepo) {
+            Remove-Item -LiteralPath $insideRepo -Recurse -Force
+            throw 'prepare-skill-evals.ps1 must not create an output root inside this repository.'
+        }
+        if (($isolationOutput -join ' ') -notmatch 'must live outside this repository') {
+            throw 'prepare-skill-evals.ps1 must explain why an in-repository output root was refused.'
+        }
+    } finally {
+        if (Test-Path -LiteralPath $packageRoot) {
+            Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific Codebelt xUnit migration and bootstrap contracts' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/SKILL.md' -GitRef $Ref
     $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-test/FORMS.md' -GitRef $Ref
