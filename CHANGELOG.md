@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+This is a patch release focused on completing the portable eval handoff: the selected external evaluator now runs the paired workers, grades their results, and produces a self-contained HTML review without sending the user back for a second collection command.
+
+### Changed
+
+- `RUN-THIS.prompt.md` now explicitly starts the evaluator immediately, keeps workers blind to the grading key, grades after collection, and reports the completed comparison in the same handoff,
+- prepared packages now carry a dependency-free `tools/generate-eval-report.ps1` that writes `report.html` and `benchmark.json` with outputs, formal grades, telemetry, isolation evidence, and review notes.
+
+### Fixed
+
+- Eval documentation and repository guidance no longer describe `-CollectResults` as the normal post-run step or leave grading and HTML review as an unexplained follow-up, and obsolete benchmark-contract references were removed from the deprecated compatibility shim.
+
 ## [0.9.0] - 2026-08-19
 
 This is a minor release that adds three .NET skills — `dotnet-test`, `dotnet-remote-testing`, and `dotnet-segregated-assets` — and replaces the repository's model-backed eval benchmark workflow with a deterministic, local-only validation path. `dotnet-test` bootstraps and modernizes xUnit test projects against Codebelt conventions with role-aware fixtures; `dotnet-remote-testing` runs .NET tests inside official Microsoft SDK containers using either an existing `testenvironments.json` or zero-config, offline-safe release discovery; `dotnet-segregated-assets` migrates ASP.NET Core applications to an artifact-first topology where `wwwroot` stays the authoring root while deployed static content is served by a separate hardened origin. Alongside those, `git-keep-a-changelog` and `git-nuget-release-notes` gained deterministic release-entity classification so a capability introduced and then refined before its first release stays a single `Added` outcome, and `git-visual-commits` gained an invocation routing lock so an explicit commit request can no longer be diverted into a changelog or release-note skill. No published skill was removed or renamed, so adopting this release is non-breaking for existing installs.
@@ -606,7 +619,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
-[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/codebeltnet/agentic/compare/v0.9.0...HEAD
 [0.9.0]: https://github.com/codebeltnet/agentic/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/codebeltnet/agentic/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/codebeltnet/agentic/compare/v0.8.0...v0.8.1
