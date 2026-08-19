@@ -98,13 +98,13 @@ Run it after the last skill edit and before `scripts/sync-skill-install.ps1`, wh
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>
 ```
 
-The script writes `.bot/<skill-name>-workspace/iteration-<n>/` with one directory per eval, each containing `with-skill.prompt.md`, `without-skill.prompt.md`, `eval-metadata.json`, the fixtures under `files/`, and result stubs under `results/`. At the root it writes `RUN-THIS.prompt.md`, a single prompt you hand to the agent of your choice that runs every case in both configurations and writes the results back, so the handoff is one paste rather than one per prompt. Both prompts carry the same task, the same inputs, and the same response contract; only the operating-instructions section differs, so the comparison isolates the skill. `.gitignore` covers `.bot/*`, so nothing there reaches git, and the script refuses an `-OutputRoot` that is inside the repository but outside `.bot/`. Pass `-OutputRoot` explicitly for a temp location instead.
+The script writes `.bot/<skill-name>-workspace/iteration-<n>/` with one directory per eval, each containing `with-skill.prompt.md`, `without-skill.prompt.md`, `eval-metadata.json`, fixtures under `files/`, and result stubs under `results/`. At the root it writes `RUN-THIS.prompt.md`, the orchestrator prompt you hand to the agent of your choice. That agent creates one isolated worker for every run, gives each worker only its prompt and inputs, and writes the results back. It never runs an eval prompt in the orchestrator context and never reuses a worker. Both worker prompts carry the same task, inputs, and response contract; only the operating instructions differ, and neither prompt identifies itself as an eval. `.gitignore` covers `.bot/*`, so nothing there reaches git. The script refuses an `-OutputRoot` inside the repository but outside `.bot/`; pass an explicit temp path when the harness does not need repository-local storage.
 
-Repository scripts, CI jobs, and agents never run those prompts. That boundary is the Priority 1 rule in `AGENTS.md`, and preparing a prompt is not permission to execute one.
+Repository scripts, CI jobs, and the agent that prepares a package never run those prompts. That boundary is the Priority 1 rule in `AGENTS.md`, and preparing a prompt is not permission to execute one. A user-selected harness handed a specific package is the executor, not the preparer; its current context orchestrates fresh workers while the workers run the prompt files.
 
 Run both configurations on the same model, same version, and same configuration. A with-skill run on one model against a baseline on another measures the model as much as the skill and is not a skill-effectiveness result.
 
-Record each external result in the matching `results/*.result.json` — `model`, `provider`, `harness`, `output`, and `grading[].passed` with evidence — then validate and compare:
+Record each external result in the matching `results/*.result.json`: `model`, `provider`, `harness`, and the complete `output`; include `transcript`, `duration_seconds`, `total_tokens`, and `tool_calls` when the harness exposes them. After deterministic or human grading adds `grading[].passed` with evidence, validate and compare:
 
 ```console
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>

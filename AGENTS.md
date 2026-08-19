@@ -60,7 +60,7 @@ pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
 
 ### Handing the package over
 
-Every package contains `RUN-THIS.prompt.md`, one instruction that drives the whole thing. It tells a capable agent with filesystem access to run both configurations of every case in fresh contexts, on one model, without reading the grading key, and to write each result back into the package.
+Every package contains `RUN-THIS.prompt.md`, one instruction that drives the whole thing. It makes the user-selected agent the eval orchestrator. That orchestrator creates a separate isolated worker for every `with_skill` and `without_skill` run, gives each worker only its prompt and required inputs, records the results and available metrics, and never executes an eval prompt in its own context.
 
 Hand the user that one file by its absolute path, and stop there. Do not reproduce its contents in the reply. The runner is built around absolute paths - the package directory, its own location, the path in the hand-back block - and a copy that has passed through a chat window arrives with them shortened to a bare directory name like `iteration-4`, pointing nowhere, with its internal links broken. The file on disk always says what the file on disk says; a paste of it is a lossy snapshot that also goes stale the moment the generator changes. Where the user's harness cannot read files at all, tell them to open that path and paste it themselves, so what travels is the real text rather than your recollection of it.
 
@@ -84,7 +84,7 @@ It reads `skills/<name>/evals/evals.json` and writes one directory per eval into
 - `files/` — the eval fixtures, attached identically to both configurations.
 - `results/` — one prefilled result stub per configuration.
 
-At the iteration root it also writes `RUN-THIS.prompt.md`, the single prompt that hands the whole package to an agent of the user's choosing.
+At the iteration root it also writes `RUN-THIS.prompt.md`, the single prompt that hands the whole package to an agent of the user's choosing. The one-file path requires a harness that can create isolated workers or sessions. A plain single-context client runs one prompt file directly per fresh session instead.
 
 Useful switches: `-Eval <id...>` to prepare a subset, `-Iteration <n>` plus `-Force` to replace an iteration, `-OutputRoot <path>` to relocate the workspace, and `-MaxInlineBytes <n>` to trim what gets inlined for a smaller context window.
 
@@ -133,17 +133,17 @@ Four things still hold while you execute:
 - Do not grade, do not read the assertions or the expected output, and do not say which configuration did better.
 - Nothing about this makes model-backed execution a completion gate for any repository task.
 
-An agent that prepared a package in this session does not get to turn around and execute it. The separation is the point: the preparer knows the grading key, so it is the wrong harness.
+An agent that prepared a package in this session does not get to turn around and execute it. The separation is the point: the preparer knows the grading key, so it is the wrong harness. This is the only role-based disqualification.
 
-That bar is about knowing the grading key, not about capability, and it is the only thing that disqualifies the preparer. A preparer citing the Priority 1 prohibition or its own lack of subagents has reached the right answer through the wrong reasoning, and that reasoning is what makes chosen executors refuse packages they were handed.
+The selected executor has two roles. Its current context is the orchestrator and may read `RUN-THIS.prompt.md`, `manifest.json`, and the prompt files needed to dispatch work. It must not execute an eval prompt itself. For every case it creates one new isolated worker for `with_skill` and another for `without_skill`, then sends each worker only the matching prompt and required inputs. Workers never see the runner, manifest, grading key, sibling results, or orchestration commentary. Never reuse a worker or session between runs.
 
-For an executor, capability is likewise not a disqualifier. A harness that cannot spawn subagents is still a harness: every prompt file is self-contained, so a fresh chat session satisfies the fresh-context requirement exactly as a spawned agent does. Partial packages collect fine - `-CollectResults` reports the unfilled ones as missing - so "I cannot loop over all of it myself" is a reason to fill one case, never a reason to decline the package. None of this reaches the preparer, which stays out regardless of how many contexts it can open.
+The candidate instructions are already inlined in `with-skill.prompt.md`; the orchestrator does not load or summarize them for the worker. The baseline prompt contains no candidate instructions, and the orchestrator must not expose the candidate skill through another route. The generated prompt files also omit eval identifiers and configuration labels so workers receive an ordinary task rather than an announcement that they are under evaluation.
 
-`RUN-THIS.prompt.md` is worth handing to a harness that can open fresh contexts of its own, since that is what turns twenty-six runs into one handover. A single-context harness is served by the prompt files directly - one per fresh session, each reply brought to a repository session that records and grades it - and saying which of the two the user has is part of handing the package over. Handing the runner to a harness that cannot spawn produces nothing runnable, and asking that harness to name the next case produces invented paths, because a context that cannot open a session usually cannot list the package either. The repository session has the directory in front of it; naming cases is its job.
+Use the same model, model version, configuration, tools, and limits for every worker. Disable persistent memory and cross-session recall. Independent runs may execute concurrently when the selected harness and the user's token budget allow it, but every run still gets a distinct context and no shared mutable workspace.
 
-What an executor limited to a single context must not do is run a prompt in the context that read `RUN-THIS.prompt.md`. That context knows an experiment is running and what the two arms are, and these prompts measure how a model behaves on a request that looks ordinary - whether it acts, asks first, hesitates, or refuses. Knowing an evaluator is watching moves exactly that. Such an executor names the next unfilled prompt, has the person paste it into a session that has seen nothing else, and records the returned response; the person supplies the fresh contexts and the agent supplies the bookkeeping. A run made in a context that had read the runner instructions is recorded with that fact in `notes`.
+`RUN-THIS.prompt.md` requires a harness that can create isolated workers or sessions. A plain single-context client can still execute an individual self-contained prompt when the user opens it directly as the first message of a fresh session. It cannot use the one-file orchestrator in that same context. Partial packages collect normally; `-CollectResults` reports the remaining arms as missing.
 
-An `output` is the model's own message in full - its questions, caveats, explanations, or refusal. Where a run invoked a tool, that tool's stdout is evidence the model quoted rather than the response itself; a result holding only a command's output has dropped what most assertions are written against.
+An `output` is the model's own message in full, including questions, caveats, explanations, or a refusal. Where a run invoked a tool, that tool's stdout is evidence rather than a replacement for the response. Record the full worker transcript, duration, token usage, and tool-call count when the harness exposes them; omit unavailable metrics rather than estimating them.
 
 ### Same model on both sides
 
@@ -155,7 +155,7 @@ A meaningful A/B result requires both configurations to run on the same model, t
 
 ### Result handoff
 
-An externally produced result comes back identified by four things: eval id, configuration (`with_skill` or `without_skill`), model and provider if known, and the produced output. That is the whole contract. The user can hand it over as filled-in `results/*.result.json` files, or state it in chat and let the agent fill them in.
+An externally produced result comes back identified by eval id, configuration (`with_skill` or `without_skill`), model and provider, and the produced output. It may also carry the transcript, duration, total tokens, tool-call count, output files, and notes. The user can hand it over as filled-in `results/*.result.json` files, or state it in chat and let the agent fill them in.
 
 Which of the two happens depends on where the harness ran, and `RUN-THIS.prompt.md` tells it to close either way. A harness sharing a disk with the repository writes the result files itself and reports the package path. A harness that does not - a different product, a browser, a sandbox - ends with one paste-ready block carrying the package path, the model, and the result objects as a JSON array. Pasting that block into a repository session is the return path: the agent writes the files from it, then grades and compares. "Bring the results back" means one of those two artifacts, never a prose recap of how the runs went.
 
@@ -211,7 +211,7 @@ Bare `yolo` or `auto` outside an explicit commit request does not invoke `git-vi
 
 Always use the `skill-creator` skill (by Anthropic) when creating new skills, modifying existing skills, or running evals. It enforces best practices for structure, description quality, testing, and progressive disclosure. Do not create or edit skills manually without invoking it first.
 
-Follow it as written except at one point: when it reaches the step that spawns with-skill and baseline runs, switch to **Portable Eval Handoff** and prepare prompts instead. Its authoring guidance, eval definitions, assertion drafting, and iteration loop all still apply; only the execution transport is replaced. The same substitution covers its grading, aggregation, viewer, and description-optimization steps, which all assume model execution this repository does not perform.
+Follow it as written except at the execution boundary. Anthropic's `skill-creator` requires paired with-skill and baseline runs in fresh subagents. This repository prepares the same paired inputs as a portable package and stops. When the user hands that package to a harness, `RUN-THIS.prompt.md` makes the selected harness create those isolated paired workers without exposing the grading key. The authoring guidance, eval definitions, assertion drafting, and iteration loop still apply; only the execution transport changes. Grading, aggregation, viewer, and description optimization remain deterministic or human in this repository because their upstream forms assume model execution the repository does not perform.
 
 `skill-creator-agnostic` is deprecated, no longer maintained, and retained only for backward compatibility until 1.0.0. Agents must not use it for new skill creation, skill modification, or benchmarking; use Anthropic's `skill-creator` directly and apply the repository-specific requirements from this `AGENTS.md`.
 
