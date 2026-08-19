@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Eval Review</title>
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --surface: #fff;
+      --border: #e4e1d8;
+      --text: #191918;
+      --muted: #817f77;
+      --accent: #d97757;
+      --with: #1976d2;
+      --with-bg: #e6f2ff;
+      --without: #c47b00;
+      --without-bg: #fff5d9;
+      --green: #5f7b42;
+      --green-bg: #eef4e8;
+      --red: #b94242;
+      --red-bg: #fceaea;
+      --unknown: #7a766d;
+      --radius: 7px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: Georgia, 'Times New Roman', serif; }
+    button, select, textarea { font: inherit; }
+    .topbar { background: #151514; color: #fff; padding: 18px 32px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .topbar h1 { margin: 0; font: 600 22px/1.2 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .topbar small { color: #c8c7c0; display: block; margin-top: 5px; font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .progress { white-space: nowrap; color: #d9d8d1; font: 14px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .tabs { display: flex; align-items: center; gap: 0; padding: 0 32px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .tab { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); cursor: pointer; padding: 13px 20px 11px; font: 600 13px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .toolbar { display: flex; justify-content: flex-end; gap: 7px; align-items: center; margin-left: auto; }
+    .toolbar button, .toolbar select { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 5px; padding: 7px 10px; font: 13px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .toolbar button { cursor: pointer; min-width: 34px; }
+    .toolbar button:disabled { cursor: default; opacity: .45; }
+    .view { display: none; }
+    .view.active { display: block; }
+    main { max-width: 1560px; margin: 0 auto; padding: 28px 32px 70px; }
+    .eval-title { font: 600 22px/1.3 system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0 0 18px; }
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 20px; overflow: hidden; }
+    .panel-title { padding: 12px 16px; color: var(--muted); border-bottom: 1px solid var(--border); background: #fbfaf7; text-transform: uppercase; letter-spacing: .08em; font: 600 11px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .panel-body { padding: 16px; }
+    .prompt { white-space: pre-wrap; line-height: 1.65; font-size: 16px; }
+    .expected { color: #4d4b45; white-space: pre-wrap; line-height: 1.55; font-size: 14px; }
+    .pair-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    .run-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .run-card-header { padding: 13px 18px; border-bottom: 1px solid var(--border); font: 600 14px system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: .04em; }
+    .run-card-header.with { color: var(--with); background: var(--with-bg); }
+    .run-card-header.without { color: var(--without); background: var(--without-bg); }
+    .run-card-header .run-meta { display: block; color: var(--muted); font: 12px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif; margin-top: 4px; letter-spacing: 0; }
+    .metric-list { padding: 12px 18px; }
+    .metric { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: baseline; padding: 7px 0; }
+    .metric + .metric { border-top: 1px solid #f0eee8; }
+    .metric-label { color: #aaa79e; text-transform: uppercase; letter-spacing: .08em; font: 600 10px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .metric-value { color: var(--text); font: 15px system-ui, -apple-system, 'Segoe UI', sans-serif; text-align: right; }
+    .metric-value.positive { background: var(--with-bg); border-radius: 4px; padding: 2px 6px; }
+    .metric-value.baseline-positive { background: var(--without-bg); border-radius: 4px; padding: 2px 6px; }
+    .section-title { padding: 13px 18px; font: 600 13px system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: .05em; text-transform: uppercase; }
+    .section-title.with { color: var(--with); background: var(--with-bg); }
+    .section-title.without { color: var(--without); background: var(--without-bg); }
+    .grade-summary { padding: 13px 18px; border-bottom: 1px solid var(--border); font: 14px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .grade-badge { display: inline-block; min-width: 48px; margin-right: 8px; padding: 4px 8px; text-align: center; border-radius: 999px; background: var(--green-bg); color: var(--green); font-weight: 700; }
+    .grade-badge.fail { background: var(--red-bg); color: var(--red); }
+    .grade-badge.unknown { background: #efede8; color: var(--unknown); }
+    .grades { border-top: 1px solid var(--border); }
+    .grade-row { padding: 12px 18px; border-bottom: 1px solid #f0eee8; font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .grade-row:last-child { border-bottom: 0; }
+    .grade-icon { display: inline-block; width: 20px; font-weight: 700; }
+    .grade-icon.pass { color: var(--green); }
+    .grade-icon.fail { color: var(--red); }
+    .grade-icon.unknown { color: var(--unknown); }
+    .grade-evidence { margin: 5px 0 0 20px; color: var(--muted); font-size: 12px; white-space: pre-wrap; }
+    .work-product { padding: 14px 18px; border-top: 1px solid var(--border); }
+    details { border: 1px solid var(--border); border-radius: 5px; margin-top: 10px; overflow: hidden; }
+    details summary { cursor: pointer; padding: 9px 11px; background: #fbfaf7; color: #56534c; font: 600 12px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    details .detail-body { padding: 11px; }
+    pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 Consolas, 'SFMono-Regular', monospace; }
+    .file { border-top: 1px solid #f0eee8; padding: 10px 0; }
+    .file:first-child { border-top: 0; }
+    .file-name { color: var(--muted); font: 600 12px system-ui, -apple-system, 'Segoe UI', sans-serif; margin-bottom: 6px; }
+    .file img { max-width: 100%; height: auto; border-radius: 4px; }
+    .feedback { padding: 14px 18px; border-top: 1px solid var(--border); }
+    .feedback label { display: block; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font: 600 10px system-ui, -apple-system, 'Segoe UI', sans-serif; margin-bottom: 7px; }
+    .feedback textarea { width: 100%; min-height: 80px; resize: vertical; border: 1px solid var(--border); border-radius: 5px; padding: 9px; color: var(--text); background: #fff; line-height: 1.45; }
+    .feedback textarea:focus { outline: 2px solid rgba(217,119,87,.2); border-color: var(--accent); }
+    .empty { padding: 30px; color: var(--muted); text-align: center; font-style: italic; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: var(--surface); font: 13px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    th, td { padding: 10px 12px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { background: #151514; color: #fff; text-transform: uppercase; letter-spacing: .05em; font-size: 10px; }
+    tr.with { background: rgba(25,118,210,.055); }
+    tr.without { background: rgba(196,123,0,.055); }
+    .delta-positive { color: var(--green); font-weight: 700; }
+    .delta-negative { color: var(--red); font-weight: 700; }
+    .summary-note { color: var(--muted); margin: 0 0 18px; font: 13px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .note-list { margin: 0; padding-left: 20px; line-height: 1.6; }
+    .skill-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .stat-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 16px; }
+    .stat-card .label { color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font: 600 10px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .stat-card .value { margin-top: 9px; font: 600 20px system-ui, -apple-system, 'Segoe UI', sans-serif; overflow-wrap: anywhere; }
+    .footer-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+    .primary { border: 0; border-radius: 5px; background: var(--accent); color: #fff; padding: 10px 16px; cursor: pointer; font: 600 13px system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .primary:hover { background: #c4613f; }
+    @media (max-width: 900px) { .pair-grid, .skill-stats { grid-template-columns: 1fr; } .topbar { padding: 16px; } .tabs { padding: 0 16px; flex-wrap: wrap; } main { padding: 20px 16px 50px; } .toolbar { width: 100%; justify-content: flex-end; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div><h1>Eval Review: <span id="skill-name"></span></h1><small id="run-meta"></small></div>
+    <div class="progress" id="progress"></div>
+  </header>
+  <nav class="tabs">
+    <button class="tab active" data-view="outputs">Outputs</button>
+    <button class="tab" data-view="benchmark">Benchmark</button>
+    <button class="tab" data-view="skill">Skill Tokens</button>
+    <div class="toolbar">
+      <button id="prev" title="Previous eval">&#8592;</button>
+      <select id="eval-select" aria-label="Select eval"></select>
+      <button id="next" title="Next eval">&#8594;</button>
+    </div>
+  </nav>
+
+  <section id="outputs-view" class="view active"><main id="outputs-main"></main></section>
+  <section id="benchmark-view" class="view"><main id="benchmark-main"></main></section>
+  <section id="skill-view" class="view"><main id="skill-main"></main></section>
+
+  <script>
+    const DATA = __EVAL_DATA__;
+    const CONFIGS = ['with_skill', 'without_skill'];
+    let current = 0;
+    const feedback = {};
+
+    function esc(value) {
+      const div = document.createElement('div');
+      div.textContent = value == null ? '' : String(value);
+      return div.innerHTML;
+    }
+    function num(value, digits = 0) {
+      if (value == null || value === '' || Number.isNaN(Number(value))) return '—';
+      return Number(value).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
+    }
+    function money(value) { return value == null || value === '' ? '—' : '$' + Number(value).toFixed(2); }
+    function seconds(value) { return value == null || value === '' ? '—' : num(value, 1) + 's'; }
+    function percent(value) { return value == null || value === '' ? '—' : num(Number(value) * 100, 0) + '%'; }
+    function resultFor(evalCase, config) { return (evalCase.runs || {})[config] || null; }
+    function gradesFor(run) { return run && Array.isArray(run.grades) ? run.grades : []; }
+    function gradeSummary(run) {
+      const grades = gradesFor(run);
+      return { passed: grades.filter(g => g.passed === true).length, failed: grades.filter(g => g.passed === false).length, total: grades.length };
+    }
+    function passRate(run) {
+      const summary = gradeSummary(run);
+      return summary.total ? summary.passed / summary.total : null;
+    }
+    function valueClass(config, value) { return value == null ? '' : (config === 'with_skill' ? 'positive' : 'baseline-positive'); }
+    function metric(label, value, config, formatter = num) { return '<div class="metric"><span class="metric-label">' + esc(label) + '</span><span class="metric-value ' + valueClass(config, value) + '">' + formatter(value) + '</span></div>'; }
+    function runLabel(config) { return config === 'with_skill' ? 'WITH SKILL' : 'WITHOUT SKILL'; }
+
+    function renderRunCard(run, config, evalCase) {
+      const kind = config === 'with_skill' ? 'with' : 'without';
+      if (!run) return '<article class="run-card"><div class="run-card-header ' + kind + '">' + runLabel(config) + '</div><div class="empty">Run not recorded.</div></article>';
+      const summary = gradeSummary(run);
+      const rate = passRate(run);
+      const meta = [run.model, run.provider, run.harness].filter(Boolean).join(' · ') || 'Runtime details not recorded';
+      let html = '<article class="run-card"><div class="run-card-header ' + kind + '">' + runLabel(config) + '<span class="run-meta">' + esc(meta) + '</span></div>';
+      html += '<div class="metric-list">';
+      html += metric('Turns', run.metrics.turns, config);
+      html += metric('Time', run.metrics.duration_seconds, config, seconds);
+      html += metric('Base input tokens', run.metrics.base_input_tokens, config);
+      html += metric('Output tokens', run.metrics.output_tokens, config);
+      html += metric('Cache read tokens', run.metrics.cache_read_tokens, config);
+      html += metric('Cache write 1h tokens', run.metrics.cache_write_1h_tokens ?? run.metrics.cache_write_tokens, config);
+      html += metric('Estimated cost', run.metrics.estimated_cost_usd, config, money);
+      html += metric('Pass rate', rate, config, percent);
+      html += '</div>';
+      html += renderGrades(run, config);
+      html += renderWorkProduct(run, config);
+      html += '<div class="feedback"><label for="feedback-' + esc(config) + '">Review feedback</label><textarea id="feedback-' + esc(config) + '" data-feedback="' + esc(config) + '" placeholder="What should change, or what looked good?">' + esc(feedback[run.feedback_key] || '') + '</textarea></div>';
+      html += '</article>';
+      return html;
+    }
+
+    function renderGrades(run, config) {
+      const summary = gradeSummary(run);
+      const rate = passRate(run);
+      const badgeClass = rate == null ? 'unknown' : rate < 0.5 ? 'fail' : '';
+      let html = '<div class="section-title ' + (config === 'with_skill' ? 'with' : 'without') + '">Formal grades</div>';
+      html += '<div class="grade-summary"><span class="grade-badge ' + badgeClass + '">' + (rate == null ? '?' : percent(rate)) + '</span>' + summary.passed + ' passed, ' + summary.failed + ' failed of ' + summary.total + '</div>';
+      if (!summary.total) return html + '<div class="empty">No assertions were graded.</div>';
+      html += '<div class="grades">';
+      for (const grade of gradesFor(run)) {
+        const state = grade.passed === true ? 'pass' : grade.passed === false ? 'fail' : 'unknown';
+        const icon = state === 'pass' ? '&#10003;' : state === 'fail' ? '&#10007;' : '?';
+        html += '<div class="grade-row"><span class="grade-icon ' + state + '">' + icon + '</span>' + esc(grade.text || 'Assertion') + (grade.evidence ? '<div class="grade-evidence">' + esc(grade.evidence) + '</div>' : '') + '</div>';
+      }
+      return html + '</div>';
+    }
+
+    function renderFile(file) {
+      let html = '<div class="file"><div class="file-name">' + esc(file.name) + '</div>';
+      if (file.type === 'image') html += '<img src="' + esc(file.data_uri) + '" alt="' + esc(file.name) + '">';
+      else if (file.type === 'text') html += '<pre>' + esc(file.content) + '</pre>';
+      else if (file.type === 'binary') html += '<a download="' + esc(file.name) + '" href="' + esc(file.data_uri) + '">Download ' + esc(file.name) + '</a>';
+      else html += '<pre>' + esc(file.content || 'Binary output is available in the package.') + '</pre>';
+      return html + '</div>';
+    }
+    function renderWorkProduct(run, config) {
+      let html = '<div class="work-product"><details open><summary>Work product and response</summary><div class="detail-body">';
+      const files = run.output_files || [];
+      if (run.output) html += '<div class="file"><div class="file-name">agent response</div><pre>' + esc(run.output) + '</pre></div>';
+      for (const file of files) html += renderFile(file);
+      if (!run.output && !files.length) html += '<div class="empty">No output was recorded.</div>';
+      html += '</div></details>';
+      const details = [
+        ['Conversation transcript', run.transcript],
+        ['Shell commands', Array.isArray(run.shell_commands) ? run.shell_commands.join('\n') : run.shell_commands],
+        ['Files read', Array.isArray(run.files_read) ? run.files_read.join('\n') : run.files_read],
+        ['Files written', Array.isArray(run.files_written) ? run.files_written.join('\n') : run.files_written],
+        ['Standard output', run.stdout],
+        ['Standard error', run.stderr],
+        ['Isolation and exit status', JSON.stringify({ isolation: run.isolation, exit_status: run.exit_status, notes: run.notes }, null, 2)]
+      ];
+      for (const [label, value] of details) if (value) html += '<details><summary>' + esc(label) + '</summary><div class="detail-body"><pre>' + esc(value) + '</pre></div></details>';
+      return html + '</div>';
+    }
+
+    function renderOutputs() {
+      const evalCase = DATA.evals[current];
+      if (!evalCase) { document.getElementById('outputs-main').innerHTML = '<div class="empty">No evals available.</div>'; return; }
+      document.getElementById('progress').textContent = (current + 1) + ' of ' + DATA.evals.length;
+      document.getElementById('eval-select').value = String(current);
+      let html = '<h2 class="eval-title">' + esc(evalCase.name) + '</h2>';
+      html += '<section class="panel"><div class="panel-title">Prompt</div><div class="panel-body prompt">' + esc(evalCase.prompt) + '</div></section>';
+      if (evalCase.expected_output) html += '<section class="panel"><div class="panel-title">Expected outcome</div><div class="panel-body expected">' + esc(evalCase.expected_output) + '</div></section>';
+      html += '<div class="pair-grid">';
+      html += renderRunCard(resultFor(evalCase, 'with_skill'), 'with_skill', evalCase);
+      html += renderRunCard(resultFor(evalCase, 'without_skill'), 'without_skill', evalCase);
+      html += '</div>';
+      html += '<div class="footer-actions"><button id="download-feedback" class="primary">Download feedback.json</button></div>';
+      document.getElementById('outputs-main').innerHTML = html;
+      document.getElementById('download-feedback').addEventListener('click', saveFeedback);
+      for (const textarea of document.querySelectorAll('[data-feedback]')) textarea.addEventListener('input', () => {
+        const run = resultFor(evalCase, textarea.dataset.feedback);
+        if (run) feedback[run.feedback_key] = textarea.value;
+      });
+    }
+
+    function stat(values) {
+      const usable = values.filter(v => v != null && v !== '' && !Number.isNaN(Number(v))).map(Number);
+      if (!usable.length) return null;
+      const mean = usable.reduce((a, b) => a + b, 0) / usable.length;
+      const variance = usable.length > 1 ? usable.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (usable.length - 1) : 0;
+      return { mean, stddev: Math.sqrt(variance) };
+    }
+    function delta(a, b, formatter = num) { if (a == null || b == null) return '—'; const value = a - b; return (value > 0 ? '+' : '') + formatter(value); }
+    function summaryMetric(evals, config, selector) { return stat(evals.map(e => { const run = resultFor(e, config); return selector(run); })); }
+    function summaryRow(label, a, b, formatter, isPercent = false) {
+      const render = s => s ? (isPercent ? percent(s.mean) + ' ± ' + percent(s.stddev) : formatter(s.mean) + ' ± ' + formatter(s.stddev)) : '—';
+      const av = a ? a.mean : null; const bv = b ? b.mean : null;
+      return '<tr><td><strong>' + esc(label) + '</strong></td><td>' + render(a) + '</td><td>' + render(b) + '</td><td class="' + (av != null && bv != null && av - bv > 0 ? 'delta-positive' : av != null && bv != null && av - bv < 0 ? 'delta-negative' : '') + '">' + (av == null || bv == null ? '—' : (av - bv > 0 ? '+' : '') + (isPercent ? num((av - bv) * 100, 0) + ' pp' : formatter(av - bv))) + '</td></tr>';
+    }
+    function renderBenchmark() {
+      const evals = DATA.evals || [];
+      let html = '<h2 class="eval-title">Benchmark</h2><p class="summary-note">Paired results are shown side by side. A missing metric means the harness did not record it; no value is estimated.</p>';
+      html += '<section class="panel"><div class="panel-title">Aggregate comparison</div><div class="table-wrap"><table><thead><tr><th>Metric</th><th>With skill</th><th>Without skill</th><th>Delta</th></tr></thead><tbody>';
+      html += summaryRow('Pass rate', summaryMetric(evals, 'with_skill', passRate), summaryMetric(evals, 'without_skill', passRate), v => num(v, 2), true);
+      html += summaryRow('Turns', summaryMetric(evals, 'with_skill', r => r && r.metrics.turns), summaryMetric(evals, 'without_skill', r => r && r.metrics.turns), v => num(v, 1));
+      html += summaryRow('Time', summaryMetric(evals, 'with_skill', r => r && r.metrics.duration_seconds), summaryMetric(evals, 'without_skill', r => r && r.metrics.duration_seconds), v => seconds(v));
+      html += summaryRow('Output tokens', summaryMetric(evals, 'with_skill', r => r && r.metrics.output_tokens), summaryMetric(evals, 'without_skill', r => r && r.metrics.output_tokens), v => num(v, 0));
+      html += summaryRow('Cache read tokens', summaryMetric(evals, 'with_skill', r => r && r.metrics.cache_read_tokens), summaryMetric(evals, 'without_skill', r => r && r.metrics.cache_read_tokens), v => num(v, 0));
+      html += summaryRow('Estimated cost', summaryMetric(evals, 'with_skill', r => r && r.metrics.estimated_cost_usd), summaryMetric(evals, 'without_skill', r => r && r.metrics.estimated_cost_usd), v => money(v));
+      html += '</tbody></table></div></section>';
+      html += '<section class="panel"><div class="panel-title">Per-eval breakdown</div><div class="table-wrap"><table><thead><tr><th>Eval</th><th>Configuration</th><th>Pass rate</th><th>Time</th><th>Output tokens</th><th>Turns</th><th>Cost</th></tr></thead><tbody>';
+      for (const e of evals) {
+        const a = resultFor(e, 'with_skill'); const b = resultFor(e, 'without_skill');
+        html += '<tr class="with"><td>' + esc(e.name) + '</td><td>With skill</td><td>' + percent(passRate(a)) + ' (' + gradeSummary(a).passed + '/' + gradeSummary(a).total + ')</td><td>' + seconds(a && a.metrics.duration_seconds) + '</td><td>' + num(a && a.metrics.output_tokens) + '</td><td>' + num(a && a.metrics.turns) + '</td><td>' + money(a && a.metrics.estimated_cost_usd) + '</td></tr>';
+        html += '<tr class="without"><td>' + esc(e.name) + '</td><td>Without skill</td><td>' + percent(passRate(b)) + ' (' + gradeSummary(b).passed + '/' + gradeSummary(b).total + ')</td><td>' + seconds(b && b.metrics.duration_seconds) + '</td><td>' + num(b && b.metrics.output_tokens) + '</td><td>' + num(b && b.metrics.turns) + '</td><td>' + money(b && b.metrics.estimated_cost_usd) + '</td></tr>';
+      }
+      html += '</tbody></table></div></section>';
+      if (DATA.benchmark && DATA.benchmark.notes && DATA.benchmark.notes.length) html += '<section class="panel"><div class="panel-title">Analysis notes</div><div class="panel-body"><ul class="note-list">' + DATA.benchmark.notes.map(n => '<li>' + esc(n) + '</li>').join('') + '</ul></div></section>';
+      document.getElementById('benchmark-main').innerHTML = html;
+    }
+
+    function renderSkill() {
+      const skill = DATA.skill || {};
+      document.getElementById('skill-main').innerHTML = '<h2 class="eval-title">Skill Tokens</h2><p class="summary-note">This view reports source and prompt-inlining sizes. Token counts are shown only when the harness or package provides them.</p><div class="skill-stats">' +
+        statCard('Files', num(skill.file_count)) + statCard('Source bytes', num(skill.total_bytes)) + statCard('Inlined bytes', num(skill.inlined_bytes)) + statCard('Token count', num(skill.token_count)) + '</div><section class="panel" style="margin-top:20px"><div class="panel-title">Revision</div><div class="panel-body expected">Hash: ' + esc(skill.hash || '—') + '<br>Token estimate is intentionally not derived from bytes.</div></section>';
+    }
+    function statCard(label, value) { return '<div class="stat-card"><div class="label">' + esc(label) + '</div><div class="value">' + value + '</div></div>'; }
+    function switchView(view) { document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === view)); document.querySelectorAll('.view').forEach(v => v.classList.remove('active')); document.getElementById(view + '-view').classList.add('active'); }
+    function saveFeedback() {
+      const reviews = Object.entries(feedback).filter(([, value]) => value && value.trim()).map(([run_id, value]) => ({ run_id, feedback: value, timestamp: new Date().toISOString() }));
+      const blob = new Blob([JSON.stringify({ reviews, status: 'complete' }, null, 2)], { type: 'application/json' });
+      const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'feedback.json'; link.click(); URL.revokeObjectURL(link.href);
+    }
+    document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => switchView(tab.dataset.view)));
+    document.getElementById('prev').addEventListener('click', () => { if (current > 0) { current--; renderOutputs(); } });
+    document.getElementById('next').addEventListener('click', () => { if (current + 1 < DATA.evals.length) { current++; renderOutputs(); } });
+    document.getElementById('eval-select').addEventListener('change', e => { current = Number(e.target.value); renderOutputs(); });
+    document.addEventListener('keydown', e => { if (e.target.tagName === 'TEXTAREA') return; if (e.key === 'ArrowLeft') document.getElementById('prev').click(); if (e.key === 'ArrowRight') document.getElementById('next').click(); });
+    document.getElementById('skill-name').textContent = DATA.skill_name || 'skill';
+    document.getElementById('run-meta').textContent = [DATA.metadata && DATA.metadata.model, DATA.metadata && DATA.metadata.provider, DATA.metadata && DATA.metadata.completed_runs + '/' + DATA.metadata.expected_runs + ' runs'].filter(Boolean).join(' · ');
+    for (let i = 0; i < (DATA.evals || []).length; i++) { const option = document.createElement('option'); option.value = String(i); option.textContent = (i + 1) + '. ' + DATA.evals[i].name; document.getElementById('eval-select').appendChild(option); }
+    renderOutputs(); renderBenchmark(); renderSkill();
+  </script>
+</body>
+</html>

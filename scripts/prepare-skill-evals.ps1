@@ -51,7 +51,8 @@
 
 .PARAMETER CollectResults
     Path to a prepared iteration directory. Validates the result files in it, invokes the packaged Anthropic
-    skill-creator aggregator and static viewer, and writes comparison.md, benchmark.json, benchmark.md, and report.html.
+    skill-creator aggregator and static viewer, and writes comparison.md, benchmark.json, benchmark.md, the first-party
+    side-by-side report.html, and the exact upstream skill-creator-report.html compatibility artifact.
     This is the fallback for results that were not finalized by the external evaluator.
 
 .EXAMPLE
@@ -520,6 +521,14 @@ function New-ResultStub {
         duration_seconds = $null
         total_tokens = $null
         tool_calls = $null
+        turns = $null
+        base_input_tokens = $null
+        output_tokens = $null
+        cache_read_tokens = $null
+        cache_write_tokens = $null
+        cache_write_1h_tokens = $null
+        estimated_cost_usd = $null
+        model_effort = ''
         isolation = [ordered]@{
             fresh_context = $null
             isolated_home = $null
@@ -815,6 +824,12 @@ function Copy-ReportTool {
     $destinationDirectory = Split-Path -Parent $destination
     New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $destination -Force
+
+    $template = Join-Path (Split-Path -Parent $source) 'eval-report-template.html'
+    if (-not (Test-Path -LiteralPath $template)) {
+        throw "Missing first-party eval report template '$template'."
+    }
+    Copy-Item -LiteralPath $template -Destination (Join-Path $destinationDirectory 'eval-report-template.html') -Force
     return $destination
 }
 
@@ -1286,11 +1301,13 @@ function Invoke-PrepareMode {
         runner_prompt = 'RUN-THIS.prompt.md'
         report = [ordered]@{
             tool = $reportToolRelativePath
+            template = 'tools/eval-report-template.html'
             skill_creator = $skillCreatorToolRelativePath
             aggregator = "$skillCreatorToolRelativePath/scripts/aggregate_benchmark.py"
             viewer = "$skillCreatorToolRelativePath/eval-viewer/generate_review.py"
             viewer_template = "$skillCreatorToolRelativePath/eval-viewer/viewer.html"
             html = 'report.html'
+            upstream_html = 'skill-creator-report.html'
             benchmark = 'benchmark.json'
             benchmark_markdown = 'benchmark.md'
         }
@@ -1342,7 +1359,7 @@ function Invoke-PrepareMode {
     Write-Host 'loses the absolute paths it depends on, and the harness then cannot find the package.'
     Write-Host ''
     Write-Host 'The runner makes the selected agent the evaluator, grader, and report producer. It must create'
-    Write-Host 'one isolated fresh worker per run, then grade the collected results and generate report.html.'
+    Write-Host 'one isolated fresh worker per run, then grade the collected results and generate both report artifacts.'
     Write-Host ''
     Write-Host 'This script prepared prompts only. It did not run them, and nothing here will.'
     Write-Host 'The selected evaluator should finish the package in one run. If it cannot write back to this package,'
@@ -1414,6 +1431,13 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('  "duration_seconds": 12.5,')
     [void]$builder.AppendLine('  "total_tokens": 1234,')
     [void]$builder.AppendLine('  "tool_calls": 6,')
+    [void]$builder.AppendLine('  "turns": 12,')
+    [void]$builder.AppendLine('  "base_input_tokens": 27,')
+    [void]$builder.AppendLine('  "output_tokens": 3800,')
+    [void]$builder.AppendLine('  "cache_read_tokens": 515605,')
+    [void]$builder.AppendLine('  "cache_write_1h_tokens": 129582,')
+    [void]$builder.AppendLine('  "estimated_cost_usd": 2.27,')
+    [void]$builder.AppendLine('  "model_effort": "high",')
     [void]$builder.AppendLine('  "isolation": {')
     [void]$builder.AppendLine('    "fresh_context": true,')
     [void]$builder.AppendLine('    "isolated_home": true,')
@@ -1427,7 +1451,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('}')
     [void]$builder.AppendLine('```')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls`, and every `isolation` flag are optional. Include each when the harness exposes it and omit it otherwise. Never estimate a missing value. For `with_skill`, set `isolation.candidate_skill_exposed` to how the skill actually reached the worker.')
+    [void]$builder.AppendLine('`transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls`, the optional efficiency telemetry fields, and every `isolation` flag are optional. Include each when the harness exposes it and omit it otherwise. Never estimate a missing value. For `with_skill`, set `isolation.candidate_skill_exposed` to how the skill actually reached the worker.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`configuration` is `with_skill` or `without_skill` and must match the prompt you ran. Read `eval_id` and `eval_name` from `manifest.json`; do not send them to the worker. Put the full model response in `output`. If it is very long, write it beside the result file and list that path in `output_files` with a summary in `output`.')
     [void]$builder.AppendLine()
@@ -1440,14 +1464,14 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('2. Write grading back into the matching result file using exactly `grading[].text`, `grading[].passed`, and `grading[].evidence`. Use `passed: null` when an assertion cannot be judged from captured evidence. Do not grade a missing run as passed.')
     [void]$builder.AppendLine('The package carries Anthropic skill-creator under `tools/skill-creator`. Use `tools/skill-creator/agents/grader.md` for grading guidance, and use `tools/skill-creator/scripts/aggregate_benchmark.py` plus `tools/skill-creator/eval-viewer/generate_review.py` as the source-of-truth aggregation and review tools.')
     $reportCommand = 'pwsh -NoProfile -File "' + (Join-Path $IterationDirectory $reportToolRelativePath) + '" -IterationDirectory "' + $IterationDirectory + '"'
-    [void]$builder.AppendLine(('3. Run the package report adapter now; do not ask the user to run a second command: ' + $reportCommand + '. It stages the recorded results into the upstream skill-creator workspace contract, invokes the exact upstream aggregator, and invokes `eval-viewer/generate_review.py --static`; it writes `report.html`, `benchmark.json`, and `benchmark.md` at the package root.'))
+    [void]$builder.AppendLine(('3. Run the package report adapter now; do not ask the user to run a second command: ' + $reportCommand + '. It stages the recorded results into the upstream skill-creator workspace contract, invokes the exact upstream aggregator and static viewer, then writes the first-party side-by-side `report.html`, the exact upstream `skill-creator-report.html`, `benchmark.json`, and `benchmark.md` at the package root.'))
     [void]$builder.AppendLine('4. If the harness can open local files, open `report.html` after it is written. Otherwise return its absolute path as the primary artifact. Do not wait for browser feedback before finishing the handoff.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The report is the completion artifact. Do not stop after worker execution, do not return a prose-only recap, and do not ask whether grading or HTML generation is wanted.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Final handoff')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The finished artifact is the upstream skill-creator viewer report, not a request for another command. If you can write to the package machine, leave every result, grading field, `benchmark.json`, `benchmark.md`, and `report.html` in place. Return the absolute report path, the completed/expected run count, any missing arms, the model/provider, and a concise quality summary.')
+    [void]$builder.AppendLine('The finished artifacts are the first-party paired review and the exact upstream skill-creator viewer report, not a request for another command. If you can write to the package machine, leave every result, grading field, `benchmark.json`, `benchmark.md`, `report.html`, and `skill-creator-report.html` in place. Return the absolute first-party report path, the completed/expected run count, any missing arms, the model/provider, and a concise quality summary.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('If you cannot write to the package machine, return one fenced JSON block containing every completed result object, including its `grading` array, plus the generated report as an artifact when the harness supports file handoff. Do not return separate blocks or a human summary in place of the result objects. State any missing arms and the concrete artifact-transfer limitation.')
     [void]$builder.AppendLine()
@@ -1503,7 +1527,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine('1. Pick one model and configuration. Use the same one for every run in this iteration.')
     [void]$builder.AppendLine('2. For each eval, launch a fresh worker for `with_skill/` with its run directory as the sandbox root, `repo/` as the working directory, and `home/` as HOME. Send `prompt.md` as the first message. Read `run.json` for the contract.')
     [void]$builder.AppendLine('3. Launch a second fresh worker for `without_skill/` the same way. Never reuse a worker between runs.')
-    [void]$builder.AppendLine('4. Save each response into the matching file under the eval''s `results/` directory, grade every completed result using the packaged `agents/grader.md` guidance, and run `tools/generate-eval-report.ps1`.')
+    [void]$builder.AppendLine('4. Save each response into the matching file under the eval''s `results/` directory, grade every completed result using the packaged `agents/grader.md` guidance, and run `tools/generate-eval-report.ps1`. The resulting `report.html` is the first-party side-by-side review; `skill-creator-report.html` is the exact upstream viewer.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`RUN-THIS.prompt.md` turns a harness that can create isolated workers or sessions into the evaluator, grader, and report producer. It reads the package, creates one new worker per run from its run directory, keeps runner instructions and grading data out of every worker, records results, grades after collection, and invokes Anthropic skill-creator''s aggregator and static viewer through the package adapter. It never executes an eval prompt in its own context.')
     [void]$builder.AppendLine()
@@ -1519,6 +1543,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine('- `executed_utc` - when')
     [void]$builder.AppendLine('- `output` - the produced output, or a summary plus paths in `output_files`')
     [void]$builder.AppendLine('- `transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls` - include the values the harness exposes; omit unavailable values rather than estimating them')
+    [void]$builder.AppendLine('- Optional efficiency telemetry: `turns`, `base_input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` or `cache_write_1h_tokens`, `estimated_cost_usd`, and `model_effort`. These are shown when recorded and never inferred from totals.')
     [void]$builder.AppendLine('- `isolation` - the guarantees the harness satisfied for this run; process-dependent assertions can only be graded from a run that captured the needed evidence')
     [void]$builder.AppendLine('- `grading[].passed` - `true`, `false`, or `null` per assertion once the external evaluator or a deterministic script has checked it, with `evidence`')
     [void]$builder.AppendLine('- `notes` - anything that would change how the result reads')
@@ -1526,7 +1551,8 @@ function New-PackageReadme {
     [void]$builder.AppendLine('The normal handoff finishes with these package-root artifacts:')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('```text')
-    [void]$builder.AppendLine('report.html     Anthropic skill-creator static viewer with outputs, formal grades, benchmark, and feedback')
+    [void]$builder.AppendLine('report.html     first-party side-by-side review with paired outputs, grades, evidence, telemetry, and feedback')
+    [void]$builder.AppendLine('skill-creator-report.html  exact Anthropic skill-creator static viewer for compatibility')
     [void]$builder.AppendLine('benchmark.json  Anthropic skill-creator machine-readable quality and runtime summary')
     [void]$builder.AppendLine('benchmark.md    Anthropic skill-creator human-readable benchmark summary')
     [void]$builder.AppendLine('```')
