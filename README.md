@@ -20,7 +20,7 @@ Evaluation keeps Anthropic's `skill-creator` methodology and replaces only its e
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
 ```
 
-That resolves every skill the branch changed and prepares a package for each. `-Skill <name>` prepares one on demand.
+That resolves every skill the branch changed and prepares a package for each. `-Skill <name>` prepares one on demand. Packages land in the gitignored `.bot/<skill>-workspace/`, so a harness that refuses to work outside the repository folder can still reach them without anything entering the working tree.
 
 Each eval gets a `with-skill.prompt.md` with the effective skill instructions inlined, a `without-skill.prompt.md` carrying the identical task, inputs, and response contract with no skill, an `eval-metadata.json` holding the expected output, assertions, fixtures, and reproduction assumptions, and prefilled result stubs. The prompts are self-contained, so they paste into Claude, Codex, Copilot, Gemini, LM Studio, a local Qwen or Gemma harness, or any other capable agent environment — you choose the model and you run them. Each package also carries a `RUN-THIS.prompt.md` that hands the entire package to one agent in a single paste, so a thirteen-case skill costs you one instruction rather than twenty-six. Feed the results back with `-CollectResults <iteration-path>`, which validates each arm against its eval, warns when the two arms did not run on the same model, and writes a comparison. Grading stays deterministic or human; nothing in this repository grades with a model. Packages are written outside the repository and are not committed.
 

@@ -98,7 +98,7 @@ Run it after the last skill edit and before `scripts/sync-skill-install.ps1`, wh
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>
 ```
 
-The script writes `<temp>/<skill-name>-workspace/iteration-<n>/` with one directory per eval, each containing `with-skill.prompt.md`, `without-skill.prompt.md`, `eval-metadata.json`, the fixtures under `files/`, and result stubs under `results/`. At the root it writes `RUN-THIS.prompt.md`, a single prompt you hand to the agent of your choice that runs every case in both configurations and writes the results back, so the handoff is one paste rather than one per prompt. Both prompts carry the same task, the same inputs, and the same response contract; only the operating-instructions section differs, so the comparison isolates the skill. The workspace lives outside this repository, and the script refuses an `-OutputRoot` inside it.
+The script writes `.bot/<skill-name>-workspace/iteration-<n>/` with one directory per eval, each containing `with-skill.prompt.md`, `without-skill.prompt.md`, `eval-metadata.json`, the fixtures under `files/`, and result stubs under `results/`. At the root it writes `RUN-THIS.prompt.md`, a single prompt you hand to the agent of your choice that runs every case in both configurations and writes the results back, so the handoff is one paste rather than one per prompt. Both prompts carry the same task, the same inputs, and the same response contract; only the operating-instructions section differs, so the comparison isolates the skill. `.gitignore` covers `.bot/*`, so nothing there reaches git, and the script refuses an `-OutputRoot` that is inside the repository but outside `.bot/`. Pass `-OutputRoot` explicitly for a temp location instead.
 
 Repository scripts, CI jobs, and agents never run those prompts. That boundary is the Priority 1 rule in `AGENTS.md`, and preparing a prompt is not permission to execute one.
 
@@ -151,6 +151,6 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD
 - [ ] Any external results were recorded per configuration with the model that produced them, and `-CollectResults` was run against the iteration
 - [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior
 - [ ] If CI is enabled for the branch, the GitHub Actions validation job passes too
-- [ ] Skill evals are intended to run from `$env:TEMP/<skill-name>-workspace/`, not from inside the repo
+- [ ] Eval packages live in `.bot/<skill-name>-workspace/` or a temp path, never anywhere else in the working tree
 - [ ] Changed skill files are synced across `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/`
 - [ ] Skill added to the table in `README.md`
