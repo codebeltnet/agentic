@@ -56,7 +56,13 @@ pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-test
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
 ```
 
-Then report the prepared prompt paths and stop.
+### Handing the package over
+
+Every package contains `RUN-THIS.prompt.md`, one instruction that drives the whole thing. It tells a capable agent with filesystem access to run both configurations of every case in fresh contexts, on one model, without reading the grading key, and to write each result back into the package.
+
+Hand the user that one prompt. Paste its full contents into the reply so it can be copied in a single action, and give its path underneath. Do not list the individual prompt files, do not describe the directory layout, and do not hand back a procedure for the user to carry out by hand. A reply that ends with 26 file paths and "run both versions" has moved the work onto the user instead of doing it.
+
+When the user says the runs are done, or pastes results back, continue without being asked: run `-CollectResults` on the iteration, grade the assertions with deterministic checks where an assertion allows one and judgement where it does not, write the grades into the result files, rerun `-CollectResults`, and present the comparison. The user asked for eval results, not for a package.
 
 ### Prepare, do not execute
 
@@ -73,6 +79,8 @@ It reads `skills/<name>/evals/evals.json` and writes one directory per eval into
 - `eval-metadata.json` — eval id and name, original prompt, expected output, assertions, required fixtures, and the assumptions needed to reproduce the run.
 - `files/` — the eval fixtures, attached identically to both configurations.
 - `results/` — one prefilled result stub per configuration.
+
+At the iteration root it also writes `RUN-THIS.prompt.md`, the single prompt that hands the whole package to an agent of the user's choosing.
 
 Useful switches: `-Eval <id...>` to prepare a subset, `-Iteration <n>` plus `-Force` to replace an iteration, `-OutputRoot <path>` to relocate the workspace, and `-MaxInlineBytes <n>` to trim what gets inlined for a smaller context window.
 
