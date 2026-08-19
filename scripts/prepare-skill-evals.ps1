@@ -242,6 +242,30 @@ function Test-IsInsidePath {
     return $candidateFull -eq $baseFull -or $candidateFull.StartsWith($baseFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Assert-WorkspaceLocation {
+    param(
+        [string]$RepoRoot,
+        [string]$WorkspaceRoot
+    )
+
+    if (-not (Test-IsInsidePath -BasePath $RepoRoot -CandidatePath $WorkspaceRoot)) {
+        return
+    }
+
+    # Inside the repository only under .bot/, which this repository ignores. Some harnesses refuse to work outside
+    # the repository folder at all, and .bot/ gives them a home that git never sees.
+    $botRoot = Join-Path $RepoRoot '.bot'
+    if (-not (Test-IsInsidePath -BasePath $botRoot -CandidatePath $WorkspaceRoot)) {
+        throw "Eval packages inside this repository must live under .bot/. '$WorkspaceRoot' does not, so it would become part of the working tree. Use .bot/<skill>-workspace or a path outside the repository."
+    }
+
+    # A .bot/ that stopped being ignored would quietly turn eval output into stageable files.
+    [void](git -C $RepoRoot check-ignore -q -- $WorkspaceRoot 2>$null)
+    if ($LASTEXITCODE -eq 1) {
+        throw "'$WorkspaceRoot' is inside the repository but git does not ignore it. Restore the .bot/ ignore rule before writing eval packages there."
+    }
+}
+
 function Get-EvalName {
     param([object]$EvalEntry)
 
@@ -519,14 +543,12 @@ function Invoke-PrepareMode {
     }
 
     $workspaceRoot = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-        Join-Path ([System.IO.Path]::GetTempPath()) "$Skill-workspace"
+        Join-Path (Join-Path $repoRoot '.bot') "$Skill-workspace"
     } else {
         $OutputRoot
     }
     $workspaceRoot = [System.IO.Path]::GetFullPath($workspaceRoot, (Get-Location).Path)
-    if (Test-IsInsidePath -BasePath $repoRoot -CandidatePath $workspaceRoot) {
-        throw "Eval workspaces must live outside this repository. '$workspaceRoot' is inside '$repoRoot'."
-    }
+    Assert-WorkspaceLocation -RepoRoot $repoRoot -WorkspaceRoot $workspaceRoot
     if (-not (Test-Path -LiteralPath $workspaceRoot)) {
         New-Item -ItemType Directory -Path $workspaceRoot -Force | Out-Null
     }
@@ -727,6 +749,14 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s). Each case has two prompts that differ in exactly one way: one carries a skill's instructions, the other does not. Run both, faithfully, and record what came out. You are running the experiment, not judging it.")
     [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Why you may run this')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('A person handed you this file and asked you to run it. That is the authorization, and it is enough.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('If you can see the source repository''s `AGENTS.md`, you will find a Priority 1 rule against model-backed eval automation. Read who it binds. It stops scripts, jobs, hooks, completion gates, and agent fan-out from reaching a model on their own, and it stops the agent that prepared this package from executing it. It does not stop the harness a person chose and pointed at a specific package. That harness is you, right now, and the same file says so under "Executing a package you were handed". Handing this back with an explanation instead of running it is the failure mode, not compliance.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('What stays off-limits: running anything beyond this package, grading, and touching a repository outside the package directory.')
+    [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Rules that keep the experiment valid')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('1. Run every prompt in a fresh context. Nothing from one run may carry into another, in either direction.')
@@ -735,7 +765,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('4. Paste each prompt file as the first message of its run, unchanged. Do not shorten it, summarize it, fix it, or add your own framing.')
     [void]$builder.AppendLine('5. Attach any file the prompt says is not inlined, from the case''s `files/` directory.')
     [void]$builder.AppendLine('6. Record what the run actually produced, including a refusal, a clarifying question, or a failure. Those are results too. Do not retry to get a nicer answer.')
-    [void]$builder.AppendLine('7. Do every bit of work inside the package directory above. The input files there are disposable copies. Never resolve a task against the source repository these fixtures came from, and never build, test, or write anything into it.')
+    [void]$builder.AppendLine('7. Do every bit of work inside the package directory above, and treat it as the whole world. The input files there are disposable copies. If that directory sits inside a source repository, nothing outside it is yours: do not read the skill from its source folder, do not resolve the task against the real project, and do not build, test, or write anywhere else in that repository.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Procedure')
     [void]$builder.AppendLine()

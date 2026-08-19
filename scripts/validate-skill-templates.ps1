@@ -1234,7 +1234,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
 
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '## Portable Eval Handoff'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'this repository prepares a portable evaluation package and stops'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'never execute a generated prompt, in any harness, including its own'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'never execute the prompts you just prepared, and never quietly become the executor of your own package'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'never spawn subagents for the candidate or baseline runs'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'never call an LLM API or an authenticated AI CLI'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'the same model, the same version, and the same configuration'
@@ -1243,6 +1243,11 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Handing the package over'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Executing a package you were handed'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'running it is the task'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'citing it to refuse is a misreading'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'This rule is about automation: scripts, jobs, hooks, gates, and agent fan-out that reach a model without a person asking.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'An agent that prepared a package in this session does not get to turn around and execute it.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Hand the user that one prompt.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'The user asked for eval results, not for a package.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Asking for an eval'
@@ -1258,7 +1263,10 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares a portable evaluation package and stops'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>'
     Assert-NotContains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'run-skill-benchmark.ps1'
-    Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'Eval workspaces must live outside this repository.'
+    Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'Eval packages inside this repository must live under .bot/.'
+    Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'git does not ignore it'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`.bot/<skill-name>-workspace/` — the default.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Anywhere else inside the repository is forbidden'
     Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'It did not run them, and nothing here will.'
 
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
@@ -1290,7 +1298,9 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'Do not read `eval-metadata.json`',
             'Use one model, one version, one configuration for every run',
             '## Do not grade',
-            'Never resolve a task against the source repository these fixtures came from'
+            '## Why you may run this',
+            'It does not stop the harness a person chose and pointed at a specific package.',
+            'nothing outside it is yours'
         )) {
             if (-not $runner.Contains($needle)) {
                 throw "RUN-THIS.prompt.md must state '$needle'."
@@ -1371,14 +1381,31 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         $insideRepo = Join-Path $repoRoot 'agentic-eval-isolation-check'
         $isolationOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo 2>&1
         if ($LASTEXITCODE -eq 0) {
-            throw 'prepare-skill-evals.ps1 must refuse an output root inside this repository.'
+            throw 'prepare-skill-evals.ps1 must refuse an output root inside this repository but outside .bot/.'
         }
         if (Test-Path -LiteralPath $insideRepo) {
             Remove-Item -LiteralPath $insideRepo -Recurse -Force
-            throw 'prepare-skill-evals.ps1 must not create an output root inside this repository.'
+            throw 'prepare-skill-evals.ps1 must not create a refused output root.'
         }
-        if (($isolationOutput -join ' ') -notmatch 'must live outside this repository') {
+        if (($isolationOutput -join ' ') -notmatch 'must live under \.bot/') {
             throw 'prepare-skill-evals.ps1 must explain why an in-repository output root was refused.'
+        }
+
+        # .bot/ is the sanctioned in-repository home, and it only works while git ignores it.
+        $botRoot = Join-Path (Join-Path $repoRoot '.bot') 'agentic-eval-bot-check'
+        try {
+            $botOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "prepare-skill-evals.ps1 must accept an output root under .bot/: $($botOutput -join [Environment]::NewLine)"
+            }
+            $botStatus = git -C $repoRoot status --porcelain --untracked-files=all -- '.bot' 2>$null
+            if (@($botStatus | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+                throw 'An eval package under .bot/ must stay invisible to git; .gitignore no longer covers it.'
+            }
+        } finally {
+            if (Test-Path -LiteralPath $botRoot) {
+                Remove-Item -LiteralPath $botRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     } finally {
         if (Test-Path -LiteralPath $packageRoot) {
