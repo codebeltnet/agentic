@@ -36,6 +36,14 @@ internal static class RemoteTestProgram
     internal const string ReleasesIndexUrl =
         "https://raw.githubusercontent.com/dotnet/core/refs/heads/main/release-notes/releases-index.json";
 
+    // Microsoft's SDK images carry exactly one runtime, so a repository that multi-targets several .NET
+    // majors cannot execute its lower target frameworks there — it builds, then fails for want of a
+    // runtime. The Codebelt test runner ships several SDKs in one image (tags such as "8-9-10-11"), so
+    // one container covers every target framework in a single run.
+    internal const string MultiSdkRepository = "codebeltnet/ubuntu-testrunner";
+    internal const string MultiSdkTagsUrl =
+        "https://hub.docker.com/v2/repositories/codebeltnet/ubuntu-testrunner/tags?page_size=100";
+
     internal static readonly JsonSerializerOptions JsonOut = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -140,6 +148,7 @@ internal sealed class Options
     public string? ConfigPath { get; private set; }
     public string? EnvironmentName { get; private set; }
     public string? ReleasesIndexFile { get; private set; }
+    public string? MultiSdkTagsFile { get; private set; }
     public string? CacheRoot { get; private set; }
 
     // Test scoping. These flow into the container command plan; they never mutate the repository.
@@ -150,6 +159,10 @@ internal sealed class Options
     public string? Framework { get; private set; }
     public bool Coverage { get; private set; }
     public int TimeoutSeconds { get; private set; }
+
+    // Staging/reporting fidelity switches. Defaults reproduce what the developer sees locally.
+    public bool NoGitMetadata { get; private set; }
+    public bool ShowLog { get; private set; }
 
     public static Options Parse(string[] args)
     {
@@ -168,10 +181,13 @@ internal sealed class Options
                 case "--offline": o.Offline = true; break;
                 case "--no-registry-check": o.NoRegistryCheck = true; break;
                 case "--coverage": o.Coverage = true; break;
+                case "--no-git-metadata": o.NoGitMetadata = true; break;
+                case "--show-log": o.ShowLog = true; break;
                 case "--repo-root": o.RepoRoot = Path.GetFullPath(Next(args, ref i, a)); break;
                 case "--config-path": o.ConfigPath = Next(args, ref i, a); break;
                 case "--environment" or "-e": o.EnvironmentName = Next(args, ref i, a); break;
                 case "--releases-index-file": o.ReleasesIndexFile = Next(args, ref i, a); break;
+                case "--multi-sdk-tags-file": o.MultiSdkTagsFile = Next(args, ref i, a); break;
                 case "--cache-root": o.CacheRoot = Next(args, ref i, a); break;
                 case "--project" or "-p": o.Project = Next(args, ref i, a); break;
                 case "--filter": o.Filter = Next(args, ref i, a); break;
@@ -258,15 +274,20 @@ internal sealed class Options
           -f, --framework <tfm>      Restrict multi-targeted test projects to one TFM.
               --coverage             Collect code coverage (XPlat Code Coverage) when the project supports it.
               --timeout <seconds>    Abort the container run after N seconds (0 = no timeout).
+              --no-git-metadata      Do not stage .git into the workspace (faster for a very large
+                                     repository, but repository-root detection, MinVer/Nerdbank
+                                     versioning and SourceLink will differ from the host).
 
         Release discovery / networking:
               --offline              Use cached release metadata only; never reach the network.
               --no-registry-check    Skip Docker registry tag validation and digest pre-resolution.
               --releases-index-file <path>  Load Microsoft release metadata from a local file instead of the network.
+              --multi-sdk-tags-file <path>  Load Codebelt multi-SDK runner tags from a local file instead of the network.
               --cache-root <path>    Override the metadata/NuGet cache root (outside the repository).
 
         Output:
               --json                 Emit machine-readable JSON.
+              --show-log             Print the container's restore/build/test log in full.
           -h, --help                 Show this help.
 
         Exit codes: 0 success, 1 test failures, 2 invalid args, 3 configuration, 4 unsupported environment,
@@ -611,6 +632,181 @@ internal static class ImageTagResolver
 }
 
 // ---------------------------------------------------------------------------------------------------
+// Multi-SDK runner discovery (codebeltnet/ubuntu-testrunner).
+//
+// A Microsoft SDK image contains one runtime. That is fine for a single-target repository, but a
+// repository multi-targeting several .NET majors can only *build* the lower targets there — executing
+// their tests needs the matching runtimes. The Codebelt runner publishes combined tags ("8-9-10-11")
+// carrying several SDKs, so the whole target-framework matrix runs in one container.
+//
+// The available tags are discovered from the published tag feed at runtime. Nothing here is hardcoded:
+// when a new major joins the combined tags, it is picked up without a skill change.
+// ---------------------------------------------------------------------------------------------------
+
+internal sealed record MultiSdkRunner
+{
+    public required string Tag { get; init; }
+    public IReadOnlyList<int> Majors { get; init; } = [];
+
+    public string Reference => $"{RemoteTestProgram.MultiSdkRepository}:{Tag}";
+
+    public bool Covers(IReadOnlyList<int> requiredMajors) => requiredMajors.All(Majors.Contains);
+}
+
+internal static class MultiSdkTagReader
+{
+    // Only the major-only combined form ("8-9-10-11") is used. It is a moving tag that tracks the
+    // current patch of each major, and it is the form the publisher documents for consumers. Single
+    // majors ("10"), channel forms ("10.0"), and fully pinned combinations are deliberately ignored
+    // here — single majors are already covered by Microsoft's images.
+    private static readonly Regex CombinedMajorTag = new(@"^\d+(?:-\d+)+$", RegexOptions.Compiled);
+
+    public static IReadOnlyList<MultiSdkRunner> Parse(string json)
+    {
+        var runners = new List<MultiSdkRunner>();
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(json);
+        }
+        catch (JsonException)
+        {
+            return runners;
+        }
+
+        using (document)
+        {
+            if (!document.RootElement.TryGetProperty("results", out var results) ||
+                results.ValueKind != JsonValueKind.Array)
+            {
+                return runners;
+            }
+
+            foreach (var entry in results.EnumerateArray())
+            {
+                if (!entry.TryGetProperty("name", out var nameElement) ||
+                    nameElement.GetString() is not { } name ||
+                    !CombinedMajorTag.IsMatch(name))
+                {
+                    continue;
+                }
+
+                var majors = new List<int>();
+                var usable = true;
+                foreach (var part in name.Split('-'))
+                {
+                    if (int.TryParse(part, NumberStyles.Integer, CultureInfo.InvariantCulture, out var major) && major > 0)
+                    {
+                        majors.Add(major);
+                    }
+                    else
+                    {
+                        usable = false;
+                        break;
+                    }
+                }
+
+                if (usable && majors.Count > 1)
+                {
+                    runners.Add(new MultiSdkRunner { Tag = name, Majors = [.. majors.Distinct().OrderBy(m => m)] });
+                }
+            }
+        }
+
+        return runners;
+    }
+
+    // Tightest fit wins: the fewest extra SDKs that still cover every required major. Ties break on the
+    // tag name so the same repository always resolves to the same image.
+    public static MultiSdkRunner? Select(IReadOnlyList<MultiSdkRunner> runners, IReadOnlyList<int> requiredMajors)
+    {
+        if (requiredMajors.Count < 2)
+        {
+            return null;
+        }
+
+        return runners
+            .Where(r => r.Covers(requiredMajors))
+            .OrderBy(r => r.Majors.Count)
+            .ThenBy(r => r.Tag, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+}
+
+internal sealed record MultiSdkResult(IReadOnlyList<MultiSdkRunner> Runners, string? Error);
+
+internal static class MultiSdkRunnerStore
+{
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
+
+    private static string CacheFile(string cacheRoot) => Path.Combine(cacheRoot, "multi-sdk-tags.cache.json");
+
+    public static async Task<MultiSdkResult> LoadAsync(Options options, CancellationToken ct)
+    {
+        // An explicit local file is a deliberate input (used by the deterministic test harness).
+        if (!string.IsNullOrWhiteSpace(options.MultiSdkTagsFile))
+        {
+            return File.Exists(options.MultiSdkTagsFile)
+                ? new MultiSdkResult(MultiSdkTagReader.Parse(await File.ReadAllTextAsync(options.MultiSdkTagsFile, ct)), null)
+                : new MultiSdkResult([], $"multi-SDK tags file not found: {options.MultiSdkTagsFile}");
+        }
+
+        var cacheFile = CacheFile(options.CacheDirectory);
+        if (options.Offline)
+        {
+            return LoadFromCache(cacheFile, "Offline mode: ");
+        }
+
+        try
+        {
+            var json = await Http.GetStringAsync(RemoteTestProgram.MultiSdkTagsUrl, ct);
+            var runners = MultiSdkTagReader.Parse(json);
+            if (runners.Count == 0)
+            {
+                return LoadFromCache(cacheFile, "Multi-SDK tag feed returned no combined tags: ");
+            }
+
+            TryWriteCache(cacheFile, json);
+            return new MultiSdkResult(runners, null);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
+        {
+            return LoadFromCache(cacheFile, $"Could not reach the multi-SDK tag feed ({ex.Message}); ");
+        }
+    }
+
+    private static MultiSdkResult LoadFromCache(string cacheFile, string prefix)
+    {
+        if (!File.Exists(cacheFile))
+        {
+            return new MultiSdkResult([], prefix + "no cached multi-SDK runner tags are available.");
+        }
+
+        try
+        {
+            return new MultiSdkResult(MultiSdkTagReader.Parse(File.ReadAllText(cacheFile)), null);
+        }
+        catch (IOException ex)
+        {
+            return new MultiSdkResult([], prefix + $"the cached multi-SDK runner tags could not be read ({ex.Message}).");
+        }
+    }
+
+    private static void TryWriteCache(string cacheFile, string json)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(cacheFile)!);
+            File.WriteAllText(cacheFile, json);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Caching is an optimization; never fail discovery because the cache could not be written.
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Environment resolution.
 // A resolved environment is what the runner actually executes against, whether it came from
 // testenvironments.json or was generated from Microsoft release metadata.
@@ -632,9 +828,34 @@ internal sealed record ResolvedEnvironment
 
     public string? LocalRoot { get; init; }
 
-    // Whether this environment's image is exempt from the Microsoft-only restriction (configured images
-    // are deliberate; generated images must come from mcr.microsoft.com/dotnet/sdk).
+    // The .NET majors this environment can both build and *run*. Empty means "single SDK, inferred from
+    // Channel/Sdk". A multi-SDK runner states them explicitly, which is what makes it usable for a
+    // repository whose target frameworks span several majors.
+    public IReadOnlyList<int> SupportedMajors { get; init; } = [];
+
+    public bool IsMultiSdk => SupportedMajors.Count > 1;
+
+    // Whether this environment's image came from the repository's own configuration rather than being
+    // generated. Configured images are deliberate intent and are always used exactly as written.
     public bool ImageIsConfigured => Origin == EnvironmentOrigin.Configured;
+
+    // The .NET major version this environment's channel represents ("10.0" -> 10), or 0 when the channel
+    // is unknown (configured environments carry no channel).
+    public int ChannelMajor
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Channel))
+            {
+                return 0;
+            }
+
+            var head = Channel.Split('.')[0];
+            return int.TryParse(head, NumberStyles.Integer, CultureInfo.InvariantCulture, out var major) && major > 0
+                ? major
+                : 0;
+        }
+    }
 }
 
 internal static class GeneratedEnvironments
@@ -677,6 +898,17 @@ internal static class GeneratedEnvironments
         return result;
     }
 
+    // A multi-SDK runner environment. It carries no single channel: its value is that every listed major
+    // is present, so a multi-targeted repository runs its whole matrix in one container.
+    public static ResolvedEnvironment FromMultiSdkRunner(MultiSdkRunner runner) => new()
+    {
+        Name = $"ubuntu-testrunner-{runner.Tag}",
+        Origin = EnvironmentOrigin.Generated,
+        ReleaseType = "Multi-SDK",
+        DockerImage = runner.Reference,
+        SupportedMajors = runner.Majors,
+    };
+
     public static ResolvedEnvironment FromConfigured(EnvironmentDefinition def) => new()
     {
         Name = def.Name,
@@ -695,6 +927,10 @@ internal sealed record EnvironmentResolution
     public ResolvedEnvironment? Environment { get; init; }
     public IReadOnlyList<string> Candidates { get; init; } = [];
     public string? Message { get; init; }
+
+    // Why this environment was chosen when the caller did not name one. Surfaced so an automatic
+    // selection is always explainable rather than looking arbitrary.
+    public string? SelectionReason { get; init; }
 }
 
 internal static class EnvironmentResolver
@@ -702,11 +938,14 @@ internal static class EnvironmentResolver
     // Deterministic precedence:
     //   1. An environment explicitly named by the user (configured first, then generated).
     //   2. An applicable Docker environment from testenvironments.json (authoritative when present).
-    //   3. Microsoft-derived environments when no testenvironments.json exists.
+    //   3. Microsoft-derived environments when no testenvironments.json exists. When several are
+    //      derived, the repository's own highest .NET target framework picks exactly one of them
+    //      (see SelectByTargetFramework) so "run my tests" does not need a question to answer.
     public static EnvironmentResolution Resolve(
         TestEnvironmentsConfig? config,
         IReadOnlyList<ResolvedEnvironment> generated,
-        string? requestedName)
+        string? requestedName,
+        TargetFrameworkInfo? repoTargets = null)
     {
         var configured = config?.SupportedDockerEnvironments ?? [];
 
@@ -789,11 +1028,81 @@ internal static class EnvironmentResolver
             return Resolved(generated[0]);
         }
 
+        // Several channels are available. The repository already states which .NET it targets, so use
+        // that instead of asking a question the source code has already answered.
+        var byTargetFramework = SelectByTargetFramework(generated, repoTargets);
+        if (byTargetFramework is not null)
+        {
+            return byTargetFramework;
+        }
+
         return new EnvironmentResolution
         {
             Status = ResolutionStatus.Ambiguous,
             Candidates = [.. generated.Select(e => e.Name)],
             Message = "Multiple Microsoft-derived environments are available. Select one with --environment <name>.",
+        };
+    }
+
+    // Deterministic tie-break: the repository's highest .NET target framework major must match exactly
+    // one derived channel. Highest wins because an SDK builds its own major and every lower one, so the
+    // newest target is the only channel guaranteed to build the whole repository.
+    //
+    // This deliberately does not "pick something close". No target frameworks, no .NET target (only
+    // netstandard/net48), or more than one channel for the same major all fall through to a question —
+    // guessing an SDK the repository never asked for is worse than asking once.
+    private static EnvironmentResolution? SelectByTargetFramework(
+        IReadOnlyList<ResolvedEnvironment> generated,
+        TargetFrameworkInfo? repoTargets)
+    {
+        if (repoTargets is null)
+        {
+            return null;
+        }
+
+        var majors = repoTargets.NetCoreMajors;
+        if (majors.Count == 0)
+        {
+            return null;
+        }
+
+        // Multi-targeted repositories need every runtime present, not just the newest SDK, so a runner
+        // covering the whole matrix wins outright when one is available.
+        if (majors.Count > 1)
+        {
+            var covering = generated.Where(e => e.IsMultiSdk && majors.All(e.SupportedMajors.Contains)).ToList();
+            if (covering.Count == 0)
+            {
+                return null;
+            }
+
+            var runner = covering
+                .OrderBy(e => e.SupportedMajors.Count)
+                .ThenBy(e => e.Name, StringComparer.Ordinal)
+                .First();
+
+            var targeted = string.Join(", ", majors.Select(m => $"net{m}.0"));
+            return Resolved(runner) with
+            {
+                SelectionReason =
+                    $"Selected automatically: the repository targets {targeted}, and this runner provides every one of them, "
+                    + "so the whole target-framework matrix runs in a single container.",
+            };
+        }
+
+        var targetMajor = majors.Max();
+        var matches = generated.Where(e => !e.IsMultiSdk && e.ChannelMajor == targetMajor).ToList();
+        if (matches.Count != 1)
+        {
+            return null;
+        }
+
+        var tfm = repoTargets.TargetFrameworks
+            .FirstOrDefault(t => TargetFrameworkInspector.NetMajor(t) == targetMajor) ?? $"net{targetMajor}.0";
+
+        return Resolved(matches[0]) with
+        {
+            SelectionReason = $"Selected automatically: the only environment matching the repository's target framework '{tfm}'.",
         };
     }
 
@@ -925,17 +1234,31 @@ internal static class TargetFrameworkInspector
     // Can a channel (identified by its SDK version) build these target frameworks? An SDK builds its own
     // major and every lower one; it cannot build a newer runtime major, and the Linux SDK cannot build
     // .NET Framework (net4x) targets.
-    public static SdkCompatibility CanBuild(SdkVersion? channelSdk, TargetFrameworkInfo tfms)
+    public static SdkCompatibility CanBuild(
+        SdkVersion? channelSdk,
+        TargetFrameworkInfo tfms,
+        IReadOnlyList<int>? supportedMajors = null)
     {
-        if (channelSdk is null)
-        {
-            return new SdkCompatibility(false, "The environment SDK version could not be determined.");
-        }
-
         if (tfms.HasNetFramework)
         {
             return new SdkCompatibility(false,
                 "The project targets .NET Framework (net4x), which cannot be built by a Linux .NET SDK container.");
+        }
+
+        // An environment that states its majors explicitly (a multi-SDK runner) is judged on that list:
+        // every target framework must be present, because presence is what allows the tests to run.
+        if (supportedMajors is { Count: > 0 })
+        {
+            var missing = tfms.NetCoreMajors.Where(m => !supportedMajors.Contains(m)).ToList();
+            return missing.Count == 0
+                ? new SdkCompatibility(true, null)
+                : new SdkCompatibility(false,
+                    $"The project targets {string.Join(", ", missing.Select(m => $"net{m}.0"))}, which the selected image does not provide.");
+        }
+
+        if (channelSdk is null)
+        {
+            return new SdkCompatibility(false, "The environment SDK version could not be determined.");
         }
 
         foreach (var major in tfms.NetCoreMajors)
@@ -945,6 +1268,18 @@ internal static class TargetFrameworkInspector
                 return new SdkCompatibility(false,
                     $"The project targets net{major}.0 but the selected SDK is {channelSdk.Major}.x and cannot build a newer runtime.");
             }
+        }
+
+        // A single-SDK image ships exactly one runtime. Lower target frameworks compile there but have
+        // no runtime to execute on, so a multi-targeted repository needs a multi-SDK runner instead of
+        // a silently doomed run.
+        var unrunnable = tfms.NetCoreMajors.Where(m => m != channelSdk.Major).ToList();
+        if (unrunnable.Count > 0)
+        {
+            return new SdkCompatibility(false,
+                $"The project targets {string.Join(", ", unrunnable.Select(m => $"net{m}.0"))} in addition to net{channelSdk.Major}.0, "
+                + $"but the selected image ships only the {channelSdk.Major}.x runtime. Use a multi-SDK runner image "
+                + $"({RemoteTestProgram.MultiSdkRepository}) or restrict the run with --framework.");
         }
 
         // Honor an explicit global.json pin: the container SDK major must satisfy it.
@@ -1035,6 +1370,12 @@ internal static class ContainerPlanner
         return string.IsNullOrWhiteSpace(test) ? null : $"FullyQualifiedName~{test}";
     }
 
+    // NuGet's package root becomes an MSBuild SourceRoot, and SourceLink rejects a SourceRoot that does
+    // not end in a separator ("SourceRoot paths are required to end with a slash or backslash"). The
+    // mount target stays clean; only the environment value carries the trailing slash.
+    public static string NuGetPackagesPath(string containerDir) =>
+        containerDir.EndsWith('/') ? containerDir : containerDir + "/";
+
     // The in-container script. Phases run in order; each emits a machine-readable end marker with its
     // exit code so the host can classify restore vs build vs test outcomes precisely. restore/build stop
     // the run on failure; test always runs to completion so a TRX is produced even when tests fail.
@@ -1048,10 +1389,13 @@ internal static class ContainerPlanner
 
         var sb = new StringBuilder();
         sb.Append("set -o pipefail\n");
-        sb.Append($"export NUGET_PACKAGES={Shell.Quote(o.NuGetDir)}\n");
+        sb.Append($"export NUGET_PACKAGES={Shell.Quote(NuGetPackagesPath(o.NuGetDir))}\n");
         sb.Append("export DOTNET_CLI_TELEMETRY_OPTOUT=1\n");
         sb.Append("export DOTNET_NOLOGO=1\n");
         sb.Append("export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1\n");
+        // Keep files created by a container user writable by the host and by a later run using a
+        // different container UID. The host-side reconciliation below cannot chmod foreign-owned files.
+        sb.Append("umask 000\n");
         sb.Append($"cd {Shell.Quote(o.WorkDir)} || {{ echo '{PhaseMarkerPrefix}staging:1##'; exit 8; }}\n");
         sb.Append("run_phase() { name=\"$1\"; shift; \"$@\"; code=$?; echo \"" + PhaseMarkerPrefix + "${name}:${code}##\"; return $code; }\n");
         sb.Append($"run_phase restore dotnet restore{target}{fw} || exit 9\n");
@@ -1071,7 +1415,7 @@ internal static class ContainerPlanner
         {
             ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
             ["DOTNET_NOLOGO"] = "1",
-            ["NUGET_PACKAGES"] = test.NuGetDir,
+            ["NUGET_PACKAGES"] = NuGetPackagesPath(test.NuGetDir),
         };
 
         var entrypoint = BuildEntrypoint(test);
@@ -1195,7 +1539,30 @@ internal static class TargetResolver
 // emit one per TFM) into a single structured result, prioritizing actionable failure detail.
 // ---------------------------------------------------------------------------------------------------
 
-internal sealed record TestFailureDetail(string TestName, string? ClassName, string? Message, string? StackTrace);
+// One failing test, with everything `dotnet test` would have printed about it: where it lives, what it
+// asserted, where it threw, and whatever the test itself wrote to the output helper.
+internal sealed record TestFailureDetail(
+    string TestName,
+    string? ClassName,
+    string? Message,
+    string? StackTrace,
+    string? Output = null,
+    string? Assembly = null,
+    string? Framework = null,
+    double DurationSeconds = 0);
+
+// One test assembly/TFM pair — the unit `dotnet test` reports a Passed!/Failed! line for.
+internal sealed record TestAssemblyResult(
+    string Assembly,
+    string? Framework,
+    int Total,
+    int Passed,
+    int Failed,
+    int Skipped,
+    double DurationSeconds)
+{
+    public string Display => Framework is null ? Assembly : $"{Assembly} ({Framework})";
+}
 
 internal sealed record TestRunResult
 {
@@ -1206,6 +1573,7 @@ internal sealed record TestRunResult
     public int NotExecuted { get; init; }
     public double DurationSeconds { get; init; }
     public IReadOnlyList<TestFailureDetail> Failures { get; init; } = [];
+    public IReadOnlyList<TestAssemblyResult> Assemblies { get; init; } = [];
     public int TrxFilesParsed { get; init; }
 
     public static TestRunResult Empty => new();
@@ -1219,32 +1587,91 @@ internal sealed record TestRunResult
         NotExecuted = NotExecuted + other.NotExecuted,
         DurationSeconds = DurationSeconds + other.DurationSeconds,
         Failures = [.. Failures, .. other.Failures],
+        Assemblies = [.. Assemblies, .. other.Assemblies],
         TrxFilesParsed = TrxFilesParsed + other.TrxFilesParsed,
     };
+}
+
+// VSTest records the test assembly's path in lower case, so a TRX alone would report
+// "acme.tests.dll" for an assembly the developer knows as "Acme.Tests.dll". The repository's own
+// project files carry the authoritative casing.
+internal static class AssemblyNameIndex
+{
+    private static readonly string[] ProjectPatterns = ["*.csproj", "*.fsproj", "*.vbproj"];
+
+    public static IReadOnlyDictionary<string, string> Build(string sourceRoot)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!Directory.Exists(sourceRoot))
+        {
+            return map;
+        }
+
+        foreach (var pattern in ProjectPatterns)
+        {
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(sourceRoot, pattern, SearchOption.AllDirectories);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            foreach (var project in files)
+            {
+                var name = Path.GetFileNameWithoutExtension(project) + ".dll";
+                map[name] = name;
+            }
+        }
+
+        return map;
+    }
 }
 
 internal static class TrxParser
 {
     private static readonly XNamespace Ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
 
-    public static TestRunResult ParseFile(string path) => Parse(File.ReadAllText(path));
+    public static TestRunResult ParseFile(string path, IReadOnlyDictionary<string, string>? assemblyNames = null) =>
+        Parse(File.ReadAllText(path), assemblyNames);
 
-    public static TestRunResult Parse(string trxXml)
+    public static TestRunResult Parse(string trxXml, IReadOnlyDictionary<string, string>? assemblyNames = null)
     {
         var doc = XDocument.Parse(trxXml);
         var root = doc.Root ?? throw new InvalidOperationException("TRX has no root element.");
 
-        // Map testId -> class name via TestDefinitions so failures carry their owning class.
+        // Map testId -> class name / storage via TestDefinitions so failures carry their owning class and
+        // the assembly they came from. Multi-targeted projects emit one TRX per TFM, and only the storage
+        // path distinguishes them.
         var classById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        string? storage = null;
+        string? classAssembly = null;
         foreach (var ut in root.Descendants(Ns + "UnitTest"))
         {
             var id = ut.Attribute("id")?.Value;
             var className = ut.Element(Ns + "TestMethod")?.Attribute("className")?.Value;
-            if (id is not null && className is not null)
+            if (className is not null)
             {
-                classById[id] = className.Split(',')[0];
+                var parts = className.Split(',', 2);
+                if (id is not null)
+                {
+                    classById[id] = parts[0];
+                }
+
+                if (classAssembly is null && parts.Length == 2)
+                {
+                    classAssembly = parts[1].Trim();
+                }
             }
+
+            storage ??= ut.Attribute("storage")?.Value
+                ?? ut.Element(Ns + "TestMethod")?.Attribute("codeBase")?.Value;
         }
+
+        var assemblyName = AssemblyDisplayName(storage, classAssembly, assemblyNames);
+        var framework = FrameworkFrom(storage);
 
         int passed = 0, failed = 0, skipped = 0, notExecuted = 0, total = 0;
         var failures = new List<TestFailureDetail>();
@@ -1262,18 +1689,24 @@ internal static class TrxParser
         foreach (var r in root.Descendants(Ns + "UnitTestResult"))
         {
             var outcome = r.Attribute("outcome")?.Value ?? "";
-            duration += ParseDuration(r.Attribute("duration")?.Value);
+            var testDuration = ParseDuration(r.Attribute("duration")?.Value);
+            duration += testDuration;
 
             if (string.Equals(outcome, "Failed", StringComparison.OrdinalIgnoreCase))
             {
                 var testId = r.Attribute("testId")?.Value;
                 var testName = r.Attribute("testName")?.Value ?? "(unknown test)";
-                var error = r.Element(Ns + "Output")?.Element(Ns + "ErrorInfo");
+                var output = r.Element(Ns + "Output");
+                var error = output?.Element(Ns + "ErrorInfo");
                 failures.Add(new TestFailureDetail(
                     testName,
                     testId is not null && classById.TryGetValue(testId, out var cls) ? cls : null,
                     error?.Element(Ns + "Message")?.Value?.Trim(),
-                    error?.Element(Ns + "StackTrace")?.Value?.Trim()));
+                    error?.Element(Ns + "StackTrace")?.Value?.Trim(),
+                    output?.Element(Ns + "StdOut")?.Value?.Trim(),
+                    assemblyName,
+                    framework,
+                    Math.Round(testDuration, 3)));
             }
             else if (outcome is "NotExecuted" or "Skipped")
             {
@@ -1301,11 +1734,14 @@ internal static class TrxParser
             NotExecuted = notExecuted,
             DurationSeconds = Math.Round(duration, 3),
             Failures = failures,
+            Assemblies = assemblyName is null
+                ? []
+                : [new TestAssemblyResult(assemblyName, framework, total, passed, failed, skipped, Math.Round(duration, 3))],
             TrxFilesParsed = 1,
         };
     }
 
-    public static TestRunResult ParseDirectory(string directory)
+    public static TestRunResult ParseDirectory(string directory, IReadOnlyDictionary<string, string>? assemblyNames = null)
     {
         var result = TestRunResult.Empty;
         if (!Directory.Exists(directory))
@@ -1317,7 +1753,7 @@ internal static class TrxParser
         {
             try
             {
-                result = result.Merge(ParseFile(file));
+                result = result.Merge(ParseFile(file, assemblyNames));
             }
             catch (Exception)
             {
@@ -1325,7 +1761,61 @@ internal static class TrxParser
             }
         }
 
-        return result;
+        return result with
+        {
+            Assemblies = [.. result.Assemblies.OrderBy(a => a.Assembly, StringComparer.OrdinalIgnoreCase).ThenBy(a => a.Framework, StringComparer.OrdinalIgnoreCase)],
+        };
+    }
+
+    // "/workspace/test/Acme.Tests/bin/Debug/net10.0/Acme.Tests.dll" -> "Acme.Tests.dll".
+    internal static string? AssemblyNameFrom(string? storage) =>
+        string.IsNullOrWhiteSpace(storage) ? null : Path.GetFileName(storage.Replace('\\', '/'));
+
+    // VSTest lower-cases the storage path it records, which would report "acme.tests.dll" for an assembly
+    // the developer knows as "Acme.Tests.dll". Two sources restore the real casing, in order of
+    // authority: the repository's own project files, then the class name's assembly part
+    // ("Namespace.Type, Acme.Tests"), which some loggers include and which keeps its casing.
+    internal static string? AssemblyDisplayName(
+        string? storage, string? classAssembly, IReadOnlyDictionary<string, string>? assemblyNames = null)
+    {
+        var fromStorage = AssemblyNameFrom(storage);
+        if (fromStorage is not null && assemblyNames is not null && assemblyNames.TryGetValue(fromStorage, out var known))
+        {
+            return known;
+        }
+
+        var simpleName = classAssembly?.Split(',')[0].Trim();
+        if (string.IsNullOrWhiteSpace(simpleName))
+        {
+            return fromStorage;
+        }
+
+        var candidate = simpleName + ".dll";
+        return fromStorage is null || string.Equals(candidate, fromStorage, StringComparison.OrdinalIgnoreCase)
+            ? candidate
+            : fromStorage;
+    }
+
+    // The TFM is the output folder the test assembly was built into; it is the only place a TRX records
+    // which target framework produced it.
+    internal static string? FrameworkFrom(string? storage)
+    {
+        if (string.IsNullOrWhiteSpace(storage))
+        {
+            return null;
+        }
+
+        var segments = storage.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = segments.Length - 2; i >= 0; i--)
+        {
+            if (Regex.IsMatch(segments[i], @"^net(standard|coreapp|framework)?\d+(\.\d+)*(-[a-z0-9.]+)?$", RegexOptions.IgnoreCase)
+                || Regex.IsMatch(segments[i], @"^net\d{2,3}$", RegexOptions.IgnoreCase))
+            {
+                return segments[i];
+            }
+        }
+
+        return null;
     }
 
     private static int IntAttr(XElement e, string name) =>
@@ -1445,14 +1935,42 @@ internal static class FailureClassifier
     public static IReadOnlyDictionary<string, int> ParsePhaseMarkers(string output)
     {
         var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (Match m in Regex.Matches(output,
-            Regex.Escape(ContainerPlanner.PhaseMarkerPrefix) + @"(?<name>[a-zA-Z]+):(?<code>-?\d+)##"))
+        foreach (Match m in MarkerPattern.Matches(output))
         {
             map[m.Groups["name"].Value] = int.Parse(m.Groups["code"].Value, CultureInfo.InvariantCulture);
         }
 
         return map;
     }
+
+    // The container emits one marker per phase, so the text between two markers is exactly that phase's
+    // log. Reporting the failing phase's own output — instead of a tail of everything — is what turns
+    // "the build failed" into "this file, this line, this compiler error".
+    public static string PhaseOutput(string output, string phase)
+    {
+        if (string.IsNullOrEmpty(output))
+        {
+            return "";
+        }
+
+        var start = 0;
+        foreach (Match m in MarkerPattern.Matches(output))
+        {
+            if (string.Equals(m.Groups["name"].Value, phase, StringComparison.OrdinalIgnoreCase))
+            {
+                return output[start..m.Index].Trim('\r', '\n');
+            }
+
+            start = m.Index + m.Length;
+        }
+
+        // The phase never completed (crash, cancellation): everything after the last marker is its log.
+        return output[start..].Trim('\r', '\n');
+    }
+
+    private static readonly Regex MarkerPattern = new(
+        Regex.Escape(ContainerPlanner.PhaseMarkerPrefix) + @"(?<name>[a-zA-Z]+):(?<code>-?\d+)##",
+        RegexOptions.Compiled);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1753,6 +2271,19 @@ internal static class DockerClient
         return r.ExitCode == 0 ? r.StdOut.Trim() : null;
     }
 
+    // The user an image is configured to run as. Empty means the image sets none, i.e. root.
+    public static async Task<string?> ResolveUserAsync(string image, CancellationToken ct)
+    {
+        var r = await ProcessRunner.RunAsync("docker", ["inspect", "--format", "{{.Config.User}}", image], null, ct);
+        if (r.ExitCode != 0)
+        {
+            return null;
+        }
+
+        var user = r.StdOut.Trim();
+        return user.Length == 0 ? null : user;
+    }
+
     public static Task<ProcessResult> BuildAsync(string dockerfile, string context, string tag, CancellationToken ct) =>
         ProcessRunner.RunAsync("docker", ["build", "-f", dockerfile, "-t", tag, context], null, ct);
 
@@ -1774,17 +2305,151 @@ internal static class DockerClient
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Source staging — copy the source into an isolated, disposable workspace so container builds never
-// pollute the developer's working tree with Linux bin/obj artifacts.
+// Image preparation — a .NET build routinely shells out to host tooling: MinVer, Nerdbank.GitVersioning,
+// GitInfo and SourceLink all invoke `git` while building. An image without it fails the build (MinVer
+// reports MINVER1007) even though the code compiles fine, which reads as a repository problem when it is
+// really a missing tool in the image. Microsoft's SDK images ship git; a minimal runner image may not.
+// When it is missing, one thin layer is derived from the resolved base image and cached under a
+// digest-addressed tag, so the cost is paid once per image and never inside the repository.
 // ---------------------------------------------------------------------------------------------------
 
-internal sealed record StagingResult(string? StagedPath, string? Error, int FileCount);
+internal sealed record PreparedImage(string Reference, bool Provisioned, string? Note = null);
+
+internal static class ImageProvisioner
+{
+    // Tooling the container must expose on PATH for a build to behave the way it does on the host.
+    public static readonly string[] RequiredTools = ["git"];
+
+    private const string TagPrefix = "dotnet-remote-testing/prepared";
+
+    public static string ToolList => string.Join(", ", RequiredTools);
+
+    // Content-addressed tag: the same base image and tool set always produce the same prepared image,
+    // so a later run reuses the cached layer instead of rebuilding it.
+    public static string DerivedTag(string baseReference, string? digest)
+    {
+        var key = digest is not null && digest.Contains(':', StringComparison.Ordinal)
+            ? digest[(digest.IndexOf(':', StringComparison.Ordinal) + 1)..]
+            : StableHash(baseReference);
+        var shortKey = key.Length > 16 ? key[..16] : key;
+        return $"{TagPrefix}:{string.Join('-', RequiredTools)}-{shortKey}";
+    }
+
+    // Verifies the tools are on PATH inside the image, without assuming a specific shell or entrypoint.
+    public static string ProbeCommand() =>
+        string.Join(" && ", RequiredTools.Select(t => $"command -v {t} >/dev/null 2>&1"));
+
+    // A single RUN that adapts to whichever package manager the base image ships. The Dockerfile is
+    // written to the run's own temporary directory — never into the repository being tested.
+    //
+    // Installing packages needs root, but the identity the tests run under is part of the environment
+    // being reproduced: a base image that runs as a non-root user must keep doing so, or the prepared
+    // image writes build and test output with different ownership than the configured image would.
+    // baseUser is that image's configured user, or null when it sets none (already root).
+    public static string Dockerfile(string baseReference, string? baseUser = null)
+    {
+        var tools = string.Join(' ', RequiredTools);
+        var restore = string.IsNullOrWhiteSpace(baseUser) ? string.Empty : $"USER {baseUser.Trim()}\n";
+        return $"""
+        FROM {baseReference}
+        USER root
+        RUN set -e; \
+            if command -v apt-get >/dev/null 2>&1; then \
+                apt-get update && apt-get install -y --no-install-recommends {tools} && rm -rf /var/lib/apt/lists/*; \
+            elif command -v apk >/dev/null 2>&1; then \
+                apk add --no-cache {tools}; \
+            elif command -v microdnf >/dev/null 2>&1; then \
+                microdnf install -y {tools} && microdnf clean all; \
+            elif command -v dnf >/dev/null 2>&1; then \
+                dnf install -y {tools} && dnf clean all; \
+            elif command -v yum >/dev/null 2>&1; then \
+                yum install -y {tools} && yum clean all; \
+            else \
+                echo 'No supported package manager in the base image.' >&2; exit 1; \
+            fi
+        {restore}
+        """;
+    }
+
+    // Best effort by design: when the tooling cannot be added, the base image is used anyway and the
+    // reason is reported, because a repository that never invokes git still runs perfectly well there.
+    public static async Task<PreparedImage> EnsureAsync(
+        string baseReference, string? digest, string workRoot, bool offline, CancellationToken ct)
+    {
+        var tag = DerivedTag(baseReference, digest);
+
+        if (await DockerClient.ResolveImageIdAsync(tag, ct) is not null)
+        {
+            return new PreparedImage(tag, true, $"Reused prepared image providing {ToolList}.");
+        }
+
+        var probe = await DockerClient.RunAsync(
+            ["run", "--rm", "--entrypoint", "sh", baseReference, "-c", ProbeCommand()], ct);
+        if (probe.ExitCode == 0)
+        {
+            return new PreparedImage(baseReference, false);
+        }
+
+        if (offline)
+        {
+            return new PreparedImage(baseReference, false,
+                $"The image does not provide {ToolList} and adding it needs network access (--offline). "
+                + "A build that invokes it will fail.");
+        }
+
+        // Read the identity off the base image before deriving from it, so the prepared image keeps
+        // running as whoever the configured image runs as instead of silently switching to root.
+        var baseUser = await DockerClient.ResolveUserAsync(baseReference, ct);
+
+        var contextDir = Path.Combine(workRoot, "image-prep");
+        Directory.CreateDirectory(contextDir);
+        var dockerfile = Path.Combine(contextDir, "Dockerfile");
+        await File.WriteAllTextAsync(dockerfile, Dockerfile(baseReference, baseUser), ct);
+
+        var build = await DockerClient.BuildAsync(dockerfile, contextDir, tag, ct);
+        if (build.ExitCode != 0)
+        {
+            var reason = build.StdErr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .LastOrDefault() ?? "docker build failed.";
+            return new PreparedImage(baseReference, false,
+                $"The image does not provide {ToolList} and it could not be added: {reason}");
+        }
+
+        return new PreparedImage(tag, true, $"Added {ToolList} to the image (cached for later runs).");
+    }
+
+    private static string StableHash(string value)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexStringLower(bytes);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Source staging — copy the source into an isolated, disposable workspace so container builds never
+// pollute the developer's working tree with Linux bin/obj artifacts.
+//
+// The staged copy must still *be* a repository. Dropping .git changes observable behavior: MinVer and
+// Nerdbank.GitVersioning fall back to 0.0.0, SourceLink stops embedding, and any repository-root probe
+// ("walk up until a .git directory exists") resolves somewhere else entirely — which silently changes
+// what the tests under it see. That is the difference between "it passes in Visual Studio's remote
+// testing and fails here", so .git is staged too, as a disposable copy the container may freely write.
+// ---------------------------------------------------------------------------------------------------
+
+internal sealed record StagingResult(
+    string? StagedPath,
+    string? Error,
+    int FileCount,
+    bool GitMetadataStaged = false,
+    long GitMetadataBytes = 0,
+    string? GitMetadataNote = null);
 
 internal static class SourceStager
 {
     private static readonly string[] ExcludedDirs = ["bin", "obj", ".git", ".vs", ".vscode", "node_modules", "TestResults"];
 
-    public static async Task<StagingResult> StageAsync(string sourceRoot, string stagingRoot, CancellationToken ct)
+    public static async Task<StagingResult> StageAsync(
+        string sourceRoot, string stagingRoot, CancellationToken ct, bool includeGitMetadata = true)
     {
         if (!Directory.Exists(sourceRoot))
         {
@@ -1802,7 +2467,13 @@ internal static class SourceStager
                 ? CopyEnumerated(sourceRoot, stagingRoot, files)
                 : CopyRecursive(sourceRoot, stagingRoot);
 
-            return new StagingResult(stagingRoot, null, count);
+            var git = includeGitMetadata
+                ? StageGitMetadata(sourceRoot, stagingRoot)
+                : new GitStagingResult(false, 0, "Git metadata staging disabled; repository-root detection and version stamping will differ from the host.");
+
+            MakeWritableForContainer(stagingRoot);
+
+            return new StagingResult(stagingRoot, null, count, git.Staged, git.Bytes, git.Note);
         }
         catch (Exception ex)
         {
@@ -1810,9 +2481,220 @@ internal static class SourceStager
         }
     }
 
+    private sealed record GitStagingResult(bool Staged, long Bytes, string? Note);
+
+    // Copy the repository's git directory verbatim into the staged workspace. Best-effort by design: a
+    // missing or unreadable .git is a fidelity note, never a reason to fail a run that can still execute.
+    private static GitStagingResult StageGitMetadata(string sourceRoot, string stagingRoot)
+    {
+        var gitDir = ResolveGitDirectory(sourceRoot);
+        if (gitDir is null)
+        {
+            return new GitStagingResult(false, 0, null);
+        }
+
+        var destination = Path.Combine(stagingRoot, ".git");
+        try
+        {
+            // A linked worktree stages its "gitdir:" pointer file as ordinary content; the real git
+            // directory has to replace it, because the path it points at does not exist in the container.
+            if (File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+
+            // A linked worktree's git directory holds only per-worktree state (HEAD, index, logs). The
+            // objects, refs and config live in the shared directory its "commondir" points at, outside
+            // the staged copy. Staging the worktree half alone produces a git directory git cannot read,
+            // so versioning falls back to 0.0.0 and SourceLink stops embedding — the exact fidelity loss
+            // staging .git exists to prevent. The shared half is copied first and the per-worktree files
+            // are layered over it, which collapses the pair into an ordinary standalone repository.
+            var commonDir = ResolveCommonDirectory(gitDir);
+            if (commonDir is not null)
+            {
+                // "worktrees/" only registers linked worktrees by host path; none of them exist in the
+                // container, and this worktree's own entry is exactly what is being flattened here.
+                CopyDirectory(commonDir, destination, excludeTopLevelDirectory: "worktrees");
+            }
+
+            var bytes = CopyDirectory(gitDir, destination);
+            if (commonDir is not null)
+            {
+                // The staged repository is standalone now; leaving the pointers behind would send git
+                // back out to host paths that do not exist in the container.
+                foreach (var pointer in new[] { "commondir", "gitdir" })
+                {
+                    var stale = Path.Combine(destination, pointer);
+                    if (File.Exists(stale))
+                    {
+                        File.Delete(stale);
+                    }
+                }
+
+                bytes = MeasureDirectory(destination);
+            }
+
+            return new GitStagingResult(true, bytes, null);
+        }
+        catch (Exception ex)
+        {
+            return new GitStagingResult(false, 0,
+                $"Git metadata could not be staged ({ex.Message}); repository-root detection and version stamping may differ from the host.");
+        }
+    }
+
+    // .git is a directory in an ordinary clone and a "gitdir: <path>" pointer file in a linked worktree
+    // or submodule. Both resolve to a real directory that carries the repository state.
+    private static string? ResolveGitDirectory(string sourceRoot)
+    {
+        var candidate = Path.Combine(sourceRoot, ".git");
+        if (Directory.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        if (!File.Exists(candidate))
+        {
+            return null;
+        }
+
+        var pointer = File.ReadAllText(candidate).Trim();
+        const string Prefix = "gitdir:";
+        if (!pointer.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var target = pointer[Prefix.Length..].Trim();
+        if (!Path.IsPathRooted(target))
+        {
+            target = Path.GetFullPath(Path.Combine(sourceRoot, target));
+        }
+
+        return Directory.Exists(target) ? target : null;
+    }
+
+    // A linked worktree's git directory carries a "commondir" file naming the shared repository
+    // directory that actually holds objects, refs and config. An ordinary clone has no such file.
+    private static string? ResolveCommonDirectory(string gitDir)
+    {
+        var marker = Path.Combine(gitDir, "commondir");
+        if (!File.Exists(marker))
+        {
+            return null;
+        }
+
+        var target = File.ReadAllText(marker).Trim();
+        if (target.Length == 0)
+        {
+            return null;
+        }
+
+        if (!Path.IsPathRooted(target))
+        {
+            target = Path.GetFullPath(Path.Combine(gitDir, target));
+        }
+
+        return Directory.Exists(target) ? target : null;
+    }
+
+    private static long MeasureDirectory(string root) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length);
+
+    // Bind mounts keep the host's ownership of the mounted directory; Docker only reconciles ownership
+    // for named volumes, never for bind mounts. A prepared image restores the base image's configured
+    // user (see ImageProvisioner), and that user's UID/GID commonly differs from whoever staged this
+    // directory on the host, which leaves restore/build/test unable to write into it. Opening group and
+    // other write access sidesteps the mismatch without needing to know the container's UID up front.
+    // No-op on Windows, where Docker Desktop's bind-mount layer does not enforce host UID/GID at all.
+    internal static void MakeWritableForContainer(string root)
+    {
+        if (OperatingSystem.IsWindows() || !Directory.Exists(root))
+        {
+            return;
+        }
+
+        try
+        {
+            AddWriteBits(root, isDirectory: true);
+            foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+            {
+                AddWriteBits(dir, isDirectory: true);
+            }
+
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            {
+                AddWriteBits(file, isDirectory: false);
+            }
+        }
+        catch (IOException)
+        {
+            // Best effort: a container user permission problem surfaces on its own via the run's exit
+            // code, which is a clearer signal than failing the run here over a chmod race.
+        }
+    }
+
+    private static void AddWriteBits(string path, bool isDirectory)
+    {
+        var mode = File.GetUnixFileMode(path);
+        var required = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite;
+        if (isDirectory)
+        {
+            required |= UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+        }
+
+        // chmod itself requires ownership. If a previous container UID already left the required
+        // access bits in place, reuse those entries without attempting a chmod that must fail.
+        if ((mode & required) == required)
+        {
+            return;
+        }
+
+        File.SetUnixFileMode(path, mode | required);
+    }
+
+    private static long CopyDirectory(string source, string destination, string? excludeTopLevelDirectory = null)
+    {
+        long bytes = 0;
+        var stack = new Stack<(string Source, string Destination)>();
+        stack.Push((source, destination));
+        while (stack.Count > 0)
+        {
+            var (from, to) = stack.Pop();
+            Directory.CreateDirectory(to);
+            foreach (var file in Directory.EnumerateFiles(from))
+            {
+                var target = Path.Combine(to, Path.GetFileName(file));
+                File.Copy(file, target, overwrite: true);
+                // The source .git may be read-only in places (packed objects); the staged copy is
+                // disposable and the container must be able to write to it.
+                new FileInfo(target).IsReadOnly = false;
+                bytes += new FileInfo(target).Length;
+            }
+
+            foreach (var dir in Directory.EnumerateDirectories(from))
+            {
+                var name = Path.GetFileName(dir);
+                if (excludeTopLevelDirectory is not null
+                    && string.Equals(from, source, StringComparison.Ordinal)
+                    && string.Equals(name, excludeTopLevelDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                stack.Push((dir, Path.Combine(to, name)));
+            }
+        }
+
+        return bytes;
+    }
+
     private static async Task<IReadOnlyList<string>?> TryGitEnumerateAsync(string sourceRoot, CancellationToken ct)
     {
-        if (!Directory.Exists(Path.Combine(sourceRoot, ".git")))
+        // .git is a directory in an ordinary clone and a "gitdir:" pointer file in a linked worktree;
+        // git enumerates both, and skipping the pointer form would stage ignored build output.
+        var marker = Path.Combine(sourceRoot, ".git");
+        if (!Directory.Exists(marker) && !File.Exists(marker))
         {
             return null;
         }
@@ -1895,7 +2777,8 @@ internal sealed record ResolveContext(
     ReleaseMetadata? Metadata,
     string? MetadataError,
     IReadOnlyList<ResolvedEnvironment> Generated,
-    EnvironmentResolution Resolution);
+    EnvironmentResolution Resolution,
+    string? MultiSdkError = null);
 
 internal static class Commands
 {
@@ -1928,8 +2811,47 @@ internal static class Commands
             }
         }
 
-        var resolution = EnvironmentResolver.Resolve(config, generated, options.EnvironmentName);
-        return new ResolveContext(config, metadata, metadataError, generated, resolution);
+        // Generated environments are resolved against the repository's own target frameworks. Configured
+        // environments never need this (they are deliberate intent), and a named environment short-circuits
+        // before it is used, so the inspection only runs when it can actually decide something.
+        TargetFrameworkInfo? repoTargets = null;
+        string? multiSdkError = null;
+        if (options.EnvironmentName is null && config?.SourcePath is null && generated.Count > 1)
+        {
+            repoTargets = NarrowToRequestedFramework(
+                TargetFrameworkInspector.Inspect(options.RepoRoot, options.Project), options.Framework);
+
+            // Only a genuinely multi-targeted repository needs the multi-SDK runner feed; do not spend a
+            // network call to answer a question a single target framework already answers.
+            if (repoTargets.NetCoreMajors.Count > 1)
+            {
+                var multi = await MultiSdkRunnerStore.LoadAsync(options, ct);
+                multiSdkError = multi.Error;
+                var runner = MultiSdkTagReader.Select(multi.Runners, repoTargets.NetCoreMajors);
+                if (runner is not null)
+                {
+                    generated = [.. generated, GeneratedEnvironments.FromMultiSdkRunner(runner)];
+                }
+            }
+        }
+
+        var resolution = EnvironmentResolver.Resolve(config, generated, options.EnvironmentName, repoTargets);
+        return new ResolveContext(config, metadata, metadataError, generated, resolution, multiSdkError);
+    }
+
+    // --framework narrows what actually runs, so it must narrow what the environment is chosen for too.
+    // Without this, "-f net10.0" on a multi-targeted repository would still be resolved as multi-targeted.
+    private static TargetFrameworkInfo NarrowToRequestedFramework(TargetFrameworkInfo info, string? framework)
+    {
+        if (string.IsNullOrWhiteSpace(framework))
+        {
+            return info;
+        }
+
+        var match = info.TargetFrameworks.FirstOrDefault(
+            t => string.Equals(t, framework, StringComparison.OrdinalIgnoreCase));
+
+        return info with { TargetFrameworks = match is null ? [framework] : [match] };
     }
 
     public static async Task<int> ListAsync(Options options)
@@ -1956,6 +2878,20 @@ internal static class Commands
             metadata = result.Metadata;
             metadataError = result.Error;
             environments = metadata is not null ? GeneratedEnvironments.FromMetadata(metadata) : [];
+
+            // A multi-targeted repository cannot execute its lower target frameworks on a single-SDK
+            // image, so offer the runner that can — listing only what cannot work would be misleading.
+            var repoMajors = NarrowToRequestedFramework(
+                TargetFrameworkInspector.Inspect(options.RepoRoot, options.Project), options.Framework).NetCoreMajors;
+            if (repoMajors.Count > 1)
+            {
+                var multi = await MultiSdkRunnerStore.LoadAsync(options, cts.Token);
+                var runner = MultiSdkTagReader.Select(multi.Runners, repoMajors);
+                if (runner is not null)
+                {
+                    environments = [GeneratedEnvironments.FromMultiSdkRunner(runner), .. environments];
+                }
+            }
         }
 
         if (options.Json)
@@ -1970,6 +2906,7 @@ internal static class Commands
                 {
                     e.Name, origin = e.Origin.ToString(), e.Channel, e.ReleaseType, e.Sdk,
                     image = e.DockerImage, dockerFile = e.DockerFile,
+                    supportedMajors = e.SupportedMajors.Count > 0 ? e.SupportedMajors : null,
                 }),
                 unsupported = unsupported.Select(e => new { e.Name, type = e.RawType }),
                 configDiagnostics = config?.Diagnostics.Select(d => new { d.Code, d.Message, environment = d.EnvironmentName }),
@@ -1997,6 +2934,11 @@ internal static class Commands
             if (e.ReleaseType is not null)
             {
                 Console.WriteLine($"  {e.ReleaseType}");
+            }
+
+            if (e.SupportedMajors.Count > 0)
+            {
+                Console.WriteLine($"  Provides .NET {string.Join(", ", e.SupportedMajors)} in one image");
             }
 
             if (e.Sdk is not null)
@@ -2046,7 +2988,8 @@ internal static class Commands
 
         var env = ctx.Resolution.Environment!;
         var sourceRoot = ResolveSourceRoot(options, env);
-        var tfmInfo = TargetFrameworkInspector.Inspect(sourceRoot, options.Project);
+        var tfmInfo = NarrowToRequestedFramework(
+            TargetFrameworkInspector.Inspect(sourceRoot, options.Project), options.Framework);
 
         // Image identity: for generated environments, validate candidate tags against MCR and pre-resolve
         // the digest without pulling. Offline / --no-registry-check skips the network probe.
@@ -2059,6 +3002,14 @@ internal static class Commands
         if (env.DockerFile is not null)
         {
             imageNote = $"Configured Dockerfile '{env.DockerFile}' will be built into a local image.";
+        }
+        else if (env.IsMultiSdk)
+        {
+            // The tag came from the publisher's own tag feed, so it exists by construction. Its digest is
+            // resolved at pull time in `run`; there is no Microsoft registry probe to make here.
+            requestedTag = env.DockerImage?.Split(':').Last();
+            imageNote = $"Multi-SDK runner providing .NET {string.Join(", ", env.SupportedMajors)}; "
+                + "the whole target-framework matrix runs in one container.";
         }
         else if (env.Origin == EnvironmentOrigin.Generated && channelSdk is not null)
         {
@@ -2087,7 +3038,7 @@ internal static class Commands
             }
         }
 
-        var compatibility = TargetFrameworkInspector.CanBuild(channelSdk, tfmInfo);
+        var compatibility = TargetFrameworkInspector.CanBuild(channelSdk, tfmInfo, env.SupportedMajors);
         var compatibilityBlocking = SdkCompatibilityPolicy.IsBlocking(env.Origin, compatibility.Compatible);
         // Configured environments trust their image SDK (validated at run time); do not present or fail
         // them as incompatible just because the SDK could not be determined statically.
@@ -2110,7 +3061,15 @@ internal static class Commands
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 tool = RemoteTestProgram.ToolName,
-                environment = new { env.Name, origin = env.Origin.ToString(), env.Channel, env.ReleaseType, env.Sdk },
+                environment = new
+                {
+                    env.Name,
+                    origin = env.Origin.ToString(),
+                    env.Channel,
+                    env.ReleaseType,
+                    env.Sdk,
+                    selectionReason = ctx.Resolution.SelectionReason,
+                },
                 image = new
                 {
                     requested = env.DockerImage ?? reference,
@@ -2119,7 +3078,7 @@ internal static class Commands
                     dockerFile = env.DockerFile,
                     digest,
                     digestResolved = digest is not null,
-                    microsoftOnlyEnforced = env.Origin == EnvironmentOrigin.Generated,
+                    recommendedPublisher = IsRecommendedPublisher(env.DockerImage ?? reference),
                     note = imageNote,
                 },
                 targetFrameworks = new
@@ -2138,6 +3097,11 @@ internal static class Commands
         else
         {
             Console.WriteLine($"Plan: {env.Name}");
+            if (ctx.Resolution.SelectionReason is not null)
+            {
+                Console.WriteLine($"  Selection:   {ctx.Resolution.SelectionReason}");
+            }
+
             Console.WriteLine($"  Image:       {env.DockerImage ?? reference ?? "(from Dockerfile)"}");
             if (requestedTag is not null)
             {
@@ -2170,6 +3134,14 @@ internal static class Commands
         Filter = ContainerPlanner.ResolveFilter(options.Filter, options.Test),
         Coverage = options.Coverage,
     };
+
+    // Recommended publishers for auto-generated environments: Microsoft's official SDK images and the
+    // Codebelt multi-SDK test runner. This is reported, not enforced — an image from anywhere else is
+    // allowed (a configured dockerImage is deliberate intent), it simply is not one we vouch for.
+    private static bool IsRecommendedPublisher(string? reference) =>
+        reference is not null
+        && (reference.StartsWith(RemoteTestProgram.SdkRepository + ":", StringComparison.Ordinal)
+            || reference.StartsWith(RemoteTestProgram.MultiSdkRepository + ":", StringComparison.Ordinal));
 
     private static string ResolveSourceRoot(Options options, ResolvedEnvironment env)
     {
@@ -2206,6 +3178,7 @@ internal static class Commands
                 message,
                 candidates = res.Candidates,
                 metadataError = ctx.MetadataError,
+                multiSdkError = ctx.MultiSdkError,
             }, RemoteTestProgram.JsonOut));
         }
         else
@@ -2214,6 +3187,11 @@ internal static class Commands
             if (res.Candidates.Count > 0)
             {
                 Console.Error.WriteLine("Available: " + string.Join(", ", res.Candidates));
+            }
+
+            if (ctx.MultiSdkError is not null)
+            {
+                Console.Error.WriteLine($"Multi-SDK runner discovery: {ctx.MultiSdkError}");
             }
         }
 
@@ -2226,7 +3204,9 @@ internal static class Commands
         string? RequestedTag = null,
         string? Sdk = null,
         FailureKind Kind = FailureKind.None,
-        string? Error = null);
+        string? Error = null,
+        string? PreparedReference = null,
+        string? ProvisionNote = null);
 
     private sealed record CleanupReport(bool ContainerRemoved, bool WorkspaceRemoved, IReadOnlyList<string> Leftovers);
 
@@ -2241,6 +3221,10 @@ internal static class Commands
         var cancelled = false;
         void OnCancel(object? _, ConsoleCancelEventArgs e) { e.Cancel = true; cancelled = true; cts.Cancel(); }
         Console.CancelKeyPress += OnCancel;
+
+        // Wall clock for the whole operation. Reported alongside the test duration from the TRX so a
+        // fast test suite behind a slow image pull never looks like the run itself took no time.
+        var wallClock = Stopwatch.StartNew();
 
         var containerName = ContainerPlanner.ContainerName(Guid.NewGuid().ToString("N")[..8]);
         var runRoot = Path.Combine(Path.GetTempPath(), "dotnet-remote-testing", containerName);
@@ -2263,9 +3247,10 @@ internal static class Commands
             }
 
             var sourceRoot = ResolveSourceRoot(options, env);
-            var tfmInfo = TargetFrameworkInspector.Inspect(sourceRoot, options.Project);
+            var tfmInfo = NarrowToRequestedFramework(
+                TargetFrameworkInspector.Inspect(sourceRoot, options.Project), options.Framework);
             var channelSdk = SdkVersion.TryParse(env.Sdk);
-            var compat = TargetFrameworkInspector.CanBuild(channelSdk, tfmInfo);
+            var compat = TargetFrameworkInspector.CanBuild(channelSdk, tfmInfo, env.SupportedMajors);
             if (SdkCompatibilityPolicy.IsBlocking(env.Origin, compat.Compatible))
             {
                 return Error(options, FailureKind.SdkIncompatibility, compat.Reason ?? "The selected SDK cannot build the requested target framework.");
@@ -2277,19 +3262,54 @@ internal static class Commands
                 return Error(options, image.Kind, image.Error);
             }
 
+            // The image runs the build, not just the tests, so it must carry what the build shells out to.
+            var prepared = await ImageProvisioner.EnsureAsync(
+                image.Reference!, image.Digest, runRoot, options.Offline, cts.Token);
+            image = image with { PreparedReference = prepared.Provisioned ? prepared.Reference : null, ProvisionNote = prepared.Note };
+
             var resultsRoot = Path.Combine(runRoot, "results");
             stagingRoot = Path.Combine(runRoot, "workspace");
             Directory.CreateDirectory(resultsRoot);
+            SourceStager.MakeWritableForContainer(resultsRoot);
 
-            var staging = await SourceStager.StageAsync(sourceRoot, stagingRoot, cts.Token);
+            var staging = await SourceStager.StageAsync(sourceRoot, stagingRoot, cts.Token, includeGitMetadata: !options.NoGitMetadata);
             if (staging.Error is not null || staging.StagedPath is null)
             {
                 return Error(options, FailureKind.SourceStaging, staging.Error ?? "Source staging produced no workspace.");
             }
 
-            // NuGet packages cache persists across runs and lives outside the repository.
+            // NuGet packages cache persists across runs and lives outside the repository. Files already
+            // in it may carry an older run's container UID, so it is reconciled on every run rather than
+            // only when created. A cache whose modes cannot be repaired by this host is quarantined and
+            // rebuilt; continuing with it would make restore fail later inside the non-root container.
             var nugetCache = Path.Combine(options.CacheDirectory, "nuget");
             Directory.CreateDirectory(nugetCache);
+            try
+            {
+                SourceStager.MakeWritableForContainer(nugetCache);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                var quarantine = Path.Combine(
+                    options.CacheDirectory,
+                    "nuget-stale-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture)
+                        + "-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    Directory.Move(nugetCache, quarantine);
+                    Directory.CreateDirectory(nugetCache);
+                    SourceStager.MakeWritableForContainer(nugetCache);
+                    Console.Error.WriteLine(
+                        $"NuGet cache entries could not be made writable because they are owned by another UID; "
+                        + $"the old cache was preserved at '{quarantine}' and a fresh cache will be used.");
+                }
+                catch (Exception recoveryError) when (recoveryError is IOException or UnauthorizedAccessException)
+                {
+                    return Error(options, FailureKind.Restore,
+                        $"NuGet cache '{nugetCache}' is not writable and could not be quarantined for recovery: "
+                        + recoveryError.Message + $" Original permission error: {ex.Message}");
+                }
+            }
 
             var testOptions = BuildTestOptions(options, sourceRoot);
             var mounts = new[]
@@ -2298,7 +3318,7 @@ internal static class Commands
                 new ContainerMount(nugetCache, "/nuget", ReadOnly: false),
                 new ContainerMount(resultsRoot, "/results", ReadOnly: false),
             };
-            var plan = ContainerPlanner.Build(image.Reference!, containerName, mounts, testOptions);
+            var plan = ContainerPlanner.Build(prepared.Reference, containerName, mounts, testOptions);
 
             ProcessResult proc;
             try
@@ -2313,13 +3333,15 @@ internal static class Commands
 
             cancelled |= proc.TimedOut;
 
-            var results = TrxParser.ParseDirectory(resultsRoot);
+            var results = TrxParser.ParseDirectory(resultsRoot, AssemblyNameIndex.Build(sourceRoot));
             var phaseMarkers = FailureClassifier.ParsePhaseMarkers(proc.StdOut);
             var outcome = FailureClassifier.Classify(phaseMarkers, proc.ExitCode, cancelled, results);
 
             var cleanup = await CleanupAsync(containerName, runRoot, cts.Token);
 
-            return EmitRunResult(options, env, image, tfmInfo, results, outcome, proc, cleanup);
+            return EmitRunResult(
+                options, env, image, tfmInfo, results, outcome, proc, cleanup,
+                ctx.Resolution.SelectionReason, wallClock.Elapsed.TotalSeconds, staging);
         }
         catch (OperationCanceledException)
         {
@@ -2377,7 +3399,9 @@ internal static class Commands
         }
         else
         {
-            // Configured dockerImage is deliberate repository intent — exempt from the Microsoft-only rule.
+            // A configured dockerImage (deliberate repository intent) or a multi-SDK runner tag taken
+            // from the publisher's tag feed. Both are used exactly as written; the digest is resolved
+            // from the pulled image below.
             reference = env.DockerImage!;
         }
 
@@ -2426,7 +3450,10 @@ internal static class Commands
         TestRunResult results,
         ExecutionOutcome outcome,
         ProcessResult proc,
-        CleanupReport cleanup)
+        CleanupReport cleanup,
+        string? selectionReason = null,
+        double? elapsedSeconds = null,
+        StagingResult? staging = null)
     {
         var exit = FailureClassifier.ToExitCode(outcome.Kind);
         if (outcome.Kind == FailureKind.None && cleanup.Leftovers.Count > 0)
@@ -2450,19 +3477,38 @@ internal static class Commands
                 failureKind = outcome.Kind == FailureKind.None ? null : outcome.Kind.ToString(),
                 phase = outcome.Phase,
                 message = outcome.Message,
-                environment = new { env.Name, origin = env.Origin.ToString(), env.Channel, env.ReleaseType },
-                image = new { requested = image.RequestedTag, reference = image.Reference, digest = image.Digest, sdk = image.Sdk },
+                environment = new { env.Name, origin = env.Origin.ToString(), env.Channel, env.ReleaseType, selectionReason },
+                image = new
+                {
+                    requested = image.RequestedTag,
+                    reference = image.Reference,
+                    digest = image.Digest,
+                    sdk = image.Sdk,
+                    prepared = image.PreparedReference,
+                    provisioning = image.ProvisionNote,
+                },
                 targetFrameworks = tfmInfo.TargetFrameworks,
+                workspace = new { gitMetadataStaged = staging?.GitMetadataStaged, gitMetadataNote = staging?.GitMetadataNote },
                 tests = new { results.Total, results.Passed, results.Skipped, results.Failed, results.DurationSeconds, trxFiles = results.TrxFilesParsed },
-                failures = results.Failures.Select(f => new { f.TestName, f.ClassName, f.Message, f.StackTrace }),
+                testAssemblies = results.Assemblies.Select(a => new { a.Assembly, a.Framework, a.Total, a.Passed, a.Failed, a.Skipped, a.DurationSeconds }),
+                elapsedSeconds = elapsedSeconds is null ? (double?)null : Math.Round(elapsedSeconds.Value, 1),
+                failures = results.Failures.Select(f => new { f.TestName, f.ClassName, f.Assembly, f.Framework, f.DurationSeconds, f.Message, f.StackTrace, f.Output }),
                 cleanup = new { cleanup.ContainerRemoved, cleanup.WorkspaceRemoved, cleanup.Leftovers },
-                diagnostics = status == "error" ? new { containerExitCode = proc.ExitCode, stdoutTail = LastLines(proc.StdOut, 30), stderrTail = LastLines(proc.StdErr, 20) } : null,
+                diagnostics = status == "error"
+                    ? new { containerExitCode = proc.ExitCode, phaseLogTail = LastLines(FailureClassifier.PhaseOutput(proc.StdOut, outcome.Phase), 40), stderrTail = LastLines(proc.StdErr, 20) }
+                    : null,
+                containerLog = options.ShowLog ? proc.StdOut : null,
             }, RemoteTestProgram.JsonOut));
             return (int)exit;
         }
 
         // Concise human result: environment → image/digest/sdk → tests → duration, actionable on failure.
         Console.WriteLine($"Remote Test: {env.Name}");
+        if (selectionReason is not null)
+        {
+            Console.WriteLine(selectionReason);
+        }
+
         Console.WriteLine();
         Console.WriteLine($"Image:  {image.Reference}");
         if (image.Digest is not null)
@@ -2475,36 +3521,70 @@ internal static class Commands
             Console.WriteLine($"SDK:    {image.Sdk}");
         }
 
+        if (image.ProvisionNote is not null)
+        {
+            Console.WriteLine($"Tools:  {image.ProvisionNote}");
+        }
+
+        if (staging?.GitMetadataNote is not null)
+        {
+            Console.WriteLine($"Note:   {staging.GitMetadataNote}");
+        }
+
         Console.WriteLine();
 
         if (outcome.Kind is FailureKind.None or FailureKind.TestFailure)
         {
-            Console.WriteLine($"Tests:  {results.Passed} passed, {results.Skipped} skipped, {results.Failed} failed");
-            Console.WriteLine($"Time:   {results.DurationSeconds.ToString("0.0", CultureInfo.InvariantCulture)} s");
-            if (results.Failed > 0)
+            // Per assembly/TFM first — the same unit `dotnet test` reports on, so a failure is
+            // immediately attributable to one test project and one target framework.
+            var width = results.Assemblies.Count == 0 ? 0 : results.Assemblies.Max(a => a.Display.Length);
+            foreach (var a in results.Assemblies)
+            {
+                var verdict = a.Failed > 0 ? "Failed!" : "Passed!";
+                Console.WriteLine(
+                    $"{verdict,-8} {a.Display.PadRight(width)}  —  {a.Passed} passed, {a.Skipped} skipped, {a.Failed} failed, {a.DurationSeconds.ToString("0.0", CultureInfo.InvariantCulture)} s");
+            }
+
+            if (results.Assemblies.Count > 0)
             {
                 Console.WriteLine();
-                Console.WriteLine($"{results.Failed} test(s) failed:");
-                foreach (var f in results.Failures)
-                {
-                    Console.WriteLine();
-                    Console.WriteLine($"  {f.ClassName}");
-                    Console.WriteLine($"    {f.TestName}");
-                    if (f.Message is not null)
-                    {
-                        Console.WriteLine($"    {f.Message}");
-                    }
-                }
             }
+
+            Console.WriteLine($"Tests:  {results.Passed} passed, {results.Skipped} skipped, {results.Failed} failed");
+            Console.WriteLine($"Time:   {results.DurationSeconds.ToString("0.0", CultureInfo.InvariantCulture)} s (tests)");
+            if (elapsedSeconds is not null)
+            {
+                Console.WriteLine($"Total:  {elapsedSeconds.Value.ToString("0.0", CultureInfo.InvariantCulture)} s (including image pull, restore and build)");
+            }
+
+            WriteFailureDetail(results);
         }
         else
         {
             Console.Error.WriteLine($"{outcome.Kind}: {outcome.Message}");
-            var tail = LastLines(proc.StdErr, 20);
-            if (!string.IsNullOrWhiteSpace(tail))
+
+            // Any TRX that was produced before the failure still names real failing tests; report those
+            // first so a test-host crash after a genuine assertion failure is not reduced to a log tail.
+            WriteFailureDetail(results);
+
+            // The container writes compiler/restore/test diagnostics to stdout, so a stderr-only tail
+            // would leave the developer with a verdict and no cause. Prefer the failing phase's own log.
+            var phaseLog = FailureClassifier.PhaseOutput(proc.StdOut, outcome.Phase);
+            var detail = FirstNonEmpty(
+                ErrorLines(phaseLog, 20), LastLines(phaseLog, 40), LastLines(proc.StdErr, 20), LastLines(proc.StdOut, 40));
+            if (!string.IsNullOrWhiteSpace(detail))
             {
-                Console.Error.WriteLine(tail);
+                Console.Error.WriteLine();
+                Console.Error.WriteLine($"--- {outcome.Phase} output ---");
+                Console.Error.WriteLine(detail);
             }
+        }
+
+        if (options.ShowLog && !string.IsNullOrWhiteSpace(proc.StdOut))
+        {
+            Console.WriteLine();
+            Console.WriteLine("--- container log ---");
+            Console.WriteLine(proc.StdOut.TrimEnd());
         }
 
         if (cleanup.Leftovers.Count > 0)
@@ -2513,6 +3593,75 @@ internal static class Commands
         }
 
         return (int)exit;
+    }
+
+    // Caps so a suite that fails wholesale stays readable; the counts above remain authoritative and the
+    // full detail is always available in --json.
+    private const int MaxReportedFailures = 15;
+    private const int MaxStackFrames = 10;
+    private const int MaxOutputLines = 15;
+
+    // The detail a developer actually needs to fix a red test: fully-qualified name, which TFM, the
+    // assertion message, the stack, and whatever the test wrote to its output helper.
+    private static void WriteFailureDetail(TestRunResult results)
+    {
+        if (results.Failures.Count == 0)
+        {
+            return;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(results.Failures.Count == 1 ? "1 test failed:" : $"{results.Failures.Count} tests failed:");
+
+        foreach (var f in results.Failures.Take(MaxReportedFailures))
+        {
+            var name = f.ClassName is not null && !f.TestName.StartsWith(f.ClassName, StringComparison.Ordinal)
+                ? $"{f.ClassName}.{f.TestName}"
+                : f.TestName;
+            var where = f.Framework is null ? "" : $" [{f.Framework}]";
+            var took = f.DurationSeconds > 0 ? $" ({(f.DurationSeconds * 1000).ToString("0", CultureInfo.InvariantCulture)} ms)" : "";
+
+            Console.WriteLine();
+            Console.WriteLine($"  Failed {name}{where}{took}");
+            WriteIndented(f.Message, "    ", int.MaxValue);
+
+            if (!string.IsNullOrWhiteSpace(f.StackTrace))
+            {
+                Console.WriteLine("    Stack trace:");
+                WriteIndented(f.StackTrace, "      ", MaxStackFrames);
+            }
+
+            if (!string.IsNullOrWhiteSpace(f.Output))
+            {
+                Console.WriteLine("    Output:");
+                WriteIndented(f.Output, "      ", MaxOutputLines);
+            }
+        }
+
+        if (results.Failures.Count > MaxReportedFailures)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  … and {results.Failures.Count - MaxReportedFailures} more failing test(s); rerun with --json for the full list.");
+        }
+    }
+
+    private static void WriteIndented(string? text, string indent, int maxLines)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        foreach (var line in lines.Take(maxLines))
+        {
+            Console.WriteLine(indent + line.TrimEnd());
+        }
+
+        if (lines.Length > maxLines)
+        {
+            Console.WriteLine($"{indent}… {lines.Length - maxLines} more line(s)");
+        }
     }
 
     private static int Error(Options options, FailureKind kind, string message)
@@ -2554,6 +3703,21 @@ internal static class Commands
         var lines = s.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return string.Join('\n', lines.TakeLast(count));
     }
+
+    // MSBuild/NuGet diagnostics, distilled from the build log so a failure names its cause.
+    private static string ErrorLines(string s, int count)
+    {
+        var lines = s.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => l.Contains(" error ", StringComparison.OrdinalIgnoreCase)
+                || l.Contains(": error", StringComparison.OrdinalIgnoreCase)
+                || l.StartsWith("error", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return string.Join('\n', lines.TakeLast(count));
+    }
+
+    private static string FirstNonEmpty(params string[] candidates) =>
+        candidates.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c)) ?? "";
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -2576,9 +3740,12 @@ internal static class SelfTest
         ReleaseMetadataTests();
         SdkAndImageTagTests();
         EnvironmentSelectionTests();
+        MultiSdkRunnerTests();
         UnsupportedEnvironmentTests();
         TargetFrameworkTests();
         CommandPlanningTests();
+        ImagePreparationTests();
+        SourceStagingTests();
         ResultParsingTests();
         FailureClassificationTests();
         CancellationAndCleanupTests();
@@ -2740,6 +3907,135 @@ internal static class SelfTest
 
         var notFound = EnvironmentResolver.Resolve(config, generated, "does-not-exist");
         Check("unknown name reported as not found", notFound.Status == ResolutionStatus.NotFound);
+
+        // Deterministic tie-break: the repository's own target framework answers the question.
+        var net10 = new TargetFrameworkInfo { TargetFrameworks = ["net10.0"] };
+        var byTfm = EnvironmentResolver.Resolve(null, generated, null, net10);
+        Check("target framework selects the matching channel without asking",
+            byTfm.Status == ResolutionStatus.Resolved && byTfm.Environment!.Name == "dotnet-10-lts");
+        Check("automatic selection explains itself", byTfm.SelectionReason is not null && byTfm.SelectionReason.Contains("net10.0"));
+
+        // A single-SDK image ships one runtime, so a multi-targeted repository must not be silently
+        // pointed at the newest channel — those lower target frameworks would build and then fail to run.
+        var multiTargeted = new TargetFrameworkInfo { TargetFrameworks = ["net8.0", "net9.0", "net10.0"] };
+        Check("multi-targeted repository is not sent to a single-SDK image",
+            EnvironmentResolver.Resolve(null, generated, null, multiTargeted).Status == ResolutionStatus.Ambiguous);
+
+        var runner = GeneratedEnvironments.FromMultiSdkRunner(
+            new MultiSdkRunner { Tag = "8-9-10-11", Majors = [8, 9, 10, 11] });
+        var withRunner = EnvironmentResolver.Resolve(null, [.. generated, runner], null, multiTargeted);
+        Check("multi-targeted repository selects the covering multi-SDK runner",
+            withRunner.Status == ResolutionStatus.Resolved && withRunner.Environment!.Name == "ubuntu-testrunner-8-9-10-11");
+        Check("multi-SDK selection explains the whole-matrix benefit",
+            withRunner.SelectionReason is not null && withRunner.SelectionReason.Contains("single container"));
+
+        Check("single-target repository still prefers the matching single-SDK channel",
+            EnvironmentResolver.Resolve(null, [.. generated, runner], null, net10).Environment!.Name == "dotnet-10-lts");
+
+        var uncovered = new TargetFrameworkInfo { TargetFrameworks = ["net7.0", "net10.0"] };
+        Check("a runner that does not cover every target framework is not selected",
+            EnvironmentResolver.Resolve(null, [.. generated, runner], null, uncovered).Status == ResolutionStatus.Ambiguous);
+
+        var previewOnly = new TargetFrameworkInfo { TargetFrameworks = ["net11.0"] };
+        Check("preview channel is selectable by target framework",
+            EnvironmentResolver.Resolve(null, generated, null, previewOnly).Environment!.Name == "dotnet-11-preview");
+
+        var unsupportedMajor = new TargetFrameworkInfo { TargetFrameworks = ["net7.0"] };
+        Check("target framework with no supported channel still asks",
+            EnvironmentResolver.Resolve(null, generated, null, unsupportedMajor).Status == ResolutionStatus.Ambiguous);
+
+        var noNetTarget = new TargetFrameworkInfo { TargetFrameworks = ["netstandard2.0"] };
+        Check("non-.NET target framework does not guess a channel",
+            EnvironmentResolver.Resolve(null, generated, null, noNetTarget).Status == ResolutionStatus.Ambiguous);
+
+        Check("empty target framework info does not guess a channel",
+            EnvironmentResolver.Resolve(null, generated, null, new TargetFrameworkInfo()).Status == ResolutionStatus.Ambiguous);
+
+        var duplicateMajor = new List<ResolvedEnvironment>(generated)
+        {
+            generated.First(e => e.ChannelMajor == 10) with { Name = "dotnet-10-alt" },
+        };
+        Check("two channels for the same major stay ambiguous",
+            EnvironmentResolver.Resolve(null, duplicateMajor, null, net10).Status == ResolutionStatus.Ambiguous);
+
+        Check("configured environments are never auto-selected by target framework",
+            EnvironmentResolver.Resolve(twoConfig, generated, null, net10).Status == ResolutionStatus.Ambiguous);
+
+        Check("channel major parsed from channel version",
+            generated.First(e => e.Name == "dotnet-10-lts").ChannelMajor == 10);
+        Check("configured environment has no channel major",
+            GeneratedEnvironments.FromConfigured(config.SupportedDockerEnvironments[0]).ChannelMajor == 0);
+    }
+
+    private const string SampleMultiSdkTags = """
+    {
+      "count": 8,
+      "results": [
+        { "name": "11.0.100-preview.7" },
+        { "name": "10" },
+        { "name": "10.0" },
+        { "name": "8-9-10-11" },
+        { "name": "8.0-9.0-10.0-11.0" },
+        { "name": "9-10" },
+        { "name": "8.0.421-9.0.314-10.0.300-11.0.100-preview.4" },
+        { "name": "mono-net8.0.418-9.0.311-10.0.103" }
+      ]
+    }
+    """;
+
+    private static void MultiSdkRunnerTests()
+    {
+        Section("Multi-SDK runner discovery");
+
+        var runners = MultiSdkTagReader.Parse(SampleMultiSdkTags);
+        var tags = runners.Select(r => r.Tag).ToList();
+        Check("combined major tags are discovered", tags.Contains("8-9-10-11") && tags.Contains("9-10"));
+        Check("single-major tags are ignored", !tags.Contains("10") && !tags.Contains("10.0"));
+        Check("channel and pinned combination forms are ignored",
+            !tags.Contains("8.0-9.0-10.0-11.0") && !tags.Contains("8.0.421-9.0.314-10.0.300-11.0.100-preview.4"));
+        Check("prefixed tags are ignored", !tags.Any(t => t.StartsWith("mono", StringComparison.Ordinal)));
+        Check("majors parsed from the tag",
+            runners.Single(r => r.Tag == "8-9-10-11").Majors.SequenceEqual([8, 9, 10, 11]));
+        Check("image reference built from the publisher repository",
+            runners.Single(r => r.Tag == "9-10").Reference == "codebeltnet/ubuntu-testrunner:9-10");
+
+        Check("malformed feed yields no runners", MultiSdkTagReader.Parse("not json").Count == 0);
+        Check("feed without results yields no runners", MultiSdkTagReader.Parse("""{ "count": 0 }""").Count == 0);
+
+        // Tightest fit: cover every required major without dragging in SDKs the repository never asked for.
+        Check("tightest covering tag wins",
+            MultiSdkTagReader.Select(runners, [9, 10])!.Tag == "9-10");
+        Check("wider tag used when the tight one does not cover",
+            MultiSdkTagReader.Select(runners, [8, 10])!.Tag == "8-9-10-11");
+        Check("no covering tag returns null",
+            MultiSdkTagReader.Select(runners, [7, 10]) is null);
+        Check("single major never selects a multi-SDK runner",
+            MultiSdkTagReader.Select(runners, [10]) is null);
+
+        var env = GeneratedEnvironments.FromMultiSdkRunner(runners.Single(r => r.Tag == "8-9-10-11"));
+        Check("runner environment is named after its tag", env.Name == "ubuntu-testrunner-8-9-10-11");
+        Check("runner environment is multi-SDK", env.IsMultiSdk && env.SupportedMajors.SequenceEqual([8, 9, 10, 11]));
+        Check("runner environment carries no single channel", env.Channel is null && env.ChannelMajor == 0);
+
+        // Compatibility is judged on declared majors, because presence is what lets the tests run.
+        var spread = new TargetFrameworkInfo { TargetFrameworks = ["net8.0", "net10.0"] };
+        Check("multi-SDK image is compatible with every provided target",
+            TargetFrameworkInspector.CanBuild(null, spread, env.SupportedMajors).Compatible);
+        Check("multi-SDK image rejects a target it does not provide",
+            !TargetFrameworkInspector.CanBuild(null, new TargetFrameworkInfo { TargetFrameworks = ["net7.0"] }, env.SupportedMajors).Compatible);
+        Check("multi-SDK image still cannot build .NET Framework",
+            !TargetFrameworkInspector.CanBuild(null, new TargetFrameworkInfo { TargetFrameworks = ["net48"] }, env.SupportedMajors).Compatible);
+
+        // The runtime gap that motivates the multi-SDK runner in the first place.
+        var sdk10 = SdkVersion.TryParse("10.0.302");
+        var singleSdkSpread = TargetFrameworkInspector.CanBuild(sdk10, spread);
+        Check("single-SDK image is incompatible with a multi-targeted repository", !singleSdkSpread.Compatible);
+        Check("the incompatibility names the missing runtime and the remedy",
+            singleSdkSpread.Reason is not null
+            && singleSdkSpread.Reason.Contains("net8.0")
+            && singleSdkSpread.Reason.Contains(RemoteTestProgram.MultiSdkRepository));
+        Check("single-SDK image remains compatible with its own single target",
+            TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net10.0"] }).Compatible);
     }
 
     private static void UnsupportedEnvironmentTests()
@@ -2783,7 +4079,11 @@ internal static class SelfTest
         Check("global.json parsed", sdk == "10.0.302" && roll == "latestFeature");
 
         var sdk10 = SdkVersion.TryParse("10.0.302");
-        Check("sdk builds equal/lower target", TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net8.0", "net10.0"] }).Compatible);
+        Check("sdk builds and runs its own target", TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net10.0"] }).Compatible);
+        // A lower target compiles on a newer SDK but has no runtime in that image, so it is not runnable
+        // there. This is why a multi-targeted repository needs a multi-SDK runner.
+        Check("sdk alone cannot run a lower target it can build",
+            !TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net8.0", "net10.0"] }).Compatible);
         Check("sdk cannot build newer target", !TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net11.0"] }).Compatible);
         Check("linux sdk cannot build net framework", !TargetFrameworkInspector.CanBuild(sdk10, new TargetFrameworkInfo { TargetFrameworks = ["net48"] }).Compatible);
         Check("global.json disable pin mismatch is incompatible", !TargetFrameworkInspector.CanBuild(sdk10,
@@ -2813,7 +4113,12 @@ internal static class SelfTest
         Check("entrypoint runs restore/build/test in order",
             entry.IndexOf("run_phase restore", StringComparison.Ordinal) < entry.IndexOf("run_phase build", StringComparison.Ordinal)
             && entry.IndexOf("run_phase build", StringComparison.Ordinal) < entry.IndexOf("run_phase test", StringComparison.Ordinal));
-        Check("entrypoint sets NUGET_PACKAGES to the cache mount", entry.Contains("export NUGET_PACKAGES='/nuget'"));
+        // Trailing slash is required: NuGet's package root becomes an MSBuild SourceRoot and SourceLink
+        // fails the build without it.
+        Check("entrypoint sets NUGET_PACKAGES to the cache mount", entry.Contains("export NUGET_PACKAGES='/nuget/'"));
+        Check("entrypoint keeps cache entries writable across container UIDs", entry.Contains("umask 000"));
+        Check("nuget package root ends with a separator",
+            ContainerPlanner.NuGetPackagesPath("/nuget") == "/nuget/" && ContainerPlanner.NuGetPackagesPath("/nuget/") == "/nuget/");
         Check("entrypoint uses --no-restore/--no-build to reuse phases", entry.Contains("--no-restore") && entry.Contains("--no-build"));
         Check("entrypoint honors configuration/framework/filter/coverage",
             entry.Contains("-c 'Release'") && entry.Contains("--framework 'net10.0'") && entry.Contains("--filter 'Category=Unit'") && entry.Contains("XPlat Code Coverage"));
@@ -2857,6 +4162,136 @@ internal static class SelfTest
         }
     }
 
+    private static void ImagePreparationTests()
+    {
+        Section("Image preparation");
+
+        const string digest = "sha256:990d47a4f925dedf27c875271c8b592e201666536f955befef9147745652f29f";
+        var tag = ImageProvisioner.DerivedTag("codebeltnet/ubuntu-testrunner:8-9-10-11", digest);
+        Check("prepared tag is derived from the base digest", tag == "dotnet-remote-testing/prepared:git-990d47a4f925dedf");
+        Check("prepared tag is stable for the same image", ImageProvisioner.DerivedTag("other:tag", digest) == tag);
+        Check("prepared tag changes with the base image",
+            ImageProvisioner.DerivedTag("x:1", "sha256:abcdef0123456789abcdef") != tag);
+        Check("prepared tag needs no digest", ImageProvisioner.DerivedTag("x:1", null).StartsWith("dotnet-remote-testing/prepared:git-", StringComparison.Ordinal));
+
+        Check("probe asks the image for the tooling", ImageProvisioner.ProbeCommand() == "command -v git >/dev/null 2>&1");
+
+        var dockerfile = ImageProvisioner.Dockerfile("codebeltnet/ubuntu-testrunner:8-9-10-11");
+        Check("provisioning layers onto the resolved base image", dockerfile.StartsWith("FROM codebeltnet/ubuntu-testrunner:8-9-10-11", StringComparison.Ordinal));
+        Check("provisioning installs the required tooling", dockerfile.Contains("install -y --no-install-recommends git"));
+        Check("provisioning adapts to the image's package manager",
+            dockerfile.Contains("command -v apt-get") && dockerfile.Contains("command -v apk") && dockerfile.Contains("command -v microdnf"));
+        Check("provisioning fails loudly on an unknown package manager", dockerfile.Contains("No supported package manager"));
+
+        // Installing needs root, but the prepared image must still run as whoever the base image runs
+        // as; switching the image to root changes file ownership and permission-sensitive results.
+        Check("provisioning does not leave a root-only image as root", !dockerfile.TrimEnd().EndsWith("USER root", StringComparison.Ordinal));
+        var nonRoot = ImageProvisioner.Dockerfile("acme/runner:1", "app");
+        Check("provisioning restores the base image's user", nonRoot.TrimEnd().EndsWith("USER app", StringComparison.Ordinal));
+        Check("provisioning still installs as root", nonRoot.Contains("USER root", StringComparison.Ordinal));
+        Check("provisioning adds no user line when the base image sets none",
+            !ImageProvisioner.Dockerfile("acme/runner:1", "  ").Contains("USER app", StringComparison.Ordinal));
+    }
+
+    private static void SourceStagingTests()
+    {
+        Section("Source staging");
+
+        var root = Path.Combine(Path.GetTempPath(), "rt-stage-" + Guid.NewGuid().ToString("N")[..8]);
+        var source = Path.Combine(root, "repo");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(source, "src"));
+            Directory.CreateDirectory(Path.Combine(source, "bin"));
+            Directory.CreateDirectory(Path.Combine(source, ".git", "refs"));
+            File.WriteAllText(Path.Combine(source, "src", "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(source, "bin", "stale.dll"), "x");
+            File.WriteAllText(Path.Combine(source, ".git", "HEAD"), "ref: refs/heads/main");
+
+            var staged = Path.Combine(root, "staged");
+            var result = SourceStager.StageAsync(source, staged, CancellationToken.None).GetAwaiter().GetResult();
+
+            Check("staging succeeds", result.Error is null && result.StagedPath == staged);
+            Check("sources are staged", File.Exists(Path.Combine(staged, "src", "App.csproj")));
+
+            var index = AssemblyNameIndex.Build(source);
+            Check("project files provide the authoritative assembly casing", index["app.dll"] == "App.dll");
+            Check("host build output is not staged", !Directory.Exists(Path.Combine(staged, "bin")));
+
+            // Without .git the staged workspace stops being a repository: MinVer/Nerdbank fall back to
+            // 0.0.0, SourceLink stops embedding, and any "walk up to the .git directory" repository-root
+            // probe resolves elsewhere — which silently changes what the tests under it observe.
+            Check("git metadata is staged", result.GitMetadataStaged && Directory.Exists(Path.Combine(staged, ".git")));
+            Check("git metadata is staged verbatim",
+                File.ReadAllText(Path.Combine(staged, ".git", "HEAD")) == "ref: refs/heads/main"
+                && Directory.Exists(Path.Combine(staged, ".git", "refs")));
+            Check("git metadata size is reported", result.GitMetadataBytes > 0);
+
+            var without = Path.Combine(root, "staged-no-git");
+            var opted = SourceStager.StageAsync(source, without, CancellationToken.None, includeGitMetadata: false).GetAwaiter().GetResult();
+            Check("git metadata can be opted out", !opted.GitMetadataStaged && !Directory.Exists(Path.Combine(without, ".git")));
+            Check("opting out is explained, not silent", opted.GitMetadataNote is not null);
+
+            // A linked worktree or submodule stores .git as a "gitdir:" pointer file, not a directory.
+            var linked = Path.Combine(root, "linked");
+            Directory.CreateDirectory(linked);
+            File.WriteAllText(Path.Combine(linked, "a.txt"), "a");
+            File.WriteAllText(Path.Combine(linked, ".git"), $"gitdir: {Path.Combine(source, ".git")}");
+            var linkedStaged = Path.Combine(root, "staged-linked");
+            var linkedResult = SourceStager.StageAsync(linked, linkedStaged, CancellationToken.None).GetAwaiter().GetResult();
+            Check("gitdir pointer file is resolved to the real git directory",
+                linkedResult.GitMetadataStaged && File.Exists(Path.Combine(linkedStaged, ".git", "HEAD")));
+
+            // A real linked worktree splits its git directory in two: per-worktree state here, objects
+            // and refs in the shared "commondir". Staging only the near half leaves a git directory git
+            // cannot read, so MinVer/Nerdbank fall back to 0.0.0 and SourceLink stops embedding.
+            var common = Path.Combine(root, "main", ".git");
+            var worktreeGit = Path.Combine(common, "worktrees", "wt");
+            Directory.CreateDirectory(Path.Combine(common, "objects", "pack"));
+            Directory.CreateDirectory(Path.Combine(common, "refs", "heads"));
+            Directory.CreateDirectory(worktreeGit);
+            File.WriteAllText(Path.Combine(common, "HEAD"), "ref: refs/heads/main");
+            File.WriteAllText(Path.Combine(common, "config"), "[core]\n\tbare = false");
+            File.WriteAllText(Path.Combine(common, "objects", "pack", "pack-1.pack"), "objects");
+            File.WriteAllText(Path.Combine(common, "refs", "heads", "main"), "0123456789abcdef");
+            File.WriteAllText(Path.Combine(worktreeGit, "HEAD"), "ref: refs/heads/feature");
+            File.WriteAllText(Path.Combine(worktreeGit, "commondir"), "../..");
+            File.WriteAllText(Path.Combine(worktreeGit, "gitdir"), Path.Combine(root, "wt", ".git"));
+
+            var worktree = Path.Combine(root, "wt");
+            Directory.CreateDirectory(worktree);
+            File.WriteAllText(Path.Combine(worktree, "a.txt"), "a");
+            File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {worktreeGit}");
+
+            var worktreeStaged = Path.Combine(root, "staged-worktree");
+            var worktreeResult = SourceStager.StageAsync(worktree, worktreeStaged, CancellationToken.None).GetAwaiter().GetResult();
+            var stagedGit = Path.Combine(worktreeStaged, ".git");
+
+            Check("worktree staging carries the shared objects and refs",
+                worktreeResult.GitMetadataStaged
+                && File.Exists(Path.Combine(stagedGit, "objects", "pack", "pack-1.pack"))
+                && File.Exists(Path.Combine(stagedGit, "refs", "heads", "main"))
+                && File.Exists(Path.Combine(stagedGit, "config")));
+            Check("worktree staging keeps the worktree's own HEAD",
+                File.ReadAllText(Path.Combine(stagedGit, "HEAD")) == "ref: refs/heads/feature");
+            Check("worktree staging drops pointers to host paths",
+                !File.Exists(Path.Combine(stagedGit, "commondir")) && !File.Exists(Path.Combine(stagedGit, "gitdir")));
+            Check("worktree staging does not register host worktrees", !Directory.Exists(Path.Combine(stagedGit, "worktrees")));
+            Check("worktree staging reports the merged size", worktreeResult.GitMetadataBytes > 0);
+
+            // A repository with no git metadata at all is ordinary, not an error.
+            var plain = Path.Combine(root, "plain");
+            Directory.CreateDirectory(plain);
+            File.WriteAllText(Path.Combine(plain, "a.txt"), "a");
+            var plainResult = SourceStager.StageAsync(plain, Path.Combine(root, "staged-plain"), CancellationToken.None).GetAwaiter().GetResult();
+            Check("a non-git source stages without a note", plainResult.Error is null && !plainResult.GitMetadataStaged && plainResult.GitMetadataNote is null);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch (Exception) { /* temp cleanup is best-effort */ }
+        }
+    }
+
     private static void ResultParsingTests()
     {
         Section("Result parsing");
@@ -2867,12 +4302,12 @@ internal static class SelfTest
           <Results>
             <UnitTestResult testId="id1" testName="StringUtilityTest.Passes" outcome="Passed" duration="00:00:00.1000000" />
             <UnitTestResult testId="id2" testName="Sanitize_WithUnicode_ReturnsExpectedValue" outcome="Failed" duration="00:00:00.2000000">
-              <Output><ErrorInfo><Message>Expected: foo Actual: bar</Message><StackTrace>at StringUtilityTest.cs:line 142</StackTrace></ErrorInfo></Output>
+              <Output><StdOut>probing /workspace/tuning</StdOut><ErrorInfo><Message>Expected: foo Actual: bar</Message><StackTrace>at StringUtilityTest.cs:line 142</StackTrace></ErrorInfo></Output>
             </UnitTestResult>
             <UnitTestResult testId="id3" testName="StringUtilityTest.Skipped" outcome="NotExecuted" />
           </Results>
           <TestDefinitions>
-            <UnitTest id="id2" name="Sanitize"><TestMethod className="Cuemon.Text.Tests.StringUtilityTest, Cuemon.Text.Tests" name="Sanitize" /></UnitTest>
+            <UnitTest id="id2" name="Sanitize" storage="/workspace/test/Cuemon.Text.Tests/bin/Debug/net10.0/Cuemon.Text.Tests.dll"><TestMethod className="Cuemon.Text.Tests.StringUtilityTest, Cuemon.Text.Tests" name="Sanitize" /></UnitTest>
           </TestDefinitions>
           <ResultSummary outcome="Failed"><Counters total="3" executed="2" passed="1" failed="1" notExecuted="1" /></ResultSummary>
         </TestRun>
@@ -2884,9 +4319,41 @@ internal static class SelfTest
         Check("failure detail captured", result.Failures.Count == 1 && result.Failures[0].TestName == "Sanitize_WithUnicode_ReturnsExpectedValue");
         Check("failure class resolved from TestDefinitions", result.Failures[0].ClassName == "Cuemon.Text.Tests.StringUtilityTest");
         Check("failure message captured", result.Failures[0].Message == "Expected: foo Actual: bar");
+        Check("failure stack trace captured", result.Failures[0].StackTrace == "at StringUtilityTest.cs:line 142");
+        Check("test-written output captured", result.Failures[0].Output == "probing /workspace/tuning");
+        Check("failure carries its assembly and framework",
+            result.Failures[0].Assembly == "Cuemon.Text.Tests.dll" && result.Failures[0].Framework == "net10.0");
+
+        Check("per-assembly summary produced",
+            result.Assemblies.Count == 1 && result.Assemblies[0] is { Assembly: "Cuemon.Text.Tests.dll", Framework: "net10.0", Failed: 1 });
+        Check("assembly summary displays framework", result.Assemblies[0].Display == "Cuemon.Text.Tests.dll (net10.0)");
+
+        Check("framework derived from the output path",
+            TrxParser.FrameworkFrom("/w/bin/Debug/net9.0/A.dll") == "net9.0"
+            && TrxParser.FrameworkFrom(@"C:\w\bin\Release\net10.0-windows\A.dll") == "net10.0-windows"
+            && TrxParser.FrameworkFrom("/w/bin/Debug/netstandard2.0/A.dll") == "netstandard2.0");
+        Check("framework absent when the path has none", TrxParser.FrameworkFrom("/w/A.dll") is null);
+        Check("assembly name derived from the storage path", TrxParser.AssemblyNameFrom(@"C:\w\bin\Debug\net10.0\A.Tests.dll") == "A.Tests.dll");
+
+        // VSTest lower-cases the storage path; the developer knows the assembly by its real casing.
+        var known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Acme.Tests.dll"] = "Acme.Tests.dll" };
+        Check("assembly casing recovered from the repository's project files",
+            TrxParser.AssemblyDisplayName("/w/bin/debug/net10.0/acme.tests.dll", null, known) == "Acme.Tests.dll");
+        Check("an unknown assembly keeps the name the TRX recorded",
+            TrxParser.AssemblyDisplayName("/w/bin/debug/net10.0/other.tests.dll", null, known) == "other.tests.dll");
+        Check("assembly casing recovered from the class name",
+            TrxParser.AssemblyDisplayName("/w/bin/debug/net10.0/acme.tests.dll", "Acme.Tests") == "Acme.Tests.dll");
+        Check("a qualified display name is reduced to its simple name",
+            TrxParser.AssemblyDisplayName("/w/bin/debug/net10.0/acme.tests.dll", "Acme.Tests, Version=1.0.0.0, Culture=neutral") == "Acme.Tests.dll");
+        Check("a class name from another assembly never overrides storage",
+            TrxParser.AssemblyDisplayName("/w/bin/Debug/net10.0/Acme.Tests.dll", "Shared.Fixtures") == "Acme.Tests.dll");
+        Check("class name alone still names the assembly",
+            TrxParser.AssemblyDisplayName(null, "Acme.Tests") == "Acme.Tests.dll");
+        Check("neither source yields no assembly name", TrxParser.AssemblyDisplayName(null, null) is null);
 
         var merged = result.Merge(TrxParser.Parse(trx));
         Check("multiple trx files aggregate", merged is { Total: 6, Failed: 2, TrxFilesParsed: 2 });
+        Check("assembly summaries aggregate too", merged.Assemblies.Count == 2);
     }
 
     private static void FailureClassificationTests()
@@ -2914,6 +4381,15 @@ internal static class SelfTest
 
         var markers = FailureClassifier.ParsePhaseMarkers("noise\n##RT_PHASE_END:restore:0##\nmore\n##RT_PHASE_END:build:2##\n");
         Check("phase markers parsed from output", markers["restore"] == 0 && markers["build"] == 2);
+
+        // Reporting the failing phase's own log — not a tail of everything — is what makes a build
+        // failure name the offending file instead of trailing test-runner chatter.
+        const string log = "restoring\n##RT_PHASE_END:restore:0##\nApp.cs(3,5): error CS1002: ; expected\n##RT_PHASE_END:build:1##\ntest chatter\n";
+        Check("phase log isolates restore", FailureClassifier.PhaseOutput(log, "restore") == "restoring");
+        Check("phase log isolates build", FailureClassifier.PhaseOutput(log, "build") == "App.cs(3,5): error CS1002: ; expected");
+        Check("an incomplete phase yields everything after the last marker",
+            FailureClassifier.PhaseOutput(log, "test") == "test chatter");
+        Check("phase log is empty when there is no output", FailureClassifier.PhaseOutput("", "build") == "");
     }
 
     private static void CancellationAndCleanupTests()

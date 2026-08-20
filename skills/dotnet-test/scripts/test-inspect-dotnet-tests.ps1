@@ -152,6 +152,21 @@ using Codebelt.Extensions.Xunit.Hosting; public class ConsoleTest : ApplicationT
     $sharedApplicationReport = $sharedApplicationJson | ConvertFrom-Json
     if ($sharedApplicationReport.projects[0].sharedApplicationTestUsages.Count -ne 1) { throw 'Expected one shared ApplicationTest usage.' }
 
+    Write-File -Path (Join-Path $workspace 'Directory.Packages.props') -Content @'
+<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include="xunit.v3" Version="3.2.2" /><PackageVersion Include="Codebelt.Extensions.Xunit.App" Version="11.0.10" /></ItemGroup></Project>
+'@
+    Write-File -Path (Join-Path $workspace 'test/App.FunctionalTests/App.FunctionalTests.csproj') -Content @'
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><IsTestProject>true</IsTestProject></PropertyGroup><ItemGroup><PackageReference Include="xunit.v3" /><PackageReference Include="Codebelt.Extensions.Xunit.App" /><ProjectReference Include="../../app/App.csproj" /></ItemGroup></Project>
+'@
+    $belowFloorReport = & pwsh -NoProfile -File $scriptPath -RepoRoot $workspace -ProjectPath 'test/App.FunctionalTests/App.FunctionalTests.csproj' | ConvertFrom-Json
+    if (@($belowFloorReport.projects[0].recommendations | Where-Object { $_ -match 'Raise Codebelt\.Extensions\.Xunit\.App from 11\.0\.10 to at least 11\.1\.0' }).Count -ne 1) { throw 'Expected a managed-fixture version-floor recommendation for a below-floor Codebelt package.' }
+
+    Write-File -Path (Join-Path $workspace 'Directory.Packages.props') -Content @'
+<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include="xunit.v3" Version="3.2.2" /><PackageVersion Include="Codebelt.Extensions.Xunit.App" Version="11.2.1" /></ItemGroup></Project>
+'@
+    $atFloorReport = & pwsh -NoProfile -File $scriptPath -RepoRoot $workspace -ProjectPath 'test/App.FunctionalTests/App.FunctionalTests.csproj' | ConvertFrom-Json
+    if (@($atFloorReport.projects[0].recommendations | Where-Object { $_ -match 'version-floor|to at least 11\.1\.0' }).Count -ne 0) { throw 'Did not expect a version-floor recommendation for a package at or above the managed-fixture floor.' }
+
     Write-Host 'inspect-dotnet-tests.ps1 regression: PASS'
 } finally {
     if (Test-Path -LiteralPath $workspace) { Remove-Item -LiteralPath $workspace -Recurse -Force }

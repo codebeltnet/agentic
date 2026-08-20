@@ -82,34 +82,37 @@ Evals let you verify the skill works and measure improvement over a baseline. Ev
 }
 ```
 
-`files` is optional. When present, list one or more fixture files relative to `skills/<name>/`. A common pattern is to store those fixtures under `evals/files/` so benchmark runners can copy or attach the same source inputs for both `with_skill` and `without_skill` runs.
+`files` is optional. When present, list one or more fixture files relative to `skills/<name>/`. A common pattern is to store those fixtures under `evals/files/` so the eval package can attach the same source inputs to both the `with_skill` and `without_skill` prompt.
 
 Aim for 3–5 evals that cover distinct scenarios: happy path, edge cases, and cases where the skill should *not* do something.
 
-Run evals from a temp workspace, not from this repository:
+Evals are prepared, not executed, from this repository. Adding or modifying a repo-managed skill requires preparing the packages for every skill the branch touched, which is a completion gate rather than an optional extra:
 
-```powershell
-$workspace = Join-Path $env:TEMP '<skill-name>-workspace'
+```console
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
 ```
 
-When creating or modifying a repo-managed skill, the eval workflow must include a paired comparison:
+Run it after the last skill edit and before `scripts/sync-skill-install.ps1`, which stays last. For a single skill on demand, use:
 
-- Resolve the installed Anthropic `skill-creator` path first, usually under `~/.agents/skills/skill-creator/` or `~/.claude/skills/skill-creator/`, then run its benchmark scripts from there
-- Run each eval as `with_skill`
-- Run the baseline as `without_skill` for new skills
-- For an existing skill, use either `without_skill` or the previous/original skill version as the baseline, following the `skill-creator` benchmark model
-- Aggregate the results into `benchmark.json`
-- Launch `eval-viewer/generate_review.py` from that installed `skill-creator` copy so a human can review both `Outputs` and `Benchmark`
-
-The preferred local entry point is the repo-owned runner:
-
-```powershell
-pwsh -NoProfile -File .\scripts\run-skill-benchmark.ps1 -SkillPath .\skills\<skill-name> -CompareWithLegacy
+```console
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>
 ```
 
-That runner keeps one temp workspace, stages shared fixtures once, shares a benchmark-scoped cache, prewarms expensive resolver work where available, enforces bounded parallelism plus per-run timeouts, and still delegates aggregation and static review generation to the installed Anthropic `skill-creator` copy.
+The script writes `.bot/<skill-name>-workspace/iteration-<n>/` with one directory per eval. Each holds the grading key `eval-metadata.json` and result stubs under `results/` at the eval-case level, plus two hermetic run directories, `with_skill/` and `without_skill/`. A run directory is the worker's sandbox root: `prompt.md`, a `run.json` contract, a `repo/` working tree materialized from the fixtures, an isolated `home/`, and - for `with_skill` only - a `skill/<name>/` copy of the candidate. The grading key and results sit outside both run directories. At the root it writes `manifest.json`, the package report adapter, the exact Anthropic skill-creator grader/aggregator/viewer assets, and `RUN-THIS.prompt.md`, the one prompt you hand to the agent of your choice. That agent starts immediately, creates one isolated worker for every run, launches it from its run directory with `repo/` as the working directory and `home/` as an isolated profile, gives each worker only its `prompt.md` and staged files, writes the results back, grades after collection using the packaged grader guidance, and runs the adapter, which invokes `aggregate_benchmark.py` and `eval-viewer/generate_review.py --static`. It never runs an eval prompt in the coordinator context and never reuses a worker. Both worker prompts carry the same task, materialized repository, and response contract; only the operating instructions and the presence of `skill/` differ, and neither prompt identifies itself as an eval. `.gitignore` covers `.bot/*`, so nothing there reaches git. The script refuses an `-OutputRoot` inside the repository but outside `.bot/`; pass an explicit temp path when the harness does not need repository-local storage.
 
-This repo treats that paired `with_skill` / `without_skill` comparison as part of the required devex for skill work. The benchmark artifacts live in the temp workspace; do not commit them to this repository unless the change explicitly calls for checked-in examples.
+Repository scripts, CI jobs, and the agent that prepares a package never run those prompts. That boundary is the Priority 1 rule in `AGENTS.md`, and preparing a prompt is not permission to execute one. A user-selected harness handed a specific package is the executor, not the preparer; its current context orchestrates fresh workers while the workers run the prompt files.
+
+Run both configurations on the same model, same version, and same configuration. A with-skill run on one model against a baseline on another measures the model as much as the skill and is not a skill-effectiveness result.
+
+Record each external result in the matching `results/*.result.json`: `model`, `provider`, `harness`, and the complete `output`; include `transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, and `tool_calls` when the harness exposes them, and the `isolation` flags the harness confirmed. Assertions about tool, shell, or file behavior are only gradeable from a run that captured that evidence. The normal external evaluator writes `grading[].passed` and evidence, then generates the report before handing the package back. If the results were transferred without those report artifacts, validate and compare with:
+
+```console
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>
+```
+
+That writes `comparison.md`, the first-party side-by-side `report.html`, the exact upstream `skill-creator-report.html`, and the upstream `benchmark.json`/`benchmark.md`, while flagging missing arms, unrun configurations, and mixed models. The normal external evaluator grades in the same handoff using deterministic checks for mechanical assertions and evidence-backed judgement where an assertion is genuinely qualitative. Repository automation remains deterministic and never invokes a model.
+
+The eval package is a temp artifact. Do not commit it, its prompts, or its results unless the change explicitly calls for checked-in examples.
 
 For scaffold/template skills, keep deterministic validators alongside evals. In this repo, `evals/evals.json` is mandatory, and validators like `scripts/validate-skill-templates.ps1` are additional protection.
 
@@ -144,10 +147,10 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD
 - [ ] At least one eval in `evals/evals.json`
 - [ ] The skill's `evals/evals.json` exists and its `skill_name` matches the folder/frontmatter name
 - [ ] Any optional `files` entries in `evals/evals.json` point to real fixture files under the same skill folder
-- [ ] Skill changes were benchmarked from a temp workspace with both `with_skill` and `without_skill` runs
-- [ ] `benchmark.json` and `eval-viewer/generate_review.py` from the installed Anthropic `skill-creator` copy were used so a human could compare `Outputs` and `Benchmark`
+- [ ] `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` was run after the last skill edit, and the prepared prompt paths were reported
+- [ ] If an external evaluation was run, each result includes the producing model and the package contains the first-party `report.html`, exact upstream `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`; use `-CollectResults` only when transferred results need the repository-side fallback
 - [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior
 - [ ] If CI is enabled for the branch, the GitHub Actions validation job passes too
-- [ ] Skill evals are intended to run from `$env:TEMP/<skill-name>-workspace/`, not from inside the repo
+- [ ] Eval packages live in `.bot/<skill-name>-workspace/` or a temp path, never anywhere else in the working tree
 - [ ] Changed skill files are synced across `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/`
 - [ ] Skill added to the table in `README.md`

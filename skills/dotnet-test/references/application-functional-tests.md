@@ -31,7 +31,7 @@ Pass `ManagedApplicationFixture<Program>` explicitly for focused tests and use i
 
 A repeated focused setup may be encapsulated in a narrow `Test`-derived harness. It must accept `ITestOutputHelper`, retain the `IHostTest`, and dispose that host test plus every owned resource in both the synchronous and asynchronous `Test` disposal hooks.
 
-After migration, run `inspect-dotnet-tests.ps1` with `-ExpectedApplicationPattern Focused` or `-ExpectedApplicationPattern Shared`. A non-zero exit is a migration failure even when restore, build, and tests pass.
+After migration, run `verify-dotnet-test-migration.ps1` for the selected project with `-ExpectedApplicationPattern Focused` or `-ExpectedApplicationPattern Shared`. A `FAILED` verdict is a migration failure even when restore, build, and tests all pass, because green tests only prove the host that ran still works, not that it is the one you were asked to move to.
 
 ## Host seam gate
 

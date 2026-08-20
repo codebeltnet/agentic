@@ -1155,9 +1155,10 @@ internal static class ComposeFileSelector
 
         // Nothing names the selected project. A file that names a different web project is that
         // project's topology; a lone remaining file in a sanctioned location is unattributed and
-        // safe to use when the project directory could not appear in it at all.
+        // safe to use only when there is no other web project it could instead belong to — with
+        // siblings in the repository, a file naming none of them is opaque, not "obviously ours".
         var unattributed = candidates.Where(candidate => !NamesAnotherProject(candidate.Text)).ToList();
-        if (selectedDirectory.Length > 0 && unattributed.Count == 1)
+        if (selectedDirectory.Length > 0 && otherDirectories.Count == 0 && unattributed.Count == 1)
             return new Selection(unattributed[0].Path, false);
 
         return new Selection(null, true);
@@ -2764,6 +2765,23 @@ internal static class SelfTest
             "services:\n  app-assets:\n    image: codebeltnet/web-cdn-origin:2.0.0\n    volumes:\n      - /elsewhere:/cdnroot:ro\n");
         Assert("compose-select: sole unattributed candidate is used",
             ComposeFileSelector.Select(opaque, Path.Combine(opaqueWeb, "Web.csproj"), new[] { "app/Web.csproj" }).ComposeFile is not null);
+
+        // Regression: in a multi-project repo, a root-level file naming none of the web projects is
+        // opaque, not "obviously ours" — it must not be silently attributed to whichever project asks.
+        var opaqueMulti = Path.Combine(root, "compose-opaque-multi");
+        var opaqueSite = Path.Combine(opaqueMulti, "src", "Acme.Site");
+        var opaqueApi = Path.Combine(opaqueMulti, "src", "Acme.Api");
+        Directory.CreateDirectory(opaqueSite);
+        Directory.CreateDirectory(opaqueApi);
+        File.WriteAllText(Path.Combine(opaqueSite, "Acme.Site.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(opaqueApi, "Acme.Api.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk.Web\" />");
+        File.WriteAllText(Path.Combine(opaqueMulti, SegregateAssetsProgram.ComposeFileName),
+            "services:\n  app-assets:\n    image: codebeltnet/web-cdn-origin:2.0.0\n    volumes:\n      - /elsewhere:/cdnroot:ro\n");
+        var opaqueMultiProjects = new[] { "src/Acme.Site/Acme.Site.csproj", "src/Acme.Api/Acme.Api.csproj" };
+        Assert("compose-select: opaque root file is not attributed to a sibling project",
+            ComposeFileSelector.Select(opaqueMulti, Path.Combine(opaqueSite, "Acme.Site.csproj"), opaqueMultiProjects).ComposeFile is null);
+        Assert("compose-select: opaque root file in a multi-project repo is reported, not silently absent",
+            ComposeFileSelector.Select(opaqueMulti, Path.Combine(opaqueSite, "Acme.Site.csproj"), opaqueMultiProjects).BelongsToAnotherProject);
 
         // Segment-boundary safety: Acme.Api must not match Acme.ApiGateway.
         var prefix = Path.Combine(root, "compose-prefix");

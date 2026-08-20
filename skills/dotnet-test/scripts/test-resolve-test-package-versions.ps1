@@ -10,6 +10,7 @@ $packageBaseAddress = 'https://mock.nuget/flatcontainer/'
 
 function Reset-ResolverMock {
     $global:DotnetTestResolverVersions = @{}
+    $global:DotnetTestResolverNuspecs = @{}
     $global:DotnetTestResolverRestoreRequests = [System.Collections.Generic.List[object]]::new()
     $global:DotnetTestResolverHttpRequests = [System.Collections.Generic.List[string]]::new()
     $global:DotnetTestResolverFailureMode = 'Success'
@@ -31,6 +32,27 @@ function Set-TestPackageVersions {
     $global:DotnetTestResolverVersions[$Id.ToLowerInvariant()] = @($Versions)
 }
 
+function Set-TestPackageNuspec {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Id,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Version,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Dependencies
+    )
+
+    $entries = (@($Dependencies.GetEnumerator() | Sort-Object Key) | ForEach-Object {
+        '<dependency id="{0}" version="{1}" exclude="Build,Analyzers" />' -f $_.Key, $_.Value
+    }) -join ''
+    # Real nuspecs repeat the same dependency once per target-framework group, so the mock does too.
+    $groups = (@('net10.0', 'net9.0') | ForEach-Object { '<group targetFramework="{0}">{1}</group>' -f $_, $entries }) -join ''
+    $xml = '<?xml version="1.0" encoding="utf-8"?><package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>{0}</id><version>{1}</version><dependencies>{2}</dependencies></metadata></package>' -f $Id, $Version, $groups
+    $global:DotnetTestResolverNuspecs[('{0}/{1}' -f $Id.ToLowerInvariant(), $Version.ToLowerInvariant())] = $xml
+}
+
 function Invoke-RestMethod {
     param([Parameter(Mandatory = $true)][string]$Uri)
 
@@ -47,6 +69,15 @@ function Invoke-RestMethod {
 
     if ($Uri.StartsWith($packageBaseAddress, [System.StringComparison]::Ordinal)) {
         $segments = $Uri.TrimEnd('/') -split '/'
+        if ($Uri.EndsWith('.nuspec', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $nuspecKey = '{0}/{1}' -f $segments[$segments.Count - 3], $segments[$segments.Count - 2]
+            if (-not $global:DotnetTestResolverNuspecs.ContainsKey($nuspecKey)) {
+                throw "Unexpected nuspec lookup: $Uri"
+            }
+
+            return [xml]$global:DotnetTestResolverNuspecs[$nuspecKey]
+        }
+
         $id = $segments[$segments.Count - 2]
         if (-not $global:DotnetTestResolverVersions.ContainsKey($id)) {
             throw "Unexpected package lookup: $Uri"
@@ -108,6 +139,8 @@ function Invoke-TestResolver {
 
         [string]$CacheDirectory,
 
+        [string]$XunitAnchorVersion,
+
         [switch]$UseDefaultCandidateLimit
     )
 
@@ -120,6 +153,8 @@ function Invoke-TestResolver {
             } else {
                 $output = @(& $resolver -TargetFramework net10.0 -Role Unit -PackageId $PackageId -CacheDirectory $CacheDirectory 2>&1)
             }
+        } elseif (-not [string]::IsNullOrWhiteSpace($XunitAnchorVersion)) {
+            $output = @(& $resolver -TargetFramework net10.0 -Role Unit -PackageId $PackageId -MaximumCandidates $MaximumCandidates -XunitAnchorVersion $XunitAnchorVersion 2>&1)
         } elseif ([string]::IsNullOrWhiteSpace($CacheDirectory)) {
             $output = @(& $resolver -TargetFramework net10.0 -Role Unit -PackageId $PackageId -MaximumCandidates $MaximumCandidates 2>&1)
         } else {
@@ -291,10 +326,61 @@ try {
         Remove-Item Env:DOTNET_TEST_MAXIMUM_CANDIDATES -ErrorAction SilentlyContinue
     }
 
+    # xUnit shipped stable 4.0.0 packages while Codebelt.Extensions.Xunit still declared 3.2.2, so "newest stable"
+    # silently jumped the test project a whole xUnit generation past the Codebelt API it targets.
+    Reset-ResolverMock
+    Set-TestPackageVersions -Id 'Codebelt.Extensions.Xunit' -Versions @('11.2.1', '11.1.0')
+    Set-TestPackageNuspec -Id 'Codebelt.Extensions.Xunit' -Version '11.2.1' -Dependencies @{ 'xunit.v3.assert' = '3.2.2'; 'xunit.v3.extensibility.core' = '3.2.2' }
+    Set-TestPackageVersions -Id 'xunit.v3.assert' -Versions @('4.0.0', '3.3.0', '3.2.2')
+    Set-TestPackageVersions -Id 'xunit.v3' -Versions @('4.0.0', '3.3.0', '3.2.2')
+    $anchored = Invoke-TestResolver -PackageId @('Codebelt.Extensions.Xunit', 'xunit.v3', 'xunit.v3.assert') -MaximumCandidates 1
+    $anchoredResult = Get-ResolverJsonObject -Text $anchored.text
+    $anchoredPackages = @($anchoredResult.packages)
+    Assert-Equal -Actual $anchored.exitCode -Expected 0 -Because 'anchored resolution should succeed'
+    Assert-Equal -Actual $anchoredResult.xunitAnchor.packageId -Expected 'Codebelt.Extensions.Xunit' -Because 'the unit role must anchor to the Codebelt xUnit package'
+    Assert-Equal -Actual $anchoredResult.xunitAnchor.major -Expected 3 -Because 'the xUnit ceiling must come from the Codebelt package dependency major'
+    Assert-Equal -Actual (($anchoredPackages | Where-Object packageId -eq 'xunit.v3.assert').version) -Expected '3.2.2' -Because 'an id the anchor declares must match it 1:1 even when a newer same-major version exists'
+    Assert-ContainsText -Text (($anchoredPackages | Where-Object packageId -eq 'xunit.v3.assert').constraint) -Expected 'matched 1:1' -Because 'the output must report the 1:1 anchor match'
+    Assert-Equal -Actual (($anchoredPackages | Where-Object packageId -eq 'xunit.v3').version) -Expected '3.3.0' -Because 'an id the anchor does not declare may take the newest minor or patch below the anchored major'
+    Assert-Equal -Actual (($anchoredPackages | Where-Object packageId -eq 'Codebelt.Extensions.Xunit').version) -Expected '11.2.1' -Because 'the anchor package itself stays unconstrained'
+    Assert-True -Condition (@($global:DotnetTestResolverRestoreRequests | Where-Object { @($_.references | Where-Object { $_.version -eq '4.0.0' }).Count -gt 0 }).Count -eq 0) -Because 'no candidate above the anchored major may reach a restore'
+
+    # Anchoring has to precede the candidate trim, otherwise a package whose newest versions are all above the ceiling
+    # arrives at resolution with nothing left to try.
+    Reset-ResolverMock
+    Set-TestPackageVersions -Id 'Codebelt.Extensions.Xunit' -Versions @('11.2.1')
+    Set-TestPackageNuspec -Id 'Codebelt.Extensions.Xunit' -Version '11.2.1' -Dependencies @{ 'xunit.v3.assert' = '3.2.2' }
+    Set-TestPackageVersions -Id 'xunit.v3' -Versions @('4.0.1', '4.0.0', '3.2.2')
+    $trimmed = Invoke-TestResolver -PackageId @('Codebelt.Extensions.Xunit', 'xunit.v3') -MaximumCandidates 2
+    $trimmedResult = Get-ResolverJsonObject -Text $trimmed.text
+    Assert-Equal -Actual $trimmed.exitCode -Expected 0 -Because 'the candidate limit must apply after the anchored ceiling'
+    Assert-Equal -Actual ((@($trimmedResult.packages) | Where-Object packageId -eq 'xunit.v3').version) -Expected '3.2.2' -Because 'the newest candidate below the anchored major must survive the candidate trim'
+
+    Reset-ResolverMock
+    Set-TestPackageVersions -Id 'Codebelt.Extensions.Xunit' -Versions @('11.2.1')
+    Set-TestPackageNuspec -Id 'Codebelt.Extensions.Xunit' -Version '11.2.1' -Dependencies @{ 'xunit.v3.assert' = '3.2.2' }
+    Set-TestPackageVersions -Id 'xunit.runner.visualstudio' -Versions @('4.0.0')
+    $ceiling = Invoke-TestResolver -PackageId @('Codebelt.Extensions.Xunit', 'xunit.runner.visualstudio') -MaximumCandidates 2
+    Assert-True -Condition ($ceiling.exitCode -ne 0) -Because 'an xunit package with no version below the anchored major must fail closed'
+    Assert-ContainsText -Text $ceiling.text -Expected 'at or below major 3' -Because 'the ceiling failure must name the anchored major'
+
+    # A repository that deliberately pins an older Codebelt xUnit must resolve the xUnit generation that release declared.
+    Reset-ResolverMock
+    Set-TestPackageVersions -Id 'Codebelt.Extensions.Xunit' -Versions @('12.0.0', '11.2.1')
+    Set-TestPackageNuspec -Id 'Codebelt.Extensions.Xunit' -Version '12.0.0' -Dependencies @{ 'xunit.v3.assert' = '4.0.0' }
+    Set-TestPackageNuspec -Id 'Codebelt.Extensions.Xunit' -Version '11.2.1' -Dependencies @{ 'xunit.v3.assert' = '3.2.2' }
+    Set-TestPackageVersions -Id 'xunit.v3' -Versions @('4.0.0', '3.2.2')
+    $pinned = Invoke-TestResolver -PackageId @('xunit.v3') -MaximumCandidates 1 -XunitAnchorVersion '11.2.1'
+    $pinnedResult = Get-ResolverJsonObject -Text $pinned.text
+    Assert-Equal -Actual $pinned.exitCode -Expected 0 -Because 'an explicit anchor version should resolve'
+    Assert-Equal -Actual $pinnedResult.xunitAnchor.version -Expected '11.2.1' -Because 'the explicit anchor version must be honored over the newest anchor release'
+    Assert-Equal -Actual ((@($pinnedResult.packages) | Where-Object packageId -eq 'xunit.v3').version) -Expected '3.2.2' -Because 'the ceiling must follow the pinned anchor release rather than the newest one'
+
     Write-Output 'resolve-test-package-versions.ps1 regression: PASS'
 } finally {
     foreach ($name in @(
         'DotnetTestResolverVersions',
+        'DotnetTestResolverNuspecs',
         'DotnetTestResolverRestoreRequests',
         'DotnetTestResolverHttpRequests',
         'DotnetTestResolverFailureMode',

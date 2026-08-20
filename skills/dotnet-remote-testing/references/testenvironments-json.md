@@ -44,7 +44,7 @@ Following Microsoft's rule, a `docker` environment must specify **either** `dock
 
 ### Configured images are deliberate
 
-An explicit `dockerImage` in `testenvironments.json` is exempt from the Microsoft-only restriction that governs auto-generated environments, because it represents intentional repository configuration. The runner uses it as written (after pulling and resolving its digest). Auto-generated environments, by contrast, always use `mcr.microsoft.com/dotnet/sdk`.
+An explicit `dockerImage` in `testenvironments.json` is intentional repository configuration, so the runner uses it as written (after pulling and resolving its digest) whatever its publisher. Auto-generated environments come from the two recommended publishers instead: `mcr.microsoft.com/dotnet/sdk` for a single .NET major, and `codebeltnet/ubuntu-testrunner` when the repository multi-targets several majors and needs all their runtimes in one image.
 
 ### Configured Dockerfiles are honored, never created
 

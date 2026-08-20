@@ -8,6 +8,10 @@ param(
 
     [string[]]$PackageId,
 
+    [string]$XunitAnchorPackageId,
+
+    [string]$XunitAnchorVersion,
+
     [int]$MaximumCandidates,
 
     [string]$CacheDirectory = $env:DOTNET_TEST_RESOLVER_CACHE_DIR,
@@ -37,12 +41,20 @@ if ($MaximumCandidates -lt 1 -or $MaximumCandidates -gt 100) {
     throw "MaximumCandidates must be between 1 and 100. Found '$MaximumCandidates'."
 }
 
+# xUnit versions its packages independently of this skill: xunit.v3 4.0.0 and xunit.runner.visualstudio 4.0.0 are stable
+# on NuGet while Codebelt.Extensions.Xunit still builds against 3.2.2. "Newest stable" would therefore drag a test project
+# a whole xUnit generation past the Codebelt API it is meant to use, so every id matching this pattern is anchored to the
+# Codebelt package instead of resolved freely.
+$xunitPackagePattern = '^xunit(\.|$)'
+$stableVersionPattern = '^\d+(?:\.\d+){1,3}$'
+
 function Get-ResolverCacheKey {
     param(
         [Parameter(Mandatory = $true)] [string]$RoleName,
         [Parameter(Mandatory = $true)] [string[]]$Frameworks,
         [Parameter(Mandatory = $true)] [string[]]$Packages,
-        [Parameter(Mandatory = $true)] [int]$CandidateLimit
+        [Parameter(Mandatory = $true)] [int]$CandidateLimit,
+        [string]$Anchor
     )
 
     $seed = [ordered]@{
@@ -50,6 +62,7 @@ function Get-ResolverCacheKey {
         targetFrameworks = @($Frameworks | Sort-Object)
         packageIds = @($Packages | Sort-Object)
         maximumCandidates = $CandidateLimit
+        xunitAnchor = [string]$Anchor
     } | ConvertTo-Json -Compress
     return [System.BitConverter]::ToString(([System.Security.Cryptography.SHA256]::HashData($utf8NoBom.GetBytes($seed)))).Replace('-', '').ToLowerInvariant()
 }
@@ -62,7 +75,8 @@ function Write-ResolverTrace {
         [string[]]$Packages,
         [int]$CandidateLimit,
         [bool]$CacheHit,
-        [double]$DurationSeconds
+        [double]$DurationSeconds,
+        [string]$Anchor
     )
 
     if ([string]::IsNullOrWhiteSpace($TraceFilePath)) { return }
@@ -76,6 +90,7 @@ function Write-ResolverTrace {
         targetFrameworks = @($Frameworks)
         packageIds = @($Packages)
         maximumCandidates = $CandidateLimit
+        xunitAnchor = [string]$Anchor
         cacheHit = $CacheHit
         durationSeconds = [math]::Round($DurationSeconds, 3)
         timestamp = [DateTimeOffset]::UtcNow.ToString('O')
@@ -92,6 +107,117 @@ function Get-VersionKey {
         revision = if ($parts.Count -gt 3) { [int]$parts[3] } else { 0 }
         text = $Version
     }
+}
+
+function Compare-VersionText {
+    param([string]$Left, [string]$Right)
+
+    $leftKey = Get-VersionKey -Version $Left
+    $rightKey = Get-VersionKey -Version $Right
+    foreach ($part in @('major', 'minor', 'patch', 'revision')) {
+        $leftPart = [int]$leftKey.$part
+        $rightPart = [int]$rightKey.$part
+        if ($leftPart -ne $rightPart) { return $leftPart.CompareTo($rightPart) }
+    }
+    return 0
+}
+
+function Get-PackageBaseAddress {
+    $serviceIndex = Invoke-RestMethod -Uri 'https://api.nuget.org/v3/index.json'
+    $address = $serviceIndex.resources |
+        Where-Object { $_.'@type' -eq 'PackageBaseAddress/3.0.0' } |
+        Select-Object -First 1 -ExpandProperty '@id'
+    if ([string]::IsNullOrWhiteSpace($address)) { throw 'NuGet service index did not expose PackageBaseAddress/3.0.0.' }
+    return $address
+}
+
+function Get-StableVersion {
+    param([string]$BaseAddress, [string]$PackageId)
+
+    $indexUrl = '{0}{1}/index.json' -f $BaseAddress, $PackageId.ToLowerInvariant()
+    try { $index = Invoke-RestMethod -Uri $indexUrl } catch { throw "NuGet lookup failed for '$PackageId' at '$indexUrl': $($_.Exception.Message)" }
+    $versions = @($index.versions |
+        Where-Object { $_ -match $stableVersionPattern } |
+        ForEach-Object { Get-VersionKey -Version $_ } |
+        Sort-Object major, minor, patch, revision -Descending)
+    return [pscustomobject]@{ source = $indexUrl; versions = $versions }
+}
+
+function Resolve-XunitAnchor {
+    param([string]$BaseAddress, [string]$PackageId, [string]$Version)
+
+    $anchorVersion = $Version
+    if ([string]::IsNullOrWhiteSpace($anchorVersion)) {
+        $index = Get-StableVersion -BaseAddress $BaseAddress -PackageId $PackageId
+        if (@($index.versions).Count -eq 0) { throw "NuGet returned no stable versions for the xUnit anchor package '$PackageId'." }
+        $anchorVersion = @($index.versions)[0].text
+    }
+    if ($anchorVersion -notmatch $stableVersionPattern) {
+        throw "XunitAnchorVersion must be a stable version such as '11.2.1'. Found '$anchorVersion'."
+    }
+
+    $nuspecUrl = '{0}{1}/{2}/{1}.nuspec' -f $BaseAddress, $PackageId.ToLowerInvariant(), $anchorVersion.ToLowerInvariant()
+    try { $nuspec = Invoke-RestMethod -Uri $nuspecUrl } catch { throw "NuGet nuspec lookup failed for '$PackageId' $anchorVersion at '$nuspecUrl': $($_.Exception.Message)" }
+
+    $pins = [ordered]@{}
+    foreach ($node in @($nuspec.GetElementsByTagName('dependency'))) {
+        $dependencyId = [string]$node.GetAttribute('id')
+        if ($dependencyId -notmatch $xunitPackagePattern) { continue }
+        $declared = (([string]$node.GetAttribute('version')).Trim('[', ']', '(', ')', ' ') -split ',')[0].Trim()
+        if ($declared -notmatch $stableVersionPattern) { continue }
+        $key = $dependencyId.ToLowerInvariant()
+        if ($pins.Contains($key) -and (Compare-VersionText -Left ([string]$pins[$key]) -Right $declared) -ge 0) { continue }
+        $pins[$key] = $declared
+    }
+    if ($pins.Count -eq 0) {
+        throw "'$PackageId' $anchorVersion declares no stable xunit* dependency, so the xUnit ceiling cannot be anchored to it. Pass -XunitAnchorPackageId with a Codebelt xUnit package that does."
+    }
+
+    $major = @(@($pins.Values) | ForEach-Object { [int]((Get-VersionKey -Version ([string]$_)).major) } | Sort-Object -Descending)[0]
+    return [pscustomobject]@{
+        packageId = $PackageId
+        version = $anchorVersion
+        major = $major
+        source = $nuspecUrl
+        pins = $pins
+    }
+}
+
+function Select-AnchoredCandidate {
+    param([string]$PackageId, [object[]]$Candidates, [object]$Anchor)
+
+    if ($null -eq $Anchor -or $PackageId -notmatch $xunitPackagePattern) { return @($Candidates) }
+
+    $allowed = @(@($Candidates) | Where-Object { [int]($_.major) -le [int]($Anchor.major) })
+    if ($allowed.Count -eq 0) {
+        throw "No stable '$PackageId' version at or below major $($Anchor.major) exists. That ceiling comes from $($Anchor.packageId) $($Anchor.version); raise the anchor package before raising the xUnit generation."
+    }
+
+    $key = $PackageId.ToLowerInvariant()
+    if ($Anchor.pins.Contains($key)) {
+        $pinned = [string]$Anchor.pins[$key]
+        $exact = @($allowed | Where-Object { $_.text -eq $pinned })
+        if ($exact.Count -gt 0) {
+            $allowed = @($exact) + @($allowed | Where-Object { $_.text -ne $pinned })
+        }
+    }
+    return @($allowed)
+}
+
+function Get-AnchorConstraint {
+    param([string]$PackageId, [string]$Version, [object]$Anchor)
+
+    if ($null -eq $Anchor -or $PackageId -notmatch $xunitPackagePattern) { return 'unanchored' }
+
+    $key = $PackageId.ToLowerInvariant()
+    if (-not $Anchor.pins.Contains($key)) {
+        return "capped at major $($Anchor.major) by $($Anchor.packageId) $($Anchor.version)"
+    }
+    $pinned = [string]$Anchor.pins[$key]
+    if ($pinned -eq $Version) {
+        return "matched 1:1 to the $pinned dependency declared by $($Anchor.packageId) $($Anchor.version)"
+    }
+    return "capped at major $($Anchor.major) by $($Anchor.packageId) $($Anchor.version) which declares $pinned"
 }
 
 function Test-PackageCompatibility {
@@ -133,14 +259,24 @@ foreach ($framework in $TargetFramework) {
     }
 }
 
+$codebeltPackage = if ($Role -eq 'Unit') { 'Codebelt.Extensions.Xunit' } else { 'Codebelt.Extensions.Xunit.App' }
 $packageIds = if ($PackageId -and $PackageId.Count -gt 0) {
     @($PackageId)
 } else {
-    $codebeltPackage = if ($Role -eq 'Unit') { 'Codebelt.Extensions.Xunit' } else { 'Codebelt.Extensions.Xunit.App' }
     @('Microsoft.NET.Test.Sdk', 'xunit.v3', 'xunit.v3.runner.console', 'xunit.runner.visualstudio', $codebeltPackage)
 }
 
-$cacheKey = if ([string]::IsNullOrWhiteSpace($CacheDirectory)) { $null } else { Get-ResolverCacheKey -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates }
+$anchorPackageId = if ([string]::IsNullOrWhiteSpace($XunitAnchorPackageId)) { $codebeltPackage } else { $XunitAnchorPackageId }
+$anchoredPackageIds = @($packageIds | Where-Object { $_ -match $xunitPackagePattern })
+$flatContainerAddress = $null
+$anchor = $null
+if ($anchoredPackageIds.Count -gt 0) {
+    $flatContainerAddress = Get-PackageBaseAddress
+    $anchor = Resolve-XunitAnchor -BaseAddress $flatContainerAddress -PackageId $anchorPackageId -Version $XunitAnchorVersion
+}
+$anchorKey = if ($null -eq $anchor) { '' } else { '{0}/{1}' -f $anchor.packageId, $anchor.version }
+
+$cacheKey = if ([string]::IsNullOrWhiteSpace($CacheDirectory)) { $null } else { Get-ResolverCacheKey -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates -Anchor $anchorKey }
 $cachePath = if ($null -eq $cacheKey) { $null } else { Join-Path $CacheDirectory ($cacheKey + '.json') }
 $startedAt = [DateTimeOffset]::UtcNow
 
@@ -157,16 +293,12 @@ if ($null -ne $cachePath -and (Test-Path -LiteralPath $cachePath -PathType Leaf)
     $cached.cache | Add-Member -NotePropertyName hit -NotePropertyValue $true -Force
     $cached.cache | Add-Member -NotePropertyName key -NotePropertyValue $cacheKey -Force
     $cached.timing | Add-Member -NotePropertyName durationSeconds -NotePropertyValue $durationSeconds -Force
-    Write-ResolverTrace -TraceFilePath $TraceFile -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates -CacheHit $true -DurationSeconds $durationSeconds
+    Write-ResolverTrace -TraceFilePath $TraceFile -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates -CacheHit $true -DurationSeconds $durationSeconds -Anchor $anchorKey
     $cached | ConvertTo-Json -Depth 8
     return
 }
 
-$serviceIndex = Invoke-RestMethod -Uri 'https://api.nuget.org/v3/index.json'
-$packageBaseAddress = $serviceIndex.resources |
-    Where-Object { $_.'@type' -eq 'PackageBaseAddress/3.0.0' } |
-    Select-Object -First 1 -ExpandProperty '@id'
-if ([string]::IsNullOrWhiteSpace($packageBaseAddress)) { throw 'NuGet service index did not expose PackageBaseAddress/3.0.0.' }
+if ($null -eq $flatContainerAddress) { $flatContainerAddress = Get-PackageBaseAddress }
 
 $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-test-package-resolution-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $workspace -Force | Out-Null
@@ -174,15 +306,13 @@ New-Item -ItemType Directory -Path $workspace -Force | Out-Null
 try {
     $packageCandidates = [System.Collections.Generic.List[object]]::new()
     foreach ($id in @($packageIds | Sort-Object -Unique)) {
-        $indexUrl = '{0}{1}/index.json' -f $packageBaseAddress, $id.ToLowerInvariant()
-        try { $index = Invoke-RestMethod -Uri $indexUrl } catch { throw "NuGet lookup failed for '$id' at '$indexUrl': $($_.Exception.Message)" }
-        $candidates = @($index.versions |
-            Where-Object { $_ -match '^\d+(?:\.\d+){1,3}$' } |
-            ForEach-Object { Get-VersionKey -Version $_ } |
-            Sort-Object major, minor, patch, revision -Descending |
+        $index = Get-StableVersion -BaseAddress $flatContainerAddress -PackageId $id
+        if (@($index.versions).Count -eq 0) { throw "NuGet returned no stable versions for '$id'." }
+        # Anchor first, trim second: a package whose newest candidates are all above the anchored major would otherwise
+        # arrive here with nothing left to try.
+        $candidates = @(Select-AnchoredCandidate -PackageId $id -Candidates @($index.versions) -Anchor $anchor |
             Select-Object -First $MaximumCandidates)
-        if ($candidates.Count -eq 0) { throw "NuGet returned no stable versions for '$id'." }
-        $packageCandidates.Add([pscustomobject]@{ packageId = $id; source = $indexUrl; candidates = $candidates })
+        $packageCandidates.Add([pscustomobject]@{ packageId = $id; source = $index.source; candidates = $candidates })
     }
 
     function Resolve-PackageSet {
@@ -239,6 +369,7 @@ try {
             version = $package.version
             source = $package.source
             compatibility = 'combined restore passed'
+            constraint = Get-AnchorConstraint -PackageId $package.packageId -Version $package.version -Anchor $anchor
         })
     }
 
@@ -247,6 +378,15 @@ try {
         role = $Role
         targetFrameworks = @($TargetFramework)
         maximumCandidates = $MaximumCandidates
+        xunitAnchor = if ($null -eq $anchor) { $null } else {
+            [ordered]@{
+                packageId = $anchor.packageId
+                version = $anchor.version
+                major = $anchor.major
+                source = $anchor.source
+                declaredDependencies = $anchor.pins
+            }
+        }
         cache = [ordered]@{
             enabled = $null -ne $cachePath
             hit = $false
@@ -266,7 +406,7 @@ try {
         $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $cachePath -Encoding utf8
     }
 
-    Write-ResolverTrace -TraceFilePath $TraceFile -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates -CacheHit $false -DurationSeconds $durationSeconds
+    Write-ResolverTrace -TraceFilePath $TraceFile -RoleName $Role -Frameworks $TargetFramework -Packages $packageIds -CandidateLimit $MaximumCandidates -CacheHit $false -DurationSeconds $durationSeconds -Anchor $anchorKey
     $result | ConvertTo-Json -Depth 8
 } finally {
     if (Test-Path -LiteralPath $workspace) { Remove-Item -LiteralPath $workspace -Recurse -Force }

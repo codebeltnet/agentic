@@ -35,6 +35,26 @@ The test must bootstrap the real `Program` entry point. Do not reproduce `Progra
 
 When setup is repeated across many focused tests, a narrow `Test`-derived harness may own the factory result and temporary resources. Accept `ITestOutputHelper`, keep one harness per intended isolation scope, and expose a client/host rather than a second composition root. Override both `OnDisposeManagedResources` and `OnDisposeManagedResourcesAsync`: dispose the `IHostTest` and owned resources in each matching path, then call the base hook. Overriding only the synchronous hook is insufficient when callers use `await using`.
 
+`IHostTest` derives from `ITest`, which implements both `IDisposable` and `IAsyncDisposable`, so call `_field.Dispose()` and `await _field.DisposeAsync()` directly on the field:
+
+```csharp
+protected override void OnDisposeManagedResources()
+{
+    _application.Dispose();
+    Content.Dispose();
+    base.OnDisposeManagedResources();
+}
+
+protected override async ValueTask OnDisposeManagedResourcesAsync()
+{
+    await _application.DisposeAsync().ConfigureAwait(false);
+    Content.Dispose();
+    await base.OnDisposeManagedResourcesAsync().ConfigureAwait(false);
+}
+```
+
+Probing with `if (_application is IAsyncDisposable d)` is dead defensive code — the interface already guarantees it — and it hides the disposal behind a local, which the `inspect-dotnet-tests.ps1` ownership check reads as a harness that never disposes what it owns.
+
 ## Shared xUnit fixture ownership
 
 Use `WebApplicationTest<TEntryPoint,TFixture>` when all tests in a class share one initialized host:
@@ -67,4 +87,4 @@ public class HealthTest : WebApplicationTest<Program, ManagedWebApplicationFixtu
 
 Do not force a shared fixture onto tests whose isolation depends on a fresh host or fresh temporary resource per method.
 
-After migration, run `inspect-dotnet-tests.ps1` with `-ExpectedWebPattern Focused` or `-ExpectedWebPattern Shared` for the selected project. A non-zero exit is a migration failure even when restore, build, and tests pass.
+After migration, run `verify-dotnet-test-migration.ps1` for the selected project with `-ExpectedWebPattern Focused` or `-ExpectedWebPattern Shared`. A `FAILED` verdict is a migration failure even when restore, build, and tests all pass, because green tests only prove the host that ran still works, not that it is the one you were asked to move to.

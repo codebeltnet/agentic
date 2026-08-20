@@ -366,6 +366,19 @@ $reports = foreach ($project in $projects) {
     }
 
     $recommendations = [System.Collections.Generic.List[string]]::new()
+    # The managed fixtures this skill targets were introduced in Codebelt xUnit 11.1.0. A project pinned below that
+    # floor restores fine and reports no usage problem, then fails to compile the moment the pattern is written, so
+    # surface the required bump as evidence during inspection instead of as a build error after the edits.
+    $managedFixtureFloor = [version]'11.1.0'
+    foreach ($package in $packages) {
+        if ($package.id -notmatch '^Codebelt\.Extensions\.Xunit(\.App|\.Hosting(\.AspNetCore)?)?$') { continue }
+        $normalizedVersion = ([string]$package.version -split '-', 2)[0]
+        $parsedVersion = $null
+        if (-not [version]::TryParse($normalizedVersion, [ref]$parsedVersion)) { continue }
+        if ($parsedVersion -lt $managedFixtureFloor) {
+            $recommendations.Add("Raise $($package.id) from $($package.version) to at least $managedFixtureFloor in $($package.versionOwner); ManagedWebApplicationFixture and ManagedApplicationFixture do not exist below that version, so the required pattern cannot compile until the version is raised.")
+        }
+    }
     if ($xunitGeneration -eq 'v2') { $recommendations.Add('Modernize the selected project to xUnit v3 and Microsoft Testing Platform while preserving target frameworks and package ownership.') }
     if ([string]$properties.UseMicrosoftTestingPlatformRunner -ne 'true') { $recommendations.Add('Enable UseMicrosoftTestingPlatformRunner for the selected xUnit v3 test project, preferably in its existing shared test-project property owner.') }
     if ($webUsages.Count -gt 0) { $recommendations.Add('Replace every selected WebApplicationFactory usage and preserve configuration, start behavior, clients, services, disposal, and isolation.') }

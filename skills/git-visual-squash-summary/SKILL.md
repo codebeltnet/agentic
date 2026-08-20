@@ -1,7 +1,7 @@
 ---
 name: git-visual-squash-summary
 description: >
-  Turn many commits into a curated grouped squash summary compatible with the opinionated wording style of git-visual-commits. Use when the user asks to squash a branch into a concise summary, write a squash-and-merge summary, summarize this branch, summarize a commit range or PR as grouped lines, clean up noisy commit history, or asks for a curated summary without committing. For normal squash-and-merge requests, default to the full current feature branch from merge-base to HEAD against the base branch instead of a same-named tracking remote, include commits from all authors unless the user explicitly narrows by author, and do not ask for yolo because the skill is read-only. Returns grouped lines only, resolves the cumulative base-to-HEAD diff first so reverted churn disappears, preserves identifiers, merges overlap, drops noise, and avoids changelog wording.
+  Turn many commits into a curated grouped squash summary for squash-and-merge contexts. Use when the user asks to squash a branch, summarize PR commits, or clean up history. Defaults to full feature branch against base (not tracking remote), includes all authors unless narrowed, and acts immediately—the skill is read-only with no permission-seeking. Returns grouped lines only, resolving the cumulative diff to drop reverted churn, preserving identifiers and overlap, and avoiding changelog wording. A bare invocation is a complete request: run git commands immediately and return summary lines, never an instruction recap or permission question.
 ---
 
 # Git Visual Squash Summary
@@ -15,6 +15,26 @@ This skill is non-mutating: it inspects history and diffs, then returns grouped 
 This skill has one job: produce a ready-to-paste squash-and-merge summary for the full current feature branch unless the user explicitly asked for a narrower range.
 
 This skill answers one question: **What would this branch effectively do if it were squashed into one commit now?**
+
+## Start Here: The First Response Is the Summary
+
+Invoking this skill is the request. Nothing needs confirming, because the skill mutates nothing and the scope is derivable on your own: the current branch against its base branch. A confirmation round-trip costs the user a turn and returns no information you could not have resolved yourself with `git`.
+
+So the first thing to do after loading this skill is run the read-only commands in Step 1 — not compose a reply. The first thing the user sees is the finished grouped summary.
+
+A response from this skill is one of exactly three things:
+
+1. The grouped summary lines. This is the normal case and covers nearly every invocation.
+2. `No branch changes to summarize.` when every safe base-branch comparison is genuinely empty.
+3. One direct question naming the missing base branch or range — only after the Step 1 fallbacks have all been tried and failed.
+
+Everything else is a failed invocation, including:
+
+- Reciting these instructions back as "I understand the instructions" or a list of "I will ..." promises. Quoting the rules is not evidence of following them; running the commands is, and the user cannot act on a restatement of your own prompt.
+- Offering to do the thing already asked for: "Would you like me to generate a squash summary of your current branch now?"
+- Announcing a plan and stopping before any `git` command has run.
+
+If a sentence you are drafting starts with "I will" or "Would you like", delete it and run `git` instead. The summary is the acknowledgment.
 
 ## Deterministic Reduction Model
 
@@ -74,6 +94,7 @@ Do not classify commit 1, then commit 2, then commit 3 and merge duplicate prose
 - A bare invocation such as `git-visual-squash-summary` or `/git-visual-squash-summary` is itself a complete request: resolve the current branch against the base branch, then return the grouped summary directly.
 - Never require, infer, or ask for `yolo` / `auto`. Those modes approve mutating workflows; this skill is read-only and should act directly.
 - Do not collect commit-set parameters through follow-up questions, widgets, or choice UIs for ordinary squash-and-merge requests.
+- Do not answer an invocation with an acknowledgment, a restatement of these rules, or an offer to proceed. Run the commands and return the summary.
 - Do not ask the user to choose between earlier branch commits and later branch commits such as changelog, version-bump, or release-finalization follow-ups. They are part of the branch unless the user explicitly narrows scope.
 - Do not stop after comparing `HEAD` to a same-named tracking branch such as `origin/<current-branch>`. That only proves local sync with the remote copy of the feature branch, not that there is nothing to summarize.
 
@@ -93,7 +114,7 @@ Resolve the commit set in this order:
 Never turn steps 2 or 3 into a user-facing choice. Resolve them automatically and continue.
 Never add `--author`, `--committer`, current-user, current-email, current-contributor, or identity-mode filters while resolving ordinary branch-level squash summaries. Author metadata may help understand ownership, but it must not narrow the default commit set.
 Do not stop to ask whether the latest branch commit "should count". If it is on the branch, it is in scope by default.
-Do not open with "What would you like me to summarize?" when the user invoked this skill directly or otherwise already asked for a squash summary.
+Do not open with "What would you like me to summarize?" or "Would you like me to generate it now?" when the user invoked this skill directly or otherwise already asked for a squash summary. Both questions ask the user to repeat a request they already made.
 If every safe base-branch comparison is genuinely empty, say `No branch changes to summarize.` and stop. Do not ask for a hypothetical range or demo.
 
 Helpful read-only commands:
@@ -237,6 +258,7 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Chronological narration of each commit in order.
 - Dumping raw commit subjects line by line.
 - Preserving reverted dependency or version churn just because it happened in history.
+- Restating the skill's own rules as an "I understand the instructions" preamble, then asking permission to start.
 - Asking the user to choose among commits that are all on the current feature branch when they asked for a squash summary of that branch.
 - Presenting commit-selection widgets or multiple-choice prompts for ordinary branch-level squash requests.
 - Filtering the branch to the current user's or current contributor's commits, or treating "my changes" as the default scope.
