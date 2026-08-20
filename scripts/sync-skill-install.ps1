@@ -115,6 +115,7 @@ if (-not $Skill -or $Skill.Count -eq 0) {
 
 $totalDrift = 0
 $recognizedHostRootCount = 0
+$unrecognizedSkillCount = 0
 
 foreach ($name in $Skill) {
     # Both roots are built by joining this name onto a trusted prefix, so a separator or `..` in it walks
@@ -127,7 +128,8 @@ foreach ($name in $Skill) {
 
     $sourceRoot = Join-Path $skillsRoot $name
     if (-not (Test-Path -LiteralPath $sourceRoot)) {
-        Write-Host "[SKIP] $name (not a repo-managed skill)"
+        Write-Host "[FAIL] $name (not a repo-managed skill)"
+        $unrecognizedSkillCount += 1
         continue
     }
 
@@ -173,6 +175,11 @@ foreach ($name in $Skill) {
 }
 
 Write-Host ''
+if ($unrecognizedSkillCount -gt 0) {
+    Write-Host "Install sync: $unrecognizedSkillCount requested skill entr$(if ($unrecognizedSkillCount -eq 1) { 'y is' } else { 'ies are' }) not repo-managed."
+    exit 1
+}
+
 if ($recognizedHostRootCount -eq 0) {
     Write-Host 'Install sync: no recognized local host installation roots found.'
     exit 1
