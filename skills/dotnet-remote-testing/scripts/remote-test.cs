@@ -2468,6 +2468,8 @@ internal static class SourceStager
                 ? StageGitMetadata(sourceRoot, stagingRoot)
                 : new GitStagingResult(false, 0, "Git metadata staging disabled; repository-root detection and version stamping will differ from the host.");
 
+            MakeWritableForContainer(stagingRoot);
+
             return new StagingResult(stagingRoot, null, count, git.Staged, git.Bytes, git.Note);
         }
         catch (Exception ex)
@@ -2595,6 +2597,54 @@ internal static class SourceStager
 
     private static long MeasureDirectory(string root) =>
         Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Sum(f => new FileInfo(f).Length);
+
+    // Bind mounts keep the host's ownership of the mounted directory; Docker only reconciles ownership
+    // for named volumes, never for bind mounts. A prepared image restores the base image's configured
+    // user (see ImageProvisioner), and that user's UID/GID commonly differs from whoever staged this
+    // directory on the host, which leaves restore/build/test unable to write into it. Opening group and
+    // other write access sidesteps the mismatch without needing to know the container's UID up front.
+    // No-op on Windows, where Docker Desktop's bind-mount layer does not enforce host UID/GID at all.
+    internal static void MakeWritableForContainer(string root)
+    {
+        if (OperatingSystem.IsWindows() || !Directory.Exists(root))
+        {
+            return;
+        }
+
+        try
+        {
+            AddWriteBits(root, isDirectory: true);
+            foreach (var dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+            {
+                AddWriteBits(dir, isDirectory: true);
+            }
+
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            {
+                AddWriteBits(file, isDirectory: false);
+            }
+        }
+        catch (IOException)
+        {
+            // Best effort: a container user permission problem surfaces on its own via the run's exit
+            // code, which is a clearer signal than failing the run here over a chmod race.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void AddWriteBits(string path, bool isDirectory)
+    {
+        var mode = File.GetUnixFileMode(path);
+        mode |= UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite;
+        if (isDirectory)
+        {
+            mode |= UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+        }
+
+        File.SetUnixFileMode(path, mode);
+    }
 
     private static long CopyDirectory(string source, string destination, string? excludeTopLevelDirectory = null)
     {
@@ -3213,6 +3263,7 @@ internal static class Commands
             var resultsRoot = Path.Combine(runRoot, "results");
             stagingRoot = Path.Combine(runRoot, "workspace");
             Directory.CreateDirectory(resultsRoot);
+            SourceStager.MakeWritableForContainer(resultsRoot);
 
             var staging = await SourceStager.StageAsync(sourceRoot, stagingRoot, cts.Token, includeGitMetadata: !options.NoGitMetadata);
             if (staging.Error is not null || staging.StagedPath is null)
@@ -3220,9 +3271,12 @@ internal static class Commands
                 return Error(options, FailureKind.SourceStaging, staging.Error ?? "Source staging produced no workspace.");
             }
 
-            // NuGet packages cache persists across runs and lives outside the repository.
+            // NuGet packages cache persists across runs and lives outside the repository. Files already
+            // in it may carry an older run's container UID, so it is reconciled on every run rather than
+            // only when created.
             var nugetCache = Path.Combine(options.CacheDirectory, "nuget");
             Directory.CreateDirectory(nugetCache);
+            SourceStager.MakeWritableForContainer(nugetCache);
 
             var testOptions = BuildTestOptions(options, sourceRoot);
             var mounts = new[]
