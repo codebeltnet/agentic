@@ -22,7 +22,8 @@ function Get-RepoRoot {
 }
 
 # HostRoot is the tool's own directory. Its absence means the tool is not installed on this machine and
-# there is genuinely nothing to sync; a missing skill directory *under* an installed tool is drift.
+# its skill path is skipped; a missing skill directory *under* an installed tool is drift. The caller still
+# requires at least one recognized host root so a mandatory sync cannot pass without checking any copy.
 function Get-InstallRoot {
     param([string]$SkillName)
 
@@ -113,6 +114,7 @@ if (-not $Skill -or $Skill.Count -eq 0) {
 }
 
 $totalDrift = 0
+$recognizedHostRootCount = 0
 
 foreach ($name in $Skill) {
     # Both roots are built by joining this name onto a trusted prefix, so a separator or `..` in it walks
@@ -138,6 +140,8 @@ foreach ($name in $Skill) {
             Write-Host "[SKIP] $name -> $installRoot (host tool not installed)"
             continue
         }
+
+        $recognizedHostRootCount += 1
 
         # An installed host with no copy of the skill used to be skipped, which let a run where nothing
         # was ever installed still report "verified, 0 drift". A sync creates the install; a verify fails.
@@ -169,6 +173,11 @@ foreach ($name in $Skill) {
 }
 
 Write-Host ''
+if ($recognizedHostRootCount -eq 0) {
+    Write-Host 'Install sync: no recognized local host installation roots found.'
+    exit 1
+}
+
 if ($totalDrift -eq 0) {
     Write-Host "Install sync: verified, 0 drift."
     exit 0
