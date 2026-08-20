@@ -1393,6 +1393,9 @@ internal static class ContainerPlanner
         sb.Append("export DOTNET_CLI_TELEMETRY_OPTOUT=1\n");
         sb.Append("export DOTNET_NOLOGO=1\n");
         sb.Append("export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1\n");
+        // Keep files created by a container user writable by the host and by a later run using a
+        // different container UID. The host-side reconciliation below cannot chmod foreign-owned files.
+        sb.Append("umask 000\n");
         sb.Append($"cd {Shell.Quote(o.WorkDir)} || {{ echo '{PhaseMarkerPrefix}staging:1##'; exit 8; }}\n");
         sb.Append("run_phase() { name=\"$1\"; shift; \"$@\"; code=$?; echo \"" + PhaseMarkerPrefix + "${name}:${code}##\"; return $code; }\n");
         sb.Append($"run_phase restore dotnet restore{target}{fw} || exit 9\n");
@@ -2629,21 +2632,25 @@ internal static class SourceStager
             // Best effort: a container user permission problem surfaces on its own via the run's exit
             // code, which is a clearer signal than failing the run here over a chmod race.
         }
-        catch (UnauthorizedAccessException)
-        {
-        }
     }
 
     private static void AddWriteBits(string path, bool isDirectory)
     {
         var mode = File.GetUnixFileMode(path);
-        mode |= UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite;
+        var required = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.OtherRead | UnixFileMode.OtherWrite;
         if (isDirectory)
         {
-            mode |= UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+            required |= UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
         }
 
-        File.SetUnixFileMode(path, mode);
+        // chmod itself requires ownership. If a previous container UID already left the required
+        // access bits in place, reuse those entries without attempting a chmod that must fail.
+        if ((mode & required) == required)
+        {
+            return;
+        }
+
+        File.SetUnixFileMode(path, mode | required);
     }
 
     private static long CopyDirectory(string source, string destination, string? excludeTopLevelDirectory = null)
@@ -3273,10 +3280,36 @@ internal static class Commands
 
             // NuGet packages cache persists across runs and lives outside the repository. Files already
             // in it may carry an older run's container UID, so it is reconciled on every run rather than
-            // only when created.
+            // only when created. A cache whose modes cannot be repaired by this host is quarantined and
+            // rebuilt; continuing with it would make restore fail later inside the non-root container.
             var nugetCache = Path.Combine(options.CacheDirectory, "nuget");
             Directory.CreateDirectory(nugetCache);
-            SourceStager.MakeWritableForContainer(nugetCache);
+            try
+            {
+                SourceStager.MakeWritableForContainer(nugetCache);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                var quarantine = Path.Combine(
+                    options.CacheDirectory,
+                    "nuget-stale-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture)
+                        + "-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    Directory.Move(nugetCache, quarantine);
+                    Directory.CreateDirectory(nugetCache);
+                    SourceStager.MakeWritableForContainer(nugetCache);
+                    Console.Error.WriteLine(
+                        $"NuGet cache entries could not be made writable because they are owned by another UID; "
+                        + $"the old cache was preserved at '{quarantine}' and a fresh cache will be used.");
+                }
+                catch (Exception recoveryError) when (recoveryError is IOException or UnauthorizedAccessException)
+                {
+                    return Error(options, FailureKind.Restore,
+                        $"NuGet cache '{nugetCache}' is not writable and could not be quarantined for recovery: "
+                        + recoveryError.Message + $" Original permission error: {ex.Message}");
+                }
+            }
 
             var testOptions = BuildTestOptions(options, sourceRoot);
             var mounts = new[]
@@ -4083,6 +4116,7 @@ internal static class SelfTest
         // Trailing slash is required: NuGet's package root becomes an MSBuild SourceRoot and SourceLink
         // fails the build without it.
         Check("entrypoint sets NUGET_PACKAGES to the cache mount", entry.Contains("export NUGET_PACKAGES='/nuget/'"));
+        Check("entrypoint keeps cache entries writable across container UIDs", entry.Contains("umask 000"));
         Check("nuget package root ends with a separator",
             ContainerPlanner.NuGetPackagesPath("/nuget") == "/nuget/" && ContainerPlanner.NuGetPackagesPath("/nuget/") == "/nuget/");
         Check("entrypoint uses --no-restore/--no-build to reuse phases", entry.Contains("--no-restore") && entry.Contains("--no-build"));

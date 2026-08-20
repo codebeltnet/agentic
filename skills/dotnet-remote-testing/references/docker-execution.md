@@ -73,7 +73,7 @@ Three bind mounts, nothing more:
 | NuGet cache | `/nuget` | Persistent package cache owned outside the repository | Yes |
 | Results | `/results` | TRX output read back by the host | No (removed after the run) |
 
-The dependency cache (`/nuget`, via `NUGET_PACKAGES`) is deliberately separated from the per-execution build/test workspace: the immutable, reusable dependency cache may persist for fast feedback, while the build/test workspace is isolated per execution so results never depend on stale source. `NUGET_PACKAGES` is exported with a trailing slash (`/nuget/`) because NuGet's package root becomes an MSBuild `SourceRoot`, and SourceLink fails the build on a `SourceRoot` that does not end in a separator.
+The dependency cache (`/nuget`, via `NUGET_PACKAGES`) is deliberately separated from the per-execution build/test workspace: the immutable, reusable dependency cache may persist for fast feedback, while the build/test workspace is isolated per execution so results never depend on stale source. `NUGET_PACKAGES` is exported with a trailing slash (`/nuget/`) because NuGet's package root becomes an MSBuild `SourceRoot`, and SourceLink fails the build on a `SourceRoot` that does not end in a separator. The in-container `umask 000` keeps newly-created entries usable by a later run with a different UID. Before mounting, the host adds the required write bits; if an older foreign-owned cache cannot be reconciled, the runner preserves it under a `nuget-stale-*` name and starts a fresh cache instead of letting restore fail later with an opaque permission error.
 
 ## In-container phases
 

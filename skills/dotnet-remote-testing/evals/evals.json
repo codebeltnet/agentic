@@ -225,6 +225,22 @@
         "evals/files/multi-targeted-failing/test/Matrix.Tests/Matrix.Tests.csproj",
         "evals/files/multi-targeted-failing/test/Matrix.Tests/MatrixTests.cs"
       ]
+    },
+    {
+      "id": 14,
+      "prompt": "The persistent NuGet cache contains entries owned by an older container UID. Remote test this repo and make sure a cache permission problem does not break restore.",
+      "expected_output": "The runner detects that the old cache cannot be reconciled, preserves it under a nuget-stale-* quarantine name, creates a fresh writable cache, and continues the remote restore/build/test run without falling back to the host.",
+      "expectations": [
+        "Does not silently continue with an inaccessible foreign-owned cache",
+        "Preserves the unrecoverable old cache and creates a fresh writable cache",
+        "Keeps newly-created cache entries writable across later container UIDs",
+        "Continues to execute restore/build/test inside Docker and never falls back to the host"
+      ],
+      "files": [
+        "evals/files/configured/testenvironments.json",
+        "evals/files/configured/test/Api.Tests/Api.Tests.csproj",
+        "evals/files/configured/test/Api.Tests/HealthTests.cs"
+      ]
     }
   ]
 }
