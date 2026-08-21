@@ -1343,7 +1343,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         foreach ($isolationField in @('fresh_context_required', 'isolated_home_required', 'isolated_cwd_required')) {
             if (-not [bool]$manifest.isolation.$isolationField) {
-                throw "manifest.isolation.$isolationField must be true so a harness knows the run is hermetic."
+                throw "manifest.isolation.$isolationField must be true so a harness knows the run requires an isolated context."
             }
         }
 

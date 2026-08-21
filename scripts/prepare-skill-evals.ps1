@@ -8,16 +8,18 @@
     harness, provider, and model they choose, then validates the results that come back.
 
     Prepare mode writes one directory per eval. The grading key and result stubs stay at the eval-case level, outside
-    the two hermetic run directories a worker actually sees:
+    the two isolated run directories a worker actually sees:
       eval-metadata.json        id, name, prompt, expected output, assertions, fixtures, hashes, assumptions
       results/                  one prefilled result stub per configuration
-      with_skill/               a hermetic run: prompt.md, run.json, repo/ (materialized fixtures), home/, skill/<name>/
+      with_skill/               an isolated run: prompt.md, run.json, repo/ (materialized fixtures), home/, skill/<name>/
       without_skill/            the same run without any skill/ directory and no skill instructions
 
-    Each run directory is the worker's sandbox root: repo/ is the working tree, home/ is an isolated profile, and skill/
+    Each run directory is the worker's staged root: repo/ is the working tree, home/ is an isolated profile, and skill/
     (with_skill only) holds the candidate skill revision. run.json is a harness-neutral contract naming only paths inside
-    the run directory. Preparation validates the isolation invariants and fails early if a package would let a baseline
-    reach the skill, let a worker reach the source repository, or stage mismatched fixtures.
+    the run directory. The selected runner enforces the isolation and reports strict confidence when it also proves hard
+    filesystem confinement or pragmatic confidence when it does not. Preparation validates the isolation invariants and
+    fails early if a package would let a baseline reach the skill, stage the source repository into a run, or stage
+    mismatched fixtures.
 
     Collect mode reads a prepared package plus whatever result files were filled in, validates them, and invokes the
     packaged Anthropic skill-creator aggregator and static eval viewer after writing a deterministic comparison. The
@@ -176,10 +178,11 @@ $executionResultSchema = 'codebeltnet/agentic/eval-execution-result/1'
 $runnerProtocolSchema = 'codebeltnet/agentic/eval-runner-protocol/1'
 $maxFixtureInlineBytes = 32768
 
-# A materialized run is hermetic: the harness treats the run directory as the worker's sandbox root, mounts repo/ as
+# A materialized run is self-contained: the runner treats the run directory as the worker's staged root, uses repo/ as
 # the working directory and home/ as the isolated user profile, and exposes skill/ only for a with_skill run. Nothing
-# else in the package - the grading key, the paired run, other evals, or results - lives inside a run directory, so a
-# worker confined to its run directory cannot reach any of it.
+# else in the package - the grading key, the paired run, other evals, or results - is staged inside a run directory, so a
+# worker that stays within its run directory is never handed any of it. Hard filesystem confinement is an optional
+# confidence signal a runner may add on top; it is not required for this staging boundary.
 $runDirectoryNames = [ordered]@{
     Working = 'repo'
     Home = 'home'
@@ -1266,9 +1269,9 @@ function Invoke-PrepareMode {
 
         $repoFiles = @($fixtures | ForEach-Object { $_.RepoRelative } | Sort-Object)
 
-        # Materialize both runs. Each run directory is the worker's sandbox root: repo/ is the working tree, home/ is an
+        # Materialize both runs. Each run directory is the worker's staged root: repo/ is the working tree, home/ is an
         # isolated profile, and skill/ (with_skill only) holds the candidate. The grading key and results live one level
-        # up, outside every run directory, so a worker confined to its run directory can never reach them.
+        # up, outside every run directory, so a worker that stays within its run directory is never handed them.
         foreach ($configuration in @('with_skill', 'without_skill')) {
             $runDir = Join-Path $evalDirectory $configuration
             New-Item -ItemType Directory -Path $runDir -Force | Out-Null
@@ -1311,7 +1314,7 @@ function Invoke-PrepareMode {
 
         $assumptions = [System.Collections.Generic.List[string]]::new()
         $assumptions.Add('Run with_skill and without_skill on the same model, same version, and same configuration. Different models measure the model, not the skill.')
-        $assumptions.Add('Each run is hermetic: launch a fresh worker with its run directory as the sandbox root, its repo/ as the working directory, and its home/ as the isolated profile.')
+        $assumptions.Add('Each run is isolated: launch a fresh worker with its run directory as the staged root, its repo/ as the working directory, and its home/ as the isolated profile. The runner reports strict confidence when it also proves hard filesystem confinement and pragmatic confidence when it does not.')
         $assumptions.Add("Both runs share an identical materialized repository. Only the with_skill run exposes the candidate skill under skill/$Skill/.")
         $notInlinedFixtures = @($fixtures | Where-Object { -not $_.Inlined })
         if ($notInlinedFixtures.Count -gt 0) {
@@ -1445,7 +1448,7 @@ function Invoke-PrepareMode {
             'fresh context',
             'isolated HOME/config',
             'isolated CWD',
-            'filesystem sandbox',
+            'staged filesystem/workspace boundary',
             'candidate skill exposure',
             'transcript capture'
         )
@@ -1462,7 +1465,7 @@ function Invoke-PrepareMode {
     $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
     Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals))
 
-    Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber) as $($manifestEvals.Count * 2) hermetic run package(s)."
+    Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber) as $($manifestEvals.Count * 2) isolated run package(s)."
     Write-Host "Package: $iterationDirectory"
     Write-Host ''
     Write-Host 'Every run is a self-contained directory: repo/ is the working tree, home/ is an isolated'
@@ -1514,7 +1517,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('1. Read `manifest.json` and `execution-profile.json`. If `runner` is null, unavailable, or unsupported, fail clearly; do not guess a default. The profile contains no credentials.')
     [void]$builder.AppendLine('2. Resolve the selected package-local runner with the resolver. Ask it for `describe` and validate its protocol, descriptor, and capability declarations before running an arm. Do not invent harness-specific CLI commands.')
     [void]$builder.AppendLine('3. For every eval case, use the exact `run_manifest` path from `manifest.json` and the same profile path. Preflight each arm, then invoke the runner exactly once with `execute`. The runner receives only `run.json` and `execution-profile.json`; it must never receive or inspect expected output, assertions, grading, paired output, benchmark data, or human feedback.')
-    [void]$builder.AppendLine('4. Keep `with_skill` and `without_skill` in fresh independent processes/sessions. Use the same model, provider, configuration, tools, and limits. The runner must send each `prompt.md` unchanged as the first task input and must enforce the run contract, including the baseline skill exclusion and filesystem boundary.')
+    [void]$builder.AppendLine('4. Keep `with_skill` and `without_skill` in fresh independent processes/sessions. Use the same model, provider, configuration, tools, and limits. The runner must send each `prompt.md` unchanged as the first task input and must enforce the run contract, including the baseline skill exclusion and the staged filesystem/workspace boundary.')
     [void]$builder.AppendLine('5. Save the runner''s single normalized JSON response unchanged as the matching `execution_result` path. Preserve the complete final response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout, harness failure, and incompatibility are results.')
     [void]$builder.AppendLine('6. If the runner cannot satisfy a required guarantee, keep the normalized status `incompatible` and stop that arm. Never fall back to the old generic isolated-worker behavior and never substitute a different runner.')
     [void]$builder.AppendLine()
@@ -1562,7 +1565,7 @@ function New-PackageReadme {
         [void]$builder.AppendLine("- ``$($entry.eval_name)/`` - eval $($entry.eval_id)")
     }
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Each eval directory holds the grading key (`eval-metadata.json`), result stubs under `results/`, and two hermetic run directories: `with_skill/` and `without_skill/`. A run directory holds `prompt.md`, a `run.json` contract, a `repo/` working tree materialized from the fixtures, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate skill. The grading key and results sit outside both run directories, so a worker confined to its run directory never sees them.')
+    [void]$builder.AppendLine('Each eval directory holds the grading key (`eval-metadata.json`), result stubs under `results/`, and two isolated run directories: `with_skill/` and `without_skill/`. A run directory holds `prompt.md`, a `run.json` contract, a `repo/` working tree materialized from the fixtures, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate skill. The grading key and results sit outside both run directories, so a worker that stays within its run directory is never handed them.')
     [void]$builder.AppendLine('The package root also holds `execution-profile.json`, the package-local Eval Runner protocol under `tools/eval-runners/`, and raw `execution-result.json` paths beside the existing result stubs. `run.json` defines what one blind arm must execute; the profile defines with what runner/model/configuration; the selected runner defines how.')
     [void]$builder.AppendLine('The package also carries the exact Anthropic skill-creator assets used after execution under `tools/skill-creator`: `tools/skill-creator/agents/grader.md`, `tools/skill-creator/agents/comparator.md`, `tools/skill-creator/agents/analyzer.md`, `tools/skill-creator/references/schemas.md`, `tools/skill-creator/scripts/aggregate_benchmark.py`, and `tools/skill-creator/eval-viewer/generate_review.py` plus `tools/skill-creator/eval-viewer/viewer.html`.')
     [void]$builder.AppendLine()
@@ -1570,12 +1573,12 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The package guarantees what a generator can: identical materialized repositories for both runs, the candidate skill staged only under `with_skill/skill/`, an empty isolated `home/` per run, and a `run.json` that names only paths inside the run directory. Fixture and skill hashes are recorded so you can prove what each worker received.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The harness must supply the rest at runtime: a fresh context per run, the run directory as the working and config root (working directory `repo/`, HOME `home/`), and a filesystem sandbox that keeps the worker inside its run directory so global skills, global config, the source repository, the paired run, and the grading key stay out of reach. Prompt wording alone does not enforce this; the sandbox does.')
+    [void]$builder.AppendLine('The harness must supply the rest at runtime: a fresh context per run, the run directory as the working and config root (working directory `repo/`, HOME `home/`), controlled candidate-skill exposure, prompt fidelity, and sufficient response capture. Because global skills, global config, the source repository, the paired run, and the grading key are never staged inside a run directory, a worker that stays within its run directory is not handed them. The selected runner enforces these controls - prompt wording alone does not - and reports strict confidence when it also proves hard filesystem confinement or pragmatic confidence when the mandatory controls hold without it. Hard filesystem confinement is an added confidence signal, not a prerequisite, so Windows and other hosts without a hard sandbox run in pragmatic mode.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## How to run')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('1. Read `execution-profile.json`. If no runner is selected, fail clearly instead of guessing. Resolve the selected package-local runner and run `describe`, then `preflight`, for every arm.')
-    [void]$builder.AppendLine('2. Invoke `execute` exactly once for each `run.json`, preserving its one JSON `execution-result.json` unchanged. The runner must provide a fresh process/session, isolated home/config, isolated CWD, filesystem confinement, baseline skill exclusion, prompt fidelity, model/configuration lock, and complete response capture or return `incompatible`.')
+    [void]$builder.AppendLine('2. Invoke `execute` exactly once for each `run.json`, preserving its one JSON `execution-result.json` unchanged. The runner must provide a fresh process/session, isolated home/config, isolated CWD, baseline skill exclusion, prompt fidelity, model/configuration lock, and complete response capture, or return `incompatible`. Hard filesystem confinement is not one of these mandatory controls: when the runner proves it the run reports strict isolation, and when it does not the run reports pragmatic isolation.')
     [void]$builder.AppendLine('3. After all arms complete or fail, run `tools/eval-runners/bridge-execution-result.ps1` for each raw result. It writes the existing `eval-result/2` file and preserves explicit unavailable telemetry. Only then read the grading key, grade with `tools/skill-creator/agents/grader.md`, and run `tools/generate-eval-report.ps1`.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It selects the package-local runner from the profile, invokes the common protocol once per blind arm, bridges raw evidence into the existing result shape, reveals grading material only after execution, and invokes Anthropic skill-creator''s compatible aggregator and static viewer through the package adapter. It never executes an eval prompt in its own context.')
@@ -1880,7 +1883,7 @@ function Invoke-CollectMode {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Isolation reported')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Flags each run''s harness confirmed: fresh context, isolated home, isolated cwd, filesystem sandbox, candidate skill exposure, transcript capture (Y/N, ? unknown). Process-dependent assertions are only gradeable from a run with process evidence.')
+    [void]$builder.AppendLine('Flags each run''s harness confirmed: fresh context, isolated home, isolated cwd, filesystem confinement (strict when a hard sandbox is proven, otherwise pragmatic), candidate skill exposure, transcript capture (Y/N, ? unknown). Process-dependent assertions are only gradeable from a run with process evidence.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('| Eval | Configuration | Isolation | Process evidence |')
     [void]$builder.AppendLine('| --- | --- | --- | --- |')
