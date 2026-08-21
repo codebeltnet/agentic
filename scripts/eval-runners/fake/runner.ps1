@@ -121,9 +121,10 @@ function Get-FakePreflight {
     }
 
     $capabilities = [ordered]@{}
-    foreach ($property in @($descriptor.capabilities.PSObject.Properties)) {
-        $capabilities[$property.Name] = $property.Value
+    foreach ($capabilityName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) {
+        $capabilities[$capabilityName] = Get-JsonProperty -Object $descriptor.capabilities -Name $capabilityName
     }
+    $capabilities['candidate_skill_exposure'] = if ($run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
     if ($reasons.Count -gt 0) {
         $warnings.Add('No execute process is started for an incompatible preflight.')
     }

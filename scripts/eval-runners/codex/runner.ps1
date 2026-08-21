@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     This is the only place where Codex CLI flags, CODEX_HOME handling, JSONL
-    event parsing, and Codex sandbox limitations are defined.
+    event parsing, and Codex isolation limitations are defined.
 #>
 [CmdletBinding()]
 param(
@@ -25,8 +25,8 @@ $descriptor = [ordered]@{
     protocol_version = (Get-RunnerSchemaNames).Protocol
     name = 'codex'
     version = '0.9.1'
-    platforms = @('linux', 'macos')
-    harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = 'current-supported' }
+    platforms = @('windows', 'linux', 'macos')
+    harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = 'unavailable' }
     capabilities = [ordered]@{
         fresh_context = 'supported'
         isolated_home_config = 'supported'
@@ -44,6 +44,7 @@ $descriptor = [ordered]@{
         command_evidence = 'conditional'
         file_evidence = 'conditional'
         cost_telemetry = 'conditional'
+        credential_child_filtering = 'supported'
         native_skill_activation_evidence = 'unsupported'
     }
     supported_telemetry = @('transcript_event_capture', 'token_telemetry', 'cache_token_telemetry', 'tool_call_telemetry', 'command_evidence', 'file_evidence', 'cost_telemetry')
@@ -86,7 +87,7 @@ function Get-CodexAuthSource {
     }
     $authPath = Join-Path $codexHome 'auth.json'
     if (Test-Path -LiteralPath $authPath -PathType Leaf) {
-        return [pscustomobject]@{ Kind = 'file'; Name = 'auth.json'; Path = (Resolve-Path -LiteralPath $authPath).Path }
+        return [pscustomobject]@{ Kind = 'file_unsupported'; Name = 'auth.json'; Path = (Resolve-Path -LiteralPath $authPath).Path }
     }
 
     return [pscustomobject]@{ Kind = 'missing'; Name = $null; Path = $null }
@@ -109,17 +110,67 @@ function Invoke-CodexCli {
 function Get-CodexHelpResult {
     param(
         [Parameter(Mandatory = $true)][object]$CommandInfo,
-        [Parameter(Mandatory = $true)][object]$Inputs
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [string[]]$Arguments = @('--ask-for-approval', 'never', 'exec', '--help')
     )
 
     $environment = New-RunnerEnvironment -Run $Inputs.Run
-    return Invoke-CodexCli -CommandInfo $CommandInfo -Arguments @('exec', '--help') -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
+    return Invoke-CodexCli -CommandInfo $CommandInfo -Arguments $Arguments -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
 }
 
 function Resolve-SandboxCommand {
     param([Parameter(Mandatory = $true)][string]$Name)
 
     return Resolve-ExternalCommand -Name $Name
+}
+
+function Get-CodexDescriptor {
+    $copy = [ordered]@{}
+    foreach ($key in $descriptor.Keys) { $copy[$key] = $descriptor[$key] }
+    $commandInfo = Resolve-ExternalCommand -Name 'codex'
+    $version = 'unavailable'
+    if ($null -ne $commandInfo) {
+        $observation = Get-ExternalCommandVersion -CommandInfo $commandInfo
+        $version = [string]$observation.Version
+    }
+    $copy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $version }
+    return $copy
+}
+
+function New-CodexCliArguments {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][string]$LastResponsePath,
+        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$VisiblePlatform = (Get-PlatformName)
+    )
+
+    $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
+    $outputArgument = Get-SandboxVisiblePath -HostPath $LastResponsePath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @('--ask-for-approval', 'never', 'exec', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--json', '--color', 'never', '--cd', $directoryArgument, '--model', $Inputs.Profile.Model, '--sandbox', 'workspace-write', '--config', 'shell_environment_policy.inherit=none', '--output-last-message', $outputArgument)) {
+        $arguments.Add([string]$argument)
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Inputs.Profile.ReasoningEffort)) {
+        $arguments.Add('-c')
+        $arguments.Add("model_reasoning_effort=$($Inputs.Profile.ReasoningEffort)")
+    }
+    $arguments.Add('-')
+    return @($arguments)
+}
+
+function Get-CodexCapabilityMap {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [bool]$HardFilesystemConfinement = $false
+    )
+
+    $capabilities = [ordered]@{}
+    foreach ($capabilityName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) {
+        $capabilities[$capabilityName] = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $capabilityName)
+    }
+    $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
+    $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
+    return $capabilities
 }
 
 function Get-CodexPreflight {
@@ -138,6 +189,7 @@ function Get-CodexPreflight {
         default { $null }
     }
     $sandboxInfo = if ([string]::IsNullOrWhiteSpace([string]$sandboxName)) { $null } else { Resolve-SandboxCommand -Name $sandboxName }
+    $versionObservation = $null
 
     if ($profile.Runner -ne 'codex') {
         $reasons.Add("execution-profile.json selects '$($profile.Runner)' rather than codex.")
@@ -166,18 +218,41 @@ function Get-CodexPreflight {
     } else {
         $checks.Add((New-PreflightCheck -Name 'harness_executable' -Status passed -Detail $commandInfo.Source))
         try {
-            $help = Get-CodexHelpResult -CommandInfo $commandInfo -Inputs $Inputs
-            if ($help.TimedOut -or $help.ExitCode -ne 0) {
-                $reasons.Add("Codex exec --help failed with exit status $($help.ExitCode).")
+            $versionObservation = Get-ExternalCommandVersion -CommandInfo $commandInfo -WorkingDirectory $run.WorkingDirectoryPath -Environment (New-RunnerEnvironment -Run $run) -TimeoutSeconds 30
+            if (-not $versionObservation.Available) {
+                $reasons.Add('The Codex CLI did not expose an exact observable version through --version.')
+                $checks.Add((New-PreflightCheck -Name 'harness_version' -Status unavailable -Detail 'codex --version did not return a usable version string.'))
             } else {
-                $helpText = [string]::Join("`n", @($help.Stdout, $help.Stderr))
-                foreach ($flag in @('--ephemeral', '--ignore-user-config', '--ignore-rules', '--json', '--output-last-message', '--sandbox', '--approve-for-me')) {
+                $checks.Add((New-PreflightCheck -Name 'harness_version' -Status passed -Detail ([string]$versionObservation.Version)))
+            }
+
+            $globalHelp = Get-CodexHelpResult -CommandInfo $commandInfo -Inputs $Inputs -Arguments @('--help')
+            $help = Get-CodexHelpResult -CommandInfo $commandInfo -Inputs $Inputs
+            if ($globalHelp.TimedOut -or $globalHelp.ExitCode -ne 0) {
+                $reasons.Add("Codex --help failed with exit status $($globalHelp.ExitCode).")
+            }
+            if ($help.TimedOut -or $help.ExitCode -ne 0) {
+                $reasons.Add("Codex --ask-for-approval never exec --help failed with exit status $($help.ExitCode).")
+            } else {
+                $helpText = [string]::Join("`n", @($globalHelp.Stdout, $globalHelp.Stderr, $help.Stdout, $help.Stderr))
+                foreach ($flag in @('--ask-for-approval', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--json', '--output-last-message', '--sandbox', '--cd', '--model', '--config')) {
                     if ($helpText -notmatch [regex]::Escape($flag)) {
                         $reasons.Add("The installed Codex CLI does not advertise required flag '$flag'.")
                     }
                 }
+                $visiblePlatform = if ($platform -eq 'linux' -and $null -ne $sandboxInfo) { 'linux' } else { $platform }
+                $constructed = New-CodexCliArguments -Inputs $Inputs -LastResponsePath (Join-Path $run.RunRoot 'evidence/codex-final.txt') -VisiblePlatform $visiblePlatform
+                if (@($constructed) -contains '--approve-for-me') {
+                    $reasons.Add('The constructed Codex invocation must not combine --approve-for-me with explicit --sandbox selection.')
+                }
+                $sandboxIndex = [Array]::IndexOf([string[]]$constructed, '--sandbox')
+                $approvalIndex = [Array]::IndexOf([string[]]$constructed, '--ask-for-approval')
+                $execIndex = [Array]::IndexOf([string[]]$constructed, 'exec')
+                if ($approvalIndex -lt 0 -or $execIndex -lt 0 -or $approvalIndex -gt $execIndex -or $sandboxIndex -lt 0) {
+                    $reasons.Add('The constructed Codex invocation must set --ask-for-approval never before exec and retain --sandbox workspace-write.')
+                }
                 if ($reasons.Count -eq 0) {
-                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Codex exec advertises the required noninteractive, ephemeral, isolated, and structured-output flags.'))
+                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Codex accepts the constructed noninteractive invocation: --ask-for-approval never, exec, --sandbox workspace-write, ephemeral JSON output, and isolated configuration controls.'))
                 }
             }
         } catch {
@@ -187,44 +262,38 @@ function Get-CodexPreflight {
 
     $auth = Get-CodexAuthSource -Provider ([string]$profile.Provider)
     if ($auth.Kind -eq 'missing') {
-        $reasons.Add('No narrow Codex authentication source is available (provider environment variable or CODEX_HOME/auth.json).')
+        $reasons.Add('No narrow Codex provider API-key environment variable is available.')
+    } elseif ($auth.Kind -eq 'file_unsupported') {
+        $reasons.Add('Codex auth.json cannot be copied into the worker HOME: the evaluated agent could read that credential file. Set the provider API-key environment variable instead.')
     } else {
-        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through $($auth.Kind) and will be injected into the isolated run only."))
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through the narrow $($auth.Name) environment variable; the child shell policy is set to inherit=none."))
     }
 
-    if ($platform -notin @('linux', 'macos')) {
-        $reasons.Add("Platform '$platform' is not supported by the Codex runner.")
+    if ($null -eq $sandboxName) {
+        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status not_applicable -Detail "Platform '$platform' has no configured external hard-confinement mechanism; pragmatic isolation remains available."))
+        $warnings.Add("Platform '$platform' has no external hard filesystem confinement in this adapter; execution will report pragmatic isolation.")
     } elseif ($null -eq $sandboxInfo) {
-        $reasons.Add("Required external filesystem sandbox '$sandboxName' is unavailable; Codex cannot prove package-boundary read confinement.")
+        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail "External '$sandboxName' is unavailable; pragmatic isolation remains available."))
+        $warnings.Add("External '$sandboxName' was unavailable; execution will report pragmatic isolation.")
     } else {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status passed -Detail "External $sandboxName confines Codex to the staged run and required system runtime paths; Codex sandbox=workspace-write remains enabled inside it."))
     }
 
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The adapter uses --ephemeral and never supplies a resume, continue, or session identifier.'))
-    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter uses an isolated CODEX_HOME plus --ignore-user-config and --ignore-rules.'))
+    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter uses an isolated CODEX_HOME plus --ignore-user-config and --ignore-rules; unrelated inherited environment variables are removed.'))
     $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "--cd $($run.WorkingDirectoryPath); CODEX_HOME under $($run.HomeDirectoryPath)"))
+    $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only the selected provider API-key variable is passed to Codex; auth files are never copied into the worker HOME.'))
 
-    $capabilities = [ordered]@{}
-    foreach ($capabilityName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) {
-        $value = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $capabilityName)
-        if ($capabilityName -eq 'filesystem_confinement' -and $platform -in @('linux', 'macos') -and $commandInfo -ne $null -and $sandboxInfo -ne $null) {
-            $value = 'supported'
-        } elseif ($capabilityName -eq 'filesystem_confinement') {
-            $value = 'unsupported'
-        }
-        $capabilities[$capabilityName] = $value
-    }
-    if ($platform -eq 'windows') {
-        $warnings.Add('The installed Codex CLI may run on Windows, but this runner does not claim the required package-level filesystem read boundary there.')
-    } elseif ($null -eq $sandboxInfo) {
-        $warnings.Add("The Codex CLI was inspected, but external sandbox '$sandboxName' was unavailable.")
-    }
-
-    $harnessVersion = if ($null -eq $commandInfo) { 'unavailable' } else { 'available' }
+    $hardConfinement = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
+    $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement
+    $harnessVersion = if ($null -eq $versionObservation) { 'unavailable' } else { [string]$versionObservation.Version }
     $descriptorCopy = [ordered]@{}
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $harnessVersion }
-    return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @('codex --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', "external $sandboxName filesystem sandbox", 'isolated CODEX_HOME', 'prompt on stdin') -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
+    $mechanisms = [System.Collections.Generic.List[string]]::new()
+    foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    if ($hardConfinement) { $mechanisms.Add("external $sandboxName filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
+    return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }
 
 function New-CodexEnvironment {
@@ -236,8 +305,8 @@ function New-CodexEnvironment {
     $codexHome = Join-Path $Inputs.Run.HomeDirectoryPath '.codex'
     New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
     $environment = New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider)) -Additional @{ CODEX_HOME = $codexHome }
-    if ($Auth.Kind -eq 'file') {
-        Copy-Item -LiteralPath $Auth.Path -Destination (Join-Path $codexHome 'auth.json') -Force | Out-Null
+    if ($Auth.Kind -ne 'environment') {
+        throw 'Codex execution requires a provider environment credential; file credentials are not safe to expose in the worker HOME.'
     }
     return $environment
 }
@@ -329,7 +398,7 @@ function Write-CodexCapture {
     param(
         [Parameter(Mandatory = $true)][object]$RunData,
         [Parameter(Mandatory = $true)][string]$RelativePath,
-        [Parameter(Mandatory = $true)][string]$Text
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
     )
 
     $path = Join-Path $RunData.Run.RunRoot ($RelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
@@ -345,45 +414,34 @@ function Invoke-CodexExecute {
     $preflight = Get-CodexPreflight -Inputs $Inputs
     $started = [DateTime]::UtcNow
     $sessionId = [Guid]::NewGuid().ToString('D')
+    $executionDescriptor = [ordered]@{}
+    foreach ($key in $descriptor.Keys) { $executionDescriptor[$key] = $descriptor[$key] }
+    $executionDescriptor.harness = $preflight.harness
     if ($preflight.status -ne 'compatible') {
         $finished = [DateTime]::UtcNow
         $failureText = [string]::Join('; ', @($preflight.reasons))
-        return New-ExecutionResult -Descriptor $descriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'preflight_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -Failure (New-ExecutionFailure -Code 'incompatible' -Message $failureText) -SessionId $sessionId -IsolationCapabilities ([ordered]@{ fresh_context = 'supported'; isolated_home_config = 'supported'; isolated_working_directory = 'supported'; filesystem_confinement = 'unsupported'; ambient_candidate_skill_exclusion = 'supported'; candidate_skill_exposure = 'supported' }) -IsolationMechanisms @('preflight-only') -Evidence ([ordered]@{ preflight = $preflight }) -AttemptCount 1
+        return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'preflight_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -Failure (New-ExecutionFailure -Code 'incompatible' -Message $failureText) -SessionId $sessionId -IsolationCapabilities ([ordered]@{}) -IsolationMechanisms @('preflight-only') -Evidence ([ordered]@{ preflight = $preflight; resume = $false }) -AttemptCount 1
     }
 
     $commandInfo = Resolve-ExternalCommand -Name 'codex'
     $auth = Get-CodexAuthSource -Provider ([string]$Inputs.Profile.Provider)
     $environment = New-CodexEnvironment -Inputs $Inputs -Auth $auth
     $lastResponsePath = 'evidence/codex-final.txt'
-    $directoryArgument = if ((Get-PlatformName) -eq 'linux') { '/run/repo' } else { $Inputs.Run.WorkingDirectoryPath }
-    $arguments = @(
-        'exec',
-        '--ephemeral',
-        '--ignore-user-config',
-        '--ignore-rules',
-        '--skip-git-repo-check',
-        '--json',
-        '--color', 'never',
-        '--cd', $directoryArgument,
-        '--model', $Inputs.Profile.Model,
-        '--sandbox', 'workspace-write',
-        '--approve-for-me',
-        '--output-last-message', (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar))
-    )
-    if (-not [string]::IsNullOrWhiteSpace([string]$Inputs.Profile.ReasoningEffort)) {
-        $arguments += @('-c', "model_reasoning_effort=$($Inputs.Profile.ReasoningEffort)")
-    }
-    $arguments += '-'
+    $platform = Get-PlatformName
+    $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
+    $hardFilesystem = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
+    $visiblePlatform = if ($hardFilesystem) { $platform } elseif ($platform -eq 'linux') { 'unknown' } else { $platform }
+    $arguments = New-CodexCliArguments -Inputs $Inputs -LastResponsePath (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -VisiblePlatform $visiblePlatform
 
-    if ((Get-PlatformName) -eq 'linux') {
-        $sandboxInfo = Resolve-SandboxCommand -Name 'bwrap'
+    if ($platform -eq 'linux' -and $hardFilesystem) {
         $sandboxArguments = Get-LinuxCodexSandboxArguments -Inputs $Inputs -CommandInfo $commandInfo -Environment $environment
         $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
-    } else {
-        $sandboxInfo = Resolve-SandboxCommand -Name 'sandbox-exec'
+    } elseif ($platform -eq 'macos' -and $hardFilesystem) {
         $sandboxProfile = New-CodexMacosSandboxProfile -Inputs $Inputs -CommandInfo $commandInfo
         $sandboxArguments = @('-f', $sandboxProfile, '--', $commandInfo.FileName) + @($commandInfo.Prefix) + @($arguments)
         $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+    } else {
+        $process = Invoke-CodexCli -CommandInfo $commandInfo -Arguments $arguments -Inputs $Inputs -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
     }
     $stdoutArtifact = Write-CodexCapture -RunData $Inputs -RelativePath 'evidence/codex-events.jsonl' -Text $process.Stdout
     $stderrArtifact = Write-CodexCapture -RunData $Inputs -RelativePath 'evidence/codex-stderr.txt' -Text $process.Stderr
@@ -477,13 +535,27 @@ function Invoke-CodexExecute {
         cost = New-UnavailableMetric -Reason 'codex_runner_does_not_estimate_cost'
     }
     $finished = [DateTime]::UtcNow
-    return New-ExecutionResult -Descriptor $descriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId (if ([string]::IsNullOrWhiteSpace($threadId)) { $sessionId } else { $threadId }) -IsolationCapabilities ([ordered]@{ fresh_context = 'supported'; isolated_home_config = 'supported'; isolated_working_directory = 'supported'; filesystem_confinement = 'supported'; ambient_candidate_skill_exclusion = 'supported'; candidate_skill_exposure = 'supported'; prompt_fidelity = 'supported'; model_configuration_lock = 'supported'; response_capture = 'supported' }) -IsolationMechanisms @('codex --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'external bwrap/sandbox-exec filesystem sandbox', 'isolated CODEX_HOME', 'prompt on stdin') -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ thread_id = $threadId; event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = if ((Get-PlatformName) -eq 'linux') { 'bwrap' } else { 'sandbox-exec' } }) -AttemptCount 1
+    $sessionResultId = if ([string]::IsNullOrWhiteSpace($threadId)) { $sessionId } else { $threadId }
+    $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem
+    $mechanisms = [System.Collections.Generic.List[string]]::new()
+    foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
+    if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
+    $sandboxEvidence = if (-not $hardFilesystem) { 'unavailable' } elseif ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' }
+    $credentialEvidence = [ordered]@{
+        source = $auth.Kind
+        provider_environment_variable = $auth.Name
+        unrelated_environment_excluded = $true
+        child_tool_visibility = 'codex_shell_environment_policy_inherit_none'
+        value_observed = $false
+    }
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Codex accepted the requested provider, model, and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ provider = $Inputs.Profile.Provider; model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ thread_id = $threadId; event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; output_last_message_argument = (Get-SandboxVisiblePath -HostPath (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -RunRoot $Inputs.Run.RunRoot -Platform $visiblePlatform); credential = $credentialEvidence }) -AttemptCount 1
 }
 
 try {
     [void](Assert-RunnerDescriptor -Descriptor $descriptor)
     switch ($Command) {
-        'describe' { Write-RunnerJson -Value $descriptor -AsOutput }
+        'describe' { Write-RunnerJson -Value (Get-CodexDescriptor) -AsOutput }
         'preflight' {
             $inputs = Resolve-CodexInputs
             Write-RunnerJson -Value (Get-CodexPreflight -Inputs $inputs) -AsOutput

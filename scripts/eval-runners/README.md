@@ -13,9 +13,13 @@ run.json + execution-profile.json -> runner -> execution-result.json
 
 `run.json` is the existing portable one-arm contract. It owns the prompt,
 working directory, isolated home, staged candidate skill, and required
-isolation semantics. `execution-profile.json` selects the runner and execution
-configuration. It contains no credentials or secrets. `execution-result.json`
-normalizes one blind execution and keeps grading separate from raw evidence.
+experimental controls. Its `filesystemIsolationRequired` and
+`mustNotReadOutsideSandbox` fields describe the staged worker-facing package
+boundary; they do not claim that the host has a hard OS filesystem sandbox.
+`execution-profile.json` selects the runner and
+execution configuration. It contains no credentials or secrets.
+`execution-result.json` normalizes one blind execution and keeps grading
+separate from raw evidence.
 
 Every runner exposes the same process surface:
 
@@ -33,19 +37,30 @@ refusals, timeouts, failures, and incompatibility.
 The package resolver selects a named child directory under this directory. It
 does not guess a runner and does not fall back to an improvised worker. A
 selected runner that cannot satisfy the required contract returns
-`incompatible`.
+`incompatible`. Hard OS-level filesystem confinement is a confidence signal,
+not a universal prerequisite: a run with all mandatory experimental controls
+proven reports `strict` isolation when hard confinement is proven and
+`pragmatic` isolation when it is not. A missing fresh context, controlled skill
+boundary, prompt fidelity, result capture, or other mandatory control remains
+incompatible.
 
-The fake runner is deterministic and is the conformance reference. The Codex
-and OpenCode runners are thin harness-specific adapters. Their native CLI
+The fake runner is deterministic and is the conformance reference. Codex,
+OpenCode, and Cline are thin harness-specific adapters. Their native CLI
 flags, environment setup, event parsing, authentication injection, and
-isolation checks stay inside their own directories.
+isolation checks stay inside their own directories. Windows is supported in
+pragmatic mode when the native CLI satisfies the mandatory controls.
 
-The Codex adapter requires the current `codex exec` contract and an external
-`bwrap` (Linux) or `sandbox-exec` (macOS) boundary in addition to Codex's
-`workspace-write` sandbox. It fails closed on Windows because this slice does
-not claim package-level filesystem read confinement there. The OpenCode
-adapter uses the same platform split, `--pure`, isolated configuration roots,
-and a narrowly selected provider credential; it also fails closed when its
-external sandbox or credential requirement is unavailable. Neither adapter
-copies a global skill directory, memory store, plugin set, or normal agent
-profile into a run.
+Codex uses `--ask-for-approval never` with `exec --sandbox workspace-write`;
+it does not combine explicit sandbox selection with `--approve-for-me`.
+OpenCode uses `run --format json --auto` with isolated global/config roots and
+preserves repository-owned project configuration; it does not depend on
+`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. Cline uses `--json`,
+`--auto-approve true`, `--retries 0`, `--config <run-home>`,
+`--data-dir <run-home>/.cline/data`, and run-local hooks; it passes no session
+id. All three capture an exact observable CLI version and pass only a narrow
+provider environment credential when available. None copies a global skill
+directory, memory store, plugin set, or normal agent profile into a run.
+
+Freebuff is currently documented as planned/blocked. Its supported CLI remains
+TUI-oriented and does not provide the required one-prompt, noninteractive,
+machine-readable fresh-session transport, so no Freebuff runner is advertised.

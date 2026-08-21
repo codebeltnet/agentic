@@ -401,6 +401,12 @@ function Get-ReportRun {
         feedback_key = "eval-$EvalId-$Configuration"
         model = [string](Get-Property -Object $Result -Name 'model' -Default '')
         provider = [string](Get-Property -Object $Result -Name 'provider' -Default '')
+        requested_model = [string](Get-Property -Object $Result -Name 'requested_model' -Default '')
+        requested_provider = [string](Get-Property -Object $Result -Name 'requested_provider' -Default '')
+        resolved_model = [string](Get-Property -Object $Result -Name 'resolved_model' -Default '')
+        resolved_provider = [string](Get-Property -Object $Result -Name 'resolved_provider' -Default '')
+        configuration_resolution_status = [string](Get-Property -Object $Result -Name 'configuration_resolution_status' -Default '')
+        configuration_resolution_reason = [string](Get-Property -Object $Result -Name 'configuration_resolution_reason' -Default '')
         harness = [string](Get-Property -Object $Result -Name 'harness' -Default '')
         executed_utc = [string](Get-Property -Object $Result -Name 'executed_utc' -Default '')
         output = $output

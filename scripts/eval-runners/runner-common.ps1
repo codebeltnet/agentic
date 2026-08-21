@@ -81,7 +81,7 @@ function Write-RunnerJson {
 }
 
 function Get-Sha256HexFromBytes {
-    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][byte[]]$Bytes)
 
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
@@ -169,6 +169,116 @@ function Get-PlatformName {
     return 'unknown'
 }
 
+function Get-SandboxVisiblePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$HostPath,
+        [Parameter(Mandatory = $true)][string]$RunRoot,
+        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$Platform = (Get-PlatformName),
+        [string]$MountRoot = '/run'
+    )
+
+    $fullHostPath = [System.IO.Path]::GetFullPath($HostPath)
+    if ($Platform -ne 'linux' -or -not (Test-PathInside -BasePath $RunRoot -CandidatePath $fullHostPath)) {
+        return $fullHostPath
+    }
+
+    $relative = [System.IO.Path]::GetRelativePath(([System.IO.Path]::GetFullPath($RunRoot)), $fullHostPath).Replace('\', '/')
+    if ($relative -eq '.') {
+        return $MountRoot.TrimEnd('/')
+    }
+    return $MountRoot.TrimEnd('/') + '/' + $relative.TrimStart('/')
+}
+
+function Get-ObservableVersionFromText {
+    param([string]$Text)
+
+    foreach ($line in ($Text -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+            return $trimmed
+        }
+    }
+    return $null
+}
+
+function New-RunnerProbeEnvironment {
+    $environment = [ordered]@{}
+    foreach ($name in @('PATH', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'LANG', 'LC_ALL', 'TZ', 'SSL_CERT_FILE', 'NODE_PATH')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $environment[$name] = $value
+        }
+    }
+    $environment['CI'] = '1'
+    $environment['NO_COLOR'] = '1'
+    return $environment
+}
+
+function Get-ExternalCommandVersion {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [string]$WorkingDirectory = '',
+        [System.Collections.IDictionary]$Environment = (New-RunnerProbeEnvironment),
+        [int]$TimeoutSeconds = 30
+    )
+
+    $probeDirectory = $WorkingDirectory
+    $ownsProbeDirectory = $false
+    if ([string]::IsNullOrWhiteSpace($probeDirectory)) {
+        $probeDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-version-probe-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
+        $ownsProbeDirectory = $true
+    }
+    try {
+        $process = Invoke-RunnerProcess -FileName $CommandInfo.FileName -ArgumentList (@($CommandInfo.Prefix) + @('--version')) -WorkingDirectory $probeDirectory -Environment $Environment -TimeoutSeconds $TimeoutSeconds
+        $text = [string]::Join("`n", @($process.Stdout, $process.Stderr))
+        $version = Get-ObservableVersionFromText -Text $text
+        return [pscustomobject]@{
+            Version = if ($process.TimedOut -or $process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($version)) { 'unavailable' } else { $version }
+            Available = (-not $process.TimedOut -and $process.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($version))
+            Process = $process
+        }
+    } catch {
+        return [pscustomobject]@{ Version = 'unavailable'; Available = $false; Process = $null; Error = $_.Exception.Message }
+    } finally {
+        if ($ownsProbeDirectory -and (Test-Path -LiteralPath $probeDirectory)) {
+            Remove-Item -LiteralPath $probeDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Get-IsolationCapabilityAssessment {
+    param([System.Collections.IDictionary]$Capabilities)
+
+    $required = @(
+        'fresh_context',
+        'isolated_home_config',
+        'isolated_working_directory',
+        'ambient_candidate_skill_exclusion',
+        'candidate_skill_exposure',
+        'prompt_fidelity',
+        'model_configuration_lock',
+        'response_capture'
+    )
+    $unproven = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in $required) {
+        $value = if ($null -ne $Capabilities -and $Capabilities.Contains($name)) { [string]$Capabilities[$name] } else { 'unavailable' }
+        $valid = if ($name -eq 'candidate_skill_exposure') { $value -in @('supported', 'excluded') } else { $value -eq 'supported' }
+        if (-not $valid) { $unproven.Add($name) }
+    }
+
+    $filesystemValue = if ($null -ne $Capabilities -and $Capabilities.Contains('filesystem_confinement')) { [string]$Capabilities['filesystem_confinement'] } else { 'unavailable' }
+    $hardFilesystem = $filesystemValue -eq 'supported'
+    $mandatoryProven = $unproven.Count -eq 0
+    return [pscustomobject]@{
+        MandatoryProven = $mandatoryProven
+        HardFilesystemConfinement = $hardFilesystem
+        Level = if (-not $mandatoryProven) { 'unsupported' } elseif ($hardFilesystem) { 'strict' } else { 'pragmatic' }
+        Unproven = $unproven.ToArray()
+        Required = @($required)
+    }
+}
+
 function Resolve-RunContract {
     param([Parameter(Mandatory = $true)][string]$RunPath)
 
@@ -181,7 +291,7 @@ function Resolve-RunContract {
         throw "run.json must declare '$($schemas.Run)'."
     }
     if (-not [bool]$run.freshContextRequired -or -not [bool]$run.filesystemIsolationRequired -or -not [bool]$run.isolatedHomeRequired) {
-        throw 'run.json must require fresh context, filesystem isolation, and isolated home.'
+        throw 'run.json must require a fresh context, a staged filesystem/workspace boundary, and an isolated home.'
     }
 
     $mode = [string]$run.mode
@@ -374,10 +484,15 @@ function New-PreflightDocument {
     )
 
     $schemas = Get-RunnerSchemaNames
+    $capabilitiesForAssessment = if ($null -eq $ResolvedCapabilities) { [ordered]@{} } else { $ResolvedCapabilities }
+    $assessment = Get-IsolationCapabilityAssessment -Capabilities $capabilitiesForAssessment
+    $effectiveCompatible = $Compatible -and $assessment.MandatoryProven
+    $unprovenControls = [string[]]$assessment.Unproven
+    if (-not $effectiveCompatible) { $unprovenControls = [string[]](@($assessment.Unproven) + @('preflight')) }
     return [ordered]@{
         schema = $schemas.Preflight
         protocol_version = $schemas.Protocol
-        status = if ($Compatible) { 'compatible' } else { 'incompatible' }
+        status = if ($effectiveCompatible) { 'compatible' } else { 'incompatible' }
         runner = [ordered]@{ name = [string]$Descriptor.name; version = [string]$Descriptor.version }
         harness = $Descriptor.harness
         run = [ordered]@{ eval_id = $Run.EvalId; eval_name = $Run.EvalName; configuration = $Run.Mode }
@@ -391,6 +506,12 @@ function New-PreflightDocument {
         }
         checks = @($Checks)
         resolved_capabilities = if ($null -eq $ResolvedCapabilities) { [ordered]@{} } else { $ResolvedCapabilities }
+        isolation = [ordered]@{
+            level = if ($effectiveCompatible) { $assessment.Level } else { 'unsupported' }
+            status = if ($effectiveCompatible) { 'verified' } else { 'unverified' }
+            hard_filesystem_confinement = if ($effectiveCompatible) { $assessment.HardFilesystemConfinement } else { $false }
+            unproven_controls = $unprovenControls
+        }
         mechanisms = @($Mechanisms)
         warnings = @($Warnings)
         reasons = @($Reasons)
@@ -432,8 +553,9 @@ function New-ExecutionResult {
         [Nullable[int]]$ExitStatus,
         [object]$Failure,
         [string]$SessionId,
-        [hashtable]$IsolationCapabilities,
+        [System.Collections.IDictionary]$IsolationCapabilities,
         [string[]]$IsolationMechanisms = @(),
+        [object]$ResolvedConfiguration = $null,
         [object]$Telemetry = $null,
         [object[]]$Artifacts = @(),
         [string[]]$Warnings = @(),
@@ -443,13 +565,60 @@ function New-ExecutionResult {
     )
 
     $schemas = Get-RunnerSchemaNames
-    $hasResponse = -not [string]::IsNullOrWhiteSpace($FinalResponse)
+    $assessment = Get-IsolationCapabilityAssessment -Capabilities $IsolationCapabilities
+    $effectiveStatus = $Status
+    $effectiveFinalResponse = $FinalResponse
+    $effectiveFinalResponseReason = $FinalResponseReason
+    $effectiveExitStatus = $ExitStatus
+    $effectiveFailure = $Failure
+    $effectiveDeviations = [System.Collections.Generic.List[string]]::new()
+    foreach ($deviation in @($CompatibilityDeviations)) { $effectiveDeviations.Add([string]$deviation) }
+    if ($Status -ne 'incompatible' -and -not $assessment.MandatoryProven) {
+        $effectiveStatus = 'incompatible'
+        $effectiveFinalResponse = $null
+        $effectiveFinalResponseReason = 'isolation_controls_unproven'
+        $effectiveExitStatus = $null
+        $effectiveFailure = New-ExecutionFailure -Code 'isolation_unproven' -Message ("Mandatory isolation controls were not proven: {0}." -f ([string]::Join(', ', @($assessment.Unproven))))
+        $effectiveDeviations.Add('execution_rejected_because_mandatory_isolation_controls_were_unproven')
+    }
+    $hasResponse = -not [string]::IsNullOrWhiteSpace($effectiveFinalResponse)
     $started = if ([string]::IsNullOrWhiteSpace($StartedUtc)) { [DateTime]::UtcNow } else { [DateTime]::Parse($StartedUtc).ToUniversalTime() }
     $finished = if ([string]::IsNullOrWhiteSpace($FinishedUtc)) { [DateTime]::UtcNow } else { [DateTime]::Parse($FinishedUtc).ToUniversalTime() }
     $isolation = [ordered]@{
-        status = if ($Status -eq 'completed' -or $Status -eq 'failed' -or $Status -eq 'timed_out' -or $Status -eq 'cancelled') { 'verified' } else { 'unverified' }
+        status = if ($effectiveStatus -ne 'incompatible' -and $assessment.MandatoryProven) { 'verified' } else { 'unverified' }
+        level = if ($effectiveStatus -eq 'incompatible') { 'unsupported' } else { $assessment.Level }
+        hard_filesystem_confinement = if ($effectiveStatus -eq 'incompatible') { $false } else { $assessment.HardFilesystemConfinement }
         capabilities = if ($null -eq $IsolationCapabilities) { [ordered]@{} } else { $IsolationCapabilities }
         mechanisms = @($IsolationMechanisms)
+        required_controls = @($assessment.Required)
+        unproven_controls = [string[]]$assessment.Unproven
+    }
+
+    $resolved = [ordered]@{
+        provider = $null
+        model = $null
+        reasoning_effort = $null
+        configuration_profile = $null
+        tool_profile = $null
+        status = 'unavailable'
+        reason = 'harness_only_confirmed_the_requested_configuration'
+        accepted = [ordered]@{
+            provider = $Profile.Provider
+            model = $Profile.Model
+            reasoning_effort = $Profile.ReasoningEffort
+            configuration_profile = $Profile.ConfigurationProfile
+            tool_profile = $Profile.ToolProfile
+        }
+    }
+    if ($null -ne $ResolvedConfiguration) {
+        $resolved.status = [string](Get-JsonProperty -Object $ResolvedConfiguration -Name 'status' -Default 'resolved')
+        $resolved.reason = Get-JsonProperty -Object $ResolvedConfiguration -Name 'reason' -Default $null
+        foreach ($name in @('provider', 'model', 'reasoning_effort', 'configuration_profile', 'tool_profile')) {
+            $value = Get-JsonProperty -Object $ResolvedConfiguration -Name $name -Default $null
+            if ($null -ne $value) { $resolved[$name] = $value }
+        }
+        $observations = Get-JsonProperty -Object $ResolvedConfiguration -Name 'observations' -Default $null
+        if ($null -ne $observations) { $resolved.observations = $observations }
     }
 
     return [ordered]@{
@@ -461,16 +630,16 @@ function New-ExecutionResult {
             fresh = $true
             resumed = $false
         }
-        status = $Status
+        status = $effectiveStatus
         run = [ordered]@{
             eval_id = $Run.EvalId
             eval_name = $Run.EvalName
             configuration = $Run.Mode
         }
         final_response = if ($hasResponse) {
-            [ordered]@{ status = 'available'; text = $FinalResponse }
+            [ordered]@{ status = 'available'; text = $effectiveFinalResponse }
         } else {
-            [ordered]@{ status = 'unavailable'; reason = if ([string]::IsNullOrWhiteSpace($FinalResponseReason)) { 'harness_did_not_return_a_final_response' } else { $FinalResponseReason } }
+            [ordered]@{ status = 'unavailable'; reason = if ([string]::IsNullOrWhiteSpace($effectiveFinalResponseReason)) { 'harness_did_not_return_a_final_response' } else { $effectiveFinalResponseReason } }
         }
         runner = [ordered]@{ name = [string]$Descriptor.name; version = [string]$Descriptor.version }
         harness = $Descriptor.harness
@@ -481,17 +650,11 @@ function New-ExecutionResult {
             configuration_profile = $Profile.ConfigurationProfile
             tool_profile = $Profile.ToolProfile
         }
-        resolved = [ordered]@{
-            provider = $Profile.Provider
-            model = $Profile.Model
-            reasoning_effort = $Profile.ReasoningEffort
-            configuration_profile = $Profile.ConfigurationProfile
-            tool_profile = $Profile.ToolProfile
-        }
+        resolved = $resolved
         started_utc = $started.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
         finished_utc = $finished.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
         duration_seconds = [Math]::Max(0, [Math]::Round($DurationSeconds, 3))
-        exit = [ordered]@{ status = $ExitStatus; failure = $Failure }
+        exit = [ordered]@{ status = $effectiveExitStatus; failure = $effectiveFailure }
         input = [ordered]@{
             prompt_sha256 = $Run.PromptHash
             run_json_sha256 = Get-Sha256HexFromFile -Path $Run.RunPath
@@ -509,7 +672,7 @@ function New-ExecutionResult {
         evidence = if ($null -eq $Evidence) { [ordered]@{} } else { $Evidence }
         artifacts = @($Artifacts)
         warnings = @($Warnings)
-        compatibility_deviations = @($CompatibilityDeviations)
+        compatibility_deviations = @($effectiveDeviations)
         attempt_count = $AttemptCount
     }
 }
@@ -542,6 +705,46 @@ function Assert-ExecutionResult {
     }
     if ([int](Get-JsonProperty -Object $Result -Name 'attempt_count' -Default 0) -ne 1) {
         throw 'execution-result.json attempt_count must be exactly 1; quality retries are not allowed.'
+    }
+    $isolationStatus = [string](Get-JsonProperty -Object $Result.isolation -Name 'status' -Default '')
+    $isolationLevel = [string](Get-JsonProperty -Object $Result.isolation -Name 'level' -Default '')
+    $hardFilesystem = [bool](Get-JsonProperty -Object $Result.isolation -Name 'hard_filesystem_confinement' -Default $false)
+    if ($isolationStatus -notin @('verified', 'unverified')) {
+        throw "execution-result.json isolation.status '$isolationStatus' is unsupported."
+    }
+    if ($isolationLevel -notin @('strict', 'pragmatic', 'unsupported')) {
+        throw "execution-result.json isolation.level '$isolationLevel' is unsupported."
+    }
+    if ($Result.status -eq 'incompatible') {
+        if ($isolationStatus -ne 'unverified' -or $isolationLevel -ne 'unsupported') {
+            throw 'An incompatible execution must report unverified, unsupported isolation.'
+        }
+    } else {
+        if ($isolationStatus -ne 'verified' -or $isolationLevel -eq 'unsupported') {
+            throw 'A non-incompatible execution must prove the mandatory experimental controls.'
+        }
+        if ($isolationLevel -eq 'strict' -and -not $hardFilesystem) {
+            throw 'Strict isolation must report hard filesystem confinement.'
+        }
+        if ($isolationLevel -eq 'pragmatic' -and $hardFilesystem) {
+            throw 'Pragmatic isolation must not claim hard filesystem confinement.'
+        }
+        $requiredControls = @('fresh_context', 'isolated_home_config', 'isolated_working_directory', 'ambient_candidate_skill_exclusion', 'candidate_skill_exposure', 'prompt_fidelity', 'model_configuration_lock', 'response_capture')
+        foreach ($control in $requiredControls) {
+            $value = [string](Get-JsonProperty -Object $Result.isolation.capabilities -Name $control -Default 'unavailable')
+            if ($control -eq 'candidate_skill_exposure') {
+                if ($value -notin @('supported', 'excluded')) { throw "Mandatory isolation capability '$control' is not proven." }
+            } elseif ($value -ne 'supported') {
+                throw "Mandatory isolation capability '$control' is not proven."
+            }
+        }
+    }
+    $resolvedStatus = [string](Get-JsonProperty -Object $Result.resolved -Name 'status' -Default '')
+    if ($resolvedStatus -notin @('unavailable', 'accepted_request', 'resolved')) {
+        throw "execution-result.json resolved.status '$resolvedStatus' is unsupported."
+    }
+    if (-not (Test-JsonProperty -Object $Result.resolved -Name 'accepted')) {
+        throw 'execution-result.json resolved must preserve the requested configuration as accepted evidence.'
     }
     foreach ($hashField in @('prompt_sha256', 'run_json_sha256', 'profile_sha256')) {
         if (-not (Test-Sha256 -Value ([string]$Result.input.$hashField))) {
@@ -636,10 +839,82 @@ function New-RunnerEnvironment {
     return $environment
 }
 
+function Get-LinuxEvalSandboxArguments {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$InsideEnvironment,
+        [string[]]$ReadOnlyRoots = @('/usr', '/usr/local', '/bin', '/sbin', '/lib', '/lib64', '/libexec', '/etc', '/opt')
+    )
+
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @('--die-with-parent', '--new-session', '--unshare-pid')) { $arguments.Add($argument) }
+    foreach ($path in $ReadOnlyRoots) {
+        if (Test-Path -LiteralPath $path -PathType Container) {
+            $arguments.Add('--ro-bind'); $arguments.Add($path); $arguments.Add($path)
+        }
+    }
+    $arguments.Add('--proc'); $arguments.Add('/proc')
+    $arguments.Add('--dev'); $arguments.Add('/dev')
+    $arguments.Add('--tmpfs'); $arguments.Add('/tmp')
+    $arguments.Add('--bind'); $arguments.Add($Inputs.Run.RunRoot); $arguments.Add('/run')
+    $commandSource = [string]$CommandInfo.Source
+    $commandDirectory = Split-Path -Parent $commandSource
+    if (-not ($commandSource.StartsWith('/usr/', [System.StringComparison]::Ordinal) -or $commandSource.StartsWith('/bin/', [System.StringComparison]::Ordinal) -or $commandSource.StartsWith('/opt/', [System.StringComparison]::Ordinal))) {
+        if (Test-Path -LiteralPath $commandDirectory -PathType Container) {
+            $arguments.Add('--ro-bind'); $arguments.Add($commandDirectory); $arguments.Add($commandDirectory)
+        }
+    }
+    $arguments.Add('--chdir'); $arguments.Add('/run/repo')
+    foreach ($key in @($InsideEnvironment.Keys)) {
+        $arguments.Add('--setenv'); $arguments.Add([string]$key); $arguments.Add([string]$InsideEnvironment[$key])
+    }
+    $arguments.Add('--')
+    $arguments.Add($CommandInfo.FileName)
+    foreach ($prefix in @($CommandInfo.Prefix)) { $arguments.Add($prefix) }
+    return @($arguments)
+}
+
+function New-MacosEvalSandboxProfile {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [string[]]$ReadOnlyRoots = @('/usr', '/usr/local', '/bin', '/sbin', '/lib', '/libexec', '/System', '/Library', '/opt', '/private/var/db')
+    )
+
+    $profilePath = Join-Path $Inputs.Run.HomeDirectoryPath 'eval-sandbox.sb'
+    $runRoot = $Inputs.Run.RunRoot.Replace('\', '/')
+    $commandDirectory = (Split-Path -Parent ([string]$CommandInfo.Source)).Replace('\', '/')
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('(version 1)')
+    $lines.Add('(deny default)')
+    $lines.Add('(allow process*)')
+    $lines.Add('(allow network*)')
+    foreach ($root in @($ReadOnlyRoots + @($commandDirectory)) | Sort-Object -Unique) {
+        if (-not [string]::IsNullOrWhiteSpace($root) -and (Test-Path -LiteralPath $root -PathType Container)) {
+            $escapedRoot = $root.Replace('\', '/').Replace('"', '\"')
+            $lines.Add(('(allow file-read* (subpath "{0}"))' -f $escapedRoot))
+        }
+    }
+    $escapedRunRoot = $runRoot.Replace('"', '\"')
+    $lines.Add(('(allow file-read* (subpath "{0}"))' -f $escapedRunRoot))
+    $lines.Add(('(allow file-write* (subpath "{0}"))' -f $escapedRunRoot))
+    $lines.Add('(allow file-read* (subpath "/dev"))')
+    $lines.Add('(allow file-write* (subpath "/dev/null"))')
+    [System.IO.File]::WriteAllText($profilePath, ([string]::Join("`n", $lines) + "`n"), [System.Text.UTF8Encoding]::new($false))
+    return $profilePath
+}
+
 function Resolve-ExternalCommand {
     param([Parameter(Mandatory = $true)][string]$Name)
 
     $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($null -eq $command) {
+        foreach ($candidateName in @("$Name.ps1", "$Name.cmd", "$Name.exe")) {
+            $command = Get-Command $candidateName -ErrorAction SilentlyContinue
+            if ($null -ne $command) { break }
+        }
+    }
     if ($null -eq $command) {
         return $null
     }
@@ -663,7 +938,7 @@ function Invoke-RunnerProcess {
         [string[]]$ArgumentList = @(),
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [System.Collections.IDictionary]$Environment = @{},
-        [byte[]]$InputBytes = @(),
+        [AllowEmptyCollection()][byte[]]$InputBytes = @(),
         [int]$TimeoutSeconds = 900
     )
 
@@ -733,6 +1008,7 @@ function Get-ProviderAuthenticationVariables {
         '^openrouter$' { return @('OPENROUTER_API_KEY') }
         '^xai$|^x-ai$' { return @('XAI_API_KEY') }
         '^mistral$' { return @('MISTRAL_API_KEY') }
+        '^cline$' { return @('CLINE_API_KEY') }
         default { return @() }
     }
 }

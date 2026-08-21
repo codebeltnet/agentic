@@ -180,6 +180,15 @@ try {
 
     $existingGrading = @(Get-ExistingGrading -ResultPath $resultPath)
     $caps = Get-JsonProperty -Object $raw.isolation -Name 'capabilities' -Default ([ordered]@{})
+    $requestedModel = [string](Get-JsonProperty -Object $raw.requested -Name 'model' -Default '')
+    $requestedProvider = [string](Get-JsonProperty -Object $raw.requested -Name 'provider' -Default '')
+    $resolvedModelValue = Get-JsonProperty -Object $raw.resolved -Name 'model' -Default $null
+    $resolvedProviderValue = Get-JsonProperty -Object $raw.resolved -Name 'provider' -Default $null
+    $resolvedModel = if ($null -eq $resolvedModelValue) { '' } else { [string]$resolvedModelValue }
+    $resolvedProvider = if ($null -eq $resolvedProviderValue) { '' } else { [string]$resolvedProviderValue }
+    $resolutionStatus = [string](Get-JsonProperty -Object $raw.resolved -Name 'status' -Default 'unavailable')
+    $resolutionReason = [string](Get-JsonProperty -Object $raw.resolved -Name 'reason' -Default '')
+    $notes.Add("configuration_resolution=$resolutionStatus")
     $portableResult = [ordered]@{
         schema = (Get-RunnerSchemaNames).PortableResult
         skill_name = if ($runData.Mode -eq 'with_skill') { [string](Get-JsonProperty -Object $runData.Contract -Name 'skillName' -Default '') } else { '' }
@@ -187,8 +196,14 @@ try {
         eval_id = $runData.EvalId
         eval_name = $runData.EvalName
         configuration = $runData.Mode
-        model = [string](Get-JsonProperty -Object $raw.resolved -Name 'model' -Default (Get-JsonProperty -Object $raw.requested -Name 'model' -Default ''))
-        provider = [string](Get-JsonProperty -Object $raw.resolved -Name 'provider' -Default (Get-JsonProperty -Object $raw.requested -Name 'provider' -Default ''))
+        model = if ([string]::IsNullOrWhiteSpace($resolvedModel)) { $requestedModel } else { $resolvedModel }
+        provider = if ([string]::IsNullOrWhiteSpace($resolvedProvider)) { $requestedProvider } else { $resolvedProvider }
+        requested_model = $requestedModel
+        requested_provider = $requestedProvider
+        resolved_model = $resolvedModel
+        resolved_provider = $resolvedProvider
+        configuration_resolution_status = $resolutionStatus
+        configuration_resolution_reason = $resolutionReason
         harness = "$(Get-JsonProperty -Object $raw.harness -Name 'name' -Default 'unknown') $(Get-JsonProperty -Object $raw.harness -Name 'version' -Default '')".Trim()
         executed_utc = [string]$raw.finished_utc
         output = $output
@@ -212,6 +227,10 @@ try {
         estimated_cost_usd = $costValue
         model_effort = [string](Get-JsonProperty -Object $raw.resolved -Name 'reasoning_effort' -Default '')
         isolation = [ordered]@{
+            level = Get-JsonProperty -Object $raw.isolation -Name 'level' -Default 'unsupported'
+            status = Get-JsonProperty -Object $raw.isolation -Name 'status' -Default 'unverified'
+            hard_filesystem_confinement = Get-JsonProperty -Object $raw.isolation -Name 'hard_filesystem_confinement' -Default $false
+            mechanisms = @(Get-JsonProperty -Object $raw.isolation -Name 'mechanisms' -Default @())
             fresh_context = Get-CapabilityBoolean (Get-JsonProperty -Object $caps -Name 'fresh_context' -Default $null)
             isolated_home = Get-CapabilityBoolean (Get-JsonProperty -Object $caps -Name 'isolated_home_config' -Default $null)
             isolated_cwd = Get-CapabilityBoolean (Get-JsonProperty -Object $caps -Name 'isolated_working_directory' -Default $null)

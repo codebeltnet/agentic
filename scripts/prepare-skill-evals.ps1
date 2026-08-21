@@ -1052,8 +1052,9 @@ function New-RunManifest {
     }
 }
 
-# Fail package generation the moment a run violates an isolation invariant, so a contaminated package never reaches a
-# harness. These checks operate on the materialized run directories, not on prose.
+# Fail package generation the moment a run violates an experimental isolation invariant, so a contaminated package never
+# reaches a harness. The filesystemIsolationRequired field declares the staged workspace boundary; hard OS confinement is
+# evaluated separately by the selected runner and reported as strict or pragmatic confidence.
 function Assert-RunIsolation {
     param(
         [string]$EvalName,
@@ -1106,7 +1107,7 @@ function Assert-RunIsolation {
             throw "$EvalName/$configuration run.json must require fresh context."
         }
         if (-not [bool]$runManifest.filesystemIsolationRequired -or -not [bool]$runManifest.isolatedHomeRequired) {
-            throw "$EvalName/$configuration run.json must require filesystem and home isolation."
+            throw "$EvalName/$configuration run.json must require the staged workspace boundary and isolated home."
         }
 
         # 6. No run manifest references the source repository, and 7. none references a global skill install.

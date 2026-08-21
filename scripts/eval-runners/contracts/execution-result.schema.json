@@ -52,12 +52,37 @@
         "reason": { "type": "string" }
       }
     },
+    "requested": { "type": "object" },
+    "resolved": {
+      "type": "object",
+      "properties": {
+        "provider": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] },
+        "reasoning_effort": { "type": ["string", "null"] },
+        "configuration_profile": { "type": ["string", "null"] },
+        "tool_profile": { "type": ["string", "null"] },
+        "status": { "enum": ["unavailable", "accepted_request", "resolved"] },
+        "accepted": { "type": "object" }
+      }
+    },
     "duration_seconds": { "type": "number", "minimum": 0 },
     "input": {
       "type": "object",
       "required": ["prompt_sha256", "run_json_sha256", "profile_sha256"]
     },
-    "isolation": { "type": "object" },
+    "isolation": {
+      "type": "object",
+      "required": ["status", "level", "hard_filesystem_confinement", "capabilities", "mechanisms"],
+      "properties": {
+        "status": { "enum": ["verified", "unverified"] },
+        "level": { "enum": ["strict", "pragmatic", "unsupported"] },
+        "hard_filesystem_confinement": { "type": "boolean" },
+        "capabilities": { "type": "object" },
+        "mechanisms": { "type": "array", "items": { "type": "string" } },
+        "required_controls": { "type": "array", "items": { "type": "string" } },
+        "unproven_controls": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "telemetry": { "type": "object" },
     "evidence": { "type": "object" },
     "artifacts": { "type": "array" },

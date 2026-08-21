@@ -1432,14 +1432,14 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                 }
             }
 
-            # 10. run.json requires fresh context and isolation; 6/7. it references nothing outside the run package.
+            # 10. run.json requires fresh context, the staged workspace boundary, and isolated home; 6/7. it references nothing outside the run package.
             $withRunJson = [System.IO.File]::ReadAllText((Join-Path $withRunDir 'run.json'), $utf8NoBom)
             $withoutRunJson = [System.IO.File]::ReadAllText((Join-Path $withoutRunDir 'run.json'), $utf8NoBom)
             $withRun = $withRunJson | ConvertFrom-Json
             $withoutRun = $withoutRunJson | ConvertFrom-Json
             foreach ($run in @($withRun, $withoutRun)) {
                 if (-not [bool]$run.freshContextRequired -or -not [bool]$run.filesystemIsolationRequired -or -not [bool]$run.isolatedHomeRequired) {
-                    throw "$($entry.eval_name) run.json must require fresh context, filesystem, and home isolation."
+                    throw "$($entry.eval_name) run.json must require fresh context, the staged workspace boundary, and isolated home."
                 }
                 if ([string]$run.workingDirectory -ne 'repo' -or [string]$run.homeDirectory -ne 'home') {
                     throw "$($entry.eval_name) run.json must set workingDirectory=repo and homeDirectory=home."
@@ -1548,7 +1548,15 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             [int]$profile.timeout_seconds -lt 1 -or [int]$profile.concurrency -lt 1) {
             throw 'execution-profile.json has an invalid schema or execution limit.'
         }
-        foreach ($runnerTool in @('runner-common.ps1', 'resolve-runner.ps1', 'bridge-execution-result.ps1', 'fake/runner.ps1', 'codex/runner.ps1', 'opencode/runner.ps1', 'contracts/execution-profile.schema.json', 'contracts/execution-result.schema.json')) {
+        $runnerTools = [System.Collections.Generic.List[string]]::new()
+        foreach ($runnerTool in @('runner-common.ps1', 'resolve-runner.ps1', 'bridge-execution-result.ps1', 'contracts/execution-profile.schema.json', 'contracts/execution-result.schema.json')) { $runnerTools.Add($runnerTool) }
+        $runnerSourceRoot = Join-Path $repoRoot 'scripts/eval-runners'
+        foreach ($runnerDirectory in Get-ChildItem -LiteralPath $runnerSourceRoot -Directory -Force | Sort-Object Name) {
+            if (Test-Path -LiteralPath (Join-Path $runnerDirectory.FullName 'runner.ps1') -PathType Leaf) {
+                $runnerTools.Add("$($runnerDirectory.Name)/runner.ps1")
+            }
+        }
+        foreach ($runnerTool in $runnerTools) {
             if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory "tools/eval-runners/$runnerTool") -PathType Leaf)) {
                 throw "Prepared package is missing runner tool '$runnerTool'."
             }

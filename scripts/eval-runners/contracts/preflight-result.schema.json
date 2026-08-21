@@ -14,6 +14,7 @@
     "requested",
     "checks",
     "resolved_capabilities",
+    "isolation",
     "mechanisms",
     "warnings",
     "reasons"
@@ -24,6 +25,16 @@
     "status": { "enum": ["compatible", "incompatible"] },
     "checks": { "type": "array" },
     "resolved_capabilities": { "type": "object" },
+    "isolation": {
+      "type": "object",
+      "required": ["level", "status", "hard_filesystem_confinement", "unproven_controls"],
+      "properties": {
+        "level": { "enum": ["strict", "pragmatic", "unsupported"] },
+        "status": { "enum": ["verified", "unverified"] },
+        "hard_filesystem_confinement": { "type": "boolean" },
+        "unproven_controls": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "mechanisms": { "type": "array", "items": { "type": "string" } },
     "warnings": { "type": "array", "items": { "type": "string" } },
     "reasons": { "type": "array", "items": { "type": "string" } }

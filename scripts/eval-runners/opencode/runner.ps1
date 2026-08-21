@@ -3,8 +3,9 @@
     OpenCode Eval Runner adapter.
 
 .DESCRIPTION
-    This is the only place where OpenCode CLI flags, pure configuration,
-    sandbox process setup, and JSON event parsing are defined.
+    This is the only place where OpenCode CLI flags, project/global
+    configuration handling, sandbox process setup, and JSON event parsing are
+    defined.
 #>
 [CmdletBinding()]
 param(
@@ -25,8 +26,8 @@ $descriptor = [ordered]@{
     protocol_version = (Get-RunnerSchemaNames).Protocol
     name = 'opencode'
     version = '0.9.1'
-    platforms = @('linux', 'macos')
-    harness = [ordered]@{ name = 'OpenCode CLI'; version = 'current-supported' }
+    platforms = @('windows', 'linux', 'macos')
+    harness = [ordered]@{ name = 'OpenCode CLI'; version = 'unavailable' }
     capabilities = [ordered]@{
         fresh_context = 'supported'
         isolated_home_config = 'supported'
@@ -44,6 +45,7 @@ $descriptor = [ordered]@{
         command_evidence = 'conditional'
         file_evidence = 'conditional'
         cost_telemetry = 'conditional'
+        credential_child_filtering = 'conditional'
         native_skill_activation_evidence = 'unsupported'
     }
     supported_telemetry = @('transcript_event_capture', 'token_telemetry', 'cache_token_telemetry', 'tool_call_telemetry', 'command_evidence', 'file_evidence', 'cost_telemetry')
@@ -110,6 +112,53 @@ function Resolve-SandboxCommand {
     return Resolve-ExternalCommand -Name $Name
 }
 
+function Get-OpenCodeDescriptor {
+    $copy = [ordered]@{}
+    foreach ($key in $descriptor.Keys) { $copy[$key] = $descriptor[$key] }
+    $commandInfo = Resolve-ExternalCommand -Name 'opencode'
+    $version = 'unavailable'
+    if ($null -ne $commandInfo) {
+        $observation = Get-ExternalCommandVersion -CommandInfo $commandInfo
+        $version = [string]$observation.Version
+    }
+    $copy.harness = [ordered]@{ name = 'OpenCode CLI'; version = $version }
+    return $copy
+}
+
+function New-OpenCodeCliArguments {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$VisiblePlatform = (Get-PlatformName)
+    )
+
+    $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
+    $model = "{0}/{1}" -f $Inputs.Profile.Provider, $Inputs.Profile.Model
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @('run', '--format', 'json', '--dir', $directoryArgument, '--model', $model, '--auto')) {
+        $arguments.Add([string]$argument)
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Inputs.Profile.ReasoningEffort)) {
+        $arguments.Add('--variant')
+        $arguments.Add([string]$Inputs.Profile.ReasoningEffort)
+    }
+    return @($arguments)
+}
+
+function Get-OpenCodeCapabilityMap {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [bool]$HardFilesystemConfinement = $false
+    )
+
+    $capabilities = [ordered]@{}
+    foreach ($capabilityName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) {
+        $capabilities[$capabilityName] = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $capabilityName)
+    }
+    $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
+    $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
+    return $capabilities
+}
+
 function Get-OpenCodePreflight {
     param([Parameter(Mandatory = $true)][object]$Inputs)
 
@@ -121,6 +170,7 @@ function Get-OpenCodePreflight {
     $platform = Get-PlatformName
     $commandInfo = Resolve-ExternalCommand -Name 'opencode'
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
+    $versionObservation = $null
 
     if ($profile.Runner -ne 'opencode') {
         $reasons.Add("execution-profile.json selects '$($profile.Runner)' rather than opencode.")
@@ -148,18 +198,30 @@ function Get-OpenCodePreflight {
     } else {
         $checks.Add((New-PreflightCheck -Name 'harness_executable' -Status passed -Detail $commandInfo.Source))
         try {
+            $versionObservation = Get-ExternalCommandVersion -CommandInfo $commandInfo -WorkingDirectory $run.WorkingDirectoryPath -Environment (New-RunnerEnvironment -Run $run) -TimeoutSeconds 30
+            if (-not $versionObservation.Available) {
+                $reasons.Add('The OpenCode CLI did not expose an exact observable version through --version.')
+                $checks.Add((New-PreflightCheck -Name 'harness_version' -Status unavailable -Detail 'opencode --version did not return a usable version string.'))
+            } else {
+                $checks.Add((New-PreflightCheck -Name 'harness_version' -Status passed -Detail ([string]$versionObservation.Version)))
+            }
             $help = Get-OpenCodeHelpResult -CommandInfo $commandInfo -Inputs $Inputs
             if ($help.TimedOut -or $help.ExitCode -ne 0) {
                 $reasons.Add("OpenCode run --help failed with exit status $($help.ExitCode).")
             } else {
                 $helpText = [string]::Join("`n", @($help.Stdout, $help.Stderr))
-                foreach ($flag in @('--pure', '--format', '--dir', '--model', '--auto')) {
+                foreach ($flag in @('--format', '--dir', '--model', '--auto')) {
                     if ($helpText -notmatch [regex]::Escape($flag)) {
                         $reasons.Add("The installed OpenCode CLI does not advertise required flag '$flag'.")
                     }
                 }
+                $visiblePlatform = if ($platform -eq 'linux' -and $null -ne $sandboxInfo) { 'linux' } else { $platform }
+                $constructed = New-OpenCodeCliArguments -Inputs $Inputs -VisiblePlatform $visiblePlatform
+                foreach ($forbidden in @('--pure', '--continue', '--session')) {
+                    if (@($constructed) -contains $forbidden) { $reasons.Add("The constructed OpenCode invocation must not use session or project-suppression option '$forbidden'.") }
+                }
                 if ($reasons.Count -eq 0) {
-                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'OpenCode run advertises pure, noninteractive, model, directory, and structured-output controls.'))
+                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'OpenCode run advertises noninteractive, model, directory, and structured-output controls; the adapter intentionally does not use --pure.'))
                 }
             }
         } catch {
@@ -175,34 +237,33 @@ function Get-OpenCodePreflight {
     }
 
     if ($platform -notin @('linux', 'macos')) {
-        $reasons.Add("Platform '$platform' has no v0.9.1 OpenCode filesystem sandbox implementation.")
+        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status not_applicable -Detail "Platform '$platform' has no configured external hard-confinement mechanism; pragmatic isolation remains available."))
+        $warnings.Add("Platform '$platform' has no external hard filesystem confinement in this adapter; execution will report pragmatic isolation.")
     } elseif ($null -eq $sandboxInfo) {
-        $reasons.Add("Required $([string]$(if ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' })) isolation command is unavailable.")
+        $sandboxName = if ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' }
+        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail "External '$sandboxName' is unavailable; pragmatic isolation remains available."))
+        $warnings.Add("External '$sandboxName' was unavailable; execution will report pragmatic isolation.")
     } else {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status passed -Detail "External $($sandboxInfo.Source) sandbox confines the process to the staged run and required system runtime paths."))
     }
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The adapter starts one new opencode run process and supplies no resume, continue, or session id.'))
-    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter uses --pure and isolated OpenCode configuration roots.'))
+    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter isolates global/user configuration roots and deliberately preserves repository-owned project configuration; OPENCODE_DISABLE_PROJECT_CONFIG is not used.'))
     $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail 'The exact prompt bytes are sent on stdin as the first and only task input.'))
+    $warnings.Add('OpenCode does not expose a supported child-tool environment filter in this CLI contract; the runner removes unrelated inherited variables but cannot independently prove that the selected provider credential is hidden from every OpenCode-launched tool.')
 
-    $capabilities = [ordered]@{}
-    foreach ($capabilityName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) {
-        $value = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $capabilityName)
-        if ($capabilityName -eq 'filesystem_confinement' -and $null -ne $sandboxInfo -and $platform -in @('linux', 'macos') -and $reasons.Count -eq 0) {
-            $value = 'supported'
-        } elseif ($capabilityName -eq 'filesystem_confinement') {
-            $value = 'unsupported'
-        }
-        $capabilities[$capabilityName] = $value
-    }
+    $hardConfinement = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
+    $capabilities = Get-OpenCodeCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement
     if ($platform -eq 'macos') {
         $warnings.Add('macOS sandbox-exec is deprecated by Apple but is used only when present; a future runner revision may replace it with an equivalent supported mechanism.')
     }
-    $harnessVersion = if ($null -eq $commandInfo) { 'unavailable' } else { 'available' }
+    $harnessVersion = if ($null -eq $versionObservation) { 'unavailable' } else { [string]$versionObservation.Version }
     $descriptorCopy = [ordered]@{}
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenCode CLI'; version = $harnessVersion }
-    return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @('--pure', 'isolated OPENCODE_CONFIG_DIR', 'external filesystem sandbox', 'prompt on stdin', 'no session continuation') -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
+    $mechanisms = [System.Collections.Generic.List[string]]::new()
+    foreach ($mechanism in @('opencode run --format json', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'repository-owned project configuration preserved', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    if ($hardConfinement) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
+    return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }
 
 function New-OpenCodeEnvironment {
@@ -216,7 +277,6 @@ function New-OpenCodeEnvironment {
         OPENCODE_CONFIG_DIR = $configDirectory
         OPENCODE_CONFIG = $configPath
         OPENCODE_DISABLE_AUTOUPDATE = '1'
-        OPENCODE_DISABLE_PROJECT_CONFIG = '1'
     }
 }
 
@@ -248,6 +308,7 @@ function Get-LinuxSandboxArguments {
     $args.Add('--chdir'); $args.Add('/run/repo')
     $insideEnvironment = [ordered]@{
         HOME = '/run/home'
+        USERPROFILE = '/run/home'
         XDG_CONFIG_HOME = '/run/home/.config'
         XDG_DATA_HOME = '/run/home/.local/share'
         XDG_CACHE_HOME = '/run/home/.cache'
@@ -256,7 +317,6 @@ function Get-LinuxSandboxArguments {
         OPENCODE_CONFIG_DIR = '/run/home/opencode-config'
         OPENCODE_CONFIG = '/run/home/opencode-config/opencode.json'
         OPENCODE_DISABLE_AUTOUPDATE = [string]$Environment['OPENCODE_DISABLE_AUTOUPDATE']
-        OPENCODE_DISABLE_PROJECT_CONFIG = [string]$Environment['OPENCODE_DISABLE_PROJECT_CONFIG']
         PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
         CI = '1'
         NO_COLOR = '1'
@@ -309,7 +369,7 @@ function Write-OpenCodeCapture {
     param(
         [Parameter(Mandatory = $true)][object]$RunData,
         [Parameter(Mandatory = $true)][string]$RelativePath,
-        [Parameter(Mandatory = $true)][string]$Text
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
     )
 
     $path = Join-Path $RunData.Run.RunRoot ($RelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
@@ -324,29 +384,32 @@ function Invoke-OpenCodeExecute {
     $preflight = Get-OpenCodePreflight -Inputs $Inputs
     $started = [DateTime]::UtcNow
     $sessionId = [Guid]::NewGuid().ToString('D')
+    $executionDescriptor = [ordered]@{}
+    foreach ($key in $descriptor.Keys) { $executionDescriptor[$key] = $descriptor[$key] }
+    $executionDescriptor.harness = $preflight.harness
     if ($preflight.status -ne 'compatible') {
         $finished = [DateTime]::UtcNow
-        return New-ExecutionResult -Descriptor $descriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'preflight_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -Failure (New-ExecutionFailure -Code 'incompatible' -Message ([string]::Join('; ', @($preflight.reasons)))) -SessionId $sessionId -IsolationCapabilities ([ordered]@{ fresh_context = 'supported'; isolated_home_config = 'supported'; isolated_working_directory = 'supported'; filesystem_confinement = 'unsupported'; ambient_candidate_skill_exclusion = 'supported'; candidate_skill_exposure = 'supported' }) -IsolationMechanisms @('preflight-only') -Evidence ([ordered]@{ preflight = $preflight }) -AttemptCount 1
+        return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'preflight_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -Failure (New-ExecutionFailure -Code 'incompatible' -Message ([string]::Join('; ', @($preflight.reasons)))) -SessionId $sessionId -IsolationCapabilities ([ordered]@{}) -IsolationMechanisms @('preflight-only') -Evidence ([ordered]@{ preflight = $preflight; resume = $false }) -AttemptCount 1
     }
 
     $commandInfo = Resolve-ExternalCommand -Name 'opencode'
     $environment = New-OpenCodeEnvironment -Inputs $Inputs
+    $platform = Get-PlatformName
+    $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
+    $hardFilesystem = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
+    $visiblePlatform = if ($hardFilesystem) { $platform } elseif ($platform -eq 'linux') { 'unknown' } else { $platform }
     $model = "{0}/{1}" -f $Inputs.Profile.Provider, $Inputs.Profile.Model
-    $directoryArgument = if ((Get-PlatformName) -eq 'linux') { '/run/repo' } else { $Inputs.Run.WorkingDirectoryPath }
-    $arguments = @('run', '--format', 'json', '--pure', '--dir', $directoryArgument, '--model', $model, '--auto')
-    if (-not [string]::IsNullOrWhiteSpace([string]$Inputs.Profile.ReasoningEffort)) {
-        $arguments += @('--variant', $Inputs.Profile.ReasoningEffort)
-    }
+    $arguments = New-OpenCodeCliArguments -Inputs $Inputs -VisiblePlatform $visiblePlatform
 
-    if ((Get-PlatformName) -eq 'linux') {
-        $sandboxInfo = Resolve-SandboxCommand -Name 'bwrap'
+    if ($platform -eq 'linux' -and $hardFilesystem) {
         $sandboxArguments = Get-LinuxSandboxArguments -Inputs $Inputs -CommandInfo $commandInfo -Environment $environment
         $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
-    } else {
-        $sandboxInfo = Resolve-SandboxCommand -Name 'sandbox-exec'
+    } elseif ($platform -eq 'macos' -and $hardFilesystem) {
         $sandboxProfile = New-MacosSandboxProfile -Inputs $Inputs -CommandInfo $commandInfo
         $sandboxArguments = @('-f', $sandboxProfile, '--', $commandInfo.FileName) + @($commandInfo.Prefix) + $arguments
         $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+    } else {
+        $process = Invoke-OpenCodeCli -CommandInfo $commandInfo -Arguments $arguments -Inputs $Inputs -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
     }
 
     $stdoutArtifact = Write-OpenCodeCapture -RunData $Inputs -RelativePath 'evidence/opencode-events.jsonl' -Text $process.Stdout
@@ -417,13 +480,25 @@ function Invoke-OpenCodeExecute {
         tool_calls = New-AvailableMetric -Value $toolCalls
         cost = if ($usageBuckets.Contains('cost')) { New-AvailableMetric -Value $usageBuckets['cost'] } else { New-UnavailableMetric -Reason 'opencode_did_not_expose_cost' }
     }
-    return New-ExecutionResult -Descriptor $descriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $process.FinishedUtc.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities ([ordered]@{ fresh_context = 'supported'; isolated_home_config = 'supported'; isolated_working_directory = 'supported'; filesystem_confinement = 'supported'; ambient_candidate_skill_exclusion = 'supported'; candidate_skill_exposure = 'supported'; prompt_fidelity = 'supported'; model_configuration_lock = 'supported'; response_capture = 'supported' }) -IsolationMechanisms @('--pure', 'isolated OPENCODE_CONFIG_DIR', 'bwrap/sandbox-exec', 'prompt on stdin', 'no session continuation') -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $eventCounts; commands = @($commands); prompt_first_input = $true; resume = $false; model_argument = $model; sandbox = if ((Get-PlatformName) -eq 'linux') { 'bwrap' } else { 'sandbox-exec' } }) -AttemptCount 1
+    $capabilities = Get-OpenCodeCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem
+    $mechanisms = [System.Collections.Generic.List[string]]::new()
+    foreach ($mechanism in @('opencode run --format json', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'repository-owned project configuration preserved', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement'); $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
+    $sandboxEvidence = if (-not $hardFilesystem) { 'unavailable' } elseif ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' }
+    $credentialNames = @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider))
+    $credentialEvidence = [ordered]@{
+        provider_environment_variables = $credentialNames
+        unrelated_environment_excluded = $true
+        child_tool_visibility = 'provider_credential_may_be_visible_to_native_child_tools; no supported child filter is exposed'
+        value_observed = $false
+    }
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $process.FinishedUtc.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'OpenCode accepted the requested provider, model, and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ provider = $Inputs.Profile.Provider; model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $eventCounts; commands = @($commands); prompt_first_input = $true; resume = $false; model_argument = $model; sandbox = $sandboxEvidence; project_configuration = 'repository_owned_project_config_preserved'; disable_project_config_environment = $false; credential = $credentialEvidence }) -AttemptCount 1
 }
 
 try {
     [void](Assert-RunnerDescriptor -Descriptor $descriptor)
     switch ($Command) {
-        'describe' { Write-RunnerJson -Value $descriptor -AsOutput }
+        'describe' { Write-RunnerJson -Value (Get-OpenCodeDescriptor) -AsOutput }
         'preflight' {
             $inputs = Resolve-OpenCodeInputs
             Write-RunnerJson -Value (Get-OpenCodePreflight -Inputs $inputs) -AsOutput
