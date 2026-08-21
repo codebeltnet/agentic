@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-runner-descriptor/1",
+  "title": "Codebelt Agentic Eval Runner Descriptor",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "protocol_version",
+    "name",
+    "version",
+    "platforms",
+    "harness",
+    "capabilities",
+    "supported_telemetry",
+    "configuration_profiles",
+    "tool_profiles"
+  ],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-runner-descriptor/1" },
+    "protocol_version": { "const": "codebeltnet/agentic/eval-runner-protocol/1" },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "platforms": { "type": "array", "items": { "type": "string" } },
+    "harness": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "enum": ["supported", "conditional", "unsupported"] }
+    },
+    "supported_telemetry": { "type": "array", "items": { "type": "string" } },
+    "configuration_profiles": { "type": "array", "items": { "type": "string" } },
+    "tool_profiles": { "type": "array", "items": { "type": "string" } }
+  }
+}

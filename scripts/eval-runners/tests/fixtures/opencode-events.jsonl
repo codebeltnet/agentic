@@ -1,0 +1,5 @@
+{"type":"step_start","part":{"id":"fixture-step"}}
+{"type":"text","part":{"text":"fixture response"}}
+{"type":"tool_use","part":{"tool":"read"}}
+{"type":"step_finish","part":{"tokens":{"input":12,"output":4},"cost":0.01}}
+{"type":"future.event.v99","payload":"unknown"}

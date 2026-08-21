@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-execution-result/1",
+  "title": "Codebelt Agentic Eval Execution Result",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "protocol_version",
+    "run_id",
+    "session",
+    "status",
+    "run",
+    "final_response",
+    "runner",
+    "harness",
+    "requested",
+    "resolved",
+    "started_utc",
+    "finished_utc",
+    "duration_seconds",
+    "exit",
+    "input",
+    "isolation",
+    "telemetry",
+    "evidence",
+    "artifacts",
+    "warnings",
+    "compatibility_deviations",
+    "attempt_count"
+  ],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-execution-result/1" },
+    "protocol_version": { "const": "codebeltnet/agentic/eval-runner-protocol/1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "session": {
+      "type": "object",
+      "required": ["id", "fresh", "resumed"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "fresh": { "const": true },
+        "resumed": { "const": false }
+      }
+    },
+    "status": { "enum": ["completed", "failed", "timed_out", "cancelled", "incompatible"] },
+    "final_response": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["available", "unavailable"] },
+        "text": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "duration_seconds": { "type": "number", "minimum": 0 },
+    "input": {
+      "type": "object",
+      "required": ["prompt_sha256", "run_json_sha256", "profile_sha256"]
+    },
+    "isolation": { "type": "object" },
+    "telemetry": { "type": "object" },
+    "evidence": { "type": "object" },
+    "artifacts": { "type": "array" },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "compatibility_deviations": { "type": "array", "items": { "type": "string" } },
+    "attempt_count": { "const": 1 }
+  }
+}

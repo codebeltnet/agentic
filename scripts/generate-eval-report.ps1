@@ -412,6 +412,9 @@ function Get-ReportRun {
         stdout = [string](Get-Property -Object $Result -Name 'stdout' -Default '')
         stderr = [string](Get-Property -Object $Result -Name 'stderr' -Default '')
         exit_status = Get-Property -Object $Result -Name 'exit_status' -Default $null
+        execution_status = Get-Property -Object $Result -Name 'execution_status' -Default $null
+        execution_run_id = Get-Property -Object $Result -Name 'execution_run_id' -Default $null
+        execution_result_file = Get-Property -Object $Result -Name 'execution_result_file' -Default $null
         metrics = $metrics
         isolation = Get-Property -Object $Result -Name 'isolation' -Default $null
         grades = @($grades)
@@ -469,7 +472,8 @@ function Write-FirstPartyReport {
             if ($null -ne $result) {
                 $run = Get-ReportRun -Result $result -Configuration $configuration -EvalName ([string]$entry.eval_name) -EvalId ([int]$metadata.eval_id) -Assertions $assertions -RunPackageDirectory (Join-Path $evalDirectory $configuration) -EvalDirectory $evalDirectory -IterationPath $IterationPath
                 $runMap[$configuration] = $run
-                if (-not [string]::IsNullOrWhiteSpace([string]$run.output) -or @($run.output_files).Count -gt 0) { $completedRuns++ }
+                $executionStatus = [string](Get-Property -Object $result -Name 'execution_status' -Default '')
+                if (-not [string]::IsNullOrWhiteSpace([string]$run.output) -or @($run.output_files).Count -gt 0 -or ($executionStatus -and $executionStatus -ne 'unrun')) { $completedRuns++ }
                 if (-not [string]::IsNullOrWhiteSpace([string]$run.model) -and -not $allModels.Contains([string]$run.model)) {
                     $allModels.Add([string]$run.model)
                 }
@@ -544,14 +548,19 @@ function Write-UpstreamGrading {
     $duration = Get-Property -Object $Result -Name 'duration_seconds' -Default $null
     $tokens = Get-Property -Object $Result -Name 'total_tokens' -Default $null
     $toolCalls = Get-Property -Object $Result -Name 'tool_calls' -Default $null
+    $exitStatus = Get-Property -Object $Result -Name 'exit_status' -Default $null
+    $errorsEncountered = if ($null -eq $exitStatus -or [string]::IsNullOrWhiteSpace([string]$exitStatus)) { $null } elseif ([int]$exitStatus -eq 0) { 0 } else { 1 }
 
-    $durationSeconds = if ($null -eq $duration) { 0.0 } else { [double]$duration }
-    $totalTokens = if ($null -eq $tokens) { 0 } else { [int64]$tokens }
-    Write-JsonFile -Path (Join-Path $RunDirectory 'timing.json') -Value ([ordered]@{
-        total_tokens = $totalTokens
-        duration_ms = [math]::Round($durationSeconds * 1000, 0)
-        total_duration_seconds = $durationSeconds
-    })
+    $timing = [ordered]@{}
+    if ($null -ne $duration -and -not [string]::IsNullOrWhiteSpace([string]$duration)) {
+        $durationSeconds = [double]$duration
+        $timing.duration_ms = [math]::Round($durationSeconds * 1000, 0)
+        $timing.total_duration_seconds = $durationSeconds
+    }
+    if ($null -ne $tokens -and -not [string]::IsNullOrWhiteSpace([string]$tokens)) {
+        $timing.total_tokens = [int64]$tokens
+    }
+    Write-JsonFile -Path (Join-Path $RunDirectory 'timing.json') -Value $timing
 
     $gradingDocument = [ordered]@{
         expectations = @($expectations)
@@ -563,7 +572,7 @@ function Write-UpstreamGrading {
         }
         execution_metrics = [ordered]@{
             total_tool_calls = $toolCalls
-            errors_encountered = if ([int](Get-Property -Object $Result -Name 'exit_status' -Default 0) -eq 0) { 0 } else { 1 }
+            errors_encountered = $errorsEncountered
         }
         # The upstream aggregator reads timing.json when grading.json does not claim a duration. Keep the
         # portable run's timing in that sibling file so both elapsed time and token usage survive aggregation.

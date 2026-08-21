@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-execution-profile/1",
+  "title": "Codebelt Agentic Eval Execution Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "runner",
+    "provider",
+    "model",
+    "reasoning_effort",
+    "configuration_profile",
+    "tool_profile",
+    "timeout_seconds",
+    "concurrency"
+  ],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-execution-profile/1" },
+    "runner": { "type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "provider": { "type": ["string", "null"], "minLength": 1 },
+    "model": { "type": ["string", "null"], "minLength": 1 },
+    "reasoning_effort": { "type": ["string", "null"], "minLength": 1 },
+    "configuration_profile": { "type": "string", "minLength": 1 },
+    "tool_profile": { "type": "string", "minLength": 1 },
+    "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+    "concurrency": { "type": "integer", "minimum": 1 }
+  }
+}

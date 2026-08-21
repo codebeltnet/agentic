@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-runner-preflight/1",
+  "title": "Codebelt Agentic Eval Runner Preflight Result",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "protocol_version",
+    "status",
+    "runner",
+    "harness",
+    "run",
+    "requested",
+    "checks",
+    "resolved_capabilities",
+    "mechanisms",
+    "warnings",
+    "reasons"
+  ],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-runner-preflight/1" },
+    "protocol_version": { "const": "codebeltnet/agentic/eval-runner-protocol/1" },
+    "status": { "enum": ["compatible", "incompatible"] },
+    "checks": { "type": "array" },
+    "resolved_capabilities": { "type": "object" },
+    "mechanisms": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "reasons": { "type": "array", "items": { "type": "string" } }
+  }
+}

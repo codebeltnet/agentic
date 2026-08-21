@@ -1191,6 +1191,7 @@ Add-ValidationResult -Results $results -Name 'Repository automation cannot launc
     $automationPaths = @($automationPaths | Where-Object {
         $normalized = $_ -replace '\\', '/'
         ($normalized.StartsWith('scripts/') -or $normalized.StartsWith('.github/')) -and
+        -not $normalized.StartsWith('scripts/eval-runners/') -and
         $normalized -ne 'scripts/validate-skill-templates.ps1' -and
         $automationExtensions -contains [System.IO.Path]::GetExtension($normalized).ToLowerInvariant()
     } | Sort-Object -Unique)
@@ -1231,8 +1232,27 @@ Add-ValidationResult -Results $results -Name 'Repository automation cannot launc
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'this repository does not provide an opt-in path around that rule.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Model-backed comparisons are not a repository completion gate.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'This rule is Priority 1.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'A human-selected external Eval Orchestrator may invoke an explicitly selected package-local Eval Runner'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'There is no repository opt-in switch.'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Eval Runner'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'validate-skill-templates.ps1 -MetadataOnly'
+}
+
+Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance remains deterministic' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $conformancePath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-runner-conformance.ps1'
+    if (-not (Test-Path -LiteralPath $conformancePath -PathType Leaf)) {
+        throw 'The Eval Runner conformance suite is missing.'
+    }
+    $conformanceOutput = & pwsh -NoProfile -File $conformancePath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Eval Runner conformance failed: $($conformanceOutput -join [Environment]::NewLine)"
+    }
+    if (@($conformanceOutput -join [Environment]::NewLine) -notmatch 'Eval Runner conformance:\s+PASS') {
+        throw 'Eval Runner conformance did not report PASS.'
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Action {
@@ -1333,17 +1353,15 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         $runner = [System.IO.File]::ReadAllText($runnerPath, $utf8NoBom)
         foreach ($needle in @(
-            'START NOW. You are the evaluator, grader, and report producer',
+            'START NOW. You are the external Eval Orchestrator',
             'Do not execute evaluation prompts in the current agent context.',
-            'create one isolated fresh-context worker for `with_skill` and a second isolated fresh-context worker for `without_skill`',
-            'Never reuse a worker or session between runs',
-            'Do not expose this runner',
-            'The candidate skill is already inlined in the with_skill run',
-            'Launch each worker from its own run directory',
-            'Use the same model, version, configuration, tools, and limits for every worker.',
-            'Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count.',
-            'Do not begin grading until every available worker has completed or failed',
-            '## Grade and report immediately',
+            'execution-profile.json` selects the runner/provider/model/configuration',
+            'invoke the runner exactly once with `execute`',
+            'never receive or inspect expected output, assertions, grading, paired output, benchmark data, or human feedback',
+            'Never fall back to the old generic isolated-worker behavior',
+            'execution-result.json',
+            'The bridge checks prompt/run/profile hashes and artifact confinement',
+            'Only now read each eval''s `eval-metadata.json`',
             'grading[].text',
             'tools/skill-creator/agents/grader.md',
             'scripts/aggregate_benchmark.py',
@@ -1380,6 +1398,9 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                     if ($run.PSObject.Properties.Name -notcontains $pathProperty) {
                         throw "$($entry.eval_name)/$configuration manifest entry must declare '$pathProperty'."
                     }
+                }
+                if ($run.PSObject.Properties.Name -notcontains 'execution_result') {
+                    throw "$($entry.eval_name)/$configuration manifest entry must declare 'execution_result'."
                 }
                 foreach ($mustExist in @($run.prompt, $run.run_manifest, $run.working_directory, $run.home_directory)) {
                     if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory $mustExist))) {
@@ -1506,6 +1527,30 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                         throw "$($entry.eval_name) result stub $resultFile must expose isolation flag '$isolationField'."
                     }
                 }
+            }
+        }
+
+        if ([string]$manifest.execution -ne 'runner_handoff' -or
+            [string]$manifest.execution_profile -ne 'execution-profile.json' -or
+            [string]$manifest.runner_protocol -ne 'codebeltnet/agentic/eval-runner-protocol/1' -or
+            [string]$manifest.runner_tools -ne 'tools/eval-runners' -or
+            [string]$manifest.execution_result_schema -ne 'codebeltnet/agentic/eval-execution-result/1') {
+            throw 'Runner-aware packages must declare the execution profile, runner protocol, runner tools, and execution-result schema.'
+        }
+        $profilePath = Join-Path $iterationDirectory ([string]$manifest.execution_profile)
+        $profile = [System.IO.File]::ReadAllText($profilePath, $utf8NoBom) | ConvertFrom-Json
+        foreach ($profileField in @('schema', 'runner', 'provider', 'model', 'reasoning_effort', 'configuration_profile', 'tool_profile', 'timeout_seconds', 'concurrency')) {
+            if ($profile.PSObject.Properties.Name -notcontains $profileField) {
+                throw "execution-profile.json must declare '$profileField'."
+            }
+        }
+        if ([string]$profile.schema -ne 'codebeltnet/agentic/eval-execution-profile/1' -or
+            [int]$profile.timeout_seconds -lt 1 -or [int]$profile.concurrency -lt 1) {
+            throw 'execution-profile.json has an invalid schema or execution limit.'
+        }
+        foreach ($runnerTool in @('runner-common.ps1', 'resolve-runner.ps1', 'bridge-execution-result.ps1', 'fake/runner.ps1', 'codex/runner.ps1', 'opencode/runner.ps1', 'contracts/execution-profile.schema.json', 'contracts/execution-result.schema.json')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory "tools/eval-runners/$runnerTool") -PathType Leaf)) {
+                throw "Prepared package is missing runner tool '$runnerTool'."
             }
         }
 
