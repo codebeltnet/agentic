@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-08-21
+
+This patch release adds the harness-agnostic Eval Runner execution boundary without changing the paired evaluation methodology or existing report schemas. Prepared packages now carry `execution-profile.json`, package-local runner protocol tools, and normalized `execution-result.json` evidence; the deterministic fake runner is the conformance reference, with Codex and OpenCode as the initial real adapters. Repository automation remains model-free; only a human-directed external Eval Orchestrator may invoke the selected runner, and unsupported isolation fails closed.
+
+### Added
+
+- `scripts/eval-runners/` with the common `describe`/`preflight`/`execute` process contract, execution-profile and execution-result schemas, deterministic fake runner, Codex adapter, OpenCode adapter, artifact/hash validation, and bridge into the existing `eval-result/2` result shape,
+- deterministic fake-runner conformance coverage for fresh paired sessions, prompt fidelity, isolation boundaries, candidate-skill exposure, status normalization, unavailable telemetry, event warnings, artifact references, and report compatibility,
+- runner-aware package preparation that reuses `run.json`, keeps runner selection outside `evals/evals.json`, and preserves Anthropic-compatible benchmark/report artifacts.
+
+### Changed
+
+- `AGENTS.md`, `README.md`, and `CONTRIBUTING.md` now distinguish the Eval Runner, Eval Orchestrator, Grader, and Human Reviewer and clarify that runner execution is an explicit external-handoff boundary rather than repository automation,
+- report timing output omits unavailable duration and token telemetry instead of writing zero placeholders.
+
 ## [0.9.0] - 2026-08-20
 
 This is a minor release that adds three .NET skills — `dotnet-test`, `dotnet-remote-testing`, and `dotnet-segregated-assets` — replaces the repository's model-backed eval benchmark workflow with deterministic, local-only validation, and finalizes the portable eval handoff. The selected external evaluator now runs the paired workers, grades their results, and invokes Anthropic's skill-creator aggregator and eval viewer without sending the user back for a second collection command. `dotnet-test` bootstraps and modernizes xUnit test projects against Codebelt conventions with role-aware fixtures; `dotnet-remote-testing` runs .NET tests inside official Microsoft SDK containers using either an existing `testenvironments.json` or zero-config, offline-safe release discovery; and `dotnet-segregated-assets` migrates ASP.NET Core applications to an artifact-first topology where `wwwroot` stays the authoring root while deployed static content is served by a separate hardened origin. Alongside those, `git-keep-a-changelog` and `git-nuget-release-notes` gained deterministic release-entity classification, and `git-visual-commits` gained an invocation routing lock. No published skill was removed or renamed, so adopting this release is non-breaking for existing installs.
