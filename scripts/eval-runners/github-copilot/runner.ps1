@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     This is the only place where GitHub Copilot CLI flags, COPILOT_HOME
-    handling, non-interactive JSONL event parsing, GitHub-token authentication,
+    handling, non-interactive JSONL event parsing, Copilot authentication,
     and Copilot isolation limitations are defined. It implements the unchanged
     describe/preflight/execute process contract shared by every runner.
 
@@ -28,9 +28,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '..\runner-common.ps1')
 
-# GitHub Copilot authenticates from a GitHub token, not a model-provider API
-# key. These are the supported token variables in precedence order; only the
-# present one is forwarded into the isolated worker environment.
+# GitHub Copilot checks these token variables before its OS credential store and
+# GitHub CLI fallback. The values are forwarded only to the Copilot process;
+# --secret-env-vars removes them from shell and MCP child environments.
 $copilotAuthVariables = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
 # Model routing runs through GitHub Copilot; the profile provider names the
 # routing backend, not a direct model vendor.
@@ -60,7 +60,7 @@ $descriptor = [ordered]@{
         command_evidence = 'conditional'
         file_evidence = 'conditional'
         cost_telemetry = 'unsupported'
-        credential_child_filtering = 'conditional'
+        credential_child_filtering = 'supported'
         native_skill_activation_evidence = 'unsupported'
     }
     supported_telemetry = @('transcript_event_capture', 'token_telemetry', 'cache_token_telemetry', 'tool_call_telemetry', 'command_evidence', 'file_evidence')
@@ -94,17 +94,35 @@ function Get-CopilotTokenVariable {
     return $null
 }
 
-function Test-CopilotLoginProfileExists {
-    # Existence check only; the file is never read or logged so no credential or
-    # login value is exposed. The default location is COPILOT_HOME or the
-    # platform user profile's .copilot directory.
-    $configuredHome = [Environment]::GetEnvironmentVariable('COPILOT_HOME')
-    $homeRoot = if ([string]::IsNullOrWhiteSpace($configuredHome)) {
-        Join-Path ([Environment]::GetFolderPath('UserProfile')) '.copilot'
-    } else {
-        $configuredHome
+function Get-CopilotGhConfigDirectory {
+    # GH_CONFIG_DIR is an authentication-state exception to the isolated
+    # Copilot configuration roots. Resolve it from GitHub CLI's documented
+    # precedence without reading or logging any credential file.
+    $configured = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
+    if ([string]::IsNullOrWhiteSpace($configured)) {
+        $xdgConfig = [Environment]::GetEnvironmentVariable('XDG_CONFIG_HOME')
+        if (-not [string]::IsNullOrWhiteSpace($xdgConfig)) {
+            $configured = Join-Path $xdgConfig 'gh'
+        } elseif ((Get-PlatformName) -eq 'windows') {
+            $applicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+            if (-not [string]::IsNullOrWhiteSpace($applicationData)) {
+                $configured = Join-Path $applicationData 'GitHub CLI'
+            }
+        } else {
+            $userHome = [Environment]::GetEnvironmentVariable('HOME')
+            if ([string]::IsNullOrWhiteSpace($userHome)) {
+                $userHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+            }
+            if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+                $configured = Join-Path (Join-Path $userHome '.config') 'gh'
+            }
+        }
     }
-    return (Test-Path -LiteralPath (Join-Path $homeRoot 'config.json') -PathType Leaf)
+
+    if ([string]::IsNullOrWhiteSpace($configured) -or -not (Test-Path -LiteralPath $configured -PathType Container)) {
+        return $null
+    }
+    return [System.IO.Path]::GetFullPath($configured)
 }
 
 function Invoke-CopilotCli {
@@ -151,15 +169,6 @@ function Get-CopilotDescriptor {
     return $copy
 }
 
-function Get-CopilotPromptText {
-    param([Parameter(Mandatory = $true)][object]$Inputs)
-
-    # The prompt is delivered verbatim through --prompt. run.json stages UTF-8
-    # prompt bytes, so decoding to a string and forwarding it as one argv value
-    # round-trips the exact characters; prompt_sha256 in the result confirms it.
-    return [System.Text.UTF8Encoding]::new($false).GetString($Inputs.Run.PromptBytes)
-}
-
 function New-CopilotCliArguments {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
@@ -169,21 +178,22 @@ function New-CopilotCliArguments {
     $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $secretList = ($copilotAuthVariables -join ',')
     $arguments = [System.Collections.Generic.List[string]]::new()
-    # Noninteractive one-shot JSONL run. --allow-all-tools is the narrow switch
-    # that removes tool-approval prompts without --allow-all-paths or
-    # --allow-all-urls, so file access stays inside the working directory and
-    # temp roots and URL/network access is not blanket-granted. --no-ask-user
-    # keeps the agent from pausing for questions. --no-custom-instructions stops
-    # ambient AGENTS.md / instruction discovery (including the host repository's)
-    # from leaking into either arm. --disable-builtin-mcps drops the ambient
-    # GitHub MCP server. --secret-env-vars redacts the GitHub token from output.
+    # Noninteractive one-shot JSONL run. --allow-all-tools is a broad
+    # tool-approval grant required for programmatic execution; it does not
+    # include --allow-all-paths or --allow-all-urls, so normal path and URL
+    # verification remains active. --no-ask-user keeps the agent from pausing
+    # for questions. Repository-owned custom instructions remain enabled so
+    # both paired arms see the staged repository exactly as supplied. Ambient
+    # Copilot state is excluded by the run-local COPILOT_HOME and environment
+    # roots. --disable-builtin-mcps drops the built-in GitHub MCP server.
+    # --secret-env-vars removes the listed credentials from shell and MCP
+    # child environments.
     foreach ($argument in @(
             '-C', $directoryArgument,
             '--model', $Inputs.Profile.Model,
             '--output-format', 'json',
             '--allow-all-tools',
             '--no-ask-user',
-            '--no-custom-instructions',
             '--disable-builtin-mcps',
             '--no-color',
             '--log-level', 'none',
@@ -196,8 +206,6 @@ function New-CopilotCliArguments {
         $arguments.Add('--reasoning-effort')
         $arguments.Add([string]$Inputs.Profile.ReasoningEffort)
     }
-    $arguments.Add('--prompt')
-    $arguments.Add((Get-CopilotPromptText -Inputs $Inputs))
     return @($arguments)
 }
 
@@ -268,7 +276,7 @@ function Get-CopilotPreflight {
                 $reasons.Add("Copilot --help failed with exit status $($help.ExitCode).")
             } else {
                 $helpText = [string]::Join("`n", @($help.Stdout, $help.Stderr))
-                foreach ($flag in @('--prompt', '--output-format', '--model', '--allow-all-tools', '--no-ask-user', '--no-custom-instructions', '--disable-builtin-mcps', '--secret-env-vars')) {
+                foreach ($flag in @('--output-format', '--model', '--allow-all-tools', '--no-ask-user', '--disable-builtin-mcps', '--secret-env-vars')) {
                     if ($helpText -notmatch [regex]::Escape($flag)) {
                         $reasons.Add("The installed Copilot CLI does not advertise required flag '$flag'.")
                     }
@@ -278,13 +286,17 @@ function Get-CopilotPreflight {
                 foreach ($forbidden in @('--resume', '-r', '--continue', '--session-id', '--connect', '--yolo', '--allow-all', '--allow-all-paths', '--allow-all-urls')) {
                     if (@($constructed) -contains $forbidden) { $reasons.Add("The constructed Copilot invocation must not use session-continuation or over-broad permission option '$forbidden'.") }
                 }
-                foreach ($required in @('--prompt', '--output-format', '--allow-all-tools', '--no-ask-user', '--no-custom-instructions')) {
-                    if (@($constructed) -notcontains $required) { $reasons.Add("The constructed Copilot invocation must include '$required'.") }
+                foreach ($required in @('--output-format', '--allow-all-tools', '--no-ask-user', '--disable-builtin-mcps', '--secret-env-vars')) {
+                    $present = @($constructed) -contains $required
+                    if ($required -eq '--secret-env-vars') {
+                        $present = $present -or (@($constructed | Where-Object { $_ -like '--secret-env-vars=*' }).Count -gt 0)
+                    }
+                    if (-not $present) { $reasons.Add("The constructed Copilot invocation must include '$required'.") }
                 }
-                $promptCount = @($constructed | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' }).Count
-                if ($promptCount -ne 1) { $reasons.Add('The constructed Copilot invocation must deliver the prompt exactly once.') }
+                $promptOptionCount = @($constructed | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count
+                if ($promptOptionCount -ne 0) { $reasons.Add('The constructed Copilot invocation must not place the prompt in argv; prompt delivery uses stdin.') }
                 if ($reasons.Count -eq 0) {
-                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Copilot accepts the constructed noninteractive invocation: --prompt once, --output-format json, --model, --allow-all-tools, --no-ask-user, --no-custom-instructions, --disable-builtin-mcps, and no session continuation.'))
+                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Copilot accepts the constructed noninteractive invocation: stdin prompt delivery, --output-format json, --model, broad --allow-all-tools approval, --no-ask-user, --disable-builtin-mcps, --secret-env-vars, and no session continuation.'))
                 }
             }
         } catch {
@@ -293,12 +305,17 @@ function Get-CopilotPreflight {
     }
 
     $tokenVariable = Get-CopilotTokenVariable
+    $ghConfigDirectory = Get-CopilotGhConfigDirectory
     if (-not [string]::IsNullOrWhiteSpace($tokenVariable)) {
-        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through the narrow $tokenVariable GitHub token; the ambient Copilot login profile is not copied into the run."))
-    } elseif (Test-CopilotLoginProfileExists) {
-        $reasons.Add('A Copilot login profile exists at the default location, but GitHub Copilot co-mingles login state with behavioral configuration in COPILOT_HOME. The runner requires a separable GitHub token (COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN - for example `gh auth token` or a fine-grained PAT with Copilot access) rather than importing that profile.')
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through the explicit $tokenVariable environment variable; Copilot OS-keychain and GitHub CLI state are not copied into the run."))
     } else {
-        $reasons.Add('No GitHub Copilot authentication is available. Export COPILOT_GITHUB_TOKEN (or GH_TOKEN/GITHUB_TOKEN) with Copilot access.')
+        $ghDetail = if ($null -eq $ghConfigDirectory) {
+            'no host GitHub CLI configuration directory was observable'
+        } else {
+            'the host GitHub CLI configuration directory will remain available for Copilot''s documented gh auth token fallback'
+        }
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status unavailable -Detail "No explicit token is present; native Copilot OS-keychain lookup is delegated to the installed CLI and $ghDetail. This preflight does not contact the Copilot service."))
+        $warnings.Add('Authentication readiness beyond explicit environment tokens and the observable GitHub CLI fallback cannot be proven without a live Copilot request; preflight remains conditional and does not reject a tokenless native OAuth/keychain configuration.')
     }
 
     if ($platform -notin @('linux', 'macos')) {
@@ -312,20 +329,14 @@ function Get-CopilotPreflight {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status passed -Detail "External $($sandboxInfo.Source) sandbox confines Copilot to the staged run and required system runtime paths."))
     }
 
-    $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The adapter starts one new copilot -p process and passes no --resume, --continue, --session-id, or --connect.'))
-    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter points COPILOT_HOME at the run''s isolated home, disables built-in MCP servers, and disables ambient custom instructions, so global skills, plugins, MCP config, sessions, memories, and instructions do not load.'))
+    $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The adapter starts one new Copilot process, supplies one stdin prompt, and passes no --resume, --continue, --session-id, or --connect.'))
+    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter points COPILOT_HOME, Copilot cache, HOME, USERPROFILE, and XDG roots at the run''s isolated home, disables built-in MCP servers, and preserves only staged repository-owned custom instructions; personal Copilot skills, plugins, MCP config, sessions, memories, and instructions are not imported.'))
     $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "-C $($run.WorkingDirectoryPath); COPILOT_HOME under $($run.HomeDirectoryPath)"))
-    $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail 'The exact UTF-8 prompt bytes are delivered once as the --prompt argument value.'))
-    $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only the present GitHub token variable is forwarded; --secret-env-vars redacts it from Copilot output; no login profile or auth file is copied into the run.'))
-    $warnings.Add('GitHub Copilot inherits the shell environment for shell tools apart from a blocklist; the runner redacts the GitHub token from output with --secret-env-vars but cannot independently prove the child-tool environment filter hides it from every tool path.')
+    $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail 'The prepared UTF-8 prompt bytes are supplied once through stdin; the execution fake proves the received bytes match the staged prompt.'))
+    $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only supported authentication state is made available to Copilot; --secret-env-vars removes every listed token variable from shell and MCP child environments; no Copilot profile or credential file is copied.'))
     if ($platform -eq 'macos') {
         $warnings.Add('macOS sandbox-exec is deprecated by Apple but is used only when present; a future runner revision may replace it with an equivalent supported mechanism.')
     }
-    $promptLength = (Get-CopilotPromptText -Inputs $Inputs).Length
-    if ($promptLength -gt 30000) {
-        $warnings.Add('The prompt exceeds 30000 characters; on some hosts a very long --prompt argument can approach the operating-system command-line length limit.')
-    }
-
     $hardConfinement = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
     $capabilities = Get-CopilotCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement
     $harnessVersion = if ($null -eq $versionObservation) { 'unavailable' } else { [string]$versionObservation.Version }
@@ -333,7 +344,7 @@ function Get-CopilotPreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'GitHub Copilot CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('copilot --prompt --output-format json', '--allow-all-tools', '--no-ask-user', '--no-custom-instructions', '--disable-builtin-mcps', '--secret-env-vars token redaction', 'isolated COPILOT_HOME', 'isolated HOME/XDG roots', 'narrow GitHub token authentication', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('copilot --output-format json', 'prompt on stdin', '--allow-all-tools broad tool approval', 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI authentication fallback through GH_CONFIG_DIR when available', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardConfinement) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }
@@ -342,11 +353,19 @@ function New-CopilotEnvironment {
     param([Parameter(Mandatory = $true)][object]$Inputs)
 
     $copilotHome = Join-Path $Inputs.Run.HomeDirectoryPath '.copilot'
+    $copilotCacheHome = Join-Path $Inputs.Run.HomeDirectoryPath '.copilot-cache'
     New-Item -ItemType Directory -Path $copilotHome -Force | Out-Null
-    return New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables $copilotAuthVariables -Additional @{
+    New-Item -ItemType Directory -Path $copilotCacheHome -Force | Out-Null
+    $additional = @{
         COPILOT_HOME = $copilotHome
+        COPILOT_CACHE_HOME = $copilotCacheHome
         COPILOT_AUTO_UPDATE = 'false'
     }
+    $ghConfigDirectory = Get-CopilotGhConfigDirectory
+    if ($null -ne $ghConfigDirectory) {
+        $additional['GH_CONFIG_DIR'] = $ghConfigDirectory
+    }
+    return New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables $copilotAuthVariables -Additional $additional
 }
 
 function New-CopilotInsideEnvironment {
@@ -364,6 +383,7 @@ function New-CopilotInsideEnvironment {
         TEMP = '/run/home/tmp'
         TMP = '/run/home/tmp'
         COPILOT_HOME = '/run/home/.copilot'
+        COPILOT_CACHE_HOME = '/run/home/.copilot-cache'
         COPILOT_AUTO_UPDATE = 'false'
         PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
         CI = '1'
@@ -374,7 +394,40 @@ function New-CopilotInsideEnvironment {
             $insideEnvironment[$authName] = [string]$Environment[$authName]
         }
     }
+    if ($Environment.Contains('GH_CONFIG_DIR') -and -not [string]::IsNullOrWhiteSpace([string]$Environment['GH_CONFIG_DIR'])) {
+        $insideEnvironment['GH_CONFIG_DIR'] = '/run/gh-config'
+    }
     return $insideEnvironment
+}
+
+function Add-CopilotLinuxAuthenticationMount {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$HostPath
+    )
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in $Arguments) { $result.Add([string]$argument) }
+    $separatorIndex = $result.IndexOf('--')
+    if ($separatorIndex -lt 0) {
+        throw 'The Linux Copilot sandbox argument list has no command separator.'
+    }
+    $result.Insert($separatorIndex, '/run/gh-config')
+    $result.Insert($separatorIndex, $HostPath)
+    $result.Insert($separatorIndex, '--ro-bind')
+    return @($result)
+}
+
+function Add-CopilotMacosAuthenticationPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProfilePath,
+        [Parameter(Mandatory = $true)][string]$HostPath
+    )
+
+    $normalized = $HostPath.Replace('\', '/')
+    $escaped = $normalized.Replace('"', '\"')
+    $line = '(allow file-read* (subpath "' + $escaped + '"))'
+    [System.IO.File]::AppendAllText($ProfilePath, "`n$line`n", [System.Text.UTF8Encoding]::new($false))
 }
 
 function Write-CopilotCapture {
@@ -497,13 +550,19 @@ function Invoke-CopilotExecute {
     if ($platform -eq 'linux' -and $hardFilesystem) {
         $insideEnvironment = New-CopilotInsideEnvironment -Inputs $Inputs -Environment $environment
         $sandboxArguments = Get-LinuxEvalSandboxArguments -Inputs $Inputs -CommandInfo $commandInfo -InsideEnvironment $insideEnvironment
-        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+        if ($environment.Contains('GH_CONFIG_DIR') -and -not [string]::IsNullOrWhiteSpace([string]$environment['GH_CONFIG_DIR'])) {
+            $sandboxArguments = Add-CopilotLinuxAuthenticationMount -Arguments $sandboxArguments -HostPath ([string]$environment['GH_CONFIG_DIR'])
+        }
+        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
     } elseif ($platform -eq 'macos' -and $hardFilesystem) {
         $sandboxProfile = New-MacosEvalSandboxProfile -Inputs $Inputs -CommandInfo $commandInfo
+        if ($environment.Contains('GH_CONFIG_DIR') -and -not [string]::IsNullOrWhiteSpace([string]$environment['GH_CONFIG_DIR'])) {
+            Add-CopilotMacosAuthenticationPath -ProfilePath $sandboxProfile -HostPath ([string]$environment['GH_CONFIG_DIR'])
+        }
         $sandboxArguments = @('-f', $sandboxProfile, '--', $commandInfo.FileName) + @($commandInfo.Prefix) + @($arguments)
-        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
     } else {
-        $process = Invoke-CopilotCli -CommandInfo $commandInfo -Arguments $arguments -Inputs $Inputs -Environment $environment -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+        $process = Invoke-CopilotCli -CommandInfo $commandInfo -Arguments $arguments -Inputs $Inputs -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
     }
 
     $stdoutArtifact = Write-CopilotCapture -RunData $Inputs -RelativePath 'evidence/copilot-events.jsonl' -Text $process.Stdout
@@ -513,7 +572,11 @@ function Invoke-CopilotExecute {
     $artifacts.Add($stderrArtifact)
 
     $warnings = [System.Collections.Generic.List[string]]::new()
-    $parsed = ConvertFrom-JsonLines -Text $process.Stdout
+    $parsed = if ([string]::IsNullOrEmpty([string]$process.Stdout)) {
+        [pscustomobject]@{ Events = @(); Errors = @() }
+    } else {
+        ConvertFrom-JsonLines -Text $process.Stdout
+    }
     foreach ($parseError in @($parsed.Errors)) { $warnings.Add("Copilot event parse error: $parseError") }
     $parsedEvents = Read-CopilotEvents -Parsed $parsed -Warnings $warnings
 
@@ -555,16 +618,18 @@ function Invoke-CopilotExecute {
 
     $capabilities = Get-CopilotCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('copilot --prompt --output-format json', '--allow-all-tools', '--no-ask-user', '--no-custom-instructions', '--disable-builtin-mcps', '--secret-env-vars token redaction', 'isolated COPILOT_HOME', 'narrow GitHub token authentication', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('copilot --output-format json', 'prompt on stdin', '--allow-all-tools broad tool approval', 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI authentication fallback through GH_CONFIG_DIR when available', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
-    $warnings.Add('GitHub Copilot inherits the shell environment for shell tools apart from a blocklist; the runner redacts the GitHub token from output with --secret-env-vars but cannot independently prove the child-tool environment filter hides it from every tool path.')
 
     $tokenVariable = Get-CopilotTokenVariable
+    $ghConfigDirectory = Get-CopilotGhConfigDirectory
     $credentialEvidence = [ordered]@{
-        source = if ([string]::IsNullOrWhiteSpace($tokenVariable)) { 'unavailable' } else { 'environment' }
+        source = if (-not [string]::IsNullOrWhiteSpace($tokenVariable)) { 'environment' } elseif ($null -ne $ghConfigDirectory) { 'copilot_os_keychain_or_github_cli' } else { 'copilot_os_keychain_or_github_cli_unverified' }
         github_token_variable = $tokenVariable
-        secret_env_var_redaction = @($copilotAuthVariables)
+        secret_env_vars = @($copilotAuthVariables)
+        secret_env_var_scope = @('shell', 'mcp')
+        github_cli_config_forwarded = $null -ne $ghConfigDirectory
         login_profile_copied = $false
         auth_file_copied = $false
         value_observed = $false
@@ -583,7 +648,7 @@ function Invoke-CopilotExecute {
 
     $finished = [DateTime]::UtcNow
     $sandboxEvidence = if (-not $hardFilesystem) { 'unavailable' } elseif ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' }
-    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration $resolvedConfiguration -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $parsedEvents.EventCounts; observed_model = $observedModel; prompt_delivery = 'argument'; prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; credential = $credentialEvidence }) -AttemptCount 1
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration $resolvedConfiguration -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $parsedEvents.EventCounts; observed_model = $observedModel; prompt_delivery = 'stdin'; prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; credential = $credentialEvidence }) -AttemptCount 1
 }
 
 try {

@@ -49,6 +49,7 @@ $recordedOldCopilotToken = $env:COPILOT_GITHUB_TOKEN
 $recordedOldGhToken = $env:GH_TOKEN
 $recordedOldGithubToken = $env:GITHUB_TOKEN
 $recordedOldCopilotHome = $env:COPILOT_HOME
+$recordedOldGhConfigDir = $env:GH_CONFIG_DIR
 try {
     $fakeBin = Join-Path $recordedRoot 'bin'
     New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
@@ -66,21 +67,49 @@ $logPath = Join-Path (Get-Location).Path ("{0}-fake-cli-log.jsonl" -f $harness)
 $arguments = @($RemainingArguments | ForEach-Object { [string]$_ })
 $authNames = @('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY', 'CLINE_API_KEY')
 $authPresent = @($authNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+$copilotAuthNames = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
+$copilotAuthPresent = @($copilotAuthNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+$copilotHome = [Environment]::GetEnvironmentVariable('COPILOT_HOME')
+$repositoryAgentsPath = Join-Path (Get-Location).Path 'AGENTS.md'
+$repositoryCopilotInstructionsPath = Join-Path (Get-Location).Path '.github\copilot-instructions.md'
+$candidateSkillPath = Join-Path (Split-Path -Parent (Get-Location).Path) 'skill'
+$repositoryInstructionMarkerVisible = $false
+if (Test-Path -LiteralPath $repositoryCopilotInstructionsPath -PathType Leaf) {
+    $repositoryInstructionMarkerVisible = [IO.File]::ReadAllText($repositoryCopilotInstructionsPath, [Text.UTF8Encoding]::new($false)).Contains('repo-owned-copilot-instruction')
+}
+$copilotAuthenticationSource = if ($copilotAuthPresent.Count -gt 0) {
+    'explicit_environment'
+} elseif (-not [string]::IsNullOrWhiteSpace($copilotHome) -and (Test-Path -LiteralPath (Join-Path $copilotHome 'fixture-os-keychain-available') -PathType Leaf)) {
+    'os_keychain'
+} elseif (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')) -and (Test-Path -LiteralPath ([Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')) -PathType Container)) {
+    'github_cli'
+} else {
+    'unavailable'
+}
 $record = [ordered]@{
     args = $arguments
     working_directory = (Get-Location).Path
     home = [Environment]::GetEnvironmentVariable('HOME')
     userprofile = [Environment]::GetEnvironmentVariable('USERPROFILE')
     auth_names_present = $authPresent
+    copilot_auth_names_present = $copilotAuthPresent
+    copilot_authentication_source = $copilotAuthenticationSource
     unrelated_present = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('AGENTIC_GLOBAL_SECRET'))
     disable_project_config_present = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('OPENCODE_DISABLE_PROJECT_CONFIG'))
     project_config_visible = Test-Path -LiteralPath (Join-Path (Get-Location).Path 'opencode.json') -PathType Leaf
     stdin_received = $false
-    prompt_via_arg = ($arguments -contains '--prompt') -or ($arguments -contains '-p')
-    prompt_arg_count = @($arguments | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' }).Count
-    copilot_home = [Environment]::GetEnvironmentVariable('COPILOT_HOME')
+    prompt_via_arg = @($arguments | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count -gt 0
+    prompt_arg_count = @($arguments | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count
+    copilot_home = $copilotHome
+    copilot_cache_home = [Environment]::GetEnvironmentVariable('COPILOT_CACHE_HOME')
+    gh_config_dir = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
     custom_instructions_disabled = ($arguments -contains '--no-custom-instructions')
     builtin_mcps_disabled = ($arguments -contains '--disable-builtin-mcps')
+    repository_agents_visible = Test-Path -LiteralPath $repositoryAgentsPath -PathType Leaf
+    repository_copilot_instructions_visible = Test-Path -LiteralPath $repositoryCopilotInstructionsPath -PathType Leaf
+    repository_instruction_marker_visible = $repositoryInstructionMarkerVisible
+    candidate_skill_staged = Test-Path -LiteralPath $candidateSkillPath -PathType Container
+    ambient_copilot_instructions_visible = if ([string]::IsNullOrWhiteSpace($copilotHome)) { $false } else { Test-Path -LiteralPath (Join-Path $copilotHome 'copilot-instructions.md') -PathType Leaf }
     secret_env_vars_arg = @($arguments | Where-Object { $_ -like '--secret-env-vars=*' })
 }
 if ($arguments -contains '--version') {
@@ -100,9 +129,29 @@ if ($arguments -contains '--help') {
     Write-Output $help
     exit 0
 }
-$stdinText = [Console]::In.ReadToEnd()
-$record.stdin_received = -not [string]::IsNullOrEmpty($stdinText)
-$probeCommand = '$result = [ordered]@{ provider_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENAI_API_KEY'')); copilot_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''COPILOT_GITHUB_TOKEN'')); auth_file_visible = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable(''HOME'')) ''.codex/auth.json''); global_secret_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''AGENTIC_GLOBAL_SECRET'')); project_disable_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENCODE_DISABLE_PROJECT_CONFIG'')) }; $result | ConvertTo-Json -Compress'
+$stdinMemory = [IO.MemoryStream]::new()
+[Console]::OpenStandardInput().CopyTo($stdinMemory)
+$stdinBytes = $stdinMemory.ToArray()
+$expectedPromptPath = Join-Path (Split-Path -Parent (Get-Location).Path) 'prompt.md'
+$expectedPromptBytes = if (Test-Path -LiteralPath $expectedPromptPath -PathType Leaf) { [IO.File]::ReadAllBytes($expectedPromptPath) } else { [byte[]]@() }
+$stdinExact = $stdinBytes.Length -eq $expectedPromptBytes.Length
+if ($stdinExact) {
+    for ($index = 0; $index -lt $stdinBytes.Length; $index++) {
+        if ($stdinBytes[$index] -ne $expectedPromptBytes[$index]) {
+            $stdinExact = $false
+            break
+        }
+    }
+}
+$stdinHash = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($stdinBytes))).ToLowerInvariant()
+$record.stdin_received = $stdinBytes.Length -gt 0
+$record.stdin_delivery_count = if ($stdinBytes.Length -gt 0) { 1 } else { 0 }
+$record.stdin_byte_length = $stdinBytes.Length
+$record.stdin_sha256 = $stdinHash
+$record.stdin_exact = $stdinExact
+$record.stdin_expected_sha256 = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($expectedPromptBytes))).ToLowerInvariant()
+$record.stdin_utf8_round_trip = ([Text.UTF8Encoding]::new($false, $true).GetString($stdinBytes) -eq [Text.UTF8Encoding]::new($false, $true).GetString($expectedPromptBytes))
+$probeCommand = '$result = [ordered]@{ provider_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENAI_API_KEY'')); copilot_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''COPILOT_GITHUB_TOKEN'')); gh_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''GH_TOKEN'')); github_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''GITHUB_TOKEN'')); auth_file_visible = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable(''HOME'')) ''.codex/auth.json''); global_secret_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''AGENTIC_GLOBAL_SECRET'')); project_disable_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENCODE_DISABLE_PROJECT_CONFIG'')) }; $result | ConvertTo-Json -Compress'
 $probeInfo = [Diagnostics.ProcessStartInfo]::new()
 $probeInfo.FileName = (Get-Command pwsh).Source
 $probeInfo.UseShellExecute = $false
@@ -118,7 +167,6 @@ $probeInfo.Environment['PATH'] = [Environment]::GetEnvironmentVariable('PATH')
 $probeInfo.Environment['HOME'] = [Environment]::GetEnvironmentVariable('HOME')
 $probeInfo.Environment['USERPROFILE'] = [Environment]::GetEnvironmentVariable('USERPROFILE')
 if ($harness -ne 'codex') { $probeInfo.Environment['OPENAI_API_KEY'] = [Environment]::GetEnvironmentVariable('OPENAI_API_KEY') }
-if ($harness -eq 'copilot') { $probeInfo.Environment['COPILOT_GITHUB_TOKEN'] = [Environment]::GetEnvironmentVariable('COPILOT_GITHUB_TOKEN') }
 $probe = [Diagnostics.Process]::new()
 $probe.StartInfo = $probeInfo
 try {
@@ -130,6 +178,8 @@ try {
     $probeResult = $probeOutput | ConvertFrom-Json
     $record.worker_provider_visible = [bool]$probeResult.provider_visible
     $record.worker_copilot_token_visible = [bool]$probeResult.copilot_token_visible
+    $record.worker_gh_token_visible = [bool]$probeResult.gh_token_visible
+    $record.worker_github_token_visible = [bool]$probeResult.github_token_visible
     $record.worker_auth_file_visible = [bool]$probeResult.auth_file_visible
     $record.worker_global_secret_visible = [bool]$probeResult.global_secret_visible
     $record.worker_project_disable_visible = [bool]$probeResult.project_disable_visible
@@ -137,6 +187,10 @@ try {
     $probe.Dispose()
 }
 [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+if ($harness -eq 'copilot' -and $copilotAuthenticationSource -eq 'unavailable') {
+    [Console]::Error.WriteLine('deterministic fixture: no Copilot authentication mechanism is available')
+    exit 17
+}
 if ($harness -eq 'codex') {
     $outputIndex = [Array]::IndexOf([string[]]$arguments, '--output-last-message')
     if ($outputIndex -ge 0 -and $outputIndex + 1 -lt $arguments.Count) {
@@ -177,8 +231,17 @@ if ($harness -eq 'codex') {
     $env:AGENTIC_GLOBAL_SECRET = 'recorded-unrelated-canary-not-logged'
     $env:OPENCODE_DISABLE_PROJECT_CONFIG = '1'
     $env:COPILOT_GITHUB_TOKEN = 'recorded-copilot-canary-not-logged'
-    $env:GH_TOKEN = $null
-    $env:GITHUB_TOKEN = $null
+    $env:GH_TOKEN = 'recorded-gh-canary-not-logged'
+    $env:GITHUB_TOKEN = 'recorded-github-canary-not-logged'
+    $recordedGhConfig = Join-Path $recordedRoot 'github-cli-auth'
+    New-Item -ItemType Directory -Path $recordedGhConfig -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $recordedGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [System.Text.UTF8Encoding]::new($false))
+    $env:GH_CONFIG_DIR = $recordedGhConfig
+    $ambientCopilotHome = Join-Path $recordedRoot 'ambient-copilot-home'
+    New-Item -ItemType Directory -Path $ambientCopilotHome -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $ambientCopilotHome 'copilot-instructions.md'), '# ambient-personal-instruction-not-logged', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $ambientCopilotHome 'config.json'), '{"loggedInUsers":[{"login":"ambient-profile-not-logged"}]}', [System.Text.UTF8Encoding]::new($false))
+    $env:COPILOT_HOME = $ambientCopilotHome
     $recordedProfiles = [ordered]@{}
     foreach ($runnerName in @('codex', 'opencode', 'cline', 'copilot')) {
         $profilePath = Join-Path $recordedRoot "$runnerName-profile.json"
@@ -215,7 +278,12 @@ if ($harness -eq 'codex') {
         Assert-Equal 'compatible' $preflightWithout.status "$runnerName without_skill pragmatic preflight"
         Assert-Equal $expectedVersion $preflightWith.harness.version "$runnerName exact preflight version"
         Assert-Equal 'pragmatic' $preflightWith.isolation.level "$runnerName pragmatic preflight level"
-        if ($runnerName -ne 'codex') {
+        if ($runnerName -eq 'copilot') {
+            Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
+            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq '--allow-all-tools broad tool approval' }).Count -eq 1) 'Copilot preflight describes --allow-all-tools as broad tool approval'
+            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)' }).Count -eq 1) 'Copilot preflight records preserved path and URL verification'
+        }
+        if ($runnerName -in @('opencode', 'cline')) {
             Assert-True (@($preflightWith.warnings | Where-Object { $_ -match 'child-tool environment filter' }).Count -gt 0) "$runnerName reports the child credential-filter limitation"
         }
         $resultWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -242,6 +310,10 @@ if ($harness -eq 'codex') {
         $executionRecords = @($records | Where-Object { $_.stdin_received -eq $true -or $_.prompt_via_arg -eq $true })
         Assert-Equal 1 $executionRecords.Count "$runnerName one execution process per checked arm"
         $execution = $executionRecords[0]
+        Assert-True $execution.stdin_received "$runnerName receives a non-empty stdin prompt"
+        Assert-Equal 1 $execution.stdin_delivery_count "$runnerName delivers one prompt through stdin"
+        Assert-True $execution.stdin_exact "$runnerName fake CLI received the exact staged prompt bytes"
+        Assert-True $execution.stdin_utf8_round_trip "$runnerName preserves arbitrary UTF-8 prompt content"
         Assert-True (-not $execution.unrelated_present) "$runnerName does not pass unrelated credential canary"
         Assert-True (-not $execution.disable_project_config_present) "$runnerName does not pass ambient project-disable override"
         Assert-True (-not $execution.worker_auth_file_visible) "$runnerName worker probe cannot read a copied Codex auth file"
@@ -250,7 +322,9 @@ if ($harness -eq 'codex') {
         if ($runnerName -eq 'codex') {
             Assert-True (-not $execution.worker_provider_visible) 'Codex shell policy hides the provider API-key variable from the worker probe'
         } elseif ($runnerName -eq 'copilot') {
-            Assert-True $execution.worker_copilot_token_visible 'Copilot GitHub-token child-visibility limitation is recorded by the worker probe'
+            Assert-True (-not $execution.worker_copilot_token_visible) 'Copilot secret COPILOT_GITHUB_TOKEN is unavailable to the worker probe'
+            Assert-True (-not $execution.worker_gh_token_visible) 'Copilot secret GH_TOKEN is unavailable to the worker probe'
+            Assert-True (-not $execution.worker_github_token_visible) 'Copilot secret GITHUB_TOKEN is unavailable to the worker probe'
         } else {
             Assert-True $execution.worker_provider_visible "$runnerName credential visibility limitation is recorded by the worker probe"
         }
@@ -268,20 +342,31 @@ if ($harness -eq 'codex') {
             Assert-True ($args -contains '--auto') 'OpenCode is noninteractive'
             Assert-True $execution.project_config_visible 'OpenCode paired arm retains repository-owned project configuration'
         } elseif ($runnerName -eq 'copilot') {
-            Assert-True ($args -contains '--prompt') 'Copilot delivers the prompt via the --prompt argument'
-            Assert-Equal 1 $execution.prompt_arg_count 'Copilot delivers the prompt exactly once'
-            Assert-True (-not $execution.stdin_received) 'Copilot does not read the prompt from stdin'
+            Assert-True (@($args | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count -eq 0) 'Copilot does not place the prompt in argv'
+            Assert-Equal 0 $execution.prompt_arg_count 'Copilot has no prompt argument'
+            Assert-True $execution.stdin_received 'Copilot reads the prompt from stdin'
             Assert-True ($args -contains '--output-format' -and $args -contains 'json') 'Copilot uses structured JSONL output'
             $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
             Assert-Equal 'claude-haiku-4.5' $args[$modelIndex + 1] 'Copilot reference model claude-haiku-4.5 propagates to the CLI invocation'
-            Assert-True ($args -contains '--allow-all-tools') 'Copilot removes tool-approval prompts without a blanket permission grant'
+            Assert-True ($args -contains '--allow-all-tools') 'Copilot grants broad tool approval for noninteractive execution'
             Assert-True ($args -contains '--no-ask-user') 'Copilot does not pause for interactive questions'
-            Assert-True ($args -contains '--no-custom-instructions') 'Copilot disables ambient custom instructions'
+            Assert-True ($args -notcontains '--no-custom-instructions') 'Copilot preserves repository-owned custom instructions'
             Assert-True ($args -contains '--disable-builtin-mcps') 'Copilot disables ambient built-in MCP servers'
             foreach ($broad in @('--yolo', '--allow-all', '--allow-all-paths', '--allow-all-urls', '--session-id', '--connect', '-r')) { Assert-True ($args -notcontains $broad) "Copilot avoids the over-broad or session option '$broad'" }
-            Assert-Equal 1 (@($args | Where-Object { $_ -like '--secret-env-vars=*' }).Count) 'Copilot redacts the GitHub token from output with --secret-env-vars'
-            Assert-True ($execution.custom_instructions_disabled -and $execution.builtin_mcps_disabled) 'Copilot ambient instruction/MCP disabling is observed by the fake CLI'
+            Assert-Equal 1 (@($args | Where-Object { $_ -like '--secret-env-vars=*' }).Count) 'Copilot filters protected variables with --secret-env-vars'
+            Assert-Equal 'COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN' ([string]($args | Where-Object { $_ -like '--secret-env-vars=*' }) -replace '^--secret-env-vars=', '') 'Copilot protects every forwarded token variable'
+            Assert-True (-not $execution.custom_instructions_disabled -and $execution.builtin_mcps_disabled) 'Copilot preserves repository instructions while disabling built-in MCPs'
+            Assert-True ($execution.repository_agents_visible -and $execution.repository_copilot_instructions_visible -and $execution.repository_instruction_marker_visible) 'Copilot sees staged repository-owned instructions'
+            Assert-True $execution.candidate_skill_staged 'Copilot with_skill arm retains the staged candidate skill independently of repository instructions'
+            Assert-True (-not $execution.ambient_copilot_instructions_visible) 'Copilot does not see the ambient personal instruction file'
+            Assert-Equal 'explicit_environment' $execution.copilot_authentication_source 'Copilot uses explicit environment authentication in the token fixture'
+            Assert-Equal 3 @($execution.copilot_auth_names_present).Count 'Copilot process receives all protected token variables without logging values'
+            Assert-True (Test-PathInside -BasePath (Join-Path $with.Root 'home') -CandidatePath ([string]$execution.copilot_cache_home)) 'Copilot cache is run-local'
             Assert-True (Test-PathInside -BasePath (Join-Path $with.Root 'home') -CandidatePath ([string]$execution.copilot_home)) 'Copilot COPILOT_HOME is the run''s isolated home'
+            Assert-Equal 'stdin' $resultWith.evidence.prompt_delivery 'Copilot result records stdin prompt delivery'
+            Assert-Equal 'COPILOT_GITHUB_TOKEN' $resultWith.evidence.credential.github_token_variable 'Copilot follows explicit token precedence'
+            Assert-Equal 'supported' $resultWith.isolation.capabilities.credential_child_filtering 'Copilot documents protected child-environment filtering'
+            Assert-Equal 'shell,mcp' ([string]::Join(',', @($resultWith.evidence.credential.secret_env_var_scope))) 'Copilot evidence names the documented filtering scope'
             Assert-Equal 'recorded Copilot final response' $resultWith.final_response.text 'Copilot final response is the last assistant message, not an intermediate one'
             Assert-Equal 'claude-haiku-4.5' $resultWith.requested.model 'Copilot requested model is preserved as the Codebelt reference model'
             Assert-True ($null -eq $resultWith.resolved.model) 'Copilot does not claim a distinct backend model resolution'
@@ -305,13 +390,23 @@ if ($harness -eq 'codex') {
             Assert-True ([int]$resultWith.telemetry.tool_calls.value -ge 1) 'Cline parses documented tool events'
         }
         $logText = [System.IO.File]::ReadAllText($logPath, [System.Text.UTF8Encoding]::new($false))
-        Assert-True ($logText -notmatch 'recorded-canary|recorded-unrelated-canary') "$runnerName logs do not contain credential values"
+        Assert-True ($logText -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') "$runnerName logs do not contain credential values"
+        Assert-True (($resultWith | ConvertTo-Json -Depth 100) -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') "$runnerName result evidence does not contain credential values"
         $withoutLogPath = Join-Path $without.Root "repo\$runnerName-fake-cli-log.jsonl"
         Assert-True (Test-Path -LiteralPath $withoutLogPath -PathType Leaf) "$runnerName baseline process log exists"
         $withoutRecords = @(Get-Content -LiteralPath $withoutLogPath | ForEach-Object { $_ | ConvertFrom-Json })
-        Assert-Equal 1 @($withoutRecords | Where-Object { $_.stdin_received -eq $true -or $_.prompt_via_arg -eq $true }).Count "$runnerName baseline has one execution process"
+        $withoutExecution = @($withoutRecords | Where-Object { $_.stdin_received -eq $true -or $_.prompt_via_arg -eq $true })
+        Assert-Equal 1 $withoutExecution.Count "$runnerName baseline has one execution process"
         $withoutLogText = [System.IO.File]::ReadAllText($withoutLogPath, [System.Text.UTF8Encoding]::new($false))
-        Assert-True ($withoutLogText -notmatch 'recorded-canary|recorded-unrelated-canary') "$runnerName baseline log does not contain credential values"
+        Assert-True ($withoutLogText -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') "$runnerName baseline log does not contain credential values"
+        Assert-True $withoutExecution[0].stdin_exact "$runnerName baseline receives exact prompt bytes"
+        if ($runnerName -eq 'copilot') {
+            Assert-True $withoutExecution[0].repository_agents_visible 'Copilot baseline sees the same staged AGENTS.md instruction'
+            Assert-True $withoutExecution[0].repository_copilot_instructions_visible 'Copilot baseline sees the same staged repository instruction'
+            Assert-True (-not $withoutExecution[0].candidate_skill_staged) 'Copilot baseline does not receive the candidate skill directory'
+            Assert-True (-not $withoutExecution[0].ambient_copilot_instructions_visible) 'Copilot baseline excludes the ambient personal instruction'
+            Assert-True (($resultWithout | ConvertTo-Json -Depth 100) -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') 'Copilot baseline result evidence does not contain credential values'
+        }
     }
     $staleCli = $fakeCli.Replace("'opencode' { '--format --dir --model --auto --pure --continue --session' }", "'opencode' { '--format --dir --model --pure --continue --session' }")
     [System.IO.File]::WriteAllText((Join-Path $fakeBin 'opencode.ps1'), $staleCli, [System.Text.UTF8Encoding]::new($false))
@@ -329,25 +424,57 @@ if ($harness -eq 'codex') {
     Assert-True (@($fileAuthPreflight.reasons | Where-Object { $_ -match 'auth\.json' }).Count -gt 0) 'Codex file-auth limitation is explicit'
     $env:OPENAI_API_KEY = 'recorded-canary-not-logged'
     $env:CODEX_HOME = $recordedOldCodexHome
-    # GitHub Copilot authentication: with no separable token the runner is fail-closed and never imports the ambient profile.
-    $copilotEmptyHome = Join-Path $recordedRoot 'copilot-empty-home'
-    New-Item -ItemType Directory -Path $copilotEmptyHome -Force | Out-Null
+    # GitHub Copilot authentication: explicit env, OS-keychain, GitHub CLI, and
+    # no-auth fixtures are all deterministic and contain no credential values.
     $env:COPILOT_GITHUB_TOKEN = $null
     $env:GH_TOKEN = $null
     $env:GITHUB_TOKEN = $null
-    $env:COPILOT_HOME = $copilotEmptyHome
-    $copilotNoAuth = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'incompatible' $copilotNoAuth.status 'Copilot without a GitHub token is fail-closed'
-    Assert-True (@($copilotNoAuth.reasons | Where-Object { $_ -match 'COPILOT_GITHUB_TOKEN' }).Count -gt 0) 'Copilot missing-auth reason names the required token variable'
-    $copilotLoginHome = Join-Path $recordedRoot 'copilot-login-home'
-    New-Item -ItemType Directory -Path $copilotLoginHome -Force | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $copilotLoginHome 'config.json'), '{"loggedInUsers":[{"login":"canary-not-logged"}]}', [System.Text.UTF8Encoding]::new($false))
-    $env:COPILOT_HOME = $copilotLoginHome
-    $copilotLoginOnly = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'incompatible' $copilotLoginOnly.status 'Copilot login-only profile is not imported as a credential'
-    Assert-True (@($copilotLoginOnly.reasons | Where-Object { $_ -match 'separable GitHub token' }).Count -gt 0) 'Copilot login-only reason explains the co-mingling limitation'
-    Assert-True (($copilotLoginOnly | ConvertTo-Json -Depth 100) -notmatch 'canary-not-logged') 'Copilot preflight never surfaces login-profile contents'
-    $env:COPILOT_GITHUB_TOKEN = 'recorded-copilot-canary-not-logged'
+    $missingGhConfig = Join-Path $recordedRoot 'missing-github-cli-auth'
+
+    # The fixture marker is fake-CLI input only; it models a positive OS
+    # keychain lookup without naming or reading a real credential-store file.
+    $copilotKeychainHome = Join-Path $recordedRoot 'copilot-keychain-home'
+    New-Item -ItemType Directory -Path $copilotKeychainHome -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $with.Root 'home\.copilot') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $with.Root 'home\.copilot\fixture-os-keychain-available'), 'fixture marker only', [Text.UTF8Encoding]::new($false))
+    $env:COPILOT_HOME = $copilotKeychainHome
+    $env:GH_CONFIG_DIR = $missingGhConfig
+    $copilotKeychainPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'compatible' $copilotKeychainPreflight.status 'Copilot tokenless OS-keychain authentication remains compatible'
+    Assert-True (@($copilotKeychainPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'unavailable' }).Count -eq 1) 'Copilot preflight leaves native keychain readiness conditional'
+    Assert-True (@($copilotKeychainPreflight.warnings | Where-Object { $_ -match 'cannot be proven' }).Count -gt 0) 'Copilot preflight explains the unverified keychain/service boundary'
+    $copilotKeychainResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'completed' $copilotKeychainResult.status 'Copilot keychain fixture executes without an exported token'
+    $keychainRecords = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.copilot_authentication_source -eq 'os_keychain' })
+    Assert-Equal 1 $keychainRecords.Count 'Copilot fake observes the simulated OS-keychain path'
+    Remove-Item -LiteralPath (Join-Path $with.Root 'home\.copilot\fixture-os-keychain-available') -Force
+
+    $copilotGhFallbackHome = Join-Path $recordedRoot 'copilot-gh-fallback-home'
+    New-Item -ItemType Directory -Path $copilotGhFallbackHome -Force | Out-Null
+    $copilotGhConfig = Join-Path $recordedRoot 'copilot-gh-config'
+    New-Item -ItemType Directory -Path $copilotGhConfig -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $copilotGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [Text.UTF8Encoding]::new($false))
+    $env:COPILOT_HOME = $copilotGhFallbackHome
+    $env:GH_CONFIG_DIR = $copilotGhConfig
+    $copilotGhPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'compatible' $copilotGhPreflight.status 'Copilot GitHub CLI fallback remains compatible'
+    $copilotGhResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'completed' $copilotGhResult.status 'Copilot GitHub CLI fallback fixture executes without an exported token'
+    Assert-True $copilotGhResult.evidence.credential.github_cli_config_forwarded 'Copilot records GitHub CLI auth-state forwarding without a credential value'
+    $ghRecords = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.copilot_authentication_source -eq 'github_cli' })
+    Assert-Equal 1 $ghRecords.Count 'Copilot fake observes the simulated GitHub CLI fallback path'
+
+    $copilotNoAuthHome = Join-Path $recordedRoot 'copilot-no-auth-home'
+    New-Item -ItemType Directory -Path $copilotNoAuthHome -Force | Out-Null
+    $env:COPILOT_HOME = $copilotNoAuthHome
+    $env:GH_CONFIG_DIR = $missingGhConfig
+    $copilotNoAuthPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'compatible' $copilotNoAuthPreflight.status 'Copilot preflight does not require an exported token when native auth is not observable'
+    Assert-True (@($copilotNoAuthPreflight.warnings | Where-Object { $_ -match 'conditional' }).Count -gt 0) 'Copilot no-auth preflight is explicitly conditional'
+    $copilotNoAuthResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'failed' $copilotNoAuthResult.status 'Copilot no-auth execution failure is captured without a model request'
+    Assert-Equal 'copilot_os_keychain_or_github_cli_unverified' $copilotNoAuthResult.evidence.credential.source 'Copilot no-auth evidence does not claim authentication'
+    Assert-True (($copilotNoAuthResult | ConvertTo-Json -Depth 100) -notmatch 'ambient-profile-not-logged|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') 'Copilot authentication fixtures never expose credential values'
     $env:COPILOT_HOME = $recordedOldCopilotHome
     Write-Output 'Real runner deterministic adapter conformance: PASS'
 } finally {
@@ -360,6 +487,7 @@ if ($harness -eq 'codex') {
     $env:GH_TOKEN = $recordedOldGhToken
     $env:GITHUB_TOKEN = $recordedOldGithubToken
     $env:COPILOT_HOME = $recordedOldCopilotHome
+    $env:GH_CONFIG_DIR = $recordedOldGhConfigDir
     if (Test-Path -LiteralPath $recordedRoot) { Remove-Item -LiteralPath $recordedRoot -Recurse -Force }
 }
 }
@@ -412,7 +540,10 @@ function New-TestRun {
     $homeDirectory = Join-Path $runRoot 'home'
     New-Item -ItemType Directory -Path $repo,$homeDirectory -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $homeDirectory 'README.txt'), 'isolated home', [System.Text.UTF8Encoding]::new($false))
-    $prompt = "# task`r`n`r`nByte fidelity: Δ and emoji 🚀.`r`n"
+    New-Item -ItemType Directory -Path (Join-Path $repo '.github') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $repo 'AGENTS.md'), '# repo-owned-agent-instruction', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $repo '.github\copilot-instructions.md'), '# repo-owned-copilot-instruction', [System.Text.UTF8Encoding]::new($false))
+    $prompt = "# task`r`n`r`nByte fidelity: Δ and emoji 🚀.`r`n" + ("large-prompt-line-0123456789`r`n" * 4096)
     [System.IO.File]::WriteAllBytes((Join-Path $runRoot 'prompt.md'), [System.Text.UTF8Encoding]::new($false).GetBytes($prompt))
     if ($Configuration -eq 'with_skill') {
         $skill = Join-Path $runRoot 'skill\candidate'

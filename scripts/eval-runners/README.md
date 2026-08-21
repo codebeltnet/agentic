@@ -58,26 +58,35 @@ be selected. Cross-runner and cross-model numbers are never blended into one
 score; a paired `with_skill` versus `without_skill` comparison is only
 meaningful within one identical runner, model, and configuration stratum.
 
-GitHub Copilot uses `copilot --prompt <text> --output-format json --model
-<model> --allow-all-tools --no-ask-user --no-custom-instructions
---disable-builtin-mcps` with an isolated `COPILOT_HOME`; it passes no
+GitHub Copilot uses `copilot -C <working-directory> --model <model>
+--output-format json --allow-all-tools --no-ask-user --disable-builtin-mcps
+--no-color --log-level none --no-auto-update
+--secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN` with the exact
+prepared prompt bytes delivered once through stdin. It passes no `--prompt`/`-p`,
 `--resume`, `--continue`, `--session-id`, or `--connect`, and it does not use
 the blanket `--yolo`, `--allow-all`, `--allow-all-paths`, or `--allow-all-urls`
-switches. It authenticates from a narrow GitHub token (`COPILOT_GITHUB_TOKEN`,
-`GH_TOKEN`, or `GITHUB_TOKEN` - for example `gh auth token` or a fine-grained
-PAT with Copilot access) rather than importing the ambient `copilot login`
-profile, and redacts that token from output with `--secret-env-vars`. Because
-Copilot co-mingles login state with behavioral configuration in `COPILOT_HOME`,
-the runner requires that separable token and classifies honestly rather than
-copying the profile. Codex uses `--ask-for-approval never` with `exec --sandbox
+switches. `--allow-all-tools` is a broad tool-approval grant required for
+noninteractive execution; it does not disable path or URL verification.
+Repository-owned custom instructions remain enabled and are staged identically
+in both paired arms. Personal Copilot configuration is excluded by run-local
+`COPILOT_HOME`, `COPILOT_CACHE_HOME`, `HOME`, `USERPROFILE`, and XDG roots;
+the runner does not copy the normal `.copilot` directory. Authentication follows
+Copilot's normal order: explicit `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or
+`GITHUB_TOKEN`, then the OS credential store, then GitHub CLI fallback through a
+host-derived `GH_CONFIG_DIR` when available. `--secret-env-vars` removes every
+listed token variable from shell and MCP child environments. Preflight does not
+make a model request and therefore reports native keychain/service readiness as
+conditional rather than claiming successful remote authentication. Codex uses
+`--ask-for-approval never` with `exec --sandbox
 workspace-write`; it does not combine explicit sandbox selection with
 `--approve-for-me`. OpenCode uses `run --format json --auto` with isolated
 global/config roots and preserves repository-owned project configuration; it
 does not depend on `OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. Cline uses
 `--json`, `--auto-approve true`, `--retries 0`, `--config <run-home>`,
 `--data-dir <run-home>/.cline/data`, and run-local hooks; it passes no session
-id. Each captures an exact observable CLI version and passes only a narrow
-environment credential when available. None copies a global skill directory,
+id. Each captures an exact observable CLI version and passes only documented
+environment credentials when the selected runner supports them. None copies a
+global skill directory,
 memory store, plugin set, or normal agent profile into a run.
 
 Freebuff is currently documented as planned/blocked. Its supported CLI remains
