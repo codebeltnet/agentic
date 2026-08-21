@@ -44,22 +44,41 @@ proven reports `strict` isolation when hard confinement is proven and
 boundary, prompt fidelity, result capture, or other mandatory control remains
 incompatible.
 
-The fake runner is deterministic and is the conformance reference. Codex,
-OpenCode, and Cline are thin harness-specific adapters. Their native CLI
-flags, environment setup, event parsing, authentication injection, and
-isolation checks stay inside their own directories. Windows is supported in
+The fake runner is deterministic and is the conformance reference. GitHub
+Copilot, Codex, OpenCode, and Cline are thin harness-specific adapters. Their
+native CLI flags, environment setup, event parsing, authentication injection,
+and isolation checks stay inside their own directories. Windows is supported in
 pragmatic mode when the native CLI satisfies the mandatory controls.
 
-Codex uses `--ask-for-approval never` with `exec --sandbox workspace-write`;
-it does not combine explicit sandbox selection with `--approve-for-me`.
-OpenCode uses `run --format json --auto` with isolated global/config roots and
-preserves repository-owned project configuration; it does not depend on
-`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. Cline uses `--json`,
-`--auto-approve true`, `--retries 0`, `--config <run-home>`,
+`github-copilot` with `claude-haiku-4.5` is the Codebelt reference evaluation
+configuration: a stable, economical pairing for routine skill comparison. It is
+a repository convention, not an Anthropic default, and the model stays
+configurable through `execution-profile.json`, so any Copilot-served model can
+be selected. Cross-runner and cross-model numbers are never blended into one
+score; a paired `with_skill` versus `without_skill` comparison is only
+meaningful within one identical runner, model, and configuration stratum.
+
+GitHub Copilot uses `copilot --prompt <text> --output-format json --model
+<model> --allow-all-tools --no-ask-user --no-custom-instructions
+--disable-builtin-mcps` with an isolated `COPILOT_HOME`; it passes no
+`--resume`, `--continue`, `--session-id`, or `--connect`, and it does not use
+the blanket `--yolo`, `--allow-all`, `--allow-all-paths`, or `--allow-all-urls`
+switches. It authenticates from a narrow GitHub token (`COPILOT_GITHUB_TOKEN`,
+`GH_TOKEN`, or `GITHUB_TOKEN` - for example `gh auth token` or a fine-grained
+PAT with Copilot access) rather than importing the ambient `copilot login`
+profile, and redacts that token from output with `--secret-env-vars`. Because
+Copilot co-mingles login state with behavioral configuration in `COPILOT_HOME`,
+the runner requires that separable token and classifies honestly rather than
+copying the profile. Codex uses `--ask-for-approval never` with `exec --sandbox
+workspace-write`; it does not combine explicit sandbox selection with
+`--approve-for-me`. OpenCode uses `run --format json --auto` with isolated
+global/config roots and preserves repository-owned project configuration; it
+does not depend on `OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. Cline uses
+`--json`, `--auto-approve true`, `--retries 0`, `--config <run-home>`,
 `--data-dir <run-home>/.cline/data`, and run-local hooks; it passes no session
-id. All three capture an exact observable CLI version and pass only a narrow
-provider environment credential when available. None copies a global skill
-directory, memory store, plugin set, or normal agent profile into a run.
+id. Each captures an exact observable CLI version and passes only a narrow
+environment credential when available. None copies a global skill directory,
+memory store, plugin set, or normal agent profile into a run.
 
 Freebuff is currently documented as planned/blocked. Its supported CLI remains
 TUI-oriented and does not provide the required one-prompt, noninteractive,
