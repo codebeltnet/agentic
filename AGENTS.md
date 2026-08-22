@@ -40,23 +40,25 @@ This rule is Priority 1. If another repository rule, skill, test, or completion 
 
 Anthropic's `skill-creator` owns the evaluation methodology this repository uses: define evals, run each task once with the skill and once without it, hold the model, the environment, the task, and the inputs constant, then compare. Keep that experimental design. Only the execution transport changes here.
 
-Where `skill-creator` says to spawn with-skill and baseline subagents in the same turn, this repository prepares a portable evaluation package and stops. The package keeps the existing paired methodology: `run.json` defines what one blind arm executes, `execution-profile.json` selects the runner/model/configuration, and the Eval Runner defines how its harness satisfies the contract. The user selects the runner, provider, and model, then hands `RUN-THIS.prompt.md` to an external Eval Orchestrator. That orchestrator preflights and invokes one fresh runner process per arm, bridges raw `execution-result.json` evidence into the existing result shape, grades only after execution, invokes the packaged Anthropic `skill-creator` aggregator and static viewer, and returns the finished reports. Preparation, collection, validation, and reporting remain deterministic and never invoke a model.
+Where `skill-creator` says to spawn with-skill and baseline subagents in the same turn, this repository prepares a portable evaluation package and stops. The package keeps the existing paired methodology: `run.json` defines what one blind arm executes, `execution-profile.json` selects the runner/model/configuration, and the Eval Runner defines how its harness satisfies the contract. Before an execution-ready `RUN-THIS.prompt.md` is emitted, the user-facing preparation flow resolves a Harness + Model choice; the portable profile stores the internal runner id and the opaque runner-native model selector. The external Eval Orchestrator never chooses runner or model policy. It preflights and invokes one fresh runner process per arm, bridges raw `execution-result.json` evidence into the existing result shape, grades only after execution, invokes the packaged Anthropic `skill-creator` aggregator and static viewer, and returns the finished reports. Preparation, collection, validation, and reporting remain deterministic and never invoke a model.
 
 ### Asking for an eval
 
 `eval <skill>`, `evaluate <skill>`, `eval this skill`, `prepare evals for <skill>`, and `evaluate <skill> using the existing evals` are all requests for this workflow. Treat them as instructions to prepare the package, never to run it, and never as a request to write new eval cases unless the user asks for that too.
 
-Run the script immediately when asked. Do not reply with a plan, a menu of options, or a question about which harness or model the user wants; the harness and model are chosen after the package exists, by the user, outside this repository.
+Resolve the execution configuration before running the package preparation script. In an interactive agent session, offer Codebelt Reference first (`GitHub Copilot CLI` + `claude-haiku-4.5`) and verify that model through `scripts/Get-HarnessModels.ps1`; if it is unavailable, show the current discovered Copilot models and ask for a replacement. For manual selection, ask for Harness, discover current models for that harness with `scripts/Get-HarnessModels.ps1`, then pass the resulting runner/model pair to the preparation script. Cline and OpenCode discovery is free-only; GitHub Copilot and Codex discovery lists all currently available models. Never guess stale model ids, silently switch harnesses, or generate an execution-ready package with a null runner or model.
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-test
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-test -Runner github-copilot -Model claude-haiku-4.5
 ```
 
 `eval` with no skill named, or `eval changed`, means the whole changed set:
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner github-copilot -Model claude-haiku-4.5
 ```
+
+Use `-CodebeltReference` only when the script should perform the dynamic Copilot catalog check itself and fail if `claude-haiku-4.5` is no longer present. For noninteractive direct script use, omitting both `-Runner/-Model` and `-CodebeltReference` is an error whenever a package would be generated.
 
 ### Handing the package over
 
@@ -70,10 +72,10 @@ The normal path ends in the external evaluator: after all workers finish, it rea
 
 ### Prepare, do not execute
 
-Generate the package with the repository script rather than by hand:
+Generate the package with the repository script rather than by hand after resolving the Harness + Model choice:
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name> -Runner <runner-id> -Model <runner-native-model>
 ```
 
 It reads `skills/<name>/evals/evals.json` and writes one directory per eval into `.bot/<name>-workspace/iteration-<n>/`. The grading key and result stubs stay at the eval-case level, outside the two isolated run directories a worker actually sees:
@@ -96,7 +98,7 @@ Adding or modifying any repo-managed skill triggers this workflow. It is not som
 After the final skill edit is in place, run:
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
+pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>
 ```
 
 It resolves every repo-managed skill this branch changed, uncommitted work included, and prepares a package for each. With no skill changed it says so and exits clean, which satisfies the gate.
@@ -154,7 +156,7 @@ A meaningful A/B result requires both configurations to run on the same model, t
 
 ### Result handoff
 
-An externally produced result comes back identified by eval id, configuration (`with_skill` or `without_skill`), model and provider, and the produced output. It may also carry the transcript, duration, total tokens, tool-call count, output files, and notes. The user can hand it over as filled-in `results/*.result.json` files, or state it in chat and let the agent fill them in.
+An externally produced result comes back identified by eval id, configuration (`with_skill` or `without_skill`), runner-native model, harness, and the produced output. It may also carry the transcript, duration, total tokens, tool-call count, output files, and notes. The user can hand it over as filled-in `results/*.result.json` files, or state it in chat and let the agent fill them in.
 
 Which artifact transfer happens depends on where the harness ran, and `RUN-THIS.prompt.md` tells it to close either way. A harness sharing a disk with the package writes the result files, grading, `benchmark.json`, `benchmark.md`, the first-party `report.html`, and the exact upstream `skill-creator-report.html` itself and reports the first-party report path. A harness that does not - a different product, a browser, or a sandbox - ends with one paste-ready block carrying the package path and every completed result object, including grading, plus the reports as file artifacts when supported. A repository session can use `-CollectResults` only as a fallback for transferred results that lack the report artifacts. "Bring the results back" means those artifacts, never a prose recap of how the runs went.
 
@@ -185,7 +187,7 @@ Every repo-managed skill must include its own `evals/evals.json` file at `skills
 - To compare a skill against a baseline, prepare a package with **Portable Eval Handoff** and hand `RUN-THIS.prompt.md` to the user; the repository agent never runs the prompts, while the user-directed external executor runs, grades, and reports the paired comparison
 - Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
 
-If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` and run `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` before considering the work complete. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
+If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` and run `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` before considering the work complete. Use `-CodebeltReference` instead only after its dynamic Copilot model check passes. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
 
 ## Git Identity
 
@@ -315,7 +317,7 @@ Before any completion message, reread the skill instructions and the current con
 
 For script-backed workflows, creating or editing files is not enough on its own. If a skill requires deterministic maintenance or verification commands, run them before completion and report their concrete outcome. For `dotnet-docfx-digest`, `scripts/agents.cs` and `scripts/docfx.cs --build-api-model --validate-samples --verify-docfx-build` are blocking completion gates whenever the skill or task summary says they are required.
 
-Whenever a repo-managed skill was edited, two gates apply in a fixed order. `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` runs first and prepares the eval packages for the changed skills, reporting the prompt paths. `scripts/sync-skill-install.ps1` runs last, because every other step can still change a file. Report the actual output of both; an earlier run in the same session satisfies neither. See [Eval preparation is a completion gate](#eval-preparation-is-a-completion-gate) and [Local Install Sync](#local-install-sync).
+Whenever a repo-managed skill was edited, two gates apply in a fixed order. `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` (or `-CodebeltReference` after dynamic availability verification) runs first and prepares the eval packages for the changed skills, reporting the prompt paths. `scripts/sync-skill-install.ps1` runs last, because every other step can still change a file. Report the actual output of both; an earlier run in the same session satisfies neither. See [Eval preparation is a completion gate](#eval-preparation-is-a-completion-gate) and [Local Install Sync](#local-install-sync).
 
 ## User Input UX
 
