@@ -17,6 +17,7 @@ This patch release adds harness-agnostic Eval Runner execution boundary infrastr
 
 ### Changed
 
+- Eval preparation now resolves Harness + Model before writing `RUN-THIS.prompt.md`, removes the redundant portable `provider` field from `execution-profile.json` and result reporting, treats model selectors as runner-native opaque strings, and adds `scripts/Get-HarnessModels.ps1` for current model discovery with Codebelt Reference verification and free-only Cline/OpenCode filtering,
 - `AGENTS.md`, `README.md`, and `CONTRIBUTING.md` now distinguish the Eval Runner, Eval Orchestrator, Grader, and Human Reviewer and clarify that runner execution is an explicit external-handoff boundary rather than repository automation,
 - All 21 repo-managed skill descriptions refactored to lean, trigger-oriented activation metadata following progressive-disclosure principles and specification compliance,
 - `AGENTS.md` Skill Authoring section restructured for clarity, brevity, and progressive disclosure of form fields, asset handling, and dynamic defaults,
