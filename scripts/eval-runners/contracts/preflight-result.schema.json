@@ -23,6 +23,24 @@
     "schema": { "const": "codebeltnet/agentic/eval-runner-preflight/1" },
     "protocol_version": { "const": "codebeltnet/agentic/eval-runner-protocol/1" },
     "status": { "enum": ["compatible", "incompatible"] },
+    "requested": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "reasoning_effort",
+        "configuration_profile",
+        "tool_profile",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "model": { "type": ["string", "null"] },
+        "reasoning_effort": { "type": ["string", "null"] },
+        "configuration_profile": { "type": "string" },
+        "tool_profile": { "type": "string" },
+        "timeout_seconds": { "type": "integer" }
+      }
+    },
     "checks": { "type": "array" },
     "resolved_capabilities": { "type": "object" },
     "isolation": {

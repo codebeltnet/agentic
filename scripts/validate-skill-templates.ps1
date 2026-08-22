@@ -1269,7 +1269,10 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'the same model, the same version, and the same configuration'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'a baseline handed the answer key is not a baseline'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'repository automation remains deterministic and never invokes a model.'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Resolve the execution configuration before running the package preparation script.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'scripts/Get-HarnessModels.ps1'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Cline and OpenCode discovery is free-only'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name> -Runner <runner-id> -Model <runner-native-model>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Handing the package over'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Executing a package you were handed'
@@ -1284,7 +1287,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'The user asked for eval results, not a second workflow decision.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Asking for an eval'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`eval <skill>`, `evaluate <skill>`'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Run the script immediately when asked. Do not reply with a plan, a menu of options'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Resolve the execution configuration before running the package preparation script.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Eval preparation is a completion gate'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Adding or modifying any repo-managed skill triggers this workflow.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed'
@@ -1293,7 +1296,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'a completion gate an agent cannot skip'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares the paired candidate and baseline inputs as a portable package and stops'
-    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name>'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name> -Runner <runner-id> -Model <runner-native-model>'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'Before running the script, choose a Harness + Model.'
     Assert-NotContains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'run-skill-benchmark.ps1'
     Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'Eval packages inside this repository must live under .bot/.'
     Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'git does not ignore it'
@@ -1306,10 +1310,98 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     }
 
     $scriptPath = Join-Path $repoRoot 'scripts/prepare-skill-evals.ps1'
+    $modelDiscoveryPath = Join-Path $repoRoot 'scripts/Get-HarnessModels.ps1'
     $packageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-package-' + [Guid]::NewGuid().ToString('N'))
     $taskMarker = "`n# Task`n"
     try {
-        $prepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot 2>&1
+        $catalogPath = Join-Path $packageRoot 'fake-model-catalog.json'
+        New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+        [System.IO.File]::WriteAllText($catalogPath, (@'
+{
+  "models": [
+    { "id": "claude-haiku-4.5", "display_name": "Claude Haiku 4.5", "availability": "paid", "operation": "language" },
+    { "id": "gpt-5.6-luna", "display_name": "GPT-5.6 Luna", "availability": "paid", "operation": "language" },
+    { "id": "deepseek/deepseek-v4-flash", "display_name": "DeepSeek V4 Flash", "availability": "free", "operation": "language" },
+    { "id": "paid-model", "display_name": "Paid Model", "availability": "paid", "operation": "language" },
+    { "id": "unknown-model", "display_name": "Unknown Model", "availability": "unknown", "operation": "language" },
+    { "id": "opencode/muse-spark-1.2-contributor-free", "display_name": "Muse Spark 1.2", "cost": { "input": 0, "output": 0, "cache": { "read": 0, "write": 0 } }, "operation": "language" }
+  ]
+}
+'@), $utf8NoBom)
+
+        $copilotDiscovery = (& pwsh -NoProfile -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath 2>&1)
+        if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for Copilot fixture: $($copilotDiscovery -join [Environment]::NewLine)" }
+        $copilotModels = ($copilotDiscovery -join [Environment]::NewLine) | ConvertFrom-Json
+        if (@($copilotModels.models).Count -ne 6) { throw 'Copilot discovery must return all available fixture models.' }
+
+        $codexDiscovery = (& pwsh -NoProfile -File $modelDiscoveryPath -Runner 'codex' -CatalogPath $catalogPath 2>&1)
+        if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for Codex fixture: $($codexDiscovery -join [Environment]::NewLine)" }
+        $codexModels = ($codexDiscovery -join [Environment]::NewLine) | ConvertFrom-Json
+        if (@($codexModels.models).Count -ne 6) { throw 'Codex discovery must return all available fixture models.' }
+
+        foreach ($runnerName in @('cline', 'opencode')) {
+            $discoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner $runnerName -CatalogPath $catalogPath 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for ${runnerName}: $($discoveryOutput -join [Environment]::NewLine)" }
+            $discovery = ($discoveryOutput -join [Environment]::NewLine) | ConvertFrom-Json
+            $ids = @($discovery.models | ForEach-Object { [string]$_.id })
+            if ($ids -notcontains 'deepseek/deepseek-v4-flash' -or $ids -notcontains 'opencode/muse-spark-1.2-contributor-free') {
+                throw "$runnerName discovery must retain free fixture model selectors."
+            }
+            if ($ids -contains 'paid-model' -or $ids -contains 'unknown-model') {
+                throw "$runnerName discovery must not include paid or unknown-availability models."
+            }
+        }
+
+        $paidCatalogPath = Join-Path $packageRoot 'paid-model-catalog.json'
+        [System.IO.File]::WriteAllText($paidCatalogPath, (@'
+{
+  "models": [
+    { "id": "paid-model", "display_name": "Paid Model", "availability": "paid", "operation": "language" },
+    { "id": "unknown-model", "display_name": "Unknown Model", "availability": "unknown", "operation": "language" }
+  ]
+}
+'@), $utf8NoBom)
+        $noFreeOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $paidCatalogPath 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($noFreeOutput -join ' ') -notmatch 'No free OpenCode models') {
+            throw 'OpenCode discovery must fail clearly when free discovery returns zero models.'
+        }
+
+        $missingCatalogOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'codex' -CatalogPath (Join-Path $packageRoot 'missing-catalog.json') 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($missingCatalogOutput -join ' ') -notmatch 'does not exist') {
+            throw 'Discovery failures must remain local and must not invent fallback models.'
+        }
+
+        $referenceOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath -RequireModel 'claude-haiku-4.5' 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Codebelt Reference fixture should resolve: $($referenceOutput -join [Environment]::NewLine)" }
+        $missingReferenceOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $paidCatalogPath -RequireModel 'claude-haiku-4.5' 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($missingReferenceOutput -join ' ') -notmatch 'Required model') {
+            throw 'Codebelt Reference discovery must fail instead of silently substituting a model.'
+        }
+
+        $referencePackageRoot = Join-Path $packageRoot 'reference-package'
+        $referencePrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $referencePackageRoot -CodebeltReference -ModelCatalogPath $catalogPath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "prepare-skill-evals.ps1 -CodebeltReference failed against the fake current catalog: $($referencePrepareOutput -join [Environment]::NewLine)"
+        }
+        $referenceProfile = [System.IO.File]::ReadAllText((Join-Path $referencePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
+        if ([string]$referenceProfile.runner -ne 'github-copilot' -or [string]$referenceProfile.model -ne 'claude-haiku-4.5') {
+            throw 'Codebelt Reference preparation must write github-copilot + claude-haiku-4.5 atomically.'
+        }
+
+        $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
+        $missingSelectionOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingSelectionRoot 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            throw 'prepare-skill-evals.ps1 must refuse to generate RUN-THIS.prompt.md without a resolved runner/model selection.'
+        }
+        if (($missingSelectionOutput -join ' ') -notmatch 'requires a resolved Harness \+ Model') {
+            throw 'prepare-skill-evals.ps1 must explain that Harness + Model selection is required before handoff generation.'
+        }
+        if (Test-Path -LiteralPath $missingSelectionRoot) {
+            Remove-Item -LiteralPath $missingSelectionRoot -Recurse -Force
+            throw 'prepare-skill-evals.ps1 must not create an unresolved eval package.'
+        }
+
+        $prepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed: $($prepareOutput -join [Environment]::NewLine)"
         }
@@ -1355,7 +1447,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         foreach ($needle in @(
             'START NOW. You are the external Eval Orchestrator',
             'Do not execute evaluation prompts in the current agent context.',
-            'execution-profile.json` selects the runner/provider/model/configuration',
+            'execution-profile.json` selects the runner/model/configuration',
             'invoke the runner exactly once with `execute`',
             'never receive or inspect expected output, assertions, grading, paired output, benchmark data, or human feedback',
             'Never fall back to the old generic isolated-worker behavior',
@@ -1375,10 +1467,13 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         foreach ($forbidden in @(
             'this context has read the runner instructions and can no longer produce a clean run',
             '## If you can only hold one context',
-            'If you truly cannot, this package is not for you'
+            'If you truly cannot, this package is not for you',
+            'Choose evaluation configuration',
+            'Codebelt Reference',
+            'discover current models'
         )) {
             if ($runner.Contains($forbidden)) {
-                throw "RUN-THIS.prompt.md must not contain the refusal path '$forbidden'."
+                throw "RUN-THIS.prompt.md must not contain forbidden handoff text '$forbidden'."
             }
         }
         foreach ($entry in @($manifest.evals)) {
@@ -1539,12 +1634,17 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         $profilePath = Join-Path $iterationDirectory ([string]$manifest.execution_profile)
         $profile = [System.IO.File]::ReadAllText($profilePath, $utf8NoBom) | ConvertFrom-Json
-        foreach ($profileField in @('schema', 'runner', 'provider', 'model', 'reasoning_effort', 'configuration_profile', 'tool_profile', 'timeout_seconds', 'concurrency')) {
+        foreach ($profileField in @('schema', 'runner', 'model', 'reasoning_effort', 'configuration_profile', 'tool_profile', 'timeout_seconds', 'concurrency')) {
             if ($profile.PSObject.Properties.Name -notcontains $profileField) {
                 throw "execution-profile.json must declare '$profileField'."
             }
         }
+        if ($profile.PSObject.Properties.Name -contains 'provider') {
+            throw 'execution-profile.json must not declare provider.'
+        }
         if ([string]$profile.schema -ne 'codebeltnet/agentic/eval-execution-profile/1' -or
+            [string]::IsNullOrWhiteSpace([string]$profile.runner) -or
+            [string]::IsNullOrWhiteSpace([string]$profile.model) -or
             [int]$profile.timeout_seconds -lt 1 -or [int]$profile.concurrency -lt 1) {
             throw 'execution-profile.json has an invalid schema or execution limit.'
         }
@@ -1585,7 +1685,6 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             $resultPath = Join-Path (Join-Path $firstEvalDirectory 'results') $resultFile
             $result = [System.IO.File]::ReadAllText($resultPath, $utf8NoBom) | ConvertFrom-Json
             $result.model = 'validator-model'
-            $result.provider = 'validator-provider'
             $result.harness = 'validator-harness'
             $result.executed_utc = '2026-01-01T00:00:00Z'
             $result.output = 'validator output'
@@ -1648,7 +1747,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
 
         $insideRepo = Join-Path $repoRoot 'agentic-eval-isolation-check'
-        $isolationOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo 2>&1
+        $isolationOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
         if ($LASTEXITCODE -eq 0) {
             throw 'prepare-skill-evals.ps1 must refuse an output root inside this repository but outside .bot/.'
         }
@@ -1663,7 +1762,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         # .bot/ is the sanctioned in-repository home, and it only works while git ignores it.
         $botRoot = Join-Path (Join-Path $repoRoot '.bot') 'agentic-eval-bot-check'
         try {
-            $botOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot 2>&1
+            $botOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "prepare-skill-evals.ps1 must accept an output root under .bot/: $($botOutput -join [Environment]::NewLine)"
             }

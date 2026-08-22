@@ -400,11 +400,8 @@ function Get-ReportRun {
         configuration = $Configuration
         feedback_key = "eval-$EvalId-$Configuration"
         model = [string](Get-Property -Object $Result -Name 'model' -Default '')
-        provider = [string](Get-Property -Object $Result -Name 'provider' -Default '')
         requested_model = [string](Get-Property -Object $Result -Name 'requested_model' -Default '')
-        requested_provider = [string](Get-Property -Object $Result -Name 'requested_provider' -Default '')
         resolved_model = [string](Get-Property -Object $Result -Name 'resolved_model' -Default '')
-        resolved_provider = [string](Get-Property -Object $Result -Name 'resolved_provider' -Default '')
         configuration_resolution_status = [string](Get-Property -Object $Result -Name 'configuration_resolution_status' -Default '')
         configuration_resolution_reason = [string](Get-Property -Object $Result -Name 'configuration_resolution_reason' -Default '')
         harness = [string](Get-Property -Object $Result -Name 'harness' -Default '')
@@ -465,7 +462,6 @@ function Write-FirstPartyReport {
 
     $evals = [System.Collections.Generic.List[object]]::new()
     $allModels = [System.Collections.Generic.List[string]]::new()
-    $allProviders = [System.Collections.Generic.List[string]]::new()
     $completedRuns = 0
     foreach ($entry in @($Manifest.evals)) {
         $evalDirectory = Join-Path $IterationPath ([string]$entry.directory)
@@ -483,9 +479,6 @@ function Write-FirstPartyReport {
                 if (-not [string]::IsNullOrWhiteSpace([string]$run.model) -and -not $allModels.Contains([string]$run.model)) {
                     $allModels.Add([string]$run.model)
                 }
-                if (-not [string]::IsNullOrWhiteSpace([string]$run.provider) -and -not $allProviders.Contains([string]$run.provider)) {
-                    $allProviders.Add([string]$run.provider)
-                }
             } else {
                 $runMap[$configuration] = $null
             }
@@ -502,7 +495,6 @@ function Write-FirstPartyReport {
 
     $metadata = [ordered]@{
         model = if ($allModels.Count -gt 0) { $allModels -join ', ' } else { $null }
-        provider = if ($allProviders.Count -gt 0) { $allProviders -join ', ' } else { $null }
         completed_runs = $completedRuns
         expected_runs = @($Manifest.evals).Count * 2
         generated_utc = [string](Get-Property -Object $Manifest -Name 'generated_utc' -Default '')

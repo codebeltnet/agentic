@@ -5,7 +5,7 @@
 .DESCRIPTION
     This script computes and prints. It never executes a prompt, never spawns an agent, and never calls a model.
     It turns skills/<name>/evals/evals.json into a paste-ready evaluation package that a human can run in whatever
-    harness, provider, and model they choose, then validates the results that come back.
+    harness and model they choose, then validates the results that come back.
 
     Prepare mode writes one directory per eval. The grading key and result stubs stay at the eval-case level, outside
     the two isolated run directories a worker actually sees:
@@ -45,14 +45,17 @@
     Overwrite an existing iteration directory.
 
 .PARAMETER Runner
-    Optional runner name written to execution-profile.json. If omitted, the profile remains unselected and an external
-    orchestrator must fail clearly rather than guess a runner.
-
-.PARAMETER Provider
-    Optional provider name written to execution-profile.json.
+    Required package-local Eval Runner id written to execution-profile.json when -CodebeltReference is not used.
 
 .PARAMETER Model
-    Optional model identifier written to execution-profile.json.
+    Required runner-native model selector written to execution-profile.json when -CodebeltReference is not used.
+
+.PARAMETER CodebeltReference
+    Resolve the Codebelt reference configuration by discovering current GitHub Copilot CLI models and selecting
+    claude-haiku-4.5 only when it is still available.
+
+.PARAMETER ModelCatalogPath
+    Optional deterministic catalog JSON used by the model discovery helper. Intended for tests and offline validation.
 
 .PARAMETER ReasoningEffort
     Optional runner-supported reasoning/effort setting written to execution-profile.json.
@@ -83,10 +86,10 @@
     This is the fallback for results that were not finalized by the external evaluator.
 
 .EXAMPLE
-    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing
+    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing -Runner github-copilot -Model claude-haiku-4.5
 
 .EXAMPLE
-    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
+    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed -CodebeltReference
 
 .EXAMPLE
     pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults $env:TEMP/dotnet-strong-name-signing-workspace/iteration-1
@@ -126,11 +129,15 @@ param(
 
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
-    [string]$Provider,
+    [string]$Model,
 
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
-    [string]$Model,
+    [switch]$CodebeltReference,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$ModelCatalogPath,
 
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
@@ -381,6 +388,91 @@ function Assert-WorkspaceLocation {
     }
 }
 
+function Get-HarnessName {
+    param([Parameter(Mandatory = $true)][string]$RunnerName)
+
+    switch ($RunnerName) {
+        'github-copilot' { return 'GitHub Copilot CLI' }
+        'codex' { return 'Codex CLI' }
+        'opencode' { return 'OpenCode' }
+        'cline' { return 'Cline' }
+        'fake' { return 'Deterministic fake runner' }
+        default { return $RunnerName }
+    }
+}
+
+function Get-SupportedRunnerIds {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $runnerRoot = Join-Path $RepoRoot 'scripts/eval-runners'
+    if (-not (Test-Path -LiteralPath $runnerRoot -PathType Container)) {
+        return @()
+    }
+
+    return @(Get-ChildItem -LiteralPath $runnerRoot -Directory -Force |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'runner.ps1') -PathType Leaf } |
+        Sort-Object Name |
+        ForEach-Object { $_.Name })
+}
+
+function Resolve-ExecutionSelection {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $referenceRunner = 'github-copilot'
+    $referenceModel = 'claude-haiku-4.5'
+    $supportedRunners = @(Get-SupportedRunnerIds -RepoRoot $RepoRoot)
+    $supportedText = if ($supportedRunners.Count -gt 0) { $supportedRunners -join ', ' } else { '(none found)' }
+
+    if ($CodebeltReference -and (-not [string]::IsNullOrWhiteSpace($Runner) -or -not [string]::IsNullOrWhiteSpace($Model))) {
+        throw 'Choose either -CodebeltReference or an explicit -Runner/-Model pair, not both.'
+    }
+
+    if ($CodebeltReference) {
+        if ($supportedRunners -notcontains $referenceRunner) {
+            throw "Codebelt Reference requires runner '$referenceRunner', but it is unavailable. Supported runner IDs: $supportedText."
+        }
+        $discoveryScript = Join-Path $RepoRoot 'scripts/Get-HarnessModels.ps1'
+        if (-not (Test-Path -LiteralPath $discoveryScript -PathType Leaf)) {
+            throw "Cannot resolve Codebelt Reference because '$discoveryScript' is missing."
+        }
+
+        $arguments = @('-Runner', $referenceRunner, '-RequireModel', $referenceModel)
+        if (-not [string]::IsNullOrWhiteSpace($ModelCatalogPath)) {
+            $arguments += @('-CatalogPath', $ModelCatalogPath)
+        }
+        $discoveryOutput = & pwsh -NoProfile -File $discoveryScript @arguments 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Codebelt Reference requires $referenceRunner + $referenceModel, but current model discovery could not verify it. $($discoveryOutput -join [Environment]::NewLine)"
+        }
+
+        return [pscustomobject]@{
+            Runner = $referenceRunner
+            Model = $referenceModel
+            Harness = Get-HarnessName -RunnerName $referenceRunner
+            Preset = 'Codebelt Reference'
+        }
+    }
+
+    $hasRunner = -not [string]::IsNullOrWhiteSpace($Runner)
+    $hasModel = -not [string]::IsNullOrWhiteSpace($Model)
+    if (-not $hasRunner -and -not $hasModel) {
+        throw "Evaluation preparation requires a resolved Harness + Model before RUN-THIS.prompt.md can be generated. Pass -Runner and -Model, or use -CodebeltReference after verifying the current catalog. Supported runner IDs: $supportedText."
+    }
+    if ($hasRunner -ne $hasModel) {
+        throw 'Runner/model selection is atomic: pass both -Runner and -Model, or neither when no package will be generated.'
+    }
+    if ($supportedRunners -notcontains $Runner) {
+        throw "Unsupported runner '$Runner'. Supported runner IDs: $supportedText."
+    }
+
+    return [pscustomobject]@{
+        Runner = $Runner
+        Model = $Model
+        Harness = Get-HarnessName -RunnerName $Runner
+        Preset = 'Custom'
+    }
+}
+
 function Get-EvalName {
     param([object]$EvalEntry)
 
@@ -572,7 +664,6 @@ function New-ResultStub {
         eval_name = $EvalName
         configuration = $Configuration
         model = ''
-        provider = ''
         harness = ''
         executed_utc = ''
         output = ''
@@ -612,11 +703,12 @@ function New-ResultStub {
 }
 
 function New-ExecutionProfile {
+    param([Parameter(Mandatory = $true)][object]$ExecutionSelection)
+
     return [ordered]@{
         schema = $executionProfileSchema
-        runner = if ([string]::IsNullOrWhiteSpace($Runner)) { $null } else { $Runner }
-        provider = if ([string]::IsNullOrWhiteSpace($Provider)) { $null } else { $Provider }
-        model = if ([string]::IsNullOrWhiteSpace($Model)) { $null } else { $Model }
+        runner = $ExecutionSelection.Runner
+        model = $ExecutionSelection.Model
         reasoning_effort = if ([string]::IsNullOrWhiteSpace($ReasoningEffort)) { $null } else { $ReasoningEffort }
         configuration_profile = $ConfigurationProfile
         tool_profile = $ToolProfile
@@ -1185,6 +1277,8 @@ function Invoke-PrepareMode {
         throw "No evals selected for '$Skill'."
     }
 
+    $executionSelection = Resolve-ExecutionSelection -RepoRoot $repoRoot
+
     $workspaceRoot = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
         Join-Path (Join-Path $repoRoot '.bot') "$Skill-workspace"
     } else {
@@ -1219,7 +1313,7 @@ function Invoke-PrepareMode {
     $skillCreatorSourcePath = Resolve-SkillCreatorSourcePath -RequestedPath $null
     [void](Copy-SkillCreatorEvalTools -IterationDirectory $iterationDirectory -SourcePath $skillCreatorSourcePath)
     [void](Copy-EvalRunnerTools -RepoRoot $repoRoot -IterationDirectory $iterationDirectory)
-    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'execution-profile.json') -Value (New-ExecutionProfile)
+    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'execution-profile.json') -Value (New-ExecutionProfile -ExecutionSelection $executionSelection)
 
     $skillText = [System.IO.File]::ReadAllText($skillMarkdownPath, $utf8NoBom)
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
@@ -1414,6 +1508,12 @@ function Invoke-PrepareMode {
         generated_utc = $generatedUtc
         configurations = @('with_skill', 'without_skill')
         execution = 'runner_handoff'
+        execution_selection = [ordered]@{
+            harness = $executionSelection.Harness
+            runner = $executionSelection.Runner
+            model = $executionSelection.Model
+            preset = $executionSelection.Preset
+        }
         runner_prompt = 'RUN-THIS.prompt.md'
         execution_profile = 'execution-profile.json'
         runner_protocol = $runnerProtocolSchema
@@ -1465,6 +1565,19 @@ function Invoke-PrepareMode {
     $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
     Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals))
 
+    Write-Host 'Evaluation package prepared.'
+    Write-Host ''
+    Write-Host 'Execution:'
+    Write-Host "  Harness: $($executionSelection.Harness)"
+    Write-Host "  Runner:  $($executionSelection.Runner)"
+    Write-Host "  Model:   $($executionSelection.Model)"
+    if (-not [string]::IsNullOrWhiteSpace([string]$executionSelection.Preset)) {
+        Write-Host "  Preset:  $($executionSelection.Preset)"
+    }
+    Write-Host ''
+    Write-Host "Cases: $($manifestEvals.Count)"
+    Write-Host "Arms:  $($manifestEvals.Count * 2)"
+    Write-Host ''
     Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber) as $($manifestEvals.Count * 2) isolated run package(s)."
     Write-Host "Package: $iterationDirectory"
     Write-Host ''
@@ -1508,16 +1621,16 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine("Profile: $profilePath")
     [void]$builder.AppendLine("Runner resolver: $resolverPath")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('This is a runner-aware package. `run.json` is the existing portable one-arm contract: it defines the prompt, staged files, working directory, isolated home, candidate-skill exposure, and required isolation. `execution-profile.json` selects the runner/provider/model/configuration and carries the execution limits. The selected runner defines how its harness satisfies the contract.')
+    [void]$builder.AppendLine('This is a runner-aware package. `run.json` is the existing portable one-arm contract: it defines the prompt, staged files, working directory, isolated home, candidate-skill exposure, and required isolation. `execution-profile.json` selects the runner/model/configuration and carries the execution limits. The selected runner defines how its harness satisfies the contract.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A human selected the external orchestrator and authorized this handoff. Repository preparation, validation, CI, hooks, and automatic completion gates remain model-free. Do not substitute a generic worker, another runner, or an improvised isolation scheme if the selected runner is unavailable or incompatible.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 1: execute blind arms')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Read `manifest.json` and `execution-profile.json`. If `runner` is null, unavailable, or unsupported, fail clearly; do not guess a default. The profile contains no credentials.')
+    [void]$builder.AppendLine('1. Read `manifest.json` and `execution-profile.json`. If `runner` or `model` is null, unavailable, or unsupported, fail clearly and list the supported package-local runner IDs; do not guess a default. The profile contains no credentials.')
     [void]$builder.AppendLine('2. Resolve the selected package-local runner with the resolver. Ask it for `describe` and validate its protocol, descriptor, and capability declarations before running an arm. Do not invent harness-specific CLI commands.')
     [void]$builder.AppendLine('3. For every eval case, use the exact `run_manifest` path from `manifest.json` and the same profile path. Preflight each arm, then invoke the runner exactly once with `execute`. The runner receives only `run.json` and `execution-profile.json`; it must never receive or inspect expected output, assertions, grading, paired output, benchmark data, or human feedback.')
-    [void]$builder.AppendLine('4. Keep `with_skill` and `without_skill` in fresh independent processes/sessions. Use the same model, provider, configuration, tools, and limits. The runner must send each `prompt.md` unchanged as the first task input and must enforce the run contract, including the baseline skill exclusion and the staged filesystem/workspace boundary.')
+    [void]$builder.AppendLine('4. Keep `with_skill` and `without_skill` in fresh independent processes/sessions. Use the same runner-native model selector, configuration, tools, and limits. The runner must send each `prompt.md` unchanged as the first task input and must enforce the run contract, including the baseline skill exclusion and the staged filesystem/workspace boundary.')
     [void]$builder.AppendLine('5. Save the runner''s single normalized JSON response unchanged as the matching `execution_result` path. Preserve the complete final response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout, harness failure, and incompatibility are results.')
     [void]$builder.AppendLine('6. If the runner cannot satisfy a required guarantee, keep the normalized status `incompatible` and stop that arm. Never fall back to the old generic isolated-worker behavior and never substitute a different runner.')
     [void]$builder.AppendLine()
@@ -1540,7 +1653,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('3. Write only `grading[].text`, `grading[].passed`, and `grading[].evidence` for grading. Do not alter raw execution results. Use null for genuinely unavailable judgement and leave missing arms visibly missing.')
     [void]$builder.AppendLine(('4. Run the existing package report adapter now: `pwsh -NoProfile -File "' + $reportPath + '" -IterationDirectory "' + $IterationDirectory + '"`. It remains the bridge to Anthropic skill-creator''s grader-compatible aggregator and viewer; do not replace it with harness-specific reporting. The packaged compatibility tools remain `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`.'))
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The completion artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md` at the package root. Return their absolute paths, completed and missing arm counts, runner/provider/model identity, and a concise evidence-backed summary. If the package cannot be written from the external environment, return one paste-ready block containing the completed result objects and report artifacts.')
+    [void]$builder.AppendLine('The completion artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md` at the package root. Return their absolute paths, completed and missing arm counts, runner/model identity, and a concise evidence-backed summary. If the package cannot be written from the external environment, return one paste-ready block containing the completed result objects and report artifacts.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("This package contains $(@($ManifestEvals).Count) eval case(s), each with paired `with_skill` and `without_skill` runs. The human reviewer remains the final evaluator.")
     return $builder.ToString()
@@ -1557,7 +1670,7 @@ function New-PackageReadme {
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine("# Eval package: $SkillName (iteration $IterationNumber)")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. `execution-profile.json` selects the user-chosen Eval Runner, provider, model, and limits; the external Eval Orchestrator runs both configurations, grades them, and generates the report.')
+    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. `execution-profile.json` selects the user-chosen Eval Runner, runner-native model, and limits; the external Eval Orchestrator runs both configurations, grades them, and generates the report.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## What is here')
     [void]$builder.AppendLine()
@@ -1577,7 +1690,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## How to run')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Read `execution-profile.json`. If no runner is selected, fail clearly instead of guessing. Resolve the selected package-local runner and run `describe`, then `preflight`, for every arm.')
+    [void]$builder.AppendLine('1. Read `execution-profile.json`. If `runner` or `model` is missing, fail clearly instead of guessing. Resolve the selected package-local runner and run `describe`, then `preflight`, for every arm.')
     [void]$builder.AppendLine('2. Invoke `execute` exactly once for each `run.json`, preserving its one JSON `execution-result.json` unchanged. The runner must provide a fresh process/session, isolated home/config, isolated CWD, baseline skill exclusion, prompt fidelity, model/configuration lock, and complete response capture, or return `incompatible`. Hard filesystem confinement is not one of these mandatory controls: when the runner proves it the run reports strict isolation, and when it does not the run reports pragmatic isolation.')
     [void]$builder.AppendLine('3. After all arms complete or fail, run `tools/eval-runners/bridge-execution-result.ps1` for each raw result. It writes the existing `eval-result/2` file and preserves explicit unavailable telemetry. Only then read the grading key, grade with `tools/skill-creator/agents/grader.md`, and run `tools/generate-eval-report.ps1`.')
     [void]$builder.AppendLine()
@@ -1591,7 +1704,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Fill in each `results/*.result.json`:')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('- `model`, `provider`, `harness` - what actually ran it, as specifically as you know')
+    [void]$builder.AppendLine('- `model`, `harness` - what actually ran it, as specifically as you know')
     [void]$builder.AppendLine('- `executed_utc` - when')
     [void]$builder.AppendLine('- `output` - the produced output, or a summary plus paths in `output_files`')
     [void]$builder.AppendLine('- `transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls` - include the values the harness exposes; omit unavailable values rather than estimating them')
@@ -1815,7 +1928,6 @@ function Invoke-CollectMode {
 
             $observed[$configuration] = [pscustomobject]@{
                 Model = $model
-                Provider = [string](Get-JsonProperty -Object $result -Name 'provider' -Default '')
                 Graded = $graded.Count
                 Passed = $passed
                 Total = $total

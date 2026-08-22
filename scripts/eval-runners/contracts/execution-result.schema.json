@@ -52,17 +52,48 @@
         "reason": { "type": "string" }
       }
     },
-    "requested": { "type": "object" },
+    "requested": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "reasoning_effort",
+        "configuration_profile",
+        "tool_profile",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "model": { "type": ["string", "null"] },
+        "reasoning_effort": { "type": ["string", "null"] },
+        "configuration_profile": { "type": "string" },
+        "tool_profile": { "type": "string" },
+        "timeout_seconds": { "type": "integer" }
+      }
+    },
     "resolved": {
       "type": "object",
       "properties": {
-        "provider": { "type": ["string", "null"] },
         "model": { "type": ["string", "null"] },
         "reasoning_effort": { "type": ["string", "null"] },
         "configuration_profile": { "type": ["string", "null"] },
         "tool_profile": { "type": ["string", "null"] },
         "status": { "enum": ["unavailable", "accepted_request", "resolved"] },
-        "accepted": { "type": "object" }
+        "accepted": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "model",
+            "reasoning_effort",
+            "configuration_profile",
+            "tool_profile"
+          ],
+          "properties": {
+            "model": { "type": ["string", "null"] },
+            "reasoning_effort": { "type": ["string", "null"] },
+            "configuration_profile": { "type": "string" },
+            "tool_profile": { "type": "string" }
+          }
+        }
       }
     },
     "duration_seconds": { "type": "number", "minimum": 0 },

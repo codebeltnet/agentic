@@ -96,6 +96,21 @@ function Get-ClineDescriptor {
     return $copy
 }
 
+function Resolve-ClineModelSelector {
+    param([string]$Model)
+
+    if ([string]::IsNullOrWhiteSpace($Model)) {
+        return [pscustomobject]@{ Provider = $null; Model = $null; Valid = $false }
+    }
+
+    $parts = $Model.Split([char[]]@('/'), 2, [System.StringSplitOptions]::None)
+    if ($parts.Count -lt 2 -or [string]::IsNullOrWhiteSpace($parts[0]) -or [string]::IsNullOrWhiteSpace($parts[1])) {
+        return [pscustomobject]@{ Provider = $null; Model = $Model; Valid = $false }
+    }
+
+    return [pscustomobject]@{ Provider = $parts[0]; Model = $parts[1]; Valid = $true }
+}
+
 function New-ClineEnvironment {
     param([Parameter(Mandatory = $true)][object]$Inputs)
 
@@ -108,8 +123,10 @@ function New-ClineEnvironment {
     foreach ($directory in @($clineRoot, $dataDirectory, $settingsDirectory, $sandboxDataDirectory, $teamDataDirectory, $hooksDirectory)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
+    $selector = Resolve-ClineModelSelector -Model ([string]$Inputs.Profile.Model)
+    $authVariables = @(if ($selector.Valid) { Get-ProviderAuthenticationVariables -Provider $selector.Provider })
     return [pscustomobject]@{
-        Environment = New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider)) -Additional @{
+        Environment = New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables $authVariables -Additional @{
             CLINE_DATA_DIR = $dataDirectory
             CLINE_SANDBOX_DATA_DIR = $sandboxDataDirectory
             CLINE_HOOKS_DIR = $hooksDirectory
@@ -147,7 +164,9 @@ function Get-ClineInsideEnvironment {
         CI = '1'
         NO_COLOR = '1'
     }
-    foreach ($name in @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider))) {
+    $selector = Resolve-ClineModelSelector -Model ([string]$Inputs.Profile.Model)
+    $authVariables = @(if ($selector.Valid) { Get-ProviderAuthenticationVariables -Provider $selector.Provider })
+    foreach ($name in $authVariables) {
         if ($EnvironmentData.Environment.Contains($name) -and -not [string]::IsNullOrWhiteSpace([string]$EnvironmentData.Environment[$name])) {
             $inside[$name] = [string]$EnvironmentData.Environment[$name]
         }
@@ -166,8 +185,9 @@ function New-ClineCliArguments {
     $configPath = Get-SandboxVisiblePath -HostPath $EnvironmentData.ConfigPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $dataRoot = Get-SandboxVisiblePath -HostPath $EnvironmentData.DataDirectory -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $hooksDirectory = Get-SandboxVisiblePath -HostPath $EnvironmentData.HooksDirectory -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
+    $selector = Resolve-ClineModelSelector -Model ([string]$Inputs.Profile.Model)
     $arguments = [System.Collections.Generic.List[string]]::new()
-    foreach ($argument in @('--json', '--auto-approve', 'true', '--cwd', $workingDirectory, '--config', $configPath, '--data-dir', $dataRoot, '--hooks-dir', $hooksDirectory, '--provider', $Inputs.Profile.Provider, '--model', $Inputs.Profile.Model, '--retries', '0', '--timeout', [string]$Inputs.Profile.TimeoutSeconds)) {
+    foreach ($argument in @('--json', '--auto-approve', 'true', '--cwd', $workingDirectory, '--config', $configPath, '--data-dir', $dataRoot, '--hooks-dir', $hooksDirectory, '--provider', $selector.Provider, '--model', $selector.Model, '--retries', '0', '--timeout', [string]$Inputs.Profile.TimeoutSeconds)) {
         $arguments.Add([string]$argument)
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$Inputs.Profile.ReasoningEffort)) {
@@ -210,15 +230,14 @@ function Get-ClinePreflight {
     } else {
         $checks.Add((New-PreflightCheck -Name 'runner_selection' -Status passed -Detail 'The selected runner is cline.'))
     }
-    if ([string]::IsNullOrWhiteSpace($profile.Provider)) {
-        $reasons.Add('Cline requires a provider in execution-profile.json.')
-    } else {
-        $checks.Add((New-PreflightCheck -Name 'provider' -Status passed -Detail $profile.Provider))
-    }
+    $selector = Resolve-ClineModelSelector -Model ([string]$profile.Model)
     if ([string]::IsNullOrWhiteSpace($profile.Model)) {
         $reasons.Add('Cline requires a model in execution-profile.json.')
+    } elseif (-not $selector.Valid) {
+        $reasons.Add("Cline requires a runner-native model selector in 'provider/model' form; received '$($profile.Model)'.")
     } else {
         $checks.Add((New-PreflightCheck -Name 'model' -Status passed -Detail $profile.Model))
+        $checks.Add((New-PreflightCheck -Name 'native_model_selector' -Status passed -Detail "--provider $($selector.Provider); --model $($selector.Model)"))
     }
     if ($profile.ConfigurationProfile -ne 'isolated-default') { $reasons.Add("configuration_profile '$($profile.ConfigurationProfile)' is unsupported by cline.") }
     if ($profile.ToolProfile -ne 'default') { $reasons.Add("tool_profile '$($profile.ToolProfile)' is unsupported by cline.") }
@@ -260,13 +279,15 @@ function Get-ClinePreflight {
         }
     }
 
-    $authVariables = @(Get-ProviderAuthenticationVariables -Provider ([string]$profile.Provider))
+    $authVariables = @(if ($selector.Valid) { Get-ProviderAuthenticationVariables -Provider $selector.Provider })
     $authVariable = $null
     foreach ($name in $authVariables) {
         if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { $authVariable = $name; break }
     }
-    if ([string]::IsNullOrWhiteSpace($authVariable)) {
-        $reasons.Add("No narrow provider authentication environment variable is available for '$($profile.Provider)'; ambient Cline auth profiles are not copied into an eval run.")
+    if ($authVariables.Count -eq 0) {
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status not_applicable -Detail 'No runner-known provider API-key environment variable is required for this Cline model selector.'))
+    } elseif ([string]::IsNullOrWhiteSpace($authVariable)) {
+        $reasons.Add("No narrow provider authentication environment variable is available for model provider '$($selector.Provider)'; ambient Cline auth profiles are not copied into an eval run.")
     } else {
         $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Provider credential will be passed only as $authVariable."))
     }
@@ -498,15 +519,17 @@ function Invoke-ClineExecute {
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     foreach ($mechanism in @('cline --json', '--auto-approve true', '--retries 0', 'no --id session resume', 'run-local HOME', 'run-local Cline data/config/hooks directories', 'prompt on stdin')) { $mechanisms.Add($mechanism) }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement'); $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
+    $nativeSelector = Resolve-ClineModelSelector -Model ([string]$Inputs.Profile.Model)
     $credentialEvidence = [ordered]@{
-        provider_environment_variables = @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider))
+        model_provider = $nativeSelector.Provider
+        provider_environment_variables = @(if ($nativeSelector.Valid) { Get-ProviderAuthenticationVariables -Provider $nativeSelector.Provider })
         unrelated_environment_excluded = $true
         child_tool_visibility = 'not_exposed_by_runner_environment; Cline child filtering is not independently observable'
         value_observed = $false
     }
     $sessionResultId = if ([string]::IsNullOrWhiteSpace($returnedSessionId)) { $sessionId } else { $returnedSessionId }
     $sandboxEvidence = if (-not $hardFilesystem) { 'unavailable' } elseif ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' }
-    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Cline accepted the requested provider, model, thinking, and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ provider = $Inputs.Profile.Provider; model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort; retries = 0 } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; session_id_supplied = $false; retry_argument = 0; sandbox = $sandboxEvidence; credential = $credentialEvidence }) -AttemptCount 1
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Cline accepted the requested runner-native model selector, thinking, and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; native_provider = $nativeSelector.Provider; native_model = $nativeSelector.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort; retries = 0 } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; session_id_supplied = $false; retry_argument = 0; sandbox = $sandboxEvidence; credential = $credentialEvidence }) -AttemptCount 1
 }
 
 try {

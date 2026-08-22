@@ -16,8 +16,11 @@ working directory, isolated home, staged candidate skill, and required
 experimental controls. Its `filesystemIsolationRequired` and
 `mustNotReadOutsideSandbox` fields describe the staged worker-facing package
 boundary; they do not claim that the host has a hard OS filesystem sandbox.
-`execution-profile.json` selects the runner and
-execution configuration. It contains no credentials or secrets.
+`execution-profile.json` selects the runner, runner-native model selector, and
+execution configuration. The model string is opaque to the portable layer: a
+runner may pass it through unchanged or split it internally when its native CLI
+requires separate provider/model arguments. The profile contains no credentials,
+secrets, or portable provider field.
 `execution-result.json` normalizes one blind execution and keeps grading
 separate from raw evidence.
 
@@ -50,13 +53,13 @@ native CLI flags, environment setup, event parsing, authentication injection,
 and isolation checks stay inside their own directories. Windows is supported in
 pragmatic mode when the native CLI satisfies the mandatory controls.
 
-`github-copilot` with `claude-haiku-4.5` is the Codebelt reference evaluation
+`github-copilot` with `claude-haiku-4.5` is the Codebelt Reference evaluation
 configuration: a stable, economical pairing for routine skill comparison. It is
-a repository convention, not an Anthropic default, and the model stays
-configurable through `execution-profile.json`, so any Copilot-served model can
-be selected. Cross-runner and cross-model numbers are never blended into one
-score; a paired `with_skill` versus `without_skill` comparison is only
-meaningful within one identical runner, model, and configuration stratum.
+a repository convention, not an Anthropic default, and preparation verifies that
+the model still appears in the current Copilot catalog before selecting it.
+Cross-runner and cross-model numbers are never blended into one score; a paired
+`with_skill` versus `without_skill` comparison is only meaningful within one
+identical runner, model, and configuration stratum.
 
 GitHub Copilot uses `copilot -C <working-directory> --model <model>
 --output-format json --allow-all-tools --no-ask-user --disable-builtin-mcps
@@ -70,24 +73,27 @@ noninteractive execution; it does not disable path or URL verification.
 Repository-owned custom instructions remain enabled and are staged identically
 in both paired arms. Personal Copilot configuration is excluded by run-local
 `COPILOT_HOME`, `COPILOT_CACHE_HOME`, `HOME`, `USERPROFILE`, and XDG roots;
-the runner does not copy the normal `.copilot` directory. Authentication follows
-Copilot's normal order: explicit `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or
-`GITHUB_TOKEN`, then the OS credential store, then GitHub CLI fallback through a
-host-derived `GH_CONFIG_DIR` when available. `--secret-env-vars` removes every
+the runner does not copy the normal `.copilot` directory. Authentication prefers
+explicit `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; when none is
+present, the trusted runner may resolve `gh auth token` outside the worker and
+inject only that token as a protected environment variable. Host `GH_CONFIG_DIR`
+is never forwarded into the evaluated worker. `--secret-env-vars` removes every
 listed token variable from shell and MCP child environments. Preflight does not
 make a model request and therefore reports native keychain/service readiness as
 conditional rather than claiming successful remote authentication. Codex uses
 `--ask-for-approval never` with `exec --sandbox
 workspace-write`; it does not combine explicit sandbox selection with
-`--approve-for-me`. OpenCode uses `run --format json --auto` with isolated
-global/config roots and preserves repository-owned project configuration; it
-does not depend on `OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. Cline uses
-`--json`, `--auto-approve true`, `--retries 0`, `--config <run-home>`,
-`--data-dir <run-home>/.cline/data`, and run-local hooks; it passes no session
-id. Each captures an exact observable CLI version and passes only documented
-environment credentials when the selected runner supports them. None copies a
-global skill directory,
-memory store, plugin set, or normal agent profile into a run.
+`--approve-for-me`. OpenCode uses `run --format json --auto --model
+<runner-native-model>` with isolated global/config roots and preserves
+repository-owned project configuration; it does not depend on
+`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. Cline expects a
+`provider/model` selector in the profile and derives its native `--provider`
+and `--model` arguments inside the adapter. Each captures an exact observable
+CLI version and passes only documented environment credentials when the selected
+runner supports them. None copies a global skill directory, memory store, plugin
+set, or normal agent profile into a run.
+
+Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list, Codex through `codex debug models`, OpenCode through `opencode models opencode --verbose`, and Cline through the installed `@cline/llms` registry. Cline and OpenCode discovery returns only models with current metadata proving free availability; zero free models is a clear local failure, not a fallback to paid models.
 
 Freebuff is currently documented as planned/blocked. Its supported CLI remains
 TUI-oriented and does not provide the required one-prompt, noninteractive,

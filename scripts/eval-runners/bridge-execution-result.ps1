@@ -181,11 +181,8 @@ try {
     $existingGrading = @(Get-ExistingGrading -ResultPath $resultPath)
     $caps = Get-JsonProperty -Object $raw.isolation -Name 'capabilities' -Default ([ordered]@{})
     $requestedModel = [string](Get-JsonProperty -Object $raw.requested -Name 'model' -Default '')
-    $requestedProvider = [string](Get-JsonProperty -Object $raw.requested -Name 'provider' -Default '')
     $resolvedModelValue = Get-JsonProperty -Object $raw.resolved -Name 'model' -Default $null
-    $resolvedProviderValue = Get-JsonProperty -Object $raw.resolved -Name 'provider' -Default $null
     $resolvedModel = if ($null -eq $resolvedModelValue) { '' } else { [string]$resolvedModelValue }
-    $resolvedProvider = if ($null -eq $resolvedProviderValue) { '' } else { [string]$resolvedProviderValue }
     $resolutionStatus = [string](Get-JsonProperty -Object $raw.resolved -Name 'status' -Default 'unavailable')
     $resolutionReason = [string](Get-JsonProperty -Object $raw.resolved -Name 'reason' -Default '')
     $notes.Add("configuration_resolution=$resolutionStatus")
@@ -197,11 +194,8 @@ try {
         eval_name = $runData.EvalName
         configuration = $runData.Mode
         model = if ([string]::IsNullOrWhiteSpace($resolvedModel)) { $requestedModel } else { $resolvedModel }
-        provider = if ([string]::IsNullOrWhiteSpace($resolvedProvider)) { $requestedProvider } else { $resolvedProvider }
         requested_model = $requestedModel
-        requested_provider = $requestedProvider
         resolved_model = $resolvedModel
-        resolved_provider = $resolvedProvider
         configuration_resolution_status = $resolutionStatus
         configuration_resolution_reason = $resolutionReason
         harness = "$(Get-JsonProperty -Object $raw.harness -Name 'name' -Default 'unknown') $(Get-JsonProperty -Object $raw.harness -Name 'version' -Default '')".Trim()

@@ -70,9 +70,7 @@ function Resolve-CodexInputs {
 }
 
 function Get-CodexAuthSource {
-    param([Parameter(Mandatory = $true)][string]$Provider)
-
-    $authVariables = @(Get-ProviderAuthenticationVariables -Provider $Provider)
+    $authVariables = @(Get-ProviderAuthenticationVariables -Provider 'openai')
     foreach ($name in $authVariables) {
         if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
             return [pscustomobject]@{ Kind = 'environment'; Name = $name; Path = $null }
@@ -196,11 +194,6 @@ function Get-CodexPreflight {
     } else {
         $checks.Add((New-PreflightCheck -Name 'runner_selection' -Status passed -Detail 'The selected runner is codex.'))
     }
-    if ([string]::IsNullOrWhiteSpace($profile.Provider) -or $profile.Provider.ToLowerInvariant() -notin @('openai', 'chatgpt')) {
-        $reasons.Add("Codex requires provider 'openai' or 'chatgpt'; received '$($profile.Provider)'.")
-    } else {
-        $checks.Add((New-PreflightCheck -Name 'provider' -Status passed -Detail $profile.Provider))
-    }
     if ([string]::IsNullOrWhiteSpace($profile.Model)) {
         $reasons.Add('Codex requires a model in execution-profile.json.')
     } else {
@@ -260,7 +253,7 @@ function Get-CodexPreflight {
         }
     }
 
-    $auth = Get-CodexAuthSource -Provider ([string]$profile.Provider)
+    $auth = Get-CodexAuthSource
     if ($auth.Kind -eq 'missing') {
         $reasons.Add('No narrow Codex provider API-key environment variable is available.')
     } elseif ($auth.Kind -eq 'file_unsupported') {
@@ -304,7 +297,7 @@ function New-CodexEnvironment {
 
     $codexHome = Join-Path $Inputs.Run.HomeDirectoryPath '.codex'
     New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
-    $environment = New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider)) -Additional @{ CODEX_HOME = $codexHome }
+    $environment = New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables @(Get-ProviderAuthenticationVariables -Provider 'openai') -Additional @{ CODEX_HOME = $codexHome }
     if ($Auth.Kind -ne 'environment') {
         throw 'Codex execution requires a provider environment credential; file credentials are not safe to expose in the worker HOME.'
     }
@@ -350,7 +343,7 @@ function Get-LinuxCodexSandboxArguments {
         CI = '1'
         NO_COLOR = '1'
     }
-    foreach ($authName in @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider))) {
+    foreach ($authName in @(Get-ProviderAuthenticationVariables -Provider 'openai')) {
         if ($Environment.Contains($authName) -and -not [string]::IsNullOrWhiteSpace([string]$Environment[$authName])) {
             $insideEnvironment[$authName] = [string]$Environment[$authName]
         }
@@ -424,7 +417,7 @@ function Invoke-CodexExecute {
     }
 
     $commandInfo = Resolve-ExternalCommand -Name 'codex'
-    $auth = Get-CodexAuthSource -Provider ([string]$Inputs.Profile.Provider)
+    $auth = Get-CodexAuthSource
     $environment = New-CodexEnvironment -Inputs $Inputs -Auth $auth
     $lastResponsePath = 'evidence/codex-final.txt'
     New-Item -ItemType Directory -Path (Join-Path $Inputs.Run.RunRoot 'evidence') -Force | Out-Null
@@ -550,7 +543,7 @@ function Invoke-CodexExecute {
         child_tool_visibility = 'codex_shell_environment_policy_inherit_none'
         value_observed = $false
     }
-    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Codex accepted the requested provider, model, and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ provider = $Inputs.Profile.Provider; model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ thread_id = $threadId; event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; output_last_message_argument = (Get-SandboxVisiblePath -HostPath (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -RunRoot $Inputs.Run.RunRoot -Platform $visiblePlatform); credential = $credentialEvidence }) -AttemptCount 1
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Codex accepted the requested model and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ thread_id = $threadId; event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; output_last_message_argument = (Get-SandboxVisiblePath -HostPath (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -RunRoot $Inputs.Run.RunRoot -Platform $visiblePlatform); credential = $credentialEvidence }) -AttemptCount 1
 }
 
 try {

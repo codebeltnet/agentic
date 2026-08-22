@@ -371,7 +371,7 @@ function Resolve-ExecutionProfile {
     }
     Assert-ProfileHasNoSecrets -Profile $profile
 
-    $allowedProperties = @('schema', 'runner', 'provider', 'model', 'reasoning_effort', 'configuration_profile', 'tool_profile', 'timeout_seconds', 'concurrency')
+    $allowedProperties = @('schema', 'runner', 'model', 'reasoning_effort', 'configuration_profile', 'tool_profile', 'timeout_seconds', 'concurrency')
     foreach ($propertyName in @(Get-JsonPropertyNames -Object $profile)) {
         if ($allowedProperties -notcontains $propertyName) {
             throw "execution-profile.json contains unsupported field '$propertyName'."
@@ -391,17 +391,18 @@ function Resolve-ExecutionProfile {
     }
 
     $runnerValue = [string](Get-JsonProperty -Object $profile -Name 'runner' -Default '')
-    $providerValue = [string](Get-JsonProperty -Object $profile -Name 'provider' -Default '')
     $modelValue = [string](Get-JsonProperty -Object $profile -Name 'model' -Default '')
     if (-not [string]::IsNullOrWhiteSpace($runnerValue) -and $runnerValue -notmatch '^[a-z0-9][a-z0-9-]*$') {
         throw 'execution-profile.json runner must be a safe lowercase runner name.'
+    }
+    if ([string]::IsNullOrWhiteSpace($runnerValue) -or [string]::IsNullOrWhiteSpace($modelValue)) {
+        throw 'execution-profile.json must declare non-empty runner and model before a runner can execute.'
     }
     return [pscustomobject]@{
         Path = $resolvedProfilePath
         Profile = $profile
         Hash = Get-Sha256HexFromFile -Path $resolvedProfilePath
         Runner = if ([string]::IsNullOrWhiteSpace($runnerValue)) { $null } else { $runnerValue }
-        Provider = if ([string]::IsNullOrWhiteSpace($providerValue)) { $null } else { $providerValue }
         Model = if ([string]::IsNullOrWhiteSpace($modelValue)) { $null } else { $modelValue }
         ReasoningEffort = if ([string]::IsNullOrWhiteSpace([string]$profile.reasoning_effort)) { $null } else { [string]$profile.reasoning_effort }
         ConfigurationProfile = [string]$profile.configuration_profile
@@ -497,7 +498,6 @@ function New-PreflightDocument {
         harness = $Descriptor.harness
         run = [ordered]@{ eval_id = $Run.EvalId; eval_name = $Run.EvalName; configuration = $Run.Mode }
         requested = [ordered]@{
-            provider = $Profile.Provider
             model = $Profile.Model
             reasoning_effort = $Profile.ReasoningEffort
             configuration_profile = $Profile.ConfigurationProfile
@@ -595,7 +595,6 @@ function New-ExecutionResult {
     }
 
     $resolved = [ordered]@{
-        provider = $null
         model = $null
         reasoning_effort = $null
         configuration_profile = $null
@@ -603,7 +602,6 @@ function New-ExecutionResult {
         status = 'unavailable'
         reason = 'harness_only_confirmed_the_requested_configuration'
         accepted = [ordered]@{
-            provider = $Profile.Provider
             model = $Profile.Model
             reasoning_effort = $Profile.ReasoningEffort
             configuration_profile = $Profile.ConfigurationProfile
@@ -613,7 +611,7 @@ function New-ExecutionResult {
     if ($null -ne $ResolvedConfiguration) {
         $resolved.status = [string](Get-JsonProperty -Object $ResolvedConfiguration -Name 'status' -Default 'resolved')
         $resolved.reason = Get-JsonProperty -Object $ResolvedConfiguration -Name 'reason' -Default $null
-        foreach ($name in @('provider', 'model', 'reasoning_effort', 'configuration_profile', 'tool_profile')) {
+        foreach ($name in @('model', 'reasoning_effort', 'configuration_profile', 'tool_profile')) {
             $value = Get-JsonProperty -Object $ResolvedConfiguration -Name $name -Default $null
             if ($null -ne $value) { $resolved[$name] = $value }
         }
@@ -644,7 +642,6 @@ function New-ExecutionResult {
         runner = [ordered]@{ name = [string]$Descriptor.name; version = [string]$Descriptor.version }
         harness = $Descriptor.harness
         requested = [ordered]@{
-            provider = $Profile.Provider
             model = $Profile.Model
             reasoning_effort = $Profile.ReasoningEffort
             configuration_profile = $Profile.ConfigurationProfile
@@ -745,6 +742,13 @@ function Assert-ExecutionResult {
     }
     if (-not (Test-JsonProperty -Object $Result.resolved -Name 'accepted')) {
         throw 'execution-result.json resolved must preserve the requested configuration as accepted evidence.'
+    }
+    $hasPortableProvider =
+        (Test-JsonProperty -Object $Result.requested -Name 'provider') -or
+        (Test-JsonProperty -Object $Result.resolved -Name 'provider') -or
+        (Test-JsonProperty -Object $Result.resolved.accepted -Name 'provider')
+    if ($hasPortableProvider) {
+        throw 'execution-result.json must not expose provider in portable requested/resolved configuration fields.'
     }
     foreach ($hashField in @('prompt_sha256', 'run_json_sha256', 'profile_sha256')) {
         if (-not (Test-Sha256 -Value ([string]$Result.input.$hashField))) {

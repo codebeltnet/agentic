@@ -106,6 +106,19 @@ function Get-OpenCodeAuthVariable {
     return $null
 }
 
+function Get-OpenCodeModelProvider {
+    param([string]$Model)
+
+    if ([string]::IsNullOrWhiteSpace($Model) -or $Model -notmatch '/') {
+        return $null
+    }
+    $parts = $Model.Split([char[]]@('/'), 2, [System.StringSplitOptions]::None)
+    if ($parts.Count -lt 2 -or [string]::IsNullOrWhiteSpace($parts[0]) -or [string]::IsNullOrWhiteSpace($parts[1])) {
+        return $null
+    }
+    return $parts[0]
+}
+
 function Resolve-SandboxCommand {
     param([Parameter(Mandatory = $true)][string]$Name)
 
@@ -130,11 +143,10 @@ function New-OpenCodeCliArguments {
         [Parameter(Mandatory = $true)][object]$Inputs,
         [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$VisiblePlatform = (Get-PlatformName)
     )
-
     $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
-    $model = "{0}/{1}" -f $Inputs.Profile.Provider, $Inputs.Profile.Model
+    $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $arguments = [System.Collections.Generic.List[string]]::new()
-    foreach ($argument in @('run', '--format', 'json', '--dir', $directoryArgument, '--model', $model, '--auto')) {
+    foreach ($argument in @('run', '--format', 'json', '--dir', $directoryArgument, '--model', $Inputs.Profile.Model, '--auto')) {
         $arguments.Add([string]$argument)
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$Inputs.Profile.ReasoningEffort)) {
@@ -177,15 +189,10 @@ function Get-OpenCodePreflight {
     } else {
         $checks.Add((New-PreflightCheck -Name 'runner_selection' -Status passed -Detail 'The selected runner is opencode.'))
     }
-    if ([string]::IsNullOrWhiteSpace($profile.Provider)) {
-        $reasons.Add('OpenCode requires a provider in execution-profile.json.')
-    } else {
-        $checks.Add((New-PreflightCheck -Name 'provider' -Status passed -Detail $profile.Provider))
-    }
     if ([string]::IsNullOrWhiteSpace($profile.Model)) {
         $reasons.Add('OpenCode requires a model in execution-profile.json.')
     } else {
-        $checks.Add((New-PreflightCheck -Name 'model' -Status passed -Detail ("{0}/{1}" -f $profile.Provider, $profile.Model)))
+        $checks.Add((New-PreflightCheck -Name 'model' -Status passed -Detail $profile.Model))
     }
     if ($profile.ConfigurationProfile -ne 'isolated-default') {
         $reasons.Add("configuration_profile '$($profile.ConfigurationProfile)' is unsupported by opencode.")
@@ -229,9 +236,13 @@ function Get-OpenCodePreflight {
         }
     }
 
-    $authVariable = if ([string]::IsNullOrWhiteSpace($profile.Provider)) { $null } else { Get-OpenCodeAuthVariable -Provider ([string]$profile.Provider) }
-    if ([string]::IsNullOrWhiteSpace($authVariable)) {
-        $reasons.Add("No narrow provider authentication environment variable is available for '$($profile.Provider)'. OpenCode global auth profiles are not copied into an eval run.")
+    $modelProvider = Get-OpenCodeModelProvider -Model ([string]$profile.Model)
+    $authVariable = if ([string]::IsNullOrWhiteSpace($modelProvider)) { $null } else { Get-OpenCodeAuthVariable -Provider $modelProvider }
+    $knownAuthVariables = @(if (-not [string]::IsNullOrWhiteSpace($modelProvider)) { Get-ProviderAuthenticationVariables -Provider $modelProvider })
+    if ($knownAuthVariables.Count -eq 0) {
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status not_applicable -Detail 'No runner-known provider API-key environment variable is required for this OpenCode model selector.'))
+    } elseif ([string]::IsNullOrWhiteSpace($authVariable)) {
+        $reasons.Add("No narrow provider authentication environment variable is available for model provider '$modelProvider'. OpenCode global auth profiles are not copied into an eval run.")
     } else {
         $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Provider credential will be passed only as $authVariable."))
     }
@@ -273,7 +284,9 @@ function New-OpenCodeEnvironment {
     New-Item -ItemType Directory -Path $configDirectory -Force | Out-Null
     $configPath = Join-Path $configDirectory 'opencode.json'
     [System.IO.File]::WriteAllText($configPath, '{}', [System.Text.UTF8Encoding]::new($false))
-    return New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider)) -Additional @{
+    $modelProvider = Get-OpenCodeModelProvider -Model ([string]$Inputs.Profile.Model)
+    $authVariables = @(if (-not [string]::IsNullOrWhiteSpace($modelProvider)) { Get-ProviderAuthenticationVariables -Provider $modelProvider })
+    return New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables $authVariables -Additional @{
         OPENCODE_CONFIG_DIR = $configDirectory
         OPENCODE_CONFIG = $configPath
         OPENCODE_DISABLE_AUTOUPDATE = '1'
@@ -321,7 +334,9 @@ function Get-LinuxSandboxArguments {
         CI = '1'
         NO_COLOR = '1'
     }
-    foreach ($authName in @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider))) {
+    $modelProvider = Get-OpenCodeModelProvider -Model ([string]$Inputs.Profile.Model)
+    $authVariables = @(if (-not [string]::IsNullOrWhiteSpace($modelProvider)) { Get-ProviderAuthenticationVariables -Provider $modelProvider })
+    foreach ($authName in $authVariables) {
         if ($Environment.Contains($authName) -and -not [string]::IsNullOrWhiteSpace([string]$Environment[$authName])) {
             $insideEnvironment[$authName] = [string]$Environment[$authName]
         }
@@ -398,7 +413,7 @@ function Invoke-OpenCodeExecute {
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
     $hardFilesystem = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
     $visiblePlatform = if ($hardFilesystem) { $platform } elseif ($platform -eq 'linux') { 'unknown' } else { $platform }
-    $model = "{0}/{1}" -f $Inputs.Profile.Provider, $Inputs.Profile.Model
+    $model = [string]$Inputs.Profile.Model
     $arguments = New-OpenCodeCliArguments -Inputs $Inputs -VisiblePlatform $visiblePlatform
 
     if ($platform -eq 'linux' -and $hardFilesystem) {
@@ -485,14 +500,16 @@ function Invoke-OpenCodeExecute {
     foreach ($mechanism in @('opencode run --format json', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'repository-owned project configuration preserved', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement'); $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
     $sandboxEvidence = if (-not $hardFilesystem) { 'unavailable' } elseif ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' }
-    $credentialNames = @(Get-ProviderAuthenticationVariables -Provider ([string]$Inputs.Profile.Provider))
+    $modelProvider = Get-OpenCodeModelProvider -Model ([string]$Inputs.Profile.Model)
+    $credentialNames = @(if (-not [string]::IsNullOrWhiteSpace($modelProvider)) { Get-ProviderAuthenticationVariables -Provider $modelProvider })
     $credentialEvidence = [ordered]@{
+        model_provider = $modelProvider
         provider_environment_variables = $credentialNames
         unrelated_environment_excluded = $true
         child_tool_visibility = 'provider_credential_may_be_visible_to_native_child_tools; no supported child filter is exposed'
         value_observed = $false
     }
-    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $process.FinishedUtc.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'OpenCode accepted the requested provider, model, and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ provider = $Inputs.Profile.Provider; model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $eventCounts; commands = @($commands); prompt_first_input = $true; resume = $false; model_argument = $model; sandbox = $sandboxEvidence; project_configuration = 'repository_owned_project_config_preserved'; disable_project_config_environment = $false; credential = $credentialEvidence }) -AttemptCount 1
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $process.FinishedUtc.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'OpenCode accepted the requested runner-native model selector and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $eventCounts; commands = @($commands); prompt_first_input = $true; resume = $false; model_argument = $model; sandbox = $sandboxEvidence; project_configuration = 'repository_owned_project_config_preserved'; disable_project_config_environment = $false; credential = $credentialEvidence }) -AttemptCount 1
 }
 
 try {
