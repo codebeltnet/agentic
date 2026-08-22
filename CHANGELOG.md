@@ -4,20 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.1] - 2026-08-21
+## [0.9.1] - 2026-08-22
 
-This patch release adds the harness-agnostic Eval Runner execution boundary without changing the paired evaluation methodology or existing report schemas. Prepared packages now carry `execution-profile.json`, package-local runner protocol tools, and normalized `execution-result.json` evidence; the deterministic fake runner is the conformance reference, with Codex and OpenCode as the initial real adapters. Repository automation remains model-free; only a human-directed external Eval Orchestrator may invoke the selected runner, and unsupported isolation fails closed.
+This patch release adds harness-agnostic Eval Runner execution boundary infrastructure without changing the paired evaluation methodology or existing report schemas, while optimizing skill descriptions and refactoring repository-level authoring guidance. Prepared packages now carry `execution-profile.json`, package-local runner protocol tools, and normalized `execution-result.json` evidence. The deterministic fake runner is the conformance reference, with Codex, GitHub Copilot CLI, Cline, and OpenCode as supported real adapters. Repository automation remains model-free; only a human-directed external Eval Orchestrator may invoke the selected runner, and unsupported isolation fails closed.
 
 ### Added
 
-- `scripts/eval-runners/` with the common `describe`/`preflight`/`execute` process contract, execution-profile and execution-result schemas, deterministic fake runner, Codex adapter, OpenCode adapter, artifact/hash validation, and bridge into the existing `eval-result/2` result shape,
+- `scripts/eval-runners/` with the common `describe`/`preflight`/`execute` process contract, execution-profile and execution-result schemas, deterministic fake runner, Codex adapter, GitHub Copilot CLI adapter, Cline adapter, OpenCode adapter, runner resolution, artifact/hash validation, and bridge into the existing `eval-result/2` result shape,
+- GitHub Copilot CLI as a supported Eval Runner with authentication handling (GitHub tokens, OS keychain, CLI fallback), JSONL-based event output parsing, stdin-based prompt delivery for byte fidelity, repository instruction visibility, and conformance tests covering token management and authentication source detection,
 - deterministic fake-runner conformance coverage for fresh paired sessions, prompt fidelity, isolation boundaries, candidate-skill exposure, status normalization, unavailable telemetry, event warnings, artifact references, and report compatibility,
 - runner-aware package preparation that reuses `run.json`, keeps runner selection outside `evals/evals.json`, and preserves Anthropic-compatible benchmark/report artifacts.
 
 ### Changed
 
 - `AGENTS.md`, `README.md`, and `CONTRIBUTING.md` now distinguish the Eval Runner, Eval Orchestrator, Grader, and Human Reviewer and clarify that runner execution is an explicit external-handoff boundary rather than repository automation,
-- report timing output omits unavailable duration and token telemetry instead of writing zero placeholders.
+- All 21 repo-managed skill descriptions refactored to lean, trigger-oriented activation metadata following progressive-disclosure principles and specification compliance,
+- `AGENTS.md` Skill Authoring section restructured for clarity, brevity, and progressive disclosure of form fields, asset handling, and dynamic defaults,
+- report timing output omits unavailable duration and token telemetry instead of writing zero placeholders,
+- Cline and GitHub Copilot runners added to the eval runner lineup alongside existing Codex and OpenCode support,
+- Runner conformance tests enhanced with additional event fixtures and isolation capability assessment.
+
+### Fixed
+
+- Codex runner now ensures the evidence directory is created before writing output files, preventing file-not-found errors,
+- Test runner conformance validation now requires the output parent directory to exist upfront with explicit error reporting when the directory structure is misconfigured.
 
 ## [0.9.0] - 2026-08-20
 
@@ -627,6 +637,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.9.1]: https://github.com/codebeltnet/agentic/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/codebeltnet/agentic/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/codebeltnet/agentic/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/codebeltnet/agentic/compare/v0.8.0...v0.8.1
