@@ -1,7 +1,7 @@
 ---
 name: dotnet-strong-name-signing
 description: >
-  Generate a strong name key (.snk) file for signing .NET assemblies using pure .NET cryptography — no Visual Studio Developer PowerShell or sn.exe required. Works in any terminal. Use this skill when the user wants to create a strong name key, generate an .snk file, sign .NET assemblies, or mentions "strong-name", "snk", "AssemblyOriginatorKeyFile", "SignAssembly", or asks how to sign a .NET library. Also use when scaffolding .NET libraries or NuGet packages that need assembly signing. ALWAYS use this skill when asked to generate or create a strong name key file.
+  Use when the user wants to generate a `.snk` strong-name key, configure `SignAssembly` or `AssemblyOriginatorKeyFile`, or sign a .NET assembly, library, or NuGet package. Do not use for Authenticode, code-signing certificates, or secret-management tasks.
 ---
 
 # Strong Name Signing for .NET

@@ -1,7 +1,7 @@
 ---
 name: git-visual-squash-summary
 description: >
-  Turn many commits into a curated grouped squash summary for squash-and-merge contexts. Use when the user asks to squash a branch, summarize PR commits, or clean up history. Defaults to full feature branch against base (not tracking remote), includes all authors unless narrowed, and acts immediately—the skill is read-only with no permission-seeking. Returns grouped lines only, resolving the cumulative diff to drop reverted churn, preserving identifiers and overlap, and avoiding changelog wording. A bare invocation is a complete request: run git commands immediately and return summary lines, never an instruction recap or permission question.
+  Use when the user wants a read-only, ready-to-paste grouped squash-and-merge or PR branch summary from a commit range or the current feature branch. Do not use to mutate history, write changelog or release notes, execute commits, or summarize a single commit message.
 ---
 
 # Git Visual Squash Summary

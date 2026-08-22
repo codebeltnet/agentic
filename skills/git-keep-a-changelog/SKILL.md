@@ -1,7 +1,7 @@
 ---
 name: git-keep-a-changelog
 description: >
-  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user explicitly asks to create or update a changelog, draft release notes, prepare or finalize a release changelog, or requests a SemVer-aware release summary. Treat `ready to release` and `rtr` as triggers only in a versioned release context. Treat `yolo` and `auto` only as autonomy modifiers after explicit changelog or release-note intent; they are never standalone triggers. Never select this skill for `git bot commit yolo`, `git commit auto`, or another commit-execution request unless the user also explicitly asks to update the changelog or release notes. Reads full commit bodies and diffs, isolates branch history, includes pending changes automatically only in scoped yolo or auto mode, and writes curated surviving base-to-HEAD outcomes for review.
+  Use when the user wants to create or update `CHANGELOG.md`, follow Keep a Changelog, or finalize a versioned changelog. Treat `ready to release` or `rtr` as triggers only with version context. Do not trigger for GitHub releases, NuGet package notes, commit execution, or bare `yolo`/`auto`.
 compatibility: >
   Requires Git and PowerShell 7+ for deterministic branch-scope resolution.
 ---

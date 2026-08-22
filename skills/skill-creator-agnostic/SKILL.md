@@ -1,7 +1,8 @@
 ---
 name: skill-creator-agnostic
 description: >
-  DEPRECATED — no longer maintained and scheduled for removal in 1.0.0. Retained only for backward compatibility. Do not use for new skill creation, modification, or benchmarking. Use Anthropic's `skill-creator` directly and apply this repository's skill-authoring rules from `AGENTS.md` instead.
+  DEPRECATED — no longer maintained and scheduled for removal in 1.0.0. Use only when the user explicitly invokes `skill-creator-agnostic` or asks about its status. Redirect skill creation, modification, evaluation, and benchmarking to Anthropic's `skill-creator` plus repository `AGENTS.md`.
+disable-model-invocation: true
 ---
 
 # Skill Creator Agnostic

@@ -1,7 +1,7 @@
 ---
 name: git-remote-release
 description: >
-  Generate GitHub release notes by summarizing all commits and pull requests between two Git tags, branches, or the current branch and the upstream default branch. Use when the user asks to write release notes, generate release notes, draft a GitHub release, create release notes from tags, summarize changes between versions, summarize the current branch, or provides a GitHub compare URL. Trigger phrases: "release notes", "generate release notes", "what changed between", "summarize changes from v1 to v2", "GitHub release", "summarize this branch", compare URLs like "github.com/owner/repo/compare/v1...v2". When no explicit input is given, detects the current branch and compares against the upstream default branch automatically.
+  Use when the user wants GitHub release notes or a human-readable change summary from commits and pull requests between tags, branches, or a GitHub compare URL. Do not use for `CHANGELOG.md`, NuGet `PackageReleaseNotes.txt`, commit messages, or squash summaries.
 ---
 
 # Git Remote Release

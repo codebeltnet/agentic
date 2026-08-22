@@ -123,6 +123,8 @@ npx skills add https://github.com/codebeltnet/agentic --skill agent-smith
 
 ## Available Skills
 
+Each `SKILL.md` description is lean activation metadata. The catalog below explains what happens after a skill is selected.
+
 | Skill | Description |
 |-------|-------------|
 | [git-visual-commits](skills/git-visual-commits/SKILL.md) | AI-driven git commit workflow with authoritative routing for `git bot commit`, `git commit`, and `git our commit`, including the exact `Please do a git bot commit yolo` form. It locks the requested identity, treats yolo/auto only as scoped auto-approval modifiers, never as the commit message, and does not hand commit execution to changelog or release-note skills. It uses deterministically validated emoji-first subjects, optional conventional prefixes only on explicit request, full-worktree semantic grouping unless narrowed, a visible multi-file single-category quality gate, commit bodies by default, and post-commit identity/body verification. Multi-file plans that initially collapse to one category also require a visible full-context quality gate; one-file changes keep the fast path. Stack-agnostic. |

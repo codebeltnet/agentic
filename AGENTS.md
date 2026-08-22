@@ -353,126 +353,106 @@ Interim progress updates should describe user-relevant progress, evidence, block
 - Mention tool/runtime failures only when they block progress, require approval, or change the planned validation
 - Prefer concise phrasing such as "The first read attempt failed before returning file content; I'm retrying and will report only if that changes the result"
 
-## Anthropic Skill Authoring Reference
+## Skill Authoring
 
-Essential conventions from [The Complete Guide to Building Skills for Claude](https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf) (Anthropic, Jan 2026). All skills in this repo must follow these rules.
+Skills MUST follow the Agent Skills specification and remain compatible with Anthropic's skill guidance. Repository conventions below may intentionally be stricter than the specification.
 
-### File Structure
+### Structure
 
-```
+```text
 skill-name/
-├── SKILL.md              # Required — exact spelling, case-sensitive
-├── scripts/              # Optional — executable code (Python, Bash, etc.)
-├── references/           # Optional — documentation loaded as needed
-└── assets/               # Optional — templates, fonts, icons used in output
+├── SKILL.md       # Required
+├── scripts/       # Optional executable automation
+├── references/    # Optional supporting documentation
+└── assets/        # Optional templates and output resources
 ```
 
-- **No `README.md`** inside the skill folder — all documentation goes in `SKILL.md` or `references/`
-- Folder name must be **kebab-case** (no spaces, no underscores, no capitals)
-- Folder name must match the `name:` field in YAML frontmatter
+- `SKILL.md` MUST use that exact case-sensitive name.
+- Skill folders MUST use kebab-case.
+- Frontmatter `name` MUST match the folder name.
+- Do NOT place `README.md` inside a skill folder. Put skill documentation in `SKILL.md` or `references/`.
+- Keep `SKILL.md` focused. Move detailed or rarely needed material to `references/`.
+- Keep `SKILL.md` below 5,000 words.
 
-### Progressive Disclosure (Three Levels)
+### Progressive Disclosure
 
-| Level | When loaded | Token cost | Content |
-|-------|------------|------------|---------|
-| **Level 1: Metadata** | Always (at startup) | ~100 tokens | `name` and `description` from YAML frontmatter |
-| **Level 2: Instructions** | When skill is triggered | Under 5k tokens | SKILL.md body — workflows, steps, guidance |
-| **Level 3: Resources** | As needed | Effectively unlimited | Linked files: scripts, references, assets, FORMS.md |
+Design every skill around three levels of context:
 
-Keep SKILL.md under **500 lines / 5,000 words**. Move detailed content to `references/`. Keep references **one level deep** from SKILL.md — nested references cause partial reads.
+1. **Metadata:** `name` and `description` are available before activation.
+2. **Instructions:** the `SKILL.md` body is loaded when the skill is selected.
+3. **Resources:** scripts, references, and assets are loaded or used only when needed.
 
-### YAML Frontmatter
+Minimize content at earlier levels. Do not put instructions into metadata merely to advertise skill capabilities.
 
-Required fields:
+### Frontmatter
 
 ```yaml
 ---
-name: kebab-case-name      # max 64 chars, lowercase + numbers + hyphens only
-description: >              # max 1024 chars, must include WHAT + WHEN + triggers
-  What it does. Use when user asks to [specific phrases].
+name: skill-name
+description: Use when ...
 ---
 ```
 
-Optional fields:
+Required:
+
+- `name`: 1-64 characters, lowercase alphanumeric characters and hyphens only; MUST match the skill directory.
+- `description`: 1-1024 characters and MUST communicate both what the skill is for and when it should activate.
+
+Optional fields such as `license`, `compatibility`, `metadata`, and supported tool restrictions MAY be used when they provide meaningful runtime or distribution information.
+
+### Description Is a Trigger
+
+Treat `description` as **activation metadata, not documentation**.
+
+- SHOULD begin with trigger-oriented language such as `Use when...`.
+- SHOULD describe **user intent**, not the skill's implementation.
+- SHOULD stay at or below a **300-character soft ceiling**.
+- MAY be shorter than 150 characters when that is sufficient. Never pad a description to meet a minimum length.
+- MAY exceed 300 characters only when additional wording materially improves trigger precision or recall.
+- MUST remain within the 1024-character specification limit.
+- SHOULD include distinctive tasks, artifacts, technologies, file types, or domain terms that help discriminate the skill from others.
+- SHOULD cover natural paraphrases conceptually rather than stuffing exact trigger phrases or keywords.
+- SHOULD add exclusions only when needed to prevent realistic near-miss or overlapping skills from triggering.
+- MUST NOT summarize workflows, scripts, implementation details, references, rationale, or every capability of the skill.
+- MUST NOT broaden the description merely to advertise functionality.
+
+Prefer:
 
 ```yaml
-license: MIT                # for open-source skills
-compatibility: >            # max 500 chars — environment requirements
-  Requires network access and Python 3.10+
-metadata:                   # custom key-value pairs
-  author: Company Name
-  version: 1.0.0
-  mcp-server: server-name
+description: Use when creating or refactoring .NET tests that require deterministic remote or containerized execution across supported test harnesses.
 ```
 
-**Forbidden**: XML angle brackets (`< >`), names containing "claude" or "anthropic" (reserved).
-
-### Description Field — The Most Important Part
-
-Structure: `[What it does] + [When to use it] + [Key capabilities]`
+Avoid:
 
 ```yaml
-# ✅ Good — specific, actionable, includes triggers
-description: >
-  Manages Linear project workflows including sprint planning,
-  task creation, and status tracking. Use when user mentions
-  "sprint", "Linear tasks", "project planning", or asks to
-  "create tickets".
-
-# ❌ Bad — too vague, no triggers
-description: Helps with projects.
+description: Provides comprehensive guidance, scripts, configuration options, troubleshooting procedures, and best practices for running .NET tests remotely using containers and multiple supported test harnesses.
 ```
 
-- Include trigger phrases users would actually say
-- Mention file types if relevant
-- Add negative triggers to prevent over-triggering: `Do NOT use for simple data exploration`
+Optimize for **trigger precision and recall per character**, not descriptive completeness.
 
-### Writing Instructions
+### Instructions
 
-- Be **specific and actionable** — `Run scripts/validate.py --input {filename}` not `Validate the data`
-- Include **error handling** — common errors, causes, and solutions
-- Use **feedback loops** — run validator → fix errors → repeat
-- Put **critical instructions at the top** — use `## Critical` or `## Important` headers
-- For critical validations, **use scripts over language instructions** — code is deterministic
-- Prefer **dynamic defaults over hardcoded values** when the source data is available from the repo, environment, or an official machine-readable feed
+Inside `SKILL.md`:
 
-### Skill Categories
+- Make instructions specific, actionable, and ordered where sequencing matters.
+- Put critical constraints near the top.
+- Include error handling where failures are predictable.
+- Use validation and refinement loops where output quality benefits from iteration.
+- Prefer deterministic scripts for repeatable or critical validation rather than lengthy natural-language procedures.
+- Prefer values discoverable from the repository, environment, or authoritative machine-readable sources over hardcoded defaults.
+- Keep detailed reference material out of the main instruction path.
 
-| Category | Purpose | Example |
-|----------|---------|---------|
-| **Document & Asset Creation** | Consistent, high-quality output (docs, code, designs) | `frontend-design`, `docx`, `xlsx` |
-| **Workflow Automation** | Multi-step processes with validation gates | `skill-creator`, scaffolding skills |
-| **MCP Enhancement** | Workflow guidance layered on top of MCP tool access | `sentry-code-review` |
+### Validation
 
-### Common Patterns
+Before shipping or materially changing a skill, verify that it:
 
-1. **Sequential workflow** — explicit step ordering with dependencies and rollback
-2. **Multi-MCP coordination** — phase separation, data passing between services
-3. **Iterative refinement** — draft → validate → fix → repeat until quality threshold
-4. **Context-aware selection** — decision trees for choosing the right tool/approach
-5. **Domain-specific intelligence** — compliance checks, governance, audit trails
+- triggers for obvious relevant requests;
+- triggers for realistic paraphrases and implicit intent;
+- does not trigger for realistic near-miss requests;
+- behaves correctly after activation;
+- improves the intended outcome compared with not using the skill.
 
-### Testing Checklist
-
-Before shipping a skill, verify:
-
-- [ ] Triggers on obvious tasks
-- [ ] Triggers on paraphrased requests
-- [ ] Does **not** trigger on unrelated topics
-- [ ] Functional tests pass (correct outputs, error handling, edge cases)
-- [ ] Performance improves over baseline (fewer messages, fewer errors, fewer tokens)
-
-Debug triggering: ask Claude `"When would you use the [skill name] skill?"` — it will quote the description back.
-
-### Troubleshooting Quick Reference
-
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| Skill won't upload | `SKILL.md` misspelled or YAML invalid | Exact case `SKILL.md`, check `---` delimiters |
-| Skill never triggers | Description too vague | Add trigger phrases, mention file types |
-| Skill triggers too often | Description too broad | Add negative triggers, narrow scope |
-| Instructions not followed | Too verbose or ambiguous | Shorten, use bullets, move detail to `references/` |
-| Slow / degraded responses | Too much content loaded | Keep SKILL.md under 5k words, use progressive disclosure |
+When optimizing a description, test both **should-trigger** and **should-not-trigger** cases. Prefer measured trigger behavior over arbitrary description length, and avoid tailoring descriptions to individual evaluation phrases.
 
 ## Karpathy Rules
 

@@ -1,7 +1,7 @@
 ---
 name: trunk-first-repo
 description: >
-  Initialize a folder as a git repository following scaled trunk-based development. Sets up an empty main branch (seed commit only), creates a versioned feature branch, pushes main before feature branches, and enforces a PR-first workflow where content only reaches main through pull requests. Use this skill when the user wants to initialize a git repo, set up a new repository, start a project with proper git workflow, safely push the first trunk-first branches later with "push remote", or mentions "trunk-based", "PR workflow", "branch protection", "git init", or wants to follow GitHub PR best practices. ALWAYS use this skill when asked to initialize or set up a git repository.
+  Use when the user wants to initialize a new Git repository with a scaled trunk-based, PR-first workflow, including an empty seeded `main`, a versioned feature branch, branch protection, or a guarded first remote push. Do not use for commits or history cleanup in an existing repository.
 ---
 
 # Trunk-First Repo

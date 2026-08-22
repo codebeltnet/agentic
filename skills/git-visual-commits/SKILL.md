@@ -1,7 +1,7 @@
 ---
 name: git-visual-commits
 description: >
-  Execute the structured git commit workflow whenever the user says `git bot commit`, `git commit`, or `git our commit`; asks the agent to commit or stage changes; or asks to write or review a commit message. Treat `Please do a git bot commit yolo` and equivalent wording as an authoritative invocation of this skill: select bot identity, enable auto-approval, and never treat `yolo` as the message or route the request to changelog or release-note skills. Treat commit wording as an automatic trigger for this skill, not as a casual hint. `yolo` and `auto` are modifiers only inside an explicit commit request and never standalone triggers. Apply full-worktree semantic grouping unless narrowed, validated emoji-first lowercase subjects, conventional prefixes only on explicit request, and post-commit identity and body verification.
+  Use when the user asks to stage or commit changes, write or review a commit message, or says `git bot commit`, `git commit`, or `git our commit`. Treat commit wording as an automatic trigger for this skill, not as a casual hint. `yolo` and `auto` only modify an explicit commit request.
 ---
 
 # Git Visual Commits
