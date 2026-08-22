@@ -427,6 +427,7 @@ function Invoke-CodexExecute {
     $auth = Get-CodexAuthSource -Provider ([string]$Inputs.Profile.Provider)
     $environment = New-CodexEnvironment -Inputs $Inputs -Auth $auth
     $lastResponsePath = 'evidence/codex-final.txt'
+    New-Item -ItemType Directory -Path (Join-Path $Inputs.Run.RunRoot 'evidence') -Force | Out-Null
     $platform = Get-PlatformName
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
     $hardFilesystem = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
