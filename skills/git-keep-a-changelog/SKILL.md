@@ -80,6 +80,17 @@ Reduce first. Interpret second. Summarize last.
 
 Establish the classification baseline at the user-facing release-entity boundary, not independently for every changed file. For a repo-managed skill, the entity is the skill capability together with its dedicated files and inseparable registration, catalog, documentation, validation, and eval wiring. If that entity is absent at the base and present at `HEAD`, its introduction is `Added`; intermediate commits that refine, fix, document, or validate it cannot create `Changed` or `Fixed` outcomes for that same new entity. A change to a separately pre-existing shared capability remains its own outcome and is classified from its own base state.
 
+### Layered Capability Classification
+
+Do not use a top-level directory or the first framework commit as the only release entity. Classify at the smallest independently selectable user-facing boundary. For layered eval tooling, the protocol/framework and each selectable runner, CLI, TUI, or harness adapter can have different release states.
+
+- A child adapter absent at the resolved base and present at `HEAD` is `Added` even when its parent directory already existed at the base or was introduced earlier in the branch. Run the entity resolver for the parent and each independent child path when the diff supports that decomposition.
+- Keep implementation, fixtures, conformance tests, and wiring with the capability they introduce. Do not repeat an adapter in a parent `Added` bullet and again in `Changed` as “added to the lineup.”
+- Refinements to a pre-existing adapter or framework are `Changed` or `Fixed` from their final delta. A defect repaired before first release of a base-absent capability remains part of that capability's `Added` outcome.
+- A planned, blocked, or unsupported CLI/TUI/harness is not support and must not be listed as an `Added` adapter.
+
+Use the final state, not commit verbs: newly usable execution support belongs under `Added`; changes to existing runner, orchestration, report, telemetry, or package behavior belong under `Changed`; and distinct supported repairs belong under `Fixed`. For example, a new framework followed by Cline or GitHub Copilot adapters gets `Added` outcomes for the framework and adapters, while changes to an existing Codex adapter are classified separately.
+
 1. Inspect cumulative manifest and version deltas across `diff_range`.
 2. Inspect the cumulative base-to-`HEAD` diff.
 3. Inspect any approved pending worktree changes that are part of the draft.
