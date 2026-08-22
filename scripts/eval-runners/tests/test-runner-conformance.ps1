@@ -195,7 +195,11 @@ if ($harness -eq 'codex') {
     $outputIndex = [Array]::IndexOf([string[]]$arguments, '--output-last-message')
     if ($outputIndex -ge 0 -and $outputIndex + 1 -lt $arguments.Count) {
         $outputPath = $arguments[$outputIndex + 1]
-        New-Item -ItemType Directory -Path (Split-Path -Parent $outputPath) -Force | Out-Null
+        $outputParent = Split-Path -Parent $outputPath
+        if (-not (Test-Path -LiteralPath $outputParent -PathType Container)) {
+            [Console]::Error.WriteLine("recorded Codex requires the output parent directory to exist: $outputParent")
+            exit 19
+        }
         [IO.File]::WriteAllText($outputPath, 'recorded Codex final response', [Text.UTF8Encoding]::new($false))
     }
     Write-Output '{"type":"thread.started","thread_id":"recorded-thread"}'
