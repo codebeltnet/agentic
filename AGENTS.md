@@ -142,7 +142,7 @@ The candidate instructions are already inlined in the with_skill run's `prompt.m
 
 Use the same model, model version, configuration, tools, and limits for every worker. Disable persistent memory and cross-session recall. Independent runs may execute concurrently when the selected harness and the user's token budget allow it, but every run still gets a distinct context and no shared mutable workspace.
 
-`RUN-THIS.prompt.md` requires a selected Eval Runner that can create isolated workers or sessions. A plain single-context client can still execute an individual self-contained prompt when the user opens it directly as the first message of a fresh session, but it cannot provide the paired comparison and report contract in that same context. A selected runner that cannot satisfy a required guarantee is `incompatible`; there is no generic fallback or runner substitution. Partial packages still grade and report what exists; missing arms remain visibly missing.
+`RUN-THIS.prompt.md` requires a selected Eval Runner that can create isolated workers or sessions. A plain single-context client can still execute an individual self-contained prompt when the user opens it directly as the first message of a fresh session, but it cannot provide the paired comparison and report contract in that same context. A selected runner that cannot satisfy a required guarantee is `incompatible`; there is no generic fallback or runner substitution. Partial package state may be inspected and reported, but the completion gate must pass before it can be presented as a completed evaluation; missing or unrun arms remain visibly incomplete.
 
 An `output` is the model's own message in full, including questions, caveats, explanations, or a refusal. Where a run invoked a tool, that tool's stdout is evidence rather than a replacement for the response. Record the full worker transcript, duration, token usage, and tool-call count when the harness exposes them; omit unavailable metrics rather than estimating them.
 
@@ -166,7 +166,7 @@ Validate and compare a collected iteration with:
 pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>
 ```
 
-It checks that each result matches its eval and configuration, warns when an arm is missing, unrun, or ran on a different model, and writes `comparison.md`, the paired `report.html`, the exact upstream `skill-creator-report.html`, and the upstream `benchmark.json`/`benchmark.md`. The external evaluator may grade in its user-directed phase-two context; repository automation remains deterministic and never invokes a model. Use deterministic checks for mechanical assertions and evidence-backed human or evaluator judgement only where the assertion is genuinely qualitative.
+It checks that each result matches its eval and configuration, may inspect and write `comparison.md`, the paired `report.html`, the exact upstream `skill-creator-report.html`, and the upstream `benchmark.json`/`benchmark.md` while warning when an arm is missing, unrun, or ran on a different model. It exits non-zero when the required completion gate is not satisfied, so an incomplete or unrun package is not a completed evaluation. The external evaluator may grade in its user-directed phase-two context; repository automation remains deterministic and never invokes a model. Use deterministic checks for mechanical assertions and evidence-backed human or evaluator judgement only where the assertion is genuinely qualitative.
 
 ### Workspace isolation
 
