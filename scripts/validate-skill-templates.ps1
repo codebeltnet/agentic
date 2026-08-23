@@ -1452,8 +1452,17 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'never receive or inspect expected output, assertions, grading, paired output, benchmark data, or human feedback',
             'Never fall back to the old generic isolated-worker behavior',
             'execution-result.json',
+            '`runs.<arm>.run_manifest`',
+            '`runs.<arm>.execution_result`',
+            '`runs.<arm>.result`',
+            '`runPath = exact run_manifest`',
+            '`executionPath = exact execution_result`',
+            '`resultPath = exact result`',
+            'Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.',
+            'bridge-manifest-results.ps1',
+            '-RequireComplete',
             'The bridge checks prompt/run/profile hashes and artifact confinement',
-            'Only now read each eval''s `eval-metadata.json`',
+            'Only if the package bridge succeeds, read each eval''s `eval-metadata.json`',
             'grading[].text',
             'tools/skill-creator/agents/grader.md',
             'scripts/aggregate_benchmark.py',
@@ -1470,7 +1479,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'If you truly cannot, this package is not for you',
             'Choose evaluation configuration',
             'Codebelt Reference',
-            'discover current models'
+            'discover current models',
+            '<result-file>'
         )) {
             if ($runner.Contains($forbidden)) {
                 throw "RUN-THIS.prompt.md must not contain forbidden handoff text '$forbidden'."
@@ -1501,6 +1511,9 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                     if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory $mustExist))) {
                         throw "$($entry.eval_name)/$configuration manifest path '$mustExist' does not exist."
                     }
+                }
+                if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory $run.result) -PathType Leaf)) {
+                    throw "$($entry.eval_name)/$configuration manifest result path '$($run.result)' does not exist."
                 }
             }
 
@@ -1603,23 +1616,24 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             }
 
             foreach ($configuration in @('with_skill', 'without_skill')) {
-                $resultFile = if ($configuration -eq 'with_skill') { 'with-skill.result.json' } else { 'without-skill.result.json' }
-                $stubPath = Join-Path (Join-Path $evalDirectory 'results') $resultFile
+                $run = $entry.runs.$configuration
+                $resultLabel = [string]$run.result
+                $stubPath = Join-Path $iterationDirectory $run.result
                 $stub = [System.IO.File]::ReadAllText($stubPath, $utf8NoBom) | ConvertFrom-Json
                 if ([string]$stub.configuration -ne $configuration) {
-                    throw "$($entry.eval_name) result stub $resultFile must declare configuration '$configuration'."
+                    throw "$($entry.eval_name) result stub $resultLabel must declare configuration '$configuration'."
                 }
                 if (@($stub.grading).Count -ne @($metadata.assertions).Count) {
-                    throw "$($entry.eval_name) result stub $resultFile must carry one grading entry per assertion."
+                    throw "$($entry.eval_name) result stub $resultLabel must carry one grading entry per assertion."
                 }
                 foreach ($propertyName in @('transcript', 'shell_commands', 'files_read', 'files_written', 'exit_status', 'duration_seconds', 'total_tokens', 'tool_calls', 'turns', 'base_input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'cache_write_1h_tokens', 'estimated_cost_usd', 'model_effort', 'isolation')) {
                     if ($stub.PSObject.Properties.Name -notcontains $propertyName) {
-                        throw "$($entry.eval_name) result stub $resultFile must expose optional field '$propertyName'."
+                        throw "$($entry.eval_name) result stub $resultLabel must expose optional field '$propertyName'."
                     }
                 }
                 foreach ($isolationField in @('fresh_context', 'isolated_home', 'isolated_cwd', 'filesystem_sandbox', 'candidate_skill_exposed', 'transcript_captured')) {
                     if ($stub.isolation.PSObject.Properties.Name -notcontains $isolationField) {
-                        throw "$($entry.eval_name) result stub $resultFile must expose isolation flag '$isolationField'."
+                        throw "$($entry.eval_name) result stub $resultLabel must expose isolation flag '$isolationField'."
                     }
                 }
             }
@@ -1649,7 +1663,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw 'execution-profile.json has an invalid schema or execution limit.'
         }
         $runnerTools = [System.Collections.Generic.List[string]]::new()
-        foreach ($runnerTool in @('runner-common.ps1', 'resolve-runner.ps1', 'bridge-execution-result.ps1', 'contracts/execution-profile.schema.json', 'contracts/execution-result.schema.json')) { $runnerTools.Add($runnerTool) }
+        foreach ($runnerTool in @('runner-common.ps1', 'resolve-runner.ps1', 'bridge-execution-result.ps1', 'bridge-manifest-results.ps1', 'manifest-paths.ps1', 'contracts/execution-profile.schema.json', 'contracts/execution-result.schema.json')) { $runnerTools.Add($runnerTool) }
         $runnerSourceRoot = Join-Path $repoRoot 'scripts/eval-runners'
         foreach ($runnerDirectory in Get-ChildItem -LiteralPath $runnerSourceRoot -Directory -Force | Sort-Object Name) {
             if (Test-Path -LiteralPath (Join-Path $runnerDirectory.FullName 'runner.ps1') -PathType Leaf) {
@@ -1663,8 +1677,11 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
 
         $collectOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "prepare-skill-evals.ps1 -CollectResults failed on an unrun package: $($collectOutput -join [Environment]::NewLine)"
+        if ($LASTEXITCODE -eq 0) {
+            throw 'prepare-skill-evals.ps1 -CollectResults must fail closed on an unrun package.'
+        }
+        if (($collectOutput -join ' ') -notmatch 'Completion gate') {
+            throw "prepare-skill-evals.ps1 -CollectResults must report the completion gate for an unrun package: $($collectOutput -join [Environment]::NewLine)"
         }
         if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'comparison.md'))) {
             throw 'prepare-skill-evals.ps1 -CollectResults must write comparison.md.'
@@ -1680,9 +1697,28 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
 
         $firstEntry = @($manifest.evals)[0]
-        $firstEvalDirectory = Join-Path $iterationDirectory $firstEntry.directory
-        foreach ($resultFile in @('with-skill.result.json', 'without-skill.result.json')) {
-            $resultPath = Join-Path (Join-Path $firstEvalDirectory 'results') $resultFile
+        $fakeRunnerPath = Join-Path $iterationDirectory 'tools/eval-runners/fake/runner.ps1'
+        $profilePath = Join-Path $iterationDirectory ([string]$manifest.execution_profile)
+        foreach ($entryToRun in @($manifest.evals)) {
+            foreach ($configuration in @('with_skill', 'without_skill')) {
+                $run = $entryToRun.runs.$configuration
+                $runPath = Join-Path $iterationDirectory ([string]$run.run_manifest)
+                $executionPath = Join-Path $iterationDirectory ([string]$run.execution_result)
+                $executionOutput = & pwsh -NoProfile -File $fakeRunnerPath execute -Run $runPath -Profile $profilePath 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "The deterministic fake runner could not produce the manifest-declared execution result '$($run.execution_result)': $($executionOutput -join [Environment]::NewLine)"
+                }
+                $executionJson = [string]::Join([Environment]::NewLine, @($executionOutput)) | ConvertFrom-Json
+                [System.IO.File]::WriteAllText($executionPath, (($executionJson | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+            }
+        }
+        $executionCollectOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "prepare-skill-evals.ps1 -CollectResults failed while bridging the complete deterministic fixture: $($executionCollectOutput -join [Environment]::NewLine)"
+        }
+        foreach ($configuration in @('with_skill', 'without_skill')) {
+            $run = $firstEntry.runs.$configuration
+            $resultPath = Join-Path $iterationDirectory ([string]$run.result)
             $result = [System.IO.File]::ReadAllText($resultPath, $utf8NoBom) | ConvertFrom-Json
             $result.model = 'validator-model'
             $result.harness = 'validator-harness'

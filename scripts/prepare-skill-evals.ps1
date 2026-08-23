@@ -159,7 +159,7 @@ param(
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
     [ValidateRange(1, 128)]
-    [int]$Concurrency = 1,
+    [int]$Concurrency = 16,
 
     [Parameter(ParameterSetName = 'Collect', Mandatory = $true)]
     [string]$CollectResults
@@ -175,6 +175,8 @@ $scriptBoundParameters = $PSBoundParameters
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
+
+. (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
 
 $packageSchema = 'codebeltnet/agentic/eval-package/2'
 $metadataSchema = 'codebeltnet/agentic/eval-metadata/2'
@@ -1611,7 +1613,7 @@ function New-RunnerPrompt {
     $builder = [System.Text.StringBuilder]::new()
     $profilePath = Join-Path $IterationDirectory 'execution-profile.json'
     $resolverPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/resolve-runner.ps1"
-    $bridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-execution-result.ps1"
+    $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
     $reportPath = Join-Path $IterationDirectory $reportToolRelativePath
     [void]$builder.AppendLine('# Execute, grade, and report this evaluation package')
     [void]$builder.AppendLine()
@@ -1629,9 +1631,9 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('1. Read `manifest.json` and `execution-profile.json`. If `runner` or `model` is null, unavailable, or unsupported, fail clearly and list the supported package-local runner IDs; do not guess a default. The profile contains no credentials.')
     [void]$builder.AppendLine('2. Resolve the selected package-local runner with the resolver. Ask it for `describe` and validate its protocol, descriptor, and capability declarations before running an arm. Do not invent harness-specific CLI commands.')
-    [void]$builder.AppendLine('3. For every eval case, use the exact `run_manifest` path from `manifest.json` and the same profile path. Preflight each arm, then invoke the runner exactly once with `execute`. The runner receives only `run.json` and `execution-profile.json`; it must never receive or inspect expected output, assertions, grading, paired output, benchmark data, or human feedback.')
+    [void]$builder.AppendLine('3. For every eval arm, read the exact `run_manifest`, `execution_result`, and `result` fields from `manifest.json` at `runs.<arm>.run_manifest`, `runs.<arm>.execution_result`, and `runs.<arm>.result`. Bind them without editing the strings: `runPath = exact run_manifest`, `executionPath = exact execution_result`, and `resultPath = exact result`.')
     [void]$builder.AppendLine('4. Keep `with_skill` and `without_skill` in fresh independent processes/sessions. Use the same runner-native model selector, configuration, tools, and limits. The runner must send each `prompt.md` unchanged as the first task input and must enforce the run contract, including the baseline skill exclusion and the staged filesystem/workspace boundary.')
-    [void]$builder.AppendLine('5. Save the runner''s single normalized JSON response unchanged as the matching `execution_result` path. Preserve the complete final response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout, harness failure, and incompatibility are results.')
+    [void]$builder.AppendLine('5. Save the runner''s single normalized JSON response unchanged to that arm''s exact `executionPath`. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path. A runner execute operation writes only to the exact manifest-declared `execution_result` path. Preserve the complete final response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout, harness failure, and incompatibility are results.')
     [void]$builder.AppendLine('6. If the runner cannot satisfy a required guarantee, keep the normalized status `incompatible` and stop that arm. Never fall back to the old generic isolated-worker behavior and never substitute a different runner.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The package-local process surface is:')
@@ -1641,17 +1643,18 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine("runner.ps1 preflight -Run `"<run.json>`" -Profile `"$profilePath`"")
     [void]$builder.AppendLine("runner.ps1 execute -Run `"<run.json>`" -Profile `"$profilePath`"")
     [void]$builder.AppendLine('```')
-    [void]$builder.AppendLine('Use the resolver output to locate `runner.ps1`; `<runner>` is data from the profile, not a branch in this orchestration contract. The runner command must be invoked once per arm and its stdout must remain one JSON execution result.')
+    [void]$builder.AppendLine('Use the resolver output to locate `runner.ps1`; `<runner>` is data from the profile, not a branch in this orchestration contract. For each arm, invoke the runner exactly once with `execute`, and keep its stdout as one JSON `execution-result.json` document.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Do not read any `eval-metadata.json`, expected output, assertions, result grading, or paired output during Phase 1. Those files remain outside every run directory and are the grading key.')
+    [void]$builder.AppendLine('Do not read any `eval-metadata.json`, expected output, assertions, result grading, or paired output during Phase 1. The runner must never receive or inspect expected output, assertions, grading, paired output, benchmark data, or human feedback. Those files remain outside every run directory and are the grading key.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 2: bridge, grade, and report')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. After every available arm has completed or failed, validate each `execution-result.json` and run the package bridge. The bridge checks prompt/run/profile hashes and artifact confinement, then writes the existing `eval-result/2` file while preserving unavailable telemetry as null/unavailable.')
-    [void]$builder.AppendLine(('   `pwsh -NoProfile -File "' + $bridgePath + '" -Run "<run.json>" -ExecutionResult "<execution-result.json>" -Result "<result-file>"`'))
-    [void]$builder.AppendLine('2. Only now read each eval''s `eval-metadata.json` and reveal `expected_output` and `assertions` to the Grader. Follow `tools/skill-creator/agents/grader.md`; grade deterministically first, then use optional model judgement only where deterministic evidence cannot decide. Never infer tool or file behavior from model self-report without process evidence.')
-    [void]$builder.AppendLine('3. Write only `grading[].text`, `grading[].passed`, and `grading[].evidence` for grading. Do not alter raw execution results. Use null for genuinely unavailable judgement and leave missing arms visibly missing.')
-    [void]$builder.AppendLine(('4. Run the existing package report adapter now: `pwsh -NoProfile -File "' + $reportPath + '" -IterationDirectory "' + $IterationDirectory + '"`. It remains the bridge to Anthropic skill-creator''s grader-compatible aggregator and viewer; do not replace it with harness-specific reporting. The packaged compatibility tools remain `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`.'))
+    [void]$builder.AppendLine('1. After every available arm has completed or failed, invoke the deterministic package bridge below. It reads `manifest.json`, obtains each arm''s exact `run_manifest`, `execution_result`, and `result` paths. The bridge checks prompt/run/profile hashes and artifact confinement, validates the manifest paths, rejects unreferenced hyphen/underscore shadow results, and invokes the existing one-arm bridge with those exact paths. Do not manually construct a bridge command for an arm.')
+    [void]$builder.AppendLine(('   `pwsh -NoProfile -File "' + $manifestBridgePath + '" -IterationDirectory "' + $IterationDirectory + '" -RequireComplete`'))
+    [void]$builder.AppendLine('   The bridge''s one-arm operation is conceptually `-Run runPath -ExecutionResult executionPath -Result resultPath`, where all three values are the exact strings read from `manifest.json`. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any of them.')
+    [void]$builder.AppendLine('2. Only if the package bridge succeeds, read each eval''s `eval-metadata.json` and reveal `expected_output` and `assertions` to the Grader. Follow `tools/skill-creator/agents/grader.md`; grade deterministically first, then use optional model judgement only where deterministic evidence cannot decide. Never infer tool or file behavior from model self-report without process evidence.')
+    [void]$builder.AppendLine('3. Write only `grading[].text`, `grading[].passed`, and `grading[].evidence` for grading. Do not alter raw execution results or replace the canonical result stubs. Use null for genuinely unavailable judgement and leave missing arms visibly missing.')
+    [void]$builder.AppendLine(('4. Run the existing package report adapter with its completion gate: `pwsh -NoProfile -File "' + $reportPath + '" -IterationDirectory "' + $IterationDirectory + '" -RequireComplete`. It remains the bridge to Anthropic skill-creator''s grader-compatible aggregator and viewer; do not replace it with harness-specific reporting. The packaged compatibility tools remain `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`.'))
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The completion artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md` at the package root. Return their absolute paths, completed and missing arm counts, runner/model identity, and a concise evidence-backed summary. If the package cannot be written from the external environment, return one paste-ready block containing the completed result objects and report artifacts.')
     [void]$builder.AppendLine()
@@ -1692,7 +1695,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('1. Read `execution-profile.json`. If `runner` or `model` is missing, fail clearly instead of guessing. Resolve the selected package-local runner and run `describe`, then `preflight`, for every arm.')
     [void]$builder.AppendLine('2. Invoke `execute` exactly once for each `run.json`, preserving its one JSON `execution-result.json` unchanged. The runner must provide a fresh process/session, isolated home/config, isolated CWD, baseline skill exclusion, prompt fidelity, model/configuration lock, and complete response capture, or return `incompatible`. Hard filesystem confinement is not one of these mandatory controls: when the runner proves it the run reports strict isolation, and when it does not the run reports pragmatic isolation.')
-    [void]$builder.AppendLine('3. After all arms complete or fail, run `tools/eval-runners/bridge-execution-result.ps1` for each raw result. It writes the existing `eval-result/2` file and preserves explicit unavailable telemetry. Only then read the grading key, grade with `tools/skill-creator/agents/grader.md`, and run `tools/generate-eval-report.ps1`.')
+    [void]$builder.AppendLine('3. After all arms complete or fail, run `tools/eval-runners/bridge-manifest-results.ps1 -IterationDirectory <package> -RequireComplete`. It reads the manifest-declared `run_manifest`, `execution_result`, and `result` paths for every arm and invokes the one-arm bridge with those exact paths. Only then read the grading key, grade with `tools/skill-creator/agents/grader.md`, and run `tools/generate-eval-report.ps1 -RequireComplete`.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It selects the package-local runner from the profile, invokes the common protocol once per blind arm, bridges raw evidence into the existing result shape, reveals grading material only after execution, and invokes Anthropic skill-creator''s compatible aggregator and static viewer through the package adapter. It never executes an eval prompt in its own context.')
     [void]$builder.AppendLine()
@@ -1846,46 +1849,66 @@ function Invoke-CollectMode {
     $errors = [System.Collections.Generic.List[string]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
     $rows = [System.Collections.Generic.List[object]]::new()
-
-    foreach ($entry in @($manifest.evals)) {
-        $evalDirectory = Join-Path $iterationDirectory $entry.directory
-        $metadata = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'eval-metadata.json'), $utf8NoBom) | ConvertFrom-Json
-        $observed = @{}
-        $runnerAware = $manifest.PSObject.Properties.Name -contains 'execution_profile'
-        $bridgePath = if ($runnerAware) { Join-Path $iterationDirectory ($manifest.runner_tools + '/bridge-execution-result.ps1') } else { $null }
-
-        foreach ($configuration in @('with_skill', 'without_skill')) {
-            $fileName = if ($configuration -eq 'with_skill') { 'with-skill.result.json' } else { 'without-skill.result.json' }
-            $resultPath = Join-Path (Join-Path $evalDirectory 'results') $fileName
-            $runEntry = Get-JsonProperty -Object $entry.runs -Name $configuration -Default $null
-            $rawRelative = Get-JsonProperty -Object $runEntry -Name 'execution_result' -Default $null
-            $rawPath = if ([string]::IsNullOrWhiteSpace([string]$rawRelative)) { $null } else { Join-Path $iterationDirectory $rawRelative }
-            $runPath = Join-Path $iterationDirectory (Get-JsonProperty -Object $runEntry -Name 'run_manifest' -Default '')
-            if ($runnerAware -and $null -ne $rawPath -and (Test-Path -LiteralPath $rawPath -PathType Leaf)) {
-                $bridgeOutput = & pwsh -NoProfile -File $bridgePath -Run $runPath -ExecutionResult $rawPath -Result $resultPath 2>&1
-                if ($LASTEXITCODE -ne 0) {
-                    $errors.Add("$($entry.eval_name)/$configuration - execution-result bridge failed: $([string]::Join(' ', @($bridgeOutput)))")
-                    continue
+    $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iterationDirectory -Manifest $manifest)
+    $runnerAware = $manifest.PSObject.Properties.Name -contains 'execution_profile'
+    if ($runnerAware) {
+        $packageBridgePath = Join-Path $iterationDirectory "$($manifest.runner_tools)/bridge-manifest-results.ps1"
+        if (-not (Test-Path -LiteralPath $packageBridgePath -PathType Leaf)) {
+            $packageBridgePath = Join-Path (Join-Path (Get-RepoRoot) 'scripts') 'eval-runners/bridge-manifest-results.ps1'
+        }
+        if (-not (Test-Path -LiteralPath $packageBridgePath -PathType Leaf)) {
+            $errors.Add("Manifest-driven bridge is missing at '$packageBridgePath'.")
+        } else {
+            $bridgeOutput = & pwsh -NoProfile -File $packageBridgePath -IterationDirectory $iterationDirectory 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                $errors.Add("Manifest-driven execution-result bridge failed: $([string]::Join(' ', @($bridgeOutput)))")
+            } else {
+                foreach ($line in @($bridgeOutput)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                        Write-Host $line
+                    }
                 }
             }
+        }
+    }
+
+    foreach ($entry in @($manifest.evals)) {
+        $entryRecords = @($manifestRecords | Where-Object { [int]$_.EvalId -eq [int]$entry.eval_id })
+        if ($entryRecords.Count -eq 0) {
+            $errors.Add("$($entry.eval_name) has no manifest-declared arm paths.")
+            continue
+        }
+        $evalDirectory = [string]$entryRecords[0].EvalDirectory
+        $metadata = [System.IO.File]::ReadAllText([string]$entryRecords[0].MetadataPath, $utf8NoBom) | ConvertFrom-Json
+        $observed = @{}
+
+        foreach ($configuration in @(Get-ManifestConfigurations -Manifest $manifest)) {
+            $runRecords = @($entryRecords | Where-Object { [string]$_.Configuration -eq $configuration })
+            if ($runRecords.Count -ne 1) {
+                $errors.Add("$($entry.eval_name)/$configuration must have exactly one manifest-declared arm path set.")
+                continue
+            }
+            $runRecord = $runRecords[0]
+            $resultPath = [string]$runRecord.ResultPath
+            $resultRelative = [string]$runRecord.ResultRelative
             if (-not (Test-Path -LiteralPath $resultPath)) {
-                $warnings.Add("$($entry.eval_name)/$configuration - no result file at results/$fileName.")
+                $warnings.Add("$($entry.eval_name)/$configuration - no result file at the manifest path '$resultRelative'.")
                 continue
             }
 
             try {
                 $result = [System.IO.File]::ReadAllText($resultPath, $utf8NoBom) | ConvertFrom-Json
             } catch {
-                $errors.Add("$($entry.eval_name)/$configuration - results/$fileName is not valid JSON: $($_.Exception.Message)")
+                $errors.Add("$($entry.eval_name)/$configuration - manifest result '$resultRelative' is not valid JSON: $($_.Exception.Message)")
                 continue
             }
 
             if ([string]$result.configuration -ne $configuration) {
-                $errors.Add("$($entry.eval_name)/$configuration - results/$fileName declares configuration '$($result.configuration)'.")
+                $errors.Add("$($entry.eval_name)/$configuration - manifest result '$resultRelative' declares configuration '$($result.configuration)'.")
                 continue
             }
             if ([int]$result.eval_id -ne [int]$metadata.eval_id) {
-                $errors.Add("$($entry.eval_name)/$configuration - results/$fileName declares eval_id $($result.eval_id) but the package says $($metadata.eval_id).")
+                $errors.Add("$($entry.eval_name)/$configuration - manifest result '$resultRelative' declares eval_id $($result.eval_id) but the package says $($metadata.eval_id).")
                 continue
             }
 
@@ -1958,6 +1981,17 @@ function Invoke-CollectMode {
             WithoutSkill = $withoutSkill
             Assertions = @($metadata.assertions).Count
         })
+    }
+
+    $completion = Test-ManifestResults `
+        -IterationDirectory $iterationDirectory `
+        -Manifest $manifest `
+        -Records $manifestRecords `
+        -RequireComplete
+    if (-not $completion.Complete) {
+        foreach ($completionError in @($completion.Errors)) {
+            $errors.Add("Completion gate: $completionError")
+        }
     }
 
     $builder = [System.Text.StringBuilder]::new()

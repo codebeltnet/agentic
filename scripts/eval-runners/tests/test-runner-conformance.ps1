@@ -17,6 +17,7 @@ Set-StrictMode -Version Latest
 $runnerRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 . (Join-Path $runnerRoot 'runner-common.ps1')
+. (Join-Path $runnerRoot 'manifest-paths.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -565,7 +566,8 @@ function Invoke-Fake {
 function New-TestRun {
     param(
         [string]$IterationDirectory,
-        [ValidateSet('with_skill', 'without_skill')][string]$Configuration
+        [ValidateSet('with_skill', 'without_skill')][string]$Configuration,
+        [string]$EvalName = 'conformance'
     )
 
     $evalDirectory = Join-Path $IterationDirectory 'conformance'
@@ -592,7 +594,7 @@ function New-TestRun {
     $run = [ordered]@{
         schema = (Get-RunnerSchemaNames).Run
         evalId = 1
-        evalName = 'conformance'
+        evalName = $EvalName
         skillName = if ($Configuration -eq 'with_skill') { 'candidate' } else { $null }
         iteration = 1
         mode = $Configuration
@@ -827,13 +829,27 @@ try {
     $prepareText = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'scripts\prepare-skill-evals.ps1'), [System.Text.UTF8Encoding]::new($false))
     $reportText = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'scripts\generate-eval-report.ps1'), [System.Text.UTF8Encoding]::new($false))
     $bridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-execution-result.ps1'), [System.Text.UTF8Encoding]::new($false))
+    $manifestBridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-manifest-results.ps1'), [System.Text.UTF8Encoding]::new($false))
     Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
     Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
     Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
+    Assert-True ($prepareText.Contains('bridge-manifest-results.ps1')) 'handoff preparation must use the deterministic package-level manifest bridge'
+    Assert-True ($prepareText.Contains('runs.<arm>.run_manifest') -and $prepareText.Contains('runs.<arm>.execution_result') -and $prepareText.Contains('runs.<arm>.result')) 'handoff preparation must require every exact manifest arm path'
+    Assert-True ($prepareText.Contains('Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')) 'handoff preparation must prohibit reconstructed paths'
+    Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
+    Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
+    Assert-True ($manifestBridgeText.Contains('Get-ManifestRunRecords') -and $manifestBridgeText.Contains('$record.ResultPath')) 'package-level bridge must resolve exact manifest records'
+    Assert-True ($manifestBridgeText -notmatch 'with[-_]skill\.result\.json|without[-_]skill\.result\.json') 'package-level bridge must not encode arm-derived result filenames'
 
     $rawPath = Join-Path $iteration 'conformance\results\with-skill.execution-result.json'
     $resultPath = Join-Path $iteration 'conformance\results\with-skill.result.json'
     New-Item -ItemType Directory -Path (Split-Path -Parent $rawPath) -Force | Out-Null
+    Write-TestJson -Path $resultPath -Value ([ordered]@{
+        schema = (Get-RunnerSchemaNames).PortableResult
+        eval_id = 1
+        configuration = 'with_skill'
+        grading = @([ordered]@{ text = 'preserved assertion'; passed = $null; evidence = '' })
+    })
     $bridgeResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $with.Path -Profile $profilePath
     Write-TestJson -Path $rawPath -Value $bridgeResult
     $bridgePath = Join-Path $runnerRoot 'bridge-execution-result.ps1'
@@ -851,6 +867,110 @@ try {
     Assert-Equal 'verified' $portable.isolation.status 'bridge carries isolation verification status'
     Assert-True (@($portable.isolation.mechanisms).Count -gt 0) 'bridge carries isolation mechanisms'
     Assert-True (@($portable.output_files).Count -gt 0) 'bridge carries confined evidence paths'
+    Assert-Equal 'preserved assertion' $portable.grading[0].text 'bridge preserves the canonical grading entry'
+    Assert-True ($null -eq $portable.grading[0].passed) 'bridge preserves the canonical grading state before grading'
+
+    $manifestPackage = Join-Path $iteration 'manifest-path-regression'
+    $manifestEval = Join-Path $manifestPackage 'conformance'
+    New-Item -ItemType Directory -Path $manifestEval -Force | Out-Null
+    $manifestWith = New-TestRun -IterationDirectory $manifestPackage -Configuration with_skill -EvalName 'manifest-path-regression'
+    $manifestWithout = New-TestRun -IterationDirectory $manifestPackage -Configuration without_skill -EvalName 'manifest-path-regression'
+    $manifestMetadataPath = Join-Path $manifestEval 'eval-metadata.json'
+    Write-TestJson -Path $manifestMetadataPath -Value ([ordered]@{
+        schema = 'codebeltnet/agentic/eval-metadata/2'
+        eval_id = 1
+        eval_name = 'manifest-path-regression'
+        assertions = @('preserved assertion', 'completed execution is bridged')
+    })
+    $manifestWithResult = Join-Path $manifestEval 'results\with-skill.result.json'
+    $manifestWithoutResult = Join-Path $manifestEval 'results\without-skill.result.json'
+    $manifestWithExecution = Join-Path $manifestEval 'results\with-skill.execution-result.json'
+    $manifestWithoutExecution = Join-Path $manifestEval 'results\without-skill.execution-result.json'
+    foreach ($resultPathForStub in @($manifestWithResult, $manifestWithoutResult)) {
+        $configurationForStub = if ($resultPathForStub -eq $manifestWithResult) { 'with_skill' } else { 'without_skill' }
+        Write-TestJson -Path $resultPathForStub -Value ([ordered]@{
+            schema = (Get-RunnerSchemaNames).PortableResult
+            eval_id = 1
+            configuration = $configurationForStub
+            execution_status = 'unrun'
+            grading = @(
+                [ordered]@{ text = 'preserved assertion'; passed = $null; evidence = '' }
+                [ordered]@{ text = 'completed execution is bridged'; passed = $null; evidence = '' }
+            )
+        })
+    }
+    $manifest = [ordered]@{
+        schema = 'codebeltnet/agentic/eval-package/2'
+        configurations = @('with_skill', 'without_skill')
+        evals = @([ordered]@{
+            eval_id = 1
+            eval_name = 'manifest-path-regression'
+            directory = 'conformance'
+            metadata = 'conformance/eval-metadata.json'
+            runs = [ordered]@{
+                with_skill = [ordered]@{
+                    mode = 'with_skill'
+                    run_manifest = 'conformance/with_skill/run.json'
+                    execution_result = 'conformance/results/with-skill.execution-result.json'
+                    result = 'conformance/results/with-skill.result.json'
+                }
+                without_skill = [ordered]@{
+                    mode = 'without_skill'
+                    run_manifest = 'conformance/without_skill/run.json'
+                    execution_result = 'conformance/results/without-skill.execution-result.json'
+                    result = 'conformance/results/without-skill.result.json'
+                }
+            }
+        })
+    }
+    Write-TestJson -Path (Join-Path $manifestPackage 'manifest.json') -Value $manifest
+    Copy-Item -LiteralPath $profilePath -Destination (Join-Path $manifestPackage 'execution-profile.json') -Force
+    $manifestWithExecutionResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $manifestWith.Path -Profile $profilePath
+    $manifestWithoutExecutionResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $manifestWithout.Path -Profile $profilePath
+    Write-TestJson -Path $manifestWithExecution -Value $manifestWithExecutionResult
+    Write-TestJson -Path $manifestWithoutExecution -Value $manifestWithoutExecutionResult
+
+    $manifestObject = Get-Content -LiteralPath (Join-Path $manifestPackage 'manifest.json') -Raw | ConvertFrom-Json
+    $preBridgeValidation = Test-ManifestResults -IterationDirectory $manifestPackage -Manifest $manifestObject
+    Assert-True (-not $preBridgeValidation.Success) 'terminal execution plus an unrun canonical result fails validation before bridging'
+    Assert-True (@($preBridgeValidation.Errors | Where-Object { $_ -match 'remains unrun' }).Count -gt 0) 'pre-bridge validation reports the canonical unrun result'
+
+    $shadowPath = Join-Path $manifestEval 'results\with_skill.result.json'
+    Write-TestJson -Path $shadowPath -Value ([ordered]@{
+        schema = (Get-RunnerSchemaNames).PortableResult
+        eval_id = 1
+        configuration = 'with_skill'
+        execution_status = 'completed'
+        grading = @()
+    })
+    $manifestBridgePath = Join-Path $runnerRoot 'bridge-manifest-results.ps1'
+    $shadowOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete 2>&1
+    $shadowExitCode = $LASTEXITCODE
+    Assert-True ($shadowExitCode -ne 0) 'manifest bridge rejects an unreferenced underscore shadow result'
+    Assert-True (([string]::Join(' ', @($shadowOutput))) -match 'unreferenced result-like sibling') 'shadow rejection explains the manifest collision'
+    $canonicalBeforeBridge = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
+    Assert-Equal 'unrun' $canonicalBeforeBridge.execution_status 'shadow result is never selected as the canonical result'
+    Remove-Item -LiteralPath $shadowPath -Force
+
+    $manifestBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "manifest path bridge failed: $([string]::Join(' ', @($manifestBridgeOutput)))" }
+    $canonicalWith = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
+    Assert-Equal 'completed' $canonicalWith.execution_status 'manifest bridge populates the canonical hyphen result'
+    Assert-Equal 'fixture-model' $canonicalWith.model 'manifest bridge carries the model to the canonical result'
+    Assert-Equal 'deterministic-fake 1' $canonicalWith.harness 'manifest bridge carries the harness to the canonical result'
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$canonicalWith.output)) 'manifest bridge carries output to the canonical result'
+    Assert-Equal 'results/with-skill.execution-result.json' $canonicalWith.execution_result_file 'manifest bridge records the exact manifest execution path'
+    Assert-Equal 2 @($canonicalWith.grading).Count 'manifest bridge preserves the canonical grading count'
+    Assert-Equal 'preserved assertion' $canonicalWith.grading[0].text 'manifest bridge preserves the canonical grading text'
+
+    $canonicalWith.grading[0].passed = $true
+    $canonicalWith.grading[0].evidence = 'graded after the first bridge'
+    Write-TestJson -Path $manifestWithResult -Value $canonicalWith
+    $repeatBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "repeat manifest path bridge failed: $([string]::Join(' ', @($repeatBridgeOutput)))" }
+    $canonicalAfterRepeat = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
+    Assert-True ([bool]$canonicalAfterRepeat.grading[0].passed) 'repeat manifest bridge preserves completed grading'
+    Assert-Equal 'graded after the first bridge' $canonicalAfterRepeat.grading[0].evidence 'repeat manifest bridge preserves grading evidence'
 
     $acceptedBridgeResult = $bridgeResult | ConvertTo-Json -Depth 100 | ConvertFrom-Json
     $acceptedBridgeResult.resolved.status = 'accepted_request'

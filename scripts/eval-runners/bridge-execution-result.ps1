@@ -96,14 +96,14 @@ function Get-ExistingGrading {
     param([Parameter(Mandatory = $true)][string]$ResultPath)
 
     if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf)) {
-        return @()
+        throw "Manifest-declared result stub '$ResultPath' does not exist; the bridge will not create a new grading-less result file."
     }
-    try {
-        $existing = Read-RunnerJson -Path $ResultPath
-        return @(Get-JsonProperty -Object $existing -Name 'grading' -Default @())
-    } catch {
-        return @()
+
+    $existing = Read-RunnerJson -Path $ResultPath
+    if (-not (Test-JsonProperty -Object $existing -Name 'grading')) {
+        throw "Manifest-declared result stub '$ResultPath' is missing its grading array."
     }
+    return @(Get-JsonProperty -Object $existing -Name 'grading' -Default @())
 }
 
 try {

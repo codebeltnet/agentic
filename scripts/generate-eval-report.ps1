@@ -26,6 +26,10 @@
 .PARAMETER SkillCreatorPath
     Optional skill-creator installation or package-local tools/skill-creator path. The package-local path is the
     default so a prepared package remains self-contained after preparation.
+
+.PARAMETER RequireComplete
+    Fail before reporting success unless every manifest-declared arm has a terminal execution result and a validated
+    canonical result bridged from that exact path.
 #>
 [CmdletBinding()]
 param(
@@ -38,13 +42,17 @@ param(
 
     [string]$BenchmarkMarkdownPath,
 
-    [string]$SkillCreatorPath
+    [string]$SkillCreatorPath,
+
+    [switch]$RequireComplete
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+. (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
 
 function Read-JsonFile {
     param([string]$Path)
@@ -175,16 +183,6 @@ function Invoke-PythonScript {
     foreach ($line in @($output)) {
         Write-Host $line
     }
-}
-
-function Get-ResultPath {
-    param(
-        [string]$EvalDirectory,
-        [string]$Configuration
-    )
-
-    $fileName = if ($Configuration -eq 'with_skill') { 'with-skill.result.json' } else { 'without-skill.result.json' }
-    return Join-Path (Join-Path $EvalDirectory 'results') $fileName
 }
 
 function Copy-RecordedOutputFiles {
@@ -428,12 +426,14 @@ function Get-ReportRun {
 function Get-ReportSkillStats {
     param(
         [object]$Manifest,
+        [object[]]$ManifestRecords,
         [string]$IterationPath
     )
 
     $skillRoot = $null
-    foreach ($entry in @($Manifest.evals)) {
-        $candidate = Join-Path (Join-Path (Join-Path $IterationPath ([string]$entry.directory)) 'with_skill') ("skill/$($Manifest.skill_name)")
+    foreach ($record in @($ManifestRecords | Where-Object { [string]$_.Configuration -eq 'with_skill' })) {
+        $runPackageDirectory = Split-Path -Parent ([string]$record.RunManifestPath)
+        $candidate = Join-Path $runPackageDirectory ("skill/$($Manifest.skill_name)")
         if (Test-Path -LiteralPath $candidate -PathType Container) {
             $skillRoot = $candidate
             break
@@ -455,6 +455,8 @@ function Get-ReportSkillStats {
 function Write-FirstPartyReport {
     param(
         [object]$Manifest,
+        [object[]]$ManifestRecords,
+        [object]$Validation,
         [string]$IterationPath,
         [string]$OutputPath,
         [object]$Benchmark
@@ -462,20 +464,30 @@ function Write-FirstPartyReport {
 
     $evals = [System.Collections.Generic.List[object]]::new()
     $allModels = [System.Collections.Generic.List[string]]::new()
-    $completedRuns = 0
+    $completedRuns = [int]$Validation.BridgedResults
     foreach ($entry in @($Manifest.evals)) {
-        $evalDirectory = Join-Path $IterationPath ([string]$entry.directory)
-        $metadata = Read-JsonFile -Path (Join-Path $evalDirectory 'eval-metadata.json')
+        $entryRecords = @($ManifestRecords | Where-Object { [int]$_.EvalId -eq [int]$entry.eval_id })
+        if ($entryRecords.Count -eq 0) {
+            throw "$($entry.eval_name) does not have manifest-declared arm paths."
+        }
+        $evalDirectory = [string]$entryRecords[0].EvalDirectory
+        $metadata = Read-JsonFile -Path ([string]$entryRecords[0].MetadataPath)
         $runMap = [ordered]@{}
         $assertions = @($metadata.assertions | ForEach-Object { [string]$_ })
         foreach ($configuration in @('with_skill', 'without_skill')) {
-            $resultPath = Get-ResultPath -EvalDirectory $evalDirectory -Configuration $configuration
+            $records = @($ManifestRecords | Where-Object {
+                    [int]$_.EvalId -eq [int]$entry.eval_id -and [string]$_.Configuration -eq $configuration
+                })
+            if ($records.Count -ne 1) {
+                throw "$($entry.eval_name)/$configuration does not have exactly one manifest-declared result path."
+            }
+            $runRecord = $records[0]
+            $resultPath = [string]$runRecord.ResultPath
             $result = if (Test-Path -LiteralPath $resultPath) { Read-JsonFile -Path $resultPath } else { $null }
             if ($null -ne $result) {
-                $run = Get-ReportRun -Result $result -Configuration $configuration -EvalName ([string]$entry.eval_name) -EvalId ([int]$metadata.eval_id) -Assertions $assertions -RunPackageDirectory (Join-Path $evalDirectory $configuration) -EvalDirectory $evalDirectory -IterationPath $IterationPath
+                $runPackageDirectory = Split-Path -Parent ([string]$runRecord.RunManifestPath)
+                $run = Get-ReportRun -Result $result -Configuration $configuration -EvalName ([string]$entry.eval_name) -EvalId ([int]$metadata.eval_id) -Assertions $assertions -RunPackageDirectory $runPackageDirectory -EvalDirectory $evalDirectory -IterationPath $IterationPath
                 $runMap[$configuration] = $run
-                $executionStatus = [string](Get-Property -Object $result -Name 'execution_status' -Default '')
-                if (-not [string]::IsNullOrWhiteSpace([string]$run.output) -or @($run.output_files).Count -gt 0 -or ($executionStatus -and $executionStatus -ne 'unrun')) { $completedRuns++ }
                 if (-not [string]::IsNullOrWhiteSpace([string]$run.model) -and -not $allModels.Contains([string]$run.model)) {
                     $allModels.Add([string]$run.model)
                 }
@@ -503,7 +515,7 @@ function Write-FirstPartyReport {
         skill_name = [string]$Manifest.skill_name
         iteration = [int]$Manifest.iteration
         metadata = $metadata
-        skill = Get-ReportSkillStats -Manifest $Manifest -IterationPath $IterationPath
+        skill = Get-ReportSkillStats -Manifest $Manifest -ManifestRecords $ManifestRecords -IterationPath $IterationPath
         evals = @($evals)
         benchmark = $Benchmark
     }
@@ -588,6 +600,7 @@ function Write-UpstreamGrading {
 function New-UpstreamWorkspace {
     param(
         [object]$Manifest,
+        [object[]]$ManifestRecords,
         [string]$IterationPath,
         [string]$WorkspacePath
     )
@@ -596,8 +609,12 @@ function New-UpstreamWorkspace {
     $workspaceEntries = [System.Collections.Generic.List[object]]::new()
 
     foreach ($entry in @($Manifest.evals)) {
-        $evalDirectory = Join-Path $IterationPath ([string]$entry.directory)
-        $metadata = Read-JsonFile -Path (Join-Path $evalDirectory 'eval-metadata.json')
+        $entryRecords = @($ManifestRecords | Where-Object { [int]$_.EvalId -eq [int]$entry.eval_id })
+        if ($entryRecords.Count -eq 0) {
+            throw "$($entry.eval_name) does not have manifest-declared arm paths."
+        }
+        $evalDirectory = [string]$entryRecords[0].EvalDirectory
+        $metadata = Read-JsonFile -Path ([string]$entryRecords[0].MetadataPath)
         $evalFolder = Join-Path $WorkspacePath ("eval-{0}-{1}" -f $entry.eval_id, (Get-SafeSegment -Value ([string]$entry.eval_name)))
         New-Item -ItemType Directory -Path $evalFolder -Force | Out-Null
 
@@ -618,7 +635,14 @@ function New-UpstreamWorkspace {
             New-Item -ItemType Directory -Path $outputsDirectory -Force | Out-Null
             Write-JsonFile -Path (Join-Path $configurationDirectory 'eval_metadata.json') -Value $upstreamMetadata
 
-            $resultPath = Get-ResultPath -EvalDirectory $evalDirectory -Configuration $configuration
+            $records = @($ManifestRecords | Where-Object {
+                    [int]$_.EvalId -eq [int]$entry.eval_id -and [string]$_.Configuration -eq $configuration
+                })
+            if ($records.Count -ne 1) {
+                throw "$($entry.eval_name)/$configuration does not have exactly one manifest-declared result path."
+            }
+            $runRecord = $records[0]
+            $resultPath = [string]$runRecord.ResultPath
             if (-not (Test-Path -LiteralPath $resultPath)) {
                 continue
             }
@@ -639,7 +663,8 @@ function New-UpstreamWorkspace {
                 Write-JsonFile -Path (Join-Path $outputsDirectory 'isolation.json') -Value $isolation
             }
 
-            Copy-RecordedOutputFiles -Result $result -RunPackageDirectory (Join-Path $evalDirectory $configuration) -EvalDirectory $evalDirectory -IterationPath $IterationPath -OutputDirectory $outputsDirectory
+            $runPackageDirectory = Split-Path -Parent ([string]$runRecord.RunManifestPath)
+            Copy-RecordedOutputFiles -Result $result -RunPackageDirectory $runPackageDirectory -EvalDirectory $evalDirectory -IterationPath $IterationPath -OutputDirectory $outputsDirectory
             Write-UpstreamGrading -Result $result -RunDirectory $runDirectory -Assertions @($metadata.assertions | ForEach-Object { [string]$_ })
         }
     }
@@ -649,10 +674,21 @@ function New-UpstreamWorkspace {
 
 $iterationPath = (Resolve-Path -LiteralPath $IterationDirectory).Path
 $manifest = Read-JsonFile -Path (Join-Path $iterationPath 'manifest.json')
+$manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iterationPath -Manifest $manifest)
+$validation = Test-ManifestResults -IterationDirectory $iterationPath -Manifest $manifest -Records $manifestRecords
+if (-not $validation.Success) {
+    throw ([string]::Join([Environment]::NewLine, @($validation.Errors)))
+}
+foreach ($warning in @($validation.Warnings)) {
+    Write-Host "[WARN] $warning"
+}
+if ($RequireComplete -and -not $validation.Complete) {
+    throw "Evaluation completion gate failed: expected $($validation.ExpectedArmCount) bridged terminal arms, found $($validation.BridgedResults)."
+}
 $skillCreatorPathResolved = Resolve-SkillCreatorPath -RequestedPath $SkillCreatorPath
 $pythonCommand = Resolve-PythonCommand
 $workspacePath = Join-Path $iterationPath '.skill-creator-report'
-$workspaceEntries = New-UpstreamWorkspace -Manifest $manifest -IterationPath $iterationPath -WorkspacePath $workspacePath
+$workspaceEntries = New-UpstreamWorkspace -Manifest $manifest -ManifestRecords $manifestRecords -IterationPath $iterationPath -WorkspacePath $workspacePath
 
 $aggregatePath = Join-Path $skillCreatorPathResolved 'scripts/aggregate_benchmark.py'
 $viewerPath = Join-Path $skillCreatorPathResolved 'eval-viewer/generate_review.py'
@@ -662,10 +698,25 @@ Invoke-PythonScript -PythonCommand $pythonCommand -ScriptPath $aggregatePath -Ar
 
 $benchmarkWorkspacePath = Join-Path $workspacePath 'benchmark.json'
 $benchmark = Read-JsonFile -Path $benchmarkWorkspacePath
+$benchmarkRuns = @(Get-Property -Object $benchmark -Name 'runs' -Default @())
+if ($RequireComplete) {
+    if ($benchmarkRuns.Count -eq 0) {
+        throw 'Evaluation completion gate failed: benchmark output contains zero completed runs.'
+    }
+    if ($benchmarkRuns.Count -ne $validation.ExpectedArmCount -or $benchmarkRuns.Count -ne $validation.BridgedResults) {
+        throw "Evaluation completion gate failed: benchmark completed-run count $($benchmarkRuns.Count) does not match expected bridged count $($validation.BridgedResults) of $($validation.ExpectedArmCount)."
+    }
+}
 $models = [System.Collections.Generic.List[string]]::new()
 foreach ($entry in @($manifest.evals)) {
     foreach ($configuration in @('with_skill', 'without_skill')) {
-        $resultPath = Get-ResultPath -EvalDirectory (Join-Path $iterationPath ([string]$entry.directory)) -Configuration $configuration
+        $records = @($manifestRecords | Where-Object {
+                [int]$_.EvalId -eq [int]$entry.eval_id -and [string]$_.Configuration -eq $configuration
+            })
+        if ($records.Count -ne 1) {
+            throw "$($entry.eval_name)/$configuration does not have exactly one manifest-declared result path."
+        }
+        $resultPath = [string]$records[0].ResultPath
         if (Test-Path -LiteralPath $resultPath) {
             $model = [string](Get-Property -Object (Read-JsonFile -Path $resultPath) -Name 'model' -Default '')
             if (-not [string]::IsNullOrWhiteSpace($model) -and -not $models.Contains($model)) {
@@ -705,7 +756,15 @@ $viewerArguments = @(
 )
 Invoke-PythonScript -PythonCommand $pythonCommand -ScriptPath $viewerPath -Arguments $viewerArguments
 
-Write-FirstPartyReport -Manifest $manifest -IterationPath $iterationPath -OutputPath $htmlOutputPath -Benchmark $benchmark
+Write-FirstPartyReport -Manifest $manifest -ManifestRecords $manifestRecords -Validation $validation -IterationPath $iterationPath -OutputPath $htmlOutputPath -Benchmark $benchmark
+
+if ($RequireComplete) {
+    foreach ($output in @($benchmarkOutputPath, $benchmarkMarkdownOutputPath, $upstreamHtmlOutputPath, $htmlOutputPath)) {
+        if (-not (Test-Path -LiteralPath $output -PathType Leaf) -or (Get-Item -LiteralPath $output).Length -eq 0) {
+            throw "Evaluation completion gate failed: report artifact '$output' is missing or empty."
+        }
+    }
+}
 
 Write-Host "Anthropic skill-creator tools: $skillCreatorPathResolved"
 Write-Host "Anthropic viewer template: $viewerTemplatePath"
@@ -713,3 +772,7 @@ Write-Host "Wrote $benchmarkOutputPath"
 Write-Host "Wrote $benchmarkMarkdownOutputPath"
 Write-Host "Wrote $upstreamHtmlOutputPath"
 Write-Host "Wrote $htmlOutputPath"
+Write-Host "Manifest-declared terminal arms: $($validation.BridgedResults)/$($validation.ExpectedArmCount)"
+if (-not $validation.Complete) {
+    Write-Host 'This is a partial report; evaluation completion was not asserted.'
+}
