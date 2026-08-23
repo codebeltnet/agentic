@@ -1699,7 +1699,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It selects the package-local runner from the profile, invokes the common protocol once per blind arm, bridges raw evidence into the existing result shape, reveals grading material only after execution, and invokes Anthropic skill-creator''s compatible aggregator and static viewer through the package adapter. It never executes an eval prompt in its own context.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('A harness that cannot provide fresh, independent sessions with isolated working and config roots is incompatible with these evals. `-CollectResults` accepts a partial iteration and reports unfilled runs as missing.')
+    [void]$builder.AppendLine('A harness that cannot provide fresh, independent sessions with isolated working and config roots is incompatible with these evals. `-CollectResults` may inspect and report available package state, including missing or unrun arms, but it exits non-zero when the required completion gate is not satisfied. An incomplete or unrun package must not be presented as a successfully completed evaluation.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A with_skill run on one model compared against a baseline on another measures both the model and the skill. That is not a skill-effectiveness result, so do not report it as one. If you do mix models, say so explicitly and treat the comparison as directional only.')
     [void]$builder.AppendLine()
