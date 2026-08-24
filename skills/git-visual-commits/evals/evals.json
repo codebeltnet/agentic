@@ -273,11 +273,13 @@
     {
       "id": 25,
       "prompt": "Please do a git bot commit yolo.",
-      "expected_output": "An unambiguous git-visual-commits invocation that uses bot identity and auto-approval for the full worktree without treating yolo as a message or routing to changelog work.",
+      "expected_output": "An unambiguous git-visual-commits invocation that uses bot identity and auto-approval for the full worktree, performs the required checks, and completes the commit workflow in the same turn without asking for another approval or treating yolo as a message or routing to changelog work.",
       "expectations": [
         "Routes the request to git-visual-commits rather than git-keep-a-changelog, release notes, or a generic commit workflow",
         "Interprets git bot commit as an identity lock and executes the git bot commit command rather than regular git commit",
         "Interprets yolo as auto-approval for the commit workflow rather than as the commit subject or message",
+        "Treats yolo as explicit approval to complete the commit workflow in the same turn after required checks pass",
+        "Does not ask whether to proceed, wait for another approval, or return a pending commit plan after presenting the status summary",
         "Treats the full current worktree as scope because the user did not narrow it",
         "Does not replace bot identity with a human-authored commit plus a Co-authored-by trailer"
       ]

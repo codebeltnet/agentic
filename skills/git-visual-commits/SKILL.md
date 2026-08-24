@@ -16,6 +16,7 @@ This skill drives the entire git commit workflow — reviewing changes, grouping
 
 - An explicit `git bot commit`, `git commit`, or `git our commit` phrase is an authoritative request to use this skill. Do not substitute a changelog, release-note, squash-summary, or generic commit workflow.
 - Interpret `Please do a git bot commit yolo` as `git bot commit` identity plus auto-approval for the full current worktree. `yolo` is not the commit message, and it does not request a changelog.
+- That exact combination is also an instruction to complete the commit workflow in the current turn after the required checks pass. Treat the visible plan as status information, not as a request for another approval; do not end with a pending plan or ask whether to proceed.
 - Equivalent word order and punctuation, such as `git bot commit, yolo` or `yolo — do a git bot commit`, preserve the same routing when both the explicit commit command and modifier are present.
 - A competing skill may run only when the user also explicitly requests its distinct output, such as updating `CHANGELOG.md`, drafting release notes, or producing a squash summary.
 
@@ -72,6 +73,7 @@ The validator enforces an emoji present in the bundled reference table, exactly 
 - mixed-scope validation
 - deterministic subject validation
 - post-commit author verification
+- In auto-approval mode, the user's `yolo` or `auto` is already the approval for this commit request. After the required checks pass, execute the commit command(s) in the same turn. Do not ask "Proceed?", "Should I commit?", or any equivalent confirmation question, and do not return a plan as if approval were still pending. Stop only for a concrete blocker such as a missing alias or failed validation, and report that blocker directly.
 
 If the user did **not** say `yolo` or `auto`, and session-level auto mode is not already enabled, do **not** run any commit command yet. You must stop after Step 4, present the plan, and wait for approval.
 
@@ -404,6 +406,8 @@ Auto-committing: 🔧 build config → 🚚 rename auth to identity → ✅ iden
 ```
 
 Even in auto-approval mode, surface the commit buckets explicitly before committing. Auto-approval removes the wait, not the planning step.
+
+The summary is status output, not a review request. Step 5 is mandatory in the same turn once its preconditions pass: never ask "Proceed with committing these groups?" (or an equivalent question), wait for a reply, or finish with a pending commit plan.
 
 If the user did not narrow scope, the plan you surface must account for the full worktree rather than an arbitrarily chosen subset.
 
