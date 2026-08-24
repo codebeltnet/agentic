@@ -275,6 +275,9 @@ function Test-ManifestResults {
                 $errors.Add("$($record.EvalName)/$($record.Configuration) execution result has non-terminal status '$rawStatus'.")
             } else {
                 $terminalExecutionResults++
+                if ($RequireComplete -and $rawStatus -eq 'incompatible') {
+                    $errors.Add("$($record.EvalName)/$($record.Configuration) is incompatible; incompatible execution evidence is diagnostic only and cannot be graded or benchmarked.")
+                }
             }
         } elseif ($RequireComplete) {
             $errors.Add("$($record.EvalName)/$($record.Configuration) is missing its manifest-declared execution result '$($record.ExecutionResultRelative)'.")
@@ -317,7 +320,7 @@ function Test-ManifestResults {
                 $errors.Add("$($record.EvalName)/$($record.Configuration) canonical execution_status '$canonicalStatus' does not match raw status '$rawStatus'.")
             }
 
-            foreach ($field in @('model', 'harness', 'execution_status', 'execution_run_id', 'execution_result_file')) {
+            foreach ($field in @('model', 'harness', 'execution_status', 'execution_run_id', 'execution_result_file', 'execution_result_sha256')) {
                 if (-not (Test-JsonProperty -Object $canonical -Name $field) -or [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $canonical -Name $field -Default ''))) {
                     $errors.Add("$($record.EvalName)/$($record.Configuration) canonical result is missing populated '$field'.")
                 }
@@ -327,7 +330,18 @@ function Test-ManifestResults {
             if ($actualExecutionFile -ne $expectedExecutionFile) {
                 $errors.Add("$($record.EvalName)/$($record.Configuration) canonical execution_result_file '$actualExecutionFile' does not match the manifest execution_result path '$($record.ExecutionResultRelative)'.")
             }
-            if ($canonicalStatus -eq $rawStatus -and $grading.Count -eq $assertionCount) {
+            $expectedExecutionHash = Get-Sha256HexFromFile -Path $record.ExecutionResultPath
+            $actualExecutionHash = [string](Get-JsonProperty -Object $canonical -Name 'execution_result_sha256' -Default '')
+            if ($actualExecutionHash -ne $expectedExecutionHash) {
+                $errors.Add("$($record.EvalName)/$($record.Configuration) canonical execution_result_sha256 does not match the current manifest execution result.")
+            }
+            if ($rawStatus -eq 'incompatible' -and $RequireComplete) {
+                $gradedEntries = @($grading | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'passed' -Default $null) })
+                if ($gradedEntries.Count -gt 0) {
+                    $errors.Add("$($record.EvalName)/$($record.Configuration) has grading for an incompatible execution; diagnostic arms must not contribute grading evidence.")
+                }
+            }
+            if ($canonicalStatus -eq $rawStatus -and $grading.Count -eq $assertionCount -and $rawStatus -ne 'incompatible') {
                 $bridgedResults++
             }
         } elseif (-not $rawExists -and $RequireComplete -and $canonicalStatus -ne 'unrun') {
