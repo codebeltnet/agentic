@@ -195,12 +195,12 @@ Never set or override `git user.name`, `git user.email`, or `alias.bot` in the *
 
 ## Git Operations Safeguards
 
-Agents must never automatically commit code changes or push to remote repositories. Both actions require explicit user approval:
+Agents must never commit code changes or push to remote repositories without explicit user approval. A direct commit request that includes `yolo` or `auto` is explicit approval for the current commit request; it authorizes the agent to complete that commit workflow in the same turn after the required checks pass.
 
-- **Commits**: Always request confirmation from the user before staging and committing code. Present a clear summary of changes and wait for user approval before executing the commit.
+- **Commits**: Request confirmation from the user before staging and committing code unless the same explicit commit request includes `yolo` or `auto`. In that auto-approved case, present the plan as status information and continue directly to staging and committing; do not ask a second confirmation question or end with a pending plan. Required review, scope, identity, message-validation, and post-commit checks still apply.
 - **Remote Operations**: Do not push, pull, fetch, or interact with `origin` or any remote repository without explicit user instruction. These operations modify repository history and can cause data loss if performed unexpectedly.
 
-**Why:** Automatic commits can pollute history with incomplete work, debugging code, or unintended changes. Unexpected remote operations can overwrite or lose commits on shared branches. Always require the user to explicitly approve these operations.
+**Why:** Automatic commits can pollute history with incomplete work, debugging code, or unintended changes. Unexpected remote operations can overwrite or lose commits on shared branches. Never treat silence, urgency, or momentum as approval; `yolo` or `auto` counts as approval only when attached to the same explicit commit request.
 
 ### Commit Skill Routing
 
