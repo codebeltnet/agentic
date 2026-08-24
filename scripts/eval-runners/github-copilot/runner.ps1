@@ -59,6 +59,23 @@ $descriptor = [ordered]@{
         cost_telemetry = 'unsupported'
         credential_child_filtering = 'supported'
         native_skill_activation_evidence = 'unsupported'
+        native_worker_delegation = 'supported'
+        delegated_worker_full_capability = 'supported'
+        delegated_worker_model_lock = 'supported'
+        delegated_worker_working_directory = 'supported'
+        delegated_worker_result_capture = 'supported'
+        delegated_worker_capacity_signal = 'supported'
+    }
+    delegation = [ordered]@{
+        mode = 'native_worker'
+        mechanism = 'Copilot CLI native task tool with an explicit full-capability general-purpose child agent; fleet/task lifecycle events observe completion'
+        worker_role = 'general-purpose'
+        full_capability = 'supported'
+        model_lock = 'supported'
+        working_directory = 'supported'
+        result_capture = 'supported'
+        capacity = 'harness_authoritative'
+        nested_model_execution = $false
     }
     supported_telemetry = @('transcript_event_capture', 'token_telemetry', 'cache_token_telemetry', 'tool_call_telemetry', 'command_evidence', 'file_evidence')
     configuration_profiles = @('isolated-default')
@@ -384,6 +401,7 @@ function Get-CopilotPreflight {
     $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "-C $($run.WorkingDirectoryPath); COPILOT_HOME under $($run.HomeDirectoryPath)"))
     $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail 'The prepared UTF-8 prompt bytes are supplied once through stdin; the execution fake proves the received bytes match the staged prompt.'))
     $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only supported authentication state is made available to Copilot; --secret-env-vars removes every listed token variable from shell and MCP child environments; no Copilot profile or credential file is copied.'))
+    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail 'Use Copilot native task with a full-capability general-purpose child agent; the parent supplies one explicit arm per child and observes child completion/model evidence.'))
     if ($platform -eq 'macos') {
         $warnings.Add('macOS sandbox-exec is deprecated by Apple but is used only when present; a future runner revision may replace it with an equivalent supported mechanism.')
     }
@@ -394,7 +412,7 @@ function Get-CopilotPreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'GitHub Copilot CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('copilot --output-format json', 'prompt on stdin', '--allow-all-tools broad tool approval', 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('native task -> general-purpose full-capability child worker', 'Copilot fleet/task lifecycle observation', 'copilot --output-format json compatibility transport', 'prompt on stdin', '--allow-all-tools broad tool approval', 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardConfinement) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }

@@ -14,6 +14,7 @@
     "requested",
     "checks",
     "resolved_capabilities",
+    "delegation",
     "isolation",
     "mechanisms",
     "warnings",
@@ -43,6 +44,28 @@
     },
     "checks": { "type": "array" },
     "resolved_capabilities": { "type": "object" },
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "mode",
+        "mechanism",
+        "worker_role",
+        "nested_model_execution",
+        "required_controls",
+        "unproven_controls"
+      ],
+      "properties": {
+        "status": { "enum": ["supported", "conditional", "unsupported"] },
+        "mode": { "enum": ["native_worker", "conditional", "unsupported"] },
+        "mechanism": { "type": "string" },
+        "worker_role": { "type": "string" },
+        "nested_model_execution": { "type": "boolean" },
+        "required_controls": { "type": "array", "items": { "type": "string" } },
+        "unproven_controls": { "type": "array", "items": { "type": "string" } }
+      }
+    },
     "isolation": {
       "type": "object",
       "required": ["level", "status", "hard_filesystem_confinement", "unproven_controls"],

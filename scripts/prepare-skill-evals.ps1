@@ -70,7 +70,7 @@
     Per-arm runner timeout. Defaults to 900 seconds.
 
 .PARAMETER Concurrency
-    Requested external-orchestrator concurrency. Defaults to 1. It does not change paired-arm semantics.
+    Requested external-orchestrator concurrency. Defaults to 16. It does not change paired-arm semantics.
 
 .PARAMETER Changed
     Prepares a package for every repo-managed skill this branch changed, including uncommitted work. This is the form
@@ -1593,9 +1593,11 @@ function Invoke-PrepareMode {
     Write-Host 'Point the harness at that path. Do not reproduce its contents in chat: a pasted copy'
     Write-Host 'loses the absolute paths it depends on, and the harness then cannot find the package.'
     Write-Host ''
-    Write-Host 'The runner-aware handoff uses execution-profile.json and the package-local Eval Runner protocol.'
-    Write-Host 'The selected external orchestrator must preflight and execute one runner process per blind arm,'
-    Write-Host 'then bridge, grade, and report the collected results.'
+    Write-Host 'The runner-aware handoff uses execution-profile.json, the package-local Eval Runner protocol,'
+    Write-Host 'and its deterministic native-worker orchestration plan.'
+    Write-Host 'The selected external orchestrator must delegate EVERY arm to a fresh harness-native worker.'
+    Write-Host 'The orchestrator coordinates; it must not execute an eval arm itself or invoke the direct execute transport.'
+    Write-Host 'Independent workers run concurrently up to execution-profile.json.concurrency; harness capacity remains authoritative.'
     Write-Host ''
     Write-Host 'This script prepared prompts only. It did not run them, and nothing here will.'
     Write-Host 'The selected evaluator should finish the package in one run. If it cannot write back to this package,'
@@ -1613,6 +1615,7 @@ function New-RunnerPrompt {
     $builder = [System.Text.StringBuilder]::new()
     $profilePath = Join-Path $IterationDirectory 'execution-profile.json'
     $resolverPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/resolve-runner.ps1"
+    $orchestrationPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/orchestration.ps1"
     $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
     $reportPath = Join-Path $IterationDirectory $reportToolRelativePath
     [void]$builder.AppendLine('# Execute, grade, and report this evaluation package')
@@ -1627,29 +1630,37 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A human selected the external orchestrator and authorized this handoff. Repository preparation, validation, CI, hooks, and automatic completion gates remain model-free. Do not substitute a generic worker, another runner, or an improvised isolation scheme if the selected runner is unavailable or incompatible.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Phase 1: execute blind arms')
+    [void]$builder.AppendLine('## Phase 1: delegate blind arms')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('> DELEGATE EVERY eval arm to a fresh harness-native worker/subagent. The Eval Orchestrator MUST NOT execute an eval arm itself.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('> One arm equals one delegated worker and one model-backed eval execution. The delegated worker is the eval worker; do not place another model-backed runner process inside it.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('> Run independent workers concurrently up to `execution-profile.json.concurrency`. If the harness temporarily refuses another worker because its own concurrency limit is reached, keep that arm queued and dispatch it when capacity becomes available.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('1. Read `manifest.json` and `execution-profile.json`. If `runner` or `model` is null, unavailable, or unsupported, fail clearly and list the supported package-local runner IDs; do not guess a default. The profile contains no credentials.')
-    [void]$builder.AppendLine('2. Resolve the selected package-local runner with the resolver. Ask it for `describe` and validate its protocol, descriptor, and capability declarations before running an arm. Do not invent harness-specific CLI commands.')
-    [void]$builder.AppendLine('3. For every eval arm, read the exact `run_manifest`, `execution_result`, and `result` fields from `manifest.json` at `runs.<arm>.run_manifest`, `runs.<arm>.execution_result`, and `runs.<arm>.result`. Bind them without editing the strings: `runPath = exact run_manifest`, `executionPath = exact execution_result`, and `resultPath = exact result`.')
-    [void]$builder.AppendLine('4. Keep `with_skill` and `without_skill` in fresh independent processes/sessions. Use the same runner-native model selector, configuration, tools, and limits. The runner must send each `prompt.md` unchanged as the first task input and must enforce the run contract, including the baseline skill exclusion and the staged filesystem/workspace boundary.')
-    [void]$builder.AppendLine('5. Save the runner''s single normalized JSON response unchanged to that arm''s exact `executionPath`. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path. A runner execute operation writes only to the exact manifest-declared `execution_result` path. Preserve the complete final response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout, harness failure, and incompatibility are results.')
-    [void]$builder.AppendLine('6. If the runner cannot satisfy a required guarantee, keep the normalized status `incompatible` and stop that arm. Never fall back to the old generic isolated-worker behavior and never substitute a different runner.')
+    [void]$builder.AppendLine(('2. Resolve the selected package-local runner with the resolver. Ask it for `describe` and `preflight`, validate its protocol, descriptor, and native-delegation capability declarations, and load the deterministic orchestration helper at ' + $orchestrationPath + '. Do not invent harness-specific CLI commands.'))
+    [void]$builder.AppendLine('3. Build the pending arm queue from `manifest.json` with the orchestration helper. For every arm, read the exact `run_manifest`, `execution_result`, and `result` fields from `runs.<arm>.run_manifest`, `runs.<arm>.execution_result`, and `runs.<arm>.result`. Retain those exact manifest-declared strings without editing them: the parent owns those exact destinations; the worker receives only its own prepared arm contract. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')
+    [void]$builder.AppendLine('4. Before dispatching, require native worker delegation and all mandatory isolation controls. A conditional or unavailable delegation mechanism is an incompatible preflight. Do not continue by invoking a runner process in the parent, and do not silently serialize arms in the parent.')
+    [void]$builder.AppendLine('5. Dispatch each pending arm to one fresh harness-native full-capability worker. The worker must execute the prepared `prompt.md` as its first task from that arm''s staged run directory, with the selected model/configuration, exact working directory and isolated home. Require terminal evidence for the exact selected model, working directory, isolated home, and fresh session; if the native surface cannot lock or prove one of these, fail preflight rather than accepting a fallback. It must not receive its paired arm, `eval-metadata.json`, expected output, assertions, grading, benchmark/report data, or any result from another arm.')
+    [void]$builder.AppendLine('6. The delegated worker is the only model-backed execution for that arm. It must not invoke `runner.ps1 execute`, a second harness CLI, another model agent, or a nested session. Return the worker transcript/terminal evidence and normalized execution result to the parent; the parent writes it to the exact manifest-declared `execution_result` path without reconstructing any path.')
+    [void]$builder.AppendLine('7. Maintain up to `min(execution-profile.json.concurrency, remaining arms)` active delegated workers. If a delegation request is rejected before the worker starts because of harness capacity, leave that arm pending, record no eval attempt, and retry it after an active worker becomes terminal. Do not add a runner-specific ceiling or change the portable requested concurrency.')
+    [void]$builder.AppendLine('8. Preserve the complete terminal response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout, harness failure, and incompatibility are results.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The package-local process surface is:')
     [void]$builder.AppendLine('```text')
     [void]$builder.AppendLine("pwsh -NoProfile -File `"$resolverPath`" <runner>")
     [void]$builder.AppendLine('runner.ps1 describe')
     [void]$builder.AppendLine("runner.ps1 preflight -Run `"<run.json>`" -Profile `"$profilePath`"")
-    [void]$builder.AppendLine("runner.ps1 execute -Run `"<run.json>`" -Profile `"$profilePath`"")
+    [void]$builder.AppendLine("runner.ps1 execute -Run `"<run.json>`" -Profile `"$profilePath`"  # direct one-arm compatibility transport; forbidden to the parent orchestrator")
     [void]$builder.AppendLine('```')
-    [void]$builder.AppendLine('Use the resolver output to locate `runner.ps1`; `<runner>` is data from the profile, not a branch in this orchestration contract. For each arm, invoke the runner exactly once with `execute`, and keep its stdout as one JSON `execution-result.json` document.')
+    [void]$builder.AppendLine('Use the resolver output to locate `runner.ps1`; `<runner>` is data from the profile, not a branch in this orchestration contract. The parent may use `describe` and `preflight` only. The `execute` command remains part of the one-arm runner protocol for compatibility and conformance, but the native delegated worker path MUST NOT invoke it: doing so would create a second model-backed execution.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Do not read any `eval-metadata.json`, expected output, assertions, result grading, or paired output during Phase 1. The runner must never receive or inspect expected output, assertions, grading, paired output, benchmark data, or human feedback. Those files remain outside every run directory and are the grading key.')
+    [void]$builder.AppendLine('Do not read any `eval-metadata.json`, expected output, assertions, result grading, benchmark/report data, or paired output during Phase 1. The orchestrator and worker must never expose those materials before all workers are terminal. They remain outside every run directory and are the grading key.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 2: bridge, grade, and report')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. After every available arm has completed or failed, invoke the deterministic package bridge below. It reads `manifest.json`, obtains each arm''s exact `run_manifest`, `execution_result`, and `result` paths. The bridge checks prompt/run/profile hashes and artifact confinement, validates the manifest paths, rejects unreferenced hyphen/underscore shadow results, and invokes the existing one-arm bridge with those exact paths. Do not manually construct a bridge command for an arm.')
+    [void]$builder.AppendLine('1. Only after every available delegated worker is terminal, invoke the deterministic package bridge below. It reads `manifest.json`, obtains each arm''s exact `run_manifest`, `execution_result`, and `result` paths. The bridge checks prompt/run/profile hashes and artifact confinement, validates the manifest paths, rejects unreferenced hyphen/underscore shadow results, and invokes the existing one-arm bridge with those exact paths. Do not manually construct a bridge command for an arm.')
     [void]$builder.AppendLine(('   `pwsh -NoProfile -File "' + $manifestBridgePath + '" -IterationDirectory "' + $IterationDirectory + '" -RequireComplete`'))
     [void]$builder.AppendLine('   The bridge''s one-arm operation is conceptually `-Run runPath -ExecutionResult executionPath -Result resultPath`, where all three values are the exact strings read from `manifest.json`. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any of them.')
     [void]$builder.AppendLine('2. Only if the package bridge succeeds, read each eval''s `eval-metadata.json` and reveal `expected_output` and `assertions` to the Grader. Follow `tools/skill-creator/agents/grader.md`; grade deterministically first, then use optional model judgement only where deterministic evidence cannot decide. Never infer tool or file behavior from model self-report without process evidence.')
@@ -1673,7 +1684,7 @@ function New-PackageReadme {
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine("# Eval package: $SkillName (iteration $IterationNumber)")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. `execution-profile.json` selects the user-chosen Eval Runner, runner-native model, and limits; the external Eval Orchestrator runs both configurations, grades them, and generates the report.')
+    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. `execution-profile.json` selects the user-chosen Eval Runner, runner-native model, and limits; the external Eval Orchestrator delegates every arm to a fresh harness-native Eval Worker, then grades and generates the report.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## What is here')
     [void]$builder.AppendLine()
@@ -1682,7 +1693,19 @@ function New-PackageReadme {
     }
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Each eval directory holds the grading key (`eval-metadata.json`), result stubs under `results/`, and two isolated run directories: `with_skill/` and `without_skill/`. A run directory holds `prompt.md`, a `run.json` contract, a `repo/` working tree materialized from the fixtures, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate skill. The grading key and results sit outside both run directories, so a worker that stays within its run directory is never handed them.')
-    [void]$builder.AppendLine('The package root also holds `execution-profile.json`, the package-local Eval Runner protocol under `tools/eval-runners/`, and raw `execution-result.json` paths beside the existing result stubs. `run.json` defines what one blind arm must execute; the profile defines with what runner/model/configuration; the selected runner defines how.')
+    [void]$builder.AppendLine('The package root also holds `execution-profile.json`, the package-local Eval Runner protocol and deterministic native-worker queue under `tools/eval-runners/`, and raw `execution-result.json` paths beside the existing result stubs. `run.json` defines what one blind arm must execute; the profile defines with what runner/model/configuration; the selected runner defines how its native worker is created.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Orchestration topology')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('```text')
+    [void]$builder.AppendLine('Eval Orchestrator')
+    [void]$builder.AppendLine('    |')
+    [void]$builder.AppendLine('    +-- Eval Worker -> one eval arm')
+    [void]$builder.AppendLine('    +-- Eval Worker -> one eval arm')
+    [void]$builder.AppendLine('    +-- Eval Worker -> one eval arm')
+    [void]$builder.AppendLine('    +-- ...')
+    [void]$builder.AppendLine('```')
+    [void]$builder.AppendLine('The Eval Orchestrator coordinates and collects; it never executes an eval arm itself. One arm equals one delegated worker and one model-backed eval execution. Independent workers run concurrently up to `execution-profile.json.concurrency`; harness capacity is authoritative, so a rejected delegation stays queued and is not an attempt.')
     [void]$builder.AppendLine('The package also carries the exact Anthropic skill-creator assets used after execution under `tools/skill-creator`: `tools/skill-creator/agents/grader.md`, `tools/skill-creator/agents/comparator.md`, `tools/skill-creator/agents/analyzer.md`, `tools/skill-creator/references/schemas.md`, `tools/skill-creator/scripts/aggregate_benchmark.py`, and `tools/skill-creator/eval-viewer/generate_review.py` plus `tools/skill-creator/eval-viewer/viewer.html`.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Isolation model')
@@ -1693,11 +1716,12 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## How to run')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Read `execution-profile.json`. If `runner` or `model` is missing, fail clearly instead of guessing. Resolve the selected package-local runner and run `describe`, then `preflight`, for every arm.')
-    [void]$builder.AppendLine('2. Invoke `execute` exactly once for each `run.json`, preserving its one JSON `execution-result.json` unchanged. The runner must provide a fresh process/session, isolated home/config, isolated CWD, baseline skill exclusion, prompt fidelity, model/configuration lock, and complete response capture, or return `incompatible`. Hard filesystem confinement is not one of these mandatory controls: when the runner proves it the run reports strict isolation, and when it does not the run reports pragmatic isolation.')
-    [void]$builder.AppendLine('3. After all arms complete or fail, run `tools/eval-runners/bridge-manifest-results.ps1 -IterationDirectory <package> -RequireComplete`. It reads the manifest-declared `run_manifest`, `execution_result`, and `result` paths for every arm and invokes the one-arm bridge with those exact paths. Only then read the grading key, grade with `tools/skill-creator/agents/grader.md`, and run `tools/generate-eval-report.ps1 -RequireComplete`.')
+    [void]$builder.AppendLine('1. Read `execution-profile.json`. If `runner` or `model` is missing, fail clearly instead of guessing. Resolve the selected package-local runner and run `describe`, then `preflight`, before any native worker is dispatched. Require the descriptor''s native delegation capability; do not use a parent sequential fallback.')
+    [void]$builder.AppendLine('2. Use the package-local orchestration helper to queue one worker per manifest arm. Delegate every arm to a fresh full-capability harness-native worker. Do not invoke the runner''s direct `execute` command from the parent or from the delegated worker, because it would add a second model execution. Each worker receives one arm only and no grading material or paired-arm data.')
+    [void]$builder.AppendLine('3. Maintain up to the requested concurrency. If the harness refuses a new worker because its own capacity is full, leave that arm queued and dispatch it when capacity is released; do not hardcode a runner-specific maximum and do not count the rejection as an attempt.')
+    [void]$builder.AppendLine('4. After all delegated workers complete or fail, run `tools/eval-runners/bridge-manifest-results.ps1 -IterationDirectory <package> -RequireComplete`. It reads the manifest-declared `run_manifest`, `execution_result`, and `result` paths for every arm and invokes the one-arm bridge with those exact paths. Only then read the grading key, grade with `tools/skill-creator/agents/grader.md`, and run `tools/generate-eval-report.ps1 -RequireComplete`.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It selects the package-local runner from the profile, invokes the common protocol once per blind arm, bridges raw evidence into the existing result shape, reveals grading material only after execution, and invokes Anthropic skill-creator''s compatible aggregator and static viewer through the package adapter. It never executes an eval prompt in its own context.')
+    [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It selects the package-local runner from the profile, delegates one native Eval Worker per blind arm, queues capacity rejections, bridges raw evidence into the existing result shape, reveals grading material only after execution, and invokes Anthropic skill-creator''s compatible aggregator and static viewer through the package adapter. It never executes an eval prompt in its own context.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A harness that cannot provide fresh, independent sessions with isolated working and config roots is incompatible with these evals. `-CollectResults` may inspect and report available package state, including missing or unrun arms, but it exits non-zero when the required completion gate is not satisfied. An incomplete or unrun package must not be presented as a successfully completed evaluation.')
     [void]$builder.AppendLine()

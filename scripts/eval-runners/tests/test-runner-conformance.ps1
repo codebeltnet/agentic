@@ -61,7 +61,6 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $with.Root 'repo\opencode.json'), '{"fixture_project_config":true}', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $without.Root 'repo\opencode.json'), '{"fixture_project_config":true}', [System.Text.UTF8Encoding]::new($false))
     $fakeCli = @'
-[CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArguments)
 $harness = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Path)
 $logPath = Join-Path (Get-Location).Path ("{0}-fake-cli-log.jsonl" -f $harness)
@@ -112,6 +111,25 @@ $record = [ordered]@{
     candidate_skill_staged = Test-Path -LiteralPath $candidateSkillPath -PathType Container
     ambient_copilot_instructions_visible = if ([string]::IsNullOrWhiteSpace($copilotHome)) { $false } else { Test-Path -LiteralPath (Join-Path $copilotHome 'copilot-instructions.md') -PathType Leaf }
     secret_env_vars_arg = @($arguments | Where-Object { $_ -like '--secret-env-vars=*' })
+}
+if ($harness -eq 'codex' -and $arguments -contains 'app-server' -and $arguments -contains 'generate-json-schema') {
+    $outArgument = @($arguments | Where-Object { $_ -like '--out=*' } | Select-Object -First 1)
+    if ($outArgument.Count -eq 0) { exit 2 }
+    $schemaDirectory = [IO.Path]::GetFullPath((Join-Path (Get-Location).Path ([string]$outArgument[0].Substring(6))))
+    New-Item -ItemType Directory -Path $schemaDirectory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $schemaDirectory 'ClientRequest.json'), '{"thread/start":"ThreadStartParams","turn/start":"TurnStartParams","cwd":true,"model":true,"ephemeral":true}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    exit 0
+}
+if ($harness -eq 'codex' -and $arguments -contains 'app-server' -and $arguments -contains '--help') {
+    [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    Write-Output 'generate-json-schema'
+    exit 0
+}
+if ($harness -eq 'codex' -and $arguments -contains 'features' -and $arguments -contains 'list') {
+    [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    Write-Output 'multi_agent stable true'
+    exit 0
 }
 if ($arguments -contains '--version') {
     $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-cline 9.3' } }
@@ -294,6 +312,9 @@ exit 2
         $runnerPath = Join-Path $runnerRoot "$runnerDir\runner.ps1"
         $description = Invoke-AdapterJson -RunnerPath $runnerPath -Command describe -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         [void](Assert-RunnerDescriptor -Descriptor $description)
+        Assert-True ($description.PSObject.Properties.Name -contains 'delegation') "$runnerName descriptor declares native delegation"
+        Assert-True (-not [bool]$description.delegation.nested_model_execution) "$runnerName descriptor forbids nested model execution"
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$description.delegation.mechanism)) "$runnerName descriptor records its native delegation mechanism"
         $expectedVersion = switch ($runnerName) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-cline 9.3' } }
         Assert-Equal $expectedVersion $description.harness.version "$runnerName exact describe version"
         $preflightWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -302,6 +323,12 @@ exit 2
         Assert-Equal 'compatible' $preflightWithout.status "$runnerName without_skill pragmatic preflight"
         Assert-Equal $expectedVersion $preflightWith.harness.version "$runnerName exact preflight version"
         Assert-Equal 'pragmatic' $preflightWith.isolation.level "$runnerName pragmatic preflight level"
+        if ($runnerName -eq 'cline') {
+            Assert-True ($preflightWith.delegation.status -ne 'supported') 'Cline preflight does not claim unavailable Agent Squad delegation'
+            Assert-True (([string]::Join(' ', @($preflightWith.warnings))) -match 'use_subagents' -and ([string]::Join(' ', @($preflightWith.warnings))) -match 'Agent Squad') 'Cline preflight rejects read-only subagents as a mutable-arm fallback'
+        } else {
+            Assert-Equal 'supported' $preflightWith.delegation.status "$runnerName native delegation preflight"
+        }
         if ($runnerName -eq 'copilot') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
             Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq '--allow-all-tools broad tool approval' }).Count -eq 1) 'Copilot preflight describes --allow-all-tools as broad tool approval'
@@ -836,6 +863,12 @@ try {
     Assert-True ($prepareText.Contains('bridge-manifest-results.ps1')) 'handoff preparation must use the deterministic package-level manifest bridge'
     Assert-True ($prepareText.Contains('runs.<arm>.run_manifest') -and $prepareText.Contains('runs.<arm>.execution_result') -and $prepareText.Contains('runs.<arm>.result')) 'handoff preparation must require every exact manifest arm path'
     Assert-True ($prepareText.Contains('Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')) 'handoff preparation must prohibit reconstructed paths'
+    Assert-True ($prepareText.Contains('DELEGATE EVERY eval arm to a fresh harness-native worker/subagent. The Eval Orchestrator MUST NOT execute an eval arm itself.')) 'handoff preparation must require delegated native workers and forbid parent execution'
+    Assert-True ($prepareText.Contains('One arm equals one delegated worker and one model-backed eval execution.')) 'handoff preparation must state the one-arm one-model invariant'
+    Assert-True ($prepareText.Contains('Require terminal evidence for the exact selected model, working directory, isolated home, and fresh session')) 'handoff preparation must require worker control evidence'
+    Assert-True ($prepareText.Contains('min(execution-profile.json.concurrency, remaining arms)')) 'handoff preparation must state requested concurrency fan-out'
+    Assert-True ($prepareText.Contains('rejected before the worker starts') -and $prepareText.Contains('record no eval attempt')) 'handoff preparation must queue capacity rejections without counting attempts'
+    Assert-True ($prepareText.Contains('orchestration.ps1')) 'handoff preparation must load the deterministic orchestration helper'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
     Assert-True ($manifestBridgeText.Contains('Get-ManifestRunRecords') -and $manifestBridgeText.Contains('$record.ResultPath')) 'package-level bridge must resolve exact manifest records'

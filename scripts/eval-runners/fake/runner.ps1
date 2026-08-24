@@ -49,6 +49,23 @@ $descriptor = [ordered]@{
         file_evidence = 'supported'
         cost_telemetry = 'unsupported'
         native_skill_activation_evidence = 'unsupported'
+        native_worker_delegation = 'supported'
+        delegated_worker_full_capability = 'supported'
+        delegated_worker_model_lock = 'supported'
+        delegated_worker_working_directory = 'supported'
+        delegated_worker_result_capture = 'supported'
+        delegated_worker_capacity_signal = 'supported'
+    }
+    delegation = [ordered]@{
+        mode = 'native_worker'
+        mechanism = 'deterministic fake native-worker fixture with one arm per worker'
+        worker_role = 'fake-eval-worker'
+        full_capability = 'supported'
+        model_lock = 'supported'
+        working_directory = 'supported'
+        result_capture = 'supported'
+        capacity = 'harness_authoritative'
+        nested_model_execution = $false
     }
     supported_telemetry = @('transcript_event_capture', 'tool_call_telemetry', 'command_evidence', 'file_evidence')
     configuration_profiles = @('isolated-default')

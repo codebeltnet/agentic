@@ -10,6 +10,7 @@ function Get-RunnerSchemaNames {
         Result = 'codebeltnet/agentic/eval-execution-result/1'
         PortableResult = 'codebeltnet/agentic/eval-result/2'
         Run = 'codebeltnet/agentic/eval-run/1'
+        OrchestrationPlan = 'codebeltnet/agentic/eval-orchestration-plan/1'
     }
 }
 
@@ -279,6 +280,58 @@ function Get-IsolationCapabilityAssessment {
     }
 }
 
+function Get-DelegationCapabilityAssessment {
+    param(
+        [Parameter(Mandatory = $true)][object]$Descriptor,
+        [System.Collections.IDictionary]$Capabilities
+    )
+
+    $required = @(
+        'native_worker_delegation',
+        'delegated_worker_full_capability',
+        'delegated_worker_model_lock',
+        'delegated_worker_working_directory',
+        'delegated_worker_result_capture',
+        'delegated_worker_capacity_signal'
+    )
+    $unproven = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in $required) {
+        $value = if ($null -ne $Capabilities -and $Capabilities.Contains($name)) { [string]$Capabilities[$name] } else { 'unavailable' }
+        if ($value -ne 'supported') { $unproven.Add($name) }
+    }
+
+    $delegation = Get-JsonProperty -Object $Descriptor -Name 'delegation' -Default $null
+    $mode = [string](Get-JsonProperty -Object $delegation -Name 'mode' -Default 'unsupported')
+    $nestedModelExecution = [bool](Get-JsonProperty -Object $delegation -Name 'nested_model_execution' -Default $true)
+    $mechanism = [string](Get-JsonProperty -Object $delegation -Name 'mechanism' -Default '')
+    $workerRole = [string](Get-JsonProperty -Object $delegation -Name 'worker_role' -Default '')
+    $modeIsNative = $mode -eq 'native_worker'
+    if (-not $modeIsNative) { $unproven.Add('delegation.mode') }
+    if ($nestedModelExecution) { $unproven.Add('delegation.nested_model_execution') }
+    $delegationFields = [ordered]@{
+        full_capability = 'delegated_worker_full_capability'
+        model_lock = 'delegated_worker_model_lock'
+        working_directory = 'delegated_worker_working_directory'
+        result_capture = 'delegated_worker_result_capture'
+        capacity = 'delegated_worker_capacity_signal'
+    }
+    foreach ($field in $delegationFields.Keys) {
+        $value = [string](Get-JsonProperty -Object $delegation -Name $field -Default 'unsupported')
+        $valid = if ($field -eq 'capacity') { $value -in @('supported', 'harness_authoritative') } else { $value -eq 'supported' }
+        if (-not $valid) { $unproven.Add("delegation.$field") }
+    }
+
+    return [pscustomobject]@{
+        MandatoryProven = $unproven.Count -eq 0
+        Mode = $mode
+        Mechanism = $mechanism
+        WorkerRole = $workerRole
+        NestedModelExecution = $nestedModelExecution
+        Unproven = @($unproven)
+        Required = @($required)
+    }
+}
+
 function Resolve-RunContract {
     param([Parameter(Mandatory = $true)][string]$RunPath)
 
@@ -422,7 +475,7 @@ function Assert-RunnerDescriptor {
     if ([string]$Descriptor.protocol_version -ne $schemas.Protocol) {
         throw "Runner descriptor protocol_version must be '$($schemas.Protocol)'."
     }
-    foreach ($field in @('name', 'version', 'platforms', 'harness', 'capabilities', 'configuration_profiles', 'tool_profiles')) {
+    foreach ($field in @('name', 'version', 'platforms', 'harness', 'capabilities', 'delegation', 'configuration_profiles', 'tool_profiles')) {
         if (-not (Test-JsonProperty -Object $Descriptor -Name $field)) {
             throw "Runner descriptor is missing '$field'."
         }
@@ -458,6 +511,37 @@ function Assert-RunnerDescriptor {
         }
     }
 
+    $delegationRequired = @(
+        'native_worker_delegation',
+        'delegated_worker_full_capability',
+        'delegated_worker_model_lock',
+        'delegated_worker_working_directory',
+        'delegated_worker_result_capture',
+        'delegated_worker_capacity_signal'
+    )
+    foreach ($name in $delegationRequired) {
+        if (-not (Test-JsonProperty -Object $Descriptor.capabilities -Name $name)) {
+            throw "Runner descriptor is missing required delegation capability '$name'."
+        }
+    }
+    $delegation = $Descriptor.delegation
+    foreach ($field in @('mode', 'mechanism', 'worker_role', 'full_capability', 'model_lock', 'working_directory', 'result_capture', 'capacity', 'nested_model_execution')) {
+        if (-not (Test-JsonProperty -Object $delegation -Name $field)) {
+            throw "Runner descriptor delegation is missing '$field'."
+        }
+    }
+    if ([string]$delegation.mode -notin @('native_worker', 'conditional', 'unsupported')) {
+        throw "Runner delegation mode '$($delegation.mode)' is unsupported."
+    }
+    foreach ($field in @('full_capability', 'model_lock', 'working_directory', 'result_capture', 'capacity')) {
+        if ([string]$delegation.$field -notin @('supported', 'conditional', 'unsupported', 'harness_authoritative')) {
+            throw "Runner delegation '$field' must be supported, conditional, unsupported, or harness_authoritative."
+        }
+    }
+    if ([bool]$delegation.nested_model_execution) {
+        throw 'Runner delegation must not describe nested model execution.'
+    }
+
     return $true
 }
 
@@ -487,6 +571,7 @@ function New-PreflightDocument {
     $schemas = Get-RunnerSchemaNames
     $capabilitiesForAssessment = if ($null -eq $ResolvedCapabilities) { [ordered]@{} } else { $ResolvedCapabilities }
     $assessment = Get-IsolationCapabilityAssessment -Capabilities $capabilitiesForAssessment
+    $delegationAssessment = Get-DelegationCapabilityAssessment -Descriptor $Descriptor -Capabilities $capabilitiesForAssessment
     $effectiveCompatible = $Compatible -and $assessment.MandatoryProven
     $unprovenControls = [string[]]$assessment.Unproven
     if (-not $effectiveCompatible) { $unprovenControls = [string[]](@($assessment.Unproven) + @('preflight')) }
@@ -506,6 +591,15 @@ function New-PreflightDocument {
         }
         checks = @($Checks)
         resolved_capabilities = if ($null -eq $ResolvedCapabilities) { [ordered]@{} } else { $ResolvedCapabilities }
+        delegation = [ordered]@{
+            status = if ($delegationAssessment.MandatoryProven) { 'supported' } elseif ($delegationAssessment.Mode -eq 'conditional') { 'conditional' } else { 'unsupported' }
+            mode = $delegationAssessment.Mode
+            mechanism = $delegationAssessment.Mechanism
+            worker_role = $delegationAssessment.WorkerRole
+            nested_model_execution = $delegationAssessment.NestedModelExecution
+            required_controls = @($delegationAssessment.Required)
+            unproven_controls = [string[]]$delegationAssessment.Unproven
+        }
         isolation = [ordered]@{
             level = if ($effectiveCompatible) { $assessment.Level } else { 'unsupported' }
             status = if ($effectiveCompatible) { 'verified' } else { 'unverified' }
@@ -516,6 +610,45 @@ function New-PreflightDocument {
         warnings = @($Warnings)
         reasons = @($Reasons)
     }
+}
+
+function Assert-NativeWorkerDelegation {
+    param(
+        [Parameter(Mandatory = $true)][object]$Descriptor,
+        [Parameter(Mandatory = $true)][object]$Preflight
+    )
+
+    $delegation = Get-JsonProperty -Object $Descriptor -Name 'delegation' -Default $null
+    $mode = [string](Get-JsonProperty -Object $delegation -Name 'mode' -Default 'unsupported')
+    if ($mode -ne 'native_worker') {
+        throw "Runner '$($Descriptor.name)' cannot satisfy the mandatory native Eval Worker contract: delegation mode is '$mode'."
+    }
+    if ([bool](Get-JsonProperty -Object $delegation -Name 'nested_model_execution' -Default $true)) {
+        throw "Runner '$($Descriptor.name)' describes nested model execution; one eval arm must have exactly one model-backed worker."
+    }
+    if ([string](Get-JsonProperty -Object $Preflight -Name 'status' -Default 'incompatible') -ne 'compatible') {
+        throw "Runner '$($Descriptor.name)' preflight is incompatible; the orchestrator must not execute an arm in the parent context."
+    }
+    $delegationPreflight = Get-JsonProperty -Object $Preflight -Name 'delegation' -Default $null
+    if ([string](Get-JsonProperty -Object $delegationPreflight -Name 'status' -Default 'unsupported') -ne 'supported') {
+        $unproven = @((Get-JsonProperty -Object $delegationPreflight -Name 'unproven_controls' -Default @()))
+        throw "Runner '$($Descriptor.name)' native worker delegation is not proven during preflight: $([string]::Join(', ', $unproven))."
+    }
+    $capabilities = Get-JsonProperty -Object $Preflight -Name 'resolved_capabilities' -Default $null
+    $required = @(
+        'native_worker_delegation',
+        'delegated_worker_full_capability',
+        'delegated_worker_model_lock',
+        'delegated_worker_working_directory',
+        'delegated_worker_result_capture',
+        'delegated_worker_capacity_signal'
+    )
+    foreach ($name in $required) {
+        if ([string](Get-JsonProperty -Object $capabilities -Name $name -Default 'unsupported') -ne 'supported') {
+            throw "Runner '$($Descriptor.name)' native worker capability '$name' is not supported; the orchestrator must not fall back to parent execution."
+        }
+    }
+    return $true
 }
 
 function New-UnavailableMetric {

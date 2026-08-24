@@ -46,6 +46,23 @@ $descriptor = [ordered]@{
         cost_telemetry = 'conditional'
         credential_child_filtering = 'supported'
         native_skill_activation_evidence = 'unsupported'
+        native_worker_delegation = 'supported'
+        delegated_worker_full_capability = 'supported'
+        delegated_worker_model_lock = 'supported'
+        delegated_worker_working_directory = 'supported'
+        delegated_worker_result_capture = 'supported'
+        delegated_worker_capacity_signal = 'supported'
+    }
+    delegation = [ordered]@{
+        mode = 'native_worker'
+        mechanism = 'Codex app-server native child session via thread/start and turn/start with per-worker cwd, model, and ephemeral context'
+        worker_role = 'native-codex-child-session'
+        full_capability = 'supported'
+        model_lock = 'supported'
+        working_directory = 'supported'
+        result_capture = 'supported'
+        capacity = 'harness_authoritative'
+        nested_model_execution = $false
     }
     supported_telemetry = @('transcript_event_capture', 'token_telemetry', 'cache_token_telemetry', 'tool_call_telemetry', 'command_evidence', 'file_evidence', 'cost_telemetry')
     configuration_profiles = @('isolated-default')
@@ -116,6 +133,46 @@ function Get-CodexHelpResult {
     return Invoke-CodexCli -CommandInfo $CommandInfo -Arguments $Arguments -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
 }
 
+function Get-CodexNativeWorkerProbe {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs
+    )
+
+    $environment = New-RunnerEnvironment -Run $Inputs.Run
+    $help = Invoke-CodexCli -CommandInfo $CommandInfo -Arguments @('app-server', '--help') -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
+    if ($help.TimedOut -or $help.ExitCode -ne 0) {
+        return [pscustomobject]@{ Available = $false; Detail = "codex app-server --help failed with exit status $($help.ExitCode)." }
+    }
+    $helpText = [string]::Join("`n", @($help.Stdout, $help.Stderr))
+    if ($helpText -notmatch 'generate-json-schema') {
+        return [pscustomobject]@{ Available = $false; Detail = 'The installed Codex CLI does not advertise app-server schema generation.' }
+    }
+    $features = Invoke-CodexCli -CommandInfo $CommandInfo -Arguments @('features', 'list') -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
+    if ($features.TimedOut -or $features.ExitCode -ne 0 -or ([string]::Join("`n", @($features.Stdout, $features.Stderr)) -notmatch '(?im)multi_agent\s+stable\s+true')) {
+        return [pscustomobject]@{ Available = $false; Detail = 'The installed Codex CLI did not report the stable multi_agent feature required for native child workers.' }
+    }
+
+    $schemaRelativeDirectory = Join-Path ([System.IO.Path]::GetRelativePath($Inputs.Run.WorkingDirectoryPath, $Inputs.Run.HomeDirectoryPath)) 'evidence/codex-app-server-schema'
+    $schemaDirectory = [System.IO.Path]::GetFullPath((Join-Path $Inputs.Run.WorkingDirectoryPath $schemaRelativeDirectory))
+    New-Item -ItemType Directory -Path $schemaDirectory -Force | Out-Null
+    $schemaProcess = Invoke-CodexCli -CommandInfo $CommandInfo -Arguments @('app-server', 'generate-json-schema', "--out=$schemaRelativeDirectory") -Inputs $Inputs -Environment $environment -TimeoutSeconds 60
+    if ($schemaProcess.TimedOut -or $schemaProcess.ExitCode -ne 0) {
+        return [pscustomobject]@{ Available = $false; Detail = "Codex app-server schema generation failed with exit status $($schemaProcess.ExitCode): $([string]::Join(' ', @($schemaProcess.Stdout, $schemaProcess.Stderr)))." }
+    }
+    $schemaFiles = @(Get-ChildItem -LiteralPath $schemaDirectory -Recurse -File -Filter '*.json' -ErrorAction SilentlyContinue)
+    $schemaText = [string]::Join("`n", @($schemaFiles | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, [System.Text.UTF8Encoding]::new($false)) }))
+    foreach ($needle in @('thread/start', 'turn/start', 'ThreadStartParams', 'TurnStartParams', '"cwd"', '"model"', '"ephemeral"')) {
+        if ($schemaText -notmatch [regex]::Escape($needle)) {
+            return [pscustomobject]@{ Available = $false; Detail = "Codex app-server schema did not prove native child-session field '$needle'." }
+        }
+    }
+    return [pscustomobject]@{
+        Available = $true
+        Detail = 'Codex multi_agent is stable and app-server schema proves thread/start and turn/start with cwd, model, and ephemeral child-session controls.'
+    }
+}
+
 function Resolve-SandboxCommand {
     param([Parameter(Mandatory = $true)][string]$Name)
 
@@ -159,7 +216,8 @@ function New-CodexCliArguments {
 function Get-CodexCapabilityMap {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
-        [bool]$HardFilesystemConfinement = $false
+        [bool]$HardFilesystemConfinement = $false,
+        [bool]$NativeWorkerAvailable = $true
     )
 
     $capabilities = [ordered]@{}
@@ -168,6 +226,9 @@ function Get-CodexCapabilityMap {
     }
     $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
     $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
+    foreach ($name in @('native_worker_delegation', 'delegated_worker_full_capability', 'delegated_worker_model_lock', 'delegated_worker_working_directory', 'delegated_worker_result_capture', 'delegated_worker_capacity_signal')) {
+        $capabilities[$name] = if ($NativeWorkerAvailable) { 'supported' } else { 'unsupported' }
+    }
     return $capabilities
 }
 
@@ -188,6 +249,7 @@ function Get-CodexPreflight {
     }
     $sandboxInfo = if ([string]::IsNullOrWhiteSpace([string]$sandboxName)) { $null } else { Resolve-SandboxCommand -Name $sandboxName }
     $versionObservation = $null
+    $nativeWorkerObservation = $null
 
     if ($profile.Runner -ne 'codex') {
         $reasons.Add("execution-profile.json selects '$($profile.Runner)' rather than codex.")
@@ -248,6 +310,13 @@ function Get-CodexPreflight {
                     $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Codex accepts the constructed noninteractive invocation: --ask-for-approval never, exec, --sandbox workspace-write, ephemeral JSON output, and isolated configuration controls.'))
                 }
             }
+            $nativeWorkerObservation = Get-CodexNativeWorkerProbe -CommandInfo $commandInfo -Inputs $Inputs
+            if ($nativeWorkerObservation.Available) {
+                $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail $nativeWorkerObservation.Detail))
+            } else {
+                $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail $nativeWorkerObservation.Detail))
+                $reasons.Add($nativeWorkerObservation.Detail)
+            }
         } catch {
             $reasons.Add("Could not inspect Codex CLI capabilities: $($_.Exception.Message)")
         }
@@ -278,13 +347,13 @@ function Get-CodexPreflight {
     $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only the selected provider API-key variable is passed to Codex; auth files are never copied into the worker HOME.'))
 
     $hardConfinement = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
-    $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement
+    $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement -NativeWorkerAvailable ($null -ne $nativeWorkerObservation -and $nativeWorkerObservation.Available)
     $harnessVersion = if ($null -eq $versionObservation) { 'unavailable' } else { [string]$versionObservation.Version }
     $descriptorCopy = [ordered]@{}
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('native app-server thread/start + turn/start child session', '--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardConfinement) { $mechanisms.Add("external $sandboxName filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }

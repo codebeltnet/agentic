@@ -12,6 +12,7 @@
     "platforms",
     "harness",
     "capabilities",
+    "delegation",
     "supported_telemetry",
     "configuration_profiles",
     "tool_profiles"
@@ -33,6 +34,32 @@
     "capabilities": {
       "type": "object",
       "additionalProperties": { "enum": ["supported", "conditional", "unsupported"] }
+    },
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "mechanism",
+        "worker_role",
+        "full_capability",
+        "model_lock",
+        "working_directory",
+        "result_capture",
+        "capacity",
+        "nested_model_execution"
+      ],
+      "properties": {
+        "mode": { "enum": ["native_worker", "conditional", "unsupported"] },
+        "mechanism": { "type": "string", "minLength": 1 },
+        "worker_role": { "type": "string", "minLength": 1 },
+        "full_capability": { "enum": ["supported", "conditional", "unsupported"] },
+        "model_lock": { "enum": ["supported", "conditional", "unsupported"] },
+        "working_directory": { "enum": ["supported", "conditional", "unsupported"] },
+        "result_capture": { "enum": ["supported", "conditional", "unsupported"] },
+        "capacity": { "enum": ["supported", "conditional", "unsupported", "harness_authoritative"] },
+        "nested_model_execution": { "const": false }
+      }
     },
     "supported_telemetry": { "type": "array", "items": { "type": "string" } },
     "configuration_profiles": { "type": "array", "items": { "type": "string" } },

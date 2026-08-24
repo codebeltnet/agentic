@@ -1,5 +1,65 @@
 # Eval Runner protocol
 
+## Native worker orchestration
+
+The external handoff uses this topology:
+
+```text
+Eval Orchestrator
+    |
+    +-- Eval Worker -> one eval arm
+    +-- Eval Worker -> one eval arm
+    +-- Eval Worker -> one eval arm
+    +-- ...
+```
+
+The Eval Orchestrator coordinates the manifest queue, native child creation,
+terminal evidence, exact manifest destinations, and the phase boundary. It
+does not execute an eval arm itself. One arm equals one fresh delegated
+harness-native worker and one model-backed execution. The delegated worker
+executes the prepared prompt directly; it must not call the runner's
+model-spawning `execute` command or start another model session.
+
+`orchestration.ps1` is the deterministic queue/state helper copied into every
+package. It creates one worker envelope per exact manifest arm, keeps unrelated
+arms dependency-free, exposes at most the requested
+`execution-profile.json.concurrency` active slots, and leaves a capacity
+rejection pending without incrementing the eval attempt count. It contains no
+harness-specific concurrency ceiling. `Assert-NativeWorkerDelegation` is the
+fail-closed preflight gate: a conditional or unavailable native mechanism
+cannot fall back to parent execution.
+
+The descriptor's `delegation` object records the native mechanism, worker role,
+full-capability and model-lock guarantees, working-directory/result capture,
+harness-authoritative capacity, and the invariant
+`nested_model_execution = false`. The direct `execute` process surface remains
+for compatibility and deterministic conformance; the external orchestrator
+must use only `describe`, `preflight`, and the harness-native delegation
+surface for the actual eval arms. It must reject a worker whose terminal
+evidence does not prove the selected model, exact run working directory,
+isolated home, and fresh session; a native surface that cannot prove those
+controls is incompatible rather than a reason to fall back to the parent.
+
+Native delegation mechanisms:
+
+- GitHub Copilot: the CLI's native `task` tool with an explicit
+  full-capability `general-purpose` child agent for each arm. Fleet/subagent
+  lifecycle is harness-owned; Codebelt supplies the already-known one-arm
+  decomposition and observes child completion/model evidence.
+- Codex: the installed CLI's native app-server child-session surface,
+  `thread/start` followed by `turn/start`, with the arm's `cwd`, selected
+  model, and ephemeral/fresh session settings. Do not wrap a native Codex
+  child in another `codex exec` invocation.
+- OpenCode: the native Task tool with the full-capability built-in `General`
+  subagent. `Explore`/`Scout` read-only agents are not valid for a mutable
+  eval arm.
+- Cline: a full-capability Cline SDK Agent Squad
+  `start_subagent(preset: "anvil")` child session backed by
+  `ClineCore.create`. The plugin's default `phantom` preset and Cline's
+  documented `use_subagents` research feature are read-only and are rejected
+  for mutable evals. The descriptor remains conditional until that
+  plugin/SDK mechanism is installed and preflight can prove it.
+
 This directory contains the package-local implementation of the v0.9.1 Eval
 Runner protocol. It is copied into prepared packages so the external Eval
 Orchestrator can use the same runner implementation that was validated with the
@@ -60,6 +120,10 @@ the model still appears in the current Copilot catalog before selecting it.
 Cross-runner and cross-model numbers are never blended into one score; a paired
 `with_skill` versus `without_skill` comparison is only meaningful within one
 identical runner, model, and configuration stratum.
+
+The following CLI details describe the compatibility `execute` transport only;
+they are not a second model layer for native worker orchestration. The native
+worker mechanisms above are authoritative for the external handoff.
 
 GitHub Copilot uses `copilot -C <working-directory> --model <model>
 --output-format json --allow-all-tools --no-ask-user --disable-builtin-mcps

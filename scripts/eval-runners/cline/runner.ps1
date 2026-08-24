@@ -47,6 +47,23 @@ $descriptor = [ordered]@{
         cost_telemetry = 'conditional'
         credential_child_filtering = 'conditional'
         native_skill_activation_evidence = 'unsupported'
+        native_worker_delegation = 'conditional'
+        delegated_worker_full_capability = 'conditional'
+        delegated_worker_model_lock = 'conditional'
+        delegated_worker_working_directory = 'conditional'
+        delegated_worker_result_capture = 'conditional'
+        delegated_worker_capacity_signal = 'conditional'
+    }
+    delegation = [ordered]@{
+        mode = 'conditional'
+        mechanism = 'Cline SDK Agent Squad start_subagent(preset: anvil) child session backed by ClineCore.create; the read-only use_subagents research feature is not acceptable'
+        worker_role = 'agents-squad-child-agent'
+        full_capability = 'conditional'
+        model_lock = 'conditional'
+        working_directory = 'conditional'
+        result_capture = 'conditional'
+        capacity = 'harness_authoritative'
+        nested_model_execution = $false
     }
     supported_telemetry = @('transcript_event_capture', 'token_telemetry', 'cache_token_telemetry', 'tool_call_telemetry', 'command_evidence', 'file_evidence', 'cost_telemetry')
     configuration_profiles = @('isolated-default')
@@ -197,10 +214,69 @@ function New-ClineCliArguments {
     return @($arguments)
 }
 
+function Get-ClineAgentsSquadCapability {
+    $configuredPath = [Environment]::GetEnvironmentVariable('CLINE_AGENTS_SQUAD_PLUGIN')
+    if ([string]::IsNullOrWhiteSpace($configuredPath)) {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = 'No CLINE_AGENTS_SQUAD_PLUGIN path is configured; the read-only use_subagents feature cannot execute a mutable eval arm.'
+        }
+    }
+    try {
+        $resolvedPath = [System.IO.Path]::GetFullPath($configuredPath)
+        if (-not (Test-Path -LiteralPath $resolvedPath -PathType Container)) {
+            return [pscustomobject]@{
+                Available = $false
+                Detail = "Configured Cline Agent Squad path '$resolvedPath' is not an existing directory."
+            }
+        }
+        $packageJson = Join-Path $resolvedPath 'package.json'
+        if (-not (Test-Path -LiteralPath $packageJson -PathType Leaf)) {
+            return [pscustomobject]@{
+                Available = $false
+                Detail = "Configured Cline Agent Squad path '$resolvedPath' has no package.json marker."
+            }
+        }
+        $package = Read-RunnerJson -Path $packageJson
+        $pluginEntries = @((Get-JsonProperty -Object (Get-JsonProperty -Object $package -Name 'cline' -Default $null) -Name 'plugins' -Default @()))
+        $runtimeEntryProven = $false
+        foreach ($pluginEntry in $pluginEntries) {
+            $capabilities = @((Get-JsonProperty -Object $pluginEntry -Name 'capabilities' -Default @()) | ForEach-Object { [string]$_ })
+            $entryPaths = @((Get-JsonProperty -Object $pluginEntry -Name 'paths' -Default @()))
+            if ($capabilities -contains 'hooks' -and $capabilities -contains 'tools' -and $entryPaths.Count -gt 0) {
+                foreach ($entryPath in $entryPaths) {
+                    $candidateEntry = [System.IO.Path]::GetFullPath((Join-Path $resolvedPath ([string]$entryPath)))
+                    if (Test-PathInside -BasePath $resolvedPath -CandidatePath $candidateEntry -and (Test-Path -LiteralPath $candidateEntry -PathType Leaf)) {
+                        $runtimeEntryProven = $true
+                        break
+                    }
+                }
+            }
+            if ($runtimeEntryProven) { break }
+        }
+        if (-not $runtimeEntryProven) {
+            return [pscustomobject]@{
+                Available = $false
+                Detail = "Configured Cline Agent Squad path '$resolvedPath' does not expose a cline plugin entry with hooks/tools and an existing entry file."
+            }
+        }
+        return [pscustomobject]@{
+            Available = $true
+            Detail = "Cline Agent Squad plugin manifest and runtime entry are available at '$resolvedPath'; the worker must use start_subagent with the full-capability anvil preset, backed by ClineCore.create with explicit cwd, model, tools, and result polling."
+        }
+    } catch {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = "Cline Agent Squad plugin path could not be resolved: $($_.Exception.Message)"
+        }
+    }
+}
+
 function Get-ClineCapabilityMap {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
-        [bool]$HardFilesystemConfinement = $false
+        [bool]$HardFilesystemConfinement = $false,
+        [bool]$NativeWorkerAvailable = $false
     )
 
     $capabilities = [ordered]@{}
@@ -209,6 +285,9 @@ function Get-ClineCapabilityMap {
     }
     $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
     $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
+    foreach ($name in @('native_worker_delegation', 'delegated_worker_full_capability', 'delegated_worker_model_lock', 'delegated_worker_working_directory', 'delegated_worker_result_capture', 'delegated_worker_capacity_signal')) {
+        $capabilities[$name] = if ($NativeWorkerAvailable) { 'supported' } else { 'unsupported' }
+    }
     return $capabilities
 }
 
@@ -224,6 +303,7 @@ function Get-ClinePreflight {
     $commandInfo = Resolve-ExternalCommand -Name 'cline'
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-ExternalCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-ExternalCommand -Name 'sandbox-exec' } else { $null }
     $versionObservation = $null
+    $agentsSquad = Get-ClineAgentsSquadCapability
 
     if ($profile.Runner -ne 'cline') {
         $reasons.Add("execution-profile.json selects '$($profile.Runner)' rather than cline.")
@@ -241,6 +321,13 @@ function Get-ClinePreflight {
     }
     if ($profile.ConfigurationProfile -ne 'isolated-default') { $reasons.Add("configuration_profile '$($profile.ConfigurationProfile)' is unsupported by cline.") }
     if ($profile.ToolProfile -ne 'default') { $reasons.Add("tool_profile '$($profile.ToolProfile)' is unsupported by cline.") }
+
+    if ($agentsSquad.Available) {
+        $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail $agentsSquad.Detail))
+    } else {
+        $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail $agentsSquad.Detail))
+        $warnings.Add('Cline native worker delegation is unavailable. The external orchestrator must not use the read-only use_subagents feature or the direct CLI execute transport as a fallback; install the full-capability Agent Squad plugin and set CLINE_AGENTS_SQUAD_PLUGIN.')
+    }
 
     $environmentData = New-ClineEnvironment -Inputs $Inputs
     if ($null -eq $commandInfo) {
@@ -309,7 +396,7 @@ function Get-ClinePreflight {
     $warnings.Add('Cline does not expose a supported child-tool environment filter in this CLI contract; the runner removes unrelated inherited variables but cannot independently prove that the selected provider credential is hidden from every Cline-launched tool.')
 
     $hardConfinement = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
-    $capabilities = Get-ClineCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement
+    $capabilities = Get-ClineCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement -NativeWorkerAvailable $agentsSquad.Available
     $harnessVersion = if ($null -eq $versionObservation) { 'unavailable' } else { [string]$versionObservation.Version }
     $descriptorCopy = [ordered]@{}
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
