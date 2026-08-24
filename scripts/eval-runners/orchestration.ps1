@@ -89,16 +89,19 @@ function New-EvalOrchestrationPlan {
     }
 
     $schemas = Get-RunnerSchemaNames
+    $parallelDispatchRequired = @($arms).Count -gt 1 -and $requestedConcurrency -gt 1
     return [ordered]@{
         schema = $schemas.OrchestrationPlan
         protocol_version = $schemas.Protocol
         runner = $runner
         model = $model
         requested_concurrency = $requestedConcurrency
+        parallel_dispatch_required = $parallelDispatchRequired
+        minimum_parallel_workers = if ($parallelDispatchRequired) { 2 } else { 1 }
         native_worker_required = $true
         parent_executes_arms = $false
         nested_model_execution = $false
-        dispatch_policy = 'one fresh harness-native worker per arm; independent workers may run concurrently up to requested_concurrency'
+        dispatch_policy = 'one fresh harness-native worker per arm; independent workers must run concurrently up to requested_concurrency when capacity permits'
         capacity_policy = 'harness_authoritative; a rejected delegation that did not start remains queued and is not an eval attempt'
         arms = $arms.ToArray()
     }
@@ -124,10 +127,13 @@ function New-OrchestrationState {
         schema = 'codebeltnet/agentic/eval-orchestration-state/1'
         plan_schema = [string]$Plan.schema
         requested_concurrency = [int]$Plan.requested_concurrency
+        parallel_dispatch_required = [bool](Get-JsonProperty -Object $Plan -Name 'parallel_dispatch_required' -Default $false)
+        minimum_parallel_workers = [int](Get-JsonProperty -Object $Plan -Name 'minimum_parallel_workers' -Default 1)
         pending_worker_ids = @($pending)
         active = [ordered]@{}
         completed = [ordered]@{}
         delegation_rejections = [ordered]@{}
+        capacity_limit_reported = $false
         eval_attempts = [ordered]@{}
         max_observed_active = 0
     }
@@ -215,7 +221,8 @@ function Register-DelegationRejected {
     param(
         [Parameter(Mandatory = $true)][object]$State,
         [Parameter(Mandatory = $true)][string]$WorkerId,
-        [Parameter(Mandatory = $true)][string]$Reason
+        [Parameter(Mandatory = $true)][string]$Reason,
+        [switch]$CapacityLimited
     )
 
     $pending = @($State.pending_worker_ids)
@@ -228,9 +235,44 @@ function Register-DelegationRejected {
         count = $count + 1
         last_reason = $Reason
         last_rejected_utc = [DateTime]::UtcNow.ToString('o')
+        capacity_limited = [bool]$CapacityLimited
         eval_attempt_started = $false
     }
+    if ($CapacityLimited) {
+        $State.capacity_limit_reported = $true
+    }
     return $true
+}
+
+function Assert-OrchestrationConcurrency {
+    <#
+      The queue exposes concurrent slots; this completion gate proves that
+      the external orchestrator used them. A serial run is valid only when the
+      harness explicitly rejected additional workers for its own capacity.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Plan,
+        [Parameter(Mandatory = $true)][object]$State
+    )
+
+    $requestedConcurrency = [int](Get-JsonProperty -Object $Plan -Name 'requested_concurrency' -Default 0)
+    $armCount = @((Get-JsonProperty -Object $Plan -Name 'arms' -Default @())).Count
+    $defaultRequired = if ($armCount -gt 1 -and $requestedConcurrency -gt 1) { 2 } else { 1 }
+    $required = [int](Get-JsonProperty -Object $Plan -Name 'minimum_parallel_workers' -Default $defaultRequired)
+    $maxObserved = [int](Get-JsonProperty -Object $State -Name 'max_observed_active' -Default 0)
+    $capacityReported = [bool](Get-JsonProperty -Object $State -Name 'capacity_limit_reported' -Default $false)
+
+    if ($required -gt 1 -and $maxObserved -lt $required -and -not $capacityReported) {
+        throw "Native worker orchestration was serial: max_observed_active=$maxObserved, required_parallel_workers=$required, requested_concurrency=$requestedConcurrency. A serial dispatch is incompatible unless the harness records an explicit capacity rejection."
+    }
+
+    return [ordered]@{
+        status = if ($maxObserved -ge $required) { 'verified' } else { 'capacity_limited' }
+        requested_concurrency = $requestedConcurrency
+        required_parallel_workers = $required
+        max_observed_active = $maxObserved
+        capacity_limit_reported = $capacityReported
+    }
 }
 
 function Register-WorkerTerminal {
@@ -350,6 +392,17 @@ function Assert-OrchestrationPlanContract {
     }
     if (-not [bool]$Plan.native_worker_required -or [bool]$Plan.parent_executes_arms -or [bool]$Plan.nested_model_execution) {
         throw 'Orchestration plan must require native workers and forbid parent or nested model execution.'
+    }
+    $armCount = @($Plan.arms).Count
+    $requestedConcurrency = [int]$Plan.requested_concurrency
+    $expectedParallel = $armCount -gt 1 -and $requestedConcurrency -gt 1
+    if ([bool](Get-JsonProperty -Object $Plan -Name 'parallel_dispatch_required' -Default $false) -ne $expectedParallel) {
+        throw 'Orchestration plan parallel_dispatch_required does not match its independent arm count and requested concurrency.'
+    }
+    $minimumParallelWorkers = [int](Get-JsonProperty -Object $Plan -Name 'minimum_parallel_workers' -Default 1)
+    $expectedMinimumParallelWorkers = if ($expectedParallel) { 2 } else { 1 }
+    if ($minimumParallelWorkers -ne $expectedMinimumParallelWorkers) {
+        throw 'Orchestration plan minimum_parallel_workers must require two workers whenever independent concurrent dispatch is requested.'
     }
     $workerIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($arm in @($Plan.arms)) {

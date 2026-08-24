@@ -105,7 +105,7 @@ function Get-CodexAuthSource {
     }
     $authPath = Join-Path $codexHome 'auth.json'
     if (Test-Path -LiteralPath $authPath -PathType Leaf) {
-        return [pscustomobject]@{ Kind = 'file_unsupported'; Name = 'auth.json'; Path = (Resolve-Path -LiteralPath $authPath).Path }
+        return [pscustomobject]@{ Kind = 'subscription_file'; Name = 'auth.json'; Path = (Resolve-Path -LiteralPath $authPath).Path }
     }
 
     return [pscustomobject]@{ Kind = 'missing'; Name = $null; Path = $null }
@@ -123,6 +123,263 @@ function Invoke-CodexCli {
 
     $allArguments = @($CommandInfo.Prefix) + @($Arguments)
     return Invoke-RunnerProcess -FileName $CommandInfo.FileName -ArgumentList $allArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
+}
+
+function Invoke-CodexAppServer {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][object]$Auth,
+        [int]$TimeoutSeconds = 900
+    )
+
+    if ($Auth.Kind -ne 'subscription_file') {
+        throw 'Codex app-server subscription transport requires auth.json authentication.'
+    }
+
+    $start = [DateTime]::UtcNow
+    $deadline = $start.AddSeconds($TimeoutSeconds)
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $CommandInfo.FileName
+    $psi.WorkingDirectory = $Inputs.Run.WorkingDirectoryPath
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    foreach ($argument in @($CommandInfo.Prefix) + @('app-server', '--stdio', '-c', 'shell_environment_policy.inherit=none')) { [void]$psi.ArgumentList.Add([string]$argument) }
+    $parentEnvironment = New-RunnerEnvironment -Run $Inputs.Run -Additional @{ CODEX_HOME = (Split-Path -Parent $Auth.Path) }
+    $psi.Environment.Clear()
+    foreach ($name in @($parentEnvironment.Keys)) { $psi.Environment[$name] = [string]$parentEnvironment[$name] }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $psi
+    $writer = $null
+    $reader = $null
+    $stderrTask = $null
+    $events = [System.Collections.Generic.List[string]]::new()
+    $normalized = [System.Collections.Generic.List[string]]::new()
+    $threadId = $null
+    $turnId = $null
+    $finalText = $null
+    $latestUsage = $null
+    $timedOut = $false
+    $transportFailure = $null
+    $turnCompleted = $false
+    $stderr = ''
+    $actualExitCode = $null
+    $processStarted = $false
+
+    try {
+        if (-not $process.Start()) { throw 'Could not start Codex app-server.' }
+        $processStarted = $true
+        $writer = $process.StandardInput
+        $reader = $process.StandardOutput
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+
+        $writeMessage = {
+            param([Parameter(Mandatory = $true)][object]$Value)
+            $writer.WriteLine(($Value | ConvertTo-Json -Depth 50 -Compress))
+            $writer.Flush()
+        }
+        $readMessage = {
+            $remaining = $deadline - [DateTime]::UtcNow
+            if ($remaining.TotalMilliseconds -le 0) { throw [TimeoutException]::new('Codex app-server timed out.') }
+            $readTask = $reader.ReadLineAsync()
+            $waitMilliseconds = [int][Math]::Min([int]::MaxValue, [Math]::Ceiling($remaining.TotalMilliseconds))
+            if (-not $readTask.Wait($waitMilliseconds)) { throw [TimeoutException]::new('Codex app-server timed out.') }
+            $line = $readTask.GetAwaiter().GetResult()
+            if ($null -eq $line) { throw [EndOfStreamException]::new('Codex app-server closed stdout before turn completion.') }
+            $events.Add($line)
+            try { return ($line | ConvertFrom-Json -Depth 50) } catch { throw [FormatException]::new("Codex app-server emitted malformed JSON: $($_.Exception.Message)") }
+        }
+        $waitForResponse = {
+            param([Parameter(Mandatory = $true)][int]$ExpectedId, [Parameter(Mandatory = $true)][string]$Operation)
+            while ($true) {
+                $message = & $readMessage
+                $messageId = Get-JsonProperty -Object $message -Name 'id' -Default $null
+                $method = [string](Get-JsonProperty -Object $message -Name 'method' -Default '')
+                if (-not [string]::IsNullOrWhiteSpace($method) -and $null -ne $messageId) {
+                    throw "Codex app-server requested unsupported interactive method '$method'."
+                }
+                if ($null -eq $messageId -or [int]$messageId -ne $ExpectedId) { continue }
+                $error = Get-JsonProperty -Object $message -Name 'error' -Default $null
+                if ($null -ne $error) {
+                    $errorMessage = [string](Get-JsonProperty -Object $error -Name 'message' -Default ($error | ConvertTo-Json -Depth 20 -Compress))
+                    throw "Codex app-server $Operation failed: $errorMessage"
+                }
+                return $message
+            }
+        }
+
+        $initializeRequest = 1
+        & $writeMessage ([ordered]@{
+            jsonrpc = '2.0'
+            id = $initializeRequest
+            method = 'initialize'
+            params = [ordered]@{
+                clientInfo = [ordered]@{ name = 'codebelt-agentic-eval-runner'; title = 'Codebelt Eval Runner'; version = '0.9.1' }
+                capabilities = [ordered]@{ experimentalApi = $true }
+            }
+        })
+        $null = & $waitForResponse $initializeRequest 'initialize'
+        & $writeMessage ([ordered]@{ jsonrpc = '2.0'; method = 'initialized' })
+
+        $threadRequest = 2
+        & $writeMessage ([ordered]@{
+            jsonrpc = '2.0'
+            id = $threadRequest
+            method = 'thread/start'
+            params = [ordered]@{
+                model = $Inputs.Profile.Model
+                cwd = $Inputs.Run.WorkingDirectoryPath
+                approvalPolicy = 'never'
+                # thread/start can persist project trust when it begins in a
+                # writable sandbox. Keep the ephemeral thread read-only and
+                # apply the intended workspace-write policy to the turn only.
+                sandbox = 'readOnly'
+                ephemeral = $true
+            }
+        })
+        $threadResponse = & $waitForResponse $threadRequest 'thread/start'
+        $threadId = [string]$threadResponse.result.thread.id
+        if ([string]::IsNullOrWhiteSpace($threadId)) { throw 'Codex app-server thread/start returned no thread id.' }
+
+        $turnRequest = 3
+        & $writeMessage ([ordered]@{
+            jsonrpc = '2.0'
+            id = $turnRequest
+            method = 'turn/start'
+            params = [ordered]@{
+                threadId = $threadId
+                input = @([ordered]@{ type = 'text'; text = [System.Text.Encoding]::UTF8.GetString($Inputs.Run.PromptBytes) })
+                cwd = $Inputs.Run.WorkingDirectoryPath
+                model = $Inputs.Profile.Model
+                effort = $Inputs.Profile.ReasoningEffort
+                approvalPolicy = 'never'
+                sandboxPolicy = [ordered]@{
+                    type = 'workspaceWrite'
+                    writableRoots = @($Inputs.Run.WorkingDirectoryPath)
+                    networkAccess = $true
+                }
+            }
+        })
+        $turnResponse = & $waitForResponse $turnRequest 'turn/start'
+        $turnId = [string]$turnResponse.result.turn.id
+        if ([string]::IsNullOrWhiteSpace($turnId)) { throw 'Codex app-server turn/start returned no turn id.' }
+
+        while (-not $turnCompleted) {
+            $message = & $readMessage
+            $messageId = Get-JsonProperty -Object $message -Name 'id' -Default $null
+            $method = [string](Get-JsonProperty -Object $message -Name 'method' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($method) -and $null -ne $messageId) {
+                throw "Codex app-server requested unsupported interactive method '$method'."
+            }
+            switch ($method) {
+                'thread/started' {
+                    $normalized.Add(([ordered]@{ type = 'thread.started'; thread_id = $message.params.thread.id } | ConvertTo-Json -Compress))
+                }
+                'item/completed' {
+                    $item = $message.params.item
+                    $itemType = [string]$item.type
+                    $normalizedType = switch ($itemType) {
+                        'agentMessage' { 'agent_message' }
+                        'commandExecution' { 'command_execution' }
+                        'fileChange' { 'file_change' }
+                        'mcpToolCall' { 'mcp_tool_call' }
+                        default { $itemType }
+                    }
+                    $normalizedItem = [ordered]@{ type = $normalizedType; id = Get-JsonProperty -Object $item -Name 'id' -Default $null }
+                    if ($itemType -eq 'agentMessage') {
+                        $normalizedItem.text = [string]$item.text
+                        $finalText = [string]$item.text
+                    } elseif ($itemType -eq 'commandExecution') {
+                        $normalizedItem.command = Get-JsonProperty -Object $item -Name 'command' -Default $null
+                        $normalizedItem.exit_code = Get-JsonProperty -Object $item -Name 'exitCode' -Default $null
+                        $normalizedItem.aggregated_output = Get-JsonProperty -Object $item -Name 'aggregatedOutput' -Default $null
+                    } elseif ($itemType -eq 'fileChange') {
+                        $normalizedItem.changes = Get-JsonProperty -Object $item -Name 'changes' -Default @()
+                    } else {
+                        $normalizedItem.raw = $item
+                    }
+                    $normalized.Add(([ordered]@{ type = 'item.completed'; item = $normalizedItem } | ConvertTo-Json -Depth 40 -Compress))
+                }
+                'thread/tokenUsage/updated' {
+                    $latestUsage = $message.params.tokenUsage.last
+                }
+                'turn/completed' {
+                    $turn = $message.params.turn
+                    if ([string]::IsNullOrWhiteSpace($finalText)) {
+                        $turnItems = @($turn.items)
+                        for ($itemIndex = $turnItems.Count - 1; $itemIndex -ge 0; $itemIndex--) {
+                            if ([string]$turnItems[$itemIndex].type -eq 'agentMessage' -and -not [string]::IsNullOrWhiteSpace([string]$turnItems[$itemIndex].text)) {
+                                $finalText = [string]$turnItems[$itemIndex].text
+                                break
+                            }
+                        }
+                    }
+                    if ([string]$turn.status -eq 'failed') {
+                        $errorMessage = [string](Get-JsonProperty -Object $turn.error -Name 'message' -Default 'Codex turn failed.')
+                        $normalized.Add(([ordered]@{ type = 'turn.failed'; error = $errorMessage } | ConvertTo-Json -Compress))
+                    } elseif ([string]$turn.status -eq 'interrupted') {
+                        $normalized.Add(([ordered]@{ type = 'turn.failed'; error = 'Codex turn was interrupted.' } | ConvertTo-Json -Compress))
+                    } else {
+                        $usage = $null
+                        if ($null -ne $latestUsage) {
+                            $usage = [ordered]@{
+                                input_tokens = $latestUsage.inputTokens
+                                cached_input_tokens = $latestUsage.cachedInputTokens
+                                output_tokens = $latestUsage.outputTokens
+                                reasoning_output_tokens = $latestUsage.reasoningOutputTokens
+                            }
+                        }
+                        $normalized.Add(([ordered]@{ type = 'turn.completed'; usage = $usage } | ConvertTo-Json -Depth 20 -Compress))
+                    }
+                    $turnCompleted = $true
+                }
+                'error' {
+                    $errorMessage = [string](Get-JsonProperty -Object $message.params -Name 'message' -Default 'Codex app-server emitted an error.')
+                    throw $errorMessage
+                }
+            }
+        }
+    } catch [TimeoutException] {
+        $timedOut = $true
+    } catch {
+        $transportFailure = $_.Exception.Message
+        $normalized.Add(([ordered]@{ type = 'error'; message = $transportFailure } | ConvertTo-Json -Compress))
+    } finally {
+        if ($null -ne $writer) { try { $writer.Close() } catch { } }
+        if ($processStarted) {
+            try {
+                if (-not $process.HasExited -and -not $process.WaitForExit(2000)) {
+                    $process.Kill($true)
+                    $process.WaitForExit()
+                }
+                if ($process.HasExited) { $actualExitCode = $process.ExitCode }
+            } catch { }
+        }
+        if ($null -ne $stderrTask) {
+            try { $stderr = $stderrTask.GetAwaiter().GetResult() } catch { $stderr = $_.Exception.Message }
+        }
+        $process.Dispose()
+    }
+
+    $finish = [DateTime]::UtcNow
+    $exitCode = if ($timedOut) { $null } elseif ($turnCompleted -and $null -eq $transportFailure) { 0 } elseif ($null -ne $actualExitCode -and $actualExitCode -ne 0) { $actualExitCode } else { 1 }
+    return [pscustomobject]@{
+        Stdout = [string]::Join("`n", $normalized)
+        RawStdout = [string]::Join("`n", $events)
+        Stderr = $stderr
+        ExitCode = $exitCode
+        TimedOut = $timedOut
+        StartedUtc = $start
+        FinishedUtc = $finish
+        DurationSeconds = [Math]::Round(($finish - $start).TotalSeconds, 3)
+        FinalText = $finalText
+        ThreadId = $threadId
+        TurnId = $turnId
+    }
 }
 
 function Get-CodexHelpResult {
@@ -330,14 +587,17 @@ function Get-CodexPreflight {
 
     $auth = Get-CodexAuthSource
     if ($auth.Kind -eq 'missing') {
-        $reasons.Add('No narrow Codex provider API-key environment variable is available.')
-    } elseif ($auth.Kind -eq 'file_unsupported') {
-        $reasons.Add('Codex auth.json cannot be copied into the worker HOME: the evaluated agent could read that credential file. Set the provider API-key environment variable instead.')
+        $reasons.Add('Neither a narrow Codex provider API-key environment variable nor subscription auth.json is available.')
+    } elseif ($auth.Kind -eq 'subscription_file') {
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail 'Codex app-server can read the existing subscription auth.json through its parent-only CODEX_HOME. The file is not copied into the staged worker home.'))
     } else {
         $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through the narrow $($auth.Name) environment variable; the child shell policy is set to inherit=none."))
     }
 
-    if ($null -eq $sandboxName) {
+    if ($auth.Kind -eq 'subscription_file') {
+        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail 'The subscription app-server parent must read the existing Codex credential home and is not wrapped by the external run-only sandbox. Codex workspace-write remains enabled for the turn.'))
+        $warnings.Add('Subscription execution uses pragmatic isolation. The adapter does not claim that an external filesystem sandbox protects the app-server transport.')
+    } elseif ($null -eq $sandboxName) {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status not_applicable -Detail "Platform '$platform' has no configured external hard-confinement mechanism; pragmatic isolation remains available."))
         $warnings.Add("Platform '$platform' has no external hard filesystem confinement in this adapter; execution will report pragmatic isolation.")
     } elseif ($null -eq $sandboxInfo) {
@@ -347,19 +607,29 @@ function Get-CodexPreflight {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status passed -Detail "External $sandboxName confines Codex to the staged run and required system runtime paths; Codex sandbox=workspace-write remains enabled inside it."))
     }
 
-    $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The adapter uses --ephemeral and never supplies a resume, continue, or session identifier.'))
-    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter uses an isolated CODEX_HOME plus --ignore-user-config and --ignore-rules; unrelated inherited environment variables are removed.'))
-    $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "--cd $($run.WorkingDirectoryPath); CODEX_HOME under $($run.HomeDirectoryPath)"))
-    $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only the selected provider API-key variable is passed to Codex; auth files are never copied into the worker HOME.'))
+    $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The selected transport starts an ephemeral thread and never supplies a resume, continue, or existing session identifier.'))
+    if ($auth.Kind -eq 'subscription_file') {
+        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The app-server parent receives a filtered environment plus the existing CODEX_HOME needed for subscription auth. Child shell inheritance is disabled with shell_environment_policy.inherit=none.'))
+        $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "thread/start and turn/start set cwd to $($run.WorkingDirectoryPath); HOME and USERPROFILE remain staged under $($run.HomeDirectoryPath)."))
+        $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'The adapter does not copy auth.json into the run or deliberately forward CODEX_HOME to child shell tools. This does not claim hard filesystem confinement where none is available.'))
+    } else {
+        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The compatibility transport uses an isolated CODEX_HOME plus --ignore-user-config and --ignore-rules; unrelated inherited environment variables are removed.'))
+        $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "--cd $($run.WorkingDirectoryPath); CODEX_HOME under $($run.HomeDirectoryPath)"))
+        $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only the selected provider API-key variable is passed to Codex; auth files are not copied into the worker HOME.'))
+    }
 
-    $hardConfinement = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
+    $hardConfinement = $auth.Kind -eq 'environment' -and $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
     $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement -NativeWorkerAvailable ($null -ne $nativeWorkerObservation -and $nativeWorkerObservation.Available)
     $harnessVersion = if ($null -eq $versionObservation) { 'unavailable' } else { [string]$versionObservation.Version }
     $descriptorCopy = [ordered]@{}
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('native app-server thread/start + turn/start child session', '--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    if ($auth.Kind -eq 'subscription_file') {
+        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'parent-only subscription CODEX_HOME', 'ephemeral thread', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    } else {
+        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    }
     if ($hardConfinement) { $mechanisms.Add("external $sandboxName filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }
@@ -373,9 +643,7 @@ function New-CodexEnvironment {
     $codexHome = Join-Path $Inputs.Run.HomeDirectoryPath '.codex'
     New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
     $environment = New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables @(Get-ProviderAuthenticationVariables -Provider 'openai') -Additional @{ CODEX_HOME = $codexHome }
-    if ($Auth.Kind -ne 'environment') {
-        throw 'Codex execution requires a provider environment credential; file credentials are not safe to expose in the worker HOME.'
-    }
+    if ($Auth.Kind -eq 'environment') { return $environment }
     return $environment
 }
 
@@ -493,16 +761,18 @@ function Invoke-CodexExecute {
 
     $commandInfo = Resolve-ExternalCommand -Name 'codex'
     $auth = Get-CodexAuthSource
-    $environment = New-CodexEnvironment -Inputs $Inputs -Auth $auth
+    $environment = if ($auth.Kind -eq 'environment') { New-CodexEnvironment -Inputs $Inputs -Auth $auth } else { $null }
     $lastResponsePath = 'evidence/codex-final.txt'
     New-Item -ItemType Directory -Path (Join-Path $Inputs.Run.RunRoot 'evidence') -Force | Out-Null
     $platform = Get-PlatformName
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
-    $hardFilesystem = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
+    $hardFilesystem = $auth.Kind -eq 'environment' -and $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
     $visiblePlatform = if ($hardFilesystem) { $platform } elseif ($platform -eq 'linux') { 'unknown' } else { $platform }
     $arguments = New-CodexCliArguments -Inputs $Inputs -LastResponsePath (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -VisiblePlatform $visiblePlatform
 
-    if ($platform -eq 'linux' -and $hardFilesystem) {
+    if ($auth.Kind -eq 'subscription_file') {
+        $process = Invoke-CodexAppServer -CommandInfo $commandInfo -Inputs $Inputs -Auth $auth -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+    } elseif ($platform -eq 'linux' -and $hardFilesystem) {
         $sandboxArguments = Get-LinuxCodexSandboxArguments -Inputs $Inputs -CommandInfo $commandInfo -Environment $environment
         $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
     } elseif ($platform -eq 'macos' -and $hardFilesystem) {
@@ -517,12 +787,19 @@ function Invoke-CodexExecute {
     $artifacts = [System.Collections.Generic.List[object]]::new()
     $artifacts.Add($stdoutArtifact)
     $artifacts.Add($stderrArtifact)
+    $transcriptArtifactPath = 'evidence/codex-events.jsonl'
+    if ($auth.Kind -eq 'subscription_file') {
+        $rawStdoutArtifact = Write-CodexCapture -RunData $Inputs -RelativePath 'evidence/codex-app-server-events.jsonl' -Text $process.RawStdout
+        $artifacts.Add($rawStdoutArtifact)
+        $transcriptArtifactPath = 'evidence/codex-app-server-events.jsonl'
+    }
 
     $parsed = ConvertFrom-JsonLines -Text $process.Stdout
     $warnings = [System.Collections.Generic.List[string]]::new()
     foreach ($parseError in @($parsed.Errors)) { $warnings.Add("Codex event parse error: $parseError") }
-    $finalText = $null
-    $threadId = $null
+    $finalText = if ($auth.Kind -eq 'subscription_file') { $process.FinalText } else { $null }
+    $threadId = if ($auth.Kind -eq 'subscription_file') { $process.ThreadId } else { $null }
+    $turnId = if ($auth.Kind -eq 'subscription_file') { $process.TurnId } else { $null }
     $turnFailure = $null
     $usage = $null
     $toolCalls = 0
@@ -549,7 +826,7 @@ function Invoke-CodexExecute {
                     if ($itemType -eq 'command_execution') {
                         $commands.Add([ordered]@{ type = $itemType; command = Get-JsonProperty -Object $item -Name 'command'; exit_code = Get-JsonProperty -Object $item -Name 'exit_code' })
                     } else {
-                        $files.Add([ordered]@{ type = $itemType; item = $itemType })
+                        $files.Add([ordered]@{ type = $itemType; item = $item })
                     }
                 }
             }
@@ -581,7 +858,8 @@ function Invoke-CodexExecute {
     } elseif ($process.ExitCode -ne 0 -or $null -ne $turnFailure) {
         $status = 'failed'
         $reason = 'codex_failure'
-        $failure = New-ExecutionFailure -Code 'codex_failure' -Message ([string]$turnFailure)
+        $failureMessage = if ($null -ne $turnFailure) { [string]$turnFailure } elseif (-not [string]::IsNullOrWhiteSpace($process.Stderr)) { $process.Stderr.Trim() } else { "Codex exited with status $($process.ExitCode)." }
+        $failure = New-ExecutionFailure -Code 'codex_failure' -Message $failureMessage
     } elseif ([string]::IsNullOrWhiteSpace($finalText)) {
         $warnings.Add('Codex exited successfully without a final agent message.')
         $reason = 'codex_did_not_return_final_response'
@@ -598,7 +876,7 @@ function Invoke-CodexExecute {
         if ($usageValue.Count -eq 0) { New-UnavailableMetric -Reason 'codex_usage_event_had_no_supported_buckets' } else { New-AvailableMetric -Value $usageValue }
     }
     $telemetry = [ordered]@{
-        transcript = New-AvailableMetric -Value ([ordered]@{ artifact = 'evidence/codex-events.jsonl'; complete = $true })
+        transcript = New-AvailableMetric -Value ([ordered]@{ artifact = $transcriptArtifactPath; complete = $true })
         tokens = $tokenMetric
         tool_calls = New-AvailableMetric -Value $toolCalls
         cost = New-UnavailableMetric -Reason 'codex_runner_does_not_estimate_cost'
@@ -607,7 +885,11 @@ function Invoke-CodexExecute {
     $sessionResultId = if ([string]::IsNullOrWhiteSpace($threadId)) { $sessionId } else { $threadId }
     $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    if ($auth.Kind -eq 'subscription_file') {
+        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'parent-only subscription CODEX_HOME', 'ephemeral thread', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    } else {
+        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
     $sandboxEvidence = if (-not $hardFilesystem) { 'unavailable' } elseif ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' }
@@ -618,7 +900,8 @@ function Invoke-CodexExecute {
         child_tool_visibility = 'codex_shell_environment_policy_inherit_none'
         value_observed = $false
     }
-    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Codex accepted the requested model and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ thread_id = $threadId; event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; output_last_message_argument = (Get-SandboxVisiblePath -HostPath (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -RunRoot $Inputs.Run.RunRoot -Platform $visiblePlatform); credential = $credentialEvidence }) -AttemptCount 1
+    $outputLastMessageArgument = if ($auth.Kind -eq 'subscription_file') { $null } else { Get-SandboxVisiblePath -HostPath (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -RunRoot $Inputs.Run.RunRoot -Platform $visiblePlatform }
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Codex accepted the requested model and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ thread_id = $threadId; turn_id = $turnId; event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; output_last_message_argument = $outputLastMessageArgument; credential = $credentialEvidence }) -AttemptCount 1
 }
 
 try {

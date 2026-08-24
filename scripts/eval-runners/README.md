@@ -24,7 +24,11 @@ model-spawning `execute` command or start another model session.
 package. It creates one worker envelope per exact manifest arm, keeps unrelated
 arms dependency-free, exposes at most the requested
 `execution-profile.json.concurrency` active slots, and leaves a capacity
-rejection pending without incrementing the eval attempt count. It contains no
+rejection pending without incrementing the eval attempt count. Independent arms
+must use at least two active slots when the requested concurrency and harness
+capacity permit it. `Assert-OrchestrationConcurrency` rejects a serial run that
+has no explicit capacity-limit evidence; `bridge-manifest-results.ps1
+-RequireParallelDispatch` applies that gate before completion. It contains no
 harness-specific concurrency ceiling. `Assert-NativeWorkerDelegation` is the
 fail-closed handoff gate: an unavailable/unsupported native mechanism cannot
 fall back to parent execution, while a conditional mechanism may dispatch only

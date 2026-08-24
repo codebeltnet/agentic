@@ -1388,6 +1388,16 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw 'Codebelt Reference preparation must write github-copilot + claude-haiku-4.5 atomically.'
         }
 
+        $codexPackageRoot = Join-Path $packageRoot 'codex-package'
+        $codexPrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $codexPackageRoot -Runner 'codex' -Model 'gpt-5.6-luna' 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "prepare-skill-evals.ps1 failed for the Codex default fixture: $($codexPrepareOutput -join [Environment]::NewLine)"
+        }
+        $codexProfile = [System.IO.File]::ReadAllText((Join-Path $codexPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
+        if ([string]$codexProfile.runner -ne 'codex' -or [string]$codexProfile.model -ne 'gpt-5.6-luna' -or [string]$codexProfile.reasoning_effort -ne 'medium') {
+            throw 'Codex preparation must preserve gpt-5.6-luna and default omitted reasoning effort to medium.'
+        }
+
         $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
         $missingSelectionOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingSelectionRoot 2>&1
         if ($LASTEXITCODE -eq 0) {

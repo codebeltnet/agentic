@@ -163,6 +163,8 @@ try {
     [void](Assert-OrchestrationPlanContract -Plan $serializedPlan)
     Assert-Equal 16 @($plan.arms).Count '8 eval cases fan out to 16 independent arms'
     Assert-Equal 16 $plan.requested_concurrency 'requested concurrency is preserved in the plan'
+    Assert-True ([bool]$plan.parallel_dispatch_required) 'independent arms require concurrent dispatch'
+    Assert-Equal 2 $plan.minimum_parallel_workers 'independent arms require at least two active workers'
     Assert-True ([bool]$plan.native_worker_required) 'native worker delegation is mandatory'
     Assert-True (-not [bool]$plan.parent_executes_arms) 'the parent is forbidden from executing arms'
     Assert-True (-not [bool]$plan.nested_model_execution) 'the plan forbids a nested model layer'
@@ -198,7 +200,7 @@ try {
             [void](Register-DelegationAccepted -State $capacityState -WorkerId $dispatch.worker_id -WorkerSessionId ('session-' + $dispatch.worker_id))
             $startedWorkers.Add([string]$dispatch.worker_id)
         } else {
-            [void](Register-DelegationRejected -State $capacityState -WorkerId $dispatch.worker_id -Reason 'fake harness capacity is four')
+            [void](Register-DelegationRejected -State $capacityState -WorkerId $dispatch.worker_id -Reason 'fake harness capacity is four' -CapacityLimited)
             $rejectedWorkers.Add([string]$dispatch.worker_id)
             $attemptsAtRejection[[string]$dispatch.worker_id] = $capacityState.eval_attempts.Contains([string]$dispatch.worker_id)
         }
@@ -216,7 +218,7 @@ try {
                 [void](Register-DelegationAccepted -State $capacityState -WorkerId $dispatch.worker_id -WorkerSessionId ('session-' + $dispatch.worker_id))
                 if ($startedWorkers -notcontains [string]$dispatch.worker_id) { $startedWorkers.Add([string]$dispatch.worker_id) }
             } else {
-                [void](Register-DelegationRejected -State $capacityState -WorkerId $dispatch.worker_id -Reason 'fake harness capacity is four')
+                [void](Register-DelegationRejected -State $capacityState -WorkerId $dispatch.worker_id -Reason 'fake harness capacity is four' -CapacityLimited)
             }
             $maxObservedByHarness = [Math]::Max($maxObservedByHarness, (Get-OrchestrationActiveCount -State $capacityState))
         }
@@ -259,6 +261,20 @@ try {
     Assert-Equal 4 $capacityState.max_observed_active 'state records the fake harness maximum of four active workers'
     Assert-Equal 4 $maxObservedByHarness 'the fake harness never exceeds four active workers'
     Assert-Equal 0 @($capacityState.pending_worker_ids).Count 'no arm remains queued after capacity is released'
+    [void](Assert-OrchestrationConcurrency -Plan $plan -State $capacityState)
+
+    $serialState = New-OrchestrationState -Plan $plan
+    $serialState.max_observed_active = 1
+    $serialState.pending_worker_ids = @()
+    $serialState.active = [ordered]@{}
+    $serialState.completed = [ordered]@{}
+    $serialRejected = $false
+    try { [void](Assert-OrchestrationConcurrency -Plan $plan -State $serialState) } catch { $serialRejected = $true }
+    Assert-True $serialRejected 'serial dispatch without capacity evidence fails the concurrency gate'
+
+    $capacityStateJson = $capacityState | ConvertTo-Json -Depth 100 | ConvertFrom-Json
+    [void](Assert-OrchestrationConcurrency -Plan $plan -State $capacityStateJson)
+    Assert-True ([bool]$capacityStateJson.capacity_limit_reported) 'serialized fallback is permitted only with persisted capacity evidence'
 
     $badDescriptor = [pscustomobject]@{
         name = 'fake-without-delegation'

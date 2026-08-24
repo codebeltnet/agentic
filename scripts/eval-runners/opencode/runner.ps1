@@ -213,6 +213,12 @@ function Get-OpenCodePreflight {
     } else {
         $checks.Add((New-PreflightCheck -Name 'model' -Status passed -Detail $profile.Model))
     }
+    if ([int]$profile.Concurrency -lt 2) {
+        $checks.Add((New-PreflightCheck -Name 'parallel_dispatch' -Status failed -Detail 'OpenCode native-worker evaluations require at least two concurrent worker slots; a serial execution profile is not supported.'))
+        $reasons.Add('OpenCode native-worker evaluations require execution-profile.json concurrency >= 2. Sequential dispatch is incompatible unless the external harness reports a capacity limit during orchestration.')
+    } else {
+        $checks.Add((New-PreflightCheck -Name 'parallel_dispatch' -Status passed -Detail "OpenCode native-worker evaluations require bounded concurrent dispatch; requested slots=$($profile.Concurrency)."))
+    }
     if ($profile.ConfigurationProfile -ne 'isolated-default') {
         $reasons.Add("configuration_profile '$($profile.ConfigurationProfile)' is unsupported by opencode.")
     }
@@ -293,7 +299,7 @@ function Get-OpenCodePreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenCode CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('native Task -> General full-capability child worker', 'opencode run --format json compatibility transport', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'repository-owned project configuration preserved', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('native Task -> General full-capability child worker', 'bounded concurrent native-worker dispatch required', 'opencode run --format json compatibility transport', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'repository-owned project configuration preserved', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardConfinement) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }

@@ -132,6 +132,59 @@ if ($harness -eq 'codex' -and $arguments -contains 'features' -and $arguments -c
     Write-Output 'multi_agent stable true'
     exit 0
 }
+if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
+    function Read-AppServerMessage {
+        $line = [Console]::In.ReadLine()
+        if ($null -eq $line) { throw 'recorded app-server reached EOF before the expected request' }
+        return ($line | ConvertFrom-Json -Depth 50)
+    }
+    function Write-AppServerMessage {
+        param([Parameter(Mandatory = $true)][object]$Value)
+        [Console]::Out.WriteLine(($Value | ConvertTo-Json -Depth 50 -Compress))
+        [Console]::Out.Flush()
+    }
+
+    $initialize = Read-AppServerMessage
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $initialize.id; result = [ordered]@{ serverInfo = [ordered]@{ name = 'recorded-codex'; version = '9.1' } } })
+    $initialized = Read-AppServerMessage
+    $threadStart = Read-AppServerMessage
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadStart.id; result = [ordered]@{ thread = [ordered]@{ id = 'recorded-subscription-thread'; ephemeral = $true; path = $null } } })
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'thread/started'; params = [ordered]@{ thread = [ordered]@{ id = 'recorded-subscription-thread' } } })
+    $turnStart = Read-AppServerMessage
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $turnStart.id; result = [ordered]@{ turn = [ordered]@{ id = 'recorded-subscription-turn'; status = 'inProgress'; items = @() } } })
+
+    $promptText = [string]$turnStart.params.input[0].text
+    $promptBytes = [Text.Encoding]::UTF8.GetBytes($promptText)
+    $expectedPromptPath = Join-Path (Split-Path -Parent (Get-Location).Path) 'prompt.md'
+    $expectedPromptBytes = [IO.File]::ReadAllBytes($expectedPromptPath)
+    $record.stdin_received = $promptBytes.Length -gt 0
+    $record.stdin_delivery_count = if ($promptBytes.Length -gt 0) { 1 } else { 0 }
+    $record.stdin_byte_length = $promptBytes.Length
+    $record.stdin_sha256 = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($promptBytes))).ToLowerInvariant()
+    $record.stdin_expected_sha256 = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($expectedPromptBytes))).ToLowerInvariant()
+    $record.stdin_exact = $record.stdin_sha256 -eq $record.stdin_expected_sha256
+    $record.stdin_utf8_round_trip = $record.stdin_exact
+    $record.worker_provider_visible = $false
+    $record.worker_copilot_token_visible = $false
+    $record.worker_gh_token_visible = $false
+    $record.worker_github_token_visible = $false
+    $record.worker_auth_file_visible = $false
+    $record.worker_global_secret_visible = $false
+    $record.worker_project_disable_visible = $false
+    $record.parent_codex_home = [Environment]::GetEnvironmentVariable('CODEX_HOME')
+    $record.parent_auth_file_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'auth.json') -PathType Leaf
+    $record.rpc_methods = @($initialize.method, $initialized.method, $threadStart.method, $turnStart.method)
+    $record.thread_params = $threadStart.params
+    $record.turn_params = $turnStart.params
+    [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Depth 50 -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'commandExecution'; id = 'command-1'; command = 'recorded command'; commandActions = @(); cwd = (Get-Location).Path; status = 'completed'; exitCode = 0; aggregatedOutput = 'recorded output' } } })
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 2; item = [ordered]@{ type = 'fileChange'; id = 'file-1'; status = 'completed'; changes = @([ordered]@{ path = 'recorded.txt'; kind = [ordered]@{ type = 'add' } }) } } })
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 3; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = 'recorded subscription response' } } })
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'thread/tokenUsage/updated'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; tokenUsage = [ordered]@{ total = [ordered]@{ inputTokens = 2; cachedInputTokens = 1; outputTokens = 3; reasoningOutputTokens = 1; totalTokens = 6 }; last = [ordered]@{ inputTokens = 2; cachedInputTokens = 1; outputTokens = 3; reasoningOutputTokens = 1; totalTokens = 6 } } } })
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'turn/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turn = [ordered]@{ id = 'recorded-subscription-turn'; status = 'completed'; items = @() } } })
+    exit 0
+}
 if ($arguments -contains '--version') {
     $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-cline 9.3' } }
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
@@ -300,7 +353,7 @@ exit 2
             configuration_profile = 'isolated-default'
             tool_profile = 'default'
             timeout_seconds = 30
-            concurrency = 1
+            concurrency = if ($runnerName -eq 'opencode') { 2 } else { 1 }
         })
         $recordedProfiles[$runnerName] = $profilePath
     }
@@ -338,6 +391,10 @@ exit 2
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
             Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq '--allow-all-tools broad tool approval' }).Count -eq 1) 'Copilot preflight describes --allow-all-tools as broad tool approval'
             Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)' }).Count -eq 1) 'Copilot preflight records preserved path and URL verification'
+        }
+        if ($runnerName -eq 'opencode') {
+            Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'parallel_dispatch' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight requires bounded concurrent dispatch'
+            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'bounded concurrent native-worker dispatch required' }).Count -eq 1) 'OpenCode preflight records the concurrency requirement'
         }
         if ($runnerName -in @('opencode', 'cline')) {
             Assert-True (@($preflightWith.warnings | Where-Object { $_ -match 'child-tool environment filter' }).Count -gt 0) "$runnerName reports the child credential-filter limitation"
@@ -474,6 +531,13 @@ exit 2
             Assert-True (($resultWithout | ConvertTo-Json -Depth 100) -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary|recorded-gh-fallback-token') 'Copilot baseline result evidence does not contain credential values'
         }
     }
+    $serialOpenCodeProfile = Join-Path $recordedRoot 'opencode-serial-profile.json'
+    $serialOpenCodeData = Read-RunnerJson -Path $recordedProfiles['opencode']
+    $serialOpenCodeData.concurrency = 1
+    Write-TestJson -Path $serialOpenCodeProfile -Value $serialOpenCodeData
+    $serialOpenCodePreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $serialOpenCodeProfile
+    Assert-Equal 'incompatible' $serialOpenCodePreflight.status 'OpenCode rejects a serial execution profile'
+    Assert-True (@($serialOpenCodePreflight.reasons | Where-Object { $_ -match 'concurrency >= 2|Sequential dispatch' }).Count -gt 0) 'OpenCode serial-profile failure explains the concurrency requirement'
     $env:CLINE_AGENTS_SQUAD_PLUGIN = $recordedOldClineAgentsSquad
     $staleCli = $fakeCli.Replace("'opencode' { '--format --dir --model --auto --pure --continue --session' }", "'opencode' { '--format --dir --model --pure --continue --session' }")
     [System.IO.File]::WriteAllText((Join-Path $fakeBin 'opencode.ps1'), $staleCli, [System.Text.UTF8Encoding]::new($false))
@@ -487,8 +551,35 @@ exit 2
     $env:OPENAI_API_KEY = $null
     $env:CODEX_HOME = $fileAuthHome
     $fileAuthPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
-    Assert-Equal 'incompatible' $fileAuthPreflight.status 'Codex file-only authentication is fail-closed'
-    Assert-True (@($fileAuthPreflight.reasons | Where-Object { $_ -match 'auth\.json' }).Count -gt 0) 'Codex file-auth limitation is explicit'
+    Assert-Equal 'compatible' $fileAuthPreflight.status 'Codex subscription auth is accepted through app-server'
+    Assert-True (@($fileAuthPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Codex subscription authentication is explicit in preflight'
+    $fileAuthResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'completed' $fileAuthResult.status 'Codex subscription app-server execution completes'
+    Assert-Equal 'recorded subscription response' $fileAuthResult.final_response.text 'Codex app-server captures the final agent message'
+    Assert-Equal 'recorded-subscription-thread' $fileAuthResult.session.id 'Codex app-server preserves thread identity'
+    Assert-Equal 'recorded-subscription-turn' $fileAuthResult.evidence.turn_id 'Codex app-server preserves turn identity'
+    Assert-Equal 'available' $fileAuthResult.telemetry.tokens.status 'Codex app-server maps token usage notifications'
+    Assert-Equal 2 ([int]$fileAuthResult.telemetry.tokens.value.input_tokens) 'Codex app-server maps input token usage'
+    Assert-Equal 3 ([int]$fileAuthResult.telemetry.tokens.value.output_tokens) 'Codex app-server maps output token usage'
+    Assert-Equal 2 ([int]$fileAuthResult.telemetry.tool_calls.value) 'Codex app-server counts command and file-change evidence'
+    Assert-Equal 1 @($fileAuthResult.evidence.commands).Count 'Codex app-server preserves command evidence'
+    Assert-Equal 1 @($fileAuthResult.evidence.files).Count 'Codex app-server preserves file-change evidence'
+    $subscriptionLogPath = Join-Path $with.Root 'repo\codex-fake-cli-log.jsonl'
+    $subscriptionRecord = Get-Content -LiteralPath $subscriptionLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.PSObject.Properties.Name -contains 'rpc_methods' } | Select-Object -Last 1
+    Assert-Equal 'initialize,initialized,thread/start,turn/start' ([string]::Join(',', @($subscriptionRecord.rpc_methods))) 'Codex app-server follows the required handshake order'
+    Assert-Equal 'gpt-5.6-luna' $subscriptionRecord.thread_params.model 'Codex app-server thread receives the requested model'
+    Assert-True ([bool]$subscriptionRecord.thread_params.ephemeral) 'Codex app-server thread is ephemeral'
+    Assert-Equal 'readOnly' $subscriptionRecord.thread_params.sandbox 'Codex app-server thread avoids persisting writable project trust'
+    Assert-Equal 'gpt-5.6-luna' $subscriptionRecord.turn_params.model 'Codex app-server turn receives the requested model'
+    Assert-Equal 'medium' $subscriptionRecord.turn_params.effort 'Codex app-server turn receives the requested reasoning effort'
+    Assert-Equal (Join-Path $with.Root 'repo') $subscriptionRecord.turn_params.cwd 'Codex app-server turn receives the staged working directory'
+    Assert-Equal 'never' $subscriptionRecord.turn_params.approvalPolicy 'Codex app-server turn rejects interactive approvals'
+    Assert-Equal 'workspaceWrite' $subscriptionRecord.turn_params.sandboxPolicy.type 'Codex app-server turn receives workspace-write sandbox policy'
+    Assert-Equal $fileAuthHome $subscriptionRecord.parent_codex_home 'Codex app-server parent receives the subscription CODEX_HOME'
+    Assert-True ([bool]$subscriptionRecord.parent_auth_file_visible) 'Codex app-server parent can read the subscription auth file'
+    Assert-True (-not [bool]$subscriptionRecord.unrelated_present) 'Codex app-server parent excludes unrelated inherited environment variables'
+    Assert-True (-not [bool]$subscriptionRecord.worker_auth_file_visible) 'Codex app-server worker fixture does not receive auth.json'
+    Assert-True (@($subscriptionRecord.args) -contains 'shell_environment_policy.inherit=none') 'Codex app-server disables child shell environment inheritance'
     $env:OPENAI_API_KEY = 'recorded-canary-not-logged'
     $env:CODEX_HOME = $recordedOldCodexHome
     # GitHub Copilot authentication: explicit env, OS-keychain, GitHub CLI, and
@@ -875,8 +966,9 @@ try {
     Assert-True ($prepareText.Contains('One arm equals one delegated worker and one model-backed eval execution.')) 'handoff preparation must state the one-arm one-model invariant'
     Assert-True ($prepareText.Contains('Assert-NativeWorkerDelegation')) 'handoff preparation must invoke the native delegation gate'
     Assert-True ($prepareText.Contains('Require terminal evidence for the exact selected model, exact arm identity, working directory, isolated HOME/config boundary, prompt fidelity, terminal result capture')) 'handoff preparation must require worker control evidence'
-    Assert-True ($prepareText.Contains('-RequireComplete -RequireNativeDelegation')) 'handoff preparation must revalidate native terminal evidence during the manifest bridge'
+    Assert-True ($prepareText.Contains('-RequireComplete -RequireNativeDelegation -RequireParallelDispatch')) 'handoff preparation must revalidate native terminal and parallel-dispatch evidence during the manifest bridge'
     Assert-True ($prepareText.Contains('min(execution-profile.json.concurrency, remaining arms)')) 'handoff preparation must state requested concurrency fan-out'
+    Assert-True ($prepareText.Contains('Assert-OrchestrationConcurrency') -and $prepareText.Contains('orchestration-state.json')) 'handoff preparation must persist and validate orchestration concurrency state'
     Assert-True ($prepareText.Contains('rejected before the worker starts') -and $prepareText.Contains('record no eval attempt')) 'handoff preparation must queue capacity rejections without counting attempts'
     Assert-True ($prepareText.Contains('orchestration.ps1')) 'handoff preparation must load the deterministic orchestration helper'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
@@ -967,9 +1059,12 @@ try {
         })
     }
     Write-TestJson -Path (Join-Path $manifestPackage 'manifest.json') -Value $manifest
-    Copy-Item -LiteralPath $profilePath -Destination (Join-Path $manifestPackage 'execution-profile.json') -Force
-    $manifestWithExecutionResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $manifestWith.Path -Profile $profilePath
-    $manifestWithoutExecutionResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $manifestWithout.Path -Profile $profilePath
+    $parallelProfilePath = Join-Path $manifestPackage 'execution-profile.json'
+    $parallelProfile = Read-RunnerJson -Path $profilePath
+    $parallelProfile.concurrency = 2
+    Write-TestJson -Path $parallelProfilePath -Value $parallelProfile
+    $manifestWithExecutionResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $manifestWith.Path -Profile $parallelProfilePath
+    $manifestWithoutExecutionResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $manifestWithout.Path -Profile $parallelProfilePath
     Write-TestJson -Path $manifestWithExecution -Value $manifestWithExecutionResult
     Write-TestJson -Path $manifestWithoutExecution -Value $manifestWithoutExecutionResult
 
@@ -995,7 +1090,27 @@ try {
     Assert-Equal 'unrun' $canonicalBeforeBridge.execution_status 'shadow result is never selected as the canonical result'
     Remove-Item -LiteralPath $shadowPath -Force
 
-    $manifestBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete 2>&1
+    $manifestStatePath = Join-Path $manifestPackage 'orchestration-state.json'
+    $manifestState = [ordered]@{
+        schema = 'codebeltnet/agentic/eval-orchestration-state/1'
+        requested_concurrency = 2
+        parallel_dispatch_required = $true
+        minimum_parallel_workers = 2
+        capacity_limit_reported = $false
+        max_observed_active = 1
+        pending_worker_ids = @()
+        active = [ordered]@{}
+        completed = [ordered]@{}
+        delegation_rejections = [ordered]@{}
+        eval_attempts = [ordered]@{ 'arm-1-with_skill' = 1; 'arm-1-without_skill' = 1 }
+    }
+    Write-TestJson -Path $manifestStatePath -Value $manifestState
+    $serialBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
+    Assert-True ($LASTEXITCODE -ne 0) 'manifest bridge rejects serial orchestration without capacity evidence'
+    Assert-True (([string]::Join(' ', @($serialBridgeOutput))) -match 'serial|parallel') 'serial bridge rejection explains the concurrency requirement'
+    $manifestState.max_observed_active = 2
+    Write-TestJson -Path $manifestStatePath -Value $manifestState
+    $manifestBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
     if ($LASTEXITCODE -ne 0) { throw "manifest path bridge failed: $([string]::Join(' ', @($manifestBridgeOutput)))" }
     $canonicalWith = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
     Assert-Equal 'completed' $canonicalWith.execution_status 'manifest bridge populates the canonical hyphen result'
@@ -1009,7 +1124,7 @@ try {
     $canonicalWith.grading[0].passed = $true
     $canonicalWith.grading[0].evidence = 'graded after the first bridge'
     Write-TestJson -Path $manifestWithResult -Value $canonicalWith
-    $repeatBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete 2>&1
+    $repeatBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
     if ($LASTEXITCODE -ne 0) { throw "repeat manifest path bridge failed: $([string]::Join(' ', @($repeatBridgeOutput)))" }
     $canonicalAfterRepeat = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
     Assert-True ([bool]$canonicalAfterRepeat.grading[0].passed) 'repeat manifest bridge preserves completed grading'

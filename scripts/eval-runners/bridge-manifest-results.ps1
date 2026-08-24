@@ -15,13 +15,18 @@ param(
 
     [switch]$RequireComplete,
 
-    [switch]$RequireNativeDelegation
+    [switch]$RequireNativeDelegation,
+
+    [switch]$RequireParallelDispatch,
+
+    [string]$OrchestrationStatePath = 'orchestration-state.json'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'manifest-paths.ps1')
+. (Join-Path $PSScriptRoot 'orchestration.ps1')
 
 try {
     $iterationPath = (Resolve-Path -LiteralPath $IterationDirectory -ErrorAction Stop).Path
@@ -32,6 +37,19 @@ try {
 
     $manifest = Read-RunnerJson -Path $manifestPath
     $records = @(Get-ManifestRunRecords -IterationDirectory $iterationPath -Manifest $manifest)
+    $parallelDispatch = $null
+    if ($RequireParallelDispatch) {
+        Assert-SafeRelativePath -RelativePath $OrchestrationStatePath -FieldName 'orchestration state path'
+        $statePath = Join-Path $iterationPath ($OrchestrationStatePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+            throw "Parallel native-worker orchestration requires '$OrchestrationStatePath' at the iteration root."
+        }
+
+        $profileData = Resolve-ExecutionProfile -ProfilePath (Join-Path $iterationPath 'execution-profile.json')
+        $plan = New-EvalOrchestrationPlan -IterationDirectory $iterationPath -Manifest $manifest -Profile $profileData.Profile
+        $state = Read-RunnerJson -Path $statePath
+        $parallelDispatch = Assert-OrchestrationConcurrency -Plan $plan -State $state
+    }
     $shadows = @(Get-ManifestShadowResultFiles -Records $records)
     if ($shadows.Count -gt 0) {
         $messages = @($shadows | ForEach-Object {
@@ -111,6 +129,7 @@ try {
         terminal_execution_results = $validation.TerminalExecutionResults
         missing_execution_results = @($missing)
         complete = $validation.Complete
+        parallel_dispatch = $parallelDispatch
         warnings = @($validation.Warnings)
     }) -AsOutput
 } catch {
