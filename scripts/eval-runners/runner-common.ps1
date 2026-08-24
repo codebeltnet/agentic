@@ -416,7 +416,9 @@ function Test-NativeWorkerTerminalEvidence {
         [Parameter(Mandatory = $true)][object]$ExecutionEvidence,
         [Parameter(Mandatory = $true)][object]$Run,
         [Parameter(Mandatory = $true)][string]$RequestedModel,
-        [string]$ExpectedWorkerSessionId = ''
+        [string]$ExpectedWorkerSessionId = '',
+        [string]$ExpectedRunner = '',
+        [string]$ExpectedMechanism = ''
     )
 
     $failures = [System.Collections.Generic.List[string]]::new()
@@ -440,6 +442,13 @@ function Test-NativeWorkerTerminalEvidence {
         $failures.Add('requested_model')
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedRunner)) {
+        $runnerEvidence = Get-JsonProperty -Object $ExecutionEvidence -Name 'runner' -Default $null
+        if ($null -eq $runnerEvidence -or [string](Get-JsonProperty -Object $runnerEvidence -Name 'name' -Default '') -ne $ExpectedRunner) {
+            $failures.Add('runner_identity')
+        }
+    }
+
     $delegation = Get-JsonProperty -Object (Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null) -Name 'delegation' -Default $null
     if ($null -eq $delegation) {
         $failures.Add('delegation_terminal_evidence')
@@ -454,6 +463,10 @@ function Test-NativeWorkerTerminalEvidence {
 
     if ([string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $delegation -Name 'mechanism' -Default ''))) {
         $failures.Add('mechanism')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedMechanism) -and
+        [string](Get-JsonProperty -Object $delegation -Name 'mechanism' -Default '') -ne $ExpectedMechanism) {
+        $failures.Add('native_mechanism')
     }
 
     $workerSessionId = [string](Get-JsonProperty -Object $delegation -Name 'worker_session_id' -Default '')
@@ -514,10 +527,18 @@ function Assert-NativeWorkerTerminalEvidence {
         [Parameter(Mandatory = $true)][object]$ExecutionEvidence,
         [Parameter(Mandatory = $true)][object]$Run,
         [Parameter(Mandatory = $true)][string]$RequestedModel,
-        [string]$ExpectedWorkerSessionId = ''
+        [string]$ExpectedWorkerSessionId = '',
+        [string]$ExpectedRunner = '',
+        [string]$ExpectedMechanism = ''
     )
 
-    $validation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $ExecutionEvidence -Run $Run -RequestedModel $RequestedModel -ExpectedWorkerSessionId $ExpectedWorkerSessionId
+    $validation = Test-NativeWorkerTerminalEvidence `
+        -ExecutionEvidence $ExecutionEvidence `
+        -Run $Run `
+        -RequestedModel $RequestedModel `
+        -ExpectedWorkerSessionId $ExpectedWorkerSessionId `
+        -ExpectedRunner $ExpectedRunner `
+        -ExpectedMechanism $ExpectedMechanism
     if (-not $validation.Valid) {
         throw "Native worker terminal evidence is incompatible: $([string]::Join(', ', @($validation.Failures)))."
     }
@@ -1026,6 +1047,19 @@ function Assert-ExecutionResult {
             throw "execution-result.json is missing '$field'."
         }
     }
+    foreach ($identityName in @('runner', 'harness')) {
+        $identity = Get-JsonProperty -Object $Result -Name $identityName -Default $null
+        foreach ($identityField in @('name', 'version')) {
+            if ($null -eq $identity -or -not (Test-JsonProperty -Object $identity -Name $identityField) -or
+                [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $identity -Name $identityField -Default ''))) {
+                throw "execution-result.json $identityName.$identityField must be non-empty."
+            }
+        }
+    }
+    $exitObject = Get-JsonProperty -Object $Result -Name 'exit' -Default $null
+    if ($null -eq $exitObject -or -not (Test-JsonProperty -Object $exitObject -Name 'status')) {
+        throw 'execution-result.json exit.status must be present and numeric or null.'
+    }
     if ([string]::IsNullOrWhiteSpace([string]$Result.run_id)) {
         throw 'execution-result.json run_id must be non-empty.'
     }
@@ -1036,6 +1070,20 @@ function Assert-ExecutionResult {
     }
     if ([int](Get-JsonProperty -Object $Result -Name 'attempt_count' -Default 0) -ne 1) {
         throw 'execution-result.json attempt_count must be exactly 1; quality retries are not allowed.'
+    }
+    $exitStatus = Get-JsonProperty -Object $exitObject -Name 'status' -Default $null
+    if ($null -ne $exitStatus) {
+        $numericExitStatus = $exitStatus -is [byte] -or
+            $exitStatus -is [sbyte] -or
+            $exitStatus -is [int16] -or
+            $exitStatus -is [uint16] -or
+            $exitStatus -is [int32] -or
+            $exitStatus -is [uint32] -or
+            $exitStatus -is [int64] -or
+            $exitStatus -is [uint64]
+        if (-not $numericExitStatus) {
+            throw 'execution-result.json exit.status must be a JSON number or null; textual lifecycle labels are not valid exit codes.'
+        }
     }
     $isolationStatus = [string](Get-JsonProperty -Object $Result.isolation -Name 'status' -Default '')
     $isolationLevel = [string](Get-JsonProperty -Object $Result.isolation -Name 'level' -Default '')

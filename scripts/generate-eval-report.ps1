@@ -28,8 +28,8 @@
     default so a prepared package remains self-contained after preparation.
 
 .PARAMETER RequireComplete
-    Fail before reporting success unless every manifest-declared arm has a terminal execution result and a validated
-    canonical result bridged from that exact path.
+    Retained for command-line compatibility. Report generation always requires every manifest-declared arm to have a
+    terminal execution result and a validated canonical result bridged from that exact path.
 #>
 [CmdletBinding()]
 param(
@@ -675,14 +675,14 @@ function New-UpstreamWorkspace {
 $iterationPath = (Resolve-Path -LiteralPath $IterationDirectory).Path
 $manifest = Read-JsonFile -Path (Join-Path $iterationPath 'manifest.json')
 $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iterationPath -Manifest $manifest)
-$validation = Test-ManifestResults -IterationDirectory $iterationPath -Manifest $manifest -Records $manifestRecords
+$validation = Test-ManifestResults -IterationDirectory $iterationPath -Manifest $manifest -Records $manifestRecords -RequireComplete
 if (-not $validation.Success) {
     throw ([string]::Join([Environment]::NewLine, @($validation.Errors)))
 }
 foreach ($warning in @($validation.Warnings)) {
     Write-Host "[WARN] $warning"
 }
-if ($RequireComplete -and -not $validation.Complete) {
+if (-not $validation.Complete) {
     throw "Evaluation completion gate failed: expected $($validation.ExpectedArmCount) bridged terminal arms, found $($validation.BridgedResults)."
 }
 $skillCreatorPathResolved = Resolve-SkillCreatorPath -RequestedPath $SkillCreatorPath

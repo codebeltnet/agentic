@@ -1394,8 +1394,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw "prepare-skill-evals.ps1 failed for the Codex default fixture: $($codexPrepareOutput -join [Environment]::NewLine)"
         }
         $codexProfile = [System.IO.File]::ReadAllText((Join-Path $codexPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
-        if ([string]$codexProfile.runner -ne 'codex' -or [string]$codexProfile.model -ne 'gpt-5.6-luna' -or [string]$codexProfile.reasoning_effort -ne 'medium') {
-            throw 'Codex preparation must preserve gpt-5.6-luna and default omitted reasoning effort to medium.'
+        if ([string]$codexProfile.runner -ne 'codex' -or [string]$codexProfile.model -ne 'gpt-5.6-luna' -or [string]$codexProfile.reasoning_effort -ne 'low') {
+            throw 'Codex preparation must preserve gpt-5.6-luna and default omitted reasoning effort to low.'
         }
 
         $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
@@ -1693,19 +1693,19 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'comparison.md'))) {
             throw 'prepare-skill-evals.ps1 -CollectResults must write comparison.md.'
         }
-        if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'report.html'))) {
-            throw 'prepare-skill-evals.ps1 -CollectResults must write report.html.'
-        }
-        if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'benchmark.json'))) {
-            throw 'prepare-skill-evals.ps1 -CollectResults must write benchmark.json.'
-        }
-        if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'benchmark.md'))) {
-            throw 'prepare-skill-evals.ps1 -CollectResults must write benchmark.md.'
+        foreach ($invalidCompletionArtifact in @('report.html', 'skill-creator-report.html', 'benchmark.json', 'benchmark.md')) {
+            if (Test-Path -LiteralPath (Join-Path $iterationDirectory $invalidCompletionArtifact)) {
+                throw "prepare-skill-evals.ps1 -CollectResults must not write '$invalidCompletionArtifact' for an incomplete diagnostic package."
+            }
         }
 
         $firstEntry = @($manifest.evals)[0]
         $fakeRunnerPath = Join-Path $iterationDirectory 'tools/eval-runners/fake/runner.ps1'
         $profilePath = Join-Path $iterationDirectory ([string]$manifest.execution_profile)
+        $deterministicProfile = [System.IO.File]::ReadAllText($profilePath, $utf8NoBom) | ConvertFrom-Json
+        $deterministicProfile.runner = 'fake'
+        $deterministicProfile.model = 'fixture-model'
+        [System.IO.File]::WriteAllText($profilePath, (($deterministicProfile | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
         foreach ($entryToRun in @($manifest.evals)) {
             foreach ($configuration in @('with_skill', 'without_skill')) {
                 $run = $entryToRun.runs.$configuration

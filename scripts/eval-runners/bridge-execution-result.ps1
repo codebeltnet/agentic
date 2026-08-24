@@ -95,7 +95,10 @@ function Get-ResultRelativeArtifactPath {
 }
 
 function Get-ExistingGrading {
-    param([Parameter(Mandatory = $true)][string]$ResultPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$ResultPath,
+        [string]$ExecutionRunId = ''
+    )
 
     if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf)) {
         throw "Manifest-declared result stub '$ResultPath' does not exist; the bridge will not create a new grading-less result file."
@@ -105,7 +108,63 @@ function Get-ExistingGrading {
     if (-not (Test-JsonProperty -Object $existing -Name 'grading')) {
         throw "Manifest-declared result stub '$ResultPath' is missing its grading array."
     }
-    return @(Get-JsonProperty -Object $existing -Name 'grading' -Default @())
+    $grading = @(Get-JsonProperty -Object $existing -Name 'grading' -Default @())
+    $existingRunId = [string](Get-JsonProperty -Object $existing -Name 'execution_run_id' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($ExecutionRunId) -and
+        -not [string]::IsNullOrWhiteSpace($existingRunId) -and
+        $existingRunId -ne $ExecutionRunId) {
+        return @($grading | ForEach-Object {
+            $reset = $_ | ConvertTo-Json -Depth 100 | ConvertFrom-Json
+            $reset.passed = $null
+            $reset.evidence = ''
+            $reset
+        })
+    }
+    return $grading
+}
+
+function Get-PackageRunnerDescriptor {
+    param([Parameter(Mandatory = $true)][string]$RunnerName)
+
+    if ($RunnerName -notmatch '^[a-z0-9-]+$') {
+        throw "execution-profile.json runner '$RunnerName' is not a valid package runner name."
+    }
+    $runnerPath = Join-Path (Join-Path $PSScriptRoot $RunnerName) 'runner.ps1'
+    if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
+        throw "Package-local runner '$RunnerName' is missing its runner.ps1 descriptor."
+    }
+
+    $descriptorOutput = & pwsh -NoProfile -File $runnerPath describe 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Package-local runner '$RunnerName' descriptor failed: $([string]::Join(' ', @($descriptorOutput)))"
+    }
+    try {
+        $descriptor = [string]::Join([Environment]::NewLine, @($descriptorOutput)) | ConvertFrom-Json
+        [void](Assert-RunnerDescriptor -Descriptor $descriptor)
+    } catch {
+        throw "Package-local runner '$RunnerName' returned an invalid descriptor: $($_.Exception.Message)"
+    }
+    if ([string]$descriptor.name -ne $RunnerName) {
+        throw "Package-local runner descriptor name '$($descriptor.name)' does not match selected runner '$RunnerName'."
+    }
+    return $descriptor
+}
+
+function Assert-NativeTerminalCaptureArtifact {
+    param([Parameter(Mandatory = $true)][object]$ExecutionResult)
+
+    $transcriptMetric = Get-JsonProperty -Object $ExecutionResult.telemetry -Name 'transcript' -Default $null
+    $transcriptStatus = [string](Get-JsonProperty -Object $transcriptMetric -Name 'status' -Default '')
+    $transcriptArtifact = [string](Get-JsonProperty -Object (Get-JsonProperty -Object $transcriptMetric -Name 'value' -Default $null) -Name 'artifact' -Default '')
+    if ($transcriptStatus -ne 'available' -or [string]::IsNullOrWhiteSpace($transcriptArtifact)) {
+        throw 'Native worker execution must provide an available terminal transcript artifact.'
+    }
+    $matchingArtifacts = @($ExecutionResult.artifacts | Where-Object {
+        [string](Get-JsonProperty -Object $_ -Name 'path' -Default '') -eq $transcriptArtifact
+    })
+    if ($matchingArtifacts.Count -ne 1) {
+        throw "Native worker transcript artifact '$transcriptArtifact' is not recorded exactly once in execution-result.json."
+    }
 }
 
 try {
@@ -115,6 +174,7 @@ try {
     $evalDirectory = Split-Path -Parent $runDirectory
     $iterationDirectory = Split-Path -Parent $evalDirectory
     $executionPath = (Resolve-Path -LiteralPath $ExecutionResult -ErrorAction Stop).Path
+    $executionResultHash = Get-Sha256HexFromFile -Path $executionPath
     $resultPath = [System.IO.Path]::GetFullPath($Result, (Get-Location).Path)
     if (-not (Test-PathInside -BasePath $iterationDirectory -CandidatePath $executionPath)) {
         throw 'execution-result.json must remain inside the prepared iteration package.'
@@ -139,8 +199,9 @@ try {
     if ([string]$raw.input.profile_sha256 -ne $profile.Hash) {
         throw 'execution-result input.profile_sha256 does not match execution-profile.json.'
     }
-    if ($RequireNativeDelegation -and [string]$raw.status -ne 'incompatible') {
-        [void](Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $raw -Run $runData -RequestedModel ([string]$profile.Profile.Model))
+    $rawRunnerName = [string](Get-JsonProperty -Object $raw.runner -Name 'name' -Default '')
+    if ($rawRunnerName -ne [string]$profile.Profile.runner) {
+        throw "execution-result runner '$rawRunnerName' does not match selected runner '$($profile.Profile.runner)'."
     }
     if ([int]$raw.run.eval_id -ne $runData.EvalId -or [string]$raw.run.configuration -ne $runData.Mode) {
         throw 'execution-result run identity does not match run.json.'
@@ -158,6 +219,20 @@ try {
             throw "Artifact '$($artifact.path)' has a size that does not match the recorded execution evidence."
         }
         $artifactPaths.Add((Get-ResultRelativeArtifactPath -EvalDirectory $evalDirectory -FullPath $full))
+    }
+
+    if ($RequireNativeDelegation) {
+        if ([string]$raw.status -eq 'incompatible') {
+            throw 'An incompatible native-worker arm is diagnostic only and cannot be bridged into a gradeable canonical result.'
+        }
+        $runnerDescriptor = Get-PackageRunnerDescriptor -RunnerName ([string]$profile.Profile.runner)
+        [void](Assert-NativeWorkerTerminalEvidence `
+            -ExecutionEvidence $raw `
+            -Run $runData `
+            -RequestedModel ([string]$profile.Profile.Model) `
+            -ExpectedRunner ([string]$profile.Profile.runner) `
+            -ExpectedMechanism ([string]$runnerDescriptor.delegation.mechanism))
+        Assert-NativeTerminalCaptureArtifact -ExecutionResult $raw
     }
 
     $finalStatus = [string]$raw.final_response.status
@@ -183,7 +258,7 @@ try {
     if ($finalStatus -eq 'unavailable') { $notes.Add("final_response_unavailable=$($raw.final_response.reason)") }
     foreach ($warning in $warnings) { if (-not [string]::IsNullOrWhiteSpace([string]$warning)) { $notes.Add([string]$warning) } }
 
-    $existingGrading = @(Get-ExistingGrading -ResultPath $resultPath)
+    $existingGrading = @(Get-ExistingGrading -ResultPath $resultPath -ExecutionRunId ([string]$raw.run_id))
     $caps = Get-JsonProperty -Object $raw.isolation -Name 'capabilities' -Default ([ordered]@{})
     $requestedModel = [string](Get-JsonProperty -Object $raw.requested -Name 'model' -Default '')
     $resolvedModelValue = Get-JsonProperty -Object $raw.resolved -Name 'model' -Default $null
@@ -237,11 +312,32 @@ try {
             candidate_skill_exposed = Get-CapabilityBoolean (Get-JsonProperty -Object $caps -Name 'candidate_skill_exposure' -Default $null)
             transcript_captured = if ($null -ne $transcriptMetricObject) { [string](Get-JsonProperty -Object $transcriptMetricObject -Name 'status' -Default '') -eq 'available' } else { $null }
         }
-        execution_status = [string]$raw.status
-        execution_run_id = [string]$raw.run_id
-        execution_result_file = [System.IO.Path]::GetRelativePath($evalDirectory, $executionPath).Replace('\', '/')
-        grading = @($existingGrading)
-        notes = [string]::Join("`n", @($notes))
+         execution_status = [string]$raw.status
+         execution_run_id = [string]$raw.run_id
+         execution_result_file = [System.IO.Path]::GetRelativePath($evalDirectory, $executionPath).Replace('\', '/')
+         execution_result_sha256 = $executionResultHash
+         grading = @($existingGrading)
+         notes = [string]::Join("`n", @($notes))
+     }
+
+    # Re-bridging the same immutable raw result must not erase grading or
+    # telemetry that an external evaluator has already attached. A changed
+    # raw hash takes the fresh-result path above and resets stale grading.
+    $existingCanonical = Read-RunnerJson -Path $resultPath
+    $existingRawHash = [string](Get-JsonProperty -Object $existingCanonical -Name 'execution_result_sha256' -Default '')
+    if ($existingRawHash -eq $executionResultHash) {
+        foreach ($field in @(
+            'model', 'requested_model', 'resolved_model', 'configuration_resolution_status',
+            'configuration_resolution_reason', 'harness', 'executed_utc', 'output', 'output_files',
+            'transcript', 'shell_commands', 'files_read', 'files_written', 'stdout', 'stderr',
+            'exit_status', 'duration_seconds', 'total_tokens', 'tool_calls', 'turns',
+            'base_input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens',
+            'cache_write_1h_tokens', 'estimated_cost_usd', 'model_effort', 'isolation', 'grading', 'notes'
+        )) {
+            if (Test-JsonProperty -Object $existingCanonical -Name $field) {
+                $portableResult[$field] = Get-JsonProperty -Object $existingCanonical -Name $field
+            }
+        }
     }
     Write-BridgeJson -Path $resultPath -Value $portableResult
     Write-RunnerJson -Value ([ordered]@{ schema = 'codebeltnet/agentic/eval-result-bridge/1'; result = [System.IO.Path]::GetRelativePath($iterationDirectory, $resultPath).Replace('\', '/'); execution_status = $raw.status }) -AsOutput

@@ -71,36 +71,10 @@ try {
             continue
         }
 
-        $alreadyBridged = $false
-        try {
-            $existingResult = Read-RunnerJson -Path $record.ResultPath
-            $rawResult = Read-RunnerJson -Path $record.ExecutionResultPath
-            $expectedExecutionFile = [System.IO.Path]::GetRelativePath($record.EvalDirectory, $record.ExecutionResultPath).Replace('\', '/')
-            $nativeEvidenceReady = -not $RequireNativeDelegation -or [string](Get-JsonProperty -Object $rawResult -Name 'status' -Default '') -eq 'incompatible'
-            if ($RequireNativeDelegation -and -not $nativeEvidenceReady) {
-                try {
-                    $runData = Resolve-RunContract -RunPath $record.RunManifestPath
-                    $profileData = Resolve-ExecutionProfile -ProfilePath (Join-Path $iterationPath 'execution-profile.json')
-                    [void](Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $rawResult -Run $runData -RequestedModel ([string]$profileData.Profile.Model))
-                    $nativeEvidenceReady = $true
-                } catch {
-                    $nativeEvidenceReady = $false
-                }
-            }
-            $alreadyBridged = $nativeEvidenceReady -and
-                @('completed', 'failed', 'timed_out', 'cancelled', 'incompatible') -contains [string](Get-JsonProperty -Object $rawResult -Name 'status' -Default '') -and
-                [string](Get-JsonProperty -Object $existingResult -Name 'execution_status' -Default '') -eq [string](Get-JsonProperty -Object $rawResult -Name 'status' -Default '') -and
-                [string](Get-JsonProperty -Object $existingResult -Name 'execution_result_file' -Default '') -eq $expectedExecutionFile -and
-                -not [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $existingResult -Name 'execution_run_id' -Default ''))
-        } catch {
-            $alreadyBridged = $false
-        }
-
-        if ($alreadyBridged) {
-            $bridged.Add("$($record.EvalName)/$($record.Configuration)")
-            continue
-        }
-
+        # Always invoke the one-arm bridge. The raw result is the authoritative
+        # terminal evidence; a status/path match alone cannot prove that the
+        # canonical result reflects the current raw file. The one-arm bridge
+        # preserves existing grading while revalidating hashes and provenance.
         $bridgeOutput = & pwsh -NoProfile -File $oneArmBridge `
             -Run $record.RunManifestPath `
             -ExecutionResult $record.ExecutionResultPath `

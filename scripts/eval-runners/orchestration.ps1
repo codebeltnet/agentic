@@ -191,15 +191,15 @@ function Register-DelegationAccepted {
         [string]$WorkerSessionId = ''
     )
 
-    $pending = [System.Collections.Generic.List[string]]::new()
-    foreach ($id in @($State.pending_worker_ids)) { [void]$pending.Add([string]$id) }
-    if (-not $pending.Contains($WorkerId)) {
-        throw "Worker '$WorkerId' cannot be accepted because it is not pending."
-    }
     $active = Get-OrchestrationDictionary -Object $State -Name 'active'
     $completed = Get-OrchestrationDictionary -Object $State -Name 'completed'
     if ($active.Contains($WorkerId) -or $completed.Contains($WorkerId)) {
-        throw "Worker '$WorkerId' was already accepted or completed."
+        throw "Worker '$WorkerId' was already accepted or completed; delegation acceptance is exactly-once and must not be retried."
+    }
+    $pending = [System.Collections.Generic.List[string]]::new()
+    foreach ($id in @($State.pending_worker_ids)) { [void]$pending.Add([string]$id) }
+    if (-not $pending.Contains($WorkerId)) {
+        throw "Worker '$WorkerId' cannot be accepted because it is not pending; preserve the orchestration state and do not register a second attempt."
     }
 
     [void]$pending.Remove($WorkerId)
@@ -285,7 +285,9 @@ function Register-WorkerTerminal {
 
     $active = Get-OrchestrationDictionary -Object $State -Name 'active'
     if (-not $active.Contains($WorkerId)) {
-        throw "Worker '$WorkerId' cannot become terminal because it is not active."
+        $completed = Get-OrchestrationDictionary -Object $State -Name 'completed'
+        $stateDescription = if ($completed.Contains($WorkerId)) { 'already terminal' } else { 'not accepted' }
+        throw "Worker '$WorkerId' cannot become terminal because it is $stateDescription; terminal registration is exactly-once and must not be retried."
     }
     $status = [string](Get-JsonProperty -Object $ExecutionEvidence -Name 'status' -Default '')
     if ($status -notin @('completed', 'failed', 'timed_out', 'cancelled', 'incompatible')) {

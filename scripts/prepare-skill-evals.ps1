@@ -58,7 +58,7 @@
     Optional deterministic catalog JSON used by the model discovery helper. Intended for tests and offline validation.
 
 .PARAMETER ReasoningEffort
-    Optional runner-supported reasoning/effort setting written to execution-profile.json. Codex defaults to medium
+    Optional runner-supported reasoning/effort setting written to execution-profile.json. Codex defaults to low
     when this is omitted.
 
 .PARAMETER ConfigurationProfile
@@ -712,7 +712,7 @@ function New-ExecutionProfile {
         schema = $executionProfileSchema
         runner = $ExecutionSelection.Runner
         model = $ExecutionSelection.Model
-        reasoning_effort = if (-not [string]::IsNullOrWhiteSpace($ReasoningEffort)) { $ReasoningEffort } elseif ($ExecutionSelection.Runner -eq 'codex') { 'medium' } else { $null }
+        reasoning_effort = if (-not [string]::IsNullOrWhiteSpace($ReasoningEffort)) { $ReasoningEffort } elseif ($ExecutionSelection.Runner -eq 'codex') { 'low' } else { $null }
         configuration_profile = $ConfigurationProfile
         tool_profile = $ToolProfile
         timeout_seconds = $TimeoutSeconds
@@ -1566,7 +1566,7 @@ function Invoke-PrepareMode {
 
     Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals))
     $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
-    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals))
+    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -RequestedConcurrency $Concurrency)
 
     Write-Host 'Evaluation package prepared.'
     Write-Host ''
@@ -1610,7 +1610,9 @@ function New-RunnerPrompt {
     param(
         [string]$IterationDirectory,
         [int]$IterationNumber,
-        [object[]]$ManifestEvals
+        [object[]]$ManifestEvals,
+        [Parameter(Mandatory = $true)][object]$ExecutionSelection,
+        [Parameter(Mandatory = $true)][int]$RequestedConcurrency
     )
 
     $builder = [System.Text.StringBuilder]::new()
@@ -1619,6 +1621,12 @@ function New-RunnerPrompt {
     $orchestrationPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/orchestration.ps1"
     $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
     $reportPath = Join-Path $IterationDirectory $reportToolRelativePath
+    $armCount = @($ManifestEvals).Count * 2
+    $firstDispatchCount = [Math]::Min($RequestedConcurrency, $armCount)
+    $armLabels = foreach ($manifestEval in @($ManifestEvals)) {
+        "arm-$($manifestEval.eval_id)-with_skill"
+        "arm-$($manifestEval.eval_id)-without_skill"
+    }
     [void]$builder.AppendLine('# Execute, grade, and report this evaluation package')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('START NOW. You are the external Eval Orchestrator for this user-directed handoff. Complete execution, deterministic grading, optional judgement, aggregation, and reporting in this run. Do not execute evaluation prompts in the current agent context.')
@@ -1644,10 +1652,19 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('3. Build the pending arm queue from `manifest.json` with the orchestration helper. For every arm, read the exact `run_manifest`, `execution_result`, and `result` fields from `runs.<arm>.run_manifest`, `runs.<arm>.execution_result`, and `runs.<arm>.result`. Retain those exact manifest-declared strings without editing them: the parent owns those exact destinations; the worker receives only its own prepared arm contract. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')
     [void]$builder.AppendLine('4. Before dispatching, require native worker delegation and all mandatory isolation controls. An unavailable or unsupported delegation mechanism is incompatible. A conditional mechanism is allowed only when the external orchestrator will require terminal evidence for the actual worker. Do not continue by invoking a runner process in the parent, and do not silently serialize arms in the parent.')
     [void]$builder.AppendLine('5. Dispatch each pending arm to one fresh harness-native full-capability worker. The worker must execute the prepared `prompt.md` as its first task from that arm''s staged run directory, with the selected model/configuration, exact working directory and isolated home. Require terminal evidence for the exact selected model, exact arm identity, working directory, isolated HOME/config boundary, prompt fidelity, terminal result capture, paired-arm/grading exclusion, fresh session, and absence of nested model execution; if any required fact is missing or mismatched, mark the arm incompatible without retrying through a fallback. It must not receive its paired arm, `eval-metadata.json`, expected output, assertions, grading, benchmark/report data, or any result from another arm.')
-    [void]$builder.AppendLine('6. The delegated worker is the only model-backed execution for that arm. It must not invoke `runner.ps1 execute`, a second harness CLI, another model agent, or a nested session. Return the worker transcript/terminal evidence and normalized execution result to the parent; the parent writes it to the exact manifest-declared `execution_result` path without reconstructing any path.')
-    [void]$builder.AppendLine('7. Maintain up to `min(execution-profile.json.concurrency, remaining arms)` active delegated workers. If a delegation request is rejected before the worker starts because of harness capacity, leave that arm pending, record no eval attempt, mark the rejection as capacity-limited in orchestration state, and retry it after an active worker becomes terminal. Do not add a runner-specific ceiling or change the portable requested concurrency.')
+    [void]$builder.AppendLine('6. The delegated worker is the only model-backed execution for that arm. It must not invoke `runner.ps1 execute`, a second harness CLI, another model agent, or a nested session. Return the runner-produced terminal `execution-result.json` unchanged, including its exact runner identity, the descriptor''s exact native delegation mechanism, and a hashed transcript/event artifact. A parent-created summary or normalized result is not genuine runner evidence and is incompatible. The parent writes that raw result to the exact manifest-declared `execution_result` path without reconstructing any path.')
+    [void]$builder.AppendLine('7. Register each worker acceptance and terminal result exactly once. If orchestration reports that an arm is already accepted or terminal, do not retry or re-register it; preserve the state and resolve the arm from its existing terminal record. Maintain up to `min(execution-profile.json.concurrency, remaining arms)` active delegated workers. If a delegation request is rejected before the worker starts because of harness capacity, leave that arm pending, record no eval attempt, mark the rejection as capacity-limited in orchestration state, and retry it after an active worker becomes terminal. Do not add a runner-specific ceiling or change the portable requested concurrency.')
+    [void]$builder.AppendLine('7a. DISPATCH IS AN ACTION, NOT A CONFIRMATION STEP. After preflight, emit the full first batch of native worker calls immediately. Do not send a prose status message, ask the user whether to start or re-dispatch, wait for confirmation, or wait for the first worker result before emitting the remaining calls. If the client cannot emit the batch in one assistant turn, mark the selected runner incompatible and stop; never replace the batch with deliberate serial dispatch.')
+    if ([string]::Equals([string]$ExecutionSelection.Runner, 'opencode', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $armLabelText = [string]::Join(', ', @($armLabels))
+        $deferredDispatchExample = 'Want me to re-dispatch...'
+        [void]$builder.AppendLine()
+        [void]$builder.AppendLine('OpenCode NATIVE TASK DISPATCH (MANDATORY): This package selected OpenCode. Use the native `Task` tool with the full-capability built-in `General` worker for every arm; do not use a prose plan as a substitute.')
+        [void]$builder.AppendLine("Immediately after preflight, in the first execution assistant turn, emit exactly $firstDispatchCount sibling `Task` tool calls for the first batch of $armCount arms (requested concurrency=$RequestedConcurrency). The arms in this package are: $armLabelText. Each call must create a fresh worker for one arm only and pass only that arm's prompt/run contract. Do not wait between calls. The UI/API may show the sibling calls as separate tool messages, but all calls must be emitted from this same assistant turn before any result is awaited.")
+        [void]$builder.AppendLine("For this OpenCode package, a response such as [$deferredDispatchExample], any equivalent confirmation question, or one Task call followed by a wait is non-compliant. Begin the sibling Task calls now. If OpenCode/the client cannot issue multiple sibling Task calls in one assistant turn, record the runner as incompatible before executing any arm; do not run the $armCount arms sequentially and do not claim a completed evaluation.")
+    }
     [void]$builder.AppendLine('8. Persist the orchestration state at `orchestration-state.json` as workers are accepted, capacity-rejected, and terminal. Before bridging, invoke `Assert-OrchestrationConcurrency`. If independent arms requested concurrency > 1 but `max_observed_active` is 1 without explicit capacity-limit evidence, fail the handoff; deliberate serial pacing is not a completed evaluation.')
-    [void]$builder.AppendLine('9. Preserve the complete terminal response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout, harness failure, and incompatibility are results.')
+    [void]$builder.AppendLine('9. Preserve the complete terminal response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout and harness failure are terminal results; incompatibility is diagnostic-only and cannot be graded or benchmarked.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The package-local process surface is:')
     [void]$builder.AppendLine('```text')
@@ -1666,7 +1683,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine(('   `pwsh -NoProfile -File "' + $manifestBridgePath + '" -IterationDirectory "' + $IterationDirectory + '" -RequireComplete -RequireNativeDelegation -RequireParallelDispatch`'))
     [void]$builder.AppendLine('   The bridge''s one-arm operation is conceptually `-Run runPath -ExecutionResult executionPath -Result resultPath`, where all three values are the exact strings read from `manifest.json`. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any of them.')
     [void]$builder.AppendLine('2. Only if the package bridge succeeds, read each eval''s `eval-metadata.json` and reveal `expected_output` and `assertions` to the Grader. Follow `tools/skill-creator/agents/grader.md`; grade deterministically first, then use optional model judgement only where deterministic evidence cannot decide. Never infer tool or file behavior from model self-report without process evidence.')
-    [void]$builder.AppendLine('3. Write only `grading[].text`, `grading[].passed`, and `grading[].evidence` for grading. Do not alter raw execution results or replace the canonical result stubs. Use null for genuinely unavailable judgement and leave missing arms visibly missing.')
+    [void]$builder.AppendLine('3. Write only `grading[].text`, `grading[].passed`, and `grading[].evidence` for grading. Do not grade incompatible arms, do not alter raw execution results, and do not replace the canonical result stubs. Use null for genuinely unavailable judgement and leave missing or incompatible arms visibly ungradeable.')
     [void]$builder.AppendLine(('4. Run the existing package report adapter with its completion gate: `pwsh -NoProfile -File "' + $reportPath + '" -IterationDirectory "' + $IterationDirectory + '" -RequireComplete`. It remains the bridge to Anthropic skill-creator''s grader-compatible aggregator and viewer; do not replace it with harness-specific reporting. The packaged compatibility tools remain `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`.'))
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The completion artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md` at the package root. Return their absolute paths, completed and missing arm counts, runner/model identity, and a concise evidence-backed summary. If the package cannot be written from the external environment, return one paste-ready block containing the completed result objects and report artifacts.')
@@ -1969,7 +1986,12 @@ function Invoke-CollectMode {
             # A transferred or partial result may arrive without grading. Fall back to the assertion count from the
             # package so the row still shows how much is left to check.
             $grading = @(Get-JsonProperty -Object $result -Name 'grading' -Default @())
-            $graded = @($grading | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'passed') })
+            if ($executionStatus -eq 'incompatible') {
+                $warnings.Add("$($entry.eval_name)/$configuration - execution is incompatible; its output is diagnostic only and cannot contribute grading evidence.")
+                $graded = @()
+            } else {
+                $graded = @($grading | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'passed') })
+            }
             $passed = @($graded | Where-Object { [bool]$_.passed }).Count
             $total = if ($grading.Count -gt 0) { $grading.Count } else { @($metadata.assertions).Count }
             if ($graded.Count -eq 0) {
@@ -2034,9 +2056,13 @@ function Invoke-CollectMode {
     }
 
     $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.AppendLine("# Eval comparison: $($manifest.skill_name) (iteration $($manifest.iteration))")
+    $comparisonKind = if ($errors.Count -gt 0) { 'Diagnostic comparison (incomplete)' } else { 'Eval comparison' }
+    [void]$builder.AppendLine("# $comparisonKind`: $($manifest.skill_name) (iteration $($manifest.iteration))")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('This repository-side comparison validates recorded grading and never invokes a model. Grading may have been performed by the user-directed external evaluator before this report was generated.')
+    if ($errors.Count -gt 0) {
+        [void]$builder.AppendLine('This package did not pass the completion gate. The rows below are diagnostic evidence only and must not be treated as a valid paired benchmark.')
+    }
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('| Eval | Assertions | with_skill model | with_skill graded | without_skill model | without_skill graded |')
     [void]$builder.AppendLine('| --- | --- | --- | --- | --- | --- |')
@@ -2097,14 +2123,18 @@ function Invoke-CollectMode {
     Write-Host ''
     Write-Host "Wrote $comparisonPath"
 
-    $reportScript = Join-Path (Join-Path (Get-RepoRoot) 'scripts') 'generate-eval-report.ps1'
-    $reportOutput = & pwsh -NoProfile -File $reportScript -IterationDirectory $iterationDirectory 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $errors.Add("Report generation failed: $($reportOutput -join [Environment]::NewLine)")
-    } else {
-        foreach ($line in @($reportOutput)) {
-            Write-Host $line
+    if ($errors.Count -eq 0) {
+        $reportScript = Join-Path (Join-Path (Get-RepoRoot) 'scripts') 'generate-eval-report.ps1'
+        $reportOutput = & pwsh -NoProfile -File $reportScript -IterationDirectory $iterationDirectory 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $errors.Add("Report generation failed: $($reportOutput -join [Environment]::NewLine)")
+        } else {
+            foreach ($line in @($reportOutput)) {
+                Write-Host $line
+            }
         }
+    } else {
+        Write-Host 'Skipping report generation because the completion gate failed; comparison.md is diagnostic only.'
     }
 
     if ($errors.Count -gt 0) {

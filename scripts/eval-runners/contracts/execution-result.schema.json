@@ -52,6 +52,22 @@
         "reason": { "type": "string" }
       }
     },
+    "runner": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
     "requested": {
       "type": "object",
       "additionalProperties": false,
@@ -97,6 +113,14 @@
       }
     },
     "duration_seconds": { "type": "number", "minimum": 0 },
+    "exit": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": ["integer", "null"] },
+        "failure": {}
+      }
+    },
     "input": {
       "type": "object",
       "required": ["prompt_sha256", "run_json_sha256", "profile_sha256"]

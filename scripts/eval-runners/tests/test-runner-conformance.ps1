@@ -956,6 +956,7 @@ try {
     $reportText = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'scripts\generate-eval-report.ps1'), [System.Text.UTF8Encoding]::new($false))
     $bridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-execution-result.ps1'), [System.Text.UTF8Encoding]::new($false))
     $manifestBridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-manifest-results.ps1'), [System.Text.UTF8Encoding]::new($false))
+    $commonText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'runner-common.ps1'), [System.Text.UTF8Encoding]::new($false))
     Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
     Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
     Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
@@ -968,8 +969,15 @@ try {
     Assert-True ($prepareText.Contains('Require terminal evidence for the exact selected model, exact arm identity, working directory, isolated HOME/config boundary, prompt fidelity, terminal result capture')) 'handoff preparation must require worker control evidence'
     Assert-True ($prepareText.Contains('-RequireComplete -RequireNativeDelegation -RequireParallelDispatch')) 'handoff preparation must revalidate native terminal and parallel-dispatch evidence during the manifest bridge'
     Assert-True ($prepareText.Contains('min(execution-profile.json.concurrency, remaining arms)')) 'handoff preparation must state requested concurrency fan-out'
+    Assert-True ($prepareText.Contains('DISPATCH IS AN ACTION, NOT A CONFIRMATION STEP.')) 'handoff preparation must forbid confirmation pauses before native dispatch'
+    Assert-True ($prepareText.Contains('sibling `Task` tool calls') -and $prepareText.Contains('same assistant turn before any result is awaited')) 'OpenCode handoff preparation must require same-turn sibling Task dispatch'
+    Assert-True ($prepareText.Contains('Want me to re-dispatch...')) 'OpenCode handoff preparation must reject deferred re-dispatch questions'
     Assert-True ($prepareText.Contains('Assert-OrchestrationConcurrency') -and $prepareText.Contains('orchestration-state.json')) 'handoff preparation must persist and validate orchestration concurrency state'
     Assert-True ($prepareText.Contains('rejected before the worker starts') -and $prepareText.Contains('record no eval attempt')) 'handoff preparation must queue capacity rejections without counting attempts'
+    Assert-True ($prepareText.Contains('Register each worker acceptance and terminal result exactly once') -and $prepareText.Contains('incompatibility is diagnostic-only') -and $prepareText.Contains('Do not grade incompatible arms')) 'handoff preparation must make duplicate registration and incompatible-arm handling fail closed'
+    Assert-True ($prepareText.Contains('Skipping report generation because the completion gate failed') -and $prepareText.Contains('Diagnostic comparison (incomplete)')) 'incomplete collection must remain diagnostic and skip report generation'
+    Assert-True ($bridgeText.Contains('Get-PackageRunnerDescriptor') -and $bridgeText.Contains('Assert-NativeTerminalCaptureArtifact') -and $bridgeText.Contains('ExpectedMechanism')) 'native bridge must require runner-produced terminal evidence'
+    Assert-True ($commonText.Contains('exit.status must be a JSON number or null')) 'execution results must reject textual exit statuses'
     Assert-True ($prepareText.Contains('orchestration.ps1')) 'handoff preparation must load the deterministic orchestration helper'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
@@ -1073,6 +1081,13 @@ try {
     Assert-True (-not $preBridgeValidation.Success) 'terminal execution plus an unrun canonical result fails validation before bridging'
     Assert-True (@($preBridgeValidation.Errors | Where-Object { $_ -match 'remains unrun' }).Count -gt 0) 'pre-bridge validation reports the canonical unrun result'
 
+    $incompatibleManifestResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $manifestWithout.Path -Profile $parallelProfilePath -Scenario incompatible
+    Write-TestJson -Path $manifestWithoutExecution -Value $incompatibleManifestResult
+    $incompatibleValidation = Test-ManifestResults -IterationDirectory $manifestPackage -Manifest $manifestObject -RequireComplete
+    Assert-True (-not $incompatibleValidation.Complete) 'incompatible execution evidence fails the completion gate'
+    Assert-True (@($incompatibleValidation.Errors | Where-Object { $_ -match 'diagnostic only' }).Count -gt 0) 'incompatible completion rejection explains that the arm is diagnostic only'
+    Write-TestJson -Path $manifestWithoutExecution -Value $manifestWithoutExecutionResult
+
     $shadowPath = Join-Path $manifestEval 'results\with_skill.result.json'
     Write-TestJson -Path $shadowPath -Value ([ordered]@{
         schema = (Get-RunnerSchemaNames).PortableResult
@@ -1129,6 +1144,26 @@ try {
     $canonicalAfterRepeat = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
     Assert-True ([bool]$canonicalAfterRepeat.grading[0].passed) 'repeat manifest bridge preserves completed grading'
     Assert-Equal 'graded after the first bridge' $canonicalAfterRepeat.grading[0].evidence 'repeat manifest bridge preserves grading evidence'
+
+    $staleReplacement = Get-Content -LiteralPath $manifestWithExecution -Raw | ConvertFrom-Json
+    $staleReplacement.run_id = 'replacement-terminal-result'
+    $staleReplacement.final_response.text = 'replacement terminal output'
+    Write-TestJson -Path $manifestWithExecution -Value $staleReplacement
+    $replacementBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "replacement manifest path bridge failed: $([string]::Join(' ', @($replacementBridgeOutput)))" }
+    $canonicalAfterReplacement = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
+    Assert-Equal 'replacement-terminal-result' $canonicalAfterReplacement.execution_run_id 'manifest bridge revalidates and replaces stale canonical execution evidence'
+    Assert-Equal 'replacement terminal output' $canonicalAfterReplacement.output 'manifest bridge does not skip a changed raw terminal result'
+    Assert-True ($null -eq $canonicalAfterReplacement.grading[0].passed) 'raw replacement clears grading tied to a prior execution run'
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$canonicalAfterReplacement.grading[0].evidence)) 'raw replacement clears stale grading evidence'
+
+    $invalidExitPath = Join-Path $manifestEval 'results\invalid-exit.execution-result.json'
+    $invalidExitResult = $bridgeResult | ConvertTo-Json -Depth 100 | ConvertFrom-Json
+    $invalidExitResult.exit.status = 'completed'
+    Write-TestJson -Path $invalidExitPath -Value $invalidExitResult
+    $invalidExitOutput = & pwsh -NoProfile -File $bridgePath -Run $with.Path -ExecutionResult $invalidExitPath -Result $resultPath 2>&1
+    Assert-True ($LASTEXITCODE -ne 0) 'one-arm bridge rejects a textual exit status'
+    Assert-True (([string]::Join(' ', @($invalidExitOutput))) -match 'JSON number or null') 'textual exit rejection explains the numeric contract'
 
     $acceptedBridgeResult = $bridgeResult | ConvertTo-Json -Depth 100 | ConvertFrom-Json
     $acceptedBridgeResult.resolved.status = 'accepted_request'

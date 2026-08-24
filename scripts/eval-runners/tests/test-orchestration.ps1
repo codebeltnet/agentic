@@ -332,6 +332,30 @@ try {
     Assert-True ((Test-NativeWorkerTerminalEvidence -ExecutionEvidence $validTerminalEvidence -Run $terminalRunData -RequestedModel ([string]$terminalArm.worker.model) -ExpectedWorkerSessionId 'native-terminal-session').Valid) 'valid terminal native-worker evidence is accepted'
     Assert-True (Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $validTerminalEvidence -Run $terminalRunData -RequestedModel ([string]$terminalArm.worker.model) -ExpectedWorkerSessionId 'native-terminal-session') 'valid terminal evidence passes the assert gate'
 
+    $exactOnceState = New-OrchestrationState -Plan ([pscustomobject]@{
+        schema = $plan.schema
+        requested_concurrency = 1
+        arms = @($terminalArm)
+    })
+    [void](Register-DelegationAccepted -State $exactOnceState -WorkerId ([string]$terminalArm.worker_id) -WorkerSessionId 'native-terminal-session')
+    $duplicateAcceptanceRejected = $false
+    try {
+        [void](Register-DelegationAccepted -State $exactOnceState -WorkerId ([string]$terminalArm.worker_id) -WorkerSessionId 'duplicate-session')
+    } catch {
+        $duplicateAcceptanceRejected = $_.Exception.Message -match 'exactly-once'
+    }
+    Assert-True $duplicateAcceptanceRejected 'duplicate worker acceptance is rejected with an exactly-once diagnostic'
+    Assert-Equal 1 $exactOnceState.active[[string]$terminalArm.worker_id].attempt_count 'duplicate acceptance does not create another attempt'
+    [void](Register-WorkerTerminal -Plan ([pscustomobject]@{ arms = @($terminalArm) }) -State $exactOnceState -WorkerId ([string]$terminalArm.worker_id) -ExecutionEvidence (Copy-TestObject -Value $validTerminalEvidence))
+    $duplicateTerminalRejected = $false
+    try {
+        [void](Register-WorkerTerminal -Plan ([pscustomobject]@{ arms = @($terminalArm) }) -State $exactOnceState -WorkerId ([string]$terminalArm.worker_id) -ExecutionEvidence (Copy-TestObject -Value $validTerminalEvidence))
+    } catch {
+        $duplicateTerminalRejected = $_.Exception.Message -match 'already terminal|exactly-once'
+    }
+    Assert-True $duplicateTerminalRejected 'duplicate terminal registration is rejected after the worker is terminal'
+    Assert-Equal 1 @($exactOnceState.completed.Keys).Count 'duplicate terminal registration does not add another completion'
+
     function Invoke-TerminalEvidenceCase {
         param(
             [Parameter(Mandatory = $true)][string]$Name,
