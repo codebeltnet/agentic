@@ -54,6 +54,13 @@ execution. Missing or mismatched evidence makes the arm `incompatible`; it is
 never a reason to invoke the parent or the compatibility `runner.ps1 execute`
 transport.
 
+The terminal result must come from the selected package runner. The parent may
+persist that result at the exact manifest-declared path, but it must not replace
+it with a worker summary or synthesize a normalized result. Native bridging
+also checks the result's runner identity, the descriptor's exact delegation
+mechanism, and a hashed transcript/event artifact. An `incompatible` arm is
+diagnostic-only: it is never gradeable and fails the completion/benchmark gate.
+
 The descriptor's `delegation` object records the native mechanism, worker role,
 advertised full-capability/model-lock/working-directory/result-capture
 properties, harness-authoritative capacity, and the invariant
@@ -77,6 +84,10 @@ Native delegation mechanisms:
 - OpenCode: the native Task tool with the full-capability built-in `General`
   subagent. Task/General availability is preflight readiness only;
   `Explore`/`Scout` read-only agents are not valid for a mutable eval arm.
+  When more than one arm is pending, the external orchestrator must emit the
+  sibling Task calls for the first batch in one assistant turn and must not ask
+  for confirmation or wait between calls. A client that cannot do that is
+  incompatible; available-capacity serial dispatch is not a fallback.
 - Cline: a full-capability Cline SDK Agent Squad
   `start_subagent(preset: "anvil")` child session backed by
   `ClineCore.create`. The plugin's default `phantom` preset and Cline's
@@ -106,7 +117,8 @@ runner may pass it through unchanged or split it internally when its native CLI
 requires separate provider/model arguments. The profile contains no credentials,
 secrets, or portable provider field.
 `execution-result.json` normalizes one blind execution and keeps grading
-separate from raw evidence.
+separate from raw evidence. Its `exit.status` is a numeric process exit code or
+`null`, never a textual lifecycle label such as `completed`.
 
 Every runner exposes the same process surface:
 
