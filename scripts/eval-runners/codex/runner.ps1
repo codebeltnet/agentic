@@ -46,21 +46,24 @@ $descriptor = [ordered]@{
         cost_telemetry = 'conditional'
         credential_child_filtering = 'supported'
         native_skill_activation_evidence = 'unsupported'
-        native_worker_delegation = 'supported'
-        delegated_worker_full_capability = 'supported'
-        delegated_worker_model_lock = 'supported'
-        delegated_worker_working_directory = 'supported'
-        delegated_worker_result_capture = 'supported'
-        delegated_worker_capacity_signal = 'supported'
+        # The app-server schema proves that a native child surface exists, not
+        # what the child actually resolved or inherited. Terminal evidence is
+        # required for every delegated-worker control.
+        native_worker_delegation = 'conditional'
+        delegated_worker_full_capability = 'conditional'
+        delegated_worker_model_lock = 'conditional'
+        delegated_worker_working_directory = 'conditional'
+        delegated_worker_result_capture = 'conditional'
+        delegated_worker_capacity_signal = 'conditional'
     }
     delegation = [ordered]@{
         mode = 'native_worker'
         mechanism = 'Codex app-server native child session via thread/start and turn/start with per-worker cwd, model, and ephemeral context'
         worker_role = 'native-codex-child-session'
-        full_capability = 'supported'
-        model_lock = 'supported'
-        working_directory = 'supported'
-        result_capture = 'supported'
+        full_capability = 'conditional'
+        model_lock = 'conditional'
+        working_directory = 'conditional'
+        result_capture = 'conditional'
         capacity = 'harness_authoritative'
         nested_model_execution = $false
     }
@@ -227,7 +230,9 @@ function Get-CodexCapabilityMap {
     $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
     $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
     foreach ($name in @('native_worker_delegation', 'delegated_worker_full_capability', 'delegated_worker_model_lock', 'delegated_worker_working_directory', 'delegated_worker_result_capture', 'delegated_worker_capacity_signal')) {
-        $capabilities[$name] = if ($NativeWorkerAvailable) { 'supported' } else { 'unsupported' }
+        # The app-server probe proves that the native surface is available;
+        # only the child terminal evidence can prove the selected controls.
+        $capabilities[$name] = if ($NativeWorkerAvailable) { 'conditional' } else { 'unsupported' }
     }
     return $capabilities
 }
@@ -312,7 +317,8 @@ function Get-CodexPreflight {
             }
             $nativeWorkerObservation = Get-CodexNativeWorkerProbe -CommandInfo $commandInfo -Inputs $Inputs
             if ($nativeWorkerObservation.Available) {
-                $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail $nativeWorkerObservation.Detail))
+                $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail ($nativeWorkerObservation.Detail + ' This proves API readiness only; the actual child remains conditional until terminal evidence.')))
+                $warnings.Add('Codex app-server native-worker controls remain conditional until terminal evidence proves the actual child model, cwd, HOME/config, fresh identity, prompt, exclusions, and terminal capture.')
             } else {
                 $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail $nativeWorkerObservation.Detail))
                 $reasons.Add($nativeWorkerObservation.Detail)

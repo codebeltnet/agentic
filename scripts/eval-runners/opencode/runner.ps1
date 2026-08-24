@@ -47,21 +47,23 @@ $descriptor = [ordered]@{
         cost_telemetry = 'conditional'
         credential_child_filtering = 'conditional'
         native_skill_activation_evidence = 'unsupported'
-        native_worker_delegation = 'supported'
-        delegated_worker_full_capability = 'supported'
-        delegated_worker_model_lock = 'supported'
-        delegated_worker_working_directory = 'supported'
-        delegated_worker_result_capture = 'supported'
-        delegated_worker_capacity_signal = 'supported'
+        # Task/General availability is only an advertised native mechanism;
+        # the actual child must prove its controls at terminal time.
+        native_worker_delegation = 'conditional'
+        delegated_worker_full_capability = 'conditional'
+        delegated_worker_model_lock = 'conditional'
+        delegated_worker_working_directory = 'conditional'
+        delegated_worker_result_capture = 'conditional'
+        delegated_worker_capacity_signal = 'conditional'
     }
     delegation = [ordered]@{
         mode = 'native_worker'
         mechanism = 'OpenCode Task tool invoking the full-capability General subagent in a fresh child context'
         worker_role = 'general'
-        full_capability = 'supported'
-        model_lock = 'supported'
-        working_directory = 'supported'
-        result_capture = 'supported'
+        full_capability = 'conditional'
+        model_lock = 'conditional'
+        working_directory = 'conditional'
+        result_capture = 'conditional'
         capacity = 'harness_authoritative'
         nested_model_execution = $false
     }
@@ -277,7 +279,8 @@ function Get-OpenCodePreflight {
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The adapter starts one new opencode run process and supplies no resume, continue, or session id.'))
     $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter isolates global/user configuration roots and deliberately preserves repository-owned project configuration; OPENCODE_DISABLE_PROJECT_CONFIG is not used.'))
     $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail 'The exact prompt bytes are sent on stdin as the first and only task input.'))
-    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail 'Use OpenCode native Task with the full-capability General subagent; Explore and Scout read-only agents are not valid eval workers.'))
+    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail 'OpenCode Task/General is an advertised native mechanism, but this preflight cannot observe the child''s resolved model, cwd, HOME/config, fresh identity, prompt, exclusions, or terminal capture. Explore and Scout remain invalid read-only workers.'))
+    $warnings.Add('OpenCode native-worker controls are conditional. The external orchestrator must require terminal delegation evidence; direct run --dir/--model/config observations do not prove the native child.')
     $warnings.Add('OpenCode does not expose a supported child-tool environment filter in this CLI contract; the runner removes unrelated inherited variables but cannot independently prove that the selected provider credential is hidden from every OpenCode-launched tool.')
 
     $hardConfinement = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')

@@ -115,7 +115,47 @@
       }
     },
     "telemetry": { "type": "object" },
-    "evidence": { "type": "object" },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "delegation": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "mechanism",
+            "worker_session_id",
+            "observed_model",
+            "observed_working_directory",
+            "observed_home",
+            "fresh_worker",
+            "home_config_isolated",
+            "prompt_fidelity",
+            "prompt_sha256",
+            "terminal_result_capture",
+            "paired_arm_visible",
+            "grading_material_visible",
+            "nested_model_execution",
+            "model_execution_count"
+          ],
+          "properties": {
+            "mechanism": { "type": "string", "minLength": 1 },
+            "worker_session_id": { "type": "string", "minLength": 1 },
+            "observed_model": { "type": "string", "minLength": 1 },
+            "observed_working_directory": { "type": "string", "minLength": 1 },
+            "observed_home": { "type": "string", "minLength": 1 },
+            "fresh_worker": { "const": true },
+            "home_config_isolated": { "const": true },
+            "prompt_fidelity": { "const": true },
+            "prompt_sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+            "terminal_result_capture": { "const": true },
+            "paired_arm_visible": { "const": false },
+            "grading_material_visible": { "const": false },
+            "nested_model_execution": { "const": false },
+            "model_execution_count": { "const": 1 }
+          }
+        }
+      }
+    },
     "artifacts": { "type": "array" },
     "warnings": { "type": "array", "items": { "type": "string" } },
     "compatibility_deviations": { "type": "array", "items": { "type": "string" } },

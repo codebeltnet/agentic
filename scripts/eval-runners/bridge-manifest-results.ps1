@@ -13,7 +13,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$IterationDirectory,
 
-    [switch]$RequireComplete
+    [switch]$RequireComplete,
+
+    [switch]$RequireNativeDelegation
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,7 +58,19 @@ try {
             $existingResult = Read-RunnerJson -Path $record.ResultPath
             $rawResult = Read-RunnerJson -Path $record.ExecutionResultPath
             $expectedExecutionFile = [System.IO.Path]::GetRelativePath($record.EvalDirectory, $record.ExecutionResultPath).Replace('\', '/')
-            $alreadyBridged = @('completed', 'failed', 'timed_out', 'cancelled', 'incompatible') -contains [string](Get-JsonProperty -Object $rawResult -Name 'status' -Default '') -and
+            $nativeEvidenceReady = -not $RequireNativeDelegation -or [string](Get-JsonProperty -Object $rawResult -Name 'status' -Default '') -eq 'incompatible'
+            if ($RequireNativeDelegation -and -not $nativeEvidenceReady) {
+                try {
+                    $runData = Resolve-RunContract -RunPath $record.RunManifestPath
+                    $profileData = Resolve-ExecutionProfile -ProfilePath (Join-Path $iterationPath 'execution-profile.json')
+                    [void](Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $rawResult -Run $runData -RequestedModel ([string]$profileData.Profile.Model))
+                    $nativeEvidenceReady = $true
+                } catch {
+                    $nativeEvidenceReady = $false
+                }
+            }
+            $alreadyBridged = $nativeEvidenceReady -and
+                @('completed', 'failed', 'timed_out', 'cancelled', 'incompatible') -contains [string](Get-JsonProperty -Object $rawResult -Name 'status' -Default '') -and
                 [string](Get-JsonProperty -Object $existingResult -Name 'execution_status' -Default '') -eq [string](Get-JsonProperty -Object $rawResult -Name 'status' -Default '') -and
                 [string](Get-JsonProperty -Object $existingResult -Name 'execution_result_file' -Default '') -eq $expectedExecutionFile -and
                 -not [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $existingResult -Name 'execution_run_id' -Default ''))
@@ -72,7 +86,8 @@ try {
         $bridgeOutput = & pwsh -NoProfile -File $oneArmBridge `
             -Run $record.RunManifestPath `
             -ExecutionResult $record.ExecutionResultPath `
-            -Result $record.ResultPath 2>&1
+            -Result $record.ResultPath `
+            -RequireNativeDelegation:$RequireNativeDelegation 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "$($record.EvalName)/$($record.Configuration) bridge failed for manifest paths run='$($record.RunManifestRelative)', execution='$($record.ExecutionResultRelative)', result='$($record.ResultRelative)': $([string]::Join(' ', @($bridgeOutput)))"
         }

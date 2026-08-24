@@ -26,39 +26,59 @@ arms dependency-free, exposes at most the requested
 `execution-profile.json.concurrency` active slots, and leaves a capacity
 rejection pending without incrementing the eval attempt count. It contains no
 harness-specific concurrency ceiling. `Assert-NativeWorkerDelegation` is the
-fail-closed preflight gate: a conditional or unavailable native mechanism
-cannot fall back to parent execution.
+fail-closed handoff gate: an unavailable/unsupported native mechanism cannot
+fall back to parent execution, while a conditional mechanism may dispatch only
+when terminal evidence will be checked.
+
+The delegation contract has three distinct evidence levels:
+
+```text
+descriptor        advertised harness capability
+preflight         locally observable readiness
+terminal evidence proof for the actual delegated Eval Worker
+```
+
+Descriptor fields describe a possible native mechanism; they do not prove an
+individual child. Preflight may prove that the installed API, plugin, or CLI
+surface is present, but child-specific model, cwd, HOME/config, fresh-session,
+prompt, exclusion, and result facts remain `conditional` until terminal
+evidence arrives. A worker is accepted only when `evidence.delegation` proves
+the requested model, exact arm identity, exact run working directory, exact
+isolated home/config boundary, prompt hash/fidelity, terminal capture, paired
+arm/grading exclusion, fresh worker/session identity, and exactly one model
+execution. Missing or mismatched evidence makes the arm `incompatible`; it is
+never a reason to invoke the parent or the compatibility `runner.ps1 execute`
+transport.
 
 The descriptor's `delegation` object records the native mechanism, worker role,
-full-capability and model-lock guarantees, working-directory/result capture,
-harness-authoritative capacity, and the invariant
+advertised full-capability/model-lock/working-directory/result-capture
+properties, harness-authoritative capacity, and the invariant
 `nested_model_execution = false`. The direct `execute` process surface remains
 for compatibility and deterministic conformance; the external orchestrator
 must use only `describe`, `preflight`, and the harness-native delegation
-surface for the actual eval arms. It must reject a worker whose terminal
-evidence does not prove the selected model, exact run working directory,
-isolated home, and fresh session; a native surface that cannot prove those
-controls is incompatible rather than a reason to fall back to the parent.
+surface for the actual eval arms.
 
 Native delegation mechanisms:
 
 - GitHub Copilot: the CLI's native `task` tool with an explicit
   full-capability `general-purpose` child agent for each arm. Fleet/subagent
   lifecycle is harness-owned; Codebelt supplies the already-known one-arm
-  decomposition and observes child completion/model evidence.
+  decomposition and requires terminal child evidence. The direct CLI
+  `-C`/`--model`/HOME compatibility transport does not prove the child.
 - Codex: the installed CLI's native app-server child-session surface,
   `thread/start` followed by `turn/start`, with the arm's `cwd`, selected
-  model, and ephemeral/fresh session settings. Do not wrap a native Codex
-  child in another `codex exec` invocation.
+  model, and ephemeral/fresh session settings. The schema/feature probe is
+  preflight readiness only; terminal evidence must prove the actual child.
+  Do not wrap a native Codex child in another `codex exec` invocation.
 - OpenCode: the native Task tool with the full-capability built-in `General`
-  subagent. `Explore`/`Scout` read-only agents are not valid for a mutable
-  eval arm.
+  subagent. Task/General availability is preflight readiness only;
+  `Explore`/`Scout` read-only agents are not valid for a mutable eval arm.
 - Cline: a full-capability Cline SDK Agent Squad
   `start_subagent(preset: "anvil")` child session backed by
   `ClineCore.create`. The plugin's default `phantom` preset and Cline's
   documented `use_subagents` research feature are read-only and are rejected
-  for mutable evals. The descriptor remains conditional until that
-  plugin/SDK mechanism is installed and preflight can prove it.
+  for mutable evals. Plugin/SDK discovery is only preflight readiness; the
+  actual child remains conditional until terminal evidence proves its controls.
 
 This directory contains the package-local implementation of the v0.9.1 Eval
 Runner protocol. It is copied into prepared packages so the external Eval
@@ -107,7 +127,9 @@ proven reports `strict` isolation when hard confinement is proven and
 boundary, prompt fidelity, result capture, or other mandatory control remains
 incompatible.
 
-The fake runner is deterministic and is the conformance reference. GitHub
+The fake runner is deterministic and is the conformance reference. It has no
+harness-native delegation surface and its compatibility output is never proof
+for a real harness. GitHub
 Copilot, Codex, OpenCode, and Cline are thin harness-specific adapters. Their
 native CLI flags, environment setup, event parsing, authentication injection,
 and isolation checks stay inside their own directories. Windows is supported in

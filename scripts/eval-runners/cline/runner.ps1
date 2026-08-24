@@ -286,7 +286,9 @@ function Get-ClineCapabilityMap {
     $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
     $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
     foreach ($name in @('native_worker_delegation', 'delegated_worker_full_capability', 'delegated_worker_model_lock', 'delegated_worker_working_directory', 'delegated_worker_result_capture', 'delegated_worker_capacity_signal')) {
-        $capabilities[$name] = if ($NativeWorkerAvailable) { 'supported' } else { 'unsupported' }
+        # Agent Squad package discovery proves local readiness only. It does
+        # not prove what the child session actually used or returned.
+        $capabilities[$name] = if ($NativeWorkerAvailable) { 'conditional' } else { 'unsupported' }
     }
     return $capabilities
 }
@@ -323,7 +325,8 @@ function Get-ClinePreflight {
     if ($profile.ToolProfile -ne 'default') { $reasons.Add("tool_profile '$($profile.ToolProfile)' is unsupported by cline.") }
 
     if ($agentsSquad.Available) {
-        $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail $agentsSquad.Detail))
+        $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail ($agentsSquad.Detail + ' This proves plugin/API readiness only; the actual child remains conditional until terminal evidence.')))
+        $warnings.Add('Cline Agent Squad native-worker controls remain conditional until terminal evidence proves the actual child model, cwd, HOME/config, fresh identity, prompt, exclusions, and terminal capture.')
     } else {
         $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail $agentsSquad.Detail))
         $warnings.Add('Cline native worker delegation is unavailable. The external orchestrator must not use the read-only use_subagents feature or the direct CLI execute transport as a fallback; install the full-capability Agent Squad plugin and set CLINE_AGENTS_SQUAD_PLUGIN.')

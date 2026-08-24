@@ -51,6 +51,7 @@ $recordedOldGhToken = $env:GH_TOKEN
 $recordedOldGithubToken = $env:GITHUB_TOKEN
 $recordedOldCopilotHome = $env:COPILOT_HOME
 $recordedOldGhConfigDir = $env:GH_CONFIG_DIR
+$recordedOldClineAgentsSquad = $env:CLINE_AGENTS_SQUAD_PLUGIN
 try {
     $fakeBin = Join-Path $recordedRoot 'bin'
     New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
@@ -272,6 +273,7 @@ exit 2
     $env:COPILOT_GITHUB_TOKEN = 'recorded-copilot-canary-not-logged'
     $env:GH_TOKEN = 'recorded-gh-canary-not-logged'
     $env:GITHUB_TOKEN = 'recorded-github-canary-not-logged'
+    $env:CLINE_AGENTS_SQUAD_PLUGIN = $null
     $recordedGhConfig = Join-Path $recordedRoot 'github-cli-auth'
     New-Item -ItemType Directory -Path $recordedGhConfig -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $recordedGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [System.Text.UTF8Encoding]::new($false))
@@ -315,6 +317,8 @@ exit 2
         Assert-True ($description.PSObject.Properties.Name -contains 'delegation') "$runnerName descriptor declares native delegation"
         Assert-True (-not [bool]$description.delegation.nested_model_execution) "$runnerName descriptor forbids nested model execution"
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$description.delegation.mechanism)) "$runnerName descriptor records its native delegation mechanism"
+        Assert-Equal 'conditional' $description.capabilities.native_worker_delegation "$runnerName descriptor does not present native delegation as terminal proof"
+        Assert-Equal 'conditional' $description.delegation.model_lock "$runnerName descriptor leaves child model resolution conditional"
         $expectedVersion = switch ($runnerName) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-cline 9.3' } }
         Assert-Equal $expectedVersion $description.harness.version "$runnerName exact describe version"
         $preflightWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -327,7 +331,8 @@ exit 2
             Assert-True ($preflightWith.delegation.status -ne 'supported') 'Cline preflight does not claim unavailable Agent Squad delegation'
             Assert-True (([string]::Join(' ', @($preflightWith.warnings))) -match 'use_subagents' -and ([string]::Join(' ', @($preflightWith.warnings))) -match 'Agent Squad') 'Cline preflight rejects read-only subagents as a mutable-arm fallback'
         } else {
-            Assert-Equal 'supported' $preflightWith.delegation.status "$runnerName native delegation preflight"
+            Assert-Equal 'conditional' $preflightWith.delegation.status "$runnerName native delegation preflight requires terminal evidence"
+            Assert-True ([bool]$preflightWith.delegation.terminal_evidence_required) "$runnerName preflight requires terminal delegation evidence"
         }
         if ($runnerName -eq 'copilot') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
@@ -469,6 +474,7 @@ exit 2
             Assert-True (($resultWithout | ConvertTo-Json -Depth 100) -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary|recorded-gh-fallback-token') 'Copilot baseline result evidence does not contain credential values'
         }
     }
+    $env:CLINE_AGENTS_SQUAD_PLUGIN = $recordedOldClineAgentsSquad
     $staleCli = $fakeCli.Replace("'opencode' { '--format --dir --model --auto --pure --continue --session' }", "'opencode' { '--format --dir --model --pure --continue --session' }")
     [System.IO.File]::WriteAllText((Join-Path $fakeBin 'opencode.ps1'), $staleCli, [System.Text.UTF8Encoding]::new($false))
     $stalePreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['opencode']
@@ -550,6 +556,7 @@ exit 2
     $env:GITHUB_TOKEN = $recordedOldGithubToken
     $env:COPILOT_HOME = $recordedOldCopilotHome
     $env:GH_CONFIG_DIR = $recordedOldGhConfigDir
+    $env:CLINE_AGENTS_SQUAD_PLUGIN = $recordedOldClineAgentsSquad
     if (Test-Path -LiteralPath $recordedRoot) { Remove-Item -LiteralPath $recordedRoot -Recurse -Force }
 }
 }
@@ -705,6 +712,7 @@ try {
     [void](Assert-RunnerDescriptor -Descriptor $descriptor)
     Assert-Equal 'fake' $descriptor.name 'descriptor identity'
     Assert-Equal (Get-RunnerSchemaNames).Protocol $descriptor.protocol_version 'descriptor protocol'
+    Assert-Equal 'unsupported' $descriptor.capabilities.native_worker_delegation 'deterministic fake does not advertise a native delegation surface'
     Assert-Throws { Assert-RunnerDescriptor -Descriptor ([pscustomobject]@{ schema = $descriptor.schema; protocol_version = 'changed'; name = 'fake' }) } 'changed protocol must fail descriptor validation'
     Assert-Throws { Resolve-ExecutionProfile -ProfilePath $legacyProviderProfilePath } 'execution profile rejects the removed provider field'
 
@@ -865,7 +873,9 @@ try {
     Assert-True ($prepareText.Contains('Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')) 'handoff preparation must prohibit reconstructed paths'
     Assert-True ($prepareText.Contains('DELEGATE EVERY eval arm to a fresh harness-native worker/subagent. The Eval Orchestrator MUST NOT execute an eval arm itself.')) 'handoff preparation must require delegated native workers and forbid parent execution'
     Assert-True ($prepareText.Contains('One arm equals one delegated worker and one model-backed eval execution.')) 'handoff preparation must state the one-arm one-model invariant'
-    Assert-True ($prepareText.Contains('Require terminal evidence for the exact selected model, working directory, isolated home, and fresh session')) 'handoff preparation must require worker control evidence'
+    Assert-True ($prepareText.Contains('Assert-NativeWorkerDelegation')) 'handoff preparation must invoke the native delegation gate'
+    Assert-True ($prepareText.Contains('Require terminal evidence for the exact selected model, exact arm identity, working directory, isolated HOME/config boundary, prompt fidelity, terminal result capture')) 'handoff preparation must require worker control evidence'
+    Assert-True ($prepareText.Contains('-RequireComplete -RequireNativeDelegation')) 'handoff preparation must revalidate native terminal evidence during the manifest bridge'
     Assert-True ($prepareText.Contains('min(execution-profile.json.concurrency, remaining arms)')) 'handoff preparation must state requested concurrency fan-out'
     Assert-True ($prepareText.Contains('rejected before the worker starts') -and $prepareText.Contains('record no eval attempt')) 'handoff preparation must queue capacity rejections without counting attempts'
     Assert-True ($prepareText.Contains('orchestration.ps1')) 'handoff preparation must load the deterministic orchestration helper'

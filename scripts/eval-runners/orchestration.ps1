@@ -251,12 +251,42 @@ function Register-WorkerTerminal {
     }
     $arm = Get-OrchestrationArmByWorkerId -Plan $Plan -WorkerId $WorkerId
     $activeWorker = $active[$WorkerId]
-    $runEvidence = Get-JsonProperty -Object $ExecutionEvidence -Name 'run' -Default $null
-    if ($null -ne $runEvidence) {
-        $evidenceEvalId = [int](Get-JsonProperty -Object $runEvidence -Name 'eval_id' -Default 0)
-        $evidenceConfiguration = [string](Get-JsonProperty -Object $runEvidence -Name 'configuration' -Default '')
-        if ($evidenceEvalId -ne [int]$arm.eval_id -or $evidenceConfiguration -ne [string]$arm.configuration) {
-            throw "Worker '$WorkerId' returned evidence for a different arm."
+    $expectedSessionId = [string](Get-JsonProperty -Object $activeWorker -Name 'worker_session_id' -Default '')
+    $effectiveStatus = $status
+    $terminalEvidenceFailures = [System.Collections.Generic.List[string]]::new()
+
+    # The plan stores the exact manifest-declared run path. Resolve only that
+    # arm here; do not infer a path from configuration or inspect grading data.
+    try {
+        $runData = Resolve-RunContract -RunPath ([string]$arm.worker.run_manifest_path)
+        $validation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $ExecutionEvidence -Run $runData -RequestedModel ([string]$arm.worker.model) -ExpectedWorkerSessionId $expectedSessionId
+        foreach ($failure in @($validation.Failures)) { $terminalEvidenceFailures.Add([string]$failure) }
+        $evidenceSessionId = [string](Get-JsonProperty -Object $validation.Delegation -Name 'worker_session_id' -Default '')
+        if ($terminalEvidenceFailures.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($evidenceSessionId)) {
+            $completedWorkers = Get-OrchestrationDictionary -Object $State -Name 'completed'
+            foreach ($completedWorker in @($completedWorkers.Values)) {
+                if ([string](Get-JsonProperty -Object $completedWorker -Name 'worker_session_id' -Default '') -eq $evidenceSessionId) {
+                    $terminalEvidenceFailures.Add('fresh_worker')
+                    break
+                }
+            }
+        }
+    } catch {
+        $terminalEvidenceFailures.Add('terminal_evidence_unresolvable')
+        $terminalEvidenceFailures.Add($_.Exception.Message)
+    }
+
+    if ($terminalEvidenceFailures.Count -gt 0 -and $effectiveStatus -ne 'incompatible') {
+        $effectiveStatus = 'incompatible'
+    }
+    if ($terminalEvidenceFailures.Count -gt 0) {
+        # A worker that returned an answer without mandatory native evidence is
+        # an incompatible arm, not an invitation to retry through another path.
+        try { $ExecutionEvidence.status = 'incompatible' } catch { }
+        if ($ExecutionEvidence -is [System.Collections.IDictionary]) {
+            $ExecutionEvidence['native_worker_evidence_failures'] = @($terminalEvidenceFailures.ToArray())
+        } elseif ($null -ne $ExecutionEvidence -and -not (Test-JsonProperty -Object $ExecutionEvidence -Name 'native_worker_evidence_failures')) {
+            Add-Member -InputObject $ExecutionEvidence -MemberType NoteProperty -Name native_worker_evidence_failures -Value @($terminalEvidenceFailures.ToArray()) -Force
         }
     }
 
@@ -267,9 +297,13 @@ function Register-WorkerTerminal {
         eval_id = [int]$arm.eval_id
         eval_name = [string]$arm.eval_name
         configuration = [string]$arm.configuration
-        status = $status
+        status = $effectiveStatus
         terminal_utc = [DateTime]::UtcNow.ToString('o')
-        worker_session_id = Get-JsonProperty -Object $activeWorker -Name 'worker_session_id' -Default $null
+        worker_session_id = if ([string]::IsNullOrWhiteSpace($expectedSessionId)) {
+            Get-JsonProperty -Object (Get-JsonProperty -Object (Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null) -Name 'delegation' -Default $null) -Name 'worker_session_id' -Default $null
+        } else { $expectedSessionId }
+        native_worker_evidence = if ($terminalEvidenceFailures.Count -eq 0) { 'verified' } else { 'incompatible' }
+        native_worker_evidence_failures = @($terminalEvidenceFailures.ToArray())
     }
     return $true
 }

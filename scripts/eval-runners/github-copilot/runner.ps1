@@ -59,21 +59,24 @@ $descriptor = [ordered]@{
         cost_telemetry = 'unsupported'
         credential_child_filtering = 'supported'
         native_skill_activation_evidence = 'unsupported'
-        native_worker_delegation = 'supported'
-        delegated_worker_full_capability = 'supported'
-        delegated_worker_model_lock = 'supported'
-        delegated_worker_working_directory = 'supported'
-        delegated_worker_result_capture = 'supported'
-        delegated_worker_capacity_signal = 'supported'
+        # These are harness capabilities advertised by the descriptor. The
+        # actual child model, cwd, home, session, and terminal result remain
+        # conditional until the delegated worker reports terminal evidence.
+        native_worker_delegation = 'conditional'
+        delegated_worker_full_capability = 'conditional'
+        delegated_worker_model_lock = 'conditional'
+        delegated_worker_working_directory = 'conditional'
+        delegated_worker_result_capture = 'conditional'
+        delegated_worker_capacity_signal = 'conditional'
     }
     delegation = [ordered]@{
         mode = 'native_worker'
         mechanism = 'Copilot CLI native task tool with an explicit full-capability general-purpose child agent; fleet/task lifecycle events observe completion'
         worker_role = 'general-purpose'
-        full_capability = 'supported'
-        model_lock = 'supported'
-        working_directory = 'supported'
-        result_capture = 'supported'
+        full_capability = 'conditional'
+        model_lock = 'conditional'
+        working_directory = 'conditional'
+        result_capture = 'conditional'
         capacity = 'harness_authoritative'
         nested_model_execution = $false
     }
@@ -401,7 +404,8 @@ function Get-CopilotPreflight {
     $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "-C $($run.WorkingDirectoryPath); COPILOT_HOME under $($run.HomeDirectoryPath)"))
     $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail 'The prepared UTF-8 prompt bytes are supplied once through stdin; the execution fake proves the received bytes match the staged prompt.'))
     $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only supported authentication state is made available to Copilot; --secret-env-vars removes every listed token variable from shell and MCP child environments; no Copilot profile or credential file is copied.'))
-    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status passed -Detail 'Use Copilot native task with a full-capability general-purpose child agent; the parent supplies one explicit arm per child and observes child completion/model evidence.'))
+    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail 'Copilot task/general-purpose delegation is an advertised native mechanism, but this preflight cannot observe the child''s resolved model, cwd, HOME/config, fresh identity, prompt, exclusions, or terminal capture.'))
+    $warnings.Add('Copilot native-worker controls are conditional. The external orchestrator must require terminal delegation evidence; direct -C/--model/HOME compatibility-transport observations do not prove the native child.')
     if ($platform -eq 'macos') {
         $warnings.Add('macOS sandbox-exec is deprecated by Apple but is used only when present; a future runner revision may replace it with an equivalent supported mechanism.')
     }

@@ -16,7 +16,9 @@ param(
     [string]$ExecutionResult,
 
     [Parameter(Mandatory = $true)]
-    [string]$Result
+    [string]$Result,
+
+    [switch]$RequireNativeDelegation
 )
 
 $ErrorActionPreference = 'Stop'
@@ -136,6 +138,9 @@ try {
     $profile = Resolve-ExecutionProfile -ProfilePath $profilePath
     if ([string]$raw.input.profile_sha256 -ne $profile.Hash) {
         throw 'execution-result input.profile_sha256 does not match execution-profile.json.'
+    }
+    if ($RequireNativeDelegation -and [string]$raw.status -ne 'incompatible') {
+        [void](Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $raw -Run $runData -RequestedModel ([string]$profile.Profile.Model))
     }
     if ([int]$raw.run.eval_id -ne $runData.EvalId -or [string]$raw.run.configuration -ne $runData.Mode) {
         throw 'execution-result run identity does not match run.json.'

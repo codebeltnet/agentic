@@ -54,7 +54,8 @@
         "worker_role",
         "nested_model_execution",
         "required_controls",
-        "unproven_controls"
+        "unproven_controls",
+        "terminal_evidence_required"
       ],
       "properties": {
         "status": { "enum": ["supported", "conditional", "unsupported"] },
@@ -63,7 +64,8 @@
         "worker_role": { "type": "string" },
         "nested_model_execution": { "type": "boolean" },
         "required_controls": { "type": "array", "items": { "type": "string" } },
-        "unproven_controls": { "type": "array", "items": { "type": "string" } }
+        "unproven_controls": { "type": "array", "items": { "type": "string" } },
+        "terminal_evidence_required": { "type": "boolean" }
       }
     },
     "isolation": {

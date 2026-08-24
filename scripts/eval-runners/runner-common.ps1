@@ -28,7 +28,7 @@ function Get-JsonProperty {
         return $Default
     }
 
-    if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name -and $null -ne $Object.$Name) {
+    if ($null -ne $Object -and @($Object.PSObject.Properties | ForEach-Object { [string]$_.Name }) -contains $Name -and $null -ne $Object.$Name) {
         return $Object.$Name
     }
 
@@ -44,7 +44,7 @@ function Get-JsonPropertyNames {
     if ($Object -is [System.Collections.IDictionary]) {
         return @($Object.Keys | ForEach-Object { [string]$_ })
     }
-    return @($Object.PSObject.Properties.Name)
+    return @($Object.PSObject.Properties | ForEach-Object { [string]$_.Name })
 }
 
 function Test-JsonProperty {
@@ -295,9 +295,14 @@ function Get-DelegationCapabilityAssessment {
         'delegated_worker_capacity_signal'
     )
     $unproven = [System.Collections.Generic.List[string]]::new()
+    $conditional = [System.Collections.Generic.List[string]]::new()
+    $unsupported = [System.Collections.Generic.List[string]]::new()
     foreach ($name in $required) {
         $value = if ($null -ne $Capabilities -and $Capabilities.Contains($name)) { [string]$Capabilities[$name] } else { 'unavailable' }
-        if ($value -ne 'supported') { $unproven.Add($name) }
+        if ($value -ne 'supported') {
+            $unproven.Add($name)
+            if ($value -eq 'conditional') { $conditional.Add($name) } else { $unsupported.Add($name) }
+        }
     }
 
     $delegation = Get-JsonProperty -Object $Descriptor -Name 'delegation' -Default $null
@@ -306,8 +311,14 @@ function Get-DelegationCapabilityAssessment {
     $mechanism = [string](Get-JsonProperty -Object $delegation -Name 'mechanism' -Default '')
     $workerRole = [string](Get-JsonProperty -Object $delegation -Name 'worker_role' -Default '')
     $modeIsNative = $mode -eq 'native_worker'
-    if (-not $modeIsNative) { $unproven.Add('delegation.mode') }
-    if ($nestedModelExecution) { $unproven.Add('delegation.nested_model_execution') }
+    if (-not $modeIsNative) {
+        $unproven.Add('delegation.mode')
+        if ($mode -eq 'conditional') { $conditional.Add('delegation.mode') } else { $unsupported.Add('delegation.mode') }
+    }
+    if ($nestedModelExecution) {
+        $unproven.Add('delegation.nested_model_execution')
+        $unsupported.Add('delegation.nested_model_execution')
+    }
     $delegationFields = [ordered]@{
         full_capability = 'delegated_worker_full_capability'
         model_lock = 'delegated_worker_model_lock'
@@ -318,18 +329,199 @@ function Get-DelegationCapabilityAssessment {
     foreach ($field in $delegationFields.Keys) {
         $value = [string](Get-JsonProperty -Object $delegation -Name $field -Default 'unsupported')
         $valid = if ($field -eq 'capacity') { $value -in @('supported', 'harness_authoritative') } else { $value -eq 'supported' }
-        if (-not $valid) { $unproven.Add("delegation.$field") }
+        if (-not $valid) {
+            $unproven.Add("delegation.$field")
+            if ($value -eq 'conditional') { $conditional.Add("delegation.$field") } else { $unsupported.Add("delegation.$field") }
+        }
+    }
+
+    $status = if ($unsupported.Count -gt 0) {
+        'unsupported'
+    } elseif ($conditional.Count -gt 0) {
+        'conditional'
+    } else {
+        'supported'
     }
 
     return [pscustomobject]@{
-        MandatoryProven = $unproven.Count -eq 0
+        MandatoryProven = $status -eq 'supported'
+        Status = $status
         Mode = $mode
         Mechanism = $mechanism
         WorkerRole = $workerRole
         NestedModelExecution = $nestedModelExecution
         Unproven = @($unproven)
+        Conditional = @($conditional)
+        Unsupported = @($unsupported)
         Required = @($required)
     }
+}
+
+function Get-NativeWorkerTerminalEvidenceRequirements {
+    return @(
+        'mechanism',
+        'worker_session_id',
+        'observed_model',
+        'observed_working_directory',
+        'observed_home',
+        'fresh_worker',
+        'home_config_isolated',
+        'prompt_fidelity',
+        'prompt_sha256',
+        'terminal_result_capture',
+        'paired_arm_visible',
+        'grading_material_visible',
+        'nested_model_execution',
+        'model_execution_count'
+    )
+}
+
+function ConvertTo-ComparablePath {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    try {
+        $full = [System.IO.Path]::GetFullPath($Path)
+        $root = [System.IO.Path]::GetPathRoot($full)
+        if (-not [string]::IsNullOrWhiteSpace($root) -and $full.Length -gt $root.Length) {
+            $full = $full.TrimEnd([char[]]@('\', '/'))
+        }
+        return $full
+    } catch {
+        return $null
+    }
+}
+
+function Test-ExactObservedPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Expected,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Observed
+    )
+
+    $expectedComparable = ConvertTo-ComparablePath -Path $Expected
+    $observedComparable = ConvertTo-ComparablePath -Path $Observed
+    if ($null -eq $expectedComparable -or $null -eq $observedComparable) { return $false }
+    $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    return [string]::Equals($expectedComparable, $observedComparable, $comparison)
+}
+
+function Test-NativeWorkerTerminalEvidence {
+    <#
+      Descriptor fields describe what a harness advertises. This validator is
+      deliberately separate: it accepts only observations from the actual
+      delegated worker for this exact arm. A direct compatibility-run result
+      without evidence.delegation is therefore never native-worker evidence.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$ExecutionEvidence,
+        [Parameter(Mandatory = $true)][object]$Run,
+        [Parameter(Mandatory = $true)][string]$RequestedModel,
+        [string]$ExpectedWorkerSessionId = ''
+    )
+
+    $failures = [System.Collections.Generic.List[string]]::new()
+    $status = [string](Get-JsonProperty -Object $ExecutionEvidence -Name 'status' -Default '')
+    if ($status -notin @('completed', 'failed', 'timed_out', 'cancelled', 'incompatible')) {
+        $failures.Add('terminal_result_capture')
+    }
+    $runEvidence = Get-JsonProperty -Object $ExecutionEvidence -Name 'run' -Default $null
+    if ($null -eq $runEvidence) {
+        $failures.Add('arm_identity')
+    } else {
+        if ([int](Get-JsonProperty -Object $runEvidence -Name 'eval_id' -Default 0) -ne [int]$Run.EvalId -or
+            [string](Get-JsonProperty -Object $runEvidence -Name 'eval_name' -Default '') -ne [string]$Run.EvalName -or
+            [string](Get-JsonProperty -Object $runEvidence -Name 'configuration' -Default '') -ne [string]$Run.Mode) {
+            $failures.Add('arm_identity')
+        }
+    }
+
+    $requestedEvidence = Get-JsonProperty -Object $ExecutionEvidence -Name 'requested' -Default $null
+    if ($null -eq $requestedEvidence -or [string](Get-JsonProperty -Object $requestedEvidence -Name 'model' -Default '') -ne $RequestedModel) {
+        $failures.Add('requested_model')
+    }
+
+    $delegation = Get-JsonProperty -Object (Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null) -Name 'delegation' -Default $null
+    if ($null -eq $delegation) {
+        $failures.Add('delegation_terminal_evidence')
+        return [pscustomobject]@{ Valid = $false; Failures = @($failures); Delegation = $null }
+    }
+
+    foreach ($name in @(Get-NativeWorkerTerminalEvidenceRequirements)) {
+        if (-not (Test-JsonProperty -Object $delegation -Name $name)) {
+            $failures.Add($name)
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $delegation -Name 'mechanism' -Default ''))) {
+        $failures.Add('mechanism')
+    }
+
+    $workerSessionId = [string](Get-JsonProperty -Object $delegation -Name 'worker_session_id' -Default '')
+    if ([string]::IsNullOrWhiteSpace($workerSessionId)) {
+        if ($failures -notcontains 'worker_session_id') { $failures.Add('worker_session_id') }
+    } elseif (-not [string]::IsNullOrWhiteSpace($ExpectedWorkerSessionId) -and $workerSessionId -ne $ExpectedWorkerSessionId) {
+        $failures.Add('worker_session_id')
+    }
+
+    if ([string](Get-JsonProperty -Object $delegation -Name 'observed_model' -Default '') -ne $RequestedModel) {
+        $failures.Add('requested_model')
+    }
+    if (-not [bool](Get-JsonProperty -Object $delegation -Name 'fresh_worker' -Default $false)) {
+        $failures.Add('fresh_worker')
+    }
+    if (-not [bool](Get-JsonProperty -Object $delegation -Name 'home_config_isolated' -Default $false)) {
+        $failures.Add('isolated_home_config')
+    }
+    if (-not [bool](Get-JsonProperty -Object $delegation -Name 'prompt_fidelity' -Default $false) -or
+        [string](Get-JsonProperty -Object $delegation -Name 'prompt_sha256' -Default '') -ne [string]$Run.PromptHash) {
+        $failures.Add('prompt_fidelity')
+    }
+    if (-not [bool](Get-JsonProperty -Object $delegation -Name 'terminal_result_capture' -Default $false)) {
+        $failures.Add('terminal_result_capture')
+    }
+    if ([bool](Get-JsonProperty -Object $delegation -Name 'paired_arm_visible' -Default $true) -or
+        [bool](Get-JsonProperty -Object $delegation -Name 'grading_material_visible' -Default $true)) {
+        $failures.Add('paired_arm_and_grading_exclusion')
+    }
+    if ([bool](Get-JsonProperty -Object $delegation -Name 'nested_model_execution' -Default $true) -or
+        [int](Get-JsonProperty -Object $delegation -Name 'model_execution_count' -Default 0) -ne 1) {
+        $failures.Add('nested_model_execution')
+    }
+    if (-not (Test-ExactObservedPath -Expected ([string]$Run.WorkingDirectoryPath) -Observed ([string](Get-JsonProperty -Object $delegation -Name 'observed_working_directory' -Default '')))) {
+        $failures.Add('working_directory')
+    }
+    if (-not (Test-ExactObservedPath -Expected ([string]$Run.HomeDirectoryPath) -Observed ([string](Get-JsonProperty -Object $delegation -Name 'observed_home' -Default '')))) {
+        $failures.Add('isolated_home_config')
+    }
+
+    $session = Get-JsonProperty -Object $ExecutionEvidence -Name 'session' -Default $null
+    if ($null -eq $session -or
+        -not [bool](Get-JsonProperty -Object $session -Name 'fresh' -Default $false) -or
+        [bool](Get-JsonProperty -Object $session -Name 'resumed' -Default $true) -or
+        [string](Get-JsonProperty -Object $session -Name 'id' -Default '') -ne $workerSessionId) {
+        $failures.Add('fresh_worker')
+    }
+
+    return [pscustomobject]@{
+        Valid = $failures.Count -eq 0
+        Failures = @($failures | Select-Object -Unique)
+        Delegation = $delegation
+    }
+}
+
+function Assert-NativeWorkerTerminalEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object]$ExecutionEvidence,
+        [Parameter(Mandatory = $true)][object]$Run,
+        [Parameter(Mandatory = $true)][string]$RequestedModel,
+        [string]$ExpectedWorkerSessionId = ''
+    )
+
+    $validation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $ExecutionEvidence -Run $Run -RequestedModel $RequestedModel -ExpectedWorkerSessionId $ExpectedWorkerSessionId
+    if (-not $validation.Valid) {
+        throw "Native worker terminal evidence is incompatible: $([string]::Join(', ', @($validation.Failures)))."
+    }
+    return $true
 }
 
 function Resolve-RunContract {
@@ -572,6 +764,9 @@ function New-PreflightDocument {
     $capabilitiesForAssessment = if ($null -eq $ResolvedCapabilities) { [ordered]@{} } else { $ResolvedCapabilities }
     $assessment = Get-IsolationCapabilityAssessment -Capabilities $capabilitiesForAssessment
     $delegationAssessment = Get-DelegationCapabilityAssessment -Descriptor $Descriptor -Capabilities $capabilitiesForAssessment
+    # Isolation is the compatibility transport's local readiness gate. Native
+    # delegation has a separate gate: conditional controls may proceed to a
+    # delegated worker, while an unavailable/unsupported mechanism cannot.
     $effectiveCompatible = $Compatible -and $assessment.MandatoryProven
     $unprovenControls = [string[]]$assessment.Unproven
     if (-not $effectiveCompatible) { $unprovenControls = [string[]](@($assessment.Unproven) + @('preflight')) }
@@ -592,13 +787,14 @@ function New-PreflightDocument {
         checks = @($Checks)
         resolved_capabilities = if ($null -eq $ResolvedCapabilities) { [ordered]@{} } else { $ResolvedCapabilities }
         delegation = [ordered]@{
-            status = if ($delegationAssessment.MandatoryProven) { 'supported' } elseif ($delegationAssessment.Mode -eq 'conditional') { 'conditional' } else { 'unsupported' }
+            status = $delegationAssessment.Status
             mode = $delegationAssessment.Mode
             mechanism = $delegationAssessment.Mechanism
             worker_role = $delegationAssessment.WorkerRole
             nested_model_execution = $delegationAssessment.NestedModelExecution
             required_controls = @($delegationAssessment.Required)
             unproven_controls = [string[]]$delegationAssessment.Unproven
+            terminal_evidence_required = $delegationAssessment.Status -eq 'conditional'
         }
         isolation = [ordered]@{
             level = if ($effectiveCompatible) { $assessment.Level } else { 'unsupported' }
@@ -620,7 +816,7 @@ function Assert-NativeWorkerDelegation {
 
     $delegation = Get-JsonProperty -Object $Descriptor -Name 'delegation' -Default $null
     $mode = [string](Get-JsonProperty -Object $delegation -Name 'mode' -Default 'unsupported')
-    if ($mode -ne 'native_worker') {
+    if ($mode -notin @('native_worker', 'conditional')) {
         throw "Runner '$($Descriptor.name)' cannot satisfy the mandatory native Eval Worker contract: delegation mode is '$mode'."
     }
     if ([bool](Get-JsonProperty -Object $delegation -Name 'nested_model_execution' -Default $true)) {
@@ -630,9 +826,13 @@ function Assert-NativeWorkerDelegation {
         throw "Runner '$($Descriptor.name)' preflight is incompatible; the orchestrator must not execute an arm in the parent context."
     }
     $delegationPreflight = Get-JsonProperty -Object $Preflight -Name 'delegation' -Default $null
-    if ([string](Get-JsonProperty -Object $delegationPreflight -Name 'status' -Default 'unsupported') -ne 'supported') {
+    $delegationStatus = [string](Get-JsonProperty -Object $delegationPreflight -Name 'status' -Default 'unsupported')
+    if ($delegationStatus -notin @('supported', 'conditional')) {
         $unproven = @((Get-JsonProperty -Object $delegationPreflight -Name 'unproven_controls' -Default @()))
-        throw "Runner '$($Descriptor.name)' native worker delegation is not proven during preflight: $([string]::Join(', ', $unproven))."
+        throw "Runner '$($Descriptor.name)' native worker delegation is unavailable during preflight: $([string]::Join(', ', $unproven)). No parent or compatibility-execute fallback is permitted."
+    }
+    if ($delegationStatus -eq 'conditional' -and -not [bool](Get-JsonProperty -Object $delegationPreflight -Name 'terminal_evidence_required' -Default $false)) {
+        throw "Runner '$($Descriptor.name)' reports conditional native worker controls without requiring terminal evidence."
     }
     $capabilities = Get-JsonProperty -Object $Preflight -Name 'resolved_capabilities' -Default $null
     $required = @(
@@ -644,8 +844,9 @@ function Assert-NativeWorkerDelegation {
         'delegated_worker_capacity_signal'
     )
     foreach ($name in $required) {
-        if ([string](Get-JsonProperty -Object $capabilities -Name $name -Default 'unsupported') -ne 'supported') {
-            throw "Runner '$($Descriptor.name)' native worker capability '$name' is not supported; the orchestrator must not fall back to parent execution."
+        $value = [string](Get-JsonProperty -Object $capabilities -Name $name -Default 'unsupported')
+        if ($value -notin @('supported', 'conditional')) {
+            throw "Runner '$($Descriptor.name)' native worker capability '$name' is unavailable; the orchestrator must not fall back to parent or compatibility execution."
         }
     }
     return $true
