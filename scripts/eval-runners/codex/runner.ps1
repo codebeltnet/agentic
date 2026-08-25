@@ -57,6 +57,7 @@ $descriptor = [ordered]@{
         delegated_worker_capacity_signal = 'conditional'
     }
     delegation = [ordered]@{
+        dispatch_owner = 'runner'
         mode = 'native_worker'
         mechanism = 'Codex app-server native child session via thread/start and turn/start with per-worker cwd, model, and ephemeral context'
         worker_role = 'native-codex-child-session'
@@ -125,6 +126,37 @@ function Invoke-CodexCli {
     return Invoke-RunnerProcess -FileName $CommandInfo.FileName -ArgumentList $allArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
 }
 
+function New-CodexAuthOnlyHome {
+    param([Parameter(Mandatory = $true)][object]$Auth)
+
+    if ($Auth.Kind -ne 'subscription_file' -or [string]::IsNullOrWhiteSpace([string]$Auth.Path)) {
+        throw 'Codex auth-only home requires a resolved subscription auth.json source.'
+    }
+    $homePath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-codex-auth-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $homePath -Force | Out-Null
+    $authDestination = Join-Path $homePath 'auth.json'
+    try {
+        # The temporary home is intentionally created outside the prepared
+        # package. It contains exactly one copied file and is removed in the
+        # app-server finally block, including start/timeout failures.
+        Copy-Item -LiteralPath $Auth.Path -Destination $authDestination -Force -ErrorAction Stop
+        $entries = @(Get-ChildItem -LiteralPath $homePath -Force -ErrorAction Stop)
+        if ($entries.Count -ne 1 -or [string]$entries[0].Name -ne 'auth.json' -or -not (Test-Path -LiteralPath $authDestination -PathType Leaf)) {
+            throw 'Codex temporary subscription home was not auth-only.'
+        }
+        return [pscustomobject]@{
+            Path = $homePath
+            AuthPath = $authDestination
+            AuthOnly = $true
+        }
+    } catch {
+        if (Test-Path -LiteralPath $homePath) {
+            Remove-Item -LiteralPath $homePath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+}
+
 function Invoke-CodexAppServer {
     param(
         [Parameter(Mandatory = $true)][object]$CommandInfo,
@@ -148,29 +180,45 @@ function Invoke-CodexAppServer {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     foreach ($argument in @($CommandInfo.Prefix) + @('app-server', '--stdio', '-c', 'shell_environment_policy.inherit=none')) { [void]$psi.ArgumentList.Add([string]$argument) }
-    $parentEnvironment = New-RunnerEnvironment -Run $Inputs.Run -Additional @{ CODEX_HOME = (Split-Path -Parent $Auth.Path) }
-    $psi.Environment.Clear()
-    foreach ($name in @($parentEnvironment.Keys)) { $psi.Environment[$name] = [string]$parentEnvironment[$name] }
 
+    $authHome = $null
+    $authOnlyHomeRemoved = $false
+    $parentEnvironment = $null
     $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $psi
     $writer = $null
     $reader = $null
     $stderrTask = $null
     $events = [System.Collections.Generic.List[string]]::new()
     $normalized = [System.Collections.Generic.List[string]]::new()
     $threadId = $null
+    $threadSessionId = $null
     $turnId = $null
     $finalText = $null
     $latestUsage = $null
     $timedOut = $false
     $transportFailure = $null
+    $threadReadFailure = $null
     $turnCompleted = $false
+    $terminalTurn = $null
     $stderr = ''
     $actualExitCode = $null
     $processStarted = $false
+    $threadStartRequest = $null
+    $threadStartResponse = $null
+    $turnStartRequest = $null
+    $turnStartResponse = $null
+    $threadReadResponse = $null
+    $instructionSources = @()
+    $instructionSourcesObserved = $false
+    $modelReroutes = [System.Collections.Generic.List[object]]::new()
 
     try {
+        $authHome = New-CodexAuthOnlyHome -Auth $Auth
+        $parentEnvironment = New-RunnerEnvironment -Run $Inputs.Run -Additional @{ CODEX_HOME = $authHome.Path }
+        $psi.Environment.Clear()
+        foreach ($name in @($parentEnvironment.Keys)) { $psi.Environment[$name] = [string]$parentEnvironment[$name] }
+        $process.StartInfo = $psi
+
         if (-not $process.Start()) { throw 'Could not start Codex app-server.' }
         $processStarted = $true
         $writer = $process.StandardInput
@@ -189,9 +237,15 @@ function Invoke-CodexAppServer {
             $waitMilliseconds = [int][Math]::Min([int]::MaxValue, [Math]::Ceiling($remaining.TotalMilliseconds))
             if (-not $readTask.Wait($waitMilliseconds)) { throw [TimeoutException]::new('Codex app-server timed out.') }
             $line = $readTask.GetAwaiter().GetResult()
-            if ($null -eq $line) { throw [EndOfStreamException]::new('Codex app-server closed stdout before turn completion.') }
+            if ($null -eq $line) { throw [EndOfStreamException]::new('Codex app-server closed stdout before the expected response.') }
             $events.Add($line)
             try { return ($line | ConvertFrom-Json -Depth 50) } catch { throw [FormatException]::new("Codex app-server emitted malformed JSON: $($_.Exception.Message)") }
+        }
+        $recordModelReroute = {
+            param([Parameter(Mandatory = $true)][object]$Message)
+            $reroute = Get-JsonProperty -Object $Message -Name 'params' -Default ([ordered]@{})
+            $modelReroutes.Add($reroute)
+            $normalized.Add(([ordered]@{ type = 'model.rerouted'; from_model = Get-JsonProperty -Object $reroute -Name 'fromModel' -Default $null; to_model = Get-JsonProperty -Object $reroute -Name 'toModel' -Default $null; reason = Get-JsonProperty -Object $reroute -Name 'reason' -Default $null } | ConvertTo-Json -Compress))
         }
         $waitForResponse = {
             param([Parameter(Mandatory = $true)][int]$ExpectedId, [Parameter(Mandatory = $true)][string]$Operation)
@@ -201,6 +255,10 @@ function Invoke-CodexAppServer {
                 $method = [string](Get-JsonProperty -Object $message -Name 'method' -Default '')
                 if (-not [string]::IsNullOrWhiteSpace($method) -and $null -ne $messageId) {
                     throw "Codex app-server requested unsupported interactive method '$method'."
+                }
+                if ($method -eq 'model/rerouted') {
+                    & $recordModelReroute $message
+                    continue
                 }
                 if ($null -eq $messageId -or [int]$messageId -ne $ExpectedId) { continue }
                 $error = Get-JsonProperty -Object $message -Name 'error' -Default $null
@@ -226,46 +284,47 @@ function Invoke-CodexAppServer {
         & $writeMessage ([ordered]@{ jsonrpc = '2.0'; method = 'initialized' })
 
         $threadRequest = 2
-        & $writeMessage ([ordered]@{
-            jsonrpc = '2.0'
-            id = $threadRequest
-            method = 'thread/start'
-            params = [ordered]@{
-                model = $Inputs.Profile.Model
-                cwd = $Inputs.Run.WorkingDirectoryPath
-                approvalPolicy = 'never'
-                # thread/start can persist project trust when it begins in a
-                # writable sandbox. Keep the ephemeral thread read-only and
-                # apply the intended workspace-write policy to the turn only.
-                sandbox = 'readOnly'
-                ephemeral = $true
-            }
-        })
-        $threadResponse = & $waitForResponse $threadRequest 'thread/start'
-        $threadId = [string]$threadResponse.result.thread.id
+        $threadStartParams = [ordered]@{
+            model = $Inputs.Profile.Model
+            cwd = $Inputs.Run.WorkingDirectoryPath
+            approvalPolicy = 'never'
+            # thread/start can persist project trust when it begins in a
+            # writable sandbox. Keep the ephemeral thread read-only and
+            # apply the intended workspace-write policy to the turn only.
+            sandbox = 'readOnly'
+            ephemeral = $true
+        }
+        $threadStartRequest = [ordered]@{ jsonrpc = '2.0'; id = $threadRequest; method = 'thread/start'; params = $threadStartParams }
+        & $writeMessage $threadStartRequest
+        $threadStartResponse = & $waitForResponse $threadRequest 'thread/start'
+        $threadStartResult = Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null
+        $threadMetadata = Get-JsonProperty -Object $threadStartResult -Name 'thread' -Default $null
+        $threadId = [string](Get-JsonProperty -Object $threadMetadata -Name 'id' -Default '')
+        $threadSessionId = [string](Get-JsonProperty -Object $threadMetadata -Name 'sessionId' -Default '')
         if ([string]::IsNullOrWhiteSpace($threadId)) { throw 'Codex app-server thread/start returned no thread id.' }
+        $instructionSourcesObserved = Test-JsonProperty -Object $threadStartResult -Name 'instructionSources'
+        if ($instructionSourcesObserved) { $instructionSources = @(Get-JsonProperty -Object $threadStartResult -Name 'instructionSources' -Default @()) }
 
         $turnRequest = 3
-        & $writeMessage ([ordered]@{
-            jsonrpc = '2.0'
-            id = $turnRequest
-            method = 'turn/start'
-            params = [ordered]@{
-                threadId = $threadId
-                input = @([ordered]@{ type = 'text'; text = [System.Text.Encoding]::UTF8.GetString($Inputs.Run.PromptBytes) })
-                cwd = $Inputs.Run.WorkingDirectoryPath
-                model = $Inputs.Profile.Model
-                effort = $Inputs.Profile.ReasoningEffort
-                approvalPolicy = 'never'
-                sandboxPolicy = [ordered]@{
-                    type = 'workspaceWrite'
-                    writableRoots = @($Inputs.Run.WorkingDirectoryPath)
-                    networkAccess = $true
-                }
+        $promptText = [System.Text.Encoding]::UTF8.GetString($Inputs.Run.PromptBytes)
+        $turnStartParams = [ordered]@{
+            threadId = $threadId
+            input = @([ordered]@{ type = 'text'; text = $promptText })
+            cwd = $Inputs.Run.WorkingDirectoryPath
+            model = $Inputs.Profile.Model
+            effort = $Inputs.Profile.ReasoningEffort
+            approvalPolicy = 'never'
+            sandboxPolicy = [ordered]@{
+                type = 'workspaceWrite'
+                writableRoots = @($Inputs.Run.WorkingDirectoryPath)
+                networkAccess = $true
             }
-        })
-        $turnResponse = & $waitForResponse $turnRequest 'turn/start'
-        $turnId = [string]$turnResponse.result.turn.id
+        }
+        $turnStartRequest = [ordered]@{ jsonrpc = '2.0'; id = $turnRequest; method = 'turn/start'; params = $turnStartParams }
+        & $writeMessage $turnStartRequest
+        $turnStartResponse = & $waitForResponse $turnRequest 'turn/start'
+        $turnStartResult = Get-JsonProperty -Object $turnStartResponse -Name 'result' -Default $null
+        $turnId = [string](Get-JsonProperty -Object (Get-JsonProperty -Object $turnStartResult -Name 'turn' -Default $null) -Name 'id' -Default '')
         if ([string]::IsNullOrWhiteSpace($turnId)) { throw 'Codex app-server turn/start returned no turn id.' }
 
         while (-not $turnCompleted) {
@@ -277,7 +336,10 @@ function Invoke-CodexAppServer {
             }
             switch ($method) {
                 'thread/started' {
-                    $normalized.Add(([ordered]@{ type = 'thread.started'; thread_id = $message.params.thread.id } | ConvertTo-Json -Compress))
+                    $normalized.Add(([ordered]@{ type = 'thread.started'; thread_id = Get-JsonProperty -Object (Get-JsonProperty -Object $message.params -Name 'thread' -Default $null) -Name 'id' -Default $null } | ConvertTo-Json -Compress))
+                }
+                'model/rerouted' {
+                    & $recordModelReroute $message
                 }
                 'item/completed' {
                     $item = $message.params.item
@@ -305,12 +367,18 @@ function Invoke-CodexAppServer {
                     $normalized.Add(([ordered]@{ type = 'item.completed'; item = $normalizedItem } | ConvertTo-Json -Depth 40 -Compress))
                 }
                 'thread/tokenUsage/updated' {
-                    $latestUsage = $message.params.tokenUsage.last
+                    $latestUsage = Get-JsonProperty -Object (Get-JsonProperty -Object $message.params -Name 'tokenUsage' -Default $null) -Name 'last' -Default $null
                 }
                 'turn/completed' {
-                    $turn = $message.params.turn
+                    $completionParams = Get-JsonProperty -Object $message -Name 'params' -Default ([ordered]@{})
+                    $terminalTurn = Get-JsonProperty -Object $completionParams -Name 'turn' -Default $null
+                    $completionThreadId = [string](Get-JsonProperty -Object $completionParams -Name 'threadId' -Default '')
+                    $completedTurnId = [string](Get-JsonProperty -Object $terminalTurn -Name 'id' -Default '')
+                    if ($completionThreadId -ne $threadId -or $completedTurnId -ne $turnId) {
+                        throw 'Codex app-server turn/completed identified an unexpected thread or turn.'
+                    }
                     if ([string]::IsNullOrWhiteSpace($finalText)) {
-                        $turnItems = @($turn.items)
+                        $turnItems = @($terminalTurn.items)
                         for ($itemIndex = $turnItems.Count - 1; $itemIndex -ge 0; $itemIndex--) {
                             if ([string]$turnItems[$itemIndex].type -eq 'agentMessage' -and -not [string]::IsNullOrWhiteSpace([string]$turnItems[$itemIndex].text)) {
                                 $finalText = [string]$turnItems[$itemIndex].text
@@ -318,19 +386,19 @@ function Invoke-CodexAppServer {
                             }
                         }
                     }
-                    if ([string]$turn.status -eq 'failed') {
-                        $errorMessage = [string](Get-JsonProperty -Object $turn.error -Name 'message' -Default 'Codex turn failed.')
+                    if ([string]$terminalTurn.status -eq 'failed') {
+                        $errorMessage = [string](Get-JsonProperty -Object $terminalTurn.error -Name 'message' -Default 'Codex turn failed.')
                         $normalized.Add(([ordered]@{ type = 'turn.failed'; error = $errorMessage } | ConvertTo-Json -Compress))
-                    } elseif ([string]$turn.status -eq 'interrupted') {
+                    } elseif ([string]$terminalTurn.status -eq 'interrupted') {
                         $normalized.Add(([ordered]@{ type = 'turn.failed'; error = 'Codex turn was interrupted.' } | ConvertTo-Json -Compress))
                     } else {
                         $usage = $null
                         if ($null -ne $latestUsage) {
                             $usage = [ordered]@{
-                                input_tokens = $latestUsage.inputTokens
-                                cached_input_tokens = $latestUsage.cachedInputTokens
-                                output_tokens = $latestUsage.outputTokens
-                                reasoning_output_tokens = $latestUsage.reasoningOutputTokens
+                                input_tokens = Get-JsonProperty -Object $latestUsage -Name 'inputTokens' -Default $null
+                                cached_input_tokens = Get-JsonProperty -Object $latestUsage -Name 'cachedInputTokens' -Default $null
+                                output_tokens = Get-JsonProperty -Object $latestUsage -Name 'outputTokens' -Default $null
+                                reasoning_output_tokens = Get-JsonProperty -Object $latestUsage -Name 'reasoningOutputTokens' -Default $null
                             }
                         }
                         $normalized.Add(([ordered]@{ type = 'turn.completed'; usage = $usage } | ConvertTo-Json -Depth 20 -Compress))
@@ -342,6 +410,18 @@ function Invoke-CodexAppServer {
                     throw $errorMessage
                 }
             }
+        }
+
+        # The installed schema exposes thread/read after completion. Use it as
+        # a second observation of ephemeral identity, cwd, and session metadata
+        # when the server provides the response; never reconstruct it locally.
+        $threadReadRequest = 4
+        & $writeMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadReadRequest; method = 'thread/read'; params = [ordered]@{ threadId = $threadId; includeTurns = $true } })
+        try {
+            $threadReadResponse = & $waitForResponse $threadReadRequest 'thread/read'
+        } catch {
+            $threadReadFailure = $_.Exception.Message
+            $normalized.Add(([ordered]@{ type = 'thread.read.unavailable'; message = $threadReadFailure } | ConvertTo-Json -Compress))
         }
     } catch [TimeoutException] {
         $timedOut = $true
@@ -363,6 +443,10 @@ function Invoke-CodexAppServer {
             try { $stderr = $stderrTask.GetAwaiter().GetResult() } catch { $stderr = $_.Exception.Message }
         }
         $process.Dispose()
+        if ($null -ne $authHome -and (Test-Path -LiteralPath $authHome.Path)) {
+            Remove-Item -LiteralPath $authHome.Path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $authOnlyHomeRemoved = $null -eq $authHome -or -not (Test-Path -LiteralPath $authHome.Path)
     }
 
     $finish = [DateTime]::UtcNow
@@ -378,7 +462,27 @@ function Invoke-CodexAppServer {
         DurationSeconds = [Math]::Round(($finish - $start).TotalSeconds, 3)
         FinalText = $finalText
         ThreadId = $threadId
+        ThreadSessionId = $threadSessionId
         TurnId = $turnId
+        TurnCompleted = $turnCompleted
+        TerminalTurn = $terminalTurn
+        ThreadStartRequest = $threadStartRequest
+        ThreadStartResponse = $threadStartResponse
+        TurnStartRequest = $turnStartRequest
+        TurnStartResponse = $turnStartResponse
+        ThreadReadResponse = $threadReadResponse
+        ThreadReadFailure = $threadReadFailure
+        InstructionSources = @($instructionSources)
+        InstructionSourcesObserved = $instructionSourcesObserved
+        ModelReroutes = @($modelReroutes.ToArray())
+        PromptInputSha256 = if ($null -ne $turnStartRequest) { Get-Sha256HexFromBytes -Bytes ([System.Text.Encoding]::UTF8.GetBytes([string]$turnStartRequest.params.input[0].text)) } else { $null }
+        ObservedModel = if ($null -ne $threadStartResponse) { [string](Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'model' -Default '') } else { '' }
+        ObservedWorkingDirectory = if ($null -ne $threadStartResponse) { [string](Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'cwd' -Default '') } else { '' }
+        ObservedEphemeral = if ($null -ne $threadStartResponse) { [bool](Get-JsonProperty -Object (Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'thread' -Default $null) -Name 'ephemeral' -Default $false) } else { $false }
+        AuthOnlyHome = $null -ne $authHome -and [bool]$authHome.AuthOnly
+        AuthOnlyHomeRemoved = $authOnlyHomeRemoved
+        WorkerHome = if ($null -ne $parentEnvironment) { [string]$parentEnvironment.HOME } else { '' }
+        TransportFailure = $transportFailure
     }
 }
 
@@ -422,14 +526,14 @@ function Get-CodexNativeWorkerProbe {
     }
     $schemaFiles = @(Get-ChildItem -LiteralPath $schemaDirectory -Recurse -File -Filter '*.json' -ErrorAction SilentlyContinue)
     $schemaText = [string]::Join("`n", @($schemaFiles | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName, [System.Text.UTF8Encoding]::new($false)) }))
-    foreach ($needle in @('thread/start', 'turn/start', 'ThreadStartParams', 'TurnStartParams', '"cwd"', '"model"', '"ephemeral"')) {
+    foreach ($needle in @('thread/start', 'turn/start', 'thread/read', 'model/rerouted', 'ThreadStartParams', 'TurnStartParams', 'ThreadReadParams', 'ThreadStartResponse', '"instructionSources"', '"cwd"', '"model"', '"ephemeral"')) {
         if ($schemaText -notmatch [regex]::Escape($needle)) {
             return [pscustomobject]@{ Available = $false; Detail = "Codex app-server schema did not prove native child-session field '$needle'." }
         }
     }
     return [pscustomobject]@{
         Available = $true
-        Detail = 'Codex multi_agent is stable and app-server schema proves thread/start and turn/start with cwd, model, and ephemeral child-session controls.'
+        Detail = 'Codex multi_agent is stable and the installed app-server schema proves thread/start, turn/start, thread/read, model/rerouted, instructionSources, cwd, model, and ephemeral child-session controls. No separate model-fallback-disable field is exposed; reroute notifications are fail-closed.'
     }
 }
 
@@ -589,13 +693,13 @@ function Get-CodexPreflight {
     if ($auth.Kind -eq 'missing') {
         $reasons.Add('Neither a narrow Codex provider API-key environment variable nor subscription auth.json is available.')
     } elseif ($auth.Kind -eq 'subscription_file') {
-        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail 'Codex app-server can read the existing subscription auth.json through its parent-only CODEX_HOME. The file is not copied into the staged worker home.'))
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail 'Codex app-server uses a fresh temporary auth-only CODEX_HOME containing only a copied auth.json; the source home and all ambient Codex configuration remain outside the worker.'))
     } else {
         $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through the narrow $($auth.Name) environment variable; the child shell policy is set to inherit=none."))
     }
 
     if ($auth.Kind -eq 'subscription_file') {
-        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail 'The subscription app-server parent must read the existing Codex credential home and is not wrapped by the external run-only sandbox. Codex workspace-write remains enabled for the turn.'))
+        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail 'The subscription app-server transport uses a temporary auth-only home but is not wrapped by the external run-only sandbox. Codex workspace-write remains enabled for the turn.'))
         $warnings.Add('Subscription execution uses pragmatic isolation. The adapter does not claim that an external filesystem sandbox protects the app-server transport.')
     } elseif ($null -eq $sandboxName) {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status not_applicable -Detail "Platform '$platform' has no configured external hard-confinement mechanism; pragmatic isolation remains available."))
@@ -609,9 +713,9 @@ function Get-CodexPreflight {
 
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The selected transport starts an ephemeral thread and never supplies a resume, continue, or existing session identifier.'))
     if ($auth.Kind -eq 'subscription_file') {
-        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The app-server parent receives a filtered environment plus the existing CODEX_HOME needed for subscription auth. Child shell inheritance is disabled with shell_environment_policy.inherit=none.'))
+        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The app-server parent receives a filtered environment plus a temporary auth-only CODEX_HOME. Child shell inheritance is disabled with shell_environment_policy.inherit=none, and the runner validates instructionSources against the staged arm root.'))
         $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "thread/start and turn/start set cwd to $($run.WorkingDirectoryPath); HOME and USERPROFILE remain staged under $($run.HomeDirectoryPath)."))
-        $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'The adapter does not copy auth.json into the run or deliberately forward CODEX_HOME to child shell tools. This does not claim hard filesystem confinement where none is available.'))
+        $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only auth.json is copied into a temporary auth-only CODEX_HOME and it is removed in finally; config.toml, skills, agents, sessions, memories, plugins, MCP configuration, and AGENTS.md are not copied. This does not claim hard filesystem confinement where none is available.'))
     } else {
         $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The compatibility transport uses an isolated CODEX_HOME plus --ignore-user-config and --ignore-rules; unrelated inherited environment variables are removed.'))
         $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "--cd $($run.WorkingDirectoryPath); CODEX_HOME under $($run.HomeDirectoryPath)"))
@@ -626,7 +730,7 @@ function Get-CodexPreflight {
     $descriptorCopy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'parent-only subscription CODEX_HOME', 'ephemeral thread', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input', 'no session continuation')) { $mechanisms.Add($mechanism) }
     } else {
         foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
@@ -846,6 +950,50 @@ function Invoke-CodexExecute {
             $finalText = [System.IO.File]::ReadAllText((Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)), [System.Text.UTF8Encoding]::new($false))
         }
     }
+    $terminalCaptureComplete = if ($auth.Kind -eq 'subscription_file') {
+        [bool]$process.TurnCompleted
+    } else {
+        @($parsed.Events | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'type' -Default '') -eq 'turn.completed' }).Count -gt 0
+    }
+
+    $nativeEvidenceFailures = [System.Collections.Generic.List[string]]::new()
+    $observedModel = if ($auth.Kind -eq 'subscription_file') { [string]$process.ObservedModel } else { '' }
+    $observedWorkingDirectory = if ($auth.Kind -eq 'subscription_file') { [string]$process.ObservedWorkingDirectory } else { '' }
+    $promptFidelity = $auth.Kind -eq 'subscription_file' -and [string]$process.PromptInputSha256 -eq [string]$Inputs.Run.PromptHash
+    $unexpectedInstructionSources = [System.Collections.Generic.List[string]]::new()
+    $invalidInstructionSources = [System.Collections.Generic.List[string]]::new()
+    if ($auth.Kind -eq 'subscription_file') {
+        if (-not [bool]$process.InstructionSourcesObserved) { $nativeEvidenceFailures.Add('instruction_sources_unobserved') }
+        foreach ($source in @($process.InstructionSources)) {
+            $sourcePath = [string]$source
+            if ([string]::IsNullOrWhiteSpace($sourcePath)) {
+                $invalidInstructionSources.Add($sourcePath)
+            } elseif (-not (Test-PathInside -BasePath $Inputs.Run.RunRoot -CandidatePath $sourcePath)) {
+                $unexpectedInstructionSources.Add($sourcePath)
+            }
+        }
+        if ($invalidInstructionSources.Count -gt 0) { $nativeEvidenceFailures.Add('invalid_instruction_sources') }
+        if ($unexpectedInstructionSources.Count -gt 0) { $nativeEvidenceFailures.Add('unexpected_instruction_sources') }
+        if ([string]::IsNullOrWhiteSpace($observedModel) -or $observedModel -ne [string]$Inputs.Profile.Model) { $nativeEvidenceFailures.Add('observed_model') }
+        if (-not (Test-ExactObservedPath -Expected ([string]$Inputs.Run.WorkingDirectoryPath) -Observed $observedWorkingDirectory)) { $nativeEvidenceFailures.Add('observed_working_directory') }
+        if (-not [bool]$process.ObservedEphemeral -or [string]::IsNullOrWhiteSpace([string]$process.ThreadId)) { $nativeEvidenceFailures.Add('fresh_worker') }
+        if (-not [bool]$process.AuthOnlyHome -or -not [bool]$process.AuthOnlyHomeRemoved) { $nativeEvidenceFailures.Add('isolated_auth_home') }
+        if (-not $promptFidelity) { $nativeEvidenceFailures.Add('prompt_fidelity') }
+        if (-not [bool]$process.TurnCompleted -or [string]::IsNullOrWhiteSpace([string]$process.RawStdout)) { $nativeEvidenceFailures.Add('terminal_result_capture') }
+        if ([string](Get-JsonProperty -Object $process.TerminalTurn -Name 'status' -Default '') -ne 'completed') { $nativeEvidenceFailures.Add('terminal_turn_status') }
+        if (@($process.ModelReroutes).Count -gt 0) { $nativeEvidenceFailures.Add('model_rerouted') }
+        $threadReadThread = if ($null -ne $process.ThreadReadResponse) { Get-JsonProperty -Object (Get-JsonProperty -Object $process.ThreadReadResponse -Name 'result' -Default $null) -Name 'thread' -Default $null } else { $null }
+        if ($null -ne $threadReadThread) {
+            if ([string](Get-JsonProperty -Object $threadReadThread -Name 'id' -Default '') -ne [string]$process.ThreadId -or
+                -not [bool](Get-JsonProperty -Object $threadReadThread -Name 'ephemeral' -Default $false) -or
+                -not (Test-ExactObservedPath -Expected ([string]$Inputs.Run.WorkingDirectoryPath) -Observed ([string](Get-JsonProperty -Object $threadReadThread -Name 'cwd' -Default '')))) {
+                $nativeEvidenceFailures.Add('thread_read_metadata')
+            }
+        }
+    }
+    $uniqueNativeEvidenceFailures = @($nativeEvidenceFailures | Select-Object -Unique)
+    $nativeEvidenceFailures = [System.Collections.Generic.List[string]]::new()
+    foreach ($failureName in $uniqueNativeEvidenceFailures) { $nativeEvidenceFailures.Add([string]$failureName) }
 
     $status = 'completed'
     $reason = $null
@@ -864,6 +1012,12 @@ function Invoke-CodexExecute {
         $warnings.Add('Codex exited successfully without a final agent message.')
         $reason = 'codex_did_not_return_final_response'
     }
+    if ($auth.Kind -eq 'subscription_file' -and $nativeEvidenceFailures.Count -gt 0) {
+        $status = 'incompatible'
+        $reason = 'codex_native_evidence_incompatible'
+        $failure = New-ExecutionFailure -Code 'native_evidence_incompatible' -Message ("Codex app-server evidence failed closed: {0}." -f ([string]::Join(', ', @($nativeEvidenceFailures))))
+        $exitStatus = $null
+    }
 
     $tokenMetric = if ($null -eq $usage) {
         New-UnavailableMetric -Reason 'codex_did_not_expose_turn_usage'
@@ -876,7 +1030,7 @@ function Invoke-CodexExecute {
         if ($usageValue.Count -eq 0) { New-UnavailableMetric -Reason 'codex_usage_event_had_no_supported_buckets' } else { New-AvailableMetric -Value $usageValue }
     }
     $telemetry = [ordered]@{
-        transcript = New-AvailableMetric -Value ([ordered]@{ artifact = $transcriptArtifactPath; complete = $true })
+        transcript = New-AvailableMetric -Value ([ordered]@{ artifact = $transcriptArtifactPath; complete = $terminalCaptureComplete })
         tokens = $tokenMetric
         tool_calls = New-AvailableMetric -Value $toolCalls
         cost = New-UnavailableMetric -Reason 'codex_runner_does_not_estimate_cost'
@@ -886,7 +1040,7 @@ function Invoke-CodexExecute {
     $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'parent-only subscription CODEX_HOME', 'ephemeral thread', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input', 'no session continuation')) { $mechanisms.Add($mechanism) }
     } else {
         foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
@@ -899,9 +1053,99 @@ function Invoke-CodexExecute {
         unrelated_environment_excluded = $true
         child_tool_visibility = 'codex_shell_environment_policy_inherit_none'
         value_observed = $false
+        auth_only_home = if ($auth.Kind -eq 'subscription_file') { [bool]$process.AuthOnlyHome } else { $false }
+        auth_only_home_removed = if ($auth.Kind -eq 'subscription_file') { [bool]$process.AuthOnlyHomeRemoved } else { $true }
+        ambient_codex_configuration_copied = $false
     }
     $outputLastMessageArgument = if ($auth.Kind -eq 'subscription_file') { $null } else { Get-SandboxVisiblePath -HostPath (Join-Path $Inputs.Run.RunRoot ($lastResponsePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -RunRoot $Inputs.Run.RunRoot -Platform $visiblePlatform }
-    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Codex accepted the requested model and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ thread_id = $threadId; turn_id = $turnId; event_counts = $eventCounts; commands = @($commands); files = @($files); prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; output_last_message_argument = $outputLastMessageArgument; credential = $credentialEvidence }) -AttemptCount 1
+    $evidence = [ordered]@{
+        thread_id = $threadId
+        thread_session_id = if ($auth.Kind -eq 'subscription_file') { $process.ThreadSessionId } else { $null }
+        turn_id = $turnId
+        event_counts = $eventCounts
+        commands = @($commands)
+        files = @($files)
+        prompt_first_input = if ($auth.Kind -eq 'subscription_file') { $promptFidelity } else { $true }
+        resume = $false
+        stdout_exit_code = $process.ExitCode
+        sandbox = $sandboxEvidence
+        output_last_message_argument = $outputLastMessageArgument
+        credential = $credentialEvidence
+    }
+    if ($auth.Kind -eq 'subscription_file') {
+        $rawArtifact = @($artifacts | Where-Object { [string]$_.path -eq $transcriptArtifactPath } | Select-Object -First 1)
+        $evidence.capture = [ordered]@{
+            source = 'harness_native_transport'
+            terminal = [bool]$process.TurnCompleted
+            worker_authored = $false
+            artifact = $transcriptArtifactPath
+            sha256 = if ($rawArtifact.Count -eq 1) { [string]$rawArtifact[0].sha256 } else { $null }
+        }
+        $evidence.delegation = [ordered]@{
+            dispatch_owner = 'runner'
+            mechanism = [string]$descriptor.delegation.mechanism
+            worker_session_id = $sessionResultId
+            observed_model = $observedModel
+            observed_working_directory = $observedWorkingDirectory
+            observed_home = [string]$process.WorkerHome
+            fresh_worker = [bool]$process.ObservedEphemeral -and -not [string]::IsNullOrWhiteSpace([string]$process.ThreadId)
+            home_config_isolated = [bool]$process.AuthOnlyHome -and [bool]$process.AuthOnlyHomeRemoved
+            prompt_fidelity = $promptFidelity
+            prompt_sha256 = $Inputs.Run.PromptHash
+            terminal_result_capture = [bool]$process.TurnCompleted -and -not [string]::IsNullOrWhiteSpace([string]$process.RawStdout)
+            paired_arm_visible = $false
+            grading_material_visible = $false
+            nested_model_execution = $false
+            model_execution_count = 1
+            thread_id = $threadId
+            thread_session_id = $process.ThreadSessionId
+            turn_id = $turnId
+            instruction_sources_observed = [bool]$process.InstructionSourcesObserved
+            instruction_sources = @($process.InstructionSources)
+            invalid_instruction_sources = @($invalidInstructionSources.ToArray())
+            unexpected_instruction_sources = @($unexpectedInstructionSources.ToArray())
+            requested_runtime_workspace_roots = @($Inputs.Run.WorkingDirectoryPath)
+            thread_read_observed = $null -ne $process.ThreadReadResponse
+            model_reroutes = @($process.ModelReroutes)
+        }
+        $threadStartResultEvidence = Get-JsonProperty -Object $process.ThreadStartResponse -Name 'result' -Default ([ordered]@{})
+        $threadReadThreadEvidence = if ($null -ne $process.ThreadReadResponse) { Get-JsonProperty -Object (Get-JsonProperty -Object $process.ThreadReadResponse -Name 'result' -Default $null) -Name 'thread' -Default $null } else { $null }
+        $turnCompletionEvidence = if ($null -ne $process.TerminalTurn) { [ordered]@{ thread_id = $process.ThreadId; turn_id = $process.TurnId; status = Get-JsonProperty -Object $process.TerminalTurn -Name 'status' -Default $null } } else { $null }
+        $evidence.app_server = [ordered]@{
+            thread_start_request = $process.ThreadStartRequest
+            thread_start_response = $process.ThreadStartResponse
+            turn_start_request = $process.TurnStartRequest
+            turn_start_response = $process.TurnStartResponse
+            thread_start = [ordered]@{
+                requested_model = $Inputs.Profile.Model
+                requested_cwd = $Inputs.Run.WorkingDirectoryPath
+                requested_ephemeral = $true
+                requested_sandbox = 'readOnly'
+                observed_model = Get-JsonProperty -Object $threadStartResultEvidence -Name 'model' -Default $null
+                observed_cwd = Get-JsonProperty -Object $threadStartResultEvidence -Name 'cwd' -Default $null
+                observed_ephemeral = Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResultEvidence -Name 'thread' -Default $null) -Name 'ephemeral' -Default $null
+                observed_sandbox = Get-JsonProperty -Object $threadStartResultEvidence -Name 'sandbox' -Default $null
+                instruction_sources = @($process.InstructionSources)
+            }
+            turn_start = [ordered]@{
+                thread_id = $process.ThreadId
+                requested_model = $Inputs.Profile.Model
+                requested_cwd = $Inputs.Run.WorkingDirectoryPath
+                requested_effort = $Inputs.Profile.ReasoningEffort
+                requested_sandbox_policy = Get-JsonProperty -Object (Get-JsonProperty -Object $process.TurnStartRequest -Name 'params' -Default $null) -Name 'sandboxPolicy' -Default $null
+                prompt_sha256 = $process.PromptInputSha256
+            }
+            terminal_turn = $turnCompletionEvidence
+            thread_read = [ordered]@{
+                request = [ordered]@{ threadId = $process.ThreadId; includeTurns = $true }
+                response = if ($null -eq $threadReadThreadEvidence) { $null } else { [ordered]@{ id = Get-JsonProperty -Object $threadReadThreadEvidence -Name 'id' -Default $null; session_id = Get-JsonProperty -Object $threadReadThreadEvidence -Name 'sessionId' -Default $null; cwd = Get-JsonProperty -Object $threadReadThreadEvidence -Name 'cwd' -Default $null; ephemeral = Get-JsonProperty -Object $threadReadThreadEvidence -Name 'ephemeral' -Default $null } }
+                failure = $process.ThreadReadFailure
+            }
+            model_rerouted = @($process.ModelReroutes)
+        }
+        if ($nativeEvidenceFailures.Count -gt 0) { $evidence.native_worker_evidence_failures = @($nativeEvidenceFailures.ToArray()) }
+    }
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Codex accepted the requested model and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence $evidence -AttemptCount 1
 }
 
 try {

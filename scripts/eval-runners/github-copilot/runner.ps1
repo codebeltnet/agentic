@@ -70,6 +70,7 @@ $descriptor = [ordered]@{
         delegated_worker_capacity_signal = 'conditional'
     }
     delegation = [ordered]@{
+        dispatch_owner = 'orchestrator'
         mode = 'native_worker'
         mechanism = 'Copilot CLI native task tool with an explicit full-capability general-purpose child agent; fleet/task lifecycle events observe completion'
         worker_role = 'general-purpose'

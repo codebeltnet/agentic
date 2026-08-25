@@ -187,6 +187,63 @@ try {
         Assert-True ($dispatch.PSObject.Properties.Name -notcontains 'expected_output') "$($dispatch.worker_id) has no expected-output payload"
     }
 
+    # Codex uses runner-owned native dispatch. The runner process/thread is the
+    # worker, so the portable queue must not ask an outer model orchestrator to
+    # create a subagent first. Six recorded arms are advanced concurrently;
+    # this test never starts a process or model.
+    $runnerDescriptor = [pscustomobject]@{
+        name = 'codex'
+        delegation = [ordered]@{
+            dispatch_owner = 'runner'
+            mechanism = 'deterministic-fake-native-worker'
+        }
+    }
+    $runnerProfile = [ordered]@{
+        runner = 'codex'
+        model = 'fixture-model'
+        reasoning_effort = $null
+        configuration_profile = 'isolated-default'
+        tool_profile = 'default'
+        timeout_seconds = 60
+        concurrency = 3
+    }
+    $runnerPlan = New-EvalOrchestrationPlan -IterationDirectory $iteration -Manifest $manifest -Profile $runnerProfile -Descriptor $runnerDescriptor
+    [void](Assert-OrchestrationPlanContract -Plan $runnerPlan)
+    Assert-Equal 'runner' $runnerPlan.dispatch_owner 'runner-owned descriptor selects runner dispatch'
+    $runnerState = New-OrchestrationState -Plan $runnerPlan
+    $outerSubagentCalls = 0
+    $runnerWorkerStarts = 0
+    $runnerDispatches = @(Get-NextWorkerDispatches -Plan $runnerPlan -State $runnerState)
+    Assert-Equal 3 $runnerDispatches.Count 'runner-owned dispatch respects requested concurrency'
+    foreach ($dispatch in $runnerDispatches) {
+        Assert-Equal 'runner' $dispatch.worker_contract.dispatch_owner "$($dispatch.worker_id) is runner-owned"
+        Assert-Equal 'required' $dispatch.worker_contract.runner_execute_invocation "$($dispatch.worker_id) uses the runner-owned execution surface"
+        $runnerWorkerStarts++
+        [void](Register-DelegationAccepted -State $runnerState -WorkerId $dispatch.worker_id)
+    }
+    Assert-Equal 3 (Get-OrchestrationActiveCount -State $runnerState) 'runner-owned workers are active concurrently'
+    Assert-True ($runnerState.max_observed_active -gt 1) 'runner-owned dispatch observes parallel active workers'
+    foreach ($workerId in @($runnerState.active.Keys)) {
+        $arm = Get-OrchestrationArmByWorkerId -Plan $runnerPlan -WorkerId ([string]$workerId)
+        $runData = Resolve-RunContract -RunPath ([string]$arm.worker.run_manifest_path)
+        [void](Register-WorkerTerminal -Plan $runnerPlan -State $runnerState -WorkerId ([string]$workerId) -ExecutionEvidence (New-TestNativeTerminalEvidence -Arm $arm -RunData $runData -WorkerSessionId ('runner-session-' + $workerId)))
+    }
+    $runnerDispatches = @(Get-NextWorkerDispatches -Plan $runnerPlan -State $runnerState)
+    Assert-Equal 3 $runnerDispatches.Count 'runner-owned queue dispatches the next concurrent batch'
+    foreach ($dispatch in $runnerDispatches) {
+        $runnerWorkerStarts++
+        [void](Register-DelegationAccepted -State $runnerState -WorkerId $dispatch.worker_id)
+    }
+    foreach ($workerId in @($runnerState.active.Keys)) {
+        $arm = Get-OrchestrationArmByWorkerId -Plan $runnerPlan -WorkerId ([string]$workerId)
+        $runData = Resolve-RunContract -RunPath ([string]$arm.worker.run_manifest_path)
+        [void](Register-WorkerTerminal -Plan $runnerPlan -State $runnerState -WorkerId ([string]$workerId) -ExecutionEvidence (New-TestNativeTerminalEvidence -Arm $arm -RunData $runData -WorkerSessionId ('runner-session-' + $workerId)))
+    }
+    Assert-Equal 6 @($runnerState.completed.Keys).Count 'runner-owned test completes six independent arms'
+    Assert-Equal 6 $runnerWorkerStarts 'runner-owned dispatch starts one runner surface per arm'
+    Assert-Equal 0 $outerSubagentCalls 'runner-owned dispatch never requests an outer model subagent'
+    Assert-Equal 3 $runnerState.max_observed_active 'runner-owned state records concurrent maximum'
+
     # A fake harness accepts only four simultaneous native workers. This limit
     # belongs to the fake harness, not to the portable plan or queue.
     $capacityState = New-OrchestrationState -Plan $plan
@@ -301,7 +358,7 @@ try {
     # validate terminal evidence; it must never reuse compatibility execute.
     $conditionalDescriptor = [pscustomobject]@{
         name = 'conditional-native'
-        delegation = [ordered]@{ mode = 'native_worker'; nested_model_execution = $false }
+        delegation = [ordered]@{ dispatch_owner = 'orchestrator'; mode = 'native_worker'; nested_model_execution = $false }
     }
     $conditionalCapabilities = [ordered]@{
         native_worker_delegation = 'conditional'

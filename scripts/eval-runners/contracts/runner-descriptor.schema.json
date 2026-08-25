@@ -39,6 +39,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "dispatch_owner",
         "mode",
         "mechanism",
         "worker_role",
@@ -50,6 +51,7 @@
         "nested_model_execution"
       ],
       "properties": {
+        "dispatch_owner": { "enum": ["orchestrator", "runner"] },
         "mode": { "enum": ["native_worker", "conditional", "unsupported"] },
         "mechanism": { "type": "string", "minLength": 1 },
         "worker_role": { "type": "string", "minLength": 1 },

@@ -57,6 +57,7 @@ $descriptor = [ordered]@{
         delegated_worker_capacity_signal = 'conditional'
     }
     delegation = [ordered]@{
+        dispatch_owner = 'orchestrator'
         mode = 'native_worker'
         mechanism = 'OpenCode Task tool invoking the full-capability General subagent in a fresh child context'
         worker_role = 'general'

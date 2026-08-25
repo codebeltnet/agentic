@@ -29,7 +29,8 @@ function New-EvalOrchestrationPlan {
     param(
         [Parameter(Mandatory = $true)][string]$IterationDirectory,
         [Parameter(Mandatory = $true)][object]$Manifest,
-        [Parameter(Mandatory = $true)][object]$Profile
+        [Parameter(Mandatory = $true)][object]$Profile,
+        [object]$Descriptor = $null
     )
 
     $records = @(Get-ManifestRunRecords -IterationDirectory $IterationDirectory -Manifest $Manifest)
@@ -42,6 +43,19 @@ function New-EvalOrchestrationPlan {
     $model = [string](Get-OrchestrationProfileValue -Profile $Profile -Name 'model' -Default '')
     if ([string]::IsNullOrWhiteSpace($runner) -or [string]::IsNullOrWhiteSpace($model)) {
         throw 'Native worker orchestration requires a selected runner and model.'
+    }
+
+    # Older deterministic callers can omit the descriptor and retain the
+    # original orchestrator-owned contract. Package handoffs always provide
+    # the selected descriptor so the native dispatch owner is explicit.
+    $dispatchOwner = 'orchestrator'
+    $dispatchMechanism = ''
+    if ($null -ne $Descriptor) {
+        $dispatchOwner = [string](Get-JsonProperty -Object (Get-JsonProperty -Object $Descriptor -Name 'delegation' -Default $null) -Name 'dispatch_owner' -Default '')
+        $dispatchMechanism = [string](Get-JsonProperty -Object (Get-JsonProperty -Object $Descriptor -Name 'delegation' -Default $null) -Name 'mechanism' -Default '')
+    }
+    if ($dispatchOwner -notin @('orchestrator', 'runner')) {
+        throw "Native worker orchestration dispatch_owner '$dispatchOwner' is unsupported."
     }
 
     $arms = [System.Collections.Generic.List[object]]::new()
@@ -59,6 +73,7 @@ function New-EvalOrchestrationPlan {
             eval_id = $record.EvalId
             eval_name = $record.EvalName
             configuration = $record.Configuration
+            dispatch_owner = $dispatchOwner
             depends_on = @()
             parent_paths = [ordered]@{
                 run_manifest = $record.RunManifestRelative
@@ -81,7 +96,9 @@ function New-EvalOrchestrationPlan {
                 paired_arm_visible = $false
                 grading_material_visible = $false
                 parent_executes_arm = $false
-                runner_execute_invocation = 'forbidden'
+                dispatch_owner = $dispatchOwner
+                dispatch_mechanism = $dispatchMechanism
+                runner_execute_invocation = if ($dispatchOwner -eq 'runner') { 'required' } else { 'forbidden' }
                 nested_model_execution = $false
                 model_execution_count = 1
             }
@@ -95,13 +112,14 @@ function New-EvalOrchestrationPlan {
         protocol_version = $schemas.Protocol
         runner = $runner
         model = $model
+        dispatch_owner = $dispatchOwner
         requested_concurrency = $requestedConcurrency
         parallel_dispatch_required = $parallelDispatchRequired
         minimum_parallel_workers = if ($parallelDispatchRequired) { 2 } else { 1 }
         native_worker_required = $true
         parent_executes_arms = $false
         nested_model_execution = $false
-        dispatch_policy = 'one fresh harness-native worker per arm; independent workers must run concurrently up to requested_concurrency when capacity permits'
+        dispatch_policy = if ($dispatchOwner -eq 'runner') { 'one fresh runner-owned native worker transport per arm; independent transports must run concurrently up to requested_concurrency when capacity permits' } else { 'one fresh orchestrator-owned harness-native worker per arm; independent workers must run concurrently up to requested_concurrency when capacity permits' }
         capacity_policy = 'harness_authoritative; a rejected delegation that did not start remains queued and is not an eval attempt'
         arms = $arms.ToArray()
     }
@@ -126,6 +144,7 @@ function New-OrchestrationState {
     return [ordered]@{
         schema = 'codebeltnet/agentic/eval-orchestration-state/1'
         plan_schema = [string]$Plan.schema
+        dispatch_owner = [string](Get-JsonProperty -Object $Plan -Name 'dispatch_owner' -Default 'orchestrator')
         requested_concurrency = [int]$Plan.requested_concurrency
         parallel_dispatch_required = [bool](Get-JsonProperty -Object $Plan -Name 'parallel_dispatch_required' -Default $false)
         minimum_parallel_workers = [int](Get-JsonProperty -Object $Plan -Name 'minimum_parallel_workers' -Default 1)
@@ -303,7 +322,7 @@ function Register-WorkerTerminal {
     # arm here; do not infer a path from configuration or inspect grading data.
     try {
         $runData = Resolve-RunContract -RunPath ([string]$arm.worker.run_manifest_path)
-        $validation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $ExecutionEvidence -Run $runData -RequestedModel ([string]$arm.worker.model) -ExpectedWorkerSessionId $expectedSessionId
+        $validation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $ExecutionEvidence -Run $runData -RequestedModel ([string]$arm.worker.model) -ExpectedWorkerSessionId $expectedSessionId -ExpectedMechanism ([string](Get-JsonProperty -Object $arm.worker -Name 'dispatch_mechanism' -Default ''))
         foreach ($failure in @($validation.Failures)) { $terminalEvidenceFailures.Add([string]$failure) }
         $evidenceSessionId = [string](Get-JsonProperty -Object $validation.Delegation -Name 'worker_session_id' -Default '')
         if ($terminalEvidenceFailures.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($evidenceSessionId)) {
@@ -378,7 +397,9 @@ function New-WorkerDispatchEnvelope {
             paired_arm_visible = $false
             grading_material_visible = $false
             parent_executes_arm = $false
-            runner_execute_invocation = 'forbidden'
+            dispatch_owner = [string](Get-JsonProperty -Object $worker -Name 'dispatch_owner' -Default 'orchestrator')
+            dispatch_mechanism = [string](Get-JsonProperty -Object $worker -Name 'dispatch_mechanism' -Default '')
+            runner_execute_invocation = [string](Get-JsonProperty -Object $worker -Name 'runner_execute_invocation' -Default 'forbidden')
             nested_model_execution = $false
             model_execution_count = 1
             fresh_worker_required = $true
@@ -391,6 +412,10 @@ function Assert-OrchestrationPlanContract {
 
     if ([string]$Plan.schema -ne (Get-RunnerSchemaNames).OrchestrationPlan) {
         throw 'Orchestration plan has an unsupported schema.'
+    }
+    $planDispatchOwner = [string](Get-JsonProperty -Object $Plan -Name 'dispatch_owner' -Default '')
+    if ($planDispatchOwner -notin @('orchestrator', 'runner')) {
+        throw "Orchestration plan dispatch_owner '$planDispatchOwner' is unsupported."
     }
     if (-not [bool]$Plan.native_worker_required -or [bool]$Plan.parent_executes_arms -or [bool]$Plan.nested_model_execution) {
         throw 'Orchestration plan must require native workers and forbid parent or nested model execution.'
@@ -411,7 +436,7 @@ function Assert-OrchestrationPlanContract {
         if (-not $workerIds.Add([string]$arm.worker_id)) { throw "Orchestration plan duplicates worker '$($arm.worker_id)'." }
         if (@($arm.depends_on).Count -ne 0) { throw "Worker '$($arm.worker_id)' has an unrelated dependency." }
         $worker = $arm.worker
-        foreach ($property in @('one_arm_only', 'paired_arm_visible', 'grading_material_visible', 'parent_executes_arm', 'nested_model_execution', 'model_execution_count')) {
+        foreach ($property in @('one_arm_only', 'paired_arm_visible', 'grading_material_visible', 'parent_executes_arm', 'dispatch_owner', 'runner_execute_invocation', 'nested_model_execution', 'model_execution_count')) {
             if (-not (Test-JsonProperty -Object $worker -Name $property)) { throw "Worker '$($arm.worker_id)' is missing '$property'." }
         }
         if (-not [bool]$worker.one_arm_only -or [bool]$worker.paired_arm_visible -or [bool]$worker.grading_material_visible -or [bool]$worker.parent_executes_arm -or [bool]$worker.nested_model_execution -or [int]$worker.model_execution_count -ne 1) {
@@ -420,7 +445,13 @@ function Assert-OrchestrationPlanContract {
         if ([string]$worker.worker_id -ne [string]$arm.worker_id -or [int]$worker.eval_id -ne [int]$arm.eval_id -or [string]$worker.configuration -ne [string]$arm.configuration) {
             throw "Worker '$($arm.worker_id)' does not identify exactly its manifest arm."
         }
-        if ([string]$worker.runner_execute_invocation -ne 'forbidden') { throw "Worker '$($arm.worker_id)' may not invoke the direct runner execute transport." }
+        if ([string]$arm.dispatch_owner -ne $planDispatchOwner -or [string]$worker.dispatch_owner -ne $planDispatchOwner) {
+            throw "Worker '$($arm.worker_id)' dispatch ownership does not match the plan."
+        }
+        $expectedRunnerExecute = if ($planDispatchOwner -eq 'runner') { 'required' } else { 'forbidden' }
+        if ([string]$worker.runner_execute_invocation -ne $expectedRunnerExecute) {
+            throw "Worker '$($arm.worker_id)' has runner_execute_invocation '$($worker.runner_execute_invocation)'; expected '$expectedRunnerExecute' for dispatch owner '$planDispatchOwner'."
+        }
         foreach ($forbiddenProperty in @('paired_arm', 'grading', 'expected_output', 'assertions', 'eval_metadata', 'execution_result', 'result')) {
             if (Test-JsonProperty -Object $worker -Name $forbiddenProperty) {
                 throw "Worker '$($arm.worker_id)' exposes forbidden parent or grading field '$forbiddenProperty'."

@@ -345,6 +345,11 @@ function Get-DelegationCapabilityAssessment {
     }
 
     $delegation = Get-JsonProperty -Object $Descriptor -Name 'delegation' -Default $null
+    $dispatchOwner = [string](Get-JsonProperty -Object $delegation -Name 'dispatch_owner' -Default 'unsupported')
+    if ($dispatchOwner -notin @('orchestrator', 'runner')) {
+        $unproven.Add('delegation.dispatch_owner')
+        $unsupported.Add('delegation.dispatch_owner')
+    }
     $mode = [string](Get-JsonProperty -Object $delegation -Name 'mode' -Default 'unsupported')
     $nestedModelExecution = [bool](Get-JsonProperty -Object $delegation -Name 'nested_model_execution' -Default $true)
     $mechanism = [string](Get-JsonProperty -Object $delegation -Name 'mechanism' -Default '')
@@ -385,6 +390,7 @@ function Get-DelegationCapabilityAssessment {
     return [pscustomobject]@{
         MandatoryProven = $status -eq 'supported'
         Status = $status
+        DispatchOwner = $dispatchOwner
         Mode = $mode
         Mechanism = $mechanism
         WorkerRole = $workerRole
@@ -801,10 +807,13 @@ function Assert-RunnerDescriptor {
         }
     }
     $delegation = $Descriptor.delegation
-    foreach ($field in @('mode', 'mechanism', 'worker_role', 'full_capability', 'model_lock', 'working_directory', 'result_capture', 'capacity', 'nested_model_execution')) {
+    foreach ($field in @('dispatch_owner', 'mode', 'mechanism', 'worker_role', 'full_capability', 'model_lock', 'working_directory', 'result_capture', 'capacity', 'nested_model_execution')) {
         if (-not (Test-JsonProperty -Object $delegation -Name $field)) {
             throw "Runner descriptor delegation is missing '$field'."
         }
+    }
+    if ([string]$delegation.dispatch_owner -notin @('orchestrator', 'runner')) {
+        throw "Runner delegation dispatch_owner '$($delegation.dispatch_owner)' must be orchestrator or runner."
     }
     if ([string]$delegation.mode -notin @('native_worker', 'conditional', 'unsupported')) {
         throw "Runner delegation mode '$($delegation.mode)' is unsupported."
@@ -871,6 +880,7 @@ function New-PreflightDocument {
         checks = @($Checks)
         resolved_capabilities = if ($null -eq $ResolvedCapabilities) { [ordered]@{} } else { $ResolvedCapabilities }
         delegation = [ordered]@{
+            dispatch_owner = $delegationAssessment.DispatchOwner
             status = $delegationAssessment.Status
             mode = $delegationAssessment.Mode
             mechanism = $delegationAssessment.Mechanism
@@ -899,6 +909,10 @@ function Assert-NativeWorkerDelegation {
     )
 
     $delegation = Get-JsonProperty -Object $Descriptor -Name 'delegation' -Default $null
+    $dispatchOwner = [string](Get-JsonProperty -Object $delegation -Name 'dispatch_owner' -Default '')
+    if ($dispatchOwner -notin @('orchestrator', 'runner')) {
+        throw "Runner '$($Descriptor.name)' has no valid native dispatch owner."
+    }
     $mode = [string](Get-JsonProperty -Object $delegation -Name 'mode' -Default 'unsupported')
     if ($mode -notin @('native_worker', 'conditional')) {
         throw "Runner '$($Descriptor.name)' cannot satisfy the mandatory native Eval Worker contract: delegation mode is '$mode'."

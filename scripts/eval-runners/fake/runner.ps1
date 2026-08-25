@@ -59,6 +59,7 @@ $descriptor = [ordered]@{
         delegated_worker_capacity_signal = 'unsupported'
     }
     delegation = [ordered]@{
+        dispatch_owner = 'orchestrator'
         mode = 'unsupported'
         mechanism = 'deterministic compatibility execute fixture; no harness-native worker surface'
         worker_role = 'compatibility-fixture'

@@ -48,6 +48,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "dispatch_owner",
         "status",
         "mode",
         "mechanism",
@@ -58,6 +59,7 @@
         "terminal_evidence_required"
       ],
       "properties": {
+        "dispatch_owner": { "enum": ["orchestrator", "runner"] },
         "status": { "enum": ["supported", "conditional", "unsupported"] },
         "mode": { "enum": ["native_worker", "conditional", "unsupported"] },
         "mechanism": { "type": "string" },

@@ -117,7 +117,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server' -and $arguments 
     if ($outArgument.Count -eq 0) { exit 2 }
     $schemaDirectory = [IO.Path]::GetFullPath((Join-Path (Get-Location).Path ([string]$outArgument[0].Substring(6))))
     New-Item -ItemType Directory -Path $schemaDirectory -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $schemaDirectory 'ClientRequest.json'), '{"thread/start":"ThreadStartParams","turn/start":"TurnStartParams","cwd":true,"model":true,"ephemeral":true}', [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $schemaDirectory 'ClientRequest.json'), '{"thread/start":"ThreadStartParams","turn/start":"TurnStartParams","thread/read":"ThreadReadParams","model/rerouted":"ModelReroutedNotification","ThreadStartResponse":true,"instructionSources":true,"cwd":true,"model":true,"ephemeral":true}', [Text.UTF8Encoding]::new($false))
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     exit 0
 }
@@ -147,9 +147,43 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $initialize.id; result = [ordered]@{ serverInfo = [ordered]@{ name = 'recorded-codex'; version = '9.1' } } })
     $initialized = Read-AppServerMessage
     $threadStart = Read-AppServerMessage
-    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadStart.id; result = [ordered]@{ thread = [ordered]@{ id = 'recorded-subscription-thread'; ephemeral = $true; path = $null } } })
+    $fixtureReroute = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-reroute') -PathType Leaf
+    $fixtureAmbientInstruction = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-ambient-instruction') -PathType Leaf
+    $instructionSources = if ($fixtureAmbientInstruction) { @('C:\ambient\AGENTS.md') } else { @($repositoryAgentsPath) }
+    $threadObject = [ordered]@{
+        id = 'recorded-subscription-thread'
+        sessionId = 'recorded-subscription-session'
+        ephemeral = $true
+        cwd = (Get-Location).Path
+        cliVersion = '9.1'
+        createdAt = 1
+        updatedAt = 1
+        modelProvider = 'recorded-provider'
+        preview = $false
+        projectId = $null
+        source = 'startup'
+        status = [ordered]@{ type = 'idle' }
+        turns = @()
+    }
+    $threadStartResult = [ordered]@{
+        approvalPolicy = 'never'
+        approvalsReviewer = 'user'
+        cwd = (Get-Location).Path
+        model = 'gpt-5.6-luna'
+        modelProvider = 'recorded-provider'
+        sandbox = [ordered]@{ type = 'readOnly' }
+        instructionSources = $instructionSources
+        thread = $threadObject
+    }
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadStart.id; result = $threadStartResult })
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'thread/started'; params = [ordered]@{ thread = [ordered]@{ id = 'recorded-subscription-thread' } } })
     $turnStart = Read-AppServerMessage
+    if ($fixtureReroute) {
+        # This notification deliberately arrives before turn/start's response
+        # so the recorded transport proves reroute capture while waiting for a
+        # JSON-RPC response, not only in the terminal event loop.
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'model/rerouted'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; fromModel = 'gpt-5.6-luna'; toModel = 'gpt-5.6-other'; reason = 'highRiskCyberActivity' } })
+    }
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $turnStart.id; result = [ordered]@{ turn = [ordered]@{ id = 'recorded-subscription-turn'; status = 'inProgress'; items = @() } } })
 
     $promptText = [string]$turnStart.params.input[0].text
@@ -172,7 +206,16 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $record.worker_project_disable_visible = $false
     $record.parent_codex_home = [Environment]::GetEnvironmentVariable('CODEX_HOME')
     $record.parent_auth_file_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'auth.json') -PathType Leaf
-    $record.rpc_methods = @($initialize.method, $initialized.method, $threadStart.method, $turnStart.method)
+    $record.parent_config_file_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'config.toml') -PathType Leaf
+    $record.parent_skills_directory_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'skills') -PathType Container
+    $record.parent_agents_directory_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'agents') -PathType Container
+    $record.parent_sessions_directory_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'sessions') -PathType Container
+    $record.parent_memories_directory_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'memories') -PathType Container
+    $record.parent_plugins_directory_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'plugins') -PathType Container
+    $record.parent_mcp_configuration_visible = (Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'mcp.json') -PathType Leaf) -or (Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'mcp') -PathType Container)
+    $record.parent_agents_file_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'AGENTS.md') -PathType Leaf
+    $record.auth_only_home = [bool]$record.parent_auth_file_visible -and -not [bool]$record.parent_config_file_visible -and -not [bool]$record.parent_skills_directory_visible -and -not [bool]$record.parent_agents_directory_visible -and -not [bool]$record.parent_sessions_directory_visible -and -not [bool]$record.parent_memories_directory_visible -and -not [bool]$record.parent_plugins_directory_visible -and -not [bool]$record.parent_mcp_configuration_visible -and -not [bool]$record.parent_agents_file_visible
+    $record.rpc_methods = @($initialize.method, $initialized.method, $threadStart.method, $turnStart.method, 'thread/read')
     $record.thread_params = $threadStart.params
     $record.turn_params = $turnStart.params
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Depth 50 -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
@@ -182,6 +225,8 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 3; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = 'recorded subscription response' } } })
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'thread/tokenUsage/updated'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; tokenUsage = [ordered]@{ total = [ordered]@{ inputTokens = 2; cachedInputTokens = 1; outputTokens = 3; reasoningOutputTokens = 1; totalTokens = 6 }; last = [ordered]@{ inputTokens = 2; cachedInputTokens = 1; outputTokens = 3; reasoningOutputTokens = 1; totalTokens = 6 } } } })
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'turn/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turn = [ordered]@{ id = 'recorded-subscription-turn'; status = 'completed'; items = @() } } })
+    $threadRead = Read-AppServerMessage
+    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadRead.id; result = [ordered]@{ thread = $threadObject } })
     exit 0
 }
 if ($arguments -contains '--version') {
@@ -359,6 +404,8 @@ exit 2
         $description = Invoke-AdapterJson -RunnerPath $runnerPath -Command describe -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         [void](Assert-RunnerDescriptor -Descriptor $description)
         Assert-True ($description.PSObject.Properties.Name -contains 'delegation') "$runnerName descriptor declares native delegation"
+        $expectedDispatchOwner = if ($runnerName -eq 'codex') { 'runner' } else { 'orchestrator' }
+        Assert-Equal $expectedDispatchOwner $description.delegation.dispatch_owner "$runnerName descriptor declares its native dispatch owner"
         Assert-True (-not [bool]$description.delegation.nested_model_execution) "$runnerName descriptor forbids nested model execution"
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$description.delegation.mechanism)) "$runnerName descriptor records its native delegation mechanism"
         Assert-Equal 'conditional' $description.capabilities.native_worker_delegation "$runnerName descriptor does not present native delegation as terminal proof"
@@ -372,6 +419,7 @@ exit 2
         Assert-Equal $expectedVersion $preflightWith.harness.version "$runnerName exact preflight version"
         Assert-Equal 'pragmatic' $preflightWith.isolation.level "$runnerName pragmatic preflight level"
         Assert-Equal 'conditional' $preflightWith.delegation.status "$runnerName native delegation preflight requires terminal evidence"
+        Assert-Equal $expectedDispatchOwner $preflightWith.delegation.dispatch_owner "$runnerName preflight preserves native dispatch ownership"
         Assert-True ([bool]$preflightWith.delegation.terminal_evidence_required) "$runnerName preflight requires terminal delegation evidence"
         if ($runnerName -eq 'copilot') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
@@ -518,6 +566,12 @@ exit 2
     $fileAuthHome = Join-Path $recordedRoot 'codex-file-auth'
     New-Item -ItemType Directory -Path $fileAuthHome -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $fileAuthHome 'auth.json'), '{"canary":"not-logged"}', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $fileAuthHome 'config.toml'), 'model = "ambient-not-used"', [System.Text.UTF8Encoding]::new($false))
+    New-Item -ItemType Directory -Path (Join-Path $fileAuthHome 'skills'), (Join-Path $fileAuthHome 'agents'), (Join-Path $fileAuthHome 'sessions'), (Join-Path $fileAuthHome 'memories'), (Join-Path $fileAuthHome 'plugins'), (Join-Path $fileAuthHome 'mcp') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $fileAuthHome 'skills\ambient.md'), 'ambient skill must not be copied', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $fileAuthHome 'agents\ambient.md'), 'ambient agent must not be copied', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $fileAuthHome 'mcp.json'), '{"ambient":true}', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $fileAuthHome 'AGENTS.md'), 'ambient instructions must not be copied', [System.Text.UTF8Encoding]::new($false))
     $env:OPENAI_API_KEY = $null
     $env:CODEX_HOME = $fileAuthHome
     $fileAuthPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
@@ -534,9 +588,48 @@ exit 2
     Assert-Equal 2 ([int]$fileAuthResult.telemetry.tool_calls.value) 'Codex app-server counts command and file-change evidence'
     Assert-Equal 1 @($fileAuthResult.evidence.commands).Count 'Codex app-server preserves command evidence'
     Assert-Equal 1 @($fileAuthResult.evidence.files).Count 'Codex app-server preserves file-change evidence'
+    Assert-Equal 'runner' $fileAuthResult.evidence.delegation.dispatch_owner 'Codex native evidence identifies runner-owned dispatch'
+    Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.delegation.observed_model 'Codex native evidence uses observed thread/start model'
+    Assert-Equal (Join-Path $with.Root 'repo') $fileAuthResult.evidence.delegation.observed_working_directory 'Codex native evidence uses observed cwd'
+    Assert-True ([bool]$fileAuthResult.evidence.delegation.fresh_worker) 'Codex native evidence proves ephemeral fresh worker'
+    Assert-True ([bool]$fileAuthResult.evidence.delegation.home_config_isolated) 'Codex native evidence proves auth-only home cleanup'
+    Assert-True ([bool]$fileAuthResult.evidence.delegation.prompt_fidelity) 'Codex native evidence proves exact prompt hash'
+    Assert-True ([bool]$fileAuthResult.evidence.delegation.terminal_result_capture) 'Codex native evidence proves turn completion capture'
+    Assert-Equal 'harness_native_transport' $fileAuthResult.evidence.capture.source 'Codex capture provenance is app-server transport-owned'
+    Assert-True ([bool]$fileAuthResult.evidence.capture.terminal -and -not [bool]$fileAuthResult.evidence.capture.worker_authored) 'Codex capture is terminal and not authored by the worker/orchestrator'
+    Assert-True ([bool]$fileAuthResult.evidence.delegation.thread_read_observed) 'Codex native evidence records thread/read observation'
+    Assert-Equal 'thread/start' $fileAuthResult.evidence.app_server.thread_start_request.method 'Codex evidence retains the exact thread/start request'
+    Assert-Equal 'turn/start' $fileAuthResult.evidence.app_server.turn_start_request.method 'Codex evidence retains the exact turn/start request'
+    Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.app_server.thread_start_request.params.model 'Codex exact thread/start request preserves model'
+    Assert-Equal (Join-Path $with.Root 'repo') $fileAuthResult.evidence.app_server.turn_start_request.params.cwd 'Codex exact turn/start request preserves cwd'
+    Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.app_server.thread_start_response.result.model 'Codex evidence retains observed thread/start model'
+    Assert-Equal 'completed' $fileAuthResult.evidence.app_server.terminal_turn.status 'Codex evidence retains terminal turn/completed status'
+    Assert-Equal 'recorded-subscription-thread' $fileAuthResult.evidence.app_server.thread_read.request.threadId 'Codex evidence retains the thread/read request identity'
+    $fileAuthEvidenceJson = ConvertTo-Json -InputObject $fileAuthResult -Depth 100
+    Assert-True ($fileAuthEvidenceJson -notmatch 'recorded-canary|not-logged' -and $fileAuthEvidenceJson -notmatch [regex]::Escape($fileAuthHome)) 'Codex result evidence does not include the copied credential or auth path'
     $subscriptionLogPath = Join-Path $with.Root 'repo\codex-fake-cli-log.jsonl'
     $subscriptionRecord = Get-Content -LiteralPath $subscriptionLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.PSObject.Properties.Name -contains 'rpc_methods' } | Select-Object -Last 1
-    Assert-Equal 'initialize,initialized,thread/start,turn/start' ([string]::Join(',', @($subscriptionRecord.rpc_methods))) 'Codex app-server follows the required handshake order'
+    $codexNativeValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $fileAuthResult -Run (Resolve-RunContract -RunPath $with.Path) -RequestedModel 'gpt-5.6-luna' -ExpectedRunner 'codex' -ExpectedMechanism $fileAuthResult.evidence.delegation.mechanism
+    Assert-True ([bool]$codexNativeValidation.Valid) 'Codex app-server result satisfies the common native terminal evidence contract'
+    [void](Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $fileAuthResult -Run (Resolve-RunContract -RunPath $with.Path) -RequestedModel 'gpt-5.6-luna' -ExpectedRunner 'codex' -ExpectedMechanism $fileAuthResult.evidence.delegation.mechanism)
+    [void](Assert-NativeTerminalCaptureArtifact -ExecutionResult $fileAuthResult)
+    $authHomePath = [string]$subscriptionRecord.parent_codex_home
+    Assert-True (-not (Test-Path -LiteralPath $authHomePath)) 'Codex temporary auth-only home is removed after the arm completes'
+
+    $rerouteMarker = Join-Path $with.Root 'home\codex-reroute'
+    [System.IO.File]::WriteAllText($rerouteMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $reroutedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'incompatible' $reroutedResult.status 'Codex model/rerouted notification fails closed'
+    Assert-True (@($reroutedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'model_rerouted' }).Count -eq 1) 'Codex reroute incompatibility is recorded as transport evidence'
+    Remove-Item -LiteralPath $rerouteMarker -Force
+
+    $ambientInstructionMarker = Join-Path $with.Root 'home\codex-ambient-instruction'
+    [System.IO.File]::WriteAllText($ambientInstructionMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $ambientInstructionResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'incompatible' $ambientInstructionResult.status 'Codex unexpected instruction source fails closed'
+    Assert-True (@($ambientInstructionResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'unexpected_instruction_sources' }).Count -eq 1) 'Codex ambient instruction rejection is recorded as transport evidence'
+    Remove-Item -LiteralPath $ambientInstructionMarker -Force
+    Assert-Equal 'initialize,initialized,thread/start,turn/start,thread/read' ([string]::Join(',', @($subscriptionRecord.rpc_methods))) 'Codex app-server follows the required handshake and post-completion read order'
     Assert-Equal 'gpt-5.6-luna' $subscriptionRecord.thread_params.model 'Codex app-server thread receives the requested model'
     Assert-True ([bool]$subscriptionRecord.thread_params.ephemeral) 'Codex app-server thread is ephemeral'
     Assert-Equal 'readOnly' $subscriptionRecord.thread_params.sandbox 'Codex app-server thread avoids persisting writable project trust'
@@ -545,8 +638,17 @@ exit 2
     Assert-Equal (Join-Path $with.Root 'repo') $subscriptionRecord.turn_params.cwd 'Codex app-server turn receives the staged working directory'
     Assert-Equal 'never' $subscriptionRecord.turn_params.approvalPolicy 'Codex app-server turn rejects interactive approvals'
     Assert-Equal 'workspaceWrite' $subscriptionRecord.turn_params.sandboxPolicy.type 'Codex app-server turn receives workspace-write sandbox policy'
-    Assert-Equal $fileAuthHome $subscriptionRecord.parent_codex_home 'Codex app-server parent receives the subscription CODEX_HOME'
+    Assert-True ($subscriptionRecord.parent_codex_home -ne $fileAuthHome) 'Codex app-server does not expose the ambient subscription CODEX_HOME'
     Assert-True ([bool]$subscriptionRecord.parent_auth_file_visible) 'Codex app-server parent can read the subscription auth file'
+    Assert-True ([bool]$subscriptionRecord.auth_only_home) 'Codex app-server temporary CODEX_HOME contains auth.json only'
+    Assert-True (-not [bool]$subscriptionRecord.parent_config_file_visible) 'Codex app-server temporary CODEX_HOME excludes config.toml'
+    Assert-True (-not [bool]$subscriptionRecord.parent_skills_directory_visible) 'Codex app-server temporary CODEX_HOME excludes skills'
+    Assert-True (-not [bool]$subscriptionRecord.parent_agents_directory_visible) 'Codex app-server temporary CODEX_HOME excludes agents'
+    Assert-True (-not [bool]$subscriptionRecord.parent_sessions_directory_visible) 'Codex app-server temporary CODEX_HOME excludes sessions'
+    Assert-True (-not [bool]$subscriptionRecord.parent_memories_directory_visible) 'Codex app-server temporary CODEX_HOME excludes memories'
+    Assert-True (-not [bool]$subscriptionRecord.parent_plugins_directory_visible) 'Codex app-server temporary CODEX_HOME excludes plugins'
+    Assert-True (-not [bool]$subscriptionRecord.parent_mcp_configuration_visible) 'Codex app-server temporary CODEX_HOME excludes MCP configuration'
+    Assert-True (-not [bool]$subscriptionRecord.parent_agents_file_visible) 'Codex app-server temporary CODEX_HOME excludes AGENTS.md'
     Assert-True (-not [bool]$subscriptionRecord.unrelated_present) 'Codex app-server parent excludes unrelated inherited environment variables'
     Assert-True (-not [bool]$subscriptionRecord.worker_auth_file_visible) 'Codex app-server worker fixture does not receive auth.json'
     Assert-True (@($subscriptionRecord.args) -contains 'shell_environment_policy.inherit=none') 'Codex app-server disables child shell environment inheritance'
@@ -920,14 +1022,19 @@ try {
     $recordText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'record-native-result.ps1'), [System.Text.UTF8Encoding]::new($false))
     $manifestBridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-manifest-results.ps1'), [System.Text.UTF8Encoding]::new($false))
     $commonText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'runner-common.ps1'), [System.Text.UTF8Encoding]::new($false))
+    $orchestrationText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'orchestration.ps1'), [System.Text.UTF8Encoding]::new($false))
     Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
+    Assert-True ($orchestrationText -notmatch '(?i)capture-native-results\.ps1|synthesize|worker_authored') 'generic orchestration must not manufacture native terminal envelopes'
     Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
     Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
     Assert-True ($prepareText.Contains('bridge-manifest-results.ps1')) 'handoff preparation must use the deterministic package-level manifest bridge'
     Assert-True ($prepareText.Contains('runs.<arm>.run_manifest') -and $prepareText.Contains('runs.<arm>.execution_result') -and $prepareText.Contains('runs.<arm>.result')) 'handoff preparation must require every exact manifest arm path'
     Assert-True ($prepareText.Contains('Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')) 'handoff preparation must prohibit reconstructed paths'
-    Assert-True ($prepareText.Contains('DELEGATE EVERY eval arm to a fresh harness-native worker/subagent. The Eval Orchestrator MUST NOT execute an eval arm itself.')) 'handoff preparation must require delegated native workers and forbid parent execution'
-    Assert-True ($prepareText.Contains('One arm equals one delegated worker and one model-backed eval execution.')) 'handoff preparation must state the one-arm one-model invariant'
+    Assert-True ($prepareText.Contains('Read `delegation.dispatch_owner` from the selected runner descriptor and preflight.')) 'handoff preparation must make native dispatch ownership explicit'
+    Assert-True ($prepareText.Contains('One arm equals one fresh native Eval Worker and one model-backed eval execution.')) 'handoff preparation must state the one-arm one-model invariant'
+    Assert-True ($prepareText.Contains('For `runner`, do not spawn a model subagent first.')) 'handoff preparation must forbid an outer runner-owned model worker'
+    Assert-True ($prepareText.Contains('do not invoke `record-native-result.ps1`, manufacture a native envelope')) 'runner-owned handoff must preserve runner capture without synthetic envelopes'
+    Assert-True ($prepareText -notmatch '(?i)capture-native-results\.ps1') 'handoff preparation must not contain a synthetic capture helper'
     Assert-True ($prepareText.Contains('Assert-NativeWorkerDelegation')) 'handoff preparation must invoke the native delegation gate'
     Assert-True ($prepareText.Contains('Require terminal evidence for the exact selected model, exact arm identity, working directory, isolated HOME/config boundary, prompt fidelity, terminal result capture')) 'handoff preparation must require worker control evidence'
     Assert-True ($prepareText.Contains('-RequireComplete -RequireNativeDelegation -RequireParallelDispatch')) 'handoff preparation must revalidate native terminal and parallel-dispatch evidence during the manifest bridge'
@@ -939,7 +1046,7 @@ try {
     Assert-True ($prepareText.Contains('rejected before the worker starts') -and $prepareText.Contains('record no eval attempt')) 'handoff preparation must queue capacity rejections without counting attempts'
     Assert-True ($prepareText.Contains('Register each worker acceptance and terminal result exactly once') -and $prepareText.Contains('incompatibility is diagnostic-only') -and $prepareText.Contains('Do not grade incompatible arms')) 'handoff preparation must make duplicate registration and incompatible-arm handling fail closed'
     Assert-True ($prepareText.Contains('Skipping report generation because the completion gate failed') -and $prepareText.Contains('Diagnostic comparison (incomplete)')) 'incomplete collection must remain diagnostic and skip report generation'
-    Assert-True ($prepareText.Contains('capture.worker_authored') -and $prepareText.Contains('Do not ask the worker to author or summarize this envelope')) 'handoff preparation must require transport-produced native envelopes rather than worker-authored summaries'
+    Assert-True ($prepareText.Contains('capture.worker_authored') -and $prepareText.Contains('Do not ask any worker or parent to author, hand-write, normalize, or repair terminal evidence.')) 'handoff preparation must require transport-produced native evidence rather than worker-authored summaries'
     Assert-True ($bridgeText.Contains('Get-PackageRunnerDescriptor') -and $bridgeText.Contains('Assert-NativeTerminalCaptureArtifact') -and $bridgeText.Contains('ExpectedMechanism')) 'native bridge must require runner-produced terminal evidence'
     Assert-True ($recordText.Contains('eval-native-worker-result/1') -and $recordText.Contains('New-ExecutionResult')) 'native terminal recording must use the runner-owned result builder'
     Assert-True ($commonText.Contains('exit.status must be a JSON number or null')) 'execution results must reject textual exit statuses'

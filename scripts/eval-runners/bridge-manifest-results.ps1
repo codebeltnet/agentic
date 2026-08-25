@@ -46,7 +46,8 @@ try {
         }
 
         $profileData = Resolve-ExecutionProfile -ProfilePath (Join-Path $iterationPath 'execution-profile.json')
-        $plan = New-EvalOrchestrationPlan -IterationDirectory $iterationPath -Manifest $manifest -Profile $profileData.Profile
+        $runnerDescriptor = Get-PackageRunnerDescriptor -RunnerName ([string]$profileData.Runner)
+        $plan = New-EvalOrchestrationPlan -IterationDirectory $iterationPath -Manifest $manifest -Profile $profileData.Profile -Descriptor $runnerDescriptor
         $state = Read-RunnerJson -Path $statePath
         $parallelDispatch = Assert-OrchestrationConcurrency -Plan $plan -State $state
     }
