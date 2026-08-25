@@ -54,12 +54,24 @@ execution. Missing or mismatched evidence makes the arm `incompatible`; it is
 never a reason to invoke the parent or the compatibility `runner.ps1 execute`
 transport.
 
-The terminal result must come from the selected package runner. The parent may
-persist that result at the exact manifest-declared path, but it must not replace
-it with a worker summary or synthesize a normalized result. Native bridging
-also checks the result's runner identity, the descriptor's exact delegation
-mechanism, and a hashed transcript/event artifact. An `incompatible` arm is
-diagnostic-only: it is never gradeable and fails the completion/benchmark gate.
+The harness-native transport returns a terminal envelope with schema
+`codebeltnet/agentic/eval-native-worker-result/1`. The envelope declares
+`capture.source = harness_native_transport`, `capture.terminal = true`, and
+`capture.worker_authored = false`; the model worker's answer is data inside the
+envelope, never its author. If the selected harness exposes only assistant text
+or a worker-authored summary, the arm is incompatible. After the worker is
+terminal, the orchestrator writes only that captured envelope to a package-local
+temporary path and invokes `record-native-result.ps1`. That deterministic
+package-runner helper derives the exact run/profile identity, timestamps,
+requested configuration, runner/harness identity, and `eval-execution-result/1`
+shape, then validates the native evidence before writing the manifest-declared
+raw result. The parent may persist only that helper-produced result; it must not
+replace it with a worker summary, hand-write `execution-result.json`, or
+synthesize a normalized result.
+Native bridging also checks the result's runner identity, the descriptor's exact
+delegation mechanism, and a hashed transcript/event artifact. An `incompatible`
+arm is diagnostic-only: it is never gradeable and fails the completion/benchmark
+gate.
 
 The descriptor's `delegation` object records the native mechanism, worker role,
 advertised full-capability/model-lock/working-directory/result-capture
@@ -88,22 +100,15 @@ Native delegation mechanisms:
   sibling Task calls for the first batch in one assistant turn and must not ask
   for confirmation or wait between calls. A client that cannot do that is
   incompatible; available-capacity serial dispatch is not a fallback.
-- Cline: a full-capability Cline SDK Agent Squad
-  `start_subagent(preset: "anvil")` child session backed by
-  `ClineCore.create`. The plugin's default `phantom` preset and Cline's
-  documented `use_subagents` research feature are read-only and are rejected
-  for mutable evals. Plugin/SDK discovery is only preflight readiness; the
-  actual child remains conditional until terminal evidence proves its controls.
-
 This directory contains the package-local implementation of the v0.9.1 Eval
 Runner protocol. It is copied into prepared packages so the external Eval
 Orchestrator can use the same runner implementation that was validated with the
 package. It is not a model executor used by repository automation.
 
-The boundary has three documents:
+The boundary has a native terminal envelope plus the runner-owned raw result:
 
 ```text
-run.json + execution-profile.json -> runner -> execution-result.json
+run.json + execution-profile.json -> native worker envelope -> record-native-result.ps1 -> execution-result.json
 ```
 
 `run.json` is the existing portable one-arm contract. It owns the prompt,
@@ -128,6 +133,17 @@ runner.ps1 preflight -Run <run.json> -Profile <execution-profile.json>
 runner.ps1 execute -Run <run.json> -Profile <execution-profile.json>
 ```
 
+The native handoff additionally uses:
+
+```text
+record-native-result.ps1 -Runner <runner> -Run <run.json> -Profile <execution-profile.json> -NativeResult <native-worker-result.json> -Output <execution-result.json>
+```
+
+`record-native-result.ps1` is deterministic and never starts a harness or a
+model. The direct `execute` command remains the compatibility/conformance
+transport; native delegation must not invoke it because that would create a
+second model execution.
+
 The commands emit one JSON document. `describe` and `preflight` do not consume
 model tokens. `execute` runs exactly one arm, never resumes a session, never
 grades or retries for answer quality, and returns a normalized result even for
@@ -146,7 +162,7 @@ incompatible.
 The fake runner is deterministic and is the conformance reference. It has no
 harness-native delegation surface and its compatibility output is never proof
 for a real harness. GitHub
-Copilot, Codex, OpenCode, and Cline are thin harness-specific adapters. Their
+Copilot, Codex, and OpenCode are thin harness-specific adapters. Their
 native CLI flags, environment setup, event parsing, authentication injection,
 and isolation checks stay inside their own directories. Windows is supported in
 pragmatic mode when the native CLI satisfies the mandatory controls.
@@ -188,14 +204,14 @@ workspace-write`; it does not combine explicit sandbox selection with
 `--approve-for-me`. OpenCode uses `run --format json --auto --model
 <runner-native-model>` with isolated global/config roots and preserves
 repository-owned project configuration; it does not depend on
-`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. Cline expects a
-`provider/model` selector in the profile and derives its native `--provider`
-and `--model` arguments inside the adapter. Each captures an exact observable
+`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`.
+
+Each captures an exact observable
 CLI version and passes only documented environment credentials when the selected
 runner supports them. None copies a global skill directory, memory store, plugin
 set, or normal agent profile into a run.
 
-Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list, Codex through `codex debug models`, OpenCode through `opencode models opencode --verbose`, and Cline through the installed `@cline/llms` registry. Cline and OpenCode discovery returns only models with current metadata proving free availability; zero free models is a clear local failure, not a fallback to paid models.
+Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list, Codex through `codex debug models`, OpenCode through `opencode models opencode --verbose`. OpenCode discovery returns only models with current metadata proving free availability; zero free models is a clear local failure, not a fallback to paid models.
 
 Freebuff is currently documented as planned/blocked. Its supported CLI remains
 TUI-oriented and does not provide the required one-prompt, noninteractive,

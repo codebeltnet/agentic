@@ -4,11 +4,11 @@
 
 .DESCRIPTION
     Discovers runner-native model selectors without executing model requests. GitHub Copilot and Codex return every
-    model the harness exposes. Cline and OpenCode return only models whose current catalog metadata proves free
+    model the harness exposes. OpenCode returns only models whose current catalog metadata proves free
     availability. Discovery failures are local to the selected harness and never fall back to stale hardcoded catalogs.
 
 .PARAMETER Runner
-    Internal Eval Runner id: github-copilot, codex, opencode, or cline.
+    Internal Eval Runner id: github-copilot, codex, or opencode.
 
 .PARAMETER CatalogPath
     Optional deterministic catalog fixture used by tests. When supplied, no harness command is invoked.
@@ -23,7 +23,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('github-copilot', 'codex', 'opencode', 'cline')]
+    [ValidateSet('github-copilot', 'codex', 'opencode')]
     [string]$Runner,
 
     [string]$CatalogPath,
@@ -48,7 +48,6 @@ function Get-HarnessDisplayName {
         'github-copilot' { return 'GitHub Copilot CLI' }
         'codex' { return 'Codex CLI' }
         'opencode' { return 'OpenCode' }
-        'cline' { return 'Cline' }
         default { return $RunnerName }
     }
 }
@@ -56,7 +55,7 @@ function Get-HarnessDisplayName {
 function Get-PolicyName {
     param([Parameter(Mandatory = $true)][string]$RunnerName)
 
-    if ($RunnerName -in @('cline', 'opencode')) {
+    if ($RunnerName -eq 'opencode') {
         return 'free'
     }
     return 'all'
@@ -190,7 +189,7 @@ function ConvertTo-ModelChoice {
     }
 
     $provider = Get-FirstPropertyValue -Object $Model -Names @('providerID', 'providerId', 'provider')
-    if ($RunnerName -in @('cline', 'opencode') -and $id -notmatch '/' -and -not [string]::IsNullOrWhiteSpace($provider)) {
+    if ($RunnerName -eq 'opencode' -and $id -notmatch '/' -and -not [string]::IsNullOrWhiteSpace($provider)) {
         $id = "$provider/$id"
     }
 
@@ -335,29 +334,6 @@ function ConvertFrom-OpenCodeTextCatalog {
     return @($models)
 }
 
-function Resolve-ClineModelsModulePath {
-    $command = Resolve-ExternalCommand -Name 'cline'
-    if ($null -eq $command) {
-        throw 'Cline CLI executable is not available on PATH.'
-    }
-
-    $source = [string]$command.Source
-    $directory = Split-Path -Parent $source
-    $candidates = @(
-        (Join-Path $directory 'node_modules/cline/node_modules/@cline/llms/dist/models.js'),
-        (Join-Path $directory '../lib/node_modules/cline/node_modules/@cline/llms/dist/models.js'),
-        (Join-Path $directory '../node_modules/cline/node_modules/@cline/llms/dist/models.js')
-    )
-    foreach ($candidate in $candidates) {
-        $full = [System.IO.Path]::GetFullPath($candidate)
-        if (Test-Path -LiteralPath $full -PathType Leaf) {
-            return $full
-        }
-    }
-
-    throw 'Cline model registry module was not found under the installed CLI package.'
-}
-
 function Resolve-CopilotSdkPath {
     $command = Resolve-ExternalCommand -Name 'copilot'
     if ($null -eq $command) {
@@ -410,39 +386,6 @@ function Get-OpenCodeModels {
     return ConvertFrom-OpenCodeTextCatalog -Text $result.Stdout
 }
 
-function Get-ClineModels {
-    $modulePath = Resolve-ClineModelsModulePath
-    $node = Resolve-ExternalCommand -Name 'node'
-    if ($null -eq $node) {
-        throw 'Node.js is required to read the Cline model registry.'
-    }
-
-    $script = @'
-import { pathToFileURL } from "node:url";
-const modulePath = process.argv[1];
-const mod = await import(pathToFileURL(modulePath).href);
-const providerIds = await mod.getProviderIds();
-const models = [];
-for (const providerId of providerIds) {
-  const providerModels = await mod.getModelsForProvider(providerId);
-  for (const [key, model] of Object.entries(providerModels || {})) {
-    models.push({
-      id: model.id || key,
-      providerID: providerId,
-      name: model.name || model.id || key,
-      pricing: model.pricing,
-      operation: model.operation,
-      capabilities: model.capabilities
-    });
-  }
-}
-console.log(JSON.stringify({ models }));
-'@
-    $result = Invoke-JsonCommand -CommandInfo $node -Arguments @('--input-type=module', '-e', $script, $modulePath) -TimeoutSeconds 60
-    $catalog = $result.Stdout | ConvertFrom-Json
-    return ConvertTo-ModelChoices -Catalog $catalog -RunnerName 'cline' -Source '@cline/llms model registry'
-}
-
 function Get-CopilotModels {
     $sdkPath = Resolve-CopilotSdkPath
     $node = Resolve-ExternalCommand -Name 'node'
@@ -472,7 +415,6 @@ try {
             'github-copilot' { Get-CopilotModels }
             'codex' { Get-CodexModels }
             'opencode' { Get-OpenCodeModels }
-            'cline' { Get-ClineModels }
         }
     }
     $models = @(Select-ModelsByPolicy -Models @($rawModels) -RunnerName $Runner)
