@@ -15,10 +15,12 @@ Eval Orchestrator
 
 The Eval Orchestrator coordinates the manifest queue, native child creation,
 terminal evidence, exact manifest destinations, and the phase boundary. It
-does not execute an eval arm itself. One arm equals one fresh delegated
-harness-native worker and one model-backed execution. The delegated worker
-executes the prepared prompt directly; it must not call the runner's
-model-spawning `execute` command or start another model session.
+does not execute an eval arm in its own model context. Each descriptor declares
+`delegation.dispatch_owner`: `orchestrator` means the orchestrator creates the
+declared native subagent/task, while `runner` means the orchestrator starts the
+runner-owned native execution surface directly. One arm equals one fresh
+native Eval Worker and one model-backed execution. A runner-owned process or
+thread is that worker; it must not be nested inside an outer model session.
 
 `orchestration.ps1` is the deterministic queue/state helper copied into every
 package. It creates one worker envelope per exact manifest arm, keeps unrelated
@@ -32,7 +34,9 @@ has no explicit capacity-limit evidence; `bridge-manifest-results.ps1
 harness-specific concurrency ceiling. `Assert-NativeWorkerDelegation` is the
 fail-closed handoff gate: an unavailable/unsupported native mechanism cannot
 fall back to parent execution, while a conditional mechanism may dispatch only
-when terminal evidence will be checked.
+when terminal evidence will be checked. The dispatch owner is part of the
+same descriptor/preflight contract, so generic orchestration does not infer it
+from a runner name.
 
 The delegation contract has three distinct evidence levels:
 
@@ -51,35 +55,32 @@ the requested model, exact arm identity, exact run working directory, exact
 isolated home/config boundary, prompt hash/fidelity, terminal capture, paired
 arm/grading exclusion, fresh worker/session identity, and exactly one model
 execution. Missing or mismatched evidence makes the arm `incompatible`; it is
-never a reason to invoke the parent or the compatibility `runner.ps1 execute`
-transport.
+never a reason to invoke the parent or a different transport.
 
-The harness-native transport returns a terminal envelope with schema
-`codebeltnet/agentic/eval-native-worker-result/1`. The envelope declares
-`capture.source = harness_native_transport`, `capture.terminal = true`, and
-`capture.worker_authored = false`; the model worker's answer is data inside the
-envelope, never its author. If the selected harness exposes only assistant text
-or a worker-authored summary, the arm is incompatible. After the worker is
-terminal, the orchestrator writes only that captured envelope to a package-local
-temporary path and invokes `record-native-result.ps1`. That deterministic
-package-runner helper derives the exact run/profile identity, timestamps,
-requested configuration, runner/harness identity, and `eval-execution-result/1`
-shape, then validates the native evidence before writing the manifest-declared
-raw result. The parent may persist only that helper-produced result; it must not
-replace it with a worker summary, hand-write `execution-result.json`, or
-synthesize a normalized result.
-Native bridging also checks the result's runner identity, the descriptor's exact
-delegation mechanism, and a hashed transcript/event artifact. An `incompatible`
-arm is diagnostic-only: it is never gradeable and fails the completion/benchmark
-gate.
+For `dispatch_owner=orchestrator`, the harness-native transport returns a
+terminal envelope with schema `codebeltnet/agentic/eval-native-worker-result/1`.
+The envelope declares `capture.source = harness_native_transport`,
+`capture.terminal = true`, and `capture.worker_authored = false`; the model
+worker's answer is data inside the envelope, never its author. The
+orchestrator preserves that envelope and invokes `record-native-result.ps1`.
+For `dispatch_owner=runner`, the runner's one-arm native execution surface
+produces the canonical `execution-result.json` directly; the orchestrator does
+not invoke the recorder, manufacture an envelope, or copy assistant text into
+transport evidence. In both modes, transport-owned timestamps, identity,
+isolation observations, prompt fidelity, terminal completion, and a hashed raw
+transcript/event artifact are mandatory. A parent-created summary or repaired
+result is incompatible. Native bridging also checks the result's runner
+identity, the descriptor's exact delegation mechanism, and the hashed artifact.
+An `incompatible` arm is diagnostic-only: it is never gradeable and fails the
+completion/benchmark gate.
 
-The descriptor's `delegation` object records the native mechanism, worker role,
+The descriptor's `delegation` object records the dispatch owner, native mechanism, worker role,
 advertised full-capability/model-lock/working-directory/result-capture
 properties, harness-authoritative capacity, and the invariant
-`nested_model_execution = false`. The direct `execute` process surface remains
-for compatibility and deterministic conformance; the external orchestrator
-must use only `describe`, `preflight`, and the harness-native delegation
-surface for the actual eval arms.
+`nested_model_execution = false`. The direct `execute` process surface is the
+runner-owned native worker surface when `dispatch_owner=runner`; for
+orchestrator-owned runners it remains a compatibility/conformance surface and
+must not be invoked inside the native subagent.
 
 Native delegation mechanisms:
 
@@ -88,11 +89,16 @@ Native delegation mechanisms:
   lifecycle is harness-owned; Codebelt supplies the already-known one-arm
   decomposition and requires terminal child evidence. The direct CLI
   `-C`/`--model`/HOME compatibility transport does not prove the child.
-- Codex: the installed CLI's native app-server child-session surface,
-  `thread/start` followed by `turn/start`, with the arm's `cwd`, selected
-  model, and ephemeral/fresh session settings. The schema/feature probe is
-  preflight readiness only; terminal evidence must prove the actual child.
-  Do not wrap a native Codex child in another `codex exec` invocation.
+- Codex: the installed CLI's runner-owned app-server child-session surface,
+  `thread/start` followed by `turn/start` and post-completion `thread/read`,
+  with the arm's `cwd`, selected model, and ephemeral/fresh session settings.
+  The schema/feature probe is preflight readiness only; terminal evidence must
+  prove the actual thread. Subscription auth uses a temporary auth-only
+  `CODEX_HOME` containing only `auth.json`; ambient config, skills, agents,
+  sessions, memories, plugins, MCP configuration, and AGENTS.md are not copied
+  and the temporary home is removed in `finally`. `model/rerouted` and
+  instruction sources outside the staged arm are incompatible. Do not wrap a
+  native Codex app-server worker in another Codex subagent.
 - OpenCode: the native Task tool with the full-capability built-in `General`
   subagent. Task/General availability is preflight readiness only;
   `Explore`/`Scout` read-only agents are not valid for a mutable eval arm.
@@ -105,10 +111,11 @@ Runner protocol. It is copied into prepared packages so the external Eval
 Orchestrator can use the same runner implementation that was validated with the
 package. It is not a model executor used by repository automation.
 
-The boundary has a native terminal envelope plus the runner-owned raw result:
+The boundary is owner-dependent:
 
 ```text
-run.json + execution-profile.json -> native worker envelope -> record-native-result.ps1 -> execution-result.json
+dispatch_owner=orchestrator: run.json + execution-profile.json -> native worker envelope -> record-native-result.ps1 -> execution-result.json
+dispatch_owner=runner:       run.json + execution-profile.json -> runner-owned native execute -> execution-result.json
 ```
 
 `run.json` is the existing portable one-arm contract. It owns the prompt,
@@ -140,9 +147,10 @@ record-native-result.ps1 -Runner <runner> -Run <run.json> -Profile <execution-pr
 ```
 
 `record-native-result.ps1` is deterministic and never starts a harness or a
-model. The direct `execute` command remains the compatibility/conformance
-transport; native delegation must not invoke it because that would create a
-second model execution.
+model; it is used only for orchestrator-owned native envelopes. The direct
+`execute` command runs exactly one arm and is the runner-owned native transport
+when the descriptor says `dispatch_owner=runner`. It must not be nested inside
+an outer model worker.
 
 The commands emit one JSON document. `describe` and `preflight` do not consume
 model tokens. `execute` runs exactly one arm, never resumes a session, never
@@ -175,9 +183,12 @@ Cross-runner and cross-model numbers are never blended into one score; a paired
 `with_skill` versus `without_skill` comparison is only meaningful within one
 identical runner, model, and configuration stratum.
 
-The following CLI details describe the compatibility `execute` transport only;
-they are not a second model layer for native worker orchestration. The native
-worker mechanisms above are authoritative for the external handoff.
+The following CLI details describe compatibility `execute` behavior where a
+runner owns a different native surface; they are not a second model layer for
+native worker orchestration. The native worker mechanisms above are
+authoritative for the external handoff. A runner-owned runner may use its
+`execute` command as that native surface; an orchestrator-owned runner must
+keep `execute` out of the native subagent.
 
 GitHub Copilot uses `copilot -C <working-directory> --model <model>
 --output-format json --allow-all-tools --no-ask-user --disable-builtin-mcps
@@ -198,9 +209,10 @@ inject only that token as a protected environment variable. Host `GH_CONFIG_DIR`
 is never forwarded into the evaluated worker. `--secret-env-vars` removes every
 listed token variable from shell and MCP child environments. Preflight does not
 make a model request and therefore reports native keychain/service readiness as
-conditional rather than claiming successful remote authentication. Codex uses
-`--ask-for-approval never` with `exec --sandbox
-workspace-write`; it does not combine explicit sandbox selection with
+conditional rather than claiming successful remote authentication. Codex's
+compatibility API-key path uses `--ask-for-approval never` with `exec --sandbox
+workspace-write`; subscription eval arms use the runner-owned app-server path
+described above. It does not combine explicit sandbox selection with
 `--approve-for-me`. OpenCode uses `run --format json --auto --model
 <runner-native-model>` with isolated global/config roots and preserves
 repository-owned project configuration; it does not depend on
