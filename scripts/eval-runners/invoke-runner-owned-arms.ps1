@@ -48,6 +48,147 @@ function ConvertTo-StartProcessArgument {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
+function Invoke-RunnerPreflight {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunnerPath,
+        [Parameter(Mandatory = $true)][string]$RunPath,
+        [Parameter(Mandatory = $true)][string]$ProfilePath
+    )
+
+    $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-preflight-' + [Guid]::NewGuid().ToString('N') + '.stdout')
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-preflight-' + [Guid]::NewGuid().ToString('N') + '.stderr')
+    $process = $null
+    try {
+        $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
+        $arguments = @(
+            '-NoProfile'
+            '-File'
+            (ConvertTo-StartProcessArgument -Value $RunnerPath)
+            'preflight'
+            '-Run'
+            (ConvertTo-StartProcessArgument -Value $RunPath)
+            '-Profile'
+            (ConvertTo-StartProcessArgument -Value $ProfilePath)
+        )
+        $process = Start-Process -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $RunPath) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+        $process.WaitForExit()
+        $exitCode = $process.ExitCode
+        $stdout = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) { [System.IO.File]::ReadAllText($stdoutPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
+        $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
+        $result = $null
+        $parseError = ''
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            try {
+                $result = $stdout | ConvertFrom-Json -Depth 100
+            } catch {
+                $parseError = $_.Exception.Message
+            }
+        }
+        return [pscustomobject]@{
+            Result = $result
+            ExitCode = $exitCode
+            Stdout = $stdout
+            Stderr = $stderr
+            ParseError = $parseError
+        }
+    } finally {
+        if ($null -ne $process) { $process.Dispose() }
+        foreach ($path in @($stdoutPath, $stderrPath)) {
+            if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
+function New-PreflightWorkerSummary {
+    param(
+        [Parameter(Mandatory = $true)][object]$Record,
+        [Parameter(Mandatory = $true)][object]$Invocation,
+        [Parameter(Mandatory = $true)][object]$Descriptor
+    )
+
+    $preflight = $Invocation.Result
+    $reasons = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $preflight) {
+        foreach ($reason in @(Get-JsonProperty -Object $preflight -Name 'reasons' -Default @())) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$reason)) { [void]$reasons.Add([string]$reason) }
+        }
+    } else {
+        if (-not [string]::IsNullOrWhiteSpace([string]$Invocation.ParseError)) { [void]$reasons.Add("runner preflight returned invalid JSON: $($Invocation.ParseError)") }
+        if ([string]::IsNullOrWhiteSpace([string]$Invocation.Stdout)) { [void]$reasons.Add('runner preflight returned no JSON result.') }
+    }
+    if ([int]$Invocation.ExitCode -ne 0) {
+        $diagnostic = [string]::Join(' ', @([string]$Invocation.Stderr, [string]$Invocation.Stdout).Where({ -not [string]::IsNullOrWhiteSpace($_) }))
+        if ([string]::IsNullOrWhiteSpace($diagnostic)) { $diagnostic = 'no diagnostic output' }
+        [void]$reasons.Add("runner preflight exited with status $($Invocation.ExitCode): $diagnostic")
+    }
+
+    $effectivePreflight = if ($null -ne $preflight) {
+        $preflight
+    } else {
+        [ordered]@{
+            status = 'incompatible'
+            delegation = [ordered]@{}
+            resolved_capabilities = [ordered]@{}
+        }
+    }
+    $status = [string](Get-JsonProperty -Object $effectivePreflight -Name 'status' -Default 'incompatible')
+    if ($status -ne 'compatible' -and $reasons.Count -eq 0) { [void]$reasons.Add("runner preflight returned status '$status'.") }
+    $delegationAssertion = 'passed'
+    $delegationError = ''
+    try {
+        [void](Assert-NativeWorkerDelegation -Descriptor $Descriptor -Preflight $effectivePreflight)
+    } catch {
+        $delegationAssertion = 'failed'
+        $delegationError = $_.Exception.Message
+        [void]$reasons.Add($delegationError)
+    }
+
+    return [ordered]@{
+        worker_id = 'arm-{0}-{1}' -f $Record.EvalId, $Record.Configuration
+        eval_id = [int]$Record.EvalId
+        eval_name = [string]$Record.EvalName
+        configuration = [string]$Record.Configuration
+        run_manifest = [string]$Record.RunManifestRelative
+        execution_result = [string]$Record.ExecutionResultRelative
+        status = if ($status -eq 'compatible' -and $delegationAssertion -eq 'passed') { 'compatible' } else { 'incompatible' }
+        reasons = @($reasons.ToArray())
+        native_delegation_assertion = [ordered]@{
+            status = $delegationAssertion
+            error = $delegationError
+        }
+        runner_exit_code = [int]$Invocation.ExitCode
+    }
+}
+
+function Get-PreflightGateSummary {
+    param(
+        [Parameter(Mandatory = $true)][object]$Profile,
+        [Parameter(Mandatory = $true)][object[]]$Preflights,
+        [string]$Status = 'preflight_incompatible',
+        [bool]$ExecutionStarted = $false,
+        [int]$ExecutionCount = 0,
+        [string]$Error = ''
+    )
+
+    $incompatible = @($Preflights | Where-Object { [string]$_.status -ne 'compatible' })
+    $summary = [ordered]@{
+        schema = 'codebeltnet/agentic/runner-owned-fanout-summary/1'
+        phase = 'preflight'
+        status = $Status
+        runner = [string](Get-JsonProperty -Object $Profile -Name 'runner' -Default '')
+        model = [string](Get-JsonProperty -Object $Profile -Name 'model' -Default '')
+        dispatch_owner = 'runner'
+        requested_concurrency = [int](Get-JsonProperty -Object $Profile -Name 'concurrency' -Default 0)
+        preflight_count = @($Preflights).Count
+        incompatible_count = $incompatible.Count
+        execution_started = $ExecutionStarted
+        execution_count = $ExecutionCount
+        preflights = @($Preflights)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Error)) { $summary.error = $Error }
+    return $summary
+}
+
 function New-ArmSummary {
     param([Parameter(Mandatory = $true)][object]$State)
 
@@ -68,6 +209,7 @@ function Get-FanoutSummary {
         [Parameter(Mandatory = $true)][object]$Plan,
         [Parameter(Mandatory = $true)][object]$State,
         [object]$Concurrency = $null,
+        [object[]]$Preflights = @(),
         [string]$Status = 'failed',
         [string]$Error = ''
     )
@@ -85,8 +227,12 @@ function Get-FanoutSummary {
         incompatible_count = $incompatible.Count
         max_observed_active = [int]$State.max_observed_active
         orchestration_state = 'orchestration-state.json'
+        preflight_count = @($Preflights).Count
+        execution_started = $completed.Count -gt 0
+        execution_count = $completed.Count
         arms = @(New-ArmSummary -State $State)
     }
+    if (@($Preflights).Count -gt 0) { $summary.preflights = @($Preflights) }
     if ($null -ne $Concurrency) { $summary.concurrency = $Concurrency }
     if (-not [string]::IsNullOrWhiteSpace($Error)) { $summary.error = $Error }
     return $summary
@@ -113,13 +259,30 @@ try {
         throw "Selected runner '$runnerName' does not declare delegation.dispatch_owner=runner."
     }
 
+    $statePath = Join-Path $iteration 'orchestration-state.json'
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+        throw "Runner-owned fan-out refuses to replace an existing orchestration state at '$statePath'."
+    }
+    $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $manifest)
+    $preflightRecords = [System.Collections.Generic.List[object]]::new()
+    foreach ($record in $manifestRecords) {
+        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path)
+        $preflightRecords.Add((New-PreflightWorkerSummary -Record $record -Invocation $invocation -Descriptor $descriptor))
+    }
+    $failedPreflights = @($preflightRecords | Where-Object { [string]$_.status -ne 'compatible' })
+    if ($failedPreflights.Count -gt 0) {
+        Write-FanoutSummary -Summary (Get-PreflightGateSummary -Profile $profile.Profile -Preflights @($preflightRecords.ToArray())) -ExitCode 2
+    }
+
     $plan = New-EvalOrchestrationPlan -IterationDirectory $iteration -Manifest $manifest -Profile $profile -Descriptor $descriptor
     [void](Assert-OrchestrationPlanContract -Plan $plan)
     if ([string]$plan.dispatch_owner -ne 'runner') { throw 'Runner-owned fan-out requires a runner-owned orchestration plan.' }
     $state = New-OrchestrationState -Plan $plan
-    $statePath = Join-Path $iteration 'orchestration-state.json'
-    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
-        throw "Runner-owned fan-out refuses to replace an existing orchestration state at '$statePath'."
+    $state.preflight = [ordered]@{
+        status = 'passed'
+        count = $preflightRecords.Count
+        workers = @($preflightRecords.ToArray())
+        execution_started = $false
     }
     Save-OrchestrationState -Path $statePath -State $state
 
@@ -148,6 +311,10 @@ try {
             )
             $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
             $process = Start-Process -FilePath $pwshPath -ArgumentList $startInfo -WorkingDirectory (Split-Path -Parent $runPath) -RedirectStandardOutput $executionResultPath -RedirectStandardError $stderrPath -PassThru
+            if (-not [bool]$state.preflight.execution_started) {
+                $state.preflight.execution_started = $true
+                Save-OrchestrationState -Path $statePath -State $state
+            }
             [void](Register-DelegationAccepted -State $state -WorkerId $workerId)
             Save-OrchestrationState -Path $statePath -State $state
             $running.Add([pscustomobject]@{ worker_id = $workerId; process = $process; result_path = $executionResultPath; stderr_path = $stderrPath; run_path = $runPath })
@@ -175,7 +342,7 @@ try {
     $concurrency = Assert-OrchestrationConcurrency -Plan $plan -State $state
     Save-OrchestrationState -Path $statePath -State $state
     $status = if (@($state.completed.Values | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'incompatible' }).Count -gt 0) { 'completed_with_incompatible_arms' } else { 'completed' }
-    Write-FanoutSummary -Summary (Get-FanoutSummary -Profile $profile -Plan $plan -State $state -Concurrency $concurrency -Status $status)
+    Write-FanoutSummary -Summary (Get-FanoutSummary -Profile $profile -Plan $plan -State $state -Concurrency $concurrency -Preflights @($preflightRecords.ToArray()) -Status $status)
 } catch {
     $errorMessage = $_.Exception.Message
     $fallbackProfile = [ordered]@{ runner = ''; model = '' }

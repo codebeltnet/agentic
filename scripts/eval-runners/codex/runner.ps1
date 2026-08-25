@@ -618,10 +618,11 @@ function Get-CodexHelpResult {
 
 function Get-CodexSchemaProperty {
     param(
-        [Parameter(Mandatory = $true)][object]$Schema,
+        [AllowNull()][object]$Schema,
         [Parameter(Mandatory = $true)][string]$PropertyName
     )
 
+    if ($null -eq $Schema) { return $null }
     return Get-JsonProperty -Object (Get-JsonProperty -Object $Schema -Name 'properties' -Default $null) -Name $PropertyName -Default $null
 }
 
@@ -643,36 +644,152 @@ function Get-CodexSchemaReference {
 
 function Test-CodexSchemaRequiredProperty {
     param(
-        [Parameter(Mandatory = $true)][object]$Schema,
+        [AllowNull()][object]$Schema,
         [Parameter(Mandatory = $true)][string]$PropertyName,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Errors,
         [Parameter(Mandatory = $true)][string]$SchemaName
     )
 
+    if ($null -eq $Schema) {
+        [void]$Errors.Add("$SchemaName schema is missing.")
+        return $null
+    }
     $property = Get-CodexSchemaProperty -Schema $Schema -PropertyName $PropertyName
     if ($null -eq $property) {
-        $Errors.Add("$SchemaName.properties.$PropertyName is missing.")
+        [void]$Errors.Add("$SchemaName.properties.$PropertyName is missing.")
         return $null
     }
     $required = @(Get-JsonProperty -Object $Schema -Name 'required' -Default @()) | ForEach-Object { [string]$_ }
     if ($required -notcontains $PropertyName) {
-        $Errors.Add("$SchemaName.required does not contain '$PropertyName'.")
+        [void]$Errors.Add("$SchemaName.required does not contain '$PropertyName'.")
     }
     return $property
 }
 
 function Get-CodexSchemaDefinition {
     param(
-        [Parameter(Mandatory = $true)][object]$Schema,
+        [AllowNull()][object]$Schema,
         [Parameter(Mandatory = $true)][string]$DefinitionName,
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Errors,
-        [Parameter(Mandatory = $true)][string]$SchemaName
+        [Parameter(Mandatory = $true)][string]$SchemaName,
+        [AllowNull()][object]$Definitions = $null
     )
 
-    $definitions = Get-JsonProperty -Object $Schema -Name 'definitions' -Default $null
+    if ($null -ne $Definitions) {
+        $definitions = $Definitions
+    } elseif ($null -ne $Schema) {
+        $definitions = Get-JsonProperty -Object $Schema -Name 'definitions' -Default $null
+    } else {
+        $definitions = $null
+    }
     $definition = Get-JsonProperty -Object $definitions -Name $DefinitionName -Default $null
-    if ($null -eq $definition) { $Errors.Add("$SchemaName.definitions.$DefinitionName is missing.") }
+    if ($null -eq $definition) { [void]$Errors.Add("$SchemaName.definitions.$DefinitionName is missing.") }
     return $definition
+}
+
+function Get-CodexSchemaTypeNames {
+    param([AllowNull()][object]$Schema)
+
+    $type = Get-JsonProperty -Object $Schema -Name 'type' -Default $null
+    if ($null -eq $type) { return @() }
+    return @($type | ForEach-Object { [string]$_ })
+}
+
+function Test-CodexSchemaType {
+    param(
+        [AllowNull()][object]$Schema,
+        [Parameter(Mandatory = $true)][string]$TypeName
+    )
+
+    return @(Get-CodexSchemaTypeNames -Schema $Schema) -contains $TypeName
+}
+
+function Resolve-CodexSchemaSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$SchemaDirectory,
+        [Parameter(Mandatory = $true)][string[]]$RequiredNames,
+        [AllowEmptyCollection()][string[]]$OptionalNames = @()
+    )
+
+    $files = @(Get-ChildItem -LiteralPath $SchemaDirectory -Recurse -File -ErrorAction Stop | Sort-Object FullName)
+    $bundleCandidates = @($files | Where-Object { $_.Name -ceq 'codex_app_server_protocol.v2.schemas.json' })
+    $schemaCache = @{}
+    $definitions = $null
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $missingRequired = [System.Collections.Generic.List[string]]::new()
+    $missingOptional = [System.Collections.Generic.List[string]]::new()
+    $sourcePath = $null
+    $sourceKind = $null
+
+    if ($bundleCandidates.Count -gt 1) {
+        [void]$errors.Add("Installed Codex app-server has multiple v2 schema bundles: $([string]::Join(', ', @($bundleCandidates | ForEach-Object { $_.FullName }))).")
+    } elseif ($bundleCandidates.Count -eq 1) {
+        $sourcePath = [string]$bundleCandidates[0].FullName
+        $sourceKind = 'aggregate_v2_bundle'
+        try {
+            $bundle = [System.IO.File]::ReadAllText($sourcePath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 100
+            $definitions = Get-JsonProperty -Object $bundle -Name 'definitions' -Default $null
+            if ($null -eq $definitions) {
+                [void]$errors.Add("Installed Codex v2 schema bundle '$sourcePath' has no definitions object.")
+                foreach ($schemaName in @($RequiredNames)) { [void]$missingRequired.Add($schemaName) }
+                foreach ($schemaName in @($OptionalNames)) { [void]$missingOptional.Add($schemaName) }
+            } else {
+                foreach ($schemaName in @($RequiredNames) + @($OptionalNames)) {
+                    $definition = Get-JsonProperty -Object $definitions -Name $schemaName -Default $null
+                    if ($null -eq $definition) {
+                        if ($RequiredNames -contains $schemaName) { [void]$missingRequired.Add($schemaName) } else { [void]$missingOptional.Add($schemaName) }
+                    } else {
+                        $schemaCache[$schemaName] = $definition
+                    }
+                }
+            }
+        } catch {
+            [void]$errors.Add("Installed Codex v2 schema bundle '$sourcePath' is not valid JSON: $($_.Exception.Message)")
+        }
+    } else {
+        $sourceKind = 'recursive_individual_files'
+        foreach ($schemaName in @($RequiredNames) + @($OptionalNames)) {
+            $matches = @($files | Where-Object { $_.Name -ceq ("{0}.json" -f $schemaName) })
+            if ($matches.Count -eq 0) {
+                if ($RequiredNames -contains $schemaName) { [void]$missingRequired.Add($schemaName) } else { [void]$missingOptional.Add($schemaName) }
+                continue
+            }
+            if ($matches.Count -gt 1) {
+                [void]$errors.Add("Installed Codex app-server has multiple unambiguous schema files for '$schemaName': $([string]::Join(', ', @($matches | ForEach-Object { $_.FullName }))).")
+                continue
+            }
+            try {
+                $schemaCache[$schemaName] = [System.IO.File]::ReadAllText($matches[0].FullName, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 100
+                if ($null -eq $schemaCache[$schemaName]) { [void]$errors.Add("Installed app-server schema file '$($matches[0].FullName)' is empty.") }
+            } catch {
+                [void]$errors.Add("Installed app-server schema file '$($matches[0].FullName)' is not valid JSON: $($_.Exception.Message)")
+            }
+        }
+    }
+
+    if ($missingRequired.Count -gt 0) {
+        $missingText = if ($missingRequired.Count -eq 1) {
+            "Installed Codex app-server schema is missing required v2 schema: $($missingRequired[0])."
+        } else {
+            "Installed Codex app-server schemas are missing required v2 schemas: $([string]::Join(', ', @($missingRequired)))."
+        }
+        [void]$errors.Insert(0, $missingText)
+    }
+    if ($missingOptional.Count -eq 1) {
+        [void]$errors.Add("Installed Codex app-server schema is missing one member of the supplemental thread/read v2 schema pair: $($missingOptional[0]).")
+    }
+
+    return [pscustomobject]@{
+        Available = $errors.Count -eq 0 -and $missingRequired.Count -eq 0
+        Detail = [string]::Join(' ', @($errors))
+        Schemas = $schemaCache
+        Definitions = $definitions
+        SourcePath = $sourcePath
+        SourceKind = $sourceKind
+        Missing = @($missingRequired)
+        SupplementalMissing = @($missingOptional)
+        SupplementalAvailable = $missingOptional.Count -eq 0
+    }
 }
 
 function Get-CodexNativeWorkerProbe {
@@ -702,18 +819,36 @@ function Get-CodexNativeWorkerProbe {
     if ($schemaProcess.TimedOut -or $schemaProcess.ExitCode -ne 0) {
         return [pscustomobject]@{ Available = $false; Detail = "Codex app-server schema generation failed with exit status $($schemaProcess.ExitCode): $([string]::Join(' ', @($schemaProcess.Stdout, $schemaProcess.Stderr)))." }
     }
-    $errors = [System.Collections.Generic.List[string]]::new()
-    $schemaCache = @{}
-    foreach ($schemaName in @('ThreadStartParams', 'ThreadStartResponse', 'TurnStartParams', 'TurnStartResponse', 'ThreadReadParams', 'ThreadReadResponse', 'ModelReroutedNotification')) {
-        $schemaPath = Join-Path $schemaDirectory ("{0}.json" -f $schemaName)
-        if (-not (Test-Path -LiteralPath $schemaPath -PathType Leaf)) {
-            $errors.Add("Installed app-server schema file '$schemaName.json' is missing.")
-            continue
+    $requiredSchemaNames = @('ThreadStartParams', 'ThreadStartResponse', 'TurnStartParams', 'TurnStartResponse', 'ModelReroutedNotification')
+    $supplementalSchemaNames = @('ThreadReadParams', 'ThreadReadResponse')
+    $schemaResolution = Resolve-CodexSchemaSource -SchemaDirectory $schemaDirectory -RequiredNames $requiredSchemaNames -OptionalNames $supplementalSchemaNames
+    if (-not $schemaResolution.Available) {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = [string]$schemaResolution.Detail
+            SupportsProviderModelFallback = $false
+            SchemaDirectory = $schemaDirectory
+            SchemaSource = [string]$schemaResolution.SourcePath
+            SchemaSourceKind = [string]$schemaResolution.SourceKind
+            MissingSchemas = @($schemaResolution.Missing)
+            SupplementalMissingSchemas = @($schemaResolution.SupplementalMissing)
         }
-        try {
-            $schemaCache[$schemaName] = [System.IO.File]::ReadAllText($schemaPath, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 100
-        } catch {
-            $errors.Add("Installed app-server schema file '$schemaName.json' is not valid JSON: $($_.Exception.Message)")
+    }
+
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $schemaCache = $schemaResolution.Schemas
+    $schemaDefinitions = $schemaResolution.Definitions
+    $missingResolved = @($requiredSchemaNames | Where-Object { $null -eq (Get-JsonProperty -Object $schemaCache -Name $_ -Default $null) })
+    if ($missingResolved.Count -gt 0) {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = if ($missingResolved.Count -eq 1) { "Installed Codex app-server schema is missing required v2 schema: $($missingResolved[0])." } else { "Installed Codex app-server schemas are missing required v2 schemas: $([string]::Join(', ', @($missingResolved)))." }
+            SupportsProviderModelFallback = $false
+            SchemaDirectory = $schemaDirectory
+            SchemaSource = [string]$schemaResolution.SourcePath
+            SchemaSourceKind = [string]$schemaResolution.SourceKind
+            MissingSchemas = @($missingResolved)
+            SupplementalMissingSchemas = @($schemaResolution.SupplementalMissing)
         }
     }
 
@@ -724,60 +859,102 @@ function Get-CodexNativeWorkerProbe {
     $threadReadParams = $schemaCache['ThreadReadParams']
     $threadReadResponse = $schemaCache['ThreadReadResponse']
     $modelRerouted = $schemaCache['ModelReroutedNotification']
+    $threadReadSchemaAvailable = [bool]$schemaResolution.SupplementalAvailable
 
     foreach ($field in @('model', 'cwd', 'approvalPolicy', 'sandbox', 'ephemeral')) {
-        if ($null -eq (Get-CodexSchemaProperty -Schema $threadStartParams -PropertyName $field)) { $errors.Add("ThreadStartParams.properties.$field is missing.") }
+        if ($null -eq (Get-CodexSchemaProperty -Schema $threadStartParams -PropertyName $field)) { [void]$errors.Add("ThreadStartParams.properties.$field is missing.") }
     }
+    foreach ($field in @('model', 'cwd')) {
+        if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $threadStartParams -PropertyName $field) -TypeName 'string')) { [void]$errors.Add("ThreadStartParams.properties.$field must include type string.") }
+    }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $threadStartParams -PropertyName 'ephemeral') -TypeName 'boolean')) { [void]$errors.Add('ThreadStartParams.properties.ephemeral must include type boolean.') }
+    if ((Get-CodexSchemaReference -Schema (Get-CodexSchemaProperty -Schema $threadStartParams -PropertyName 'approvalPolicy')) -ne '#/definitions/AskForApproval') { [void]$errors.Add('ThreadStartParams.approvalPolicy must reference definitions.AskForApproval.') }
     $sandboxProperty = Get-CodexSchemaProperty -Schema $threadStartParams -PropertyName 'sandbox'
-    $sandboxReference = [string](Get-JsonProperty -Object $sandboxProperty -Name '$ref' -Default '')
-    if ([string]::IsNullOrWhiteSpace($sandboxReference)) {
-        foreach ($alternative in @(Get-JsonProperty -Object $sandboxProperty -Name 'anyOf' -Default @())) {
-            $candidateReference = [string](Get-JsonProperty -Object $alternative -Name '$ref' -Default '')
-            if (-not [string]::IsNullOrWhiteSpace($candidateReference)) { $sandboxReference = $candidateReference; break }
-        }
-    }
-    $sandboxDefinition = if ($sandboxReference -eq '#/definitions/SandboxMode') { Get-CodexSchemaDefinition -Schema $threadStartParams -DefinitionName 'SandboxMode' -Errors $errors -SchemaName 'ThreadStartParams' } else { $null }
-    if ($sandboxReference -ne '#/definitions/SandboxMode' -or $null -eq $sandboxDefinition) { $errors.Add('ThreadStartParams.sandbox must reference definitions.SandboxMode.') }
+    $sandboxReference = Get-CodexSchemaReference -Schema $sandboxProperty
+    $sandboxDefinition = if ($sandboxReference -eq '#/definitions/SandboxMode') { Get-CodexSchemaDefinition -Schema $threadStartParams -DefinitionName 'SandboxMode' -Definitions $schemaDefinitions -Errors $errors -SchemaName 'ThreadStartParams' } else { $null }
+    if ($sandboxReference -ne '#/definitions/SandboxMode' -or $null -eq $sandboxDefinition) { [void]$errors.Add('ThreadStartParams.sandbox must reference definitions.SandboxMode.') }
     $sandboxEnum = @((Get-JsonProperty -Object $sandboxDefinition -Name 'enum' -Default @()) | ForEach-Object { [string]$_ })
-    foreach ($mode in @('read-only', 'workspace-write', 'danger-full-access')) {
-        if ($sandboxEnum -notcontains $mode) { $errors.Add("ThreadStartParams.definitions.SandboxMode.enum is missing '$mode'.") }
+    $requiredSandboxModes = @('read-only', 'workspace-write', 'danger-full-access')
+    foreach ($mode in $requiredSandboxModes) {
+        if ($sandboxEnum -notcontains $mode) { [void]$errors.Add("ThreadStartParams.definitions.SandboxMode.enum is missing '$mode'.") }
     }
     $fallbackProperty = Get-CodexSchemaProperty -Schema $threadStartParams -PropertyName 'allowProviderModelFallback'
     $supportsProviderModelFallback = $null -ne $fallbackProperty
-    if ($supportsProviderModelFallback -and @((Get-JsonProperty -Object $fallbackProperty -Name 'type' -Default @()) | ForEach-Object { [string]$_ }) -notcontains 'boolean') {
-        $errors.Add('ThreadStartParams.allowProviderModelFallback must be boolean when installed.')
+    if ($supportsProviderModelFallback -and -not (Test-CodexSchemaType -Schema $fallbackProperty -TypeName 'boolean')) {
+        [void]$errors.Add('ThreadStartParams.allowProviderModelFallback must include type boolean when installed.')
     }
 
     foreach ($field in @('model', 'cwd', 'thread')) { [void](Test-CodexSchemaRequiredProperty -Schema $threadStartResponse -PropertyName $field -Errors $errors -SchemaName 'ThreadStartResponse') }
     $instructionSourcesProperty = Get-CodexSchemaProperty -Schema $threadStartResponse -PropertyName 'instructionSources'
     if ($null -eq $instructionSourcesProperty) {
-        $errors.Add('ThreadStartResponse.properties.instructionSources is missing.')
-    } elseif (@((Get-JsonProperty -Object $instructionSourcesProperty -Name 'type' -Default @()) | ForEach-Object { [string]$_ }) -notcontains 'array') {
-        $errors.Add('ThreadStartResponse.instructionSources must be an array when present.')
+        [void]$errors.Add('ThreadStartResponse.properties.instructionSources is missing.')
+    } elseif (-not (Test-CodexSchemaType -Schema $instructionSourcesProperty -TypeName 'array')) {
+        [void]$errors.Add('ThreadStartResponse.instructionSources must be an array when present.')
     } elseif ((Get-CodexSchemaReference -Schema (Get-JsonProperty -Object $instructionSourcesProperty -Name 'items' -Default $null)) -ne '#/definitions/LegacyAppPathString') {
-        $errors.Add('ThreadStartResponse.instructionSources.items must reference definitions.LegacyAppPathString.')
+        [void]$errors.Add('ThreadStartResponse.instructionSources.items must reference definitions.LegacyAppPathString.')
     }
-    $threadReference = [string](Get-JsonProperty -Object (Get-CodexSchemaProperty -Schema $threadStartResponse -PropertyName 'thread') -Name '$ref' -Default '')
-    if ($threadReference -ne '#/definitions/Thread') { $errors.Add('ThreadStartResponse.thread must reference definitions.Thread.') }
-    $threadDefinition = Get-CodexSchemaDefinition -Schema $threadStartResponse -DefinitionName 'Thread' -Errors $errors -SchemaName 'ThreadStartResponse'
+    $threadReference = Get-CodexSchemaReference -Schema (Get-CodexSchemaProperty -Schema $threadStartResponse -PropertyName 'thread')
+    if ($threadReference -ne '#/definitions/Thread') { [void]$errors.Add('ThreadStartResponse.thread must reference definitions.Thread.') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $threadStartResponse -PropertyName 'model') -TypeName 'string')) { [void]$errors.Add('ThreadStartResponse.model must include type string.') }
+    if ((Get-CodexSchemaReference -Schema (Get-CodexSchemaProperty -Schema $threadStartResponse -PropertyName 'cwd')) -ne '#/definitions/AbsolutePathBuf') { [void]$errors.Add('ThreadStartResponse.cwd must reference definitions.AbsolutePathBuf.') }
+    $threadDefinition = Get-CodexSchemaDefinition -Schema $threadStartResponse -DefinitionName 'Thread' -Definitions $schemaDefinitions -Errors $errors -SchemaName 'ThreadStartResponse'
     foreach ($field in @('id', 'cwd', 'ephemeral', 'sessionId')) { [void](Test-CodexSchemaRequiredProperty -Schema $threadDefinition -PropertyName $field -Errors $errors -SchemaName 'ThreadStartResponse.definitions.Thread') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $threadDefinition -PropertyName 'id') -TypeName 'string')) { [void]$errors.Add('ThreadStartResponse.definitions.Thread.id must include type string.') }
+    if ((Get-CodexSchemaReference -Schema (Get-CodexSchemaProperty -Schema $threadDefinition -PropertyName 'cwd')) -ne '#/definitions/AbsolutePathBuf') { [void]$errors.Add('ThreadStartResponse.definitions.Thread.cwd must reference definitions.AbsolutePathBuf.') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $threadDefinition -PropertyName 'ephemeral') -TypeName 'boolean')) { [void]$errors.Add('ThreadStartResponse.definitions.Thread.ephemeral must include type boolean.') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $threadDefinition -PropertyName 'sessionId') -TypeName 'string')) { [void]$errors.Add('ThreadStartResponse.definitions.Thread.sessionId must include type string.') }
 
     foreach ($field in @('input', 'threadId')) { [void](Test-CodexSchemaRequiredProperty -Schema $turnStartParams -PropertyName $field -Errors $errors -SchemaName 'TurnStartParams') }
-    foreach ($field in @('cwd', 'model', 'effort', 'approvalPolicy', 'sandboxPolicy')) {
-        if ($null -eq (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName $field)) { $errors.Add("TurnStartParams.properties.$field is missing.") }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName 'input') -TypeName 'array')) { [void]$errors.Add('TurnStartParams.input must be an array.') }
+    if ((Get-CodexSchemaReference -Schema (Get-JsonProperty -Object (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName 'input') -Name 'items' -Default $null)) -ne '#/definitions/UserInput') { [void]$errors.Add('TurnStartParams.input.items must reference definitions.UserInput.') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName 'threadId') -TypeName 'string')) { [void]$errors.Add('TurnStartParams.threadId must include type string.') }
+    foreach ($field in @('cwd', 'model')) {
+        if ($null -eq (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName $field)) { [void]$errors.Add("TurnStartParams.properties.$field is missing.") }
+        elseif (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName $field) -TypeName 'string')) { [void]$errors.Add("TurnStartParams.properties.$field must include type string.") }
+    }
+    foreach ($field in @(
+        [pscustomobject]@{ Name = 'effort'; Reference = '#/definitions/ReasoningEffort' }
+        [pscustomobject]@{ Name = 'approvalPolicy'; Reference = '#/definitions/AskForApproval' }
+        [pscustomobject]@{ Name = 'sandboxPolicy'; Reference = '#/definitions/SandboxPolicy' }
+    )) {
+        if ($null -eq (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName $field.Name)) { [void]$errors.Add("TurnStartParams.properties.$($field.Name) is missing.") }
+        elseif ((Get-CodexSchemaReference -Schema (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName $field.Name)) -ne $field.Reference) { [void]$errors.Add("TurnStartParams.$($field.Name) must reference $($field.Reference.Replace('#/definitions/', 'definitions.')).") }
+    }
+    $sandboxPolicyDefinition = Get-CodexSchemaDefinition -Schema $turnStartParams -DefinitionName 'SandboxPolicy' -Definitions $schemaDefinitions -Errors $errors -SchemaName 'TurnStartParams'
+    $workspaceWritePolicy = @((Get-JsonProperty -Object $sandboxPolicyDefinition -Name 'oneOf' -Default @()) | Where-Object {
+        $typeProperty = Get-JsonProperty -Object (Get-JsonProperty -Object $_ -Name 'properties' -Default $null) -Name 'type' -Default $null
+        @((Get-JsonProperty -Object $typeProperty -Name 'enum' -Default @())) -contains 'workspaceWrite'
+    }) | Select-Object -First 1
+    if ($null -eq $workspaceWritePolicy) {
+        [void]$errors.Add('TurnStartParams.definitions.SandboxPolicy must advertise the workspaceWrite policy used by the runner.')
+    } else {
+        $writableRoots = Get-JsonProperty -Object (Get-JsonProperty -Object $workspaceWritePolicy -Name 'properties' -Default $null) -Name 'writableRoots' -Default $null
+        $networkAccess = Get-JsonProperty -Object (Get-JsonProperty -Object $workspaceWritePolicy -Name 'properties' -Default $null) -Name 'networkAccess' -Default $null
+        if ($null -eq $writableRoots -or -not (Test-CodexSchemaType -Schema $writableRoots -TypeName 'array')) { [void]$errors.Add('TurnStartParams.definitions.SandboxPolicy.workspaceWrite.writableRoots must be an array.') }
+        if ($null -eq $networkAccess -or -not (Test-CodexSchemaType -Schema $networkAccess -TypeName 'boolean')) { [void]$errors.Add('TurnStartParams.definitions.SandboxPolicy.workspaceWrite.networkAccess must be boolean.') }
     }
     $turnProperty = Test-CodexSchemaRequiredProperty -Schema $turnStartResponse -PropertyName 'turn' -Errors $errors -SchemaName 'TurnStartResponse'
-    $turnReference = [string](Get-JsonProperty -Object $turnProperty -Name '$ref' -Default '')
-    if ($turnReference -ne '#/definitions/Turn') { $errors.Add('TurnStartResponse.turn must reference definitions.Turn.') }
-    $turnDefinition = Get-CodexSchemaDefinition -Schema $turnStartResponse -DefinitionName 'Turn' -Errors $errors -SchemaName 'TurnStartResponse'
+    $turnReference = Get-CodexSchemaReference -Schema $turnProperty
+    if ($turnReference -ne '#/definitions/Turn') { [void]$errors.Add('TurnStartResponse.turn must reference definitions.Turn.') }
+    $turnDefinition = Get-CodexSchemaDefinition -Schema $turnStartResponse -DefinitionName 'Turn' -Definitions $schemaDefinitions -Errors $errors -SchemaName 'TurnStartResponse'
     foreach ($field in @('id', 'items', 'status')) { [void](Test-CodexSchemaRequiredProperty -Schema $turnDefinition -PropertyName $field -Errors $errors -SchemaName 'TurnStartResponse.definitions.Turn') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $turnDefinition -PropertyName 'id') -TypeName 'string')) { [void]$errors.Add('TurnStartResponse.definitions.Turn.id must include type string.') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $turnDefinition -PropertyName 'items') -TypeName 'array')) { [void]$errors.Add('TurnStartResponse.definitions.Turn.items must include type array.') }
+    if ((Get-CodexSchemaReference -Schema (Get-CodexSchemaProperty -Schema $turnDefinition -PropertyName 'status')) -ne '#/definitions/TurnStatus') { [void]$errors.Add('TurnStartResponse.definitions.Turn.status must reference definitions.TurnStatus.') }
 
-    [void](Test-CodexSchemaRequiredProperty -Schema $threadReadParams -PropertyName 'threadId' -Errors $errors -SchemaName 'ThreadReadParams')
-    $includeTurnsProperty = Get-CodexSchemaProperty -Schema $threadReadParams -PropertyName 'includeTurns'
-    if ($null -eq $includeTurnsProperty -or [string](Get-JsonProperty -Object $includeTurnsProperty -Name 'type' -Default '') -ne 'boolean') { $errors.Add('ThreadReadParams.includeTurns must be an optional boolean.') }
-    $threadReadProperty = Test-CodexSchemaRequiredProperty -Schema $threadReadResponse -PropertyName 'thread' -Errors $errors -SchemaName 'ThreadReadResponse'
-    if ([string](Get-JsonProperty -Object $threadReadProperty -Name '$ref' -Default '') -ne '#/definitions/Thread') { $errors.Add('ThreadReadResponse.thread must reference definitions.Thread.') }
+    if ($threadReadSchemaAvailable) {
+        [void](Test-CodexSchemaRequiredProperty -Schema $threadReadParams -PropertyName 'threadId' -Errors $errors -SchemaName 'ThreadReadParams')
+        if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $threadReadParams -PropertyName 'threadId') -TypeName 'string')) { [void]$errors.Add('ThreadReadParams.threadId must include type string.') }
+        $includeTurnsProperty = Get-CodexSchemaProperty -Schema $threadReadParams -PropertyName 'includeTurns'
+        if ($null -eq $includeTurnsProperty -or -not (Test-CodexSchemaType -Schema $includeTurnsProperty -TypeName 'boolean')) { [void]$errors.Add('ThreadReadParams.includeTurns must be an optional boolean.') }
+        $threadReadProperty = Test-CodexSchemaRequiredProperty -Schema $threadReadResponse -PropertyName 'thread' -Errors $errors -SchemaName 'ThreadReadResponse'
+        if ((Get-CodexSchemaReference -Schema $threadReadProperty) -ne '#/definitions/Thread') { [void]$errors.Add('ThreadReadResponse.thread must reference definitions.Thread.') }
+    }
     foreach ($field in @('threadId', 'turnId', 'fromModel', 'toModel', 'reason')) { [void](Test-CodexSchemaRequiredProperty -Schema $modelRerouted -PropertyName $field -Errors $errors -SchemaName 'ModelReroutedNotification') }
+    foreach ($field in @('threadId', 'turnId', 'fromModel', 'toModel')) {
+        if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $modelRerouted -PropertyName $field) -TypeName 'string')) { [void]$errors.Add("ModelReroutedNotification.$field must include type string.") }
+    }
+    if ((Get-CodexSchemaReference -Schema (Get-CodexSchemaProperty -Schema $modelRerouted -PropertyName 'reason')) -ne '#/definitions/ModelRerouteReason') { [void]$errors.Add('ModelReroutedNotification.reason must reference definitions.ModelRerouteReason.') }
 
     if ($errors.Count -gt 0) {
         return [pscustomobject]@{
@@ -785,13 +962,31 @@ function Get-CodexNativeWorkerProbe {
             Detail = 'Installed Codex app-server schema failed structural validation: ' + [string]::Join(' ', @($errors))
             SupportsProviderModelFallback = $supportsProviderModelFallback
             SchemaDirectory = $schemaDirectory
+            SchemaSource = [string]$schemaResolution.SourcePath
+            SchemaSourceKind = [string]$schemaResolution.SourceKind
+            SandboxModes = @($sandboxEnum)
+            ThreadReadSchemaAvailable = $threadReadSchemaAvailable
         }
+    }
+    $schemaDetail = if ($threadReadSchemaAvailable) {
+        'Codex multi_agent is stable and the installed v2 app-server schema structurally proves the consumed thread/start, turn/start, thread/read, and model/rerouted fields.'
+    } else {
+        'Codex multi_agent is stable and the installed v2 app-server schema structurally proves the consumed thread/start, turn/start, and model/rerouted fields; thread/read is supplemental and not advertised.'
+    }
+    if ($supportsProviderModelFallback) {
+        $schemaDetail += ' allowProviderModelFallback is supported and will be sent as false; reroute notifications remain fail-closed.'
+    } else {
+        $schemaDetail += ' allowProviderModelFallback is not exposed by the installed protocol; reroute notifications remain fail-closed.'
     }
     return [pscustomobject]@{
         Available = $true
-        Detail = if ($supportsProviderModelFallback) { 'Codex multi_agent is stable and the installed app-server schema structurally proves the consumed thread/start, turn/start, thread/read, and model/rerouted fields. allowProviderModelFallback is supported and will be sent as false; reroute notifications remain fail-closed.' } else { 'Codex multi_agent is stable and the installed app-server schema structurally proves the consumed thread/start, turn/start, thread/read, and model/rerouted fields. allowProviderModelFallback is not exposed by the installed protocol; reroute notifications remain fail-closed.' }
+        Detail = $schemaDetail
         SupportsProviderModelFallback = $supportsProviderModelFallback
         SchemaDirectory = $schemaDirectory
+        SchemaSource = [string]$schemaResolution.SourcePath
+        SchemaSourceKind = [string]$schemaResolution.SourceKind
+        SandboxModes = @($sandboxEnum)
+        ThreadReadSchemaAvailable = $threadReadSchemaAvailable
     }
 }
 
@@ -997,7 +1192,11 @@ function Get-CodexPreflight {
     if ($null -ne $nativeWorkerObservation -and $nativeWorkerObservation.Available) {
         $document.protocol_observations = [ordered]@{
             schema_directory = [string]$nativeWorkerObservation.SchemaDirectory
+            schema_source = [string]$nativeWorkerObservation.SchemaSource
+            schema_source_kind = [string]$nativeWorkerObservation.SchemaSourceKind
+            sandbox_modes = @($nativeWorkerObservation.SandboxModes)
             allow_provider_model_fallback = [bool]$nativeWorkerObservation.SupportsProviderModelFallback
+            thread_read_schema_available = [bool]$nativeWorkerObservation.ThreadReadSchemaAvailable
         }
     }
     return $document
