@@ -51,7 +51,6 @@ $recordedOldGhToken = $env:GH_TOKEN
 $recordedOldGithubToken = $env:GITHUB_TOKEN
 $recordedOldCopilotHome = $env:COPILOT_HOME
 $recordedOldGhConfigDir = $env:GH_CONFIG_DIR
-$recordedOldClineAgentsSquad = $env:CLINE_AGENTS_SQUAD_PLUGIN
 try {
     $fakeBin = Join-Path $recordedRoot 'bin'
     New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
@@ -66,7 +65,7 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArgume
 $harness = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Path)
 $logPath = Join-Path (Get-Location).Path ("{0}-fake-cli-log.jsonl" -f $harness)
 $arguments = @($RemainingArguments | ForEach-Object { [string]$_ })
-$authNames = @('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY', 'CLINE_API_KEY')
+$authNames = @('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY')
 $authPresent = @($authNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
 $copilotAuthNames = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
 $copilotAuthPresent = @($copilotAuthNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
@@ -186,7 +185,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     exit 0
 }
 if ($arguments -contains '--version') {
-    $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-cline 9.3' } }
+    $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-unknown 9.3' } }
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     Write-Output $version
     exit 0
@@ -292,15 +291,9 @@ if ($harness -eq 'codex') {
     Write-Output '{"type":"assistant.usage","id":"e6","parentId":"e5","ephemeral":true,"data":{"model":"claude-haiku-4.5","inputTokens":2,"outputTokens":3,"cacheReadTokens":1,"numToolCalls":1,"cost":0.2}}'
     Write-Output '{"type":"session.task_complete","id":"e7","parentId":"e6","data":{}}'
     Write-Output '{"type":"future.event.v99","payload":"fixture"}'
-} else {
-    Write-Output '{"type":"say","say":"text","text":"recorded Cline progress","partial":false}'
-    Write-Output '{"type":"say","say":"tool","name":"read_file","text":"fixture.md","partial":false}'
-    Write-Output '{"type":"say","say":"completion_result","text":"recorded Cline final response","partial":false}'
-    Write-Output '{"type":"say","say":"api_req_finished","text":"{\"inputTokens\":2,\"outputTokens\":3,\"totalTokens\":5}"}'
-    Write-Output '{"type":"future.event.v99","payload":"fixture"}'
 }
 '@
-    foreach ($harness in @('codex', 'opencode', 'cline', 'copilot')) {
+    foreach ($harness in @('codex', 'opencode', 'copilot')) {
         [System.IO.File]::WriteAllText((Join-Path $fakeBin "$harness.ps1"), $fakeCli, [System.Text.UTF8Encoding]::new($false))
     }
     $fakeGh = @'
@@ -326,7 +319,6 @@ exit 2
     $env:COPILOT_GITHUB_TOKEN = 'recorded-copilot-canary-not-logged'
     $env:GH_TOKEN = 'recorded-gh-canary-not-logged'
     $env:GITHUB_TOKEN = 'recorded-github-canary-not-logged'
-    $env:CLINE_AGENTS_SQUAD_PLUGIN = $null
     $recordedGhConfig = Join-Path $recordedRoot 'github-cli-auth'
     New-Item -ItemType Directory -Path $recordedGhConfig -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $recordedGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [System.Text.UTF8Encoding]::new($false))
@@ -337,13 +329,12 @@ exit 2
     [System.IO.File]::WriteAllText((Join-Path $ambientCopilotHome 'config.json'), '{"loggedInUsers":[{"login":"ambient-profile-not-logged"}]}', [System.Text.UTF8Encoding]::new($false))
     $env:COPILOT_HOME = $ambientCopilotHome
     $recordedProfiles = [ordered]@{}
-    foreach ($runnerName in @('codex', 'opencode', 'cline', 'copilot')) {
+    foreach ($runnerName in @('codex', 'opencode', 'copilot')) {
         $profilePath = Join-Path $recordedRoot "$runnerName-profile.json"
         $profileModel = switch ($runnerName) {
             'copilot' { 'claude-haiku-4.5' }
             'codex' { 'gpt-5.6-luna' }
             'opencode' { 'opencode/muse-spark-1.2-contributor-free' }
-            'cline' { 'deepseek/deepseek-v4-flash' }
         }
         Write-TestJson -Path $profilePath -Value ([ordered]@{
             schema = (Get-RunnerSchemaNames).Profile
@@ -362,7 +353,7 @@ exit 2
     $recordedVersion = Get-ExternalCommandVersion -CommandInfo $resolvedRecordedCodex -WorkingDirectory (Join-Path $with.Root 'repo')
     if (-not $recordedVersion.Available) { throw "recorded Codex --version is not observable (exit=$($recordedVersion.Process.ExitCode), timed_out=$($recordedVersion.Process.TimedOut), stdout='$($recordedVersion.Process.Stdout)', stderr='$($recordedVersion.Process.Stderr)')" }
     Assert-Equal 'recorded-codex 9.1' $recordedVersion.Version 'recorded Codex exact version helper'
-    foreach ($runnerName in @('codex', 'opencode', 'cline', 'copilot')) {
+    foreach ($runnerName in @('codex', 'opencode', 'copilot')) {
         $runnerDir = if ($runnerName -eq 'copilot') { 'github-copilot' } else { $runnerName }
         $runnerPath = Join-Path $runnerRoot "$runnerDir\runner.ps1"
         $description = Invoke-AdapterJson -RunnerPath $runnerPath -Command describe -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -372,7 +363,7 @@ exit 2
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$description.delegation.mechanism)) "$runnerName descriptor records its native delegation mechanism"
         Assert-Equal 'conditional' $description.capabilities.native_worker_delegation "$runnerName descriptor does not present native delegation as terminal proof"
         Assert-Equal 'conditional' $description.delegation.model_lock "$runnerName descriptor leaves child model resolution conditional"
-        $expectedVersion = switch ($runnerName) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-cline 9.3' } }
+        $expectedVersion = switch ($runnerName) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-unknown 9.3' } }
         Assert-Equal $expectedVersion $description.harness.version "$runnerName exact describe version"
         $preflightWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         $preflightWithout = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $without.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -380,13 +371,8 @@ exit 2
         Assert-Equal 'compatible' $preflightWithout.status "$runnerName without_skill pragmatic preflight"
         Assert-Equal $expectedVersion $preflightWith.harness.version "$runnerName exact preflight version"
         Assert-Equal 'pragmatic' $preflightWith.isolation.level "$runnerName pragmatic preflight level"
-        if ($runnerName -eq 'cline') {
-            Assert-True ($preflightWith.delegation.status -ne 'supported') 'Cline preflight does not claim unavailable Agent Squad delegation'
-            Assert-True (([string]::Join(' ', @($preflightWith.warnings))) -match 'use_subagents' -and ([string]::Join(' ', @($preflightWith.warnings))) -match 'Agent Squad') 'Cline preflight rejects read-only subagents as a mutable-arm fallback'
-        } else {
-            Assert-Equal 'conditional' $preflightWith.delegation.status "$runnerName native delegation preflight requires terminal evidence"
-            Assert-True ([bool]$preflightWith.delegation.terminal_evidence_required) "$runnerName preflight requires terminal delegation evidence"
-        }
+        Assert-Equal 'conditional' $preflightWith.delegation.status "$runnerName native delegation preflight requires terminal evidence"
+        Assert-True ([bool]$preflightWith.delegation.terminal_evidence_required) "$runnerName preflight requires terminal delegation evidence"
         if ($runnerName -eq 'copilot') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
             Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq '--allow-all-tools broad tool approval' }).Count -eq 1) 'Copilot preflight describes --allow-all-tools as broad tool approval'
@@ -396,7 +382,7 @@ exit 2
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'parallel_dispatch' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight requires bounded concurrent dispatch'
             Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'bounded concurrent native-worker dispatch required' }).Count -eq 1) 'OpenCode preflight records the concurrency requirement'
         }
-        if ($runnerName -in @('opencode', 'cline')) {
+        if ($runnerName -eq 'opencode') {
             Assert-True (@($preflightWith.warnings | Where-Object { $_ -match 'child-tool environment filter' }).Count -gt 0) "$runnerName reports the child credential-filter limitation"
         }
         $resultWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -496,21 +482,6 @@ exit 2
             Assert-Equal 'available' $resultWith.telemetry.tool_calls.status 'Copilot reports available tool-call telemetry'
             Assert-True ([int]$resultWith.telemetry.tool_calls.value -ge 1) 'Copilot parses documented tool.execution events'
             Assert-Equal 'unavailable' $resultWith.telemetry.cost.status 'Copilot does not estimate a currency cost'
-        } else {
-            $retryIndex = [Array]::IndexOf([string[]]$args, '--retries')
-            Assert-Equal '0' $args[$retryIndex + 1] 'Cline disables internal retries'
-            Assert-True ($args -notcontains '--id') 'Cline does not resume a session'
-            Assert-True ($args -contains '--json') 'Cline uses structured output'
-            $providerIndex = [Array]::IndexOf([string[]]$args, '--provider')
-            Assert-Equal 'deepseek' $args[$providerIndex + 1] 'Cline derives its native provider argument from the opaque selector'
-            $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
-            Assert-Equal 'deepseek-v4-flash' $args[$modelIndex + 1] 'Cline derives its native model argument from the opaque selector'
-            $configIndex = [Array]::IndexOf([string[]]$args, '--config')
-            Assert-True ($args[$configIndex + 1] -match '(?i)[\\/]\.cline$') 'Cline uses the documented isolated config root'
-            $dataIndex = [Array]::IndexOf([string[]]$args, '--data-dir')
-            Assert-True ($args[$dataIndex + 1] -match '(?i)[\\/]\.cline[\\/]data$') 'Cline data-dir is the isolated data root'
-            Assert-Equal 'available' $resultWith.telemetry.tool_calls.status 'Cline reports available tool-call telemetry'
-            Assert-True ([int]$resultWith.telemetry.tool_calls.value -ge 1) 'Cline parses documented tool events'
         }
         $logText = [System.IO.File]::ReadAllText($logPath, [System.Text.UTF8Encoding]::new($false))
         Assert-True ($logText -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary|recorded-gh-fallback-token') "$runnerName logs do not contain credential values"
@@ -538,7 +509,6 @@ exit 2
     $serialOpenCodePreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $serialOpenCodeProfile
     Assert-Equal 'incompatible' $serialOpenCodePreflight.status 'OpenCode rejects a serial execution profile'
     Assert-True (@($serialOpenCodePreflight.reasons | Where-Object { $_ -match 'concurrency >= 2|Sequential dispatch' }).Count -gt 0) 'OpenCode serial-profile failure explains the concurrency requirement'
-    $env:CLINE_AGENTS_SQUAD_PLUGIN = $recordedOldClineAgentsSquad
     $staleCli = $fakeCli.Replace("'opencode' { '--format --dir --model --auto --pure --continue --session' }", "'opencode' { '--format --dir --model --pure --continue --session' }")
     [System.IO.File]::WriteAllText((Join-Path $fakeBin 'opencode.ps1'), $staleCli, [System.Text.UTF8Encoding]::new($false))
     $stalePreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['opencode']
@@ -647,7 +617,6 @@ exit 2
     $env:GITHUB_TOKEN = $recordedOldGithubToken
     $env:COPILOT_HOME = $recordedOldCopilotHome
     $env:GH_CONFIG_DIR = $recordedOldGhConfigDir
-    $env:CLINE_AGENTS_SQUAD_PLUGIN = $recordedOldClineAgentsSquad
     if (Test-Path -LiteralPath $recordedRoot) { Remove-Item -LiteralPath $recordedRoot -Recurse -Force }
 }
 }
@@ -945,21 +914,15 @@ try {
     Assert-True (@($copilotFixture.Events | Where-Object { $_.type -eq 'assistant.message' }).Count -ge 1) 'recorded copilot fixture includes documented assistant.message output'
     Assert-True (@($copilotFixture.Events | Where-Object { $_.type -eq 'assistant.usage' }).Count -eq 1) 'recorded copilot fixture includes documented assistant.usage output'
     Assert-True (@($copilotFixture.Events | Where-Object { $_.type -eq 'tool.execution_start' }).Count -eq 1) 'recorded copilot fixture includes documented tool.execution output'
-    $clineFixture = ConvertFrom-JsonLines -Text ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'fixtures\cline-events.jsonl'), [System.Text.UTF8Encoding]::new($false)))
-    Assert-Equal 0 $clineFixture.Errors.Count 'recorded cline fixture has valid JSONL'
-    Assert-True ($clineFixture.Events.Count -ge 9) 'recorded cline fixture has events'
-    Assert-True (@($clineFixture.Events | Where-Object { $_.type -eq 'say' -and $_.say -eq 'tool' }).Count -eq 1) 'recorded cline fixture includes documented tool output'
-    Assert-True (@($clineFixture.Events | Where-Object { $_.type -eq 'say' -and $_.say -eq 'completion_result' }).Count -eq 1) 'recorded cline fixture includes documented completion_result output'
-    Assert-True (@($clineFixture.Events | Where-Object { $_.type -eq 'future.event.v99' }).Count -eq 1) 'recorded cline fixture includes an unknown event'
-
     $prepareText = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'scripts\prepare-skill-evals.ps1'), [System.Text.UTF8Encoding]::new($false))
     $reportText = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'scripts\generate-eval-report.ps1'), [System.Text.UTF8Encoding]::new($false))
     $bridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-execution-result.ps1'), [System.Text.UTF8Encoding]::new($false))
+    $recordText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'record-native-result.ps1'), [System.Text.UTF8Encoding]::new($false))
     $manifestBridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-manifest-results.ps1'), [System.Text.UTF8Encoding]::new($false))
     $commonText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'runner-common.ps1'), [System.Text.UTF8Encoding]::new($false))
-    Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
-    Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
-    Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|cline\s+--|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
+    Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
+    Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
+    Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
     Assert-True ($prepareText.Contains('bridge-manifest-results.ps1')) 'handoff preparation must use the deterministic package-level manifest bridge'
     Assert-True ($prepareText.Contains('runs.<arm>.run_manifest') -and $prepareText.Contains('runs.<arm>.execution_result') -and $prepareText.Contains('runs.<arm>.result')) 'handoff preparation must require every exact manifest arm path'
     Assert-True ($prepareText.Contains('Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')) 'handoff preparation must prohibit reconstructed paths'
@@ -976,8 +939,11 @@ try {
     Assert-True ($prepareText.Contains('rejected before the worker starts') -and $prepareText.Contains('record no eval attempt')) 'handoff preparation must queue capacity rejections without counting attempts'
     Assert-True ($prepareText.Contains('Register each worker acceptance and terminal result exactly once') -and $prepareText.Contains('incompatibility is diagnostic-only') -and $prepareText.Contains('Do not grade incompatible arms')) 'handoff preparation must make duplicate registration and incompatible-arm handling fail closed'
     Assert-True ($prepareText.Contains('Skipping report generation because the completion gate failed') -and $prepareText.Contains('Diagnostic comparison (incomplete)')) 'incomplete collection must remain diagnostic and skip report generation'
+    Assert-True ($prepareText.Contains('capture.worker_authored') -and $prepareText.Contains('Do not ask the worker to author or summarize this envelope')) 'handoff preparation must require transport-produced native envelopes rather than worker-authored summaries'
     Assert-True ($bridgeText.Contains('Get-PackageRunnerDescriptor') -and $bridgeText.Contains('Assert-NativeTerminalCaptureArtifact') -and $bridgeText.Contains('ExpectedMechanism')) 'native bridge must require runner-produced terminal evidence'
+    Assert-True ($recordText.Contains('eval-native-worker-result/1') -and $recordText.Contains('New-ExecutionResult')) 'native terminal recording must use the runner-owned result builder'
     Assert-True ($commonText.Contains('exit.status must be a JSON number or null')) 'execution results must reject textual exit statuses'
+    Assert-True ($commonText.Contains('requested.timeout_seconds') -and $commonText.Contains('execution-result.json run.$field')) 'raw execution results must retain the complete run and requested configuration contract'
     Assert-True ($prepareText.Contains('orchestration.ps1')) 'handoff preparation must load the deterministic orchestration helper'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
@@ -994,6 +960,106 @@ try {
         grading = @([ordered]@{ text = 'preserved assertion'; passed = $null; evidence = '' })
     })
     $bridgeResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $with.Path -Profile $profilePath
+
+    $codexProfilePath = Join-Path $iteration 'codex-native-profile.json'
+    Write-TestJson -Path $codexProfilePath -Value ([ordered]@{
+        schema = (Get-RunnerSchemaNames).Profile
+        runner = 'codex'
+        model = 'fixture-model'
+        reasoning_effort = 'high'
+        configuration_profile = 'isolated-default'
+        tool_profile = 'default'
+        timeout_seconds = 30
+        concurrency = 1
+    })
+    $codexRunData = Resolve-RunContract -RunPath $with.Path
+    $nativeEventRelativePath = 'evidence/native-worker-events.jsonl'
+    $nativeEventPath = Join-Path $with.Root ($nativeEventRelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+    New-Item -ItemType Directory -Path (Split-Path -Parent $nativeEventPath) -Force | Out-Null
+    [System.IO.File]::WriteAllText($nativeEventPath, '{"type":"terminal"}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $nativeArtifact = New-ArtifactReference -Run $codexRunData -Path $nativeEventRelativePath -Scope run -MediaType 'application/x-ndjson'
+    $codexDescriptor = Get-PackageRunnerDescriptor -RunnerName 'codex'
+    $nativeInputPath = Join-Path $iteration 'conformance\results\native-worker-result.json'
+    $nativeOutputPath = Join-Path $iteration 'conformance\results\recorded.execution-result.json'
+    $nativeEnvelope = [ordered]@{
+        schema = 'codebeltnet/agentic/eval-native-worker-result/1'
+        run_id = 'native-fixture-run'
+        session = [ordered]@{ id = 'native-fixture-session'; fresh = $true; resumed = $false }
+        status = 'completed'
+        run = [ordered]@{ eval_id = 1; eval_name = 'conformance'; configuration = 'with_skill' }
+        final_response = [ordered]@{ status = 'available'; text = 'native fixture response' }
+        timing = [ordered]@{ started_utc = '2024-01-01T00:00:00Z'; finished_utc = '2024-01-01T00:00:01Z'; duration_seconds = 1 }
+        exit = [ordered]@{ status = 0; failure = $null }
+        isolation = [ordered]@{
+            capabilities = [ordered]@{
+                fresh_context = 'supported'
+                isolated_home_config = 'supported'
+                isolated_working_directory = 'supported'
+                ambient_candidate_skill_exclusion = 'supported'
+                candidate_skill_exposure = 'supported'
+                prompt_fidelity = 'supported'
+                model_configuration_lock = 'supported'
+                response_capture = 'supported'
+                filesystem_confinement = 'unavailable'
+            }
+            mechanisms = @('native-fixture-worker')
+        }
+        telemetry = [ordered]@{
+            transcript = New-AvailableMetric -Value ([ordered]@{ artifact = $nativeEventRelativePath; complete = $true })
+            tokens = New-UnavailableMetric -Reason 'fixture does not expose token telemetry'
+            tool_calls = New-AvailableMetric -Value 0
+            cost = New-UnavailableMetric -Reason 'fixture does not expose cost telemetry'
+        }
+        evidence = [ordered]@{
+            delegation = [ordered]@{
+                mechanism = [string]$codexDescriptor.delegation.mechanism
+                worker_session_id = 'native-fixture-session'
+                observed_model = 'fixture-model'
+                observed_working_directory = $codexRunData.WorkingDirectoryPath
+                observed_home = $codexRunData.HomeDirectoryPath
+                fresh_worker = $true
+                home_config_isolated = $true
+                prompt_fidelity = $true
+                prompt_sha256 = $codexRunData.PromptHash
+                terminal_result_capture = $true
+                paired_arm_visible = $false
+                grading_material_visible = $false
+                nested_model_execution = $false
+                model_execution_count = 1
+            }
+        }
+        capture = [ordered]@{
+            source = 'harness_native_transport'
+            terminal = $true
+            worker_authored = $false
+        }
+        artifacts = @($nativeArtifact)
+        warnings = @()
+        compatibility_deviations = @()
+        attempt_count = 1
+        resolved = [ordered]@{ status = 'accepted_request'; reason = 'native fixture accepted the requested configuration'; observations = [ordered]@{ model = 'fixture-model'; reasoning_effort = 'high' } }
+    }
+    Write-TestJson -Path $nativeInputPath -Value $nativeEnvelope
+    $recordPath = Join-Path $runnerRoot 'record-native-result.ps1'
+    $recordOutput = & pwsh -NoProfile -File $recordPath -Runner codex -Run $with.Path -Profile $codexProfilePath -NativeResult $nativeInputPath -Output $nativeOutputPath 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "native terminal recording failed: $([string]::Join(' ', @($recordOutput)))" }
+    $recordedResult = Read-RunnerJson -Path $nativeOutputPath
+    [void](Assert-ExecutionResult -Result $recordedResult)
+    Assert-Equal 'native-fixture-run' $recordedResult.run_id 'native terminal recording preserves the opaque worker run id'
+    Assert-Equal 'conformance' $recordedResult.run.eval_name 'native terminal recording derives exact arm identity from run.json'
+    Assert-Equal 'fixture-model' $recordedResult.requested.model 'native terminal recording derives model from execution-profile.json'
+    Assert-Equal 30 $recordedResult.requested.timeout_seconds 'native terminal recording preserves the requested timeout'
+    Assert-Equal '2024-01-01T00:00:00.000Z' ([DateTime]$recordedResult.started_utc).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') 'native terminal recording writes canonical started_utc'
+    Assert-True ($recordedResult.telemetry.transcript.status -eq 'available') 'native terminal recording preserves transcript evidence'
+    Assert-Equal 'harness_native_transport' $recordedResult.evidence.capture.source 'native terminal recording preserves capture provenance'
+    Assert-True (-not [bool]$recordedResult.evidence.capture.worker_authored) 'native terminal recording rejects worker-authored capture provenance'
+
+    $legacyNativeInputPath = Join-Path $iteration 'conformance\results\legacy-summary.json'
+    Write-TestJson -Path $legacyNativeInputPath -Value $bridgeResult
+    $legacyOutput = & pwsh -NoProfile -File $recordPath -Runner codex -Run $with.Path -Profile $codexProfilePath -NativeResult $legacyNativeInputPath -Output $nativeOutputPath 2>&1
+    Assert-True ($LASTEXITCODE -ne 0) 'legacy summary-shaped worker output is rejected by the native recording boundary'
+    Assert-True (([string]::Join(' ', @($legacyOutput))) -match 'eval-native-worker-result/1') 'legacy summary rejection identifies the required native envelope'
+
     Write-TestJson -Path $rawPath -Value $bridgeResult
     $bridgePath = Join-Path $runnerRoot 'bridge-execution-result.ps1'
     $bridgeOutput = & pwsh -NoProfile -File $bridgePath -Run $with.Path -ExecutionResult $rawPath -Result $resultPath

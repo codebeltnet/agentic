@@ -1271,7 +1271,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'repository automation remains deterministic and never invokes a model.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Resolve the execution configuration before running the package preparation script.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'scripts/Get-HarnessModels.ps1'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Cline and OpenCode discovery is free-only'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'OpenCode discovery is free-only'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name> -Runner <runner-id> -Model <runner-native-model>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Handing the package over'
@@ -1339,7 +1339,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         $codexModels = ($codexDiscovery -join [Environment]::NewLine) | ConvertFrom-Json
         if (@($codexModels.models).Count -ne 6) { throw 'Codex discovery must return all available fixture models.' }
 
-        foreach ($runnerName in @('cline', 'opencode')) {
+        foreach ($runnerName in @('opencode')) {
             $discoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner $runnerName -CatalogPath $catalogPath 2>&1
             if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for ${runnerName}: $($discoveryOutput -join [Environment]::NewLine)" }
             $discovery = ($discoveryOutput -join [Environment]::NewLine) | ConvertFrom-Json
