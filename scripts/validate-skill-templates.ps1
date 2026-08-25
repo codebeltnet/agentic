@@ -1255,6 +1255,23 @@ Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance r
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains deterministic' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $orchestrationPath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-orchestration.ps1'
+    if (-not (Test-Path -LiteralPath $orchestrationPath -PathType Leaf)) {
+        throw 'The native-worker orchestration suite is missing.'
+    }
+    $orchestrationOutput = & pwsh -NoProfile -File $orchestrationPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Native-worker orchestration failed: $($orchestrationOutput -join [Environment]::NewLine)"
+    }
+    if (@($orchestrationOutput -join [Environment]::NewLine) -notmatch 'Native worker orchestration:\s+PASS') {
+        throw 'Native-worker orchestration did not report PASS.'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Action {
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref

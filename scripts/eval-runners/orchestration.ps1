@@ -263,6 +263,28 @@ function Register-DelegationRejected {
     return $true
 }
 
+function Register-DelegationSession {
+    param(
+        [Parameter(Mandatory = $true)][object]$State,
+        [Parameter(Mandatory = $true)][string]$WorkerId,
+        [Parameter(Mandatory = $true)][string]$WorkerSessionId
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WorkerSessionId)) {
+        throw "Runner-produced session id for '$WorkerId' is empty."
+    }
+    $active = Get-OrchestrationDictionary -Object $State -Name 'active'
+    if (-not $active.Contains($WorkerId)) {
+        throw "Worker '$WorkerId' cannot register a session because it is not active."
+    }
+    $existing = [string](Get-JsonProperty -Object $active[$WorkerId] -Name 'worker_session_id' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($existing) -and $existing -ne $WorkerSessionId) {
+        throw "Worker '$WorkerId' attempted to replace its runner-produced session id."
+    }
+    $active[$WorkerId].worker_session_id = $WorkerSessionId
+    return $true
+}
+
 function Assert-OrchestrationConcurrency {
     <#
       The queue exposes concurrent slots; this completion gate proves that
@@ -318,12 +340,22 @@ function Register-WorkerTerminal {
     $effectiveStatus = $status
     $terminalEvidenceFailures = [System.Collections.Generic.List[string]]::new()
 
+    # Preserve runner-owned failure codes before the common validator runs.
+    # They are transport evidence, not parent-authored annotations. The common
+    # validator may add portable failures, but it must never erase the
+    # runner's additional Codex checks.
+    foreach ($reportedFailure in @(Get-NativeWorkerReportedFailures -ExecutionEvidence $ExecutionEvidence)) {
+        $terminalEvidenceFailures.Add([string]$reportedFailure)
+    }
+
     # The plan stores the exact manifest-declared run path. Resolve only that
     # arm here; do not infer a path from configuration or inspect grading data.
     try {
         $runData = Resolve-RunContract -RunPath ([string]$arm.worker.run_manifest_path)
         $validation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $ExecutionEvidence -Run $runData -RequestedModel ([string]$arm.worker.model) -ExpectedWorkerSessionId $expectedSessionId -ExpectedMechanism ([string](Get-JsonProperty -Object $arm.worker -Name 'dispatch_mechanism' -Default ''))
-        foreach ($failure in @($validation.Failures)) { $terminalEvidenceFailures.Add([string]$failure) }
+        foreach ($failure in @($validation.Failures)) {
+            if ($terminalEvidenceFailures -notcontains [string]$failure) { $terminalEvidenceFailures.Add([string]$failure) }
+        }
         $evidenceSessionId = [string](Get-JsonProperty -Object $validation.Delegation -Name 'worker_session_id' -Default '')
         if ($terminalEvidenceFailures.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($evidenceSessionId)) {
             $completedWorkers = Get-OrchestrationDictionary -Object $State -Name 'completed'
@@ -342,15 +374,14 @@ function Register-WorkerTerminal {
     if ($terminalEvidenceFailures.Count -gt 0 -and $effectiveStatus -ne 'incompatible') {
         $effectiveStatus = 'incompatible'
     }
+    if ($status -eq 'incompatible' -and $terminalEvidenceFailures.Count -eq 0) {
+        $terminalEvidenceFailures.Add('runner_reported_incompatible')
+    }
     if ($terminalEvidenceFailures.Count -gt 0) {
         # A worker that returned an answer without mandatory native evidence is
         # an incompatible arm, not an invitation to retry through another path.
         try { $ExecutionEvidence.status = 'incompatible' } catch { }
-        if ($ExecutionEvidence -is [System.Collections.IDictionary]) {
-            $ExecutionEvidence['native_worker_evidence_failures'] = @($terminalEvidenceFailures.ToArray())
-        } elseif ($null -ne $ExecutionEvidence -and -not (Test-JsonProperty -Object $ExecutionEvidence -Name 'native_worker_evidence_failures')) {
-            Add-Member -InputObject $ExecutionEvidence -MemberType NoteProperty -Name native_worker_evidence_failures -Value @($terminalEvidenceFailures.ToArray()) -Force
-        }
+        [void](Set-NativeWorkerReportedFailures -ExecutionEvidence $ExecutionEvidence -Failures @($terminalEvidenceFailures.ToArray()))
     }
 
     $active.Remove($WorkerId)
@@ -365,7 +396,7 @@ function Register-WorkerTerminal {
         worker_session_id = if ([string]::IsNullOrWhiteSpace($expectedSessionId)) {
             Get-JsonProperty -Object (Get-JsonProperty -Object (Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null) -Name 'delegation' -Default $null) -Name 'worker_session_id' -Default $null
         } else { $expectedSessionId }
-        native_worker_evidence = if ($terminalEvidenceFailures.Count -eq 0) { 'verified' } else { 'incompatible' }
+        native_worker_evidence = if ($effectiveStatus -eq 'incompatible' -or $terminalEvidenceFailures.Count -gt 0) { 'incompatible' } else { 'verified' }
         native_worker_evidence_failures = @($terminalEvidenceFailures.ToArray())
     }
     return $true

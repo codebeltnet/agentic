@@ -450,6 +450,37 @@ function Test-ExactObservedPath {
     return [string]::Equals($expectedComparable, $observedComparable, $comparison)
 }
 
+function Get-NativeWorkerReportedFailures {
+    param([Parameter(Mandatory = $true)][object]$ExecutionEvidence)
+
+    $evidence = Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null
+    $reported = @(Get-JsonProperty -Object $evidence -Name 'native_worker_evidence_failures' -Default @())
+    if ($reported.Count -eq 0) {
+        $reported = @(Get-JsonProperty -Object $ExecutionEvidence -Name 'native_worker_evidence_failures' -Default @())
+    }
+    return @($reported | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
+function Set-NativeWorkerReportedFailures {
+    param(
+        [Parameter(Mandatory = $true)][object]$ExecutionEvidence,
+        [Parameter(Mandatory = $true)][string[]]$Failures
+    )
+
+    $uniqueFailures = @($Failures | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+    $evidence = Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null
+    if ($null -ne $evidence) {
+        if ($evidence -is [System.Collections.IDictionary]) {
+            $evidence['native_worker_evidence_failures'] = $uniqueFailures
+        } elseif (Test-JsonProperty -Object $evidence -Name 'native_worker_evidence_failures') {
+            $evidence.native_worker_evidence_failures = $uniqueFailures
+        } else {
+            Add-Member -InputObject $evidence -MemberType NoteProperty -Name native_worker_evidence_failures -Value $uniqueFailures -Force
+        }
+    }
+    return $uniqueFailures
+}
+
 function Test-NativeWorkerTerminalEvidence {
     <#
       Descriptor fields describe what a harness advertises. This validator is
@@ -492,6 +523,21 @@ function Test-NativeWorkerTerminalEvidence {
         if ($null -eq $runnerEvidence -or [string](Get-JsonProperty -Object $runnerEvidence -Name 'name' -Default '') -ne $ExpectedRunner) {
             $failures.Add('runner_identity')
         }
+    }
+
+    # Preserve runner-specific terminal codes even when the result has no
+    # portable delegation object. The common validator must not erase the
+    # transport's exact failure reason while reporting the missing common proof.
+    $reportedFailures = @(Get-NativeWorkerReportedFailures -ExecutionEvidence $ExecutionEvidence)
+    if ($status -eq 'incompatible') {
+        if ($reportedFailures.Count -eq 0) {
+            $failures.Add('runner_reported_incompatible')
+        } else {
+            foreach ($reportedFailure in $reportedFailures) { $failures.Add($reportedFailure) }
+        }
+    } elseif ($reportedFailures.Count -gt 0) {
+        $failures.Add('runner_evidence_status_mismatch')
+        foreach ($reportedFailure in $reportedFailures) { $failures.Add($reportedFailure) }
     }
 
     $delegation = Get-JsonProperty -Object (Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null) -Name 'delegation' -Default $null
@@ -545,10 +591,27 @@ function Test-NativeWorkerTerminalEvidence {
         [int](Get-JsonProperty -Object $delegation -Name 'model_execution_count' -Default 0) -ne 1) {
         $failures.Add('nested_model_execution')
     }
-    if (-not (Test-ExactObservedPath -Expected ([string]$Run.WorkingDirectoryPath) -Observed ([string](Get-JsonProperty -Object $delegation -Name 'observed_working_directory' -Default '')))) {
+    $executionPaths = Get-JsonProperty -Object (Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null) -Name 'execution_paths' -Default $null
+    $expectedWorkingDirectory = [string]$Run.WorkingDirectoryPath
+    $expectedHomeDirectory = [string]$Run.HomeDirectoryPath
+    if ($null -ne $executionPaths) {
+        $logicalWorkingDirectory = [string](Get-JsonProperty -Object $executionPaths -Name 'logical_working_directory' -Default '')
+        $logicalHomeDirectory = [string](Get-JsonProperty -Object $executionPaths -Name 'logical_home_directory' -Default '')
+        if (-not (Test-ExactObservedPath -Expected ([string]$Run.WorkingDirectoryPath) -Observed $logicalWorkingDirectory)) {
+            $failures.Add('working_directory')
+        }
+        if (-not (Test-ExactObservedPath -Expected ([string]$Run.HomeDirectoryPath) -Observed $logicalHomeDirectory)) {
+            $failures.Add('isolated_home_config')
+        }
+        $physicalWorkingDirectory = [string](Get-JsonProperty -Object $executionPaths -Name 'physical_working_directory' -Default '')
+        $physicalHomeDirectory = [string](Get-JsonProperty -Object $executionPaths -Name 'physical_home_directory' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($physicalWorkingDirectory)) { $expectedWorkingDirectory = $physicalWorkingDirectory }
+        if (-not [string]::IsNullOrWhiteSpace($physicalHomeDirectory)) { $expectedHomeDirectory = $physicalHomeDirectory }
+    }
+    if (-not (Test-ExactObservedPath -Expected $expectedWorkingDirectory -Observed ([string](Get-JsonProperty -Object $delegation -Name 'observed_working_directory' -Default '')))) {
         $failures.Add('working_directory')
     }
-    if (-not (Test-ExactObservedPath -Expected ([string]$Run.HomeDirectoryPath) -Observed ([string](Get-JsonProperty -Object $delegation -Name 'observed_home' -Default '')))) {
+    if (-not (Test-ExactObservedPath -Expected $expectedHomeDirectory -Observed ([string](Get-JsonProperty -Object $delegation -Name 'observed_home' -Default '')))) {
         $failures.Add('isolated_home_config')
     }
 
@@ -1530,7 +1593,7 @@ function Get-MediaType {
 }
 
 function ConvertFrom-JsonLines {
-    param([Parameter(Mandatory = $true)][string]$Text)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
 
     $events = [System.Collections.Generic.List[object]]::new()
     $errors = [System.Collections.Generic.List[string]]::new()
