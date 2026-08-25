@@ -6,23 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.9.1] - 2026-08-22
 
-This patch release adds harness-agnostic Eval Runner execution boundary infrastructure without changing the paired evaluation methodology or existing report schemas, while optimizing skill descriptions and refactoring repository-level authoring guidance. Prepared packages now carry `execution-profile.json`, package-local runner protocol tools, and normalized `execution-result.json` evidence. The deterministic fake runner is the conformance reference, with Codex, GitHub Copilot CLI, Cline, and OpenCode as supported real adapters. Repository automation remains model-free; only a human-directed external Eval Orchestrator may invoke the selected runner, and unsupported isolation fails closed.
+This patch release adds harness-agnostic Eval Runner execution boundary infrastructure without changing the paired evaluation methodology or existing report schemas, while optimizing skill descriptions and refactoring repository-level authoring guidance. Prepared packages now carry `execution-profile.json`, package-local runner protocol tools, and normalized `execution-result.json` evidence. The deterministic fake runner is the conformance reference, with Codex, GitHub Copilot CLI, and OpenCode as supported real adapters. Repository automation remains model-free; only a human-directed external Eval Orchestrator may invoke the selected runner, and unsupported isolation fails closed.
 
 ### Added
 
-- `scripts/eval-runners/` with the common `describe`/`preflight`/`execute` process contract, execution-profile and execution-result schemas, deterministic fake runner, Codex adapter, GitHub Copilot CLI adapter, Cline adapter, OpenCode adapter, runner resolution, artifact/hash validation, and bridge into the existing `eval-result/2` result shape,
+- `scripts/eval-runners/` with the common `describe`/`preflight`/`execute` process contract, execution-profile and execution-result schemas, deterministic fake runner, Codex adapter, GitHub Copilot CLI adapter, OpenCode adapter, runner resolution, artifact/hash validation, and bridge into the existing `eval-result/2` result shape,
 - GitHub Copilot CLI as a supported Eval Runner with authentication handling (GitHub tokens, OS keychain, CLI fallback), JSONL-based event output parsing, stdin-based prompt delivery for byte fidelity, repository instruction visibility, and conformance tests covering token management and authentication source detection,
 - deterministic fake-runner conformance coverage for fresh paired sessions, prompt fidelity, isolation boundaries, candidate-skill exposure, status normalization, unavailable telemetry, event warnings, artifact references, and report compatibility,
 - runner-aware package preparation that reuses `run.json`, keeps runner selection outside `evals/evals.json`, and preserves Anthropic-compatible benchmark/report artifacts.
 
 ### Changed
 
-- Eval preparation now resolves Harness + Model before writing `RUN-THIS.prompt.md`, removes the redundant portable `provider` field from `execution-profile.json` and result reporting, treats model selectors as runner-native opaque strings, and adds `scripts/Get-HarnessModels.ps1` for current model discovery with Codebelt Reference verification and free-only Cline/OpenCode filtering,
+- Eval preparation now resolves Harness + Model before writing `RUN-THIS.prompt.md`, removes the redundant portable `provider` field from `execution-profile.json` and result reporting, treats model selectors as runner-native opaque strings, and adds `scripts/Get-HarnessModels.ps1` for current model discovery with Codebelt Reference verification and free-only OpenCode filtering,
 - `AGENTS.md`, `README.md`, and `CONTRIBUTING.md` now distinguish the Eval Runner, Eval Orchestrator, Grader, and Human Reviewer and clarify that runner execution is an explicit external-handoff boundary rather than repository automation,
 - All 21 repo-managed skill descriptions refactored to lean, trigger-oriented activation metadata following progressive-disclosure principles and specification compliance,
 - `AGENTS.md` Skill Authoring section restructured for clarity, brevity, and progressive disclosure of form fields, asset handling, and dynamic defaults,
 - report timing output omits unavailable duration and token telemetry instead of writing zero placeholders,
-- Cline and GitHub Copilot runners added to the eval runner lineup alongside existing Codex and OpenCode support,
+- GitHub Copilot runner added to the eval runner lineup alongside existing Codex and OpenCode support,
 - Runner conformance tests enhanced with additional event fixtures and isolation capability assessment.
 
 ### Fixed
