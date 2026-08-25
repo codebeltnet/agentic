@@ -14,6 +14,37 @@ function Get-RunnerSchemaNames {
     }
 }
 
+function Get-PackageRunnerDescriptor {
+    param([Parameter(Mandatory = $true)][string]$RunnerName)
+
+    if ($RunnerName -notmatch '^[a-z0-9-]+$') {
+        throw "execution-profile.json runner '$RunnerName' is not a valid package runner name."
+    }
+
+    $runnerPath = Join-Path (Join-Path $PSScriptRoot $RunnerName) 'runner.ps1'
+    if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
+        throw "Package-local runner '$RunnerName' is missing its runner.ps1 descriptor."
+    }
+
+    $descriptorOutput = & pwsh -NoProfile -File $runnerPath describe 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Package-local runner '$RunnerName' descriptor failed: $([string]::Join(' ', @($descriptorOutput)))"
+    }
+
+    try {
+        $descriptor = [string]::Join([Environment]::NewLine, @($descriptorOutput)) | ConvertFrom-Json
+        [void](Assert-RunnerDescriptor -Descriptor $descriptor)
+    } catch {
+        throw "Package-local runner '$RunnerName' returned an invalid descriptor: $($_.Exception.Message)"
+    }
+
+    if ([string]$descriptor.name -ne $RunnerName) {
+        throw "Package-local runner descriptor name '$($descriptor.name)' does not match selected runner '$RunnerName'."
+    }
+
+    return $descriptor
+}
+
 function Get-JsonProperty {
     param(
         [object]$Object,
@@ -63,7 +94,15 @@ function Read-RunnerJson {
         throw "JSON file '$Path' does not exist."
     }
 
-    return [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $Path).Path, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    $json = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $Path).Path, [System.Text.UTF8Encoding]::new($false))
+    $convertFromJson = Get-Command ConvertFrom-Json -ErrorAction Stop
+    if ($convertFromJson.Parameters.ContainsKey('DateKind')) {
+        return $json | ConvertFrom-Json -DateKind String
+    }
+
+    # DateKind was added after the oldest supported PowerShell 7 releases.
+    # Keep those versions usable; the canonical writers still emit UTC strings.
+    return $json | ConvertFrom-Json
 }
 
 function Write-RunnerJson {
@@ -545,6 +584,30 @@ function Assert-NativeWorkerTerminalEvidence {
     return $true
 }
 
+function Assert-NativeTerminalCaptureArtifact {
+    param([Parameter(Mandatory = $true)][object]$ExecutionResult)
+
+    $capture = Get-JsonProperty -Object $ExecutionResult.evidence -Name 'capture' -Default $null
+    if ([string](Get-JsonProperty -Object $capture -Name 'source' -Default '') -ne 'harness_native_transport' -or
+        -not [bool](Get-JsonProperty -Object $capture -Name 'terminal' -Default $false) -or
+        [bool](Get-JsonProperty -Object $capture -Name 'worker_authored' -Default $true)) {
+        throw 'Native worker execution must preserve harness-native terminal capture provenance.'
+    }
+
+    $transcriptMetric = Get-JsonProperty -Object $ExecutionResult.telemetry -Name 'transcript' -Default $null
+    $transcriptStatus = [string](Get-JsonProperty -Object $transcriptMetric -Name 'status' -Default '')
+    $transcriptArtifact = [string](Get-JsonProperty -Object (Get-JsonProperty -Object $transcriptMetric -Name 'value' -Default $null) -Name 'artifact' -Default '')
+    if ($transcriptStatus -ne 'available' -or [string]::IsNullOrWhiteSpace($transcriptArtifact)) {
+        throw 'Native worker execution must provide an available terminal transcript artifact.'
+    }
+    $matchingArtifacts = @($ExecutionResult.artifacts | Where-Object {
+        [string](Get-JsonProperty -Object $_ -Name 'path' -Default '') -eq $transcriptArtifact
+    })
+    if ($matchingArtifacts.Count -ne 1) {
+        throw "Native worker transcript artifact '$transcriptArtifact' is not recorded exactly once in execution-result.json."
+    }
+}
+
 function Resolve-RunContract {
     param([Parameter(Mandatory = $true)][string]$RunPath)
 
@@ -1001,6 +1064,7 @@ function New-ExecutionResult {
             reasoning_effort = $Profile.ReasoningEffort
             configuration_profile = $Profile.ConfigurationProfile
             tool_profile = $Profile.ToolProfile
+            timeout_seconds = $Profile.TimeoutSeconds
         }
         resolved = $resolved
         started_utc = $started.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
@@ -1042,10 +1106,19 @@ function Assert-ExecutionResult {
     if ([string]$Result.status -notin @('completed', 'failed', 'timed_out', 'cancelled', 'incompatible')) {
         throw "execution-result.json status '$($Result.status)' is unsupported."
     }
-    foreach ($field in @('run_id', 'runner', 'harness', 'requested', 'resolved', 'started_utc', 'finished_utc', 'duration_seconds', 'exit', 'final_response', 'input', 'isolation', 'telemetry', 'evidence', 'artifacts', 'warnings')) {
+    foreach ($field in @('run_id', 'runner', 'harness', 'requested', 'resolved', 'started_utc', 'finished_utc', 'duration_seconds', 'exit', 'final_response', 'input', 'isolation', 'telemetry', 'evidence', 'artifacts', 'warnings', 'compatibility_deviations')) {
         if (-not (Test-JsonProperty -Object $Result -Name $field)) {
             throw "execution-result.json is missing '$field'."
         }
+    }
+    $runIdentity = Get-JsonProperty -Object $Result -Name 'run' -Default $null
+    foreach ($field in @('eval_id', 'eval_name', 'configuration')) {
+        if ($null -eq $runIdentity -or -not (Test-JsonProperty -Object $runIdentity -Name $field)) {
+            throw "execution-result.json run.$field must be present."
+        }
+    }
+    if (-not (Test-JsonProperty -Object $Result.requested -Name 'timeout_seconds')) {
+        throw 'execution-result.json requested.timeout_seconds must be present.'
     }
     foreach ($identityName in @('runner', 'harness')) {
         $identity = Get-JsonProperty -Object $Result -Name $identityName -Default $null
@@ -1394,7 +1467,7 @@ function Get-ProviderAuthenticationVariables {
         '^openrouter$' { return @('OPENROUTER_API_KEY') }
         '^xai$|^x-ai$' { return @('XAI_API_KEY') }
         '^mistral$' { return @('MISTRAL_API_KEY') }
-        '^cline$' { return @('CLINE_API_KEY') }
+
         default { return @() }
     }
 }

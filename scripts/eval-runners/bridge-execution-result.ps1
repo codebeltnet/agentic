@@ -123,50 +123,6 @@ function Get-ExistingGrading {
     return $grading
 }
 
-function Get-PackageRunnerDescriptor {
-    param([Parameter(Mandatory = $true)][string]$RunnerName)
-
-    if ($RunnerName -notmatch '^[a-z0-9-]+$') {
-        throw "execution-profile.json runner '$RunnerName' is not a valid package runner name."
-    }
-    $runnerPath = Join-Path (Join-Path $PSScriptRoot $RunnerName) 'runner.ps1'
-    if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) {
-        throw "Package-local runner '$RunnerName' is missing its runner.ps1 descriptor."
-    }
-
-    $descriptorOutput = & pwsh -NoProfile -File $runnerPath describe 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Package-local runner '$RunnerName' descriptor failed: $([string]::Join(' ', @($descriptorOutput)))"
-    }
-    try {
-        $descriptor = [string]::Join([Environment]::NewLine, @($descriptorOutput)) | ConvertFrom-Json
-        [void](Assert-RunnerDescriptor -Descriptor $descriptor)
-    } catch {
-        throw "Package-local runner '$RunnerName' returned an invalid descriptor: $($_.Exception.Message)"
-    }
-    if ([string]$descriptor.name -ne $RunnerName) {
-        throw "Package-local runner descriptor name '$($descriptor.name)' does not match selected runner '$RunnerName'."
-    }
-    return $descriptor
-}
-
-function Assert-NativeTerminalCaptureArtifact {
-    param([Parameter(Mandatory = $true)][object]$ExecutionResult)
-
-    $transcriptMetric = Get-JsonProperty -Object $ExecutionResult.telemetry -Name 'transcript' -Default $null
-    $transcriptStatus = [string](Get-JsonProperty -Object $transcriptMetric -Name 'status' -Default '')
-    $transcriptArtifact = [string](Get-JsonProperty -Object (Get-JsonProperty -Object $transcriptMetric -Name 'value' -Default $null) -Name 'artifact' -Default '')
-    if ($transcriptStatus -ne 'available' -or [string]::IsNullOrWhiteSpace($transcriptArtifact)) {
-        throw 'Native worker execution must provide an available terminal transcript artifact.'
-    }
-    $matchingArtifacts = @($ExecutionResult.artifacts | Where-Object {
-        [string](Get-JsonProperty -Object $_ -Name 'path' -Default '') -eq $transcriptArtifact
-    })
-    if ($matchingArtifacts.Count -ne 1) {
-        throw "Native worker transcript artifact '$transcriptArtifact' is not recorded exactly once in execution-result.json."
-    }
-}
-
 try {
     $runData = Resolve-RunContract -RunPath $Run
     $runPath = $runData.RunPath
