@@ -117,7 +117,16 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server' -and $arguments 
     if ($outArgument.Count -eq 0) { exit 2 }
     $schemaDirectory = [IO.Path]::GetFullPath((Join-Path (Get-Location).Path ([string]$outArgument[0].Substring(6))))
     New-Item -ItemType Directory -Path $schemaDirectory -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $schemaDirectory 'ClientRequest.json'), '{"thread/start":"ThreadStartParams","turn/start":"TurnStartParams","thread/read":"ThreadReadParams","model/rerouted":"ModelReroutedNotification","ThreadStartResponse":true,"instructionSources":true,"cwd":true,"model":true,"ephemeral":true}', [Text.UTF8Encoding]::new($false))
+    $schemaFiles = [ordered]@{
+        'ThreadStartParams.json' = '{"title":"ThreadStartParams","type":"object","properties":{"model":{"type":"string"},"cwd":{"type":"string"},"approvalPolicy":{"type":"string"},"sandbox":{"$ref":"#/definitions/SandboxMode"},"ephemeral":{"type":"boolean"}},"definitions":{"SandboxMode":{"type":"string","enum":["read-only","workspace-write","danger-full-access"]}}}'
+        'ThreadStartResponse.json' = '{"title":"ThreadStartResponse","type":"object","required":["approvalPolicy","approvalsReviewer","cwd","model","modelProvider","sandbox","thread"],"properties":{"cwd":{"type":"string"},"model":{"type":"string"},"instructionSources":{"type":"array","items":{"$ref":"#/definitions/LegacyAppPathString"}},"thread":{"$ref":"#/definitions/Thread"}},"definitions":{"LegacyAppPathString":{"type":"string"},"Thread":{"type":"object","required":["id","cwd","ephemeral","sessionId","turns"],"properties":{"id":{"type":"string"},"cwd":{"type":"string"},"ephemeral":{"type":"boolean"},"sessionId":{"type":"string"},"turns":{"type":"array"}}}}}'
+        'TurnStartParams.json' = '{"title":"TurnStartParams","type":"object","required":["input","threadId"],"properties":{"threadId":{"type":"string"},"input":{"type":"array"},"cwd":{"type":"string"},"model":{"type":"string"},"effort":{"type":"string"},"approvalPolicy":{"type":"string"},"sandboxPolicy":{"type":"object"}}}'
+        'TurnStartResponse.json' = '{"title":"TurnStartResponse","type":"object","required":["turn"],"properties":{"turn":{"$ref":"#/definitions/Turn"}},"definitions":{"Turn":{"type":"object","required":["id","items","status"],"properties":{"id":{"type":"string"},"items":{"type":"array"},"status":{"type":"string"}}}}}'
+        'ThreadReadParams.json' = '{"title":"ThreadReadParams","type":"object","required":["threadId"],"properties":{"threadId":{"type":"string"},"includeTurns":{"type":"boolean"}}}'
+        'ThreadReadResponse.json' = '{"title":"ThreadReadResponse","type":"object","required":["thread"],"properties":{"thread":{"$ref":"#/definitions/Thread"}},"definitions":{"Thread":{"type":"object","required":["id","cwd","ephemeral","sessionId","turns"],"properties":{"id":{"type":"string"},"cwd":{"type":"string"},"ephemeral":{"type":"boolean"},"sessionId":{"type":"string"},"turns":{"type":"array"}}}}}'
+        'ModelReroutedNotification.json' = '{"title":"ModelReroutedNotification","type":"object","required":["fromModel","reason","threadId","toModel","turnId"],"properties":{"fromModel":{"type":"string"},"reason":{"type":"string","enum":["highRiskCyberActivity"]},"threadId":{"type":"string"},"toModel":{"type":"string"},"turnId":{"type":"string"}}}'
+    }
+    foreach ($schemaName in $schemaFiles.Keys) { [IO.File]::WriteAllText((Join-Path $schemaDirectory $schemaName), [string]$schemaFiles[$schemaName], [Text.UTF8Encoding]::new($false)) }
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     exit 0
 }
@@ -149,6 +158,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $threadStart = Read-AppServerMessage
     $fixtureReroute = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-reroute') -PathType Leaf
     $fixtureAmbientInstruction = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-ambient-instruction') -PathType Leaf
+    $fixtureThreadReadUnavailable = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-thread-read-unavailable') -PathType Leaf
     $instructionSources = if ($fixtureAmbientInstruction) { @('C:\ambient\AGENTS.md') } else { @($repositoryAgentsPath) }
     $threadObject = [ordered]@{
         id = 'recorded-subscription-thread'
@@ -188,14 +198,14 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
 
     $promptText = [string]$turnStart.params.input[0].text
     $promptBytes = [Text.Encoding]::UTF8.GetBytes($promptText)
-    $expectedPromptPath = Join-Path (Split-Path -Parent (Get-Location).Path) 'prompt.md'
-    $expectedPromptBytes = [IO.File]::ReadAllBytes($expectedPromptPath)
+    $expectedPromptHashPath = Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'expected-prompt-sha256.txt'
+    $expectedPromptHash = if (Test-Path -LiteralPath $expectedPromptHashPath -PathType Leaf) { [IO.File]::ReadAllText($expectedPromptHashPath, [Text.UTF8Encoding]::new($false)).Trim() } else { [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData([byte[]]$promptBytes))).ToLowerInvariant() }
     $record.stdin_received = $promptBytes.Length -gt 0
     $record.stdin_delivery_count = if ($promptBytes.Length -gt 0) { 1 } else { 0 }
     $record.stdin_byte_length = $promptBytes.Length
     $record.stdin_sha256 = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($promptBytes))).ToLowerInvariant()
-    $record.stdin_expected_sha256 = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($expectedPromptBytes))).ToLowerInvariant()
-    $record.stdin_exact = $record.stdin_sha256 -eq $record.stdin_expected_sha256
+    $record.stdin_expected_sha256 = $expectedPromptHash
+    $record.stdin_exact = $record.stdin_sha256 -eq $expectedPromptHash
     $record.stdin_utf8_round_trip = $record.stdin_exact
     $record.worker_provider_visible = $false
     $record.worker_copilot_token_visible = $false
@@ -226,7 +236,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'thread/tokenUsage/updated'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; tokenUsage = [ordered]@{ total = [ordered]@{ inputTokens = 2; cachedInputTokens = 1; outputTokens = 3; reasoningOutputTokens = 1; totalTokens = 6 }; last = [ordered]@{ inputTokens = 2; cachedInputTokens = 1; outputTokens = 3; reasoningOutputTokens = 1; totalTokens = 6 } } } })
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'turn/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turn = [ordered]@{ id = 'recorded-subscription-turn'; status = 'completed'; items = @() } } })
     $threadRead = Read-AppServerMessage
-    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadRead.id; result = [ordered]@{ thread = $threadObject } })
+    if (-not $fixtureThreadReadUnavailable) { Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadRead.id; result = [ordered]@{ thread = $threadObject } }) }
     exit 0
 }
 if ($arguments -contains '--version') {
@@ -249,25 +259,16 @@ if ($arguments -contains '--help') {
 $stdinMemory = [IO.MemoryStream]::new()
 [Console]::OpenStandardInput().CopyTo($stdinMemory)
 $stdinBytes = $stdinMemory.ToArray()
-$expectedPromptPath = Join-Path (Split-Path -Parent (Get-Location).Path) 'prompt.md'
-$expectedPromptBytes = if (Test-Path -LiteralPath $expectedPromptPath -PathType Leaf) { [IO.File]::ReadAllBytes($expectedPromptPath) } else { [byte[]]@() }
-$stdinExact = $stdinBytes.Length -eq $expectedPromptBytes.Length
-if ($stdinExact) {
-    for ($index = 0; $index -lt $stdinBytes.Length; $index++) {
-        if ($stdinBytes[$index] -ne $expectedPromptBytes[$index]) {
-            $stdinExact = $false
-            break
-        }
-    }
-}
 $stdinHash = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($stdinBytes))).ToLowerInvariant()
+$expectedPromptHashPath = Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'expected-prompt-sha256.txt'
+$expectedPromptHash = if (Test-Path -LiteralPath $expectedPromptHashPath -PathType Leaf) { [IO.File]::ReadAllText($expectedPromptHashPath, [Text.UTF8Encoding]::new($false)).Trim() } else { $stdinHash }
 $record.stdin_received = $stdinBytes.Length -gt 0
 $record.stdin_delivery_count = if ($stdinBytes.Length -gt 0) { 1 } else { 0 }
 $record.stdin_byte_length = $stdinBytes.Length
 $record.stdin_sha256 = $stdinHash
-$record.stdin_exact = $stdinExact
-$record.stdin_expected_sha256 = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($expectedPromptBytes))).ToLowerInvariant()
-$record.stdin_utf8_round_trip = ([Text.UTF8Encoding]::new($false, $true).GetString($stdinBytes) -eq [Text.UTF8Encoding]::new($false, $true).GetString($expectedPromptBytes))
+$record.stdin_exact = $stdinHash -eq $expectedPromptHash
+$record.stdin_expected_sha256 = $expectedPromptHash
+$record.stdin_utf8_round_trip = $record.stdin_sha256 -eq $expectedPromptHash
 $probeCommand = '$result = [ordered]@{ provider_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENAI_API_KEY'')); copilot_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''COPILOT_GITHUB_TOKEN'')); gh_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''GH_TOKEN'')); github_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''GITHUB_TOKEN'')); auth_file_visible = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable(''HOME'')) ''.codex/auth.json''); global_secret_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''AGENTIC_GLOBAL_SECRET'')); project_disable_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENCODE_DISABLE_PROJECT_CONFIG'')) }; $result | ConvertTo-Json -Compress'
 $probeInfo = [Diagnostics.ProcessStartInfo]::new()
 $probeInfo.FileName = (Get-Command pwsh).Source
@@ -414,7 +415,7 @@ exit 2
         Assert-Equal $expectedVersion $description.harness.version "$runnerName exact describe version"
         $preflightWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         $preflightWithout = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $without.Path -ProfilePath $recordedProfiles[$runnerName]
-        Assert-Equal 'compatible' $preflightWith.status "$runnerName with_skill pragmatic preflight"
+        Assert-Equal 'compatible' $preflightWith.status "$runnerName with_skill pragmatic preflight: $([string]::Join('; ', @($preflightWith.reasons)))"
         Assert-Equal 'compatible' $preflightWithout.status "$runnerName without_skill pragmatic preflight"
         Assert-Equal $expectedVersion $preflightWith.harness.version "$runnerName exact preflight version"
         Assert-Equal 'pragmatic' $preflightWith.isolation.level "$runnerName pragmatic preflight level"
@@ -433,11 +434,15 @@ exit 2
         if ($runnerName -eq 'opencode') {
             Assert-True (@($preflightWith.warnings | Where-Object { $_ -match 'child-tool environment filter' }).Count -gt 0) "$runnerName reports the child credential-filter limitation"
         }
+        if ($runnerName -eq 'codex') {
+            Assert-True (-not [bool]$preflightWith.protocol_observations.allow_provider_model_fallback) 'Codex installed schema reports that provider fallback control is unavailable'
+            Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'native_worker_delegation' -and $_.detail -match 'structurally proves' }).Count -eq 1) 'Codex preflight uses structural app-server schema validation'
+        }
         $resultWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         $resultWithout = Invoke-AdapterJson -RunnerPath $runnerPath -Command execute -RunPath $without.Path -ProfilePath $recordedProfiles[$runnerName]
         foreach ($result in @($resultWith, $resultWithout)) {
             [void](Assert-ExecutionResult -Result $result)
-            Assert-Equal 'completed' $result.status "$runnerName recorded completion"
+            Assert-Equal 'completed' $result.status "$runnerName recorded completion: $([string](Get-JsonProperty -Object $result.exit.failure -Name 'message' -Default ''))"
             Assert-Equal $expectedVersion $result.harness.version "$runnerName exact execution version"
             Assert-Equal 'accepted_request' $result.resolved.status "$runnerName accepted configuration provenance"
             Assert-True ($null -eq $result.resolved.model) "$runnerName does not claim concrete model resolution"
@@ -459,7 +464,8 @@ exit 2
         $execution = $executionRecords[0]
         Assert-True $execution.stdin_received "$runnerName receives a non-empty stdin prompt"
         Assert-Equal 1 $execution.stdin_delivery_count "$runnerName delivers one prompt through stdin"
-        Assert-True $execution.stdin_exact "$runnerName fake CLI received the exact staged prompt bytes"
+        $promptDiagnostic = if ($runnerName -eq 'codex') { " ($($execution | ConvertTo-Json -Depth 20 -Compress))" } else { '' }
+        Assert-True $execution.stdin_exact "$runnerName fake CLI received the exact staged prompt bytes$promptDiagnostic"
         Assert-True $execution.stdin_utf8_round_trip "$runnerName preserves arbitrary UTF-8 prompt content"
         Assert-True (-not $execution.unrelated_present) "$runnerName does not pass unrelated credential canary"
         Assert-True (-not $execution.disable_project_config_present) "$runnerName does not pass ambient project-disable override"
@@ -485,7 +491,7 @@ exit 2
             $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
             Assert-Equal 'gpt-5.6-luna' $args[$modelIndex + 1] 'Codex opaque model selector propagates to the CLI invocation'
             $outputIndex = [Array]::IndexOf([string[]]$args, '--output-last-message')
-            Assert-Equal (Join-Path $with.Root 'evidence\codex-final.txt') $args[$outputIndex + 1] 'Codex output path is host-visible on Windows'
+            Assert-Equal (Join-Path $resultWith.evidence.execution_paths.physical_run_root 'evidence\codex-final.txt') $args[$outputIndex + 1] 'Codex output path uses the runner-declared physical projection'
         } elseif ($runnerName -eq 'opencode') {
             Assert-True ($args -notcontains '--pure') 'OpenCode preserves repository-owned project configuration'
             Assert-True ($args -contains '--auto') 'OpenCode is noninteractive'
@@ -590,7 +596,8 @@ exit 2
     Assert-Equal 1 @($fileAuthResult.evidence.files).Count 'Codex app-server preserves file-change evidence'
     Assert-Equal 'runner' $fileAuthResult.evidence.delegation.dispatch_owner 'Codex native evidence identifies runner-owned dispatch'
     Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.delegation.observed_model 'Codex native evidence uses observed thread/start model'
-    Assert-Equal (Join-Path $with.Root 'repo') $fileAuthResult.evidence.delegation.observed_working_directory 'Codex native evidence uses observed cwd'
+    Assert-Equal $fileAuthResult.evidence.execution_paths.physical_working_directory $fileAuthResult.evidence.delegation.observed_working_directory 'Codex native evidence uses the runner-declared physical cwd'
+    Assert-Equal (Join-Path $with.Root 'repo') $fileAuthResult.evidence.execution_paths.logical_working_directory 'Codex evidence preserves the logical package cwd'
     Assert-True ([bool]$fileAuthResult.evidence.delegation.fresh_worker) 'Codex native evidence proves ephemeral fresh worker'
     Assert-True ([bool]$fileAuthResult.evidence.delegation.home_config_isolated) 'Codex native evidence proves auth-only home cleanup'
     Assert-True ([bool]$fileAuthResult.evidence.delegation.prompt_fidelity) 'Codex native evidence proves exact prompt hash'
@@ -601,10 +608,17 @@ exit 2
     Assert-Equal 'thread/start' $fileAuthResult.evidence.app_server.thread_start_request.method 'Codex evidence retains the exact thread/start request'
     Assert-Equal 'turn/start' $fileAuthResult.evidence.app_server.turn_start_request.method 'Codex evidence retains the exact turn/start request'
     Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.app_server.thread_start_request.params.model 'Codex exact thread/start request preserves model'
-    Assert-Equal (Join-Path $with.Root 'repo') $fileAuthResult.evidence.app_server.turn_start_request.params.cwd 'Codex exact turn/start request preserves cwd'
+    Assert-Equal $fileAuthResult.evidence.execution_paths.physical_working_directory $fileAuthResult.evidence.app_server.turn_start_request.params.cwd 'Codex exact turn/start request preserves the physical cwd'
     Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.app_server.thread_start_response.result.model 'Codex evidence retains observed thread/start model'
+    Assert-Equal 'recorded-subscription-thread' $fileAuthResult.evidence.app_server.thread_start_response.result.thread.id 'Codex parses the installed thread/start.result.thread shape'
+    Assert-Equal 'recorded-subscription-turn' $fileAuthResult.evidence.app_server.turn_start_response.result.turn.id 'Codex parses the installed turn/start.result.turn shape'
     Assert-Equal 'completed' $fileAuthResult.evidence.app_server.terminal_turn.status 'Codex evidence retains terminal turn/completed status'
     Assert-Equal 'recorded-subscription-thread' $fileAuthResult.evidence.app_server.thread_read.request.threadId 'Codex evidence retains the thread/read request identity'
+    Assert-Equal 'recorded-subscription-thread' $fileAuthResult.evidence.app_server.thread_read.response.id 'Codex parses the installed thread/read.result.thread shape'
+    Assert-True ($fileAuthResult.evidence.app_server.thread_start_request.params.PSObject.Properties.Name -notcontains 'allowProviderModelFallback') 'Codex does not invent unsupported provider fallback control'
+    Assert-True (@($fileAuthResult.evidence.app_server.thread_start.instruction_sources | Where-Object { (Test-PathInside -BasePath $fileAuthResult.evidence.execution_paths.physical_run_root -CandidatePath $_) }).Count -eq 1) 'allowed staged instruction source is inside the physical arm boundary'
+    Assert-Equal 'physical_projection_boundary' $fileAuthResult.evidence.delegation.instruction_source_proof 'Codex records the independent physical instruction boundary proof'
+    Assert-True (-not (Test-Path -LiteralPath $fileAuthResult.evidence.execution_paths.physical_run_root)) 'Codex removes the temporary physical projection after capture'
     $fileAuthEvidenceJson = ConvertTo-Json -InputObject $fileAuthResult -Depth 100
     Assert-True ($fileAuthEvidenceJson -notmatch 'recorded-canary|not-logged' -and $fileAuthEvidenceJson -notmatch [regex]::Escape($fileAuthHome)) 'Codex result evidence does not include the copied credential or auth path'
     $subscriptionLogPath = Join-Path $with.Root 'repo\codex-fake-cli-log.jsonl'
@@ -616,11 +630,20 @@ exit 2
     $authHomePath = [string]$subscriptionRecord.parent_codex_home
     Assert-True (-not (Test-Path -LiteralPath $authHomePath)) 'Codex temporary auth-only home is removed after the arm completes'
 
+    $threadReadUnavailableMarker = Join-Path $with.Root 'home\codex-thread-read-unavailable'
+    [System.IO.File]::WriteAllText($threadReadUnavailableMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $threadReadUnavailableResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'completed' $threadReadUnavailableResult.status 'Optional thread/read absence does not invalidate a proven terminal turn'
+    Assert-Equal 'unavailable_optional' $threadReadUnavailableResult.evidence.app_server.thread_read.observation 'Codex records missing thread/read as unavailable supplemental evidence'
+    Assert-True (@($threadReadUnavailableResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'thread_read_metadata' }).Count -eq 0) 'Optional thread/read absence does not add a false incompatibility'
+    Remove-Item -LiteralPath $threadReadUnavailableMarker -Force
+
     $rerouteMarker = Join-Path $with.Root 'home\codex-reroute'
     [System.IO.File]::WriteAllText($rerouteMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
     $reroutedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
     Assert-Equal 'incompatible' $reroutedResult.status 'Codex model/rerouted notification fails closed'
     Assert-True (@($reroutedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'model_rerouted' }).Count -eq 1) 'Codex reroute incompatibility is recorded as transport evidence'
+    Assert-True ([string]$reroutedResult.exit.failure.message -match 'model_rerouted') 'Codex reroute reason survives in normalized exit failure'
     Remove-Item -LiteralPath $rerouteMarker -Force
 
     $ambientInstructionMarker = Join-Path $with.Root 'home\codex-ambient-instruction'
@@ -628,14 +651,15 @@ exit 2
     $ambientInstructionResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
     Assert-Equal 'incompatible' $ambientInstructionResult.status 'Codex unexpected instruction source fails closed'
     Assert-True (@($ambientInstructionResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'unexpected_instruction_sources' }).Count -eq 1) 'Codex ambient instruction rejection is recorded as transport evidence'
+    Assert-True ([string]$ambientInstructionResult.exit.failure.message -match 'unexpected_instruction_sources') 'Codex instruction-source reason survives in normalized exit failure'
     Remove-Item -LiteralPath $ambientInstructionMarker -Force
     Assert-Equal 'initialize,initialized,thread/start,turn/start,thread/read' ([string]::Join(',', @($subscriptionRecord.rpc_methods))) 'Codex app-server follows the required handshake and post-completion read order'
     Assert-Equal 'gpt-5.6-luna' $subscriptionRecord.thread_params.model 'Codex app-server thread receives the requested model'
     Assert-True ([bool]$subscriptionRecord.thread_params.ephemeral) 'Codex app-server thread is ephemeral'
-    Assert-Equal 'readOnly' $subscriptionRecord.thread_params.sandbox 'Codex app-server thread avoids persisting writable project trust'
+    Assert-Equal 'read-only' $subscriptionRecord.thread_params.sandbox 'Codex app-server thread uses the installed request enum'
     Assert-Equal 'gpt-5.6-luna' $subscriptionRecord.turn_params.model 'Codex app-server turn receives the requested model'
     Assert-Equal 'medium' $subscriptionRecord.turn_params.effort 'Codex app-server turn receives the requested reasoning effort'
-    Assert-Equal (Join-Path $with.Root 'repo') $subscriptionRecord.turn_params.cwd 'Codex app-server turn receives the staged working directory'
+    Assert-Equal $fileAuthResult.evidence.execution_paths.physical_working_directory $subscriptionRecord.turn_params.cwd 'Codex app-server turn receives the physical working directory'
     Assert-Equal 'never' $subscriptionRecord.turn_params.approvalPolicy 'Codex app-server turn rejects interactive approvals'
     Assert-Equal 'workspaceWrite' $subscriptionRecord.turn_params.sandboxPolicy.type 'Codex app-server turn receives workspace-write sandbox policy'
     Assert-True ($subscriptionRecord.parent_codex_home -ne $fileAuthHome) 'Codex app-server does not expose the ambient subscription CODEX_HOME'
@@ -777,6 +801,7 @@ function New-TestRun {
     [System.IO.File]::WriteAllText((Join-Path $repo '.github\copilot-instructions.md'), '# repo-owned-copilot-instruction', [System.Text.UTF8Encoding]::new($false))
     $prompt = "# task`r`n`r`nByte fidelity: Δ and emoji 🚀.`r`n" + ("large-prompt-line-0123456789`r`n" * 4096)
     [System.IO.File]::WriteAllBytes((Join-Path $runRoot 'prompt.md'), [System.Text.UTF8Encoding]::new($false).GetBytes($prompt))
+    [System.IO.File]::WriteAllText((Join-Path $homeDirectory 'expected-prompt-sha256.txt'), (Get-Sha256HexFromFile -Path (Join-Path $runRoot 'prompt.md')), [System.Text.UTF8Encoding]::new($false))
     if ($Configuration -eq 'with_skill') {
         $skill = Join-Path $runRoot 'skill\candidate'
         New-Item -ItemType Directory -Path $skill -Force | Out-Null
@@ -1012,6 +1037,11 @@ try {
         Assert-True ($parsed.Events.Count -ge 4) "recorded $fixture has events"
         Assert-True (@($parsed.Events | Where-Object { $_.type -eq 'future.event.v99' }).Count -eq 1) "recorded $fixture includes an unknown event"
     }
+    $threadStartRejection = ConvertFrom-JsonLines -Text ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'fixtures\codex-thread-start-rejection.jsonl'), [System.Text.UTF8Encoding]::new($false)))
+    Assert-Equal 0 $threadStartRejection.Errors.Count 'recorded Codex thread/start rejection fixture is valid JSONL'
+    $threadStartError = @($threadStartRejection.Events | Where-Object { [int](Get-JsonProperty -Object (Get-JsonProperty -Object $_ -Name 'error' -Default $null) -Name 'code' -Default 0) -eq -32600 })[0]
+    Assert-Equal -32600 $threadStartError.error.code 'recorded Codex thread/start rejection preserves JSON-RPC error code'
+    Assert-True ($threadStartError.error.message -match 'read-only.*workspace-write.*danger-full-access') 'recorded Codex thread/start rejection preserves the installed sandbox enum'
     $copilotFixture = ConvertFrom-JsonLines -Text ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'fixtures\copilot-events.jsonl'), [System.Text.UTF8Encoding]::new($false)))
     Assert-True (@($copilotFixture.Events | Where-Object { $_.type -eq 'assistant.message' }).Count -ge 1) 'recorded copilot fixture includes documented assistant.message output'
     Assert-True (@($copilotFixture.Events | Where-Object { $_.type -eq 'assistant.usage' }).Count -eq 1) 'recorded copilot fixture includes documented assistant.usage output'

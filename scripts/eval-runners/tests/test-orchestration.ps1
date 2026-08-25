@@ -389,6 +389,27 @@ try {
     Assert-True ((Test-NativeWorkerTerminalEvidence -ExecutionEvidence $validTerminalEvidence -Run $terminalRunData -RequestedModel ([string]$terminalArm.worker.model) -ExpectedWorkerSessionId 'native-terminal-session').Valid) 'valid terminal native-worker evidence is accepted'
     Assert-True (Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $validTerminalEvidence -Run $terminalRunData -RequestedModel ([string]$terminalArm.worker.model) -ExpectedWorkerSessionId 'native-terminal-session') 'valid terminal evidence passes the assert gate'
 
+    # Runner-specific checks and the portable validator must make one terminal
+    # decision. Preserve the exact runner codes while the common validator
+    # rechecks the portable evidence.
+    $codexFailureCodes = @('instruction_sources_unobserved', 'observed_model', 'observed_working_directory', 'fresh_worker', 'prompt_fidelity', 'terminal_result_capture', 'terminal_turn_status')
+    $runnerIncompatible = Copy-TestObject -Value $validTerminalEvidence
+    $runnerIncompatible.status = 'incompatible'
+    Add-Member -InputObject $runnerIncompatible.evidence -MemberType NoteProperty -Name native_worker_evidence_failures -Value $codexFailureCodes -Force
+    $runnerValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $runnerIncompatible -Run $terminalRunData -RequestedModel ([string]$terminalArm.worker.model) -ExpectedWorkerSessionId 'native-terminal-session'
+    Assert-True (-not [bool]$runnerValidation.Valid) 'common terminal validation rejects runner-reported incompatibility'
+    Assert-True (@($runnerValidation.Failures | Where-Object { $_ -eq 'terminal_turn_status' }).Count -eq 1) 'common validation preserves an exact runner-specific failure code'
+    $runnerState = New-OrchestrationState -Plan ([pscustomobject]@{ schema = $plan.schema; requested_concurrency = 1; arms = @($terminalArm) })
+    [void](Register-DelegationAccepted -State $runnerState -WorkerId ([string]$terminalArm.worker_id) -WorkerSessionId 'native-terminal-session')
+    [void](Register-WorkerTerminal -Plan ([pscustomobject]@{ arms = @($terminalArm) }) -State $runnerState -WorkerId ([string]$terminalArm.worker_id) -ExecutionEvidence $runnerIncompatible)
+    Assert-Equal 'incompatible' $runnerState.completed[[string]$terminalArm.worker_id].native_worker_evidence 'runner-specific incompatibility cannot become common verified evidence'
+    foreach ($failureCode in $codexFailureCodes) {
+        Assert-True (@($runnerState.completed[[string]$terminalArm.worker_id].native_worker_evidence_failures | Where-Object { $_ -eq $failureCode }).Count -eq 1) "exact runner failure '$failureCode' survives orchestration state"
+    }
+    $optionalReadEvidence = Copy-TestObject -Value $validTerminalEvidence
+    Add-Member -InputObject $optionalReadEvidence.evidence -MemberType NoteProperty -Name app_server -Value ([ordered]@{ thread_read = [ordered]@{ observation = 'unavailable_optional' } }) -Force
+    Assert-True ((Test-NativeWorkerTerminalEvidence -ExecutionEvidence $optionalReadEvidence -Run $terminalRunData -RequestedModel ([string]$terminalArm.worker.model) -ExpectedWorkerSessionId 'native-terminal-session').Valid) 'optional thread/read absence does not invalidate mandatory common evidence'
+
     $exactOnceState = New-OrchestrationState -Plan ([pscustomobject]@{
         schema = $plan.schema
         requested_concurrency = 1
@@ -473,6 +494,113 @@ try {
     [void](Register-WorkerTerminal -Plan ([pscustomobject]@{ arms = @($terminalArm) }) -State $duplicateSessionState -WorkerId ([string]$terminalArm.worker_id) -ExecutionEvidence (Copy-TestObject -Value $validTerminalEvidence))
     Assert-Equal 'incompatible' $duplicateSessionState.completed[[string]$terminalArm.worker_id].status 'reused worker session makes the arm incompatible'
     Assert-True (([string]::Join(',', @($duplicateSessionState.completed[[string]$terminalArm.worker_id].native_worker_evidence_failures))) -match 'fresh_worker') 'reused worker session records fresh-worker failure'
+
+    $fanoutPath = Join-Path $runnerRoot 'invoke-runner-owned-arms.ps1'
+    $fanoutText = [System.IO.File]::ReadAllText($fanoutPath, [System.Text.UTF8Encoding]::new($false))
+    foreach ($needle in @('manifest.json', 'New-EvalOrchestrationPlan', 'dispatch_owner', 'Get-OrchestrationArmByWorkerId', 'arm.parent_paths.execution_result', 'Start-Process', 'Register-DelegationAccepted', 'Register-DelegationSession', 'Register-WorkerTerminal', 'Assert-OrchestrationConcurrency', 'orchestration-state.json')) {
+        Assert-True $fanoutText.Contains($needle) "runner-owned helper contains deterministic '$needle' behavior"
+    }
+    Assert-True ($fanoutText -notmatch '(?i)spawn[_ -]?agent|subagent|native-worker-result|with_skill.*worker_id|without_skill.*worker_id') 'runner-owned helper does not create outer subagents, synthetic envelopes, or derived worker IDs'
+    Assert-True ($fanoutText -notmatch '(?i)(with[-_]skill|without[-_]skill)\.execution-result|execution_result\s*=\s*.*configuration') 'runner-owned helper does not reconstruct result filenames'
+
+    # Exercise the helper end-to-end with a deterministic runner-owned fixture.
+    # The fixture is a protocol adapter only; it never calls a model or an AI
+    # CLI. Six short processes must be active through the helper's first batch.
+    $fanoutPackage = Join-Path $testRoot 'runner-owned fanout package'
+    $fanoutTools = Join-Path $fanoutPackage 'tools\eval-runners'
+    New-Item -ItemType Directory -Path $fanoutTools -Force | Out-Null
+    foreach ($toolItem in @(Get-ChildItem -LiteralPath $runnerRoot -Force | Where-Object { $_.Name -ne 'tests' })) {
+        Copy-Item -LiteralPath $toolItem.FullName -Destination $fanoutTools -Recurse -Force
+    }
+    $fixtureRunnerDirectory = Join-Path $fanoutTools 'fixture'
+    New-Item -ItemType Directory -Path $fixtureRunnerDirectory -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $runnerRoot 'tests\fixtures\runner-owned-fixture.ps1') -Destination (Join-Path $fixtureRunnerDirectory 'runner.ps1') -Force
+    $fanoutProfileRelative = 'execution-profile.json'
+    Write-TestJson -Path (Join-Path $fanoutPackage $fanoutProfileRelative) -Value ([ordered]@{
+        schema = (Get-RunnerSchemaNames).Profile
+        runner = 'fixture'
+        model = 'fixture-model'
+        reasoning_effort = $null
+        configuration_profile = 'isolated-default'
+        tool_profile = 'default'
+        timeout_seconds = 30
+        concurrency = 3
+    })
+    $fanoutManifestEvals = [System.Collections.Generic.List[object]]::new()
+    for ($evalId = 1; $evalId -le 3; $evalId++) {
+        $evalName = 'fanout-eval-{0:d2}' -f $evalId
+        $evalDirectory = Join-Path $fanoutPackage $evalName
+        New-Item -ItemType Directory -Path $evalDirectory -Force | Out-Null
+        Write-TestJson -Path (Join-Path $evalDirectory 'eval-metadata.json') -Value ([ordered]@{ eval_id = $evalId; eval_name = $evalName; assertions = @('fixture') })
+        $runs = [ordered]@{}
+        foreach ($configuration in @('with_skill', 'without_skill')) {
+            $runDirectory = Join-Path $evalDirectory $configuration
+            $repoDirectory = Join-Path $runDirectory 'repo'
+            $homeDirectory = Join-Path $runDirectory 'home'
+            New-Item -ItemType Directory -Path $repoDirectory, $homeDirectory -Force | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $repoDirectory 'input.txt'), "$evalName/$configuration", [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::WriteAllText((Join-Path $runDirectory 'prompt.md'), "fixture prompt $evalName/$configuration", [System.Text.UTF8Encoding]::new($false))
+            $skillDirectory = $null
+            $skillHash = $null
+            if ($configuration -eq 'with_skill') {
+                $skillDirectory = 'skill/candidate'
+                New-Item -ItemType Directory -Path (Join-Path $runDirectory 'skill\candidate') -Force | Out-Null
+                [System.IO.File]::WriteAllText((Join-Path $runDirectory 'skill\candidate\SKILL.md'), '# fixture', [System.Text.UTF8Encoding]::new($false))
+                $skillHash = ('b' * 64)
+            }
+            Write-TestJson -Path (Join-Path $runDirectory 'run.json') -Value ([ordered]@{
+                schema = (Get-RunnerSchemaNames).Run
+                evalId = $evalId
+                evalName = $evalName
+                skillName = if ($configuration -eq 'with_skill') { 'candidate' } else { $null }
+                iteration = 1
+                mode = $configuration
+                promptFile = 'prompt.md'
+                workingDirectory = 'repo'
+                homeDirectory = 'home'
+                skillDirectory = $skillDirectory
+                freshContextRequired = $true
+                filesystemIsolationRequired = $true
+                isolatedHomeRequired = $true
+                fixtureHash = ('a' * 64)
+                skillHash = $skillHash
+            })
+            $resultDirectory = Join-Path $runDirectory 'results'
+            New-Item -ItemType Directory -Path $resultDirectory -Force | Out-Null
+            $runs[$configuration] = [ordered]@{
+                run_manifest = "$evalName/$configuration/run.json"
+                execution_result = "$evalName/$configuration/results/execution-result.json"
+                result = "$evalName/$configuration/results/result.json"
+                mode = $configuration
+            }
+            Write-TestJson -Path (Join-Path $resultDirectory 'result.json') -Value ([ordered]@{ eval_id = $evalId; configuration = $configuration })
+        }
+        $fanoutManifestEvals.Add([ordered]@{ eval_id = $evalId; eval_name = $evalName; directory = $evalName; metadata = "$evalName/eval-metadata.json"; runs = $runs })
+    }
+    Write-TestJson -Path (Join-Path $fanoutPackage 'manifest.json') -Value ([ordered]@{
+        schema = 'codebeltnet/agentic/eval-package/2'
+        configurations = @('with_skill', 'without_skill')
+        execution_profile = $fanoutProfileRelative
+        evals = $fanoutManifestEvals.ToArray()
+    })
+    $fanoutHelper = Join-Path $fanoutTools 'invoke-runner-owned-arms.ps1'
+    $fanoutOutput = & pwsh -NoProfile -File $fanoutHelper -IterationDirectory $fanoutPackage 2>&1
+    Assert-Equal 0 $LASTEXITCODE ("deterministic runner-owned fan-out exits successfully; output: " + [string]::Join([Environment]::NewLine, @($fanoutOutput)))
+    $fanoutSummary = ([string]::Join([Environment]::NewLine, @($fanoutOutput)) | ConvertFrom-Json)
+    Assert-Equal 'completed' $fanoutSummary.status 'deterministic runner-owned fan-out completes six fixture arms'
+    Assert-Equal 6 $fanoutSummary.completed_count 'runner-owned helper completes all six arms'
+    Assert-True ([int]$fanoutSummary.max_observed_active -gt 1) 'runner-owned helper reaches parallel active execution'
+    $fanoutState = Read-RunnerJson -Path (Join-Path $fanoutPackage 'orchestration-state.json')
+    Assert-Equal 'verified' ([string]$fanoutSummary.concurrency.status) 'runner-owned helper persists verified concurrency state'
+    Assert-Equal 3 ([int]$fanoutSummary.concurrency.requested_concurrency) 'runner-owned helper reports requested concurrency'
+    $fanoutWorkerIds = @($fanoutState.completed.PSObject.Properties.Name | Sort-Object)
+    Assert-Equal 'arm-1-with_skill,arm-1-without_skill,arm-2-with_skill,arm-2-without_skill,arm-3-with_skill,arm-3-without_skill' ([string]::Join(',', $fanoutWorkerIds)) 'runner-owned helper preserves exact manifest plan worker IDs'
+    foreach ($record in @(Get-ManifestRunRecords -IterationDirectory $fanoutPackage -Manifest (Read-RunnerJson -Path (Join-Path $fanoutPackage 'manifest.json')))) {
+        $result = Read-RunnerJson -Path $record.ExecutionResultPath
+        $workerId = "arm-$($record.EvalId)-$($record.Configuration)"
+        $completedEntry = $fanoutState.completed.PSObject.Properties[$workerId].Value
+        Assert-Equal ([string]$result.session.id) ([string]$completedEntry.worker_session_id) "runner-owned helper derives $workerId session identity from its result"
+    }
 
     # A compatibility-transport answer has no native delegation evidence and
     # is rejected rather than retried through runner.ps1 execute or parent code.
