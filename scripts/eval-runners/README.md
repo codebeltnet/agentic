@@ -39,14 +39,20 @@ same descriptor/preflight contract, so generic orchestration does not infer it
 from a runner name.
 
 For `delegation.dispatch_owner=runner`, the external handoff invokes
-`invoke-runner-owned-arms.ps1`. It reads the manifest/profile, uses the exact
-orchestration-plan worker IDs and manifest-declared execution-result paths,
-starts runner-owned `execute` processes concurrently, redirects each process's
-single JSON stdout directly to its declared path, registers the runner-produced
-session/result once, persists `orchestration-state.json`, and enforces the
-parallel-dispatch gate. It is not called by preparation, validation, CI, hooks,
-or automatic completion gates. The Copilot orchestrator-owned path continues to
-use its native worker envelope and `record-native-result.ps1`.
+`invoke-runner-owned-arms.ps1` as the complete deterministic Phase 1 boundary.
+It reads the manifest/profile, resolves the runner and descriptor, requires
+`delegation.dispatch_owner=runner`, preflights every pending manifest run, and
+invokes `Assert-NativeWorkerDelegation` for every preflight result. Any
+incompatible preflight produces a concise machine-readable summary, starts zero
+`execute` processes, and exits non-zero. Only after every preflight passes does
+it use the exact orchestration-plan worker IDs and manifest-declared
+execution-result paths, start runner-owned `execute` processes concurrently,
+redirect each process's single JSON stdout directly to its declared path,
+register the runner-produced session/result once, persist
+`orchestration-state.json`, and enforce the parallel-dispatch gate. It is not
+called by preparation, validation, CI, hooks, or automatic completion gates.
+The Copilot orchestrator-owned path continues to use its native worker envelope
+and `record-native-result.ps1`.
 
 The delegation contract has three distinct evidence levels:
 
