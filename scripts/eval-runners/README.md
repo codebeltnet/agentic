@@ -38,6 +38,16 @@ when terminal evidence will be checked. The dispatch owner is part of the
 same descriptor/preflight contract, so generic orchestration does not infer it
 from a runner name.
 
+For `delegation.dispatch_owner=runner`, the external handoff invokes
+`invoke-runner-owned-arms.ps1`. It reads the manifest/profile, uses the exact
+orchestration-plan worker IDs and manifest-declared execution-result paths,
+starts runner-owned `execute` processes concurrently, redirects each process's
+single JSON stdout directly to its declared path, registers the runner-produced
+session/result once, persists `orchestration-state.json`, and enforces the
+parallel-dispatch gate. It is not called by preparation, validation, CI, hooks,
+or automatic completion gates. The Copilot orchestrator-owned path continues to
+use its native worker envelope and `record-native-result.ps1`.
+
 The delegation contract has three distinct evidence levels:
 
 ```text
@@ -90,15 +100,17 @@ Native delegation mechanisms:
   decomposition and requires terminal child evidence. The direct CLI
   `-C`/`--model`/HOME compatibility transport does not prove the child.
 - Codex: the installed CLI's runner-owned app-server child-session surface,
-  `thread/start` followed by `turn/start` and post-completion `thread/read`,
-  with the arm's `cwd`, selected model, and ephemeral/fresh session settings.
-  The schema/feature probe is preflight readiness only; terminal evidence must
-  prove the actual thread. Subscription auth uses a temporary auth-only
-  `CODEX_HOME` containing only `auth.json`; ambient config, skills, agents,
-  sessions, memories, plugins, MCP configuration, and AGENTS.md are not copied
-  and the temporary home is removed in `finally`. `model/rerouted` and
-  instruction sources outside the staged arm are incompatible. Do not wrap a
-  native Codex app-server worker in another Codex subagent.
+  `thread/start` followed by `turn/start`, with supplemental post-completion
+  `thread/read` when available, and the arm's `cwd`, selected model, and
+  ephemeral/fresh session settings. The schema/feature probe is preflight
+  readiness only; terminal evidence must prove the actual thread. Subscription
+  auth uses a temporary auth-only `CODEX_HOME` containing only `auth.json`; the
+  runner physically projects only the arm's `repo/`, `home/`, and candidate
+  `skill/` outside the source-repository ancestor chain, does not copy ambient
+  config, skills, agents, sessions, memories, plugins, MCP configuration, or
+  AGENTS.md, and removes the projection/home in `finally`. `model/rerouted`
+  and instruction sources outside that physical arm boundary are incompatible.
+  Do not wrap a native Codex app-server worker in another Codex subagent.
 - OpenCode: the native Task tool with the full-capability built-in `General`
   subagent. Task/General availability is preflight readiness only;
   `Explore`/`Scout` read-only agents are not valid for a mutable eval arm.
