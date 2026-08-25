@@ -117,16 +117,136 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server' -and $arguments 
     if ($outArgument.Count -eq 0) { exit 2 }
     $schemaDirectory = [IO.Path]::GetFullPath((Join-Path (Get-Location).Path ([string]$outArgument[0].Substring(6))))
     New-Item -ItemType Directory -Path $schemaDirectory -Force | Out-Null
-    $schemaFiles = [ordered]@{
-        'ThreadStartParams.json' = '{"title":"ThreadStartParams","type":"object","properties":{"model":{"type":"string"},"cwd":{"type":"string"},"approvalPolicy":{"type":"string"},"sandbox":{"$ref":"#/definitions/SandboxMode"},"ephemeral":{"type":"boolean"}},"definitions":{"SandboxMode":{"type":"string","enum":["read-only","workspace-write","danger-full-access"]}}}'
-        'ThreadStartResponse.json' = '{"title":"ThreadStartResponse","type":"object","required":["approvalPolicy","approvalsReviewer","cwd","model","modelProvider","sandbox","thread"],"properties":{"cwd":{"type":"string"},"model":{"type":"string"},"instructionSources":{"type":"array","items":{"$ref":"#/definitions/LegacyAppPathString"}},"thread":{"$ref":"#/definitions/Thread"}},"definitions":{"LegacyAppPathString":{"type":"string"},"Thread":{"type":"object","required":["id","cwd","ephemeral","sessionId","turns"],"properties":{"id":{"type":"string"},"cwd":{"type":"string"},"ephemeral":{"type":"boolean"},"sessionId":{"type":"string"},"turns":{"type":"array"}}}}}'
-        'TurnStartParams.json' = '{"title":"TurnStartParams","type":"object","required":["input","threadId"],"properties":{"threadId":{"type":"string"},"input":{"type":"array"},"cwd":{"type":"string"},"model":{"type":"string"},"effort":{"type":"string"},"approvalPolicy":{"type":"string"},"sandboxPolicy":{"type":"object"}}}'
-        'TurnStartResponse.json' = '{"title":"TurnStartResponse","type":"object","required":["turn"],"properties":{"turn":{"$ref":"#/definitions/Turn"}},"definitions":{"Turn":{"type":"object","required":["id","items","status"],"properties":{"id":{"type":"string"},"items":{"type":"array"},"status":{"type":"string"}}}}}'
-        'ThreadReadParams.json' = '{"title":"ThreadReadParams","type":"object","required":["threadId"],"properties":{"threadId":{"type":"string"},"includeTurns":{"type":"boolean"}}}'
-        'ThreadReadResponse.json' = '{"title":"ThreadReadResponse","type":"object","required":["thread"],"properties":{"thread":{"$ref":"#/definitions/Thread"}},"definitions":{"Thread":{"type":"object","required":["id","cwd","ephemeral","sessionId","turns"],"properties":{"id":{"type":"string"},"cwd":{"type":"string"},"ephemeral":{"type":"boolean"},"sessionId":{"type":"string"},"turns":{"type":"array"}}}}}'
-        'ModelReroutedNotification.json' = '{"title":"ModelReroutedNotification","type":"object","required":["fromModel","reason","threadId","toModel","turnId"],"properties":{"fromModel":{"type":"string"},"reason":{"type":"string","enum":["highRiskCyberActivity"]},"threadId":{"type":"string"},"toModel":{"type":"string"},"turnId":{"type":"string"}}}'
+    foreach ($existingSchemaFile in @(Get-ChildItem -LiteralPath $schemaDirectory -Force -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $existingSchemaFile.FullName -Recurse -Force
     }
-    foreach ($schemaName in $schemaFiles.Keys) { [IO.File]::WriteAllText((Join-Path $schemaDirectory $schemaName), [string]$schemaFiles[$schemaName], [Text.UTF8Encoding]::new($false)) }
+    $schema = 'http://json-schema.org/draft-07/schema#'
+    $definitions = [ordered]@{
+        AbsolutePathBuf = [ordered]@{ type = 'string' }
+        LegacyAppPathString = [ordered]@{ type = 'string' }
+        SandboxMode = [ordered]@{ type = 'string'; enum = @('read-only', 'workspace-write', 'danger-full-access') }
+        AskForApproval = [ordered]@{ oneOf = @([ordered]@{ type = 'string'; enum = @('untrusted', 'on-request', 'never') }) }
+        ReasoningEffort = [ordered]@{ type = 'string'; minLength = 1 }
+        ModelRerouteReason = [ordered]@{ type = 'string'; enum = @('highRiskCyberActivity') }
+        TurnStatus = [ordered]@{ type = 'string'; enum = @('inProgress', 'completed', 'failed', 'interrupted') }
+        UserInput = [ordered]@{ oneOf = @([ordered]@{ type = 'object'; required = @('text', 'type'); properties = [ordered]@{ type = [ordered]@{ type = 'string'; enum = @('text') }; text = [ordered]@{ type = 'string' } } }) }
+        SandboxPolicy = [ordered]@{ oneOf = @(
+            [ordered]@{ type = 'object'; required = @('type'); properties = [ordered]@{ type = [ordered]@{ type = 'string'; enum = @('dangerFullAccess') } } }
+            [ordered]@{ type = 'object'; required = @('type'); properties = [ordered]@{ type = [ordered]@{ type = 'string'; enum = @('readOnly') }; networkAccess = [ordered]@{ type = 'boolean' } } }
+            [ordered]@{ type = 'object'; required = @('type'); properties = [ordered]@{ type = [ordered]@{ type = 'string'; enum = @('workspaceWrite') }; writableRoots = [ordered]@{ type = 'array'; items = [ordered]@{ '$ref' = '#/definitions/AbsolutePathBuf' } }; networkAccess = [ordered]@{ type = 'boolean' } } }
+        ) }
+        Thread = [ordered]@{ type = 'object'; required = @('id', 'cwd', 'ephemeral', 'sessionId', 'turns'); properties = [ordered]@{ id = [ordered]@{ type = 'string' }; cwd = [ordered]@{ allOf = @([ordered]@{ '$ref' = '#/definitions/AbsolutePathBuf' }) }; ephemeral = [ordered]@{ type = 'boolean' }; sessionId = [ordered]@{ type = 'string' }; turns = [ordered]@{ type = 'array' } } }
+        Turn = [ordered]@{ type = 'object'; required = @('id', 'items', 'status'); properties = [ordered]@{ id = [ordered]@{ type = 'string' }; items = [ordered]@{ type = 'array' }; status = [ordered]@{ '$ref' = '#/definitions/TurnStatus' } } }
+    }
+    $definitions.ThreadStartParams = [ordered]@{
+        '$schema' = $schema
+        title = 'ThreadStartParams'
+        type = 'object'
+        properties = [ordered]@{
+            model = [ordered]@{ type = @('string', 'null') }
+            cwd = [ordered]@{ type = @('string', 'null') }
+            approvalPolicy = [ordered]@{ anyOf = @([ordered]@{ '$ref' = '#/definitions/AskForApproval' }, [ordered]@{ type = 'null' }) }
+            sandbox = [ordered]@{ anyOf = @([ordered]@{ '$ref' = '#/definitions/SandboxMode' }, [ordered]@{ type = 'null' }) }
+            ephemeral = [ordered]@{ type = @('boolean', 'null') }
+        }
+    }
+    $definitions.ThreadStartResponse = [ordered]@{
+        '$schema' = $schema
+        title = 'ThreadStartResponse'
+        type = 'object'
+        required = @('approvalPolicy', 'approvalsReviewer', 'cwd', 'model', 'modelProvider', 'sandbox', 'thread')
+        properties = [ordered]@{
+            approvalPolicy = [ordered]@{ '$ref' = '#/definitions/AskForApproval' }
+            cwd = [ordered]@{ '$ref' = '#/definitions/AbsolutePathBuf' }
+            instructionSources = [ordered]@{ type = 'array'; items = [ordered]@{ '$ref' = '#/definitions/LegacyAppPathString' } }
+            model = [ordered]@{ type = 'string' }
+            sandbox = [ordered]@{ allOf = @([ordered]@{ '$ref' = '#/definitions/SandboxPolicy' }) }
+            thread = [ordered]@{ '$ref' = '#/definitions/Thread' }
+        }
+    }
+    $definitions.TurnStartParams = [ordered]@{
+        '$schema' = $schema
+        title = 'TurnStartParams'
+        type = 'object'
+        required = @('input', 'threadId')
+        properties = [ordered]@{
+            threadId = [ordered]@{ type = 'string' }
+            input = [ordered]@{ type = 'array'; items = [ordered]@{ '$ref' = '#/definitions/UserInput' } }
+            cwd = [ordered]@{ type = @('string', 'null') }
+            model = [ordered]@{ type = @('string', 'null') }
+            effort = [ordered]@{ anyOf = @([ordered]@{ '$ref' = '#/definitions/ReasoningEffort' }, [ordered]@{ type = 'null' }) }
+            approvalPolicy = [ordered]@{ anyOf = @([ordered]@{ '$ref' = '#/definitions/AskForApproval' }, [ordered]@{ type = 'null' }) }
+            sandboxPolicy = [ordered]@{ anyOf = @([ordered]@{ '$ref' = '#/definitions/SandboxPolicy' }, [ordered]@{ type = 'null' }) }
+        }
+    }
+    $definitions.TurnStartResponse = [ordered]@{
+        '$schema' = $schema
+        title = 'TurnStartResponse'
+        type = 'object'
+        required = @('turn')
+        properties = [ordered]@{ turn = [ordered]@{ '$ref' = '#/definitions/Turn' } }
+    }
+    $definitions.ThreadReadParams = [ordered]@{
+        '$schema' = $schema
+        title = 'ThreadReadParams'
+        type = 'object'
+        required = @('threadId')
+        properties = [ordered]@{ threadId = [ordered]@{ type = 'string' }; includeTurns = [ordered]@{ type = 'boolean' } }
+    }
+    $definitions.ThreadReadResponse = [ordered]@{
+        '$schema' = $schema
+        title = 'ThreadReadResponse'
+        type = 'object'
+        required = @('thread')
+        properties = [ordered]@{ thread = [ordered]@{ '$ref' = '#/definitions/Thread' } }
+    }
+    $definitions.ModelReroutedNotification = [ordered]@{
+        '$schema' = $schema
+        title = 'ModelReroutedNotification'
+        type = 'object'
+        required = @('fromModel', 'reason', 'threadId', 'toModel', 'turnId')
+        properties = [ordered]@{
+            fromModel = [ordered]@{ type = 'string' }
+            reason = [ordered]@{ '$ref' = '#/definitions/ModelRerouteReason' }
+            threadId = [ordered]@{ type = 'string' }
+            toModel = [ordered]@{ type = 'string' }
+            turnId = [ordered]@{ type = 'string' }
+        }
+    }
+    $fixtureHome = [Environment]::GetEnvironmentVariable('HOME')
+    $schemaMode = if (-not [string]::IsNullOrWhiteSpace($fixtureHome) -and (Test-Path -LiteralPath (Join-Path $fixtureHome 'codex-schema-individual-v2') -PathType Leaf)) { 'individual-v2' } else { '' }
+    $missingSchema = if (-not [string]::IsNullOrWhiteSpace($fixtureHome) -and (Test-Path -LiteralPath (Join-Path $fixtureHome 'codex-schema-missing-ThreadStartParams') -PathType Leaf)) { 'ThreadStartParams' } else { '' }
+    $missingRequiredSchemas = -not [string]::IsNullOrWhiteSpace($fixtureHome) -and (Test-Path -LiteralPath (Join-Path $fixtureHome 'codex-schema-missing-required') -PathType Leaf)
+    $withoutThreadRead = -not [string]::IsNullOrWhiteSpace($fixtureHome) -and (Test-Path -LiteralPath (Join-Path $fixtureHome 'codex-schema-without-thread-read') -PathType Leaf)
+    if (-not [string]::IsNullOrWhiteSpace($missingSchema)) { [void]$definitions.Remove($missingSchema) }
+    if ($missingRequiredSchemas) {
+        [void]$definitions.Remove('ThreadStartParams')
+        [void]$definitions.Remove('TurnStartResponse')
+    }
+    if ($withoutThreadRead) {
+        [void]$definitions.Remove('ThreadReadParams')
+        [void]$definitions.Remove('ThreadReadResponse')
+    }
+    $schemaFiles = [ordered]@{
+        'codex_app_server_protocol.v2.schemas.json' = [ordered]@{ '$schema' = $schema; title = 'codex_app_server_protocol.v2.schemas'; type = 'object'; definitions = $definitions }
+    }
+    foreach ($schemaName in @('ThreadStartParams', 'ThreadStartResponse', 'TurnStartParams', 'TurnStartResponse', 'ThreadReadParams', 'ThreadReadResponse', 'ModelReroutedNotification')) {
+        if ($definitions.Contains($schemaName)) {
+            $source = $definitions[$schemaName]
+            $individual = [ordered]@{ '$schema' = $schema }
+            foreach ($propertyName in @('title', 'type', 'properties', 'required')) {
+                if ($source.Contains($propertyName)) { $individual[$propertyName] = $source[$propertyName] }
+            }
+            $individual.definitions = $definitions
+            $schemaFiles[('v2\{0}.json' -f $schemaName)] = $individual
+        }
+    }
+    if ($schemaMode -eq 'individual-v2') { [void]$schemaFiles.Remove('codex_app_server_protocol.v2.schemas.json') }
+    foreach ($schemaName in $schemaFiles.Keys) {
+        $schemaPath = Join-Path $schemaDirectory $schemaName
+        New-Item -ItemType Directory -Path (Split-Path -Parent $schemaPath) -Force | Out-Null
+        [IO.File]::WriteAllText($schemaPath, ([string]($schemaFiles[$schemaName] | ConvertTo-Json -Depth 100)), [Text.UTF8Encoding]::new($false))
+    }
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     exit 0
 }
@@ -437,6 +557,55 @@ exit 2
         if ($runnerName -eq 'codex') {
             Assert-True (-not [bool]$preflightWith.protocol_observations.allow_provider_model_fallback) 'Codex installed schema reports that provider fallback control is unavailable'
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'native_worker_delegation' -and $_.detail -match 'structurally proves' }).Count -eq 1) 'Codex preflight uses structural app-server schema validation'
+            Assert-Equal 'aggregate_v2_bundle' $preflightWith.protocol_observations.schema_source_kind 'Codex fixture resolves the aggregate v2 schema bundle'
+            Assert-True ([string]$preflightWith.protocol_observations.schema_source -match 'codex_app_server_protocol\.v2\.schemas\.json$') 'Codex fixture records the aggregate v2 schema source'
+            Assert-Equal 'read-only,workspace-write,danger-full-access' ([string]::Join(',', @($preflightWith.protocol_observations.sandbox_modes))) 'Codex fixture validates the installed sandbox enum'
+
+            $individualSchemaMarker = Join-Path $with.Root 'home\codex-schema-individual-v2'
+            [IO.File]::WriteAllText($individualSchemaMarker, 'fixture', [Text.UTF8Encoding]::new($false))
+            try {
+                $individualPreflight = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
+                Assert-Equal 'compatible' $individualPreflight.status 'Codex recursively discovers namespaced individual v2 schemas'
+                Assert-Equal 'recursive_individual_files' $individualPreflight.protocol_observations.schema_source_kind 'Codex records recursive individual schema discovery'
+            } finally {
+                Remove-Item -LiteralPath $individualSchemaMarker -Force
+            }
+
+            $withoutThreadReadMarker = Join-Path $with.Root 'home\codex-schema-without-thread-read'
+            [IO.File]::WriteAllText($withoutThreadReadMarker, 'fixture', [Text.UTF8Encoding]::new($false))
+            try {
+                $withoutThreadReadPreflight = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
+                Assert-Equal 'compatible' $withoutThreadReadPreflight.status 'Codex accepts a protocol without the supplemental thread/read method'
+                Assert-True (-not [bool]$withoutThreadReadPreflight.protocol_observations.thread_read_schema_available) 'Codex records absent supplemental thread/read schemas as unavailable'
+                $withoutThreadReadDelegationCheck = @($withoutThreadReadPreflight.checks | Where-Object { $_.name -eq 'native_worker_delegation' }) | Select-Object -First 1
+                Assert-True ([string]$withoutThreadReadDelegationCheck.detail -match 'thread/read is supplemental and not advertised') 'Codex reports the supplemental thread/read decision deterministically'
+            } finally {
+                Remove-Item -LiteralPath $withoutThreadReadMarker -Force
+            }
+
+            $missingSchemaMarker = Join-Path $with.Root 'home\codex-schema-missing-ThreadStartParams'
+            [IO.File]::WriteAllText($missingSchemaMarker, 'fixture', [Text.UTF8Encoding]::new($false))
+            try {
+                $missingPreflight = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
+                Assert-Equal 'incompatible' $missingPreflight.status 'Codex missing schema is a controlled incompatible preflight'
+                $missingText = [string]($missingPreflight | ConvertTo-Json -Depth 100)
+                Assert-True ($missingText -match 'Installed Codex app-server schema is missing required v2 schema: ThreadStartParams\.') 'Codex reports the exact missing logical schema'
+                Assert-True ($missingText -notmatch 'Cannot bind argument to parameter .Schema. because it is null') 'Codex missing schema never emits a null-binding exception'
+            } finally {
+                Remove-Item -LiteralPath $missingSchemaMarker -Force
+            }
+
+            $multipleMissingSchemaMarker = Join-Path $with.Root 'home\codex-schema-missing-required'
+            [IO.File]::WriteAllText($multipleMissingSchemaMarker, 'fixture', [Text.UTF8Encoding]::new($false))
+            try {
+                $multipleMissingPreflight = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
+                Assert-Equal 'incompatible' $multipleMissingPreflight.status 'Codex reports multiple missing schemas as a controlled incompatible preflight'
+                $multipleMissingText = [string]($multipleMissingPreflight | ConvertTo-Json -Depth 100)
+                Assert-True ($multipleMissingText -match 'Installed Codex app-server schemas are missing required v2 schemas: ThreadStartParams, TurnStartResponse\.') 'Codex reports all missing logical schemas in one deterministic message'
+                Assert-True ($multipleMissingText -notmatch 'Cannot bind argument to parameter .Schema. because it is null') 'Codex multiple missing schemas never emits a null-binding exception'
+            } finally {
+                Remove-Item -LiteralPath $multipleMissingSchemaMarker -Force
+            }
         }
         $resultWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         $resultWithout = Invoke-AdapterJson -RunnerPath $runnerPath -Command execute -RunPath $without.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -1051,6 +1220,7 @@ try {
     $bridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-execution-result.ps1'), [System.Text.UTF8Encoding]::new($false))
     $recordText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'record-native-result.ps1'), [System.Text.UTF8Encoding]::new($false))
     $manifestBridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-manifest-results.ps1'), [System.Text.UTF8Encoding]::new($false))
+    $runnerOwnedText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'invoke-runner-owned-arms.ps1'), [System.Text.UTF8Encoding]::new($false))
     $commonText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'runner-common.ps1'), [System.Text.UTF8Encoding]::new($false))
     $orchestrationText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'orchestration.ps1'), [System.Text.UTF8Encoding]::new($false))
     Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
@@ -1082,6 +1252,8 @@ try {
     Assert-True ($commonText.Contains('exit.status must be a JSON number or null')) 'execution results must reject textual exit statuses'
     Assert-True ($commonText.Contains('requested.timeout_seconds') -and $commonText.Contains('execution-result.json run.$field')) 'raw execution results must retain the complete run and requested configuration contract'
     Assert-True ($prepareText.Contains('orchestration.ps1')) 'handoff preparation must load the deterministic orchestration helper'
+    Assert-True ($prepareText.Contains('complete deterministic Phase 1 boundary') -and $prepareText.Contains('Do not hand-author per-arm preflight, assertion, queue, state, or result-path bookkeeping.')) 'runner-owned handoff must delegate Phase 1 preflight and fan-out bookkeeping to one deterministic command'
+    Assert-True ($runnerOwnedText.Contains('Invoke-RunnerPreflight') -and $runnerOwnedText.Contains('Get-PreflightGateSummary') -and $runnerOwnedText.Contains('execution_started = $false')) 'runner-owned helper must gate all execute processes behind deterministic preflight'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
     Assert-True ($manifestBridgeText.Contains('Get-ManifestRunRecords') -and $manifestBridgeText.Contains('$record.ResultPath')) 'package-level bridge must resolve exact manifest records'

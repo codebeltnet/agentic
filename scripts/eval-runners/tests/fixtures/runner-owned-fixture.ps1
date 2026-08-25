@@ -54,10 +54,37 @@ try {
     [void](Assert-RunnerDescriptor -Descriptor $descriptor)
     if ($Command -eq 'describe') { Write-RunnerJson -Value $descriptor -AsOutput; exit 0 }
     $inputs = [pscustomobject]@{ Run = Resolve-RunContract -RunPath $Run; Profile = Resolve-ExecutionProfile -ProfilePath $Profile }
+    function Write-FixtureEvent {
+        param([Parameter(Mandatory = $true)][string]$Kind)
+
+        $logPath = [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_LOG')
+        if ([string]::IsNullOrWhiteSpace($logPath)) { return }
+        $mutex = [Threading.Mutex]::new($false, 'agentic-runner-owned-fixture-event-log')
+        try {
+            [void]$mutex.WaitOne()
+            $event = [ordered]@{
+                kind = $Kind
+                eval_id = [int]$inputs.Run.EvalId
+                eval_name = [string]$inputs.Run.EvalName
+                configuration = [string]$inputs.Run.Mode
+                utc = [DateTime]::UtcNow.ToString('o')
+            }
+            [IO.File]::AppendAllText($logPath, (($event | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        } finally {
+            try { [void]$mutex.ReleaseMutex() } catch { }
+            $mutex.Dispose()
+        }
+    }
     if ($Command -eq 'preflight') {
+        Write-FixtureEvent -Kind 'preflight'
+        if (Test-Path -LiteralPath (Join-Path $inputs.Run.HomeDirectoryPath 'preflight-incompatible') -PathType Leaf) {
+            Write-RunnerJson -Value (New-PreflightDocument -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Compatible $false -Reasons @("fixture preflight rejected $($inputs.Run.EvalName)/$($inputs.Run.Mode)") -ResolvedCapabilities $descriptor.capabilities -Mechanisms @('deterministic fixture')) -AsOutput
+            exit 0
+        }
         Write-RunnerJson -Value (New-PreflightDocument -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Compatible $true -ResolvedCapabilities $descriptor.capabilities -Mechanisms @('deterministic fixture')) -AsOutput
         exit 0
     }
+    Write-FixtureEvent -Kind 'execute'
     Start-Sleep -Milliseconds 250
     $capabilities = [ordered]@{}
     foreach ($propertyName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) { $capabilities[$propertyName] = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $propertyName) }

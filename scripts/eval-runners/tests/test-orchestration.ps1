@@ -75,6 +75,7 @@ function New-TestNativeTerminalEvidence {
 }
 
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-orchestration-' + [Guid]::NewGuid().ToString('N'))
+$oldFixtureLogPath = $env:AGENTIC_RUNNER_FIXTURE_LOG
 try {
     $iteration = Join-Path $testRoot 'iteration-1'
     New-Item -ItemType Directory -Path $iteration -Force | Out-Null
@@ -524,7 +525,7 @@ try {
         configuration_profile = 'isolated-default'
         tool_profile = 'default'
         timeout_seconds = 30
-        concurrency = 3
+        concurrency = 16
     })
     $fanoutManifestEvals = [System.Collections.Generic.List[object]]::new()
     for ($evalId = 1; $evalId -le 3; $evalId++) {
@@ -584,15 +585,33 @@ try {
         evals = $fanoutManifestEvals.ToArray()
     })
     $fanoutHelper = Join-Path $fanoutTools 'invoke-runner-owned-arms.ps1'
+    $fixtureLogPath = Join-Path $testRoot 'runner-owned-events.jsonl'
+    $env:AGENTIC_RUNNER_FIXTURE_LOG = $fixtureLogPath
     $fanoutOutput = & pwsh -NoProfile -File $fanoutHelper -IterationDirectory $fanoutPackage 2>&1
     Assert-Equal 0 $LASTEXITCODE ("deterministic runner-owned fan-out exits successfully; output: " + [string]::Join([Environment]::NewLine, @($fanoutOutput)))
     $fanoutSummary = ([string]::Join([Environment]::NewLine, @($fanoutOutput)) | ConvertFrom-Json)
     Assert-Equal 'completed' $fanoutSummary.status 'deterministic runner-owned fan-out completes six fixture arms'
+    Assert-Equal 6 $fanoutSummary.preflight_count 'runner-owned helper preflights all six manifest arms before fan-out'
+    Assert-True $fanoutSummary.execution_started 'runner-owned helper records that execution started after preflight'
+    Assert-Equal 6 $fanoutSummary.execution_count 'runner-owned helper executes exactly six compatible arms'
     Assert-Equal 6 $fanoutSummary.completed_count 'runner-owned helper completes all six arms'
     Assert-True ([int]$fanoutSummary.max_observed_active -gt 1) 'runner-owned helper reaches parallel active execution'
+    $fanoutEvents = @(Get-Content -LiteralPath $fixtureLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+    Assert-Equal 12 $fanoutEvents.Count 'runner-owned fixture records six preflight and six execute events'
+    Assert-Equal 6 @($fanoutEvents | Where-Object { $_.kind -eq 'preflight' }).Count 'all six preflight calls complete'
+    Assert-Equal 6 @($fanoutEvents | Where-Object { $_.kind -eq 'execute' }).Count 'all six execute calls start after compatible preflight'
+    $firstExecuteIndex = -1
+    $lastPreflightIndex = -1
+    for ($eventIndex = 0; $eventIndex -lt $fanoutEvents.Count; $eventIndex++) {
+        if ($fanoutEvents[$eventIndex].kind -eq 'preflight') { $lastPreflightIndex = $eventIndex }
+        if ($fanoutEvents[$eventIndex].kind -eq 'execute' -and $firstExecuteIndex -lt 0) { $firstExecuteIndex = $eventIndex }
+    }
+    Assert-True ($lastPreflightIndex -ge 0 -and $firstExecuteIndex -gt $lastPreflightIndex) 'all runner-owned preflights occur before the first execute process'
     $fanoutState = Read-RunnerJson -Path (Join-Path $fanoutPackage 'orchestration-state.json')
+    Assert-Equal 6 $fanoutState.preflight.count 'orchestration state preserves all preflight worker records'
+    Assert-Equal 'passed' $fanoutState.preflight.status 'orchestration state records the passed preflight gate'
     Assert-Equal 'verified' ([string]$fanoutSummary.concurrency.status) 'runner-owned helper persists verified concurrency state'
-    Assert-Equal 3 ([int]$fanoutSummary.concurrency.requested_concurrency) 'runner-owned helper reports requested concurrency'
+    Assert-Equal 16 ([int]$fanoutSummary.concurrency.requested_concurrency) 'runner-owned helper preserves requested concurrency 16'
     $fanoutWorkerIds = @($fanoutState.completed.PSObject.Properties.Name | Sort-Object)
     Assert-Equal 'arm-1-with_skill,arm-1-without_skill,arm-2-with_skill,arm-2-without_skill,arm-3-with_skill,arm-3-without_skill' ([string]::Join(',', $fanoutWorkerIds)) 'runner-owned helper preserves exact manifest plan worker IDs'
     foreach ($record in @(Get-ManifestRunRecords -IterationDirectory $fanoutPackage -Manifest (Read-RunnerJson -Path (Join-Path $fanoutPackage 'manifest.json')))) {
@@ -602,6 +621,35 @@ try {
         Assert-Equal ([string]$result.session.id) ([string]$completedEntry.worker_session_id) "runner-owned helper derives $workerId session identity from its result"
     }
 
+    # The preflight gate must fail closed: one incompatible arm is reported
+    # with its manifest identity and no runner-owned execute process starts.
+    $gatePackage = Join-Path $testRoot 'runner-owned preflight gate package'
+    Copy-Item -LiteralPath $fanoutPackage -Destination $gatePackage -Recurse -Force
+    foreach ($executionResultFile in @(Get-ChildItem -LiteralPath $gatePackage -Recurse -File -Filter 'execution-result.json')) {
+        Remove-Item -LiteralPath $executionResultFile.FullName -Force
+    }
+    Remove-Item -LiteralPath (Join-Path $gatePackage 'orchestration-state.json') -Force
+    $gateMarker = Join-Path $gatePackage 'fanout-eval-02\with_skill\home\preflight-incompatible'
+    [IO.File]::WriteAllText($gateMarker, 'fixture', [Text.UTF8Encoding]::new($false))
+    $gateLogPath = Join-Path $testRoot 'runner-owned-gate-events.jsonl'
+    $env:AGENTIC_RUNNER_FIXTURE_LOG = $gateLogPath
+    $gateOutput = & pwsh -NoProfile -File (Join-Path $gatePackage 'tools\eval-runners\invoke-runner-owned-arms.ps1') -IterationDirectory $gatePackage 2>&1
+    $gateExitCode = $LASTEXITCODE
+    Assert-Equal 2 $gateExitCode ("incompatible runner-owned preflight exits non-zero; output: " + [string]::Join([Environment]::NewLine, @($gateOutput)))
+    $gateSummary = ([string]::Join([Environment]::NewLine, @($gateOutput)) | ConvertFrom-Json)
+    Assert-Equal 'preflight_incompatible' $gateSummary.status 'incompatible preflight stops before fan-out'
+    Assert-Equal 6 $gateSummary.preflight_count 'incompatible gate still preflights every pending arm'
+    Assert-Equal 1 $gateSummary.incompatible_count 'incompatible gate reports one failed arm'
+    Assert-Equal $false $gateSummary.execution_started 'incompatible gate records zero started executions'
+    Assert-Equal 0 $gateSummary.execution_count 'incompatible gate reports zero executions'
+    $failedGateArm = @($gateSummary.preflights | Where-Object { $_.worker_id -eq 'arm-2-with_skill' })
+    Assert-Equal 1 $failedGateArm.Count 'incompatible gate preserves the exact manifest worker ID'
+    Assert-True ([string]$failedGateArm[0].reasons -match 'fixture preflight rejected fanout-eval-02/with_skill') 'incompatible gate preserves the exact preflight reason'
+    $gateEvents = @(Get-Content -LiteralPath $gateLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+    Assert-Equal 6 $gateEvents.Count 'incompatible gate records only the six preflight calls'
+    Assert-Equal 0 @($gateEvents | Where-Object { $_.kind -eq 'execute' }).Count 'incompatible gate starts zero execute processes'
+    Assert-Equal 0 @(Get-ChildItem -LiteralPath $gatePackage -Recurse -File -Filter 'execution-result.json').Count 'incompatible gate leaves manifest execution results untouched'
+
     # A compatibility-transport answer has no native delegation evidence and
     # is rejected rather than retried through runner.ps1 execute or parent code.
     $compatibilityTransportResult = Copy-TestObject -Value $validTerminalEvidence
@@ -610,5 +658,6 @@ try {
 
     Write-Output 'Native worker orchestration: PASS'
 } finally {
+    if ($null -eq $oldFixtureLogPath) { Remove-Item Env:AGENTIC_RUNNER_FIXTURE_LOG -ErrorAction SilentlyContinue } else { $env:AGENTIC_RUNNER_FIXTURE_LOG = $oldFixtureLogPath }
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }
