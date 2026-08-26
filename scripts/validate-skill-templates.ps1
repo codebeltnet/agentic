@@ -1432,6 +1432,16 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw 'Codex preparation must preserve gpt-5.6-luna and default omitted reasoning effort to low.'
         }
 
+        $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
+        $opencodePrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'opencode/muse-spark-1.2-contributor-free' 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "prepare-skill-evals.ps1 failed for the OpenCode fixture: $($opencodePrepareOutput -join [Environment]::NewLine)"
+        }
+        $opencodeProfile = [System.IO.File]::ReadAllText((Join-Path $opencodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
+        if ([string]$opencodeProfile.runner -ne 'opencode' -or [string]$opencodeProfile.model -ne 'opencode/muse-spark-1.2-contributor-free') {
+            throw 'OpenCode preparation must preserve the selected runner-native model.'
+        }
+
         $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
         $missingSelectionOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingSelectionRoot 2>&1
         if ($LASTEXITCODE -eq 0) {
@@ -1493,7 +1503,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'Do not execute evaluation prompts in the current agent context.',
             'execution-profile.json` selects the runner/model/configuration',
             'Read `delegation.dispatch_owner` from the selected runner descriptor and preflight.',
-            'For `runner`, do not spawn a model subagent first.',
+            'Do not create outer native subagents/tasks',
             'do not invoke `record-native-result.ps1`, manufacture a native envelope',
             'Do not read any `eval-metadata.json`, expected output, assertions, result grading, benchmark/report data, or paired output during Phase 1.',
             'Do not substitute a generic worker, another runner, or an improvised isolation scheme if the selected runner is unavailable or incompatible.',
@@ -1529,6 +1539,64 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                 throw "RUN-THIS.prompt.md must not contain forbidden handoff text '$forbidden'."
             }
         }
+
+        $generatedHandoffs = @(
+            [pscustomobject]@{ Name = 'GitHub Copilot generated handoff'; Iteration = $iterationDirectory },
+            [pscustomobject]@{ Name = 'Codex generated handoff'; Iteration = (Join-Path $codexPackageRoot 'iteration-1') },
+            [pscustomobject]@{ Name = 'OpenCode generated handoff'; Iteration = (Join-Path $opencodePackageRoot 'iteration-1') }
+        )
+        foreach ($generatedHandoff in $generatedHandoffs) {
+            $generatedPromptPath = Join-Path $generatedHandoff.Iteration 'RUN-THIS.prompt.md'
+            if (-not (Test-Path -LiteralPath $generatedPromptPath -PathType Leaf)) {
+                throw "$($generatedHandoff.Name) must be prepared through the real handoff generator."
+            }
+            $generatedPrompt = [System.IO.File]::ReadAllText($generatedPromptPath, $utf8NoBom)
+            foreach ($needle in @(
+                'invoke-runner-owned-arms.ps1',
+                'delegation.dispatch_owner=runner',
+                'exactly once',
+                'Consume its machine-readable summary',
+                'Do not create outer native subagents/tasks',
+                'hand-author preflight, fan-out, orchestration-state, or result bookkeeping',
+                'evaluation is incomplete and must fail closed',
+                'Only persisted runner-produced evidence at the manifest-declared paths may proceed to Phase 2'
+            )) {
+                Assert-Contains -Name $generatedHandoff.Name -Content $generatedPrompt -Needle $needle
+            }
+            foreach ($forbidden in @(
+                'bring back the result objects',
+                'paste-ready JSON array',
+                'If the harness cannot write to the package machine',
+                'state it in chat',
+                '-CollectResults'
+            )) {
+                Assert-NotContains -Name $generatedHandoff.Name -Content $generatedPrompt -Needle $forbidden
+            }
+
+            $generatedReadmePath = Join-Path $generatedHandoff.Iteration 'README.md'
+            $generatedReadme = [System.IO.File]::ReadAllText($generatedReadmePath, $utf8NoBom)
+            Assert-Contains -Name "$($generatedHandoff.Name) package README" -Content $generatedReadme -Needle 'evaluation is incomplete and must fail closed'
+            Assert-NotContains -Name "$($generatedHandoff.Name) package README" -Content $generatedReadme -Needle 'paste-ready JSON array'
+            Assert-NotContains -Name "$($generatedHandoff.Name) package README" -Content $generatedReadme -Needle '-CollectResults'
+        }
+
+        $opencodePrompt = [System.IO.File]::ReadAllText((Join-Path $opencodePackageRoot 'iteration-1\RUN-THIS.prompt.md'), $utf8NoBom)
+        foreach ($forbidden in @(
+            'OpenCode NATIVE TASK DISPATCH',
+            'native `Task` tool',
+            'full-capability built-in `General` worker',
+            'sibling `Task` tool calls',
+            'same assistant turn',
+            'Want me to re-dispatch'
+        )) {
+            Assert-NotContains -Name 'OpenCode generated handoff' -Content $opencodePrompt -Needle $forbidden
+        }
+
+        $copilotPrompt = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'RUN-THIS.prompt.md'), $utf8NoBom)
+        foreach ($forbidden in @('general-purpose', 'fleet', 'native `Task` tool', 'sibling `Task` tool calls')) {
+            Assert-NotContains -Name 'GitHub Copilot generated handoff' -Content $copilotPrompt -Needle $forbidden
+        }
+
         foreach ($entry in @($manifest.evals)) {
             $metadataForLeak = [System.IO.File]::ReadAllText((Join-Path (Join-Path $iterationDirectory $entry.directory) 'eval-metadata.json'), $utf8NoBom) | ConvertFrom-Json
             if ($runner.Contains([string]$metadataForLeak.expected_output)) {

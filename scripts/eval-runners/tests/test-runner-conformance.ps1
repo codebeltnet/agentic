@@ -1239,6 +1239,7 @@ try {
     $runnerOwnedText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'invoke-runner-owned-arms.ps1'), [System.Text.UTF8Encoding]::new($false))
     $commonText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'runner-common.ps1'), [System.Text.UTF8Encoding]::new($false))
     $orchestrationText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'orchestration.ps1'), [System.Text.UTF8Encoding]::new($false))
+    $opencodeRunnerText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'opencode/runner.ps1'), [System.Text.UTF8Encoding]::new($false))
     Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
     Assert-True ($orchestrationText -notmatch '(?i)capture-native-results\.ps1|synthesize|worker_authored') 'generic orchestration must not manufacture native terminal envelopes'
     Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
@@ -1248,7 +1249,7 @@ try {
     Assert-True ($prepareText.Contains('Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')) 'handoff preparation must prohibit reconstructed paths'
     Assert-True ($prepareText.Contains('Read `delegation.dispatch_owner` from the selected runner descriptor and preflight.')) 'handoff preparation must make native dispatch ownership explicit'
     Assert-True ($prepareText.Contains('One arm equals one fresh native Eval Worker and one model-backed eval execution.')) 'handoff preparation must state the one-arm one-model invariant'
-    Assert-True ($prepareText.Contains('For `runner`, do not spawn a model subagent first.')) 'handoff preparation must forbid an outer runner-owned model worker'
+    Assert-True ($prepareText.Contains('Do not create outer native subagents/tasks')) 'handoff preparation must forbid outer runner-owned native workers'
     Assert-True ($prepareText.Contains('do not invoke `record-native-result.ps1`, manufacture a native envelope')) 'runner-owned handoff must preserve runner capture without synthetic envelopes'
     Assert-True ($prepareText -notmatch '(?i)capture-native-results\.ps1') 'handoff preparation must not contain a synthetic capture helper'
     Assert-True ($prepareText.Contains('Assert-NativeWorkerDelegation')) 'handoff preparation must invoke the native delegation gate'
@@ -1256,8 +1257,10 @@ try {
     Assert-True ($prepareText.Contains('-RequireComplete -RequireNativeDelegation -RequireParallelDispatch')) 'handoff preparation must revalidate native terminal and parallel-dispatch evidence during the manifest bridge'
     Assert-True ($prepareText.Contains('min(execution-profile.json.concurrency, remaining arms)')) 'handoff preparation must state requested concurrency fan-out'
     Assert-True ($prepareText.Contains('DISPATCH IS AN ACTION, NOT A CONFIRMATION STEP.')) 'handoff preparation must forbid confirmation pauses before native dispatch'
-    Assert-True ($prepareText.Contains('sibling `Task` tool calls') -and $prepareText.Contains('same assistant turn before any result is awaited')) 'OpenCode handoff preparation must require same-turn sibling Task dispatch'
-    Assert-True ($prepareText.Contains('Want me to re-dispatch...')) 'OpenCode handoff preparation must reject deferred re-dispatch questions'
+    Assert-True ($prepareText.Contains('invoke the complete deterministic Phase 1 boundary') -and $prepareText.Contains('exactly once') -and $prepareText.Contains('Consume its machine-readable summary')) 'runner-owned handoff preparation must invoke the deterministic Phase 1 boundary once and consume its summary'
+    Assert-True ($prepareText.Contains('Do not create outer native subagents/tasks') -and $prepareText.Contains('hand-author preflight, fan-out, orchestration-state, or result bookkeeping')) 'runner-owned handoff preparation must keep native fan-out and bookkeeping inside the runner-owned boundary'
+    Assert-True ($prepareText -notmatch '(?i)OpenCode\s+NATIVE\s+TASK\s+DISPATCH|sibling\s+`Task`\s+tool\s+calls|Want me to re-dispatch') 'handoff preparation must not generate the retired OpenCode Task dispatch path'
+    Assert-True ($prepareText.Contains('evaluation is incomplete and must fail closed') -and $prepareText.Contains('Only persisted runner-produced evidence at the manifest-declared paths may proceed')) 'handoff preparation must fail closed when runner evidence cannot be persisted'
     Assert-True ($prepareText.Contains('Assert-OrchestrationConcurrency') -and $prepareText.Contains('orchestration-state.json')) 'handoff preparation must persist and validate orchestration concurrency state'
     Assert-True ($prepareText.Contains('rejected before the worker starts') -and $prepareText.Contains('record no eval attempt')) 'handoff preparation must queue capacity rejections without counting attempts'
     Assert-True ($prepareText.Contains('Register each worker acceptance and terminal result exactly once') -and $prepareText.Contains('incompatibility is diagnostic-only') -and $prepareText.Contains('Do not grade incompatible arms')) 'handoff preparation must make duplicate registration and incompatible-arm handling fail closed'
@@ -1268,12 +1271,13 @@ try {
     Assert-True ($commonText.Contains('exit.status must be a JSON number or null')) 'execution results must reject textual exit statuses'
     Assert-True ($commonText.Contains('requested.timeout_seconds') -and $commonText.Contains('execution-result.json run.$field')) 'raw execution results must retain the complete run and requested configuration contract'
     Assert-True ($prepareText.Contains('orchestration.ps1')) 'handoff preparation must load the deterministic orchestration helper'
-    Assert-True ($prepareText.Contains('complete deterministic Phase 1 boundary') -and $prepareText.Contains('Do not hand-author per-arm preflight, assertion, queue, state, or result-path bookkeeping.')) 'runner-owned handoff must delegate Phase 1 preflight and fan-out bookkeeping to one deterministic command'
+    Assert-True ($prepareText.Contains('complete deterministic Phase 1 boundary') -and $prepareText.Contains('hand-author preflight, fan-out, orchestration-state, or result bookkeeping')) 'runner-owned handoff must delegate Phase 1 preflight and fan-out bookkeeping to one deterministic command'
     Assert-True ($runnerOwnedText.Contains('Invoke-RunnerPreflight') -and $runnerOwnedText.Contains('Get-PreflightGateSummary') -and $runnerOwnedText.Contains('execution_started = $false')) 'runner-owned helper must gate all execute processes behind deterministic preflight'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
     Assert-True ($manifestBridgeText.Contains('Get-ManifestRunRecords') -and $manifestBridgeText.Contains('$record.ResultPath')) 'package-level bridge must resolve exact manifest records'
     Assert-True ($manifestBridgeText -notmatch 'with[-_]skill\.result\.json|without[-_]skill\.result\.json') 'package-level bridge must not encode arm-derived result filenames'
+    Assert-Equal 1 ([regex]::Matches($opencodeRunnerText, '\$directoryArgument = Get-SandboxVisiblePath').Count) 'OpenCode CLI argument construction assigns the sandbox directory once'
 
     $rawPath = Join-Path $iteration 'conformance\results\with-skill.execution-result.json'
     $resultPath = Join-Path $iteration 'conformance\results\with-skill.result.json'
