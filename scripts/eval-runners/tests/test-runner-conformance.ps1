@@ -525,7 +525,7 @@ exit 2
         $description = Invoke-AdapterJson -RunnerPath $runnerPath -Command describe -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         [void](Assert-RunnerDescriptor -Descriptor $description)
         Assert-True ($description.PSObject.Properties.Name -contains 'delegation') "$runnerName descriptor declares native delegation"
-        $expectedDispatchOwner = if ($runnerName -eq 'codex') { 'runner' } else { 'orchestrator' }
+        $expectedDispatchOwner = 'runner'
         Assert-Equal $expectedDispatchOwner $description.delegation.dispatch_owner "$runnerName descriptor declares its native dispatch owner"
         Assert-True (-not [bool]$description.delegation.nested_model_execution) "$runnerName descriptor forbids nested model execution"
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$description.delegation.mechanism)) "$runnerName descriptor records its native delegation mechanism"
@@ -549,7 +549,7 @@ exit 2
         }
         if ($runnerName -eq 'opencode') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'parallel_dispatch' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight requires bounded concurrent dispatch'
-            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'bounded concurrent native-worker dispatch required' }).Count -eq 1) 'OpenCode preflight records the concurrency requirement'
+            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'deterministic runner-owned concurrent fan-out' }).Count -eq 1) 'OpenCode preflight records the runner-owned concurrent fan-out'
         }
         if ($runnerName -eq 'opencode') {
             Assert-True (@($preflightWith.warnings | Where-Object { $_ -match 'child-tool environment filter' }).Count -gt 0) "$runnerName reports the child credential-filter limitation"
@@ -623,6 +623,22 @@ exit 2
             foreach ($artifact in @($result.artifacts)) {
                 Assert-True ($artifact.path -notmatch '(^|/|\\)\.\.(/|\\|$)') "$runnerName artifact path remains relative"
                 Assert-True (Test-Path -LiteralPath (Join-Path $resultRoot ($artifact.path -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -PathType Leaf) "$runnerName artifact exists inside its run"
+            }
+            # Runner-owned convergence: Copilot and OpenCode behavioral transport
+            # now emits transport-owned terminal evidence for its own fresh
+            # session, with no orchestrator-authored reconstruction. Codex's
+            # runner-owned app-server evidence is validated in its dedicated
+            # subscription block below; its API-key `codex exec` compatibility
+            # path is intentionally not the runner-owned behavioral transport.
+            if ($runnerName -in @('copilot', 'opencode')) {
+                Assert-Equal 'runner' ([string]$result.evidence.delegation.dispatch_owner) "$runnerName execution evidence is runner-owned"
+                Assert-Equal 'harness_native_transport' ([string]$result.evidence.capture.source) "$runnerName capture provenance is transport-owned"
+                Assert-True (-not [bool]$result.evidence.capture.worker_authored) "$runnerName capture is not orchestrator/worker-authored"
+                Assert-Equal ([string]$result.session.id) ([string]$result.evidence.delegation.worker_session_id) "$runnerName terminal evidence binds to the fresh session id"
+                $convergenceRunPath = if ($result.run.configuration -eq 'with_skill') { $with.Path } else { $without.Path }
+                $convergenceRun = Resolve-RunContract -RunPath $convergenceRunPath
+                $convergenceEvidence = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $result -Run $convergenceRun -RequestedModel ([string]$result.requested.model) -ExpectedWorkerSessionId ([string]$result.session.id) -ExpectedMechanism ([string]$description.delegation.mechanism)
+                Assert-True $convergenceEvidence.Valid "$runnerName produces valid runner-owned terminal evidence: $([string]::Join(', ', @($convergenceEvidence.Failures)))"
             }
         }
         $logPath = Join-Path $with.Root "repo\$runnerName-fake-cli-log.jsonl"

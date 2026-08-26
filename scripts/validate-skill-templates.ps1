@@ -1272,6 +1272,23 @@ Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Windows UTF-8 report generation succeeds without patching upstream skill-creator' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $reportUtf8Path = Join-Path $repoRoot 'scripts/eval-runners/tests/test-report-utf8.ps1'
+    if (-not (Test-Path -LiteralPath $reportUtf8Path -PathType Leaf)) {
+        throw 'The Windows UTF-8 report regression is missing.'
+    }
+    $reportUtf8Output = & pwsh -NoProfile -File $reportUtf8Path 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Windows UTF-8 report regression failed: $($reportUtf8Output -join [Environment]::NewLine)"
+    }
+    if (@($reportUtf8Output -join [Environment]::NewLine) -notmatch 'Report UTF-8 regression:\s+(PASS|SKIP)') {
+        throw 'Windows UTF-8 report regression did not report PASS or SKIP.'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Action {
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref

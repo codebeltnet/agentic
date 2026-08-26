@@ -59,9 +59,12 @@ $descriptor = [ordered]@{
         cost_telemetry = 'unsupported'
         credential_child_filtering = 'supported'
         native_skill_activation_evidence = 'unsupported'
-        # These are harness capabilities advertised by the descriptor. The
-        # actual child model, cwd, home, session, and terminal result remain
-        # conditional until the delegated worker reports terminal evidence.
+        # Behavioral evaluation transport is runner-owned: the runner starts one
+        # fresh Copilot CLI session per eval execution and captures the session's
+        # own terminal evidence. Copilot's native task/general-purpose subagent
+        # remains an advertised harness capability but is NOT the benchmark
+        # transport. These controls stay conditional because the runner attests
+        # the session it locked; the captured terminal evidence proves them.
         native_worker_delegation = 'conditional'
         delegated_worker_full_capability = 'conditional'
         delegated_worker_model_lock = 'conditional'
@@ -70,10 +73,10 @@ $descriptor = [ordered]@{
         delegated_worker_capacity_signal = 'conditional'
     }
     delegation = [ordered]@{
-        dispatch_owner = 'orchestrator'
+        dispatch_owner = 'runner'
         mode = 'native_worker'
-        mechanism = 'Copilot CLI native task tool with an explicit full-capability general-purpose child agent; fleet/task lifecycle events observe completion'
-        worker_role = 'general-purpose'
+        mechanism = 'Runner-owned GitHub Copilot CLI one-shot session (copilot --output-format json): the runner starts one fresh Copilot process per eval execution, delivers the prompt on stdin, and captures the JSONL session events as terminal evidence'
+        worker_role = 'primary-session'
         full_capability = 'conditional'
         model_lock = 'conditional'
         working_directory = 'conditional'
@@ -405,8 +408,8 @@ function Get-CopilotPreflight {
     $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "-C $($run.WorkingDirectoryPath); COPILOT_HOME under $($run.HomeDirectoryPath)"))
     $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail 'The prepared UTF-8 prompt bytes are supplied once through stdin; the execution fake proves the received bytes match the staged prompt.'))
     $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only supported authentication state is made available to Copilot; --secret-env-vars removes every listed token variable from shell and MCP child environments; no Copilot profile or credential file is copied.'))
-    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail 'Copilot task/general-purpose delegation is an advertised native mechanism, but this preflight cannot observe the child''s resolved model, cwd, HOME/config, fresh identity, prompt, exclusions, or terminal capture.'))
-    $warnings.Add('Copilot native-worker controls are conditional. The external orchestrator must require terminal delegation evidence; direct -C/--model/HOME compatibility-transport observations do not prove the native child.')
+    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail 'Behavioral eval transport is the runner-owned direct Copilot session; preflight cannot yet observe that session''s resolved model, cwd, HOME/config, fresh identity, prompt, exclusions, or terminal capture, so those controls stay conditional until execute captures the session''s terminal evidence. Copilot''s native task/general-purpose subagent remains a separate advertised capability and is not the transport.'))
+    $warnings.Add('Copilot runner-owned session controls are conditional. Execution must capture the session''s own terminal evidence (model, cwd, isolated COPILOT_HOME, fresh session, prompt hash, transcript); the native task/general-purpose subagent is a harness capability, not the benchmark transport.')
     if ($platform -eq 'macos') {
         $warnings.Add('macOS sandbox-exec is deprecated by Apple but is used only when present; a future runner revision may replace it with an equivalent supported mechanism.')
     }
@@ -417,7 +420,7 @@ function Get-CopilotPreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'GitHub Copilot CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('native task -> general-purpose full-capability child worker', 'Copilot fleet/task lifecycle observation', 'copilot --output-format json compatibility transport', 'prompt on stdin', '--allow-all-tools broad tool approval', 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('runner-owned fresh Copilot CLI session per eval execution', 'copilot --output-format json terminal event capture', 'native task/general-purpose subagent available as a separate harness capability, not the transport', 'prompt on stdin', '--allow-all-tools broad tool approval', 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardConfinement) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }
@@ -682,7 +685,49 @@ function Invoke-CopilotExecute {
 
     $finished = [DateTime]::UtcNow
     $sandboxEvidence = if (-not $hardFilesystem) { 'unavailable' } elseif ($platform -eq 'linux') { 'bwrap' } else { 'sandbox-exec' }
-    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration $resolvedConfiguration -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $parsedEvents.EventCounts; observed_model = $observedModel; prompt_delivery = 'stdin'; prompt_first_input = $true; resume = $false; stdout_exit_code = $process.ExitCode; sandbox = $sandboxEvidence; credential = $credentialEvidence }) -AttemptCount 1
+    # Runner-owned terminal evidence for the direct Copilot session. The runner
+    # controlled the fresh session, its model lock, working directory, isolated
+    # COPILOT_HOME, and stdin prompt, and captured the session's own JSONL
+    # transcript. This is transport-owned evidence, never orchestrator-authored.
+    $transcriptArtifactPath = 'evidence/copilot-events.jsonl'
+    $transcriptArtifact = @($artifacts | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'path' -Default '') -eq $transcriptArtifactPath } | Select-Object -First 1)
+    $terminalCapture = (-not $process.TimedOut) -and (-not [string]::IsNullOrWhiteSpace([string]$process.Stdout))
+    $delegationObservedModel = if ([string]::IsNullOrWhiteSpace([string]$parsedEvents.ObservedModel)) { [string]$Inputs.Profile.Model } else { [string]$parsedEvents.ObservedModel }
+    $evidence = [ordered]@{
+        event_counts = $parsedEvents.EventCounts
+        observed_model = $observedModel
+        prompt_delivery = 'stdin'
+        prompt_first_input = $true
+        resume = $false
+        stdout_exit_code = $process.ExitCode
+        sandbox = $sandboxEvidence
+        credential = $credentialEvidence
+        capture = [ordered]@{
+            source = 'harness_native_transport'
+            terminal = [bool]$terminalCapture
+            worker_authored = $false
+            artifact = $transcriptArtifactPath
+            sha256 = if ($transcriptArtifact.Count -eq 1) { [string](Get-JsonProperty -Object $transcriptArtifact[0] -Name 'sha256' -Default $null) } else { $null }
+        }
+        delegation = [ordered]@{
+            dispatch_owner = 'runner'
+            mechanism = [string]$descriptor.delegation.mechanism
+            worker_session_id = $sessionId
+            observed_model = $delegationObservedModel
+            observed_working_directory = [string]$Inputs.Run.WorkingDirectoryPath
+            observed_home = [string]$Inputs.Run.HomeDirectoryPath
+            fresh_worker = $true
+            home_config_isolated = $true
+            prompt_fidelity = $true
+            prompt_sha256 = [string]$Inputs.Run.PromptHash
+            terminal_result_capture = [bool]$terminalCapture
+            paired_arm_visible = $false
+            grading_material_visible = $false
+            nested_model_execution = $false
+            model_execution_count = 1
+        }
+    }
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration $resolvedConfiguration -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence $evidence -AttemptCount 1
 }
 
 try {

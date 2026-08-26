@@ -84,8 +84,19 @@ try {
         Write-RunnerJson -Value (New-PreflightDocument -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Compatible $true -ResolvedCapabilities $descriptor.capabilities -Mechanisms @('deterministic fixture')) -AsOutput
         exit 0
     }
+    $executeStartUtc = [DateTime]::UtcNow
     Write-FixtureEvent -Kind 'execute'
-    Start-Sleep -Milliseconds 250
+    # An optional per-run marker lets a test make one arm deliberately slow so
+    # the fan-out's capacity refill can be observed: a fast sibling must free its
+    # slot and let the next pending arm start without waiting for the slow arm.
+    $delayMs = 250
+    $delayMarker = Join-Path $inputs.Run.HomeDirectoryPath 'execute-delay-ms'
+    if (Test-Path -LiteralPath $delayMarker -PathType Leaf) {
+        $parsedDelay = 0
+        if ([int]::TryParse((([System.IO.File]::ReadAllText($delayMarker, [Text.UTF8Encoding]::new($false))).Trim()), [ref]$parsedDelay) -and $parsedDelay -ge 0) { $delayMs = $parsedDelay }
+    }
+    Start-Sleep -Milliseconds $delayMs
+    $executeFinishUtc = [DateTime]::UtcNow
     $capabilities = [ordered]@{}
     foreach ($propertyName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) { $capabilities[$propertyName] = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $propertyName) }
     $sessionId = ('fixture-session-' + [Guid]::NewGuid().ToString('N'))
@@ -109,7 +120,7 @@ try {
             model_execution_count = 1
         }
     }
-    $result = New-ExecutionResult -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Status completed -FinalResponse 'deterministic fixture response' -StartedUtc ([DateTime]::UtcNow.AddMilliseconds(-250).ToString('o')) -FinishedUtc ([DateTime]::UtcNow.ToString('o')) -DurationSeconds 0.25 -ExitStatus ([Nullable[int]]0) -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @('deterministic runner-owned fixture') -Telemetry ([ordered]@{ transcript = New-UnavailableMetric -Reason 'fixture transcript not required for queue test'; tokens = New-UnavailableMetric -Reason 'fixture'; tool_calls = New-AvailableMetric -Value 0; cost = New-UnavailableMetric -Reason 'fixture' }) -Evidence $evidence -AttemptCount 1
+    $result = New-ExecutionResult -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Status completed -FinalResponse 'deterministic fixture response' -StartedUtc ($executeStartUtc.ToString('o')) -FinishedUtc ($executeFinishUtc.ToString('o')) -DurationSeconds ([Math]::Round(($executeFinishUtc - $executeStartUtc).TotalSeconds, 3)) -ExitStatus ([Nullable[int]]0) -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @('deterministic runner-owned fixture') -Telemetry ([ordered]@{ transcript = New-UnavailableMetric -Reason 'fixture transcript not required for queue test'; tokens = New-UnavailableMetric -Reason 'fixture'; tool_calls = New-AvailableMetric -Value 0; cost = New-UnavailableMetric -Reason 'fixture' }) -Evidence $evidence -AttemptCount 1
     [void](Assert-ExecutionResult -Result $result)
     Write-RunnerJson -Value $result -AsOutput
 } catch {

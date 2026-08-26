@@ -21,6 +21,7 @@ $iteration = (Resolve-Path -LiteralPath $IterationDirectory -ErrorAction Stop).P
 . (Join-Path $PSScriptRoot 'runner-common.ps1')
 . (Join-Path $PSScriptRoot 'manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'orchestration.ps1')
+. (Join-Path $PSScriptRoot 'fanout-process.ps1')
 
 function Write-FanoutSummary {
     param(
@@ -41,13 +42,6 @@ function Save-OrchestrationState {
     [System.IO.File]::WriteAllText($Path, (($State | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
 }
 
-function ConvertTo-StartProcessArgument {
-    param([Parameter(Mandatory = $true)][string]$Value)
-
-    if ($Value -notmatch '\s|"') { return $Value }
-    return '"' + $Value.Replace('"', '\"') + '"'
-}
-
 function Invoke-RunnerPreflight {
     param(
         [Parameter(Mandatory = $true)][string]$RunnerPath,
@@ -57,22 +51,25 @@ function Invoke-RunnerPreflight {
 
     $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-preflight-' + [Guid]::NewGuid().ToString('N') + '.stdout')
     $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-preflight-' + [Guid]::NewGuid().ToString('N') + '.stderr')
-    $process = $null
+    $child = $null
     try {
         $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
+        # ProcessStartInfo.ArgumentList escapes each argument natively, so raw
+        # paths are passed without manual quoting. The child preflight runs
+        # headless (no visible console window on Windows).
         $arguments = @(
             '-NoProfile'
             '-File'
-            (ConvertTo-StartProcessArgument -Value $RunnerPath)
+            $RunnerPath
             'preflight'
             '-Run'
-            (ConvertTo-StartProcessArgument -Value $RunPath)
+            $RunPath
             '-Profile'
-            (ConvertTo-StartProcessArgument -Value $ProfilePath)
+            $ProfilePath
         )
-        $process = Start-Process -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $RunPath) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
-        $process.WaitForExit()
-        $exitCode = $process.ExitCode
+        $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $RunPath) -StdoutPath $stdoutPath -StderrPath $stderrPath
+        $exitCode = Complete-RunnerChildProcess -Child $child
+        $child = $null
         $stdout = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) { [System.IO.File]::ReadAllText($stdoutPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
         $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
         $result = $null
@@ -92,7 +89,7 @@ function Invoke-RunnerPreflight {
             ParseError = $parseError
         }
     } finally {
-        if ($null -ne $process) { $process.Dispose() }
+        if ($null -ne $child) { try { [void](Complete-RunnerChildProcess -Child $child) } catch { } }
         foreach ($path in @($stdoutPath, $stderrPath)) {
             if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
         }
@@ -297,35 +294,42 @@ try {
             if (Test-Path -LiteralPath $executionResultPath) {
                 throw "$workerId has an existing manifest-declared execution result; refusing to overwrite a prior attempt."
             }
-            New-Item -ItemType Directory -Path (Split-Path -Parent $executionResultPath) -Force | Out-Null
             $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-owned-' + [Guid]::NewGuid().ToString('N') + '.stderr')
-            $startInfo = @(
+            # ProcessStartInfo.ArgumentList escapes each argument natively, so raw
+            # paths are passed without manual quoting.
+            $arguments = @(
                 '-NoProfile'
                 '-File'
-                (ConvertTo-StartProcessArgument -Value $runnerPath)
+                $runnerPath
                 'execute'
                 '-Run'
-                (ConvertTo-StartProcessArgument -Value $runPath)
+                $runPath
                 '-Profile'
-                (ConvertTo-StartProcessArgument -Value ([string]$profile.Path))
+                ([string]$profile.Path)
             )
             $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
-            $process = Start-Process -FilePath $pwshPath -ArgumentList $startInfo -WorkingDirectory (Split-Path -Parent $runPath) -RedirectStandardOutput $executionResultPath -RedirectStandardError $stderrPath -PassThru
+            # Headless child: CreateNoWindow suppresses the per-child console
+            # window on Windows while the process stays a real isolation
+            # boundary. The child's sole stdout is streamed to the exact
+            # manifest-declared execution result; stderr is captured separately.
+            $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $runPath) -StdoutPath $executionResultPath -StderrPath $stderrPath
             if (-not [bool]$state.preflight.execution_started) {
                 $state.preflight.execution_started = $true
                 Save-OrchestrationState -Path $statePath -State $state
             }
             [void](Register-DelegationAccepted -State $state -WorkerId $workerId)
             Save-OrchestrationState -Path $statePath -State $state
-            $running.Add([pscustomobject]@{ worker_id = $workerId; process = $process; result_path = $executionResultPath; stderr_path = $stderrPath; run_path = $runPath })
+            $running.Add([pscustomobject]@{ worker_id = $workerId; child = $child; Process = $child.Process; result_path = $executionResultPath; stderr_path = $stderrPath; run_path = $runPath })
         }
 
         if ($running.Count -eq 0) { throw 'Runner-owned fan-out has pending arms but no active native process.' }
-        $activeRun = $running[0]
-        $activeRun.process.WaitForExit()
-        $exitCode = $activeRun.process.ExitCode
-        $activeRun.process.Dispose()
-        if (-not (Test-Path -LiteralPath $activeRun.result_path -PathType Leaf)) {
+        # Release a slot as soon as ANY child completes, not only the oldest in
+        # the list, so a slow eval execution never blocks refilling the slot a
+        # faster sibling already freed.
+        $completedIndex = Wait-AnyRunnerChild -Running $running
+        $activeRun = $running[$completedIndex]
+        $exitCode = Complete-RunnerChildProcess -Child $activeRun.child
+        if (-not (Test-Path -LiteralPath $activeRun.result_path -PathType Leaf) -or (Get-Item -LiteralPath $activeRun.result_path).Length -eq 0) {
             $stderr = if (Test-Path -LiteralPath $activeRun.stderr_path -PathType Leaf) { [System.IO.File]::ReadAllText($activeRun.stderr_path, [System.Text.UTF8Encoding]::new($false)).Trim() } else { '' }
             throw "$($activeRun.worker_id) runner exited with status $exitCode without writing its manifest-declared execution result. $stderr"
         }
@@ -336,7 +340,7 @@ try {
         [void](Register-WorkerTerminal -Plan $plan -State $state -WorkerId ([string]$activeRun.worker_id) -ExecutionEvidence $executionResult)
         Save-OrchestrationState -Path $statePath -State $state
         if (Test-Path -LiteralPath $activeRun.stderr_path -PathType Leaf) { Remove-Item -LiteralPath $activeRun.stderr_path -Force -ErrorAction SilentlyContinue }
-        $running.RemoveAt(0)
+        $running.RemoveAt($completedIndex)
     }
 
     $concurrency = Assert-OrchestrationConcurrency -Plan $plan -State $state

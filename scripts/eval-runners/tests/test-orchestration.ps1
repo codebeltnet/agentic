@@ -15,6 +15,7 @@ Set-StrictMode -Version Latest
 $runnerRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $runnerRoot 'runner-common.ps1')
 . (Join-Path $runnerRoot 'orchestration.ps1')
+. (Join-Path $runnerRoot 'fanout-process.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -498,9 +499,10 @@ try {
 
     $fanoutPath = Join-Path $runnerRoot 'invoke-runner-owned-arms.ps1'
     $fanoutText = [System.IO.File]::ReadAllText($fanoutPath, [System.Text.UTF8Encoding]::new($false))
-    foreach ($needle in @('manifest.json', 'New-EvalOrchestrationPlan', 'dispatch_owner', 'Get-OrchestrationArmByWorkerId', 'arm.parent_paths.execution_result', 'Start-Process', 'Register-DelegationAccepted', 'Register-DelegationSession', 'Register-WorkerTerminal', 'Assert-OrchestrationConcurrency', 'orchestration-state.json')) {
+    foreach ($needle in @('manifest.json', 'New-EvalOrchestrationPlan', 'dispatch_owner', 'Get-OrchestrationArmByWorkerId', 'arm.parent_paths.execution_result', 'Start-RunnerChildProcess', 'Wait-AnyRunnerChild', 'Register-DelegationAccepted', 'Register-DelegationSession', 'Register-WorkerTerminal', 'Assert-OrchestrationConcurrency', 'orchestration-state.json')) {
         Assert-True $fanoutText.Contains($needle) "runner-owned helper contains deterministic '$needle' behavior"
     }
+    Assert-True (-not $fanoutText.Contains('Start-Process')) 'runner-owned helper no longer uses window-creating Start-Process for child dispatch'
     Assert-True ($fanoutText -notmatch '(?i)spawn[_ -]?agent|subagent|native-worker-result|with_skill.*worker_id|without_skill.*worker_id') 'runner-owned helper does not create outer subagents, synthetic envelopes, or derived worker IDs'
     Assert-True ($fanoutText -notmatch '(?i)(with[-_]skill|without[-_]skill)\.execution-result|execution_result\s*=\s*.*configuration') 'runner-owned helper does not reconstruct result filenames'
 
@@ -655,6 +657,110 @@ try {
     $compatibilityTransportResult = Copy-TestObject -Value $validTerminalEvidence
     $compatibilityTransportResult.evidence.PSObject.Properties.Remove('delegation')
     Invoke-TerminalEvidenceCase -Name 'compatibility transport result' -Evidence $compatibilityTransportResult -ExpectedFailure 'delegation_terminal_evidence'
+
+    # Regression (Copilot forensic iteration-4): an orchestrator-authored /
+    # synthetic execution-result must be rejected by the schema gate with no
+    # fallback to a manual "success". This mirrors the real invalid Copilot run
+    # -- capture provenance "agent_output", a textual terminal_status instead of
+    # a numeric exit code, a non-fresh session, and no runner terminal
+    # delegation evidence -- proving the outer orchestrator cannot hand-build a
+    # passing result.
+    $syntheticCopilotResult = [ordered]@{
+        schema = (Get-RunnerSchemaNames).Result
+        protocol_version = (Get-RunnerSchemaNames).Protocol
+        run_id = '1_with_skill'
+        session = [ordered]@{ id = ''; fresh = $false; resumed = $true }
+        status = 'completed'
+        run = [ordered]@{ eval_id = 1; eval_name = 'strong-name'; configuration = 'with_skill' }
+        runner = [ordered]@{ name = 'github-copilot'; version = '0.9.1' }
+        harness = [ordered]@{ name = 'GitHub Copilot CLI'; version = 'unavailable' }
+        requested = [ordered]@{ model = 'claude-haiku-4.5'; reasoning_effort = $null; configuration_profile = 'isolated-default'; tool_profile = 'default'; timeout_seconds = 900 }
+        resolved = [ordered]@{ status = 'accepted_request'; accepted = [ordered]@{ model = 'claude-haiku-4.5' } }
+        started_utc = '2026-08-25T20:00:00.000Z'
+        finished_utc = '2026-08-25T20:00:10.000Z'
+        duration_seconds = 10
+        exit = [ordered]@{ status = 'success'; failure = $null }
+        terminal_status = 'success'
+        output_summary = 'Successfully generated repo.snk (1024-bit RSA, 596 bytes)'
+        final_response = [ordered]@{ status = 'available'; text = 'done' }
+        input = [ordered]@{ prompt_sha256 = ('0' * 64); run_json_sha256 = ('0' * 64); profile_sha256 = ('0' * 64) }
+        isolation = [ordered]@{ status = 'verified'; level = 'pragmatic'; hard_filesystem_confinement = $false; capabilities = [ordered]@{}; mechanisms = @(); required_controls = @(); unproven_controls = @() }
+        telemetry = [ordered]@{ transcript = [ordered]@{ status = 'available'; value = [ordered]@{ transcript_excerpt = '' } } }
+        evidence = [ordered]@{ capture = [ordered]@{ source = 'agent_output'; terminal = $true; worker_authored = $false }; tool_call_count = 0; transcript_excerpt = '' }
+        artifacts = @()
+        warnings = @()
+        compatibility_deviations = @()
+        attempt_count = 1
+    }
+    $syntheticResultObject = ($syntheticCopilotResult | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $syntheticRejected = $false
+    $syntheticReason = ''
+    try { [void](Assert-ExecutionResult -Result $syntheticResultObject) } catch { $syntheticRejected = $true; $syntheticReason = $_.Exception.Message }
+    Assert-True $syntheticRejected 'orchestrator-authored synthetic Copilot execution-result is rejected by the schema gate'
+    Assert-True ($syntheticReason -match 'fresh, non-resumed session|exit.status must be a JSON number') "synthetic Copilot result is rejected for its non-fresh session or textual exit status: $syntheticReason"
+    # A synthetic result that is schema-shaped but carries agent_output capture
+    # with no runner delegation evidence is still incompatible at the terminal
+    # gate, so it can never be graded as a real eval execution.
+    $agentOutputResult = Copy-TestObject -Value $validTerminalEvidence
+    $agentOutputResult.evidence | Add-Member -NotePropertyName capture -NotePropertyValue ([pscustomobject]@{ source = 'agent_output'; terminal = $true; worker_authored = $true }) -Force
+    $agentOutputResult.evidence.PSObject.Properties.Remove('delegation')
+    Invoke-TerminalEvidenceCase -Name 'agent_output synthetic result' -Evidence $agentOutputResult -ExpectedFailure 'delegation_terminal_evidence'
+
+    # Regression (#6): runner-owned child processes are headless on Windows. The
+    # start configuration keeps a real isolation boundary but must not create a
+    # visible console window, and stdout/stderr stay redirected for capture.
+    $headlessStartInfo = New-RunnerChildProcessStartInfo -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', 'runner.ps1', 'execute') -WorkingDirectory $testRoot
+    Assert-True (-not $headlessStartInfo.UseShellExecute) 'runner child process does not use ShellExecute'
+    Assert-True ($headlessStartInfo.CreateNoWindow) 'runner child process creates no visible console window'
+    Assert-True ($headlessStartInfo.RedirectStandardOutput) 'runner child process redirects stdout for exact result capture'
+    Assert-True ($headlessStartInfo.RedirectStandardError) 'runner child process redirects stderr for diagnostics'
+    Assert-Equal 'runner.ps1' ([string]$headlessStartInfo.ArgumentList[2]) 'runner child process preserves its exact argument vector without manual quoting'
+
+    # Regression (#5.8): capacity is released when ANY child completes, not only
+    # the oldest queued child. Wait-AnyRunnerChild must return whichever child
+    # exited first so a slow sibling never blocks refilling a freed slot.
+    $waitAnyLaterFirst = [System.Collections.Generic.List[object]]::new()
+    $waitAnyLaterFirst.Add([pscustomobject]@{ Process = [pscustomobject]@{ HasExited = $false } })
+    $waitAnyLaterFirst.Add([pscustomobject]@{ Process = [pscustomobject]@{ HasExited = $false } })
+    $waitAnyLaterFirst.Add([pscustomobject]@{ Process = [pscustomobject]@{ HasExited = $true } })
+    Assert-Equal 2 (Wait-AnyRunnerChild -Running $waitAnyLaterFirst) 'capacity refill selects a later-completing child, not the oldest queued one'
+    $waitAnyOldestFirst = [System.Collections.Generic.List[object]]::new()
+    $waitAnyOldestFirst.Add([pscustomobject]@{ Process = [pscustomobject]@{ HasExited = $true } })
+    $waitAnyOldestFirst.Add([pscustomobject]@{ Process = [pscustomobject]@{ HasExited = $false } })
+    Assert-Equal 0 (Wait-AnyRunnerChild -Running $waitAnyOldestFirst) 'capacity refill also selects the oldest child when it completes first'
+
+    # Regression (OpenCode forensic iteration-5): synthetic concurrency state
+    # cannot be injected. The runner-owned fan-out refuses to run over a
+    # pre-authored orchestration-state.json, so a hand-written max_observed_active
+    # (with no observed process/session lifecycle) is rejected fail-closed.
+    $syntheticStatePackage = Join-Path $testRoot 'runner-owned synthetic concurrency package'
+    Copy-Item -LiteralPath $fanoutPackage -Destination $syntheticStatePackage -Recurse -Force
+    foreach ($executionResultFile in @(Get-ChildItem -LiteralPath $syntheticStatePackage -Recurse -File -Filter 'execution-result.json')) {
+        Remove-Item -LiteralPath $executionResultFile.FullName -Force
+    }
+    Write-TestJson -Path (Join-Path $syntheticStatePackage 'orchestration-state.json') -Value ([ordered]@{
+        schema = 'codebeltnet/agentic/eval-orchestration-state/1'
+        dispatch_owner = 'orchestrator'
+        requested_concurrency = 16
+        parallel_dispatch_required = $true
+        minimum_parallel_workers = 2
+        pending_worker_ids = @()
+        active = [ordered]@{}
+        completed = [ordered]@{}
+        delegation_rejections = [ordered]@{}
+        capacity_limit_reported = $false
+        eval_attempts = [ordered]@{}
+        max_observed_active = 6
+    })
+    $syntheticStateLog = Join-Path $testRoot 'runner-owned-synthetic-state-events.jsonl'
+    $env:AGENTIC_RUNNER_FIXTURE_LOG = $syntheticStateLog
+    $syntheticStateOutput = & pwsh -NoProfile -File (Join-Path $syntheticStatePackage 'tools\eval-runners\invoke-runner-owned-arms.ps1') -IterationDirectory $syntheticStatePackage 2>&1
+    $syntheticStateExit = $LASTEXITCODE
+    Assert-Equal 2 $syntheticStateExit ("runner-owned fan-out rejects a pre-authored orchestration state; output: " + [string]::Join([Environment]::NewLine, @($syntheticStateOutput)))
+    $syntheticStateSummary = ([string]::Join([Environment]::NewLine, @($syntheticStateOutput)) | ConvertFrom-Json)
+    Assert-Equal 'failed' $syntheticStateSummary.status 'synthetic concurrency state cannot drive a completed fan-out'
+    Assert-True ([string]$syntheticStateSummary.error -match 'refuses to replace an existing orchestration state') 'runner-owned fan-out explains it will not reuse a hand-authored orchestration state'
+    Assert-Equal 0 @(Get-ChildItem -LiteralPath $syntheticStatePackage -Recurse -File -Filter 'execution-result.json').Count 'synthetic concurrency rejection starts zero real executions'
 
     Write-Output 'Native worker orchestration: PASS'
 } finally {

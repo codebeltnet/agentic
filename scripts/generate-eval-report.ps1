@@ -51,6 +51,11 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+# Ensure this process reads UTF-8 from the child Python tooling's stdout even
+# when the Windows console default is cp1252, so non-ASCII report evidence is
+# captured and forwarded intact.
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
 
 . (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
 
@@ -175,13 +180,30 @@ function Invoke-PythonScript {
         [string[]]$Arguments
     )
 
-    $output = & $PythonCommand $ScriptPath @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Python script '$ScriptPath' failed with exit code ${LASTEXITCODE}:`n$($output -join [Environment]::NewLine)"
-    }
+    # Force CPython UTF-8 Mode for the child so the packaged upstream
+    # skill-creator Python tooling (aggregate_benchmark.py, generate_review.py)
+    # reads and writes UTF-8 regardless of the Windows console/locale default
+    # (cp1252). This fixes non-ASCII report generation on Windows WITHOUT
+    # modifying any packaged upstream Python source. Setting PYTHONUTF8=1 is
+    # equivalent to `python -X utf8` and works for both the `python` interpreter
+    # and the `py` launcher, which does not reliably forward interpreter -X
+    # options placed before the script path.
+    $previousUtf8 = [Environment]::GetEnvironmentVariable('PYTHONUTF8')
+    $previousIoEncoding = [Environment]::GetEnvironmentVariable('PYTHONIOENCODING')
+    $env:PYTHONUTF8 = '1'
+    $env:PYTHONIOENCODING = 'utf-8'
+    try {
+        $output = & $PythonCommand $ScriptPath @Arguments 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Python script '$ScriptPath' failed with exit code ${LASTEXITCODE}:`n$($output -join [Environment]::NewLine)"
+        }
 
-    foreach ($line in @($output)) {
-        Write-Host $line
+        foreach ($line in @($output)) {
+            Write-Host $line
+        }
+    } finally {
+        if ($null -eq $previousUtf8) { Remove-Item Env:PYTHONUTF8 -ErrorAction SilentlyContinue } else { $env:PYTHONUTF8 = $previousUtf8 }
+        if ($null -eq $previousIoEncoding) { Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue } else { $env:PYTHONIOENCODING = $previousIoEncoding }
     }
 }
 

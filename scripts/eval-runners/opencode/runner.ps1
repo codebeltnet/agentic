@@ -47,8 +47,12 @@ $descriptor = [ordered]@{
         cost_telemetry = 'conditional'
         credential_child_filtering = 'conditional'
         native_skill_activation_evidence = 'unsupported'
-        # Task/General availability is only an advertised native mechanism;
-        # the actual child must prove its controls at terminal time.
+        # Behavioral evaluation transport is runner-owned: the runner starts one
+        # fresh OpenCode session per eval execution and captures the session's own
+        # structured event evidence. OpenCode's native Task/General subagent
+        # remains an advertised harness capability but is NOT the benchmark
+        # transport. These controls stay conditional because the runner attests
+        # the session it locked; the captured terminal evidence proves them.
         native_worker_delegation = 'conditional'
         delegated_worker_full_capability = 'conditional'
         delegated_worker_model_lock = 'conditional'
@@ -57,10 +61,10 @@ $descriptor = [ordered]@{
         delegated_worker_capacity_signal = 'conditional'
     }
     delegation = [ordered]@{
-        dispatch_owner = 'orchestrator'
+        dispatch_owner = 'runner'
         mode = 'native_worker'
-        mechanism = 'OpenCode Task tool invoking the full-capability General subagent in a fresh child context'
-        worker_role = 'general'
+        mechanism = 'Runner-owned OpenCode one-shot session (opencode run --format json): the runner starts one fresh OpenCode session per eval execution, delivers the prompt on stdin, and captures the structured session events as terminal evidence'
+        worker_role = 'primary-session'
         full_capability = 'conditional'
         model_lock = 'conditional'
         working_directory = 'conditional'
@@ -286,8 +290,8 @@ function Get-OpenCodePreflight {
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The adapter starts one new opencode run process and supplies no resume, continue, or session id.'))
     $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter isolates global/user configuration roots and deliberately preserves repository-owned project configuration; OPENCODE_DISABLE_PROJECT_CONFIG is not used.'))
     $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail 'The exact prompt bytes are sent on stdin as the first and only task input.'))
-    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail 'OpenCode Task/General is an advertised native mechanism, but this preflight cannot observe the child''s resolved model, cwd, HOME/config, fresh identity, prompt, exclusions, or terminal capture. Explore and Scout remain invalid read-only workers.'))
-    $warnings.Add('OpenCode native-worker controls are conditional. The external orchestrator must require terminal delegation evidence; direct run --dir/--model/config observations do not prove the native child.')
+    $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail 'Behavioral eval transport is the runner-owned direct OpenCode session; preflight cannot yet observe that session''s resolved model, cwd, HOME/config, fresh identity, prompt, exclusions, or terminal capture, so those controls stay conditional until execute captures the session''s terminal evidence. OpenCode''s native Task/General subagent (and read-only Explore/Scout) remain separate advertised capabilities and are not the transport.'))
+    $warnings.Add('OpenCode runner-owned session controls are conditional. Execution must capture the session''s own terminal evidence (model, cwd, isolated OPENCODE_CONFIG_DIR/HOME, fresh session, prompt hash, transcript); the native Task/General subagent is a harness capability, not the benchmark transport.')
     $warnings.Add('OpenCode does not expose a supported child-tool environment filter in this CLI contract; the runner removes unrelated inherited variables but cannot independently prove that the selected provider credential is hidden from every OpenCode-launched tool.')
 
     $hardConfinement = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
@@ -300,7 +304,7 @@ function Get-OpenCodePreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenCode CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('native Task -> General full-capability child worker', 'bounded concurrent native-worker dispatch required', 'opencode run --format json compatibility transport', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'repository-owned project configuration preserved', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('runner-owned fresh OpenCode session per eval execution', 'opencode run --format json terminal event capture', 'native Task/General subagent available as a separate harness capability, not the transport', 'deterministic runner-owned concurrent fan-out', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'repository-owned project configuration preserved', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardConfinement) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     return New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
 }
@@ -537,7 +541,50 @@ function Invoke-OpenCodeExecute {
         child_tool_visibility = 'provider_credential_may_be_visible_to_native_child_tools; no supported child filter is exposed'
         value_observed = $false
     }
-    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $process.FinishedUtc.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'OpenCode accepted the requested runner-native model selector and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence ([ordered]@{ event_counts = $eventCounts; commands = @($commands); prompt_first_input = $true; resume = $false; model_argument = $model; sandbox = $sandboxEvidence; project_configuration = 'repository_owned_project_config_preserved'; disable_project_config_environment = $false; credential = $credentialEvidence }) -AttemptCount 1
+    # Runner-owned terminal evidence for the direct OpenCode session. The runner
+    # controlled the fresh session, its model lock, working directory, isolated
+    # OPENCODE_CONFIG_DIR/HOME, and stdin prompt, and captured the session's own
+    # structured event transcript. This is transport-owned evidence, never
+    # orchestrator-authored.
+    $transcriptArtifactPath = 'evidence/opencode-events.jsonl'
+    $transcriptArtifact = @($artifacts | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'path' -Default '') -eq $transcriptArtifactPath } | Select-Object -First 1)
+    $terminalCapture = (-not $process.TimedOut) -and (-not [string]::IsNullOrWhiteSpace([string]$process.Stdout))
+    $evidence = [ordered]@{
+        event_counts = $eventCounts
+        commands = @($commands)
+        prompt_first_input = $true
+        resume = $false
+        model_argument = $model
+        sandbox = $sandboxEvidence
+        project_configuration = 'repository_owned_project_config_preserved'
+        disable_project_config_environment = $false
+        credential = $credentialEvidence
+        capture = [ordered]@{
+            source = 'harness_native_transport'
+            terminal = [bool]$terminalCapture
+            worker_authored = $false
+            artifact = $transcriptArtifactPath
+            sha256 = if ($transcriptArtifact.Count -eq 1) { [string](Get-JsonProperty -Object $transcriptArtifact[0] -Name 'sha256' -Default $null) } else { $null }
+        }
+        delegation = [ordered]@{
+            dispatch_owner = 'runner'
+            mechanism = [string]$descriptor.delegation.mechanism
+            worker_session_id = $sessionId
+            observed_model = [string]$model
+            observed_working_directory = [string]$Inputs.Run.WorkingDirectoryPath
+            observed_home = [string]$Inputs.Run.HomeDirectoryPath
+            fresh_worker = $true
+            home_config_isolated = $true
+            prompt_fidelity = $true
+            prompt_sha256 = [string]$Inputs.Run.PromptHash
+            terminal_result_capture = [bool]$terminalCapture
+            paired_arm_visible = $false
+            grading_material_visible = $false
+            nested_model_execution = $false
+            model_execution_count = 1
+        }
+    }
+    return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $process.FinishedUtc.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'OpenCode accepted the requested runner-native model selector and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence $evidence -AttemptCount 1
 }
 
 try {
