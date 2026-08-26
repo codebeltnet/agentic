@@ -49,10 +49,19 @@ it use the exact orchestration-plan worker IDs and manifest-declared
 execution-result paths, start runner-owned `execute` processes concurrently,
 redirect each process's single JSON stdout directly to its declared path,
 register the runner-produced session/result once, persist
-`orchestration-state.json`, and enforce the parallel-dispatch gate. It is not
-called by preparation, validation, CI, hooks, or automatic completion gates.
-The Copilot orchestrator-owned path continues to use its native worker envelope
-and `record-native-result.ps1`.
+`orchestration-state.json`, and enforce the parallel-dispatch gate. Child
+processes are headless isolation boundaries: they start through
+`fanout-process.ps1` with `CreateNoWindow` so no per-child console window
+appears on Windows, and a freed slot is refilled as soon as ANY child completes
+(not only the oldest), so a slow eval execution never blocks a faster sibling.
+It is not called by preparation, validation, CI, hooks, or automatic completion
+gates.
+Behavioral evaluation for GitHub Copilot, Codex, and OpenCode is runner-owned:
+each declares `delegation.dispatch_owner=runner`, is driven by
+`invoke-runner-owned-arms.ps1`, and produces its own terminal
+`execution-result.json`. The orchestrator-owned envelope and
+`record-native-result.ps1` remain available for any runner that still declares
+`dispatch_owner=orchestrator` (for example the deterministic conformance fake).
 
 The delegation contract has three distinct evidence levels:
 
@@ -100,11 +109,13 @@ must not be invoked inside the native subagent.
 
 Native delegation mechanisms:
 
-- GitHub Copilot: the CLI's native `task` tool with an explicit
-  full-capability `general-purpose` child agent for each arm. Fleet/subagent
-  lifecycle is harness-owned; Codebelt supplies the already-known one-arm
-  decomposition and requires terminal child evidence. The direct CLI
-  `-C`/`--model`/HOME compatibility transport does not prove the child.
+- GitHub Copilot: runner-owned behavioral transport. The runner starts one
+  fresh Copilot CLI session per eval execution (`copilot -C <working-directory>
+  --model <model> --output-format json`, prompt on stdin) and captures that
+  session's own JSONL events as terminal evidence for its model, cwd, isolated
+  `COPILOT_HOME`, fresh session, prompt hash, and transcript. Copilot's native
+  `task` tool with a full-capability `general-purpose` child remains an
+  advertised harness capability but is not the benchmark transport.
 - Codex: the installed CLI's runner-owned app-server child-session surface,
   `thread/start` followed by `turn/start`, with supplemental post-completion
   `thread/read` when available, and the arm's `cwd`, selected model, and
@@ -117,13 +128,14 @@ Native delegation mechanisms:
   AGENTS.md, and removes the projection/home in `finally`. `model/rerouted`
   and instruction sources outside that physical arm boundary are incompatible.
   Do not wrap a native Codex app-server worker in another Codex subagent.
-- OpenCode: the native Task tool with the full-capability built-in `General`
-  subagent. Task/General availability is preflight readiness only;
-  `Explore`/`Scout` read-only agents are not valid for a mutable eval arm.
-  When more than one arm is pending, the external orchestrator must emit the
-  sibling Task calls for the first batch in one assistant turn and must not ask
-  for confirmation or wait between calls. A client that cannot do that is
-  incompatible; available-capacity serial dispatch is not a fallback.
+- OpenCode: runner-owned behavioral transport. The runner starts one fresh
+  OpenCode session per eval execution (`opencode run --format json --auto
+  --model <model>`, prompt on stdin) and captures that session's structured
+  events as terminal evidence. Parallelism comes from the deterministic
+  runner-owned process fan-out (`invoke-runner-owned-arms.ps1`), not from an
+  orchestrator emitting sibling Task calls in one assistant turn. OpenCode's
+  native Task/General subagent (and read-only `Explore`/`Scout`) remain
+  advertised harness capabilities but are not the benchmark transport.
 This directory contains the package-local implementation of the v0.9.1 Eval
 Runner protocol. It is copied into prepared packages so the external Eval
 Orchestrator can use the same runner implementation that was validated with the
