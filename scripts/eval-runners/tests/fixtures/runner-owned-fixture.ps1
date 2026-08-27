@@ -80,7 +80,14 @@ try {
     if ($Command -eq 'preflight') {
         Write-FixtureEvent -Kind 'preflight'
         if (Test-Path -LiteralPath (Join-Path $inputs.Run.HomeDirectoryPath 'preflight-incompatible') -PathType Leaf) {
-            Write-RunnerJson -Value (New-PreflightDocument -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Compatible $false -Reasons @("fixture preflight rejected $($inputs.Run.EvalName)/$($inputs.Run.Mode)") -ResolvedCapabilities $descriptor.capabilities -Mechanisms @('deterministic fixture')) -AsOutput
+            $preflightCapabilities = [ordered]@{}
+            foreach ($capabilityName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) { $preflightCapabilities[$capabilityName] = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $capabilityName) }
+            $preflightReason = "fixture preflight rejected $($inputs.Run.EvalName)/$($inputs.Run.Mode)"
+            if ($null -ne $inputs.Run.Interaction) {
+                $preflightCapabilities.scripted_multi_turn_same_session = 'unsupported'
+                $preflightReason += ': scripted interaction capability unsupported'
+            }
+            Write-RunnerJson -Value (New-PreflightDocument -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Compatible $false -Reasons @($preflightReason) -ResolvedCapabilities $preflightCapabilities -Mechanisms @('deterministic fixture')) -AsOutput
             exit 0
         }
         Write-RunnerJson -Value (New-PreflightDocument -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Compatible $true -ResolvedCapabilities $descriptor.capabilities -Mechanisms @('deterministic fixture')) -AsOutput

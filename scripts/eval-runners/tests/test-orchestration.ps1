@@ -634,6 +634,22 @@ try {
     }
     Remove-Item -LiteralPath (Join-Path $gatePackage 'orchestration-state.json') -Force
     Remove-Item -LiteralPath (Join-Path $gatePackage 'execution-freeze.json') -Force
+    $gateInteraction = [ordered]@{
+        schema = (Get-RunnerSchemaNames).Interaction
+        mode = 'scripted'
+        turns = @(
+            [ordered]@{ role = 'user'; content = 'fixture confirmation request' }
+            [ordered]@{ role = 'user'; content = 'fixture protected operation request' }
+        )
+    }
+    foreach ($gateRunFile in @(Get-ChildItem -LiteralPath $gatePackage -Recurse -File -Filter 'run.json')) {
+        $gateInteractionPath = Join-Path $gateRunFile.DirectoryName 'interaction.json'
+        Write-TestJson -Path $gateInteractionPath -Value $gateInteraction
+        $gateRun = Read-RunnerJson -Path $gateRunFile.FullName
+        Add-Member -InputObject $gateRun -MemberType NoteProperty -Name interactionFile -Value 'interaction.json' -Force
+        Add-Member -InputObject $gateRun -MemberType NoteProperty -Name interactionHash -Value (Get-Sha256HexFromFile -Path $gateInteractionPath) -Force
+        Write-TestJson -Path $gateRunFile.FullName -Value $gateRun
+    }
     $gateMarker = Join-Path $gatePackage 'fanout-eval-02\with_skill\home\preflight-incompatible'
     [IO.File]::WriteAllText($gateMarker, 'fixture', [Text.UTF8Encoding]::new($false))
     $gateLogPath = Join-Path $testRoot 'runner-owned-gate-events.jsonl'
@@ -650,6 +666,7 @@ try {
     $failedGateArm = @($gateSummary.preflights | Where-Object { $_.worker_id -eq 'arm-2-with_skill' })
     Assert-Equal 1 $failedGateArm.Count 'incompatible gate preserves the exact manifest worker ID'
     Assert-True ([string]$failedGateArm[0].reasons -match 'fixture preflight rejected fanout-eval-02/with_skill') 'incompatible gate preserves the exact preflight reason'
+    Assert-True ([string]$failedGateArm[0].reasons -match 'scripted interaction capability unsupported') 'incompatible gate rejects an unsupported scripted interaction before execution'
     $gateEvents = @(Get-Content -LiteralPath $gateLogPath | ForEach-Object { $_ | ConvertFrom-Json })
     Assert-Equal 6 $gateEvents.Count 'incompatible gate records only the six preflight calls'
     Assert-Equal 0 @($gateEvents | Where-Object { $_.kind -eq 'execute' }).Count 'incompatible gate starts zero execute processes'

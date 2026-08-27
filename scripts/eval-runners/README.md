@@ -134,7 +134,11 @@ Native delegation mechanisms:
   session's own JSONL events as terminal evidence for its model, cwd, isolated
   `COPILOT_HOME`, fresh session, prompt hash, and transcript. Copilot's native
   `task` tool with a full-capability `general-purpose` child remains an
-  advertised harness capability but is not the benchmark transport.
+  advertised harness capability but is not the benchmark transport. When an
+  `interaction.json` sidecar is present, the runner first proves from the
+  installed help that an explicit session-id continuation flag is available,
+  captures the first session id from structured events, and adds only that
+  exact id on later turns; it never resumes the most recent session.
 - Codex: the installed CLI's runner-owned app-server child-session surface,
   `thread/start` followed by `turn/start`, with supplemental post-completion
   `thread/read` when available, and the arm's `cwd`, selected model, and
@@ -150,7 +154,9 @@ Native delegation mechanisms:
 - OpenCode: runner-owned behavioral transport. The runner starts one fresh
   OpenCode session per eval execution (`opencode run --format json --auto
   --model <model>`, prompt on stdin) and captures that session's structured
-  events as terminal evidence. Parallelism comes from the deterministic
+  events as terminal evidence. Scripted interactions use only help-proven
+  `--session <exact-session-id>` continuation after turn 1; `--continue` is
+  never used. Parallelism comes from the deterministic
   runner-owned process fan-out (`invoke-runner-owned-arms.ps1`), not from an
   orchestrator emitting sibling Task calls in one assistant turn. OpenCode's
   native Task/General subagent (and read-only `Explore`/`Scout`) remain
@@ -205,7 +211,8 @@ model; it is used only for orchestrator-owned native envelopes. The direct
 `execute` command runs exactly one arm and is the runner-owned native transport
 when the descriptor says `dispatch_owner=runner`. It must not be nested inside
 an outer model worker. A scripted interaction still uses one `execute` process
-and one native session; it does not start a second independent model process.
+and one exact native session identity; later turns are runner-owned
+continuation invocations, never fresh sessions or implicit last-session resumes.
 
 The commands emit one JSON document. `describe` and `preflight` do not consume
 model tokens. `execute` runs exactly one arm, never grades or retries for answer
@@ -247,12 +254,13 @@ authoritative for the external handoff. A runner-owned runner may use its
 `execute` command as that native surface; an orchestrator-owned runner must
 keep `execute` out of the native subagent.
 
-GitHub Copilot uses `copilot -C <working-directory> --model <model>
+For a single-turn run, GitHub Copilot uses `copilot -C <working-directory> --model <model>
 --output-format json --allow-all-tools --no-ask-user --disable-builtin-mcps
 --no-color --log-level none --no-auto-update
 --secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN` with the exact
 prepared prompt bytes delivered once through stdin. It passes no `--prompt`/`-p`,
-`--resume`, `--continue`, `--session-id`, or `--connect`, and it does not use
+`--resume`, `--continue`, `--session-id`, or `--connect` on this fresh
+single-turn invocation, and it does not use
 the blanket `--yolo`, `--allow-all`, `--allow-all-paths`, or `--allow-all-urls`
 switches. `--allow-all-tools` is a broad tool-approval grant required for
 noninteractive execution; it does not disable path or URL verification.
@@ -270,10 +278,12 @@ conditional rather than claiming successful remote authentication. Codex's
 compatibility API-key path uses `--ask-for-approval never` with `exec --sandbox
 workspace-write`; subscription eval arms use the runner-owned app-server path
 described above. It does not combine explicit sandbox selection with
-`--approve-for-me`. OpenCode uses `run --format json --auto --model
+`--approve-for-me`. OpenCode single-turn execution uses `run --format json --auto --model
 <runner-native-model>` with isolated global/config roots and preserves
 repository-owned project configuration; it does not depend on
-`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`.
+`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. For a scripted interaction,
+turn 1 uses those same arguments and later turns add the exact captured session
+id using the installed-help-proven `--session` form; `--continue` is rejected.
 
 Each captures an exact observable
 CLI version and passes only documented environment credentials when the selected

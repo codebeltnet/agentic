@@ -52,9 +52,13 @@ $recordedOldGhToken = $env:GH_TOKEN
 $recordedOldGithubToken = $env:GITHUB_TOKEN
 $recordedOldCopilotHome = $env:COPILOT_HOME
 $recordedOldGhConfigDir = $env:GH_CONFIG_DIR
+$recordedOldFixtures = $env:AGENTIC_RECORDED_FIXTURES
 try {
     $fakeBin = Join-Path $recordedRoot 'bin'
     New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
+    $recordedFixtureRoot = (Resolve-Path (Join-Path $PSScriptRoot 'fixtures')).Path
+    $env:AGENTIC_RECORDED_FIXTURES = $recordedFixtureRoot
+    Copy-Item -LiteralPath $recordedFixtureRoot -Destination (Join-Path $fakeBin 'fixtures') -Recurse -Force
     $recordedIteration = Join-Path $recordedRoot 'iteration-1'
     New-Item -ItemType Directory -Path $recordedIteration -Force | Out-Null
     $with = New-TestRun -IterationDirectory $recordedIteration -Configuration with_skill
@@ -66,6 +70,37 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArgume
 $harness = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Path)
 $logPath = Join-Path (Get-Location).Path ("{0}-fake-cli-log.jsonl" -f $harness)
 $arguments = @($RemainingArguments | ForEach-Object { [string]$_ })
+$fixtureRoot = [Environment]::GetEnvironmentVariable('AGENTIC_RECORDED_FIXTURES')
+if ([string]::IsNullOrWhiteSpace($fixtureRoot)) { $fixtureRoot = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'fixtures' }
+$fixtureHome = [Environment]::GetEnvironmentVariable('HOME')
+function Test-FixtureMarker {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    if ([string]::IsNullOrWhiteSpace($fixtureHome)) { return $false }
+    return Test-Path -LiteralPath (Join-Path $fixtureHome $Name) -PathType Leaf
+}
+$scriptedFixture = Test-FixtureMarker -Name 'scripted-session-fixture'
+$exactSessionHelpFixture = Test-FixtureMarker -Name ("{0}-exact-session-help" -f $harness)
+$noExactSessionHelpFixture = Test-FixtureMarker -Name ("{0}-no-exact-session-help" -f $harness)
+$noSessionFirstFixture = Test-FixtureMarker -Name 'scripted-no-session-first'
+$noTerminalFirstFixture = Test-FixtureMarker -Name 'scripted-no-terminal-first'
+$mismatchSessionFixture = Test-FixtureMarker -Name 'scripted-session-mismatch'
+$continuationFlag = $null
+foreach ($candidate in @('--resume', '--session-id', '--session')) {
+    if ($arguments -contains $candidate -or @($arguments | Where-Object { [string]$_ -like ($candidate + '=*') }).Count -gt 0) {
+        $continuationFlag = $candidate
+        break
+    }
+}
+$continuationSessionId = $null
+if (-not [string]::IsNullOrWhiteSpace([string]$continuationFlag)) {
+    $continuationIndex = [Array]::IndexOf([string[]]$arguments, [string]$continuationFlag)
+    if ($continuationIndex -ge 0 -and $continuationIndex + 1 -lt $arguments.Count -and $arguments[$continuationIndex + 1] -notmatch '^--') {
+        $continuationSessionId = [string]$arguments[$continuationIndex + 1]
+    } else {
+        $continuationAssignment = @($arguments | Where-Object { $_ -like (([string]$continuationFlag) + '=*') } | Select-Object -First 1)
+        if ($continuationAssignment.Count -eq 1) { $continuationSessionId = [string]$continuationAssignment[0].Substring(([string]$continuationFlag).Length + 1) }
+    }
+}
 $authNames = @('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY')
 $authPresent = @($authNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
 $copilotAuthNames = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
@@ -104,6 +139,9 @@ $record = [ordered]@{
     copilot_home = $copilotHome
     copilot_cache_home = [Environment]::GetEnvironmentVariable('COPILOT_CACHE_HOME')
     gh_config_dir = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
+    fixture_mode = if ($scriptedFixture) { 'scripted' } else { 'single_turn' }
+    continuation_flag = $continuationFlag
+    continuation_session_id = $continuationSessionId
     custom_instructions_disabled = ($arguments -contains '--no-custom-instructions')
     builtin_mcps_disabled = ($arguments -contains '--disable-builtin-mcps')
     repository_agents_visible = Test-Path -LiteralPath $repositoryAgentsPath -PathType Leaf
@@ -369,8 +407,16 @@ if ($arguments -contains '--version') {
 if ($arguments -contains '--help') {
     $help = switch ($harness) {
         'codex' { '--ask-for-approval never --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox --cd --model --config --approve-for-me' }
-        'opencode' { '--format --dir --model --auto --pure --continue --session' }
-        'copilot' { '--prompt --output-format --model --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all --allow-all-paths --allow-all-urls' }
+        'opencode' {
+            if ($exactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'opencode-help-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
+            elseif ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'opencode-help-implicit-only.txt'), [Text.UTF8Encoding]::new($false)) }
+            else { '--format --dir --model --auto --pure --continue --session' }
+        }
+        'copilot' {
+            if ($exactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
+            elseif ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-no-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
+            else { '--prompt --output-format --model --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all --allow-all-paths --allow-all-urls' }
+        }
         default { '--json --auto-approve --cwd --config --data-dir --hooks-dir --provider --model --thinking --timeout --retries --id' }
     }
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
@@ -382,7 +428,7 @@ $stdinMemory = [IO.MemoryStream]::new()
 $stdinBytes = $stdinMemory.ToArray()
 $stdinHash = [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData($stdinBytes))).ToLowerInvariant()
 $expectedPromptHashPath = Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'expected-prompt-sha256.txt'
-$expectedPromptHash = if (Test-Path -LiteralPath $expectedPromptHashPath -PathType Leaf) { [IO.File]::ReadAllText($expectedPromptHashPath, [Text.UTF8Encoding]::new($false)).Trim() } else { $stdinHash }
+$expectedPromptHash = if ($scriptedFixture) { $stdinHash } elseif (Test-Path -LiteralPath $expectedPromptHashPath -PathType Leaf) { [IO.File]::ReadAllText($expectedPromptHashPath, [Text.UTF8Encoding]::new($false)).Trim() } else { $stdinHash }
 $record.stdin_received = $stdinBytes.Length -gt 0
 $record.stdin_delivery_count = if ($stdinBytes.Length -gt 0) { 1 } else { 0 }
 $record.stdin_byte_length = $stdinBytes.Length
@@ -429,6 +475,31 @@ try {
 if ($harness -eq 'copilot' -and $copilotAuthenticationSource -eq 'unavailable') {
     [Console]::Error.WriteLine('deterministic fixture: no Copilot authentication mechanism is available')
     exit 17
+}
+if ($scriptedFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot) -and $harness -in @('copilot', 'opencode')) {
+    $turnNumber = if ([string]::IsNullOrWhiteSpace([string]$continuationSessionId)) { 1 } else { 2 }
+    $fixturePath = Join-Path $fixtureRoot ("{0}-scripted-turn-{1}-events.jsonl" -f $harness, $turnNumber)
+    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
+        [Console]::Error.WriteLine("recorded scripted fixture is missing: $fixturePath")
+        exit 23
+    }
+    $fixtureText = [IO.File]::ReadAllText($fixturePath, [Text.UTF8Encoding]::new($false))
+    if ($turnNumber -eq 1 -and $noSessionFirstFixture) {
+        if ($harness -eq 'copilot') { $fixtureText = $fixtureText.Replace('"sessionId":"fixture-copilot-session"', '"sessionId":null') }
+        if ($harness -eq 'opencode') { $fixtureText = $fixtureText.Replace('"sessionID":"fixture-opencode-session"', '"sessionID":null') }
+    }
+    if ($turnNumber -eq 1 -and $noTerminalFirstFixture) {
+        $terminalEventPattern = if ($harness -eq 'copilot') { 'session.task_complete' } else { 'step_finish' }
+        $fixtureText = [string]::Join("`n", @($fixtureText -split "`r?`n" | Where-Object { $_ -notmatch [regex]::Escape($terminalEventPattern) }))
+    }
+    if ($turnNumber -gt 1 -and $mismatchSessionFixture) {
+        if ($harness -eq 'copilot') { $fixtureText = $fixtureText.Replace('fixture-copilot-session', 'fixture-copilot-mismatch') }
+        if ($harness -eq 'opencode') { $fixtureText = $fixtureText.Replace('fixture-opencode-session', 'fixture-opencode-mismatch') }
+    }
+    foreach ($fixtureLine in @($fixtureText -split "`r?`n")) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$fixtureLine)) { Write-Output $fixtureLine }
+    }
+    exit 0
 }
 if ($harness -eq 'codex') {
     $outputIndex = [Array]::IndexOf([string[]]$arguments, '--output-last-message')
@@ -520,6 +591,23 @@ exit 2
     $recordedVersion = Get-ExternalCommandVersion -CommandInfo $resolvedRecordedCodex -WorkingDirectory (Join-Path $with.Root 'repo')
     if (-not $recordedVersion.Available) { throw "recorded Codex --version is not observable (exit=$($recordedVersion.Process.ExitCode), timed_out=$($recordedVersion.Process.TimedOut), stdout='$($recordedVersion.Process.Stdout)', stderr='$($recordedVersion.Process.Stderr)')" }
     Assert-Equal 'recorded-codex 9.1' $recordedVersion.Version 'recorded Codex exact version helper'
+    foreach ($fixtureName in @(
+            'copilot-scripted-turn-1-events.jsonl',
+            'copilot-scripted-turn-2-events.jsonl',
+            'opencode-scripted-turn-1-events.jsonl',
+            'opencode-scripted-turn-2-events.jsonl'
+        )) {
+        $fixturePath = Join-Path $recordedFixtureRoot $fixtureName
+        Assert-True (Test-Path -LiteralPath $fixturePath -PathType Leaf) "recorded scripted fixture exists: $fixtureName"
+        $fixtureEvents = [System.Collections.Generic.List[object]]::new()
+        foreach ($line in @(Get-Content -LiteralPath $fixturePath)) {
+            if ([string]::IsNullOrWhiteSpace([string]$line)) { continue }
+            try { $fixtureEvents.Add(($line | ConvertFrom-Json -Depth 100)) }
+            catch { throw "recorded scripted fixture '$fixtureName' contains invalid JSON: $($_.Exception.Message)" }
+        }
+        Assert-True ($fixtureEvents.Count -ge 3) "recorded scripted fixture has structured events: $fixtureName"
+        Assert-True (@($fixtureEvents | Where-Object { [string]$_.type -in @('assistant.message', 'text') }).Count -ge 1) "recorded scripted fixture has an assistant message: $fixtureName"
+    }
     foreach ($runnerName in @('codex', 'opencode', 'copilot')) {
         $runnerDir = if ($runnerName -eq 'copilot') { 'github-copilot' } else { $runnerName }
         $runnerPath = Join-Path $runnerRoot "$runnerDir\runner.ps1"
@@ -532,6 +620,9 @@ exit 2
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$description.delegation.mechanism)) "$runnerName descriptor records its native delegation mechanism"
         Assert-Equal 'conditional' $description.capabilities.native_worker_delegation "$runnerName descriptor does not present native delegation as terminal proof"
         Assert-Equal 'conditional' $description.delegation.model_lock "$runnerName descriptor leaves child model resolution conditional"
+        if ($runnerName -in @('copilot', 'opencode')) {
+            Assert-Equal 'conditional' $description.capabilities.scripted_multi_turn_same_session "$runnerName descriptor gates scripted continuation on installed capability proof"
+        }
         $expectedVersion = switch ($runnerName) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-unknown 9.3' } }
         Assert-Equal $expectedVersion $description.harness.version "$runnerName exact describe version"
         $preflightWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -543,6 +634,9 @@ exit 2
         Assert-Equal 'conditional' $preflightWith.delegation.status "$runnerName native delegation preflight requires terminal evidence"
         Assert-Equal $expectedDispatchOwner $preflightWith.delegation.dispatch_owner "$runnerName preflight preserves native dispatch ownership"
         Assert-True ([bool]$preflightWith.delegation.terminal_evidence_required) "$runnerName preflight requires terminal delegation evidence"
+        if ($runnerName -in @('copilot', 'opencode')) {
+            Assert-Equal 'conditional' $preflightWith.resolved_capabilities.scripted_multi_turn_same_session "$runnerName single-turn preflight leaves scripted capability conditional"
+        }
         if ($runnerName -eq 'copilot') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
             Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq '--allow-all-tools broad tool approval' }).Count -eq 1) 'Copilot preflight describes --allow-all-tools as broad tool approval'
@@ -742,6 +836,128 @@ exit 2
             Assert-True (($resultWithout | ConvertTo-Json -Depth 100) -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary|recorded-gh-fallback-token') 'Copilot baseline result evidence does not contain credential values'
         }
     }
+    $scriptedInteraction = [ordered]@{
+        schema = (Get-RunnerSchemaNames).Interaction
+        mode = 'scripted'
+        turns = @(
+            [ordered]@{ role = 'user'; content = 'recorded scripted turn one' }
+            [ordered]@{ role = 'user'; content = 'recorded scripted turn two' }
+        )
+    }
+    foreach ($runnerName in @('copilot', 'opencode')) {
+        $scriptedIteration = Join-Path $recordedRoot ("scripted-{0}" -f $runnerName)
+        New-Item -ItemType Directory -Path $scriptedIteration -Force | Out-Null
+        $scriptedWith = New-TestRun -IterationDirectory $scriptedIteration -Configuration with_skill -EvalName 'scripted-conformance' -Interaction $scriptedInteraction
+        $scriptedWithout = New-TestRun -IterationDirectory $scriptedIteration -Configuration without_skill -EvalName 'scripted-conformance' -Interaction $scriptedInteraction
+        foreach ($scriptedRun in @($scriptedWith, $scriptedWithout)) {
+            [IO.File]::WriteAllText((Join-Path $scriptedRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText((Join-Path $scriptedRun.Root ("home\{0}-exact-session-help" -f $runnerName)), 'fixture', [Text.UTF8Encoding]::new($false))
+        }
+        $scriptedRunnerRelativePath = if ($runnerName -eq 'copilot') { 'github-copilot\runner.ps1' } else { 'opencode\runner.ps1' }
+        $scriptedRunnerPath = Join-Path $runnerRoot $scriptedRunnerRelativePath
+        $scriptedPreflight = Invoke-AdapterJson -RunnerPath $scriptedRunnerPath -Command preflight -RunPath $scriptedWith.Path -ProfilePath $recordedProfiles[$runnerName]
+        Assert-Equal 'compatible' $scriptedPreflight.status "$runnerName exact-session scripted preflight: $([string]::Join('; ', @($scriptedPreflight.reasons)))"
+        Assert-Equal 'supported' $scriptedPreflight.resolved_capabilities.scripted_multi_turn_same_session "$runnerName exact-session capability is supported only after help proof"
+        Assert-True ([bool]$scriptedPreflight.protocol_observations.scripted_multi_turn_same_session.available) "$runnerName records model-free exact-session help proof"
+        Assert-True (-not [bool]$scriptedPreflight.protocol_observations.scripted_multi_turn_same_session.implicit_continuation) "$runnerName rejects implicit continuation in the protocol observation"
+        $scriptedResult = Invoke-AdapterJson -RunnerPath $scriptedRunnerPath -Command execute -RunPath $scriptedWith.Path -ProfilePath $recordedProfiles[$runnerName]
+        [void](Assert-ExecutionResult -Result $scriptedResult)
+        Assert-Equal 'completed' $scriptedResult.status "$runnerName exact-session scripted execution completes"
+        [void](Assert-InteractionResultEvidence -ExecutionResult $scriptedResult -RunData (Resolve-RunContract -RunPath $scriptedWith.Path))
+        Assert-True ([bool]$scriptedResult.evidence.interaction.same_session) "$runnerName scripted result proves one same session"
+        Assert-Equal 2 @($scriptedResult.evidence.interaction.native_turns).Count "$runnerName records both native turns"
+        Assert-Equal ([string]$scriptedResult.session.id) ([string]$scriptedResult.evidence.interaction.session_id) "$runnerName shared interaction evidence uses the result session id"
+        Assert-Equal ([string]$scriptedResult.session.id) ([string]$scriptedResult.evidence.exact_session_continuation.exact_session_id) "$runnerName exact continuation evidence uses the captured session id"
+        Assert-True ([bool]$scriptedResult.evidence.exact_session_continuation.turns_started_after_prior_terminal) "$runnerName starts continuation only after a terminal first turn"
+        Assert-True ([bool]$scriptedResult.evidence.capture.complete_structured_transcript) "$runnerName records a complete structured multi-turn transcript"
+        Assert-Equal 1 $scriptedResult.evidence.delegation.model_execution_count "$runnerName keeps one runner-owned model execution worker across scripted invocations"
+        $nativeTurns = @($scriptedResult.evidence.interaction.native_turns)
+        $firstNativeTurn = $nativeTurns[0]
+        $secondNativeTurn = $nativeTurns[1]
+        Assert-Equal 'fresh' $firstNativeTurn.invocation "$runnerName turn 1 is fresh"
+        Assert-Equal 'explicit_session_resume' $secondNativeTurn.invocation "$runnerName turn 2 explicitly resumes"
+        Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondNativeTurn.session_id) "$runnerName native turn evidence has one session id"
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$firstNativeTurn.session_id)) "$runnerName captures an exact session id from turn 1 structured events"
+        Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondNativeTurn.target_session_id) "$runnerName turn 2 targets turn 1's exact session id"
+        Assert-True ([bool]$secondNativeTurn.target_session_match) "$runnerName turn 2 native session identity matches its target"
+        Assert-Equal ([string]$firstNativeTurn.working_directory) ([string]$secondNativeTurn.working_directory) "$runnerName preserves the working directory across turns"
+        Assert-Equal ([string]$firstNativeTurn.home) ([string]$secondNativeTurn.home) "$runnerName preserves the isolated home across turns"
+        Assert-Equal ([string]$firstNativeTurn.requested_model) ([string]$secondNativeTurn.requested_model) "$runnerName preserves the requested model across turns"
+        Assert-True (@($firstNativeTurn.observed_models | Where-Object { [string]$_ -eq [string]$firstNativeTurn.requested_model }).Count -gt 0) "$runnerName records the requested model in first-turn structured evidence"
+        Assert-True (@($secondNativeTurn.observed_models | Where-Object { [string]$_ -eq [string]$secondNativeTurn.requested_model }).Count -gt 0) "$runnerName records the requested model in resumed-turn structured evidence"
+        Assert-Equal 0 $firstNativeTurn.exit_code "$runnerName first turn exits cleanly"
+        Assert-Equal 0 $secondNativeTurn.exit_code "$runnerName resumed turn exits cleanly"
+        Assert-True ([bool]$firstNativeTurn.terminal -and [bool]$secondNativeTurn.terminal) "$runnerName records terminal native turn evidence"
+        Assert-True ([bool]$firstNativeTurn.terminal_assistant_response -and [bool]$firstNativeTurn.terminal_event_observed) "$runnerName proves turn 1 has a terminal assistant response before continuation"
+        Assert-True ([bool]$secondNativeTurn.terminal_assistant_response -and [bool]$secondNativeTurn.terminal_event_observed) "$runnerName proves the resumed turn has a terminal assistant response"
+        Assert-True ([DateTime]::Compare([DateTime]$firstNativeTurn.finished_utc, [DateTime]$secondNativeTurn.started_utc) -le 0) "$runnerName starts turn 2 after turn 1 finishes"
+        Assert-True @($firstNativeTurn.event_timestamps).Count -gt 0 "$runnerName records first-turn event timestamps"
+        Assert-True @($secondNativeTurn.event_timestamps).Count -gt 0 "$runnerName records second-turn event timestamps"
+        if ($runnerName -eq 'copilot') {
+            Assert-Equal ([string]$firstNativeTurn.copilot_home) ([string]$secondNativeTurn.copilot_home) "$runnerName preserves the isolated COPILOT_HOME across turns"
+        } else {
+            Assert-Equal ([string]$firstNativeTurn.config_directory) ([string]$secondNativeTurn.config_directory) "$runnerName preserves the isolated config directory across turns"
+            Assert-Equal ([string]$firstNativeTurn.config_file) ([string]$secondNativeTurn.config_file) "$runnerName preserves the isolated config file across turns"
+        }
+        $firstArgs = @($firstNativeTurn.arguments)
+        $secondArgs = @($secondNativeTurn.arguments)
+        $continuationFlag = if ($runnerName -eq 'copilot') { '--resume' } else { '--session' }
+        Assert-True ($firstArgs -notcontains $continuationFlag) "$runnerName fresh turn does not carry a continuation flag"
+        Assert-True ($secondArgs -contains $continuationFlag) "$runnerName resumed turn carries its explicit continuation flag"
+        Assert-True ($firstArgs -notcontains '--continue' -and $secondArgs -notcontains '--continue') "$runnerName never uses implicit last-session continuation"
+        $continuationIndex = [Array]::IndexOf([string[]]$secondArgs, $continuationFlag)
+        Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondArgs[$continuationIndex + 1]) "$runnerName resumed invocation passes the exact captured session id"
+        $scriptedLogPath = Join-Path $scriptedWith.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
+        $scriptedRecords = @(Get-Content -LiteralPath $scriptedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+        $scriptedExecutions = @($scriptedRecords | Where-Object { $_.stdin_received -eq $true })
+        Assert-Equal 2 $scriptedExecutions.Count "$runnerName scripted transport starts exactly two recorded invocations"
+        Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$scriptedExecutions[1].continuation_session_id) "$runnerName recorded transport receives the exact session id on turn 2"
+        Assert-True ([bool]$scriptedExecutions[0].stdin_exact -and [bool]$scriptedExecutions[1].stdin_exact) "$runnerName sends both scripted turn inputs through stdin"
+        $scriptedFailureValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $scriptedResult -Run (Resolve-RunContract -RunPath $scriptedWith.Path) -RequestedModel ([string]$scriptedResult.requested.model) -ExpectedWorkerSessionId ([string]$scriptedResult.session.id) -ExpectedMechanism ([string]$scriptedResult.evidence.delegation.mechanism)
+        Assert-True ([bool]$scriptedFailureValidation.Valid) "$runnerName scripted result satisfies the shared native terminal evidence contract"
+    }
+    foreach ($runnerName in @('copilot', 'opencode')) {
+        $unsupportedIteration = Join-Path $recordedRoot ("unsupported-scripted-{0}" -f $runnerName)
+        New-Item -ItemType Directory -Path $unsupportedIteration -Force | Out-Null
+        $unsupportedRun = New-TestRun -IterationDirectory $unsupportedIteration -Configuration with_skill -EvalName 'unsupported-scripted' -Interaction $scriptedInteraction
+        [IO.File]::WriteAllText((Join-Path $unsupportedRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $unsupportedRun.Root ("home\{0}-no-exact-session-help" -f $runnerName)), 'fixture', [Text.UTF8Encoding]::new($false))
+        $unsupportedRunnerRelativePath = if ($runnerName -eq 'copilot') { 'github-copilot\runner.ps1' } else { 'opencode\runner.ps1' }
+        $unsupportedRunnerPath = Join-Path $runnerRoot $unsupportedRunnerRelativePath
+        $unsupportedPreflight = Invoke-AdapterJson -RunnerPath $unsupportedRunnerPath -Command preflight -RunPath $unsupportedRun.Path -ProfilePath $recordedProfiles[$runnerName]
+        Assert-Equal 'incompatible' $unsupportedPreflight.status "$runnerName unsupported exact-session help fails preflight"
+        Assert-Equal 'unsupported' $unsupportedPreflight.resolved_capabilities.scripted_multi_turn_same_session "$runnerName unsupported continuation is not advertised as supported"
+        Assert-True (@($unsupportedPreflight.checks | Where-Object { $_.name -eq 'scripted_multi_turn_same_session' -and $_.status -eq 'failed' }).Count -eq 1) "$runnerName records a failed scripted continuation preflight check"
+        Assert-True (([string]$unsupportedPreflight.protocol_observations.scripted_multi_turn_same_session.reason) -match '(?i)explicit|session|implicit') "$runnerName explains why implicit or ambiguous continuation is rejected"
+        $unsupportedResult = Invoke-AdapterJson -RunnerPath $unsupportedRunnerPath -Command execute -RunPath $unsupportedRun.Path -ProfilePath $recordedProfiles[$runnerName]
+        [void](Assert-ExecutionResult -Result $unsupportedResult)
+        Assert-Equal 'incompatible' $unsupportedResult.status "$runnerName unsupported continuation never executes"
+        $unsupportedLogPath = Join-Path $unsupportedRun.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
+        $unsupportedRecords = @(Get-Content -LiteralPath $unsupportedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+        Assert-Equal 0 @($unsupportedRecords | Where-Object { $_.stdin_received -eq $true }).Count "$runnerName unsupported continuation starts zero model invocations"
+    }
+    foreach ($runnerName in @('copilot', 'opencode')) {
+        foreach ($failureMarker in @('scripted-no-session-first', 'scripted-session-mismatch', 'scripted-no-terminal-first')) {
+            $failureIteration = Join-Path $recordedRoot ("scripted-failure-{0}-{1}" -f $runnerName, ($failureMarker -replace '^scripted-', ''))
+            New-Item -ItemType Directory -Path $failureIteration -Force | Out-Null
+            $failureRun = New-TestRun -IterationDirectory $failureIteration -Configuration with_skill -EvalName 'scripted-failure' -Interaction $scriptedInteraction
+            [IO.File]::WriteAllText((Join-Path $failureRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText((Join-Path $failureRun.Root ("home\{0}-exact-session-help" -f $runnerName)), 'fixture', [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText((Join-Path $failureRun.Root ("home\{0}" -f $failureMarker)), 'fixture', [Text.UTF8Encoding]::new($false))
+            $failureRunnerRelativePath = if ($runnerName -eq 'copilot') { 'github-copilot\runner.ps1' } else { 'opencode\runner.ps1' }
+            $failureRunnerPath = Join-Path $runnerRoot $failureRunnerRelativePath
+            $failureResult = Invoke-AdapterJson -RunnerPath $failureRunnerPath -Command execute -RunPath $failureRun.Path -ProfilePath $recordedProfiles[$runnerName]
+            [void](Assert-ExecutionResult -Result $failureResult)
+            Assert-Equal 'incompatible' $failureResult.status "$runnerName $failureMarker fails closed"
+            $expectedFailureCode = switch ($failureMarker) { 'scripted-no-session-first' { 'session_id_unobservable' } 'scripted-session-mismatch' { 'session_identity_mismatch' } 'scripted-no-terminal-first' { 'terminal_turn_status' } }
+            Assert-True (@($failureResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq $expectedFailureCode }).Count -gt 0) "$runnerName $failureMarker records the native interaction failure"
+            $failureLogPath = Join-Path $failureRun.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
+            $failureRecords = @(Get-Content -LiteralPath $failureLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $failureExecutions = @($failureRecords | Where-Object { $_.stdin_received -eq $true })
+            $expectedFailureExecutions = if ($failureMarker -eq 'scripted-session-mismatch') { 2 } else { 1 }
+            Assert-Equal $expectedFailureExecutions $failureExecutions.Count "$runnerName $failureMarker does not continue after an unproven first turn"
+        }
+    }
     $serialOpenCodeProfile = Join-Path $recordedRoot 'opencode-serial-profile.json'
     $serialOpenCodeData = Read-RunnerJson -Path $recordedProfiles['opencode']
     $serialOpenCodeData.concurrency = 1
@@ -749,7 +965,7 @@ exit 2
     $serialOpenCodePreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $serialOpenCodeProfile
     Assert-Equal 'incompatible' $serialOpenCodePreflight.status 'OpenCode rejects a serial execution profile'
     Assert-True (@($serialOpenCodePreflight.reasons | Where-Object { $_ -match 'concurrency >= 2|Sequential dispatch' }).Count -gt 0) 'OpenCode serial-profile failure explains the concurrency requirement'
-    $staleCli = $fakeCli.Replace("'opencode' { '--format --dir --model --auto --pure --continue --session' }", "'opencode' { '--format --dir --model --pure --continue --session' }")
+    $staleCli = $fakeCli.Replace("else { '--format --dir --model --auto --pure --continue --session' }", "else { '--format --dir --model --pure --continue --session' }")
     [System.IO.File]::WriteAllText((Join-Path $fakeBin 'opencode.ps1'), $staleCli, [System.Text.UTF8Encoding]::new($false))
     $stalePreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['opencode']
     Assert-Equal 'incompatible' $stalePreflight.status 'stale OpenCode help contract is rejected during preflight'
@@ -929,6 +1145,7 @@ exit 2
     $env:GITHUB_TOKEN = $recordedOldGithubToken
     $env:COPILOT_HOME = $recordedOldCopilotHome
     $env:GH_CONFIG_DIR = $recordedOldGhConfigDir
+    $env:AGENTIC_RECORDED_FIXTURES = $recordedOldFixtures
     if (Test-Path -LiteralPath $recordedRoot) { Remove-Item -LiteralPath $recordedRoot -Recurse -Force }
 }
 }
@@ -973,7 +1190,8 @@ function New-TestRun {
     param(
         [string]$IterationDirectory,
         [ValidateSet('with_skill', 'without_skill')][string]$Configuration,
-        [string]$EvalName = 'conformance'
+        [string]$EvalName = 'conformance',
+        [object]$Interaction = $null
     )
 
     $evalDirectory = Join-Path $IterationDirectory 'conformance'
@@ -1023,6 +1241,12 @@ function New-TestRun {
             mustNotReadOutsideSandbox = $true
             mustNotExposeGlobalSkillsOrConfig = $true
         }
+    }
+    if ($null -ne $Interaction) {
+        $interactionPath = Join-Path $runRoot 'interaction.json'
+        Write-TestJson -Path $interactionPath -Value $Interaction
+        $run.interactionFile = 'interaction.json'
+        $run.interactionHash = Get-Sha256HexFromFile -Path $interactionPath
     }
     $path = Join-Path $runRoot 'run.json'
     Write-TestJson -Path $path -Value $run
