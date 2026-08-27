@@ -4,22 +4,56 @@
     {
       "id": 1,
       "prompt": "Generate a strong name key for this repository using the defaults.",
-      "expected_output": "A summary-first confirmation flow that generates a .snk file with the default 1024-bit key size in the repo root.",
+      "expected_output": "Turn 1 computes the defaults, presents the 1024-bit repository-root summary, and waits for confirmation without generating the key. After the deterministic confirmation turn, turn 2 generates and verifies the .snk file and reports its details.",
       "expectations": [
         "Computes defaults silently before asking for confirmation",
+        "Presents the default path and 1024-bit size and explicitly asks for confirmation before the protected operation",
+        "Does not generate the key before the confirmation turn",
         "Defaults to a 1024-bit RSA key",
-        "Uses the RSACryptoServiceProvider ExportCspBlob flow"
-      ]
+        "Uses the RSACryptoServiceProvider ExportCspBlob flow",
+        "Continues the same runner session for the confirmation turn",
+        "Generates and verifies the key only after confirmation and reports its path, size, and key details"
+      ],
+      "interaction": {
+        "mode": "scripted",
+        "turns": [
+          {
+            "role": "user",
+            "source": "prompt.md"
+          },
+          {
+            "role": "user",
+            "content": "Yes, proceed."
+          }
+        ]
+      }
     },
     {
       "id": 2,
       "prompt": "Create a 4096-bit strong name key called signing-key in C:\\temp\\keys.",
-      "expected_output": "The workflow overrides the defaults for key size, file name, and output directory, then reports the generated file details.",
+      "expected_output": "Turn 1 summarizes the requested 4096-bit key, signing-key filename, and output directory, then waits for confirmation without generating it. After the deterministic confirmation turn, turn 2 performs the generation and reports the final file details.",
       "expectations": [
         "Allows overriding individual values after the summary",
+        "Requests confirmation before generating the overridden key",
+        "Does not perform the protected generation before the confirmation turn",
         "Uses the requested 4096-bit key size",
-        "Reports output path, size, and key size after generation"
-      ]
+        "Reports output path, size, and key size after generation",
+        "Continues the same runner session for the confirmation turn",
+        "Performs the overridden generation only after confirmation"
+      ],
+      "interaction": {
+        "mode": "scripted",
+        "turns": [
+          {
+            "role": "user",
+            "source": "prompt.md"
+          },
+          {
+            "role": "user",
+            "content": "Yes, proceed."
+          }
+        ]
+      }
     },
     {
       "id": 3,
