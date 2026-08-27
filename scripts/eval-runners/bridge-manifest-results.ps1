@@ -27,6 +27,7 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'orchestration.ps1')
+. (Join-Path $PSScriptRoot 'execution-freeze.ps1')
 
 try {
     $iterationPath = (Resolve-Path -LiteralPath $IterationDirectory -ErrorAction Stop).Path
@@ -37,6 +38,13 @@ try {
 
     $manifest = Read-RunnerJson -Path $manifestPath
     $records = @(Get-ManifestRunRecords -IterationDirectory $iterationPath -Manifest $manifest)
+    # Validate the complete immutable Phase 1 ledger before any one-arm bridge
+    # can write a canonical result. This is deliberately read-only: a changed
+    # raw result or artifact is a failed evaluation, never a new blessing.
+    [void](Assert-ExecutionFreeze -IterationDirectory $iterationPath -RequireOrchestrationState)
+    $profileData = Resolve-ExecutionProfile -ProfilePath (Join-Path $iterationPath 'execution-profile.json')
+    $runnerDescriptor = Get-PackageRunnerDescriptor -RunnerName ([string]$profileData.Runner)
+    $effectiveRequireNativeDelegation = [bool]$RequireNativeDelegation -or [string](Get-JsonProperty -Object $runnerDescriptor.delegation -Name 'dispatch_owner' -Default '') -eq 'runner'
     $parallelDispatch = $null
     if ($RequireParallelDispatch) {
         Assert-SafeRelativePath -RelativePath $OrchestrationStatePath -FieldName 'orchestration state path'
@@ -45,8 +53,6 @@ try {
             throw "Parallel native-worker orchestration requires '$OrchestrationStatePath' at the iteration root."
         }
 
-        $profileData = Resolve-ExecutionProfile -ProfilePath (Join-Path $iterationPath 'execution-profile.json')
-        $runnerDescriptor = Get-PackageRunnerDescriptor -RunnerName ([string]$profileData.Runner)
         $plan = New-EvalOrchestrationPlan -IterationDirectory $iterationPath -Manifest $manifest -Profile $profileData.Profile -Descriptor $runnerDescriptor
         $state = Read-RunnerJson -Path $statePath
         $parallelDispatch = Assert-OrchestrationConcurrency -Plan $plan -State $state
@@ -80,7 +86,7 @@ try {
             -Run $record.RunManifestPath `
             -ExecutionResult $record.ExecutionResultPath `
             -Result $record.ResultPath `
-            -RequireNativeDelegation:$RequireNativeDelegation 2>&1
+            -RequireNativeDelegation:$effectiveRequireNativeDelegation 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "$($record.EvalName)/$($record.Configuration) bridge failed for manifest paths run='$($record.RunManifestRelative)', execution='$($record.ExecutionResultRelative)', result='$($record.ResultRelative)': $([string]::Join(' ', @($bridgeOutput)))"
         }

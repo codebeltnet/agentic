@@ -24,6 +24,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'runner-common.ps1')
+. (Join-Path $PSScriptRoot 'execution-freeze.ps1')
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
@@ -96,8 +97,7 @@ function Get-ResultRelativeArtifactPath {
 
 function Get-ExistingGrading {
     param(
-        [Parameter(Mandatory = $true)][string]$ResultPath,
-        [string]$ExecutionRunId = ''
+        [Parameter(Mandatory = $true)][string]$ResultPath
     )
 
     if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf)) {
@@ -108,19 +108,7 @@ function Get-ExistingGrading {
     if (-not (Test-JsonProperty -Object $existing -Name 'grading')) {
         throw "Manifest-declared result stub '$ResultPath' is missing its grading array."
     }
-    $grading = @(Get-JsonProperty -Object $existing -Name 'grading' -Default @())
-    $existingRunId = [string](Get-JsonProperty -Object $existing -Name 'execution_run_id' -Default '')
-    if (-not [string]::IsNullOrWhiteSpace($ExecutionRunId) -and
-        -not [string]::IsNullOrWhiteSpace($existingRunId) -and
-        $existingRunId -ne $ExecutionRunId) {
-        return @($grading | ForEach-Object {
-            $reset = $_ | ConvertTo-Json -Depth 100 | ConvertFrom-Json
-            $reset.passed = $null
-            $reset.evidence = ''
-            $reset
-        })
-    }
-    return $grading
+    return @(Get-JsonProperty -Object $existing -Name 'grading' -Default @())
 }
 
 try {
@@ -129,6 +117,10 @@ try {
     $runDirectory = $runData.RunRoot
     $evalDirectory = Split-Path -Parent $runDirectory
     $iterationDirectory = Split-Path -Parent $evalDirectory
+    # The bridge is a validator of frozen evidence, never an authority that
+    # can bless a new raw hash. This call intentionally covers every manifest
+    # arm before this one-arm operation can write a canonical result.
+    [void](Assert-ExecutionFreeze -IterationDirectory $iterationDirectory -RequireOrchestrationState)
     $executionPath = (Resolve-Path -LiteralPath $ExecutionResult -ErrorAction Stop).Path
     $executionResultHash = Get-Sha256HexFromFile -Path $executionPath
     $resultPath = [System.IO.Path]::GetFullPath($Result, (Get-Location).Path)
@@ -214,7 +206,8 @@ try {
     if ($finalStatus -eq 'unavailable') { $notes.Add("final_response_unavailable=$($raw.final_response.reason)") }
     foreach ($warning in $warnings) { if (-not [string]::IsNullOrWhiteSpace([string]$warning)) { $notes.Add([string]$warning) } }
 
-    $existingGrading = @(Get-ExistingGrading -ResultPath $resultPath -ExecutionRunId ([string]$raw.run_id))
+    $existingCanonical = Read-RunnerJson -Path $resultPath
+    $existingGrading = @(Get-ExistingGrading -ResultPath $resultPath)
     $caps = Get-JsonProperty -Object $raw.isolation -Name 'capabilities' -Default ([ordered]@{})
     $requestedModel = [string](Get-JsonProperty -Object $raw.requested -Name 'model' -Default '')
     $resolvedModelValue = Get-JsonProperty -Object $raw.resolved -Name 'model' -Default $null
@@ -276,24 +269,21 @@ try {
          notes = [string]::Join("`n", @($notes))
      }
 
-    # Re-bridging the same immutable raw result must not erase grading or
-    # telemetry that an external evaluator has already attached. A changed
-    # raw hash takes the fresh-result path above and resets stale grading.
-    $existingCanonical = Read-RunnerJson -Path $resultPath
+    # Re-bridging is idempotent only for the exact frozen raw result. Existing
+    # grading is preserved, but canonical non-grading fields are never repaired
+    # or accepted from an external writer.
     $existingRawHash = [string](Get-JsonProperty -Object $existingCanonical -Name 'execution_result_sha256' -Default '')
-    if ($existingRawHash -eq $executionResultHash) {
-        foreach ($field in @(
-            'model', 'requested_model', 'resolved_model', 'configuration_resolution_status',
-            'configuration_resolution_reason', 'harness', 'executed_utc', 'output', 'output_files',
-            'transcript', 'shell_commands', 'files_read', 'files_written', 'stdout', 'stderr',
-            'exit_status', 'duration_seconds', 'total_tokens', 'tool_calls', 'turns',
-            'base_input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens',
-            'cache_write_1h_tokens', 'estimated_cost_usd', 'model_effort', 'isolation', 'grading', 'notes'
-        )) {
-            if (Test-JsonProperty -Object $existingCanonical -Name $field) {
-                $portableResult[$field] = Get-JsonProperty -Object $existingCanonical -Name $field
-            }
+    if (-not [string]::IsNullOrWhiteSpace($existingRawHash) -and $existingRawHash -ne $executionResultHash) {
+        throw "Execution integrity failure: canonical result '$Result' refers to a different raw execution hash; refusing repair."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($existingRawHash)) {
+        $expectedFingerprint = Get-JsonFingerprint -Object (Get-JsonWithoutProperty -Object $portableResult -PropertyName 'grading')
+        $actualFingerprint = Get-JsonFingerprint -Object (Get-JsonWithoutProperty -Object $existingCanonical -PropertyName 'grading')
+        if ($actualFingerprint -ne $expectedFingerprint) {
+            throw "Execution integrity failure: canonical non-grading fields changed for '$Result'; refusing repair."
         }
+    } elseif ([string](Get-JsonProperty -Object $existingCanonical -Name 'execution_status' -Default '') -ne 'unrun') {
+        throw "Execution integrity failure: canonical result '$Result' is neither a prepared stub nor the frozen bridged result; refusing repair."
     }
     Write-BridgeJson -Path $resultPath -Value $portableResult
     Write-RunnerJson -Value ([ordered]@{ schema = 'codebeltnet/agentic/eval-result-bridge/1'; result = [System.IO.Path]::GetRelativePath($iterationDirectory, $resultPath).Replace('\', '/'); execution_status = $raw.status }) -AsOutput

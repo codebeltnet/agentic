@@ -155,6 +155,7 @@ function New-OrchestrationState {
         capacity_limit_reported = $false
         eval_attempts = [ordered]@{}
         max_observed_active = 0
+        execution_freeze = $null
     }
 }
 

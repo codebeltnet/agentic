@@ -18,6 +18,7 @@ $runnerRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 . (Join-Path $runnerRoot 'runner-common.ps1')
 . (Join-Path $runnerRoot 'manifest-paths.ps1')
+. (Join-Path $runnerRoot 'execution-freeze.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -769,7 +770,7 @@ exit 2
     Assert-Equal 'compatible' $fileAuthPreflight.status 'Codex subscription auth is accepted through app-server'
     Assert-True (@($fileAuthPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Codex subscription authentication is explicit in preflight'
     $fileAuthResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
-    Assert-Equal 'completed' $fileAuthResult.status 'Codex subscription app-server execution completes'
+    Assert-Equal 'completed' $fileAuthResult.status ("Codex subscription app-server execution completes (native_failures={0}; failure={1})" -f ([string]::Join(',', @($fileAuthResult.evidence.native_worker_evidence_failures))), ([string](Get-JsonProperty -Object $fileAuthResult.exit.failure -Name 'message' -Default '')))
     Assert-Equal 'recorded subscription response' $fileAuthResult.final_response.text 'Codex app-server captures the final agent message'
     Assert-Equal 'recorded-subscription-thread' $fileAuthResult.session.id 'Codex app-server preserves thread identity'
     Assert-Equal 'recorded-subscription-turn' $fileAuthResult.evidence.turn_id 'Codex app-server preserves turn identity'
@@ -781,7 +782,7 @@ exit 2
     Assert-Equal 1 @($fileAuthResult.evidence.files).Count 'Codex app-server preserves file-change evidence'
     Assert-Equal 'runner' $fileAuthResult.evidence.delegation.dispatch_owner 'Codex native evidence identifies runner-owned dispatch'
     Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.delegation.observed_model 'Codex native evidence uses observed thread/start model'
-    Assert-Equal $fileAuthResult.evidence.execution_paths.physical_working_directory $fileAuthResult.evidence.delegation.observed_working_directory 'Codex native evidence uses the runner-declared physical cwd'
+    Assert-True (Test-ExactObservedPath -Expected $fileAuthResult.evidence.execution_paths.physical_working_directory -Observed $fileAuthResult.evidence.delegation.observed_working_directory) 'Codex native evidence uses the runner-declared physical cwd'
     Assert-Equal (Join-Path $with.Root 'repo') $fileAuthResult.evidence.execution_paths.logical_working_directory 'Codex evidence preserves the logical package cwd'
     Assert-True ([bool]$fileAuthResult.evidence.delegation.fresh_worker) 'Codex native evidence proves ephemeral fresh worker'
     Assert-True ([bool]$fileAuthResult.evidence.delegation.home_config_isolated) 'Codex native evidence proves auth-only home cleanup'
@@ -1244,34 +1245,17 @@ try {
     Assert-True ($orchestrationText -notmatch '(?i)capture-native-results\.ps1|synthesize|worker_authored') 'generic orchestration must not manufacture native terminal envelopes'
     Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
     Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
-    Assert-True ($prepareText.Contains('bridge-manifest-results.ps1')) 'handoff preparation must use the deterministic package-level manifest bridge'
-    Assert-True ($prepareText.Contains('runs.<arm>.run_manifest') -and $prepareText.Contains('runs.<arm>.execution_result') -and $prepareText.Contains('runs.<arm>.result')) 'handoff preparation must require every exact manifest arm path'
-    Assert-True ($prepareText.Contains('Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.')) 'handoff preparation must prohibit reconstructed paths'
-    Assert-True ($prepareText.Contains('Read `delegation.dispatch_owner` from the selected runner descriptor and preflight.')) 'handoff preparation must make native dispatch ownership explicit'
-    Assert-True ($prepareText.Contains('One arm equals one fresh native Eval Worker and one model-backed eval execution.')) 'handoff preparation must state the one-arm one-model invariant'
-    Assert-True ($prepareText.Contains('Do not create outer native subagents/tasks')) 'handoff preparation must forbid outer runner-owned native workers'
-    Assert-True ($prepareText.Contains('do not invoke `record-native-result.ps1`, manufacture a native envelope')) 'runner-owned handoff must preserve runner capture without synthetic envelopes'
-    Assert-True ($prepareText -notmatch '(?i)capture-native-results\.ps1') 'handoff preparation must not contain a synthetic capture helper'
-    Assert-True ($prepareText.Contains('Assert-NativeWorkerDelegation')) 'handoff preparation must invoke the native delegation gate'
-    Assert-True ($prepareText.Contains('Require terminal evidence for the exact selected model, exact arm identity, working directory, isolated HOME/config boundary, prompt fidelity, terminal result capture')) 'handoff preparation must require worker control evidence'
-    Assert-True ($prepareText.Contains('-RequireComplete -RequireNativeDelegation -RequireParallelDispatch')) 'handoff preparation must revalidate native terminal and parallel-dispatch evidence during the manifest bridge'
-    Assert-True ($prepareText.Contains('min(execution-profile.json.concurrency, remaining arms)')) 'handoff preparation must state requested concurrency fan-out'
-    Assert-True ($prepareText.Contains('DISPATCH IS AN ACTION, NOT A CONFIRMATION STEP.')) 'handoff preparation must forbid confirmation pauses before native dispatch'
-    Assert-True ($prepareText.Contains('invoke the complete deterministic Phase 1 boundary') -and $prepareText.Contains('exactly once') -and $prepareText.Contains('Consume its machine-readable summary')) 'runner-owned handoff preparation must invoke the deterministic Phase 1 boundary once and consume its summary'
-    Assert-True ($prepareText.Contains('Do not create outer native subagents/tasks') -and $prepareText.Contains('hand-author preflight, fan-out, orchestration-state, or result bookkeeping')) 'runner-owned handoff preparation must keep native fan-out and bookkeeping inside the runner-owned boundary'
-    Assert-True ($prepareText -notmatch '(?i)OpenCode\s+NATIVE\s+TASK\s+DISPATCH|sibling\s+`Task`\s+tool\s+calls|Want me to re-dispatch') 'handoff preparation must not generate the retired OpenCode Task dispatch path'
-    Assert-True ($prepareText.Contains('evaluation is incomplete and must fail closed') -and $prepareText.Contains('Only persisted runner-produced evidence at the manifest-declared paths may proceed')) 'handoff preparation must fail closed when runner evidence cannot be persisted'
-    Assert-True ($prepareText.Contains('Assert-OrchestrationConcurrency') -and $prepareText.Contains('orchestration-state.json')) 'handoff preparation must persist and validate orchestration concurrency state'
-    Assert-True ($prepareText.Contains('rejected before the worker starts') -and $prepareText.Contains('record no eval attempt')) 'handoff preparation must queue capacity rejections without counting attempts'
-    Assert-True ($prepareText.Contains('Register each worker acceptance and terminal result exactly once') -and $prepareText.Contains('incompatibility is diagnostic-only') -and $prepareText.Contains('Do not grade incompatible arms')) 'handoff preparation must make duplicate registration and incompatible-arm handling fail closed'
-    Assert-True ($prepareText.Contains('Skipping report generation because the completion gate failed') -and $prepareText.Contains('Diagnostic comparison (incomplete)')) 'incomplete collection must remain diagnostic and skip report generation'
-    Assert-True ($prepareText.Contains('capture.worker_authored') -and $prepareText.Contains('Do not ask any worker or parent to author, hand-write, normalize, or repair terminal evidence.')) 'handoff preparation must require transport-produced native evidence rather than worker-authored summaries'
+    Assert-True ($prepareText.Contains('execution-freeze.json') -and $prepareText.Contains('grading.json') -and $prepareText.Contains('apply-eval-grading.ps1') -and $prepareText.Contains('finalize-eval-package.ps1')) 'handoff preparation must expose the shared freeze, grading, and finalization boundaries'
+    Assert-True ($prepareText.Contains('Read the selected runner descriptor and its `delegation.dispatch_owner`.') -and $prepareText.Contains('invoke this deterministic helper exactly once')) 'handoff preparation must make native dispatch ownership and one-shot Phase 1 explicit'
+    Assert-True ($prepareText.Contains('Do not create outer workers') -and $prepareText.Contains('edit raw result/evidence files')) 'handoff preparation must forbid outer runner-owned workers and raw evidence edits'
+    Assert-True ($prepareText.Contains('The Grader may author exactly one package-root `grading.json`') -and $prepareText.Contains('It must not edit raw execution results')) 'handoff preparation must isolate the Grader to the grading-only artifact'
+    Assert-True ($prepareText.Contains('Return only its machine-readable JSON summary') -and $prepareText.Contains('Never repair, re-freeze, re-bridge a changed raw result')) 'handoff preparation must make finalizer success and fail-closed recovery explicit'
+    Assert-True ($prepareText.Contains('evaluation is incomplete') -and $prepareText.Contains('Only persisted runner-produced evidence')) 'handoff preparation must fail closed when runner evidence cannot be persisted'
+    Assert-True ($prepareText -notmatch '(?i)runs\.<arm>|record-native-result\.ps1|Assert-NativeWorkerDelegation|Assert-OrchestrationConcurrency|capture\.worker_authored') 'runner-owned handoff must not teach manual orchestration, recorder, or evidence repair trivia'
     Assert-True ($bridgeText.Contains('Get-PackageRunnerDescriptor') -and $bridgeText.Contains('Assert-NativeTerminalCaptureArtifact') -and $bridgeText.Contains('ExpectedMechanism')) 'native bridge must require runner-produced terminal evidence'
     Assert-True ($recordText.Contains('eval-native-worker-result/1') -and $recordText.Contains('New-ExecutionResult')) 'native terminal recording must use the runner-owned result builder'
     Assert-True ($commonText.Contains('exit.status must be a JSON number or null')) 'execution results must reject textual exit statuses'
     Assert-True ($commonText.Contains('requested.timeout_seconds') -and $commonText.Contains('execution-result.json run.$field')) 'raw execution results must retain the complete run and requested configuration contract'
-    Assert-True ($prepareText.Contains('orchestration.ps1')) 'handoff preparation must load the deterministic orchestration helper'
-    Assert-True ($prepareText.Contains('complete deterministic Phase 1 boundary') -and $prepareText.Contains('hand-author preflight, fan-out, orchestration-state, or result bookkeeping')) 'runner-owned handoff must delegate Phase 1 preflight and fan-out bookkeeping to one deterministic command'
     Assert-True ($runnerOwnedText.Contains('Invoke-RunnerPreflight') -and $runnerOwnedText.Contains('Get-PreflightGateSummary') -and $runnerOwnedText.Contains('execution_started = $false')) 'runner-owned helper must gate all execute processes behind deterministic preflight'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
@@ -1280,15 +1264,65 @@ try {
     Assert-Equal 1 ([regex]::Matches($opencodeRunnerText, '\$directoryArgument = Get-SandboxVisiblePath').Count) 'OpenCode CLI argument construction assigns the sandbox directory once'
 
     $rawPath = Join-Path $iteration 'conformance\results\with-skill.execution-result.json'
+    $withoutRawPath = Join-Path $iteration 'conformance\results\without-skill.execution-result.json'
     $resultPath = Join-Path $iteration 'conformance\results\with-skill.result.json'
+    $withoutResultPath = Join-Path $iteration 'conformance\results\without-skill.result.json'
     New-Item -ItemType Directory -Path (Split-Path -Parent $rawPath) -Force | Out-Null
     Write-TestJson -Path $resultPath -Value ([ordered]@{
         schema = (Get-RunnerSchemaNames).PortableResult
         eval_id = 1
+        eval_name = 'conformance'
         configuration = 'with_skill'
+        execution_status = 'unrun'
+        grading = @([ordered]@{ text = 'preserved assertion'; passed = $null; evidence = '' })
+    })
+    Write-TestJson -Path $withoutResultPath -Value ([ordered]@{
+        schema = (Get-RunnerSchemaNames).PortableResult
+        eval_id = 1
+        eval_name = 'conformance'
+        configuration = 'without_skill'
+        execution_status = 'unrun'
         grading = @([ordered]@{ text = 'preserved assertion'; passed = $null; evidence = '' })
     })
     $bridgeResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $with.Path -Profile $profilePath
+    $withoutBridgeResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $without.Path -Profile $profilePath
+    Write-TestJson -Path $rawPath -Value $bridgeResult
+    Write-TestJson -Path $withoutRawPath -Value $withoutBridgeResult
+    Write-TestJson -Path (Join-Path $iteration 'conformance\eval-metadata.json') -Value ([ordered]@{
+        schema = 'codebeltnet/agentic/eval-metadata/2'
+        eval_id = 1
+        eval_name = 'conformance'
+        assertions = @('preserved assertion')
+    })
+    $oneArmManifest = [ordered]@{
+        schema = 'codebeltnet/agentic/eval-package/2'
+        configurations = @('with_skill', 'without_skill')
+        execution_freeze = 'execution-freeze.json'
+        evals = @([ordered]@{
+            eval_id = 1
+            eval_name = 'conformance'
+            directory = 'conformance'
+            metadata = 'conformance/eval-metadata.json'
+            runs = [ordered]@{
+                with_skill = [ordered]@{ mode = 'with_skill'; run_manifest = 'conformance/with_skill/run.json'; execution_result = 'conformance/results/with-skill.execution-result.json'; result = 'conformance/results/with-skill.result.json' }
+                without_skill = [ordered]@{ mode = 'without_skill'; run_manifest = 'conformance/without_skill/run.json'; execution_result = 'conformance/results/without-skill.execution-result.json'; result = 'conformance/results/without-skill.result.json' }
+            }
+        })
+    }
+    Write-TestJson -Path (Join-Path $iteration 'manifest.json') -Value $oneArmManifest
+    $oneArmManifestObject = Read-RunnerJson -Path (Join-Path $iteration 'manifest.json')
+    $oneArmRecords = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $oneArmManifestObject)
+    $oneArmProfile = Resolve-ExecutionProfile -ProfilePath $profilePath
+    $oneArmStatePath = Join-Path $iteration 'orchestration-state.json'
+    $oneArmState = [ordered]@{
+        schema = 'codebeltnet/agentic/eval-orchestration-state/1'
+        completed = [ordered]@{
+            'arm-1-with_skill' = [ordered]@{ worker_id = 'arm-1-with_skill'; eval_id = 1; configuration = 'with_skill'; status = [string]$bridgeResult.status }
+            'arm-1-without_skill' = [ordered]@{ worker_id = 'arm-1-without_skill'; eval_id = 1; configuration = 'without_skill'; status = [string]$withoutBridgeResult.status }
+        }
+        execution_freeze = $null
+    }
+    Write-TestJson -Path $oneArmStatePath -Value $oneArmState
 
     $codexProfilePath = Join-Path $iteration 'codex-native-profile.json'
     Write-TestJson -Path $codexProfilePath -Value ([ordered]@{
@@ -1378,7 +1412,7 @@ try {
     Assert-Equal 'conformance' $recordedResult.run.eval_name 'native terminal recording derives exact arm identity from run.json'
     Assert-Equal 'fixture-model' $recordedResult.requested.model 'native terminal recording derives model from execution-profile.json'
     Assert-Equal 30 $recordedResult.requested.timeout_seconds 'native terminal recording preserves the requested timeout'
-    Assert-Equal '2024-01-01T00:00:00.000Z' ([DateTime]$recordedResult.started_utc).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') 'native terminal recording writes canonical started_utc'
+    Assert-Equal '2024-01-01T00:00:00.000Z' ([DateTime]$recordedResult.started_utc).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [Globalization.CultureInfo]::InvariantCulture) 'native terminal recording writes canonical started_utc'
     Assert-True ($recordedResult.telemetry.transcript.status -eq 'available') 'native terminal recording preserves transcript evidence'
     Assert-Equal 'harness_native_transport' $recordedResult.evidence.capture.source 'native terminal recording preserves capture provenance'
     Assert-True (-not [bool]$recordedResult.evidence.capture.worker_authored) 'native terminal recording rejects worker-authored capture provenance'
@@ -1388,6 +1422,11 @@ try {
     $legacyOutput = & pwsh -NoProfile -File $recordPath -Runner codex -Run $with.Path -Profile $codexProfilePath -NativeResult $legacyNativeInputPath -Output $nativeOutputPath 2>&1
     Assert-True ($LASTEXITCODE -ne 0) 'legacy summary-shaped worker output is rejected by the native recording boundary'
     Assert-True (([string]::Join(' ', @($legacyOutput))) -match 'eval-native-worker-result/1') 'legacy summary rejection identifies the required native envelope'
+
+    $oneArmFreeze = New-ExecutionFreezeDocument -IterationDirectory $iteration -Manifest $oneArmManifestObject -Records $oneArmRecords -Profile $oneArmProfile
+    $oneArmFreezePath = Write-ExecutionFreezeDocument -IterationDirectory $iteration -Freeze $oneArmFreeze
+    $oneArmState.execution_freeze = [ordered]@{ schema = (Get-RunnerSchemaNames).ExecutionFreeze; path = 'execution-freeze.json'; sha256 = Get-Sha256HexFromFile -Path $oneArmFreezePath }
+    Write-TestJson -Path $oneArmStatePath -Value $oneArmState
 
     Write-TestJson -Path $rawPath -Value $bridgeResult
     $bridgePath = Join-Path $runnerRoot 'bridge-execution-result.ps1'
@@ -1440,6 +1479,7 @@ try {
     $manifest = [ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
+        execution_freeze = 'execution-freeze.json'
         evals = @([ordered]@{
             eval_id = 1
             eval_name = 'manifest-path-regression'
@@ -1483,6 +1523,32 @@ try {
     Assert-True (@($incompatibleValidation.Errors | Where-Object { $_ -match 'diagnostic only' }).Count -gt 0) 'incompatible completion rejection explains that the arm is diagnostic only'
     Write-TestJson -Path $manifestWithoutExecution -Value $manifestWithoutExecutionResult
 
+    $manifestStatePath = Join-Path $manifestPackage 'orchestration-state.json'
+    $manifestState = [ordered]@{
+        schema = 'codebeltnet/agentic/eval-orchestration-state/1'
+        requested_concurrency = 2
+        parallel_dispatch_required = $true
+        minimum_parallel_workers = 2
+        capacity_limit_reported = $false
+        max_observed_active = 2
+        pending_worker_ids = @()
+        active = [ordered]@{}
+        completed = [ordered]@{
+            'arm-1-with_skill' = [ordered]@{ worker_id = 'arm-1-with_skill'; eval_id = 1; configuration = 'with_skill'; status = 'completed' }
+            'arm-1-without_skill' = [ordered]@{ worker_id = 'arm-1-without_skill'; eval_id = 1; configuration = 'without_skill'; status = 'completed' }
+        }
+        delegation_rejections = [ordered]@{}
+        eval_attempts = [ordered]@{ 'arm-1-with_skill' = 1; 'arm-1-without_skill' = 1 }
+        execution_freeze = $null
+    }
+    Write-TestJson -Path $manifestStatePath -Value $manifestState
+    $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $manifestPackage -Manifest $manifestObject)
+    $manifestProfileData = Resolve-ExecutionProfile -ProfilePath $parallelProfilePath
+    $manifestFreeze = New-ExecutionFreezeDocument -IterationDirectory $manifestPackage -Manifest $manifestObject -Records $manifestRecords -Profile $manifestProfileData
+    $manifestFreezePath = Write-ExecutionFreezeDocument -IterationDirectory $manifestPackage -Freeze $manifestFreeze
+    $manifestState.execution_freeze = [ordered]@{ schema = (Get-RunnerSchemaNames).ExecutionFreeze; path = 'execution-freeze.json'; sha256 = Get-Sha256HexFromFile -Path $manifestFreezePath }
+    Write-TestJson -Path $manifestStatePath -Value $manifestState
+
     $shadowPath = Join-Path $manifestEval 'results\with_skill.result.json'
     Write-TestJson -Path $shadowPath -Value ([ordered]@{
         schema = (Get-RunnerSchemaNames).PortableResult
@@ -1500,24 +1566,11 @@ try {
     Assert-Equal 'unrun' $canonicalBeforeBridge.execution_status 'shadow result is never selected as the canonical result'
     Remove-Item -LiteralPath $shadowPath -Force
 
-    $manifestStatePath = Join-Path $manifestPackage 'orchestration-state.json'
-    $manifestState = [ordered]@{
-        schema = 'codebeltnet/agentic/eval-orchestration-state/1'
-        requested_concurrency = 2
-        parallel_dispatch_required = $true
-        minimum_parallel_workers = 2
-        capacity_limit_reported = $false
-        max_observed_active = 1
-        pending_worker_ids = @()
-        active = [ordered]@{}
-        completed = [ordered]@{}
-        delegation_rejections = [ordered]@{}
-        eval_attempts = [ordered]@{ 'arm-1-with_skill' = 1; 'arm-1-without_skill' = 1 }
-    }
+    $manifestState.max_observed_active = 1
     Write-TestJson -Path $manifestStatePath -Value $manifestState
     $serialBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
-    Assert-True ($LASTEXITCODE -ne 0) 'manifest bridge rejects serial orchestration without capacity evidence'
-    Assert-True (([string]::Join(' ', @($serialBridgeOutput))) -match 'serial|parallel') 'serial bridge rejection explains the concurrency requirement'
+    Assert-True ($LASTEXITCODE -ne 0) 'manifest bridge rejects post-freeze orchestration mutation'
+    Assert-True (([string]::Join(' ', @($serialBridgeOutput))) -match 'orchestration-state.json changed') 'state mutation rejection preserves the immutable concurrency ledger'
     $manifestState.max_observed_active = 2
     Write-TestJson -Path $manifestStatePath -Value $manifestState
     $manifestBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
@@ -1540,39 +1593,30 @@ try {
     Assert-True ([bool]$canonicalAfterRepeat.grading[0].passed) 'repeat manifest bridge preserves completed grading'
     Assert-Equal 'graded after the first bridge' $canonicalAfterRepeat.grading[0].evidence 'repeat manifest bridge preserves grading evidence'
 
+    $frozenManifestRawBytes = [System.IO.File]::ReadAllBytes($manifestWithExecution)
+    $canonicalBeforeIntegrityFailure = [System.IO.File]::ReadAllBytes($manifestWithResult)
     $staleReplacement = Get-Content -LiteralPath $manifestWithExecution -Raw | ConvertFrom-Json
     $staleReplacement.run_id = 'replacement-terminal-result'
     $staleReplacement.final_response.text = 'replacement terminal output'
     Write-TestJson -Path $manifestWithExecution -Value $staleReplacement
     $replacementBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "replacement manifest path bridge failed: $([string]::Join(' ', @($replacementBridgeOutput)))" }
-    $canonicalAfterReplacement = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
-    Assert-Equal 'replacement-terminal-result' $canonicalAfterReplacement.execution_run_id 'manifest bridge revalidates and replaces stale canonical execution evidence'
-    Assert-Equal 'replacement terminal output' $canonicalAfterReplacement.output 'manifest bridge does not skip a changed raw terminal result'
-    Assert-True ($null -eq $canonicalAfterReplacement.grading[0].passed) 'raw replacement clears grading tied to a prior execution run'
-    Assert-True ([string]::IsNullOrWhiteSpace([string]$canonicalAfterReplacement.grading[0].evidence)) 'raw replacement clears stale grading evidence'
+    Assert-True ($LASTEXITCODE -ne 0) 'manifest bridge rejects a raw execution result changed after the freeze'
+    Assert-True (([string]::Join(' ', @($replacementBridgeOutput))) -match 'Execution integrity failure|requires fresh Phase 1 execution') 'raw mutation rejection identifies frozen evidence integrity'
+    Assert-True ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($manifestWithResult)) -eq [Convert]::ToBase64String($canonicalBeforeIntegrityFailure)) 'raw integrity failure does not rewrite the canonical result'
+    [System.IO.File]::WriteAllBytes($manifestWithExecution, $frozenManifestRawBytes)
+    $restoredBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "restored manifest path bridge failed: $([string]::Join(' ', @($restoredBridgeOutput)))" }
 
     $invalidExitPath = Join-Path $manifestEval 'results\invalid-exit.execution-result.json'
     $invalidExitResult = $bridgeResult | ConvertTo-Json -Depth 100 | ConvertFrom-Json
     $invalidExitResult.exit.status = 'completed'
     Write-TestJson -Path $invalidExitPath -Value $invalidExitResult
-    $invalidExitOutput = & pwsh -NoProfile -File $bridgePath -Run $with.Path -ExecutionResult $invalidExitPath -Result $resultPath 2>&1
-    Assert-True ($LASTEXITCODE -ne 0) 'one-arm bridge rejects a textual exit status'
-    Assert-True (([string]::Join(' ', @($invalidExitOutput))) -match 'JSON number or null') 'textual exit rejection explains the numeric contract'
-
-    $acceptedBridgeResult = $bridgeResult | ConvertTo-Json -Depth 100 | ConvertFrom-Json
-    $acceptedBridgeResult.resolved.status = 'accepted_request'
-    $acceptedBridgeResult.resolved.model = $null
-    $acceptedBridgeResult.resolved.reason = 'fixture accepted the requested alias without exposing backend resolution.'
-    Write-TestJson -Path $rawPath -Value $acceptedBridgeResult
-    $acceptedBridgeOutput = & pwsh -NoProfile -File $bridgePath -Run $with.Path -ExecutionResult $rawPath -Result $resultPath
-    if ($LASTEXITCODE -ne 0) { throw "accepted-configuration bridge failed: $([string]::Join(' ', @($acceptedBridgeOutput)))" }
-    $acceptedPortable = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-    Assert-Equal 'fixture-model' $acceptedPortable.model 'bridge keeps requested model compatibility label'
-    Assert-Equal 'fixture-model' $acceptedPortable.requested_model 'bridge records requested model separately'
-    Assert-True ([string]::IsNullOrWhiteSpace([string]$acceptedPortable.resolved_model)) 'bridge does not invent a resolved model'
-    Assert-Equal 'accepted_request' $acceptedPortable.configuration_resolution_status 'bridge carries configuration provenance'
-    Assert-True ([string]$acceptedPortable.notes -match 'configuration_resolution=accepted_request') 'bridge notes configuration provenance'
+    $invalidExitThrew = $false
+    try { [void](Assert-ExecutionResult -Result $invalidExitResult) } catch {
+        $invalidExitThrew = $true
+        Assert-True ($_.Exception.Message -match 'JSON number or null') 'textual exit rejection explains the numeric contract'
+    }
+    Assert-True $invalidExitThrew 'execution-result validator rejects a textual exit status'
 
     Write-Output 'Eval Runner conformance: PASS'
 } finally {

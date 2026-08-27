@@ -41,6 +41,8 @@ $descriptor = [ordered]@{
     platforms = @('windows', 'linux', 'macos')
     harness = [ordered]@{ name = 'GitHub Copilot CLI'; version = 'unavailable' }
     capabilities = [ordered]@{
+        single_turn = 'supported'
+        scripted_multi_turn_same_session = 'unsupported'
         fresh_context = 'supported'
         isolated_home_config = 'supported'
         isolated_working_directory = 'supported'
@@ -304,6 +306,7 @@ function Get-CopilotCapabilityMap {
     }
     $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
     $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
+    $capabilities['scripted_multi_turn_same_session'] = 'unsupported'
     return $capabilities
 }
 
@@ -335,6 +338,10 @@ function Get-CopilotPreflight {
     }
     if ($profile.ToolProfile -ne 'default') {
         $reasons.Add("tool_profile '$($profile.ToolProfile)' is unsupported by github-copilot.")
+    }
+    if ($null -ne $run.Interaction) {
+        $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail 'The installed Copilot transport is one-shot. No model-free proof of a supported same-process/session continuation API is available, so scripted multi-turn execution is incompatible.'))
+        $reasons.Add('scripted_multi_turn_same_session is incompatible: the current Copilot CLI adapter exposes only one-shot copilot --output-format json execution and cannot prove a same-session continuation mechanism; no second independent process is permitted.')
     }
 
     if ($null -eq $commandInfo) {
@@ -740,6 +747,7 @@ try {
         }
         'execute' {
             $inputs = Resolve-CopilotInputs
+            [void](Assert-PhaseOneEvidenceWritable -Run $inputs.Run)
             $result = Invoke-CopilotExecute -Inputs $inputs
             [void](Assert-ExecutionResult -Result $result)
             Write-RunnerJson -Value $result -AsOutput

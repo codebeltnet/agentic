@@ -22,6 +22,7 @@ $iteration = (Resolve-Path -LiteralPath $IterationDirectory -ErrorAction Stop).P
 . (Join-Path $PSScriptRoot 'manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'orchestration.ps1')
 . (Join-Path $PSScriptRoot 'fanout-process.ps1')
+. (Join-Path $PSScriptRoot 'execution-freeze.ps1')
 
 function Write-FanoutSummary {
     param(
@@ -238,6 +239,12 @@ function Get-FanoutSummary {
 try {
     $manifestPath = Join-Path $iteration 'manifest.json'
     $manifest = Read-RunnerJson -Path $manifestPath
+    $freezeRelativePath = [string](Get-JsonProperty -Object $manifest -Name 'execution_freeze' -Default '')
+    if ([string]::IsNullOrWhiteSpace($freezeRelativePath)) { throw 'manifest.json must declare execution_freeze.' }
+    $freezePath = Get-ExecutionFreezePath -IterationDirectory $iteration -RelativePath $freezeRelativePath
+    if (Test-Path -LiteralPath $freezePath) {
+        throw "Execution integrity failure: Phase 1 is already frozen at '$freezePath'; refusing a second runner-owned execution. Requires fresh Phase 1 execution."
+    }
     $profileRelativePath = [string](Get-JsonProperty -Object $manifest -Name 'execution_profile' -Default '')
     if ([string]::IsNullOrWhiteSpace($profileRelativePath)) { throw 'manifest.json must declare execution_profile.' }
     $profilePath = Resolve-ManifestDeclaredPath -IterationDirectory $iteration -RelativePath $profileRelativePath -FieldName 'execution_profile' -Kind File -RequireExists
@@ -345,8 +352,26 @@ try {
 
     $concurrency = Assert-OrchestrationConcurrency -Plan $plan -State $state
     Save-OrchestrationState -Path $statePath -State $state
+    # Phase 1 ends here. Freeze the exact runner-produced bytes and all raw
+    # artifacts before any bridge, grader, or report process can run. The
+    # freeze is intentionally written once; later phases can validate it but
+    # cannot replace it after evidence changes.
+    $freeze = New-ExecutionFreezeDocument -IterationDirectory $iteration -Manifest $manifest -Records $manifestRecords -Profile $profile
+    $freezePath = Write-ExecutionFreezeDocument -IterationDirectory $iteration -Freeze $freeze -RelativePath $freezeRelativePath
+    $state.execution_freeze = [ordered]@{
+        schema = (Get-RunnerSchemaNames).ExecutionFreeze
+        path = [System.IO.Path]::GetRelativePath($iteration, $freezePath).Replace('\', '/')
+        sha256 = Get-Sha256HexFromFile -Path $freezePath
+    }
+    Save-OrchestrationState -Path $statePath -State $state
     $status = if (@($state.completed.Values | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'incompatible' }).Count -gt 0) { 'completed_with_incompatible_arms' } else { 'completed' }
-    Write-FanoutSummary -Summary (Get-FanoutSummary -Profile $profile -Plan $plan -State $state -Concurrency $concurrency -Preflights @($preflightRecords.ToArray()) -Status $status)
+    $summary = Get-FanoutSummary -Profile $profile -Plan $plan -State $state -Concurrency $concurrency -Preflights @($preflightRecords.ToArray()) -Status $status
+    $summary.execution_freeze = [ordered]@{
+        path = $freezePath
+        sha256 = [string]$state.execution_freeze.sha256
+        schema = [string]$state.execution_freeze.schema
+    }
+    Write-FanoutSummary -Summary $summary
 } catch {
     $errorMessage = $_.Exception.Message
     $fallbackProfile = [ordered]@{ runner = ''; model = '' }

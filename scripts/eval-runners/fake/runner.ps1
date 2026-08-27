@@ -32,6 +32,8 @@ $descriptor = [ordered]@{
     platforms = @('windows', 'linux', 'macos')
     harness = [ordered]@{ name = 'deterministic-fake'; version = '1' }
     capabilities = [ordered]@{
+        single_turn = 'supported'
+        scripted_multi_turn_same_session = 'unsupported'
         fresh_context = 'supported'
         isolated_home_config = 'supported'
         isolated_working_directory = 'supported'
@@ -235,7 +237,11 @@ function Invoke-FakeExecute {
 
     if ($preflight.status -eq 'incompatible') {
         $finished = [DateTime]::UtcNow
-        return New-ExecutionResult -Descriptor $descriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'preflight_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -Failure (New-ExecutionFailure -Code 'incompatible' -Message ([string]::Join('; ', @($preflight.reasons)))) -SessionId $sessionId -IsolationCapabilities ([ordered]@{ fresh_context = 'supported'; isolated_home_config = 'supported'; isolated_working_directory = 'supported'; filesystem_confinement = 'supported'; candidate_skill_exposure = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' } }) -IsolationMechanisms @('pwsh-process', 'run-directory-contained-path-guard', 'isolated-home-directory') -CompatibilityDeviations @($deviations) -Evidence ([ordered]@{ preflight = $preflight }) -AttemptCount 1
+        $incompatibilityMessage = [string]::Join('; ', @($preflight.reasons))
+        if ([string]::IsNullOrWhiteSpace($incompatibilityMessage)) {
+            $incompatibilityMessage = "Fake preflight reported incompatible without a reason (profile_runner=$($Inputs.Profile.Runner); configuration_profile=$($Inputs.Profile.ConfigurationProfile); tool_profile=$($Inputs.Profile.ToolProfile); scenario=$scenarioValue)."
+        }
+        return New-ExecutionResult -Descriptor $descriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'preflight_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -Failure (New-ExecutionFailure -Code 'incompatible' -Message $incompatibilityMessage) -SessionId $sessionId -IsolationCapabilities ([ordered]@{ fresh_context = 'supported'; isolated_home_config = 'supported'; isolated_working_directory = 'supported'; filesystem_confinement = 'supported'; candidate_skill_exposure = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' } }) -IsolationMechanisms @('pwsh-process', 'run-directory-contained-path-guard', 'isolated-home-directory') -CompatibilityDeviations @($deviations) -Evidence ([ordered]@{ preflight = $preflight }) -AttemptCount 1
     }
 
     $artifacts = @(Write-FakeEvidence -Inputs $Inputs -SessionId $sessionId -ScenarioValue $scenarioValue)
@@ -288,11 +294,13 @@ try {
         }
         'execute' {
             $inputs = Resolve-FakeInputs
+            [void](Assert-PhaseOneEvidenceWritable -Run $inputs.Run)
             $result = Invoke-FakeExecute -Inputs $inputs
             [void](Assert-ExecutionResult -Result $result)
             Write-RunnerJson -Value $result -AsOutput
         }
     }
 } catch {
-    Write-ProtocolError -Message $_.Exception.Message
+    [Console]::Error.WriteLine($_.Exception.ToString())
+    exit 2
 }

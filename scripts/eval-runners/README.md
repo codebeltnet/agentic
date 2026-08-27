@@ -63,6 +63,25 @@ each declares `delegation.dispatch_owner=runner`, is driven by
 `record-native-result.ps1` remain available for any runner that still declares
 `dispatch_owner=orchestrator` (for example the deterministic conformance fake).
 
+Phase 1 closes with `execution-freeze.json`. The shared freeze records the exact
+manifest arm paths, runner/harness/model/session identity, terminal status, and
+SHA-256 hashes for every raw `execution-result.json` and every referenced
+transcript/event artifact. `bridge-manifest-results.ps1`, grading, and reporting
+must validate that ledger; none of them can replace it or bless changed bytes.
+If a raw result or referenced artifact changes, the package is corrupted and
+requires a fresh Phase 1 execution.
+
+The normal post-execution boundary is deterministic: the external Grader writes
+only the package-root `grading.json` artifact (`codebeltnet/agentic/eval-grading/1`)
+with exact assertion identities and `passed`/`evidence` decisions. The shared
+`apply-eval-grading.ps1` helper projects those decisions onto canonical
+`result.json` files and verifies that every non-grading field is unchanged.
+`finalize-eval-package.ps1` then validates the freeze, bridge, canonical results,
+and complete grading, invokes the existing report adapter, and fails unless
+`report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`
+are all non-empty. A prose success message cannot substitute for its JSON
+success summary.
+
 The delegation contract has three distinct evidence levels:
 
 ```text
@@ -160,7 +179,12 @@ requires separate provider/model arguments. The profile contains no credentials,
 secrets, or portable provider field.
 `execution-result.json` normalizes one blind execution and keeps grading
 separate from raw evidence. Its `exit.status` is a numeric process exit code or
-`null`, never a textual lifecycle label such as `completed`.
+`null`, never a textual lifecycle label such as `completed`. Ordinary runs are
+single-turn; an optional package-local `interaction.json` sidecar can request
+scripted user turns, but only a runner that advertises and preflights
+`scripted_multi_turn_same_session` may continue one fresh session. The runner
+captures ordered user/assistant turns, the shared session/thread identity,
+timestamps when available, and the complete final transcript/event artifact.
 
 Every runner exposes the same process surface:
 
@@ -180,12 +204,15 @@ record-native-result.ps1 -Runner <runner> -Run <run.json> -Profile <execution-pr
 model; it is used only for orchestrator-owned native envelopes. The direct
 `execute` command runs exactly one arm and is the runner-owned native transport
 when the descriptor says `dispatch_owner=runner`. It must not be nested inside
-an outer model worker.
+an outer model worker. A scripted interaction still uses one `execute` process
+and one native session; it does not start a second independent model process.
 
 The commands emit one JSON document. `describe` and `preflight` do not consume
-model tokens. `execute` runs exactly one arm, never resumes a session, never
-grades or retries for answer quality, and returns a normalized result even for
-refusals, timeouts, failures, and incompatibility.
+model tokens. `execute` runs exactly one arm, never grades or retries for answer
+quality, and returns a normalized result even for refusals, timeouts, failures,
+and incompatibility. Single-turn execution always starts a fresh session;
+scripted continuation is an explicit capability-gated exception inside that
+same runner-owned execution.
 
 The package resolver selects a named child directory under this directory. It
 does not guess a runner and does not fall back to an improvised worker. A

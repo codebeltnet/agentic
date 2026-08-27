@@ -28,6 +28,8 @@ $descriptor = [ordered]@{
     platforms = @('windows', 'linux', 'macos')
     harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = 'unavailable' }
     capabilities = [ordered]@{
+        single_turn = 'supported'
+        scripted_multi_turn_same_session = 'conditional'
         fresh_context = 'supported'
         isolated_home_config = 'supported'
         isolated_working_directory = 'supported'
@@ -201,6 +203,8 @@ function New-CodexExecutionProjection {
         throw 'Codex physical projection unexpectedly resolved under the logical arm root.'
     }
     New-Item -ItemType Directory -Path $physicalRunRoot -Force | Out-Null
+    $physicalPrompt = Join-Path $physicalRunRoot 'prompt.md'
+    [System.IO.File]::WriteAllBytes($physicalPrompt, [byte[]]$Inputs.Run.PromptBytes)
     $physicalRepo = Join-Path $physicalRunRoot 'repo'
     $physicalHome = Join-Path $physicalRunRoot 'home'
     Copy-CodexProjectionDirectory -Source $Inputs.Run.WorkingDirectoryPath -Destination $physicalRepo
@@ -213,6 +217,23 @@ function New-CodexExecutionProjection {
         Copy-CodexProjectionDirectory -Source $Inputs.Run.SkillDirectoryPath -Destination $physicalSkill
     }
 
+    $physicalInteraction = $null
+    if ($null -ne $Inputs.Run.InteractionPath) {
+        $interactionRelative = [System.IO.Path]::GetRelativePath($Inputs.Run.RunRoot, $Inputs.Run.InteractionPath)
+        $physicalInteraction = Join-Path $physicalRunRoot ($interactionRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $physicalInteraction) -Force | Out-Null
+        Copy-Item -LiteralPath $Inputs.Run.InteractionPath -Destination $physicalInteraction -Force
+        foreach ($turn in @($Inputs.Run.Interaction.turns)) {
+            $source = [string](Get-JsonProperty -Object $turn -Name 'source' -Default '')
+            if ([string]::IsNullOrWhiteSpace($source)) { continue }
+            $logicalSource = Resolve-ContainedPath -BasePath $Inputs.Run.RunRoot -RelativePath $source -FieldName 'interaction turn source' -Kind File
+            $sourceRelative = [System.IO.Path]::GetRelativePath($Inputs.Run.RunRoot, $logicalSource)
+            $physicalSource = Join-Path $physicalRunRoot ($sourceRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+            New-Item -ItemType Directory -Path (Split-Path -Parent $physicalSource) -Force | Out-Null
+            Copy-Item -LiteralPath $logicalSource -Destination $physicalSource -Force
+        }
+    }
+
     $physicalRun = [pscustomobject]@{
         RunPath = $Inputs.Run.RunPath
         RunRoot = $physicalRunRoot
@@ -220,7 +241,7 @@ function New-CodexExecutionProjection {
         EvalId = $Inputs.Run.EvalId
         EvalName = $Inputs.Run.EvalName
         Mode = $Inputs.Run.Mode
-        PromptPath = $Inputs.Run.PromptPath
+        PromptPath = $physicalPrompt
         PromptBytes = $Inputs.Run.PromptBytes
         PromptHash = $Inputs.Run.PromptHash
         WorkingDirectoryPath = $physicalRepo
@@ -229,6 +250,9 @@ function New-CodexExecutionProjection {
         CandidateSkillExposed = $Inputs.Run.CandidateSkillExposed
         FixtureHash = $Inputs.Run.FixtureHash
         SkillHash = $Inputs.Run.SkillHash
+        InteractionPath = $physicalInteraction
+        InteractionHash = $Inputs.Run.InteractionHash
+        Interaction = $Inputs.Run.Interaction
     }
     return [pscustomobject]@{
         Root = $physicalRunRoot
@@ -325,6 +349,16 @@ function Invoke-CodexAppServer {
     $threadStartResponse = $null
     $turnStartRequest = $null
     $turnStartResponse = $null
+    $turnStartRequests = [System.Collections.Generic.List[object]]::new()
+    $turnStartResponses = [System.Collections.Generic.List[object]]::new()
+    $turnRecords = [System.Collections.Generic.List[object]]::new()
+    $requestedInteractionTurns = [System.Collections.Generic.List[object]]::new()
+    if ($null -eq $Inputs.Run.Interaction) {
+        $requestedInteractionTurns.Add([ordered]@{ role = 'user'; source = 'prompt.md'; content = $null })
+    } else {
+        foreach ($interactionTurn in @($Inputs.Run.Interaction.turns)) { $requestedInteractionTurns.Add($interactionTurn) }
+    }
+    $allTurnsCompleted = $true
     $threadReadResponse = $null
     $instructionSources = @()
     $instructionSourcesObserved = $false
@@ -424,8 +458,14 @@ function Invoke-CodexAppServer {
         $instructionSourcesObserved = Test-JsonProperty -Object $threadStartResult -Name 'instructionSources'
         if ($instructionSourcesObserved) { $instructionSources = @(Get-JsonProperty -Object $threadStartResult -Name 'instructionSources' -Default @()) }
 
-        $turnRequest = 3
-        $promptText = [System.Text.Encoding]::UTF8.GetString($Inputs.Run.PromptBytes)
+        for ($scriptedTurnIndex = 0; $scriptedTurnIndex -lt $requestedInteractionTurns.Count; $scriptedTurnIndex++) {
+        $turnCompleted = $false
+        $finalText = $null
+        $latestUsage = $null
+        $terminalTurn = $null
+        $turnStartedUtc = [DateTime]::UtcNow
+        $turnRequest = 3 + $scriptedTurnIndex
+        $promptText = Get-InteractionTurnText -Turn $requestedInteractionTurns[$scriptedTurnIndex] -RunData $Inputs.Run
         $turnStartParams = [ordered]@{
             threadId = $threadId
             input = @([ordered]@{ type = 'text'; text = $promptText })
@@ -440,8 +480,10 @@ function Invoke-CodexAppServer {
             }
         }
         $turnStartRequest = [ordered]@{ jsonrpc = '2.0'; id = $turnRequest; method = 'turn/start'; params = $turnStartParams }
+        $turnStartRequests.Add($turnStartRequest)
         & $writeMessage $turnStartRequest
         $turnStartResponse = & $waitForResponse $turnRequest 'turn/start'
+        $turnStartResponses.Add($turnStartResponse)
         $turnStartResult = Get-JsonProperty -Object $turnStartResponse -Name 'result' -Default $null
         $turnId = [string](Get-JsonProperty -Object (Get-JsonProperty -Object $turnStartResult -Name 'turn' -Default $null) -Name 'id' -Default '')
         if ([string]::IsNullOrWhiteSpace($turnId)) { throw 'Codex app-server turn/start returned no turn id.' }
@@ -531,10 +573,18 @@ function Invoke-CodexAppServer {
             }
         }
 
+        $turnRecords.Add([ordered]@{ sequence = ($scriptedTurnIndex * 2) + 1; role = 'user'; content_sha256 = Get-Sha256HexFromBytes -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes($promptText)); session_id = $threadId; timestamp_utc = Format-UtcTimestamp -Value $turnStartedUtc })
+        $turnRecords.Add([ordered]@{ sequence = ($scriptedTurnIndex * 2) + 2; role = 'assistant'; text = if ($null -eq $finalText) { '' } else { [string]$finalText }; session_id = $threadId; timestamp_utc = Format-UtcTimestamp -Value ([DateTime]::UtcNow) })
+        if (-not $turnCompleted -or [string](Get-JsonProperty -Object $terminalTurn -Name 'status' -Default '') -ne 'completed') {
+            $allTurnsCompleted = $false
+            break
+        }
+        }
+
         # The installed schema exposes thread/read after completion. Use it as
         # a second observation of ephemeral identity, cwd, and session metadata
         # when the server provides the response; never reconstruct it locally.
-        $threadReadRequest = 4
+        $threadReadRequest = 3 + $requestedInteractionTurns.Count + 1
         & $writeMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadReadRequest; method = 'thread/read'; params = [ordered]@{ threadId = $threadId; includeTurns = $true } })
         try {
             $threadReadResponse = & $waitForResponse $threadReadRequest 'thread/read'
@@ -583,18 +633,24 @@ function Invoke-CodexAppServer {
         ThreadId = $threadId
         ThreadSessionId = $threadSessionId
         TurnId = $turnId
-        TurnCompleted = $turnCompleted
+        TurnCompleted = $allTurnsCompleted
+        LastTurnCompleted = $turnCompleted
         TerminalTurn = $terminalTurn
         ThreadStartRequest = $threadStartRequest
         ThreadStartResponse = $threadStartResponse
         TurnStartRequest = $turnStartRequest
         TurnStartResponse = $turnStartResponse
+        TurnStartRequests = @($turnStartRequests.ToArray())
+        TurnStartResponses = @($turnStartResponses.ToArray())
+        TurnRecords = @($turnRecords.ToArray())
+        RequestedTurnCount = $requestedInteractionTurns.Count
+        AllTurnsCompleted = $allTurnsCompleted
         ThreadReadResponse = $threadReadResponse
         ThreadReadFailure = $threadReadFailure
         InstructionSources = @($instructionSources)
         InstructionSourcesObserved = $instructionSourcesObserved
         ModelReroutes = @($modelReroutes.ToArray())
-        PromptInputSha256 = if ($null -ne $turnStartRequest) { Get-Sha256HexFromBytes -Bytes ([System.Text.Encoding]::UTF8.GetBytes([string]$turnStartRequest.params.input[0].text)) } else { $null }
+        PromptInputSha256 = if ($turnStartRequests.Count -gt 0) { Get-Sha256HexFromBytes -Bytes ([System.Text.Encoding]::UTF8.GetBytes([string]$turnStartRequests[0].params.input[0].text)) } else { $null }
         ObservedModel = if ($null -ne $threadStartResponse) { [string](Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'model' -Default '') } else { '' }
         ObservedWorkingDirectory = if ($null -ne $threadStartResponse) { [string](Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'cwd' -Default '') } else { '' }
         ObservedEphemeral = if ($null -ne $threadStartResponse) { [bool](Get-JsonProperty -Object (Get-JsonProperty -Object (Get-JsonProperty -Object $threadStartResponse -Name 'result' -Default $null) -Name 'thread' -Default $null) -Name 'ephemeral' -Default $false) } else { $false }
@@ -1034,7 +1090,8 @@ function Get-CodexCapabilityMap {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
         [bool]$HardFilesystemConfinement = $false,
-        [bool]$NativeWorkerAvailable = $true
+        [bool]$NativeWorkerAvailable = $true,
+        [string]$AuthKind = ''
     )
 
     $capabilities = [ordered]@{}
@@ -1047,6 +1104,13 @@ function Get-CodexCapabilityMap {
         # The app-server probe proves that the native surface is available;
         # only the child terminal evidence can prove the selected controls.
         $capabilities[$name] = if ($NativeWorkerAvailable) { 'conditional' } else { 'unsupported' }
+    }
+    $capabilities['scripted_multi_turn_same_session'] = if ($Inputs.Run.Interaction -eq $null) {
+        'conditional'
+    } elseif ($AuthKind -ne 'subscription_file' -or -not $NativeWorkerAvailable) {
+        'unsupported'
+    } else {
+        'supported'
     }
     return $capabilities
 }
@@ -1151,6 +1215,18 @@ function Get-CodexPreflight {
         $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through the narrow $($auth.Name) environment variable; the child shell policy is set to inherit=none."))
     }
 
+    if ($null -ne $run.Interaction) {
+        if ($auth.Kind -ne 'subscription_file') {
+            $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail 'The Codex API-key compatibility transport is one-shot and cannot continue the same app-server thread.'))
+            $reasons.Add('scripted_multi_turn_same_session is incompatible for the Codex API-key compatibility transport; same-session scripted turns require the native app-server thread/start + repeated turn/start surface.')
+        } elseif ($null -eq $nativeWorkerObservation -or -not $nativeWorkerObservation.Available) {
+            $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail 'The installed Codex app-server schema did not prove thread/start plus repeatable turn/start on one thread.'))
+            $reasons.Add('scripted_multi_turn_same_session is incompatible: model-free Codex app-server schema probing did not prove same-thread continuation before execution.')
+        } else {
+            $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status passed -Detail 'Codex app-server reuses the fresh thread/start identity for every deterministic user turn and dispatches the next turn/start only after the prior turn reaches terminal state.'))
+        }
+    }
+
     if ($auth.Kind -eq 'subscription_file') {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail 'The subscription app-server transport uses a temporary auth-only home but is not wrapped by the external run-only sandbox. Codex workspace-write remains enabled for the turn.'))
         $warnings.Add('Subscription execution uses pragmatic isolation. The adapter does not claim that an external filesystem sandbox protects the app-server transport.')
@@ -1176,14 +1252,15 @@ function Get-CodexPreflight {
     }
 
     $hardConfinement = $auth.Kind -eq 'environment' -and $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
-    $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement -NativeWorkerAvailable ($null -ne $nativeWorkerObservation -and $nativeWorkerObservation.Available)
+    $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardConfinement -NativeWorkerAvailable ($null -ne $nativeWorkerObservation -and $nativeWorkerObservation.Available) -AuthKind $auth.Kind
     $harnessVersion = if ($null -eq $versionObservation) { 'unavailable' } else { [string]$versionObservation.Version }
     $descriptorCopy = [ordered]@{}
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
+        if ($null -ne $run.Interaction) { $mechanisms.Add('same-thread repeated turn/start for scripted interaction') } else { $mechanisms.Add('no session continuation') }
     } else {
         foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
@@ -1557,10 +1634,12 @@ function Invoke-CodexExecute {
     }
     $finished = [DateTime]::UtcNow
     $sessionResultId = if ([string]::IsNullOrWhiteSpace($threadId)) { $sessionId } else { $threadId }
-    $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem
+    $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem -NativeWorkerAvailable ($auth.Kind -eq 'subscription_file') -AuthKind $auth.Kind
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
+        $continuationMechanism = if ($null -ne $Inputs.Run.Interaction) { 'same-thread repeated turn/start for scripted interaction' } else { 'no session continuation' }
+        $mechanisms.Add($continuationMechanism)
     } else {
         foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
@@ -1593,6 +1672,7 @@ function Invoke-CodexExecute {
         output_last_message_argument = $outputLastMessageArgument
         credential = $credentialEvidence
     }
+    if ($null -ne $Inputs.Run.Interaction) { $evidence.turns = @($process.TurnRecords) }
     if ($auth.Kind -eq 'subscription_file') {
         $rawArtifact = @($artifacts | Where-Object { [string]$_.path -eq $transcriptArtifactPath } | Select-Object -First 1)
         $evidence.capture = [ordered]@{
@@ -1631,6 +1711,19 @@ function Invoke-CodexExecute {
             thread_read_observed = $null -ne $process.ThreadReadResponse
             thread_read_observation = $threadReadObservation
             model_reroutes = @($process.ModelReroutes)
+            same_session_continuation = if ($null -ne $Inputs.Run.Interaction) { [bool]$process.AllTurnsCompleted } else { $null }
+        }
+        if ($null -ne $Inputs.Run.Interaction) {
+            $evidence.interaction = [ordered]@{
+                schema = (Get-RunnerSchemaNames).Interaction
+                mode = 'scripted'
+                same_session = [bool]$process.AllTurnsCompleted
+                session_id = $sessionResultId
+                turns = @($process.TurnRecords)
+                final_response_sequence = @($process.TurnRecords).Count
+                turn_start_requests = @($process.TurnStartRequests)
+                turn_start_responses = @($process.TurnStartResponses)
+            }
         }
         $threadStartResultEvidence = Get-JsonProperty -Object $process.ThreadStartResponse -Name 'result' -Default ([ordered]@{})
         $threadReadThreadEvidence = if ($null -ne $process.ThreadReadResponse) { Get-JsonProperty -Object (Get-JsonProperty -Object $process.ThreadReadResponse -Name 'result' -Default $null) -Name 'thread' -Default $null } else { $null }
@@ -1660,6 +1753,14 @@ function Invoke-CodexExecute {
                 requested_sandbox_policy = Get-JsonProperty -Object (Get-JsonProperty -Object $process.TurnStartRequest -Name 'params' -Default $null) -Name 'sandboxPolicy' -Default $null
                 prompt_sha256 = $process.PromptInputSha256
             }
+            turn_starts = @($process.TurnStartRequests | ForEach-Object {
+                [ordered]@{
+                    thread_id = Get-JsonProperty -Object $_.params -Name 'threadId' -Default $null
+                    requested_model = Get-JsonProperty -Object $_.params -Name 'model' -Default $null
+                    requested_cwd = Get-JsonProperty -Object $_.params -Name 'cwd' -Default $null
+                    prompt_sha256 = Get-Sha256HexFromBytes -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes([string]$_.params.input[0].text))
+                }
+            })
             terminal_turn = $turnCompletionEvidence
             thread_read = [ordered]@{
                 request = [ordered]@{ threadId = $process.ThreadId; includeTurns = $true }
@@ -1723,6 +1824,7 @@ try {
         }
         'execute' {
             $inputs = Resolve-CodexInputs
+            [void](Assert-PhaseOneEvidenceWritable -Run $inputs.Run)
             $result = Invoke-CodexExecute -Inputs $inputs
             [void](Assert-ExecutionResult -Result $result)
             Write-RunnerJson -Value $result -AsOutput

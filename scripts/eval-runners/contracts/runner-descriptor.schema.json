@@ -33,7 +33,8 @@
     },
     "capabilities": {
       "type": "object",
-      "additionalProperties": { "enum": ["supported", "conditional", "unsupported"] }
+      "additionalProperties": { "enum": ["supported", "conditional", "unsupported"] },
+      "required": ["single_turn", "scripted_multi_turn_same_session"]
     },
     "delegation": {
       "type": "object",

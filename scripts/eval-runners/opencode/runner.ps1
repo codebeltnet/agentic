@@ -29,6 +29,8 @@ $descriptor = [ordered]@{
     platforms = @('windows', 'linux', 'macos')
     harness = [ordered]@{ name = 'OpenCode CLI'; version = 'unavailable' }
     capabilities = [ordered]@{
+        single_turn = 'supported'
+        scripted_multi_turn_same_session = 'unsupported'
         fresh_context = 'supported'
         isolated_home_config = 'supported'
         isolated_working_directory = 'supported'
@@ -191,6 +193,7 @@ function Get-OpenCodeCapabilityMap {
     }
     $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
     $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
+    $capabilities['scripted_multi_turn_same_session'] = 'unsupported'
     return $capabilities
 }
 
@@ -228,6 +231,10 @@ function Get-OpenCodePreflight {
     }
     if ($profile.ToolProfile -ne 'default') {
         $reasons.Add("tool_profile '$($profile.ToolProfile)' is unsupported by opencode.")
+    }
+    if ($null -ne $run.Interaction) {
+        $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail 'The installed OpenCode transport is intentionally fresh one-shot execution. No model-free proof of a supported same-session continuation API is available.'))
+        $reasons.Add('scripted_multi_turn_same_session is incompatible: the current OpenCode CLI adapter intentionally avoids resume/session continuation and cannot prove a same-session structured transport; no second independent process is permitted.')
     }
     if ($null -eq $commandInfo) {
         $reasons.Add('The OpenCode CLI executable is not available on PATH.')
@@ -596,6 +603,7 @@ try {
         }
         'execute' {
             $inputs = Resolve-OpenCodeInputs
+            [void](Assert-PhaseOneEvidenceWritable -Run $inputs.Run)
             $result = Invoke-OpenCodeExecute -Inputs $inputs
             [void](Assert-ExecutionResult -Result $result)
             Write-RunnerJson -Value $result -AsOutput

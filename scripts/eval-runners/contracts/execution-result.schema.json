@@ -142,6 +142,19 @@
     "evidence": {
       "type": "object",
       "properties": {
+        "interaction": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["schema", "mode", "same_session", "session_id", "turns", "final_response_sequence"],
+          "properties": {
+            "schema": { "const": "codebeltnet/agentic/eval-interaction/1" },
+            "mode": { "const": "scripted" },
+            "same_session": { "const": true },
+            "session_id": { "type": "string", "minLength": 1 },
+            "turns": { "type": "array", "minItems": 2 },
+            "final_response_sequence": { "type": "integer", "minimum": 2 }
+          }
+        },
         "delegation": {
           "type": "object",
           "additionalProperties": true,

@@ -146,6 +146,7 @@ try {
     $manifest = [ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
+        execution_freeze = 'execution-freeze.json'
         evals = @($manifestEvals)
     }
     $profile = [ordered]@{
@@ -584,6 +585,7 @@ try {
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
         execution_profile = $fanoutProfileRelative
+        execution_freeze = 'execution-freeze.json'
         evals = $fanoutManifestEvals.ToArray()
     })
     $fanoutHelper = Join-Path $fanoutTools 'invoke-runner-owned-arms.ps1'
@@ -631,6 +633,7 @@ try {
         Remove-Item -LiteralPath $executionResultFile.FullName -Force
     }
     Remove-Item -LiteralPath (Join-Path $gatePackage 'orchestration-state.json') -Force
+    Remove-Item -LiteralPath (Join-Path $gatePackage 'execution-freeze.json') -Force
     $gateMarker = Join-Path $gatePackage 'fanout-eval-02\with_skill\home\preflight-incompatible'
     [IO.File]::WriteAllText($gateMarker, 'fixture', [Text.UTF8Encoding]::new($false))
     $gateLogPath = Join-Path $testRoot 'runner-owned-gate-events.jsonl'
@@ -738,6 +741,7 @@ try {
     foreach ($executionResultFile in @(Get-ChildItem -LiteralPath $syntheticStatePackage -Recurse -File -Filter 'execution-result.json')) {
         Remove-Item -LiteralPath $executionResultFile.FullName -Force
     }
+    Remove-Item -LiteralPath (Join-Path $syntheticStatePackage 'execution-freeze.json') -Force
     Write-TestJson -Path (Join-Path $syntheticStatePackage 'orchestration-state.json') -Value ([ordered]@{
         schema = 'codebeltnet/agentic/eval-orchestration-state/1'
         dispatch_owner = 'orchestrator'
@@ -759,7 +763,7 @@ try {
     Assert-Equal 2 $syntheticStateExit ("runner-owned fan-out rejects a pre-authored orchestration state; output: " + [string]::Join([Environment]::NewLine, @($syntheticStateOutput)))
     $syntheticStateSummary = ([string]::Join([Environment]::NewLine, @($syntheticStateOutput)) | ConvertFrom-Json)
     Assert-Equal 'failed' $syntheticStateSummary.status 'synthetic concurrency state cannot drive a completed fan-out'
-    Assert-True ([string]$syntheticStateSummary.error -match 'refuses to replace an existing orchestration state') 'runner-owned fan-out explains it will not reuse a hand-authored orchestration state'
+    Assert-True ([string]$syntheticStateSummary.error -match 'refuses to replace an existing orchestration state') ("runner-owned fan-out explains it will not reuse a hand-authored orchestration state; error: " + [string]$syntheticStateSummary.error)
     Assert-Equal 0 @(Get-ChildItem -LiteralPath $syntheticStatePackage -Recurse -File -Filter 'execution-result.json').Count 'synthetic concurrency rejection starts zero real executions'
 
     Write-Output 'Native worker orchestration: PASS'

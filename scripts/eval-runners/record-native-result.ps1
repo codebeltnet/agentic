@@ -130,6 +130,7 @@ function Assert-NativeResultEnvelope {
 
 try {
     $runData = Resolve-RunContract -RunPath $Run
+    [void](Assert-PhaseOneEvidenceWritable -Run $runData)
     $profileData = Resolve-ExecutionProfile -ProfilePath $Profile
     if ([string]$profileData.Runner -ne $Runner) {
         throw "Selected runner '$Runner' does not match execution-profile.json runner '$($profileData.Runner)'."

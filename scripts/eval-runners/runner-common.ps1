@@ -1,6 +1,12 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Format-UtcTimestamp {
+    param([Parameter(Mandatory = $true)][DateTime]$Value)
+
+    return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Get-RunnerSchemaNames {
     return [ordered]@{
         Protocol = 'codebeltnet/agentic/eval-runner-protocol/1'
@@ -11,6 +17,9 @@ function Get-RunnerSchemaNames {
         PortableResult = 'codebeltnet/agentic/eval-result/2'
         Run = 'codebeltnet/agentic/eval-run/1'
         OrchestrationPlan = 'codebeltnet/agentic/eval-orchestration-plan/1'
+        Interaction = 'codebeltnet/agentic/eval-interaction/1'
+        ExecutionFreeze = 'codebeltnet/agentic/eval-execution-freeze/1'
+        Grading = 'codebeltnet/agentic/eval-grading/1'
     }
 }
 
@@ -76,6 +85,56 @@ function Get-JsonPropertyNames {
         return @($Object.Keys | ForEach-Object { [string]$_ })
     }
     return @($Object.PSObject.Properties | ForEach-Object { [string]$_.Name })
+}
+
+function Get-JsonWithoutProperty {
+    param(
+        [Parameter(Mandatory = $true)][object]$Object,
+        [Parameter(Mandatory = $true)][string]$PropertyName
+    )
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        $copy = [ordered]@{}
+        foreach ($key in $Object.Keys) {
+            if ([string]$key -ne $PropertyName) { $copy[[string]$key] = $Object[$key] }
+        }
+        return $copy
+    }
+    $copyObject = [ordered]@{}
+    foreach ($property in @($Object.PSObject.Properties)) {
+        if ([string]$property.Name -ne $PropertyName) { $copyObject[[string]$property.Name] = $property.Value }
+    }
+    return $copyObject
+}
+
+function ConvertTo-CanonicalJsonValue {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [ValueType]) { return $Value }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $canonical = [ordered]@{}
+        foreach ($key in @($Value.Keys | ForEach-Object { [string]$_ } | Sort-Object)) {
+            $canonical[$key] = ConvertTo-CanonicalJsonValue -Value $Value[$key]
+        }
+        return $canonical
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        $canonical = [System.Collections.Generic.List[object]]::new()
+        foreach ($item in $Value) { $canonical.Add((ConvertTo-CanonicalJsonValue -Value $item)) }
+        return @($canonical.ToArray())
+    }
+    $canonicalObject = [ordered]@{}
+    foreach ($property in @($Value.PSObject.Properties | Sort-Object Name)) {
+        $canonicalObject[[string]$property.Name] = ConvertTo-CanonicalJsonValue -Value $property.Value
+    }
+    return $canonicalObject
+}
+
+function Get-JsonFingerprint {
+    param([Parameter(Mandatory = $true)][object]$Object)
+
+    $json = ConvertTo-CanonicalJsonValue -Value $Object | ConvertTo-Json -Depth 100 -Compress
+    return Get-Sha256HexFromBytes -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes($json))
 }
 
 function Test-JsonProperty {
@@ -144,14 +203,80 @@ function Test-Sha256 {
     return -not [string]::IsNullOrWhiteSpace($Value) -and $Value -match '^[0-9a-fA-F]{64}$'
 }
 
+function Expand-WindowsShortPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not $IsWindows -or [string]::IsNullOrWhiteSpace($Path)) { return $Path }
+    try {
+        # Windows APIs and .NET can return either the long or 8.3 spelling of
+        # the same existing path.  Normalize that spelling before comparing
+        # runner-observed paths; this does not resolve symlinks or authorize a
+        # path outside the requested boundary.
+        $fullPath = [System.IO.Path]::GetFullPath($Path)
+        $root = [System.IO.Path]::GetPathRoot($fullPath)
+        if (-not [string]::IsNullOrWhiteSpace($root)) {
+            # DirectoryInfo expands an 8.3 component only when that component
+            # is the final component. Walk existing components so a short
+            # parent such as ADMINI~1 is expanded before comparing a nested
+            # runner path.
+            $current = $root
+            $remaining = $fullPath.Substring($root.Length) -split '[\\/]'
+            for ($componentIndex = 0; $componentIndex -lt $remaining.Count; $componentIndex++) {
+                $component = [string]$remaining[$componentIndex]
+                if ([string]::IsNullOrWhiteSpace($component)) { continue }
+                $next = Join-Path -Path $current -ChildPath $component
+                if (Test-Path -LiteralPath $next -PathType Container) {
+                    $current = ([System.IO.DirectoryInfo]::new($next)).FullName
+                } elseif (Test-Path -LiteralPath $next -PathType Leaf) {
+                    $current = ([System.IO.FileInfo]::new($next)).FullName
+                } else {
+                    $current = Join-Path -Path $current -ChildPath $component
+                    if ($componentIndex + 1 -lt $remaining.Count) {
+                        $current = Join-Path -Path $current -ChildPath ([string]::Join([System.IO.Path]::DirectorySeparatorChar, @($remaining[($componentIndex + 1)..($remaining.Count - 1)] | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })))
+                    }
+                    break
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($current)) { return $current }
+        }
+        if ($null -eq ([System.Management.Automation.PSTypeName]'CodebeltAgenticWin32Path').Type) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+
+public static class CodebeltAgenticWin32Path
+{
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetLongPathName(string shortPath, StringBuilder longPath, uint longPathLength);
+
+    public static string Expand(string path)
+    {
+        uint required = GetLongPathName(path, null, 0);
+        if (required == 0) return path;
+
+        var buffer = new StringBuilder((int)required + 1);
+        uint written = GetLongPathName(path, buffer, (uint)buffer.Capacity);
+        return written == 0 ? path : buffer.ToString();
+    }
+}
+'@ -ErrorAction Stop | Out-Null
+        }
+        return [CodebeltAgenticWin32Path]::Expand($Path)
+    } catch {
+        return $Path
+    }
+}
+
 function Test-PathInside {
     param(
         [Parameter(Mandatory = $true)][string]$BasePath,
         [Parameter(Mandatory = $true)][string]$CandidatePath
     )
 
-    $base = ([System.IO.Path]::GetFullPath($BasePath)).TrimEnd([char[]]@('\', '/'))
-    $candidate = ([System.IO.Path]::GetFullPath($CandidatePath)).TrimEnd([char[]]@('\', '/'))
+    $base = ConvertTo-ComparablePath -Path $BasePath
+    $candidate = ConvertTo-ComparablePath -Path $CandidatePath
+    if ($null -eq $base -or $null -eq $candidate) { return $false }
     return $candidate -eq $base -or $candidate.StartsWith($base + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
@@ -427,6 +552,7 @@ function ConvertTo-ComparablePath {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
     try {
         $full = [System.IO.Path]::GetFullPath($Path)
+        $full = Expand-WindowsShortPath -Path $full
         $root = [System.IO.Path]::GetPathRoot($full)
         if (-not [string]::IsNullOrWhiteSpace($root) -and $full.Length -gt $root.Length) {
             $full = $full.TrimEnd([char[]]@('\', '/'))
@@ -701,6 +827,43 @@ function Resolve-RunContract {
     $workingPath = Resolve-ContainedPath -BasePath $runRoot -RelativePath ([string]$run.workingDirectory) -FieldName 'workingDirectory' -Kind Directory
     $homePath = Resolve-ContainedPath -BasePath $runRoot -RelativePath ([string]$run.homeDirectory) -FieldName 'homeDirectory' -Kind Directory
 
+    $interactionPath = $null
+    $interaction = $null
+    $interactionHash = $null
+    $interactionFile = [string](Get-JsonProperty -Object $run -Name 'interactionFile' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($interactionFile)) {
+        $interactionPath = Resolve-ContainedPath -BasePath $runRoot -RelativePath $interactionFile -FieldName 'interactionFile' -Kind File
+        $interaction = Read-RunnerJson -Path $interactionPath
+        $interactionSchemas = Get-RunnerSchemaNames
+        if ([string]$interaction.schema -ne $interactionSchemas.Interaction -or [string]$interaction.mode -ne 'scripted') {
+            throw "interaction.json must declare '$($interactionSchemas.Interaction)' and mode 'scripted'."
+        }
+        $interactionTurns = @(Get-JsonProperty -Object $interaction -Name 'turns' -Default @())
+        if ($interactionTurns.Count -lt 2) { throw 'Scripted interaction must contain at least two user turns.' }
+        $allowedInteractionFields = @('schema', 'mode', 'turns')
+        foreach ($name in @(Get-JsonPropertyNames -Object $interaction)) {
+            if ($allowedInteractionFields -notcontains $name) { throw "interaction.json contains unsupported field '$name'." }
+        }
+        for ($turnIndex = 0; $turnIndex -lt $interactionTurns.Count; $turnIndex++) {
+            $turn = $interactionTurns[$turnIndex]
+            foreach ($name in @(Get-JsonPropertyNames -Object $turn)) {
+                if (@('role', 'source', 'content') -notcontains $name) { throw "interaction turn $turnIndex contains unsupported field '$name'." }
+            }
+            if ([string](Get-JsonProperty -Object $turn -Name 'role' -Default '') -ne 'user') { throw "interaction turn $turnIndex must have role 'user'." }
+            $hasSource = (Test-JsonProperty -Object $turn -Name 'source') -and -not [string]::IsNullOrWhiteSpace([string]$turn.source)
+            $hasContent = (Test-JsonProperty -Object $turn -Name 'content') -and -not [string]::IsNullOrWhiteSpace([string]$turn.content)
+            if ($hasSource -eq $hasContent) { throw "interaction turn $turnIndex must declare exactly one non-empty source or content." }
+            if ($hasSource) {
+                [void](Resolve-ContainedPath -BasePath $runRoot -RelativePath ([string]$turn.source) -FieldName "interaction.turns[$turnIndex].source" -Kind File)
+            }
+        }
+        if (-not (Test-JsonProperty -Object $run -Name 'interactionHash') -or -not (Test-Sha256 -Value ([string]$run.interactionHash))) {
+            throw 'run.json with interactionFile must declare a valid interactionHash.'
+        }
+        $interactionHash = [string]$run.interactionHash
+        if ($interactionHash -ne (Get-Sha256HexFromFile -Path $interactionPath)) { throw 'run.json interactionHash does not match interaction.json.' }
+    }
+
     $skillPath = $null
     if ($mode -eq 'with_skill') {
         if ([string]::IsNullOrWhiteSpace([string]$run.skillDirectory)) {
@@ -745,7 +908,69 @@ function Resolve-RunContract {
         CandidateSkillExposed = $mode -eq 'with_skill'
         FixtureHash = $fixtureHash
         SkillHash = if ($mode -eq 'with_skill') { [string]$run.skillHash } else { $null }
+        InteractionPath = $interactionPath
+        InteractionHash = $interactionHash
+        Interaction = $interaction
     }
+}
+
+function Get-InteractionTurnText {
+    param(
+        [Parameter(Mandatory = $true)][object]$Turn,
+        [Parameter(Mandatory = $true)][object]$RunData
+    )
+
+    $content = Get-JsonProperty -Object $Turn -Name 'content' -Default $null
+    if ($null -ne $content) { return [string]$content }
+    $sourcePath = Resolve-ContainedPath -BasePath $RunData.RunRoot -RelativePath ([string]$Turn.source) -FieldName 'interaction turn source' -Kind File
+    return [System.IO.File]::ReadAllText($sourcePath, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Assert-InteractionResultEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object]$ExecutionResult,
+        [Parameter(Mandatory = $true)][object]$RunData
+    )
+
+    if ($null -eq $RunData.Interaction) { return $true }
+    if ([string]$ExecutionResult.status -ne 'completed') { return $true }
+    $interaction = Get-JsonProperty -Object $ExecutionResult.evidence -Name 'interaction' -Default $null
+    if ($null -eq $interaction) { throw 'Scripted interaction execution must provide evidence.interaction.' }
+    $schemas = Get-RunnerSchemaNames
+    if ([string]$interaction.schema -ne $schemas.Interaction -or [string]$interaction.mode -ne 'scripted' -or -not [bool]$interaction.same_session) {
+        throw 'Scripted interaction evidence must prove the eval stayed in one same-session scripted interaction.'
+    }
+    $sessionId = [string]$ExecutionResult.session.id
+    if ([string]$interaction.session_id -ne $sessionId) { throw 'Scripted interaction evidence session_id does not match execution-result session.id.' }
+    $requestedTurns = @(Get-JsonProperty -Object $RunData.Interaction -Name 'turns' -Default @())
+    $observedTurns = @(Get-JsonProperty -Object $interaction -Name 'turns' -Default @())
+    if ($observedTurns.Count -ne ($requestedTurns.Count * 2)) {
+        throw "Scripted interaction evidence has $($observedTurns.Count) turns; expected $($requestedTurns.Count * 2) ordered user/assistant turns."
+    }
+    for ($index = 0; $index -lt $observedTurns.Count; $index++) {
+        $observed = $observedTurns[$index]
+        $expectedRole = if (($index % 2) -eq 0) { 'user' } else { 'assistant' }
+        if ([int](Get-JsonProperty -Object $observed -Name 'sequence' -Default -1) -ne ($index + 1) -or [string]$observed.role -ne $expectedRole) {
+            throw 'Scripted interaction evidence does not preserve ordered user/assistant turns.'
+        }
+        $observedSession = [string](Get-JsonProperty -Object $observed -Name 'session_id' -Default $sessionId)
+        if ($observedSession -ne $sessionId) { throw 'Scripted interaction evidence changed session identity between turns.' }
+        if ($expectedRole -eq 'user') {
+            $requestedTurn = $requestedTurns[[int]($index / 2)]
+            $expectedText = Get-InteractionTurnText -Turn $requestedTurn -RunData $RunData
+            $expectedHash = Get-Sha256HexFromBytes -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes($expectedText))
+            if ([string]$observed.content_sha256 -ne $expectedHash) { throw "Scripted interaction user turn $($index / 2) does not match its deterministic package input." }
+        } elseif (-not (Test-JsonProperty -Object $observed -Name 'text')) {
+            throw "Scripted interaction assistant turn $($index / 2) is missing its terminal response text."
+        }
+    }
+    $finalSequence = [int](Get-JsonProperty -Object $interaction -Name 'final_response_sequence' -Default 0)
+    if ($finalSequence -ne $observedTurns.Count) { throw 'Scripted interaction evidence final response does not identify the last assistant turn.' }
+    if ([string]$ExecutionResult.final_response.status -eq 'available' -and
+        [string]$ExecutionResult.final_response.text -ne [string]$observedTurns[$observedTurns.Count - 1].text) {
+        throw 'Scripted interaction final_response does not match the last assistant turn.'
+    }
+    return $true
 }
 
 function Assert-ProfileHasNoSecrets {
@@ -840,6 +1065,8 @@ function Assert-RunnerDescriptor {
     }
 
     $required = @(
+        'single_turn',
+        'scripted_multi_turn_same_session',
         'fresh_context',
         'isolated_home_config',
         'isolated_working_directory',
@@ -1034,6 +1261,30 @@ function New-ExecutionFailure {
     return [ordered]@{ code = $Code; message = $Message }
 }
 
+function Assert-PhaseOneEvidenceWritable {
+    param([Parameter(Mandatory = $true)][object]$Run)
+
+    # Every runner-owned transport reaches this shared result builder. Once the
+    # package-level freeze exists, refusing to build another result prevents a
+    # direct runner invocation (or the orchestrator-owned recorder) from
+    # truncating or replacing frozen raw evidence.
+    $runRoot = [System.IO.Path]::GetFullPath([string]$Run.RunRoot)
+    $iterationDirectory = Split-Path -Parent (Split-Path -Parent $runRoot)
+    $freezeRelativePath = 'execution-freeze.json'
+    $manifestPath = Join-Path $iterationDirectory 'manifest.json'
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        $manifest = Read-RunnerJson -Path $manifestPath
+        $declaredFreezePath = [string](Get-JsonProperty -Object $manifest -Name 'execution_freeze' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($declaredFreezePath)) { $freezeRelativePath = $declaredFreezePath }
+    }
+    Assert-SafeRelativePath -RelativePath $freezeRelativePath -FieldName 'execution freeze path'
+    $freezePath = Join-Path $iterationDirectory ($freezeRelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+    if (Test-Path -LiteralPath $freezePath) {
+        throw "Execution integrity failure: Phase 1 raw evidence is already frozen at '$freezePath'; requires fresh Phase 1 execution."
+    }
+    return $true
+}
+
 function New-ExecutionResult {
     param(
         [Parameter(Mandatory = $true)][object]$Descriptor,
@@ -1059,6 +1310,7 @@ function New-ExecutionResult {
         [int]$AttemptCount = 1
     )
 
+    [void](Assert-PhaseOneEvidenceWritable -Run $Run)
     $schemas = Get-RunnerSchemaNames
     $assessment = Get-IsolationCapabilityAssessment -Capabilities $IsolationCapabilities
     $effectiveStatus = $Status
@@ -1144,8 +1396,8 @@ function New-ExecutionResult {
             timeout_seconds = $Profile.TimeoutSeconds
         }
         resolved = $resolved
-        started_utc = $started.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-        finished_utc = $finished.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+        started_utc = Format-UtcTimestamp -Value $started
+        finished_utc = Format-UtcTimestamp -Value $finished
         duration_seconds = [Math]::Max(0, [Math]::Round($DurationSeconds, 3))
         exit = [ordered]@{ status = $effectiveExitStatus; failure = $effectiveFailure }
         input = [ordered]@{

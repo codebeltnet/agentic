@@ -17,6 +17,8 @@ $descriptor = [ordered]@{
     platforms = @('windows')
     harness = [ordered]@{ name = 'deterministic runner-owned fixture'; version = 'test' }
     capabilities = [ordered]@{
+        single_turn = 'supported'
+        scripted_multi_turn_same_session = 'supported'
         fresh_context = 'supported'
         isolated_home_config = 'supported'
         isolated_working_directory = 'supported'
@@ -84,6 +86,9 @@ try {
         Write-RunnerJson -Value (New-PreflightDocument -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Compatible $true -ResolvedCapabilities $descriptor.capabilities -Mechanisms @('deterministic fixture')) -AsOutput
         exit 0
     }
+    # Refuse a second execution before any transport event or raw artifact can
+    # be created after Phase 1 has been frozen.
+    [void](Assert-PhaseOneEvidenceWritable -Run $inputs.Run)
     $executeStartUtc = [DateTime]::UtcNow
     Write-FixtureEvent -Kind 'execute'
     # An optional per-run marker lets a test make one arm deliberately slow so
@@ -99,7 +104,77 @@ try {
     $executeFinishUtc = [DateTime]::UtcNow
     $capabilities = [ordered]@{}
     foreach ($propertyName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) { $capabilities[$propertyName] = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $propertyName) }
+    if ([string]$inputs.Run.Mode -eq 'without_skill') { $capabilities.candidate_skill_exposure = 'excluded' }
     $sessionId = ('fixture-session-' + [Guid]::NewGuid().ToString('N'))
+    $turnRecords = [System.Collections.Generic.List[object]]::new()
+    $fixtureFinalResponse = 'deterministic fixture response'
+    if ($null -ne $inputs.Run.Interaction) {
+        $requestedTurns = @($inputs.Run.Interaction.turns)
+        for ($turnIndex = 0; $turnIndex -lt $requestedTurns.Count; $turnIndex++) {
+            $turnText = Get-InteractionTurnText -Turn $requestedTurns[$turnIndex] -RunData $inputs.Run
+            $turnRecords.Add([ordered]@{ sequence = ($turnIndex * 2) + 1; role = 'user'; content_sha256 = Get-Sha256HexFromBytes -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($turnText)); session_id = $sessionId; timestamp_utc = Format-UtcTimestamp -Value ([DateTime]::UtcNow) })
+            $assistantText = if ($turnIndex -eq 0) { 'fixture confirmation required' } else { 'fixture protected operation completed after confirmation' }
+            $turnRecords.Add([ordered]@{ sequence = ($turnIndex * 2) + 2; role = 'assistant'; text = $assistantText; session_id = $sessionId; timestamp_utc = Format-UtcTimestamp -Value ([DateTime]::UtcNow) })
+            $fixtureFinalResponse = $assistantText
+        }
+    }
+    # Deterministic validation can request stable worker metrics without
+    # changing the normal fixture behavior. These values are injected before
+    # the Phase 1 freeze, never by grading or report code.
+    $finalResponseOverride = [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_FINAL_RESPONSE')
+    if (-not [string]::IsNullOrWhiteSpace($finalResponseOverride)) { $fixtureFinalResponse = $finalResponseOverride }
+    $durationSeconds = [Math]::Round(($executeFinishUtc - $executeStartUtc).TotalSeconds, 3)
+    $durationOverride = [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_DURATION_SECONDS')
+    $parsedDuration = 0.0
+    if (-not [string]::IsNullOrWhiteSpace($durationOverride) -and [double]::TryParse($durationOverride, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsedDuration) -and $parsedDuration -ge 0) {
+        $durationSeconds = $parsedDuration
+    }
+    $fixtureTelemetryTokens = New-UnavailableMetric -Reason 'fixture'
+    $fixtureTelemetryToolCalls = New-AvailableMetric -Value 0
+    if ([Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_METRICS') -eq '1') {
+        $fixtureTelemetryTokens = New-AvailableMetric -Value ([ordered]@{
+            input_tokens = 27
+            output_tokens = 123
+            total_tokens = 123
+            cached_input_tokens = 456
+            cache_write_tokens = 78
+        })
+        $fixtureTelemetryToolCalls = New-AvailableMetric -Value 2
+    }
+    $eventsPath = Join-Path $inputs.Run.RunRoot 'evidence/fixture-events.jsonl'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $eventsPath) -Force | Out-Null
+    $eventLines = [System.Collections.Generic.List[string]]::new()
+    if ($turnRecords.Count -gt 0) {
+        $eventSequence = 0
+        foreach ($turn in @($turnRecords.ToArray())) {
+            if ([string]$turn.role -eq 'assistant' -and [int]$turn.sequence -eq 4) {
+                # The confirmation fixture models the protected operation as a
+                # transport event between the second user dispatch and its
+                # terminal response. It can therefore prove the operation did
+                # not happen in the first turn without consulting model text.
+                $eventSequence++
+                $eventLines.Add(([ordered]@{
+                    type = 'protected.operation'
+                    sequence = $eventSequence
+                    turn_sequence = [int]$turn.sequence
+                    session_id = [string]$turn.session_id
+                    timestamp_utc = Format-UtcTimestamp -Value ([DateTime]::UtcNow)
+                } | ConvertTo-Json -Compress))
+            }
+            $eventSequence++
+            $eventLines.Add(([ordered]@{
+                type = if ([string]$turn.role -eq 'user') { 'user.dispatched' } else { 'assistant.terminal' }
+                sequence = $eventSequence
+                turn_sequence = [int]$turn.sequence
+                session_id = [string]$turn.session_id
+                timestamp_utc = [string]$turn.timestamp_utc
+            } | ConvertTo-Json -Compress))
+        }
+    } else {
+        $eventLines.Add(([ordered]@{ type = 'assistant.terminal'; sequence = 1; session_id = $sessionId; timestamp_utc = Format-UtcTimestamp -Value $executeFinishUtc } | ConvertTo-Json -Compress))
+    }
+    [IO.File]::WriteAllText($eventsPath, ([string]::Join("`n", $eventLines) + "`n"), [Text.UTF8Encoding]::new($false))
+    $eventsArtifact = New-ArtifactReference -Run $inputs.Run -Path 'evidence/fixture-events.jsonl' -Scope run -MediaType 'application/x-ndjson; charset=utf-8'
     $evidence = [ordered]@{
         capture = [ordered]@{ source = 'harness_native_transport'; terminal = $true; worker_authored = $false }
         delegation = [ordered]@{
@@ -119,8 +194,12 @@ try {
             nested_model_execution = $false
             model_execution_count = 1
         }
+        turns = if ($turnRecords.Count -gt 0) { @($turnRecords.ToArray()) } else { $null }
     }
-    $result = New-ExecutionResult -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Status completed -FinalResponse 'deterministic fixture response' -StartedUtc ($executeStartUtc.ToString('o')) -FinishedUtc ($executeFinishUtc.ToString('o')) -DurationSeconds ([Math]::Round(($executeFinishUtc - $executeStartUtc).TotalSeconds, 3)) -ExitStatus ([Nullable[int]]0) -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @('deterministic runner-owned fixture') -Telemetry ([ordered]@{ transcript = New-UnavailableMetric -Reason 'fixture transcript not required for queue test'; tokens = New-UnavailableMetric -Reason 'fixture'; tool_calls = New-AvailableMetric -Value 0; cost = New-UnavailableMetric -Reason 'fixture' }) -Evidence $evidence -AttemptCount 1
+    if ($turnRecords.Count -gt 0) {
+        $evidence.interaction = [ordered]@{ schema = (Get-RunnerSchemaNames).Interaction; mode = 'scripted'; same_session = $true; session_id = $sessionId; turns = @($turnRecords.ToArray()); final_response_sequence = $turnRecords.Count }
+    }
+    $result = New-ExecutionResult -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Status completed -FinalResponse $fixtureFinalResponse -StartedUtc ($executeStartUtc.ToString('o')) -FinishedUtc ($executeFinishUtc.ToString('o')) -DurationSeconds $durationSeconds -ExitStatus ([Nullable[int]]0) -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @('deterministic runner-owned fixture') -Telemetry ([ordered]@{ transcript = New-AvailableMetric -Value ([ordered]@{ artifact = 'evidence/fixture-events.jsonl'; complete = $true }); tokens = $fixtureTelemetryTokens; tool_calls = $fixtureTelemetryToolCalls; cost = New-UnavailableMetric -Reason 'fixture' }) -Artifacts @($eventsArtifact) -Evidence $evidence -AttemptCount 1
     [void](Assert-ExecutionResult -Result $result)
     Write-RunnerJson -Value $result -AsOutput
 } catch {
