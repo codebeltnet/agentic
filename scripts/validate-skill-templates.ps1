@@ -1272,6 +1272,23 @@ Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Frozen evidence, grading isolation, and finalization remain deterministic' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $integrityPath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-integrity-finalization.ps1'
+    if (-not (Test-Path -LiteralPath $integrityPath -PathType Leaf)) {
+        throw 'The frozen-evidence and finalization regression suite is missing.'
+    }
+    $integrityOutput = & pwsh -NoProfile -File $integrityPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Frozen-evidence/finalization regression failed: $($integrityOutput -join [Environment]::NewLine)"
+    }
+    if (@($integrityOutput -join [Environment]::NewLine) -notmatch 'Eval package integrity and finalization:\s+PASS') {
+        throw 'Frozen-evidence/finalization regression did not report PASS.'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Windows UTF-8 report generation succeeds without patching upstream skill-creator' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
@@ -1500,27 +1517,26 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         $runner = [System.IO.File]::ReadAllText($runnerPath, $utf8NoBom)
         foreach ($needle in @(
             'START NOW. You are the external Eval Orchestrator',
-            'Do not execute evaluation prompts in the current agent context.',
-            'execution-profile.json` selects the runner/model/configuration',
-            'Read `delegation.dispatch_owner` from the selected runner descriptor and preflight.',
-            'Do not create outer native subagents/tasks',
-            'do not invoke `record-native-result.ps1`, manufacture a native envelope',
-            'Do not read any `eval-metadata.json`, expected output, assertions, result grading, benchmark/report data, or paired output during Phase 1.',
-            'Do not substitute a generic worker, another runner, or an improvised isolation scheme if the selected runner is unavailable or incompatible.',
-            '`runs.<arm>.run_manifest`',
-            '`runs.<arm>.execution_result`',
-            '`runs.<arm>.result`',
-            'The bridge''s one-arm operation is conceptually `-Run runPath -ExecutionResult executionPath -Result resultPath`, where all three values are the exact strings read from `manifest.json`.',
-            'Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path.',
-            'bridge-manifest-results.ps1',
-            '-RequireComplete',
-            'The bridge checks prompt/run/profile hashes and artifact confinement',
-            'Only if the package bridge succeeds, read each eval''s `eval-metadata.json`',
-            'grading[].text',
-            'tools/skill-creator/agents/grader.md',
-            'scripts/aggregate_benchmark.py',
-            'eval-viewer/generate_review.py',
-            'report.html'
+            'Do not execute an eval prompt in your own context.',
+            'execution-freeze.json',
+            'invoke-runner-owned-arms.ps1',
+            'exactly once',
+            'If it fails, stop.',
+            'Do not create outer workers',
+            'edit raw result/evidence files',
+            'Only after Phase 1 reports success and the freeze exists',
+            'grading.json',
+            'codebeltnet/agentic/eval-grading/1',
+            'assertion_index',
+            'passed',
+            'evidence',
+            'apply-eval-grading.ps1',
+            'finalize-eval-package.ps1',
+            'machine-readable JSON summary',
+            'report.html',
+            'skill-creator-report.html',
+            'benchmark.json',
+            'benchmark.md'
         )) {
             if (-not $runner.Contains($needle)) {
                 throw "RUN-THIS.prompt.md must state '$needle'."
@@ -1533,7 +1549,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'Choose evaluation configuration',
             'Codebelt Reference',
             'discover current models',
-            '<result-file>'
+            '<result-file>',
+            'record-native-result.ps1',
+            'manufacture a native envelope',
+            'recompute or re-bless',
+            'hand-author preflight',
+            'paste-ready JSON'
         )) {
             if ($runner.Contains($forbidden)) {
                 throw "RUN-THIS.prompt.md must not contain forbidden handoff text '$forbidden'."
@@ -1553,13 +1574,18 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             $generatedPrompt = [System.IO.File]::ReadAllText($generatedPromptPath, $utf8NoBom)
             foreach ($needle in @(
                 'invoke-runner-owned-arms.ps1',
-                'delegation.dispatch_owner=runner',
+                'delegation.dispatch_owner',
                 'exactly once',
-                'Consume its machine-readable summary',
-                'Do not create outer native subagents/tasks',
-                'hand-author preflight, fan-out, orchestration-state, or result bookkeeping',
+                'Consume its JSON summary',
+                'bridge-manifest-results.ps1',
+                'Only if that bridge succeeds',
+                'Do not create outer workers',
+                'execution-freeze.json',
+                'grading.json',
+                'apply-eval-grading.ps1',
+                'finalize-eval-package.ps1',
                 'evaluation is incomplete and must fail closed',
-                'Only persisted runner-produced evidence at the manifest-declared paths may proceed to Phase 2'
+                'Only persisted runner-produced evidence at the manifest-declared paths may proceed'
             )) {
                 Assert-Contains -Name $generatedHandoff.Name -Content $generatedPrompt -Needle $needle
             }
@@ -1774,7 +1800,23 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw 'execution-profile.json has an invalid schema or execution limit.'
         }
         $runnerTools = [System.Collections.Generic.List[string]]::new()
-        foreach ($runnerTool in @('runner-common.ps1', 'resolve-runner.ps1', 'bridge-execution-result.ps1', 'bridge-manifest-results.ps1', 'manifest-paths.ps1', 'contracts/execution-profile.schema.json', 'contracts/execution-result.schema.json')) { $runnerTools.Add($runnerTool) }
+        foreach ($runnerTool in @(
+                'runner-common.ps1',
+                'resolve-runner.ps1',
+                'orchestration.ps1',
+                'execution-freeze.ps1',
+                'freeze-execution-evidence.ps1',
+                'apply-eval-grading.ps1',
+                'finalize-eval-package.ps1',
+                'bridge-execution-result.ps1',
+                'bridge-manifest-results.ps1',
+                'manifest-paths.ps1',
+                'contracts/execution-profile.schema.json',
+                'contracts/execution-result.schema.json',
+                'contracts/execution-freeze.schema.json',
+                'contracts/grading.schema.json',
+                'contracts/interaction.schema.json'
+            )) { $runnerTools.Add($runnerTool) }
         $runnerSourceRoot = Join-Path $repoRoot 'scripts/eval-runners'
         foreach ($runnerDirectory in Get-ChildItem -LiteralPath $runnerSourceRoot -Directory -Force | Sort-Object Name) {
             if (Test-Path -LiteralPath (Join-Path $runnerDirectory.FullName 'runner.ps1') -PathType Leaf) {
@@ -1804,66 +1846,82 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
 
         $firstEntry = @($manifest.evals)[0]
-        $fakeRunnerPath = Join-Path $iterationDirectory 'tools/eval-runners/fake/runner.ps1'
+        # Use the package-local runner-owned fixture for this deterministic
+        # package check. It exercises the same Phase 1 fan-out and freeze
+        # boundary as a real runner, including the scripted interaction case;
+        # no validator step authors raw or canonical evidence after freezing.
+        $fixtureRunnerDirectory = Join-Path $iterationDirectory 'tools/eval-runners/fixture'
+        New-Item -ItemType Directory -Path $fixtureRunnerDirectory -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts/eval-runners/tests/fixtures/runner-owned-fixture.ps1') -Destination (Join-Path $fixtureRunnerDirectory 'runner.ps1') -Force
         $profilePath = Join-Path $iterationDirectory ([string]$manifest.execution_profile)
         $deterministicProfile = [System.IO.File]::ReadAllText($profilePath, $utf8NoBom) | ConvertFrom-Json
-        $deterministicProfile.runner = 'fake'
+        $deterministicProfile.runner = 'fixture'
         $deterministicProfile.model = 'fixture-model'
         [System.IO.File]::WriteAllText($profilePath, (($deterministicProfile | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
-        foreach ($entryToRun in @($manifest.evals)) {
-            foreach ($configuration in @('with_skill', 'without_skill')) {
-                $run = $entryToRun.runs.$configuration
-                $runPath = Join-Path $iterationDirectory ([string]$run.run_manifest)
-                $executionPath = Join-Path $iterationDirectory ([string]$run.execution_result)
-                $executionOutput = & pwsh -NoProfile -File $fakeRunnerPath execute -Run $runPath -Profile $profilePath 2>&1
-                if ($LASTEXITCODE -ne 0) {
-                    throw "The deterministic fake runner could not produce the manifest-declared execution result '$($run.execution_result)': $($executionOutput -join [Environment]::NewLine)"
-                }
-                $executionJson = [string]::Join([Environment]::NewLine, @($executionOutput)) | ConvertFrom-Json
-                [System.IO.File]::WriteAllText($executionPath, (($executionJson | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+        $fixtureMetricEnvironment = [ordered]@{
+            AGENTIC_RUNNER_FIXTURE_FINAL_RESPONSE = 'validator output'
+            AGENTIC_RUNNER_FIXTURE_DURATION_SECONDS = '1.25'
+            AGENTIC_RUNNER_FIXTURE_METRICS = '1'
+        }
+        $fixtureMetricEnvironmentBefore = [ordered]@{}
+        foreach ($environmentName in $fixtureMetricEnvironment.Keys) {
+            $fixtureMetricEnvironmentBefore[$environmentName] = [Environment]::GetEnvironmentVariable($environmentName)
+            [Environment]::SetEnvironmentVariable($environmentName, [string]$fixtureMetricEnvironment[$environmentName])
+        }
+        try {
+            $fanoutPath = Join-Path $iterationDirectory 'tools/eval-runners/invoke-runner-owned-arms.ps1'
+            $fanoutOutput = & pwsh -NoProfile -File $fanoutPath -IterationDirectory $iterationDirectory 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "The deterministic runner-owned fixture could not complete the package: $($fanoutOutput -join [Environment]::NewLine)"
+            }
+        } finally {
+            foreach ($environmentName in $fixtureMetricEnvironment.Keys) {
+                [Environment]::SetEnvironmentVariable($environmentName, $fixtureMetricEnvironmentBefore[$environmentName])
             }
         }
         $executionCollectOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -CollectResults failed while bridging the complete deterministic fixture: $($executionCollectOutput -join [Environment]::NewLine)"
         }
-        foreach ($configuration in @('with_skill', 'without_skill')) {
-            $run = $firstEntry.runs.$configuration
-            $resultPath = Join-Path $iterationDirectory ([string]$run.result)
-            $result = [System.IO.File]::ReadAllText($resultPath, $utf8NoBom) | ConvertFrom-Json
-            $result.model = 'validator-model'
-            $result.harness = 'validator-harness'
-            $result.executed_utc = '2026-01-01T00:00:00Z'
-            $result.output = 'validator output'
-            $result.transcript = 'validator transcript'
-            $result.duration_seconds = 1.25
-            $result.total_tokens = 123
-            $result.tool_calls = 2
-            $result.turns = 4
-            $result.base_input_tokens = 27
-            $result.output_tokens = 123
-            $result.cache_read_tokens = 456
-            $result.cache_write_1h_tokens = 78
-            $result.estimated_cost_usd = 0.12
-            $result.model_effort = 'high'
-            foreach ($grade in @($result.grading)) {
-                $grade.passed = $true
-                $grade.evidence = 'validator evidence'
+        # The only post-execution artifact authored by this validator is a
+        # grading-only document with exact metadata identities. Canonical
+        # result grading is projected by the deterministic application helper.
+        $gradingEntries = [System.Collections.Generic.List[object]]::new()
+        foreach ($entryToGrade in @($manifest.evals)) {
+            $metadataPath = Join-Path $iterationDirectory ([string]$entryToGrade.metadata)
+            $metadataForGrade = [System.IO.File]::ReadAllText($metadataPath, $utf8NoBom) | ConvertFrom-Json
+            foreach ($configuration in @('with_skill', 'without_skill')) {
+                for ($assertionIndex = 0; $assertionIndex -lt @($metadataForGrade.assertions).Count; $assertionIndex++) {
+                    $gradingEntries.Add([ordered]@{
+                        eval_id = [int]$entryToGrade.eval_id
+                        eval_name = [string]$entryToGrade.eval_name
+                        configuration = $configuration
+                        assertion_index = $assertionIndex
+                        assertion = [string]$metadataForGrade.assertions[$assertionIndex]
+                        passed = $true
+                        evidence = 'validator evidence'
+                    })
+                }
             }
-            $result.isolation.fresh_context = $true
-            $result.isolation.isolated_home = $true
-            $result.isolation.isolated_cwd = $true
-            $result.isolation.filesystem_sandbox = $true
-            $result.isolation.candidate_skill_exposed = $true
-            $result.isolation.transcript_captured = $true
-            [System.IO.File]::WriteAllText($resultPath, (($result | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+        }
+        $gradingPath = Join-Path $iterationDirectory ([string]$manifest.grading)
+        [System.IO.File]::WriteAllText($gradingPath, (([ordered]@{ schema = 'codebeltnet/agentic/eval-grading/1'; grading = @($gradingEntries.ToArray()) } | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+        $applyGradingPath = Join-Path $iterationDirectory 'tools/eval-runners/apply-eval-grading.ps1'
+        $applyOutput = & pwsh -NoProfile -File $applyGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "The deterministic grading-only application failed: $($applyOutput -join [Environment]::NewLine)"
+        }
+        $finalizerPath = Join-Path $iterationDirectory 'tools/eval-runners/finalize-eval-package.ps1'
+        $finalizerOutput = & pwsh -NoProfile -File $finalizerPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "The deterministic eval finalizer failed: $($finalizerOutput -join [Environment]::NewLine)"
         }
         $metricsOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -CollectResults failed on recorded metrics: $($metricsOutput -join [Environment]::NewLine)"
         }
         $comparison = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'comparison.md'), $utf8NoBom)
-        foreach ($needle in @('## Run metrics', '| 1.25 | 123 | 2 | recorded |', '## Isolation reported', 'fresh=Y home=Y cwd=Y fs=Y skill=Y tx=Y')) {
+        foreach ($needle in @('## Run metrics', '| 1.25 | 123 | 2 | recorded |', '## Isolation reported', 'fresh=Y home=Y cwd=Y fs=Y skill=Y tx=Y', 'fresh=Y home=Y cwd=Y fs=Y skill=N tx=Y')) {
             if (-not $comparison.Contains($needle)) {
                 throw "comparison.md must report available run metric '$needle'."
             }

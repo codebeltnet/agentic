@@ -58,6 +58,7 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = $utf8NoBom
 
 . (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
+. (Join-Path $PSScriptRoot 'eval-runners/execution-freeze.ps1')
 
 function Read-JsonFile {
     param([string]$Path)
@@ -696,6 +697,7 @@ function New-UpstreamWorkspace {
 
 $iterationPath = (Resolve-Path -LiteralPath $IterationDirectory).Path
 $manifest = Read-JsonFile -Path (Join-Path $iterationPath 'manifest.json')
+[void](Assert-ExecutionFreeze -IterationDirectory $iterationPath -RequireOrchestrationState)
 $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iterationPath -Manifest $manifest)
 $validation = Test-ManifestResults -IterationDirectory $iterationPath -Manifest $manifest -Records $manifestRecords -RequireComplete
 if (-not $validation.Success) {

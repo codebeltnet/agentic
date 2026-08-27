@@ -770,6 +770,40 @@ function Get-Assertions {
     return @()
 }
 
+function New-InteractionDocument {
+    param([Parameter(Mandatory = $true)][object]$EvalEntry)
+
+    $declared = Get-JsonProperty -Object $EvalEntry -Name 'interaction' -Default $null
+    if ($null -eq $declared) { return $null }
+    if ([string](Get-JsonProperty -Object $declared -Name 'mode' -Default 'scripted') -ne 'scripted') {
+        throw "Eval $($EvalEntry.id) interaction mode must be 'scripted'."
+    }
+    $turns = @(Get-JsonProperty -Object $declared -Name 'turns' -Default @())
+    if ($turns.Count -lt 2) { throw "Eval $($EvalEntry.id) scripted interaction must contain at least two turns." }
+    $normalizedTurns = [System.Collections.Generic.List[object]]::new()
+    foreach ($turn in $turns) {
+        $role = [string](Get-JsonProperty -Object $turn -Name 'role' -Default 'user')
+        if ($role -ne 'user') { throw "Eval $($EvalEntry.id) interaction turns must all be user turns." }
+        $source = [string](Get-JsonProperty -Object $turn -Name 'source' -Default '')
+        $content = [string](Get-JsonProperty -Object $turn -Name 'content' -Default '')
+        if (($source -and $content) -or (-not $source -and -not $content)) {
+            throw "Eval $($EvalEntry.id) interaction turns must declare exactly one source or content."
+        }
+        $normalizedTurn = [ordered]@{ role = 'user' }
+        if ($source) {
+            $normalizedTurn.source = $source
+        } else {
+            $normalizedTurn.content = $content
+        }
+        $normalizedTurns.Add($normalizedTurn)
+    }
+    return [ordered]@{
+        schema = 'codebeltnet/agentic/eval-interaction/1'
+        mode = 'scripted'
+        turns = @($normalizedTurns.ToArray())
+    }
+}
+
 function Get-Sha256Hex {
     param([byte[]]$Bytes)
 
@@ -1117,12 +1151,14 @@ function New-RunManifest {
         [string[]]$RepoFiles,
         [string]$FixtureHash,
         [string]$SkillHash,
-        [bool]$GitWorkspace
+        [bool]$GitWorkspace,
+        [string]$InteractionFile = '',
+        [string]$InteractionHash = ''
     )
 
     $skillDirectory = if ($Configuration -eq 'with_skill') { "$($runDirectoryNames.Skill)/$SkillName" } else { $null }
 
-    return [ordered]@{
+    $manifest = [ordered]@{
         schema = $runSchema
         evalId = [int]$EvalEntry.id
         evalName = $EvalName
@@ -1148,6 +1184,11 @@ function New-RunManifest {
             mustNotExposeGlobalSkillsOrConfig = $true
         }
     }
+    if (-not [string]::IsNullOrWhiteSpace($InteractionFile)) {
+        $manifest.interactionFile = $InteractionFile
+        $manifest.interactionHash = $InteractionHash
+    }
+    return $manifest
 }
 
 # Fail package generation the moment a run violates an experimental isolation invariant, so a contaminated package never
@@ -1399,6 +1440,7 @@ function Invoke-PrepareMode {
 
         $inputFilesSection = New-InputFilesSection -Fixtures @($fixtures)
         $assertions = Get-Assertions -EvalEntry $evalEntry
+        $interactionDocument = New-InteractionDocument -EvalEntry $evalEntry
 
         $withSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withSkillInstructions -InputFilesSection $inputFilesSection
         $withoutSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withoutSkillPreamble -InputFilesSection $inputFilesSection
@@ -1406,8 +1448,19 @@ function Invoke-PrepareMode {
         Write-Utf8File -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Prompt) -Content $withSkillPrompt
         Write-Utf8File -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Prompt) -Content $withoutSkillPrompt
 
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git)
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git)
+        $interactionFile = ''
+        $interactionHash = ''
+        if ($null -ne $interactionDocument) {
+            $interactionFile = 'interaction.json'
+            foreach ($configuration in @('with_skill', 'without_skill')) {
+                $interactionPath = Join-Path (Join-Path $evalDirectory $configuration) $interactionFile
+                ConvertTo-JsonFile -Path $interactionPath -Value $interactionDocument
+                if ([string]::IsNullOrWhiteSpace($interactionHash)) { $interactionHash = Get-FileSha256 -Path $interactionPath }
+                if ((Get-FileSha256 -Path $interactionPath) -ne $interactionHash) { throw "Scripted interaction sidecar diverged between configurations for '$evalName'." }
+            }
+        }
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
 
         $assumptions = [System.Collections.Generic.List[string]]::new()
         $assumptions.Add('Run with_skill and without_skill on the same model, same version, and same configuration. Different models measure the model, not the skill.')
@@ -1421,6 +1474,9 @@ function Invoke-PrepareMode {
             $assumptions.Add('This eval stages a real .git in repo/ so repository-root detection and version-deriving tools behave as on a developer machine.')
         }
         $assumptions.Add('The expected output and assertions in this file are the grading key. They live outside every run directory and must never reach a worker.')
+        if ($null -ne $interactionDocument) {
+            $assumptions.Add('This eval uses a deterministic scripted same-session interaction sidecar. Every configuration receives the same ordered user turns; the runner must continue the same session and capture every user/assistant turn.')
+        }
 
         $metadata = [ordered]@{
             schema = $metadataSchema
@@ -1460,6 +1516,7 @@ function Invoke-PrepareMode {
             }
             assumptions = @($assumptions)
         }
+        if ($null -ne $interactionDocument) { $metadata.interaction = $interactionDocument }
 
         ConvertTo-JsonFile -Path (Join-Path $evalDirectory 'eval-metadata.json') -Value $metadata
         ConvertTo-JsonFile -Path (Join-Path $evalDirectory 'results/with-skill.result.json') -Value (New-ResultStub -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -Assertions $assertions)
@@ -1522,6 +1579,9 @@ function Invoke-PrepareMode {
         runner_protocol = $runnerProtocolSchema
         runner_tools = $evalRunnerToolRelativePath
         execution_result_schema = $executionResultSchema
+        execution_freeze = 'execution-freeze.json'
+        grading = 'grading.json'
+        finalizer = "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
         report = [ordered]@{
             tool = $reportToolRelativePath
             template = 'tools/eval-report-template.html'
@@ -1617,66 +1677,33 @@ function New-RunnerPrompt {
 
     $builder = [System.Text.StringBuilder]::new()
     $profilePath = Join-Path $IterationDirectory 'execution-profile.json'
-    $resolverPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/resolve-runner.ps1"
-    $orchestrationPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/orchestration.ps1"
     $runnerOwnedFanoutPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1"
-    $nativeResultRecorderPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/record-native-result.ps1"
     $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
-    $reportPath = Join-Path $IterationDirectory $reportToolRelativePath
+    $finalizerPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
     [void]$builder.AppendLine('# Execute, grade, and report this evaluation package')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('START NOW. You are the external Eval Orchestrator for this user-directed handoff. Complete execution, deterministic grading, optional judgement, aggregation, and reporting in this run. Do not execute evaluation prompts in the current agent context.')
+    [void]$builder.AppendLine('START NOW. You are the external Eval Orchestrator for this user-directed handoff. Do not execute an eval prompt in your own context. The repository preparation and validation flow remain model-free.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("Package: $IterationDirectory")
     [void]$builder.AppendLine("Profile: $profilePath")
-    [void]$builder.AppendLine("Runner resolver: $resolverPath")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('This is a runner-aware package. `run.json` is the existing portable one-arm contract: it defines the prompt, staged files, working directory, isolated home, candidate-skill exposure, and required isolation. `execution-profile.json` selects the runner/model/configuration and carries the execution limits. The selected runner defines how its harness satisfies the contract.')
+    [void]$builder.AppendLine('## Phase 1 — blind execution')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('A human selected the external orchestrator and authorized this handoff. Repository preparation, validation, CI, hooks, and automatic completion gates remain model-free. Do not substitute a generic worker, another runner, or an improvised isolation scheme if the selected runner is unavailable or incompatible.')
+    [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke this deterministic helper exactly once:')
+    [void]$builder.AppendLine("pwsh -NoProfile -File `"$runnerOwnedFanoutPath`" -IterationDirectory `"$IterationDirectory`"")
+    [void]$builder.AppendLine('It performs every preflight before any execute process, preserves exact manifest paths, owns concurrency/backpressure and terminal registration, and writes `execution-freeze.json` before Phase 2. Consume its JSON summary. If it fails, stop. Do not create outer workers, execute an arm yourself, write orchestration state, or edit raw result/evidence files. If dispatch ownership is orchestrator-owned, use only the descriptor-declared native worker transport, the exact manifest paths, and then run the shared freeze boundary; do not synthesize or repair transport evidence.')
+    [void]$builder.AppendLine('Workers receive only their isolated run directory. Keep the paired arm, metadata, expected output, assertions, grading, reports, and orchestration files out of Phase 1. Preserve runner-owned terminal results and all referenced raw transcript/event artifacts exactly as written.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Phase 1: delegate blind arms')
+    [void]$builder.AppendLine('## Phase 2 — grading and finalization')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('> Read `delegation.dispatch_owner` from the selected runner descriptor and preflight. `orchestrator` means the orchestrator dispatches the declared native subagent/task; `runner` means the orchestrator starts the runner-owned native execution surface directly. The orchestrator never executes an arm in its own model context.')
+    [void]$builder.AppendLine('After Phase 1 reports success, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
+    [void]$builder.AppendLine("pwsh -NoProfile -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
+    [void]$builder.AppendLine('Only if that bridge succeeds, reveal the grading key in `eval-metadata.json` to the Grader. The Grader may author exactly one package-root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`; each entry contains only `eval_id`, `eval_name`, `configuration`, `assertion_index`, `assertion`, `passed`, and `evidence`. It must not edit raw execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.')
+    [void]$builder.AppendLine('Write that artifact. Do not invoke the application helper separately; the finalizer invokes `apply-eval-grading.ps1` deterministically. Then invoke exactly once:')
+    [void]$builder.AppendLine("pwsh -NoProfile -File `"$finalizerPath`" -IterationDirectory `"$IterationDirectory`"")
+    [void]$builder.AppendLine('The finalizer revalidates the manifest, profile, terminal orchestration/concurrency evidence, immutable freeze, raw artifacts, bridge, canonical results, and grading; it then generates and verifies all required reports. Return only its machine-readable JSON summary and artifact paths. A non-zero exit, missing artifact, integrity error, or report error means the evaluation is incomplete. Never repair, re-freeze, re-bridge a changed raw result, or report prose success.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('> One arm equals one fresh native Eval Worker and one model-backed eval execution. For runner-owned dispatch, the runner process/thread is that worker; do not create an outer model subagent first.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('> Run independent workers concurrently up to `execution-profile.json.concurrency`. If the harness temporarily refuses another worker because its own concurrency limit is reached, keep that arm queued and dispatch it when capacity becomes available.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Read `manifest.json` and `execution-profile.json`. If `runner` or `model` is null, unavailable, or unsupported, fail clearly and list the supported package-local runner IDs; do not guess a default. The profile contains no credentials.')
-    [void]$builder.AppendLine(('2. Resolve the selected package-local runner with the resolver and read its descriptor. For any `delegation.dispatch_owner=runner`, invoke the complete deterministic Phase 1 boundary at ' + $runnerOwnedFanoutPath + ' exactly once with `-IterationDirectory "' + $IterationDirectory + '"`. It reads the manifest/profile, resolves the runner, requires `dispatch_owner=runner`, preflights every pending manifest run, invokes `Assert-NativeWorkerDelegation` for every result, and only after all preflights pass constructs the plan and fans out the runner-owned workers. Consume its machine-readable summary. Do not create outer native subagents/tasks or hand-author preflight, fan-out, orchestration-state, or result bookkeeping. For `delegation.dispatch_owner=orchestrator`, use the declared native worker/task mechanism and the deterministic recorder at ' + $orchestrationPath + '. Do not invent harness-specific CLI commands.'))
-    [void]$builder.AppendLine('3. For `delegation.dispatch_owner=orchestrator` only, build the pending arm queue from `manifest.json` with the orchestration helper. Read the exact `run_manifest`, `execution_result`, and `result` fields from `runs.<arm>.run_manifest`, `runs.<arm>.execution_result`, and `runs.<arm>.result`. Retain those exact manifest-declared strings without editing them: the parent owns those exact destinations; the worker receives only its own prepared arm contract. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any run, execution-result, or result path. For `delegation.dispatch_owner=runner`, the Phase 1 boundary owns this work.')
-    [void]$builder.AppendLine('4. For `delegation.dispatch_owner=orchestrator` only, before dispatching require native worker delegation and all mandatory isolation controls. An unavailable or unsupported delegation mechanism is incompatible. A conditional mechanism is allowed only when terminal evidence is required for the actual worker. Use the descriptor''s `delegation.dispatch_owner` as the protocol decision: `orchestrator` selects the declared native subagent/task mechanism, while `runner` selects the runner''s declared one-arm native execution surface. Do not substitute a generic worker, an outer model subagent, a parent-side eval, or a compatibility fallback. For `delegation.dispatch_owner=runner`, the deterministic Phase 1 boundary performs this gate for every pending arm and starts zero executions when any preflight is incompatible.')
-    [void]$builder.AppendLine('5. For `dispatch_owner=orchestrator` only, dispatch each pending arm to one fresh harness-native full-capability worker. The worker must execute the prepared `prompt.md` as its first task from that arm''s staged run directory, with the selected model/configuration, exact working directory and isolated home. Require terminal evidence for the exact selected model, exact arm identity, working directory, isolated HOME/config boundary, prompt fidelity, terminal result capture, paired-arm/grading exclusion, fresh session, and absence of nested model execution; if any required fact is missing or mismatched, mark the arm incompatible without retrying through a fallback. It must not receive its paired arm, `eval-metadata.json`, expected output, assertions, grading, benchmark/report data, or any result from another arm. For `dispatch_owner=runner`, the Phase 1 helper owns this dispatch.')
-    [void]$builder.AppendLine(('6. Apply the dispatch-owner semantics exactly. For `orchestrator`, the native subagent/task is the only model-backed execution: it must not invoke `runner.ps1 execute`, a second harness CLI, another model agent, or a nested session. Its harness-native transport must produce schema `codebeltnet/agentic/eval-native-worker-result/1` with `capture.source=harness_native_transport`, `capture.terminal=true`, and `capture.worker_authored=false`; then preserve that envelope and invoke the deterministic runner-owned recorder at {0} with the exact `-Runner`, `-Run`, `-Profile`, `-NativeResult`, and manifest-declared `-Output` paths. For `runner`, use the machine-readable summary from the single Phase 1 helper invocation. It records exactly one runner-produced result per pending arm at the plan''s exact worker IDs and manifest execution_result paths, with each runner''s sole JSON stdout redirected directly to that path. That runner process/thread is the Eval Worker and the single model-backed execution; do not invoke `record-native-result.ps1`, manufacture a native envelope, copy assistant text into transport evidence, or repair/normalize runner output. In either case, the native transport must own timestamps, session/thread identity, isolation observations, prompt fidelity, terminal completion, and the hashed raw transcript/event artifact. A response or summary without transport-owned evidence is incompatible.' -f $nativeResultRecorderPath))
-    [void]$builder.AppendLine('7. Register each worker acceptance and terminal result exactly once. For `dispatch_owner=runner`, consume the machine-readable summary from the Phase 1 helper and do not hand-write PowerShell queue/state bookkeeping. The helper uses the exact plan worker_id values, exact manifest execution_result destinations, and runner-produced session IDs; it never derives an arm label or result filename. For `dispatch_owner=orchestrator`, the external orchestrator owns the declared native worker registration. If orchestration reports that an arm is already accepted or terminal, do not retry or re-register it; preserve the state and resolve the arm from its existing terminal record. Maintain up to `min(execution-profile.json.concurrency, remaining arms)` active delegated workers. If a delegation request is rejected before the worker starts because of harness capacity, leave that arm pending, record no eval attempt, mark the rejection as capacity-limited in orchestration state, and retry it after an active worker becomes terminal. Do not add a runner-specific ceiling or change the portable requested concurrency.')
-    [void]$builder.AppendLine('7a. DISPATCH IS AN ACTION, NOT A CONFIRMATION STEP. After preflight, start the full first batch of native workers immediately. For `orchestrator`, emit the required sibling native worker calls before awaiting results. For `runner`, the single Phase 1 helper invocation launches the independent runner-owned one-arm processes/threads concurrently before awaiting its summary. Do not send a prose status message, ask the user whether to start or re-dispatch, wait for confirmation, or replace the batch with deliberate serial dispatch. If the selected harness cannot satisfy its declared dispatch-owner mechanism and isolation contract, mark it incompatible and stop.')
-    [void]$builder.AppendLine('8. Persist the orchestration state at `orchestration-state.json` as workers are accepted, capacity-rejected, and terminal. Before bridging, invoke `Assert-OrchestrationConcurrency`. If independent arms requested concurrency > 1 but `max_observed_active` is 1 without explicit capacity-limit evidence, fail the handoff; deliberate serial pacing is not a completed evaluation.')
-    [void]$builder.AppendLine('9. Preserve the complete terminal response, status, telemetry, evidence references, hashes, isolation mechanisms, warnings, and compatibility deviations. Do not retry for answer quality. A refusal is a result; timeout and harness failure are terminal results; incompatibility is diagnostic-only and cannot be graded or benchmarked.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The package-local process surface is:')
-    [void]$builder.AppendLine('```text')
-    [void]$builder.AppendLine("pwsh -NoProfile -File `"$resolverPath`" <runner>")
-    [void]$builder.AppendLine("pwsh -NoProfile -File `"$runnerOwnedFanoutPath`" -IterationDirectory `"$IterationDirectory`"  # dispatch_owner=runner only; deterministic fan-out")
-    [void]$builder.AppendLine('runner.ps1 describe')
-    [void]$builder.AppendLine("runner.ps1 preflight -Run `"<run.json>`" -Profile `"$profilePath`"")
-    [void]$builder.AppendLine("runner.ps1 execute -Run `"<run.json>`" -Profile `"$profilePath`"  # runner-owned dispatch only; one native worker/model execution")
-    [void]$builder.AppendLine("record-native-result.ps1 -Runner `"<runner>`" -Run `"<run.json>`" -Profile `"$profilePath`" -NativeResult `"<native-worker-result.json>`" -Output `"<manifest execution-result path>`"  # orchestrator-owned dispatch only")
-    [void]$builder.AppendLine('```')
-    [void]$builder.AppendLine('Use the resolver output and descriptor data to locate `runner.ps1`; `<runner>` is data from the profile, not a runner-specific branch in this orchestration contract. The parent may use `describe` and `preflight`. `invoke-runner-owned-arms.ps1` is the only runner-owned fan-out surface and must not be called by preparation, validation, CI, hooks, or automatic completion gates. `record-native-result.ps1` is only for orchestrator-owned native envelopes. `runner.ps1 execute` is the runner-owned native worker surface when `delegation.dispatch_owner=runner`; invoking it inside an outer model worker would create a second model-backed execution and is forbidden.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Do not read any `eval-metadata.json`, expected output, assertions, result grading, benchmark/report data, or paired output during Phase 1. The orchestrator and worker must never expose those materials before all workers are terminal. They remain outside every run directory and are the grading key.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Phase 2: bridge, grade, and report')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Only after every available native worker is terminal and `Assert-OrchestrationConcurrency` passes, invoke the deterministic package bridge below. It reads `manifest.json`, obtains each arm''s exact `run_manifest`, `execution_result`, and `result` paths. The bridge checks prompt/run/profile hashes and artifact confinement, validates the manifest paths, rejects unreferenced hyphen/underscore shadow results, verifies the persisted parallel-dispatch state, and invokes the existing one-arm bridge with those exact paths. Do not manually construct a bridge command for an arm.')
-    [void]$builder.AppendLine(('   `pwsh -NoProfile -File "' + $manifestBridgePath + '" -IterationDirectory "' + $IterationDirectory + '" -RequireComplete -RequireNativeDelegation -RequireParallelDispatch`'))
-    [void]$builder.AppendLine('   The bridge''s one-arm operation is conceptually `-Run runPath -ExecutionResult executionPath -Result resultPath`, where all three values are the exact strings read from `manifest.json`. Do not derive, normalize, rename, hyphenate, underscore, or otherwise reconstruct any of them.')
-    [void]$builder.AppendLine('2. Only if the package bridge succeeds, read each eval''s `eval-metadata.json` and reveal `expected_output` and `assertions` to the Grader. Follow `tools/skill-creator/agents/grader.md`; grade deterministically first, then use optional model judgement only where deterministic evidence cannot decide. Never infer tool or file behavior from model self-report without process evidence.')
-    [void]$builder.AppendLine('3. Write only `grading[].text`, `grading[].passed`, and `grading[].evidence` for grading. Do not grade incompatible arms, do not alter raw execution results, and do not replace the canonical result stubs. Use null for genuinely unavailable judgement and leave missing or incompatible arms visibly ungradeable.')
-    [void]$builder.AppendLine(('4. Run the existing package report adapter with its completion gate: `pwsh -NoProfile -File "' + $reportPath + '" -IterationDirectory "' + $IterationDirectory + '" -RequireComplete`. It remains the bridge to Anthropic skill-creator''s grader-compatible aggregator and viewer; do not replace it with harness-specific reporting. The packaged compatibility tools remain `scripts/aggregate_benchmark.py` and `eval-viewer/generate_review.py`.'))
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The completion artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md` at the package root. Return their absolute paths, completed and missing arm counts, runner/model identity, and a concise evidence-backed summary. If the selected external process cannot write valid runner-produced execution results back into the package, the evaluation is incomplete and must fail closed. Only persisted runner-produced evidence at the manifest-declared paths may proceed to Phase 2.')
+    [void]$builder.AppendLine('The four required package-root artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`. Same-session scripted evals, when present in a run, are handled by the selected runner only if its descriptor/preflight proves `scripted_multi_turn_same_session`; otherwise preflight fails before execution. The paired configurations receive identical scripted user turns.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("This package contains $(@($ManifestEvals).Count) eval case(s), each with paired `with_skill` and `without_skill` runs. The human reviewer remains the final evaluator.")
     return $builder.ToString()
@@ -1725,13 +1752,12 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## How to run')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine(('1. Read `execution-profile.json`. If `runner` or `model` is missing, fail clearly instead of guessing. Resolve the selected package-local runner and read its descriptor. For any `delegation.dispatch_owner=runner`, invoke the complete deterministic Phase 1 boundary at ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1") + ' exactly once with `-IterationDirectory "' + $IterationDirectory + '"`; it performs every pending-arm preflight and native-delegation assertion before constructing the plan, and any incompatible preflight starts zero execute processes. Consume its machine-readable summary. Do not create outer native subagents/tasks or hand-author preflight, fan-out, orchestration-state, or result bookkeeping. For `delegation.dispatch_owner=orchestrator`, run `describe`, then preflight before dispatch, invoke `Assert-NativeWorkerDelegation`, and use the declared native worker mechanism. Conditional controls require terminal evidence, unsupported controls are incompatible, and no parent sequential fallback is allowed. For OpenCode, a profile with concurrency below 2 is incompatible.'))
-    [void]$builder.AppendLine('2. For `delegation.dispatch_owner=orchestrator` only, use the package-local orchestration helper to queue one native worker per manifest arm. Read `delegation.dispatch_owner` from the descriptor: `orchestrator` means the declared native subagent/task receives the arm, while `runner` means the deterministic Phase 1 boundary has already preflighted and owns the runner''s one-arm native execution surface. A runner-owned process/thread is the sole model-backed worker for that arm; never put it inside an outer model worker. Each worker receives one arm only and no grading material or paired-arm data.')
-    [void]$builder.AppendLine('3. For orchestrator-owned dispatch, preserve each native transport envelope under schema `codebeltnet/agentic/eval-native-worker-result/1` and invoke the deterministic `record-native-result.ps1` recorder with the exact manifest `run_manifest`, `execution_result`, and profile paths. For runner-owned dispatch, preserve the runner-produced `execution-result.json` directly at the exact manifest-declared path and do not invoke the recorder or synthesize an envelope. In both cases, transport evidence must prove `capture.source=harness_native_transport`, `capture.terminal=true`, `capture.worker_authored=false`; assistant text alone is not terminal evidence. Do not ask any worker or parent to author, hand-write, normalize, or repair terminal evidence.')
-    [void]$builder.AppendLine('4. For `delegation.dispatch_owner=orchestrator`, maintain up to the requested concurrency. If the harness refuses a new worker because its own capacity is full, leave that arm queued, mark the rejection as capacity-limited in `orchestration-state.json`, and dispatch it when capacity is released; do not hardcode a runner-specific maximum and do not count the rejection as an attempt. For `delegation.dispatch_owner=runner`, the deterministic Phase 1 boundary preserves the requested concurrency and owns this state.')
-    [void]$builder.AppendLine('5. After all delegated workers complete or fail, invoke `Assert-OrchestrationConcurrency`, persist `orchestration-state.json`, and run `tools/eval-runners/bridge-manifest-results.ps1 -IterationDirectory <package> -RequireComplete -RequireNativeDelegation -RequireParallelDispatch`. It reads the manifest-declared `run_manifest`, `execution_result`, and `result` paths for every arm, validates native terminal evidence and parallel-dispatch evidence again, and invokes the one-arm bridge with those exact paths. Only then read the grading key, grade with `tools/skill-creator/agents/grader.md`, and run `tools/generate-eval-report.ps1 -RequireComplete`.')
+    [void]$builder.AppendLine(('1. Read `execution-profile.json` and the selected runner descriptor. If `runner` or `model` is missing or unsupported, fail clearly instead of guessing. For `delegation.dispatch_owner=runner`, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1") + ' exactly once. It performs all preflight, native dispatch, concurrency, terminal registration, and raw-evidence freezing. For `delegation.dispatch_owner=orchestrator`, use only the descriptor-declared native worker mechanism, then invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/freeze-execution-evidence.ps1") + ' after every arm is terminal.'))
+    [void]$builder.AppendLine('2. Do not execute an arm in the parent context, create a second worker for a runner-owned arm, expose grading material during execution, or author/repair raw evidence. If Phase 1 or freezing fails, stop: the package is incomplete.')
+    [void]$builder.AppendLine(('3. After the freeze succeeds, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1") + ' with `-RequireComplete -RequireParallelDispatch` and add `-RequireNativeDelegation` when the selected descriptor has `dispatch_owner=runner`. Only after that deterministic bridge succeeds, give the grading key to the Grader. The Grader writes only the package-root `grading.json` grading-only artifact. It must not modify execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.'))
+    [void]$builder.AppendLine(('4. Invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1") + ' exactly once. It invokes the deterministic apply-eval-grading boundary, validates the frozen evidence, idempotent bridge, complete grading, and report outputs. Return only its machine-readable summary.'))
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It selects the package-local runner from the profile, delegates one native Eval Worker per blind arm, queues capacity rejections, bridges raw evidence into the existing result shape, reveals grading material only after execution, and invokes Anthropic skill-creator''s compatible aggregator and static viewer through the package adapter. It never executes an eval prompt in its own context.')
+    [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It never executes an eval arm in its own model context. Same-session scripted interactions are allowed only when the selected runner proves that capability; paired runs receive identical deterministic turns. The package is complete only when the finalizer exits successfully.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A harness that cannot provide fresh, independent sessions with isolated working and config roots is incompatible with these evals. If the selected external process cannot write valid runner-produced execution results back into the package, the evaluation is incomplete and must fail closed. Only persisted runner-produced evidence at the manifest-declared paths may proceed to Phase 2.')
     [void]$builder.AppendLine()
@@ -1739,7 +1765,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Report artifacts')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The package bridge writes each `results/*.result.json` from the runner-produced execution result at its exact manifest-declared path. The external evaluator may add grading fields after the completion gate; it must not author or repair raw execution evidence:')
+    [void]$builder.AppendLine('The package bridge writes each `results/*.result.json` from the runner-produced execution result at its exact manifest-declared path. The external Grader authors only the package-root grading artifact; the deterministic application helper projects it onto canonical results without changing any other field:')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('- `model`, `harness` - what actually ran it, as specifically as you know')
     [void]$builder.AppendLine('- `executed_utc` - when')
@@ -1747,7 +1773,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine('- `transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls` - include the values the harness exposes; omit unavailable values rather than estimating them')
     [void]$builder.AppendLine('- Optional efficiency telemetry: `turns`, `base_input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` or `cache_write_1h_tokens`, `estimated_cost_usd`, and `model_effort`. These are shown when recorded and never inferred from totals.')
     [void]$builder.AppendLine('- `isolation` - the guarantees the harness satisfied for this run; process-dependent assertions can only be graded from a run that captured the needed evidence')
-    [void]$builder.AppendLine('- `grading[].passed` - `true`, `false`, or `null` per assertion once the external evaluator or a deterministic script has checked it, with `evidence`')
+    [void]$builder.AppendLine('- `grading.json` - schema `codebeltnet/agentic/eval-grading/1`, with exact assertion identities and only `passed` plus `evidence` decisions')
     [void]$builder.AppendLine('- `notes` - anything that would change how the result reads')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The normal handoff finishes with these package-root artifacts:')
