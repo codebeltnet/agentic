@@ -52,7 +52,20 @@ function Invoke-GeneratedRunnerPrompt {
     $evalRunnerToolRelativePath = 'tools/eval-runners'
     Invoke-Expression $functionAst[0].Extent.Text
     $selection = [pscustomobject]@{ Harness = 'OpenCode CLI'; Runner = 'opencode'; Model = 'opencode/muse-spark-1.2-contributor-free'; Preset = '' }
-    return New-RunnerPrompt -IterationDirectory 'C:\temp\eval-package' -IterationNumber 1 -ManifestEvals @() -ExecutionSelection $selection -RequestedConcurrency 2
+    $generatedRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-generated-handoff-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        $metadataPath = Join-Path $generatedRoot 'eval-01\eval-metadata.json'
+        Write-TestJson -Path $metadataPath -Value ([ordered]@{
+            interaction = [ordered]@{ turns = @(
+                [ordered]@{ role = 'user'; content = 'first' }
+                [ordered]@{ role = 'user'; content = 'second' }
+            ) }
+        })
+        $manifestEval = [pscustomobject]@{ metadata = 'eval-01/eval-metadata.json' }
+        return New-RunnerPrompt -IterationDirectory $generatedRoot -IterationNumber 1 -ManifestEvals @($manifestEval) -ExecutionSelection $selection -RequestedConcurrency 2 -PerArmTimeoutSeconds 7 -RunnerGraceSeconds 3
+    } finally {
+        if (Test-Path -LiteralPath $generatedRoot) { Remove-Item -LiteralPath $generatedRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 function Invoke-AdapterJson {
@@ -126,6 +139,104 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArgume
 $harness = [System.IO.Path]::GetFileNameWithoutExtension($MyInvocation.MyCommand.Path)
 $logPath = Join-Path (Get-Location).Path ("{0}-fake-cli-log.jsonl" -f $harness)
 $arguments = @($RemainingArguments | ForEach-Object { [string]$_ })
+$serverMode = $harness -eq 'opencode' -and $arguments -contains 'serve' -and $arguments -notcontains '--help'
+if ($harness -eq 'opencode' -and $arguments -contains 'serve' -and $arguments -contains '--help') {
+    [Console]::Out.WriteLine('opencode serve --hostname <host> --port <port>')
+    [IO.File]::AppendAllText($logPath, (([ordered]@{ invocation_kind = 'serve_help_probe'; args = $arguments } | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    exit 0
+}
+if ($serverMode) {
+    $portIndex = [Array]::IndexOf([string[]]$arguments, '--port')
+    $hostnameIndex = [Array]::IndexOf([string[]]$arguments, '--hostname')
+    $port = if ($portIndex -ge 0 -and $portIndex + 1 -lt $arguments.Count) { [int]$arguments[$portIndex + 1] } else { 0 }
+    $hostname = if ($hostnameIndex -ge 0 -and $hostnameIndex + 1 -lt $arguments.Count) { [string]$arguments[$hostnameIndex + 1] } else { '' }
+    $listener = [System.Net.HttpListener]::new()
+    $listener.Prefixes.Add("http://$hostname`:$port/")
+    $sessionId = 'ses-recorded-opencode-server'
+    $messageCount = 0
+    $stopRequested = $false
+    $fakeHome = [Environment]::GetEnvironmentVariable('HOME')
+    $noSessionFirst = -not [string]::IsNullOrWhiteSpace($fakeHome) -and (Test-Path -LiteralPath (Join-Path $fakeHome 'scripted-no-session-first') -PathType Leaf)
+    $mismatchSession = -not [string]::IsNullOrWhiteSpace($fakeHome) -and (Test-Path -LiteralPath (Join-Path $fakeHome 'scripted-session-mismatch') -PathType Leaf)
+    $noTerminalFirst = -not [string]::IsNullOrWhiteSpace($fakeHome) -and (Test-Path -LiteralPath (Join-Path $fakeHome 'scripted-no-terminal-first') -PathType Leaf)
+    $assistantSchema = [ordered]@{ type = 'object'; properties = [ordered]@{ id = [ordered]@{ type = 'string'; pattern = '^msg' }; sessionID = [ordered]@{ type = 'string'; pattern = '^ses' }; role = [ordered]@{ type = 'string'; enum = @('assistant') }; time = [ordered]@{ type = 'object' }; parentID = [ordered]@{ type = 'string' }; modelID = [ordered]@{ type = 'string' }; providerID = [ordered]@{ type = 'string' }; mode = [ordered]@{ type = 'string' }; agent = [ordered]@{ type = 'string' }; path = [ordered]@{ type = 'object' }; cost = [ordered]@{ type = 'number' }; tokens = [ordered]@{ type = 'object' } }; required = @('id', 'sessionID', 'role', 'time', 'parentID', 'modelID', 'providerID', 'mode', 'agent', 'path', 'cost', 'tokens'); additionalProperties = $false }
+    $openApi = [ordered]@{
+        openapi = '3.0.0'
+        info = [ordered]@{ title = 'recorded-opencode'; version = '1.0.0' }
+        paths = [ordered]@{
+            '/global/health' = [ordered]@{ get = [ordered]@{ operationId = 'global.health'; responses = [ordered]@{ '200' = [ordered]@{ content = [ordered]@{ 'application/json' = [ordered]@{ schema = [ordered]@{ type = 'object' } } } } } } }
+            '/session' = [ordered]@{ post = [ordered]@{ operationId = 'session.create'; parameters = @([ordered]@{ name = 'directory'; in = 'query'; required = $false; schema = [ordered]@{ type = 'string' } }); requestBody = [ordered]@{ content = [ordered]@{ 'application/json' = [ordered]@{ schema = [ordered]@{ type = 'object'; properties = [ordered]@{ model = [ordered]@{ type = 'object'; properties = [ordered]@{ id = [ordered]@{ type = 'string' }; providerID = [ordered]@{ type = 'string' } }; required = @('id', 'providerID') } }; additionalProperties = $false } } } }; responses = [ordered]@{ '200' = [ordered]@{ content = [ordered]@{ 'application/json' = [ordered]@{ schema = [ordered]@{ '$ref' = '#/components/schemas/Session' } } } } } } }
+            '/session/{sessionID}/message' = [ordered]@{ post = [ordered]@{ operationId = 'session.prompt'; parameters = @([ordered]@{ name = 'sessionID'; in = 'path'; required = $true; schema = [ordered]@{ type = 'string'; pattern = '^ses' } }, [ordered]@{ name = 'directory'; in = 'query'; required = $false; schema = [ordered]@{ type = 'string' } }); requestBody = [ordered]@{ content = [ordered]@{ 'application/json' = [ordered]@{ schema = [ordered]@{ type = 'object'; properties = [ordered]@{ model = [ordered]@{ type = 'object'; properties = [ordered]@{ providerID = [ordered]@{ type = 'string' }; modelID = [ordered]@{ type = 'string' } }; required = @('providerID', 'modelID') }; parts = [ordered]@{ type = 'array'; items = [ordered]@{ anyOf = @([ordered]@{ '$ref' = '#/components/schemas/TextPartInput' }) } } }; required = @('parts'); additionalProperties = $false } } } }; responses = [ordered]@{ '200' = [ordered]@{ content = [ordered]@{ 'application/json' = [ordered]@{ schema = [ordered]@{ type = 'object'; properties = [ordered]@{ info = [ordered]@{ '$ref' = '#/components/schemas/AssistantMessage' }; parts = [ordered]@{ type = 'array' } }; required = @('info', 'parts') } } } } } } }
+            '/session/{sessionID}/abort' = [ordered]@{ post = [ordered]@{ operationId = 'session.abort'; responses = [ordered]@{ '204' = [ordered]@{} } } }
+            '/instance/dispose' = [ordered]@{ post = [ordered]@{ operationId = 'instance.dispose'; responses = [ordered]@{ '200' = [ordered]@{ content = [ordered]@{ 'application/json' = [ordered]@{ schema = [ordered]@{ type = 'boolean' } } } } } } }
+        }
+        components = [ordered]@{ schemas = [ordered]@{
+            Session = [ordered]@{ type = 'object'; properties = [ordered]@{ id = [ordered]@{ type = 'string'; pattern = '^ses' }; slug = [ordered]@{ type = 'string' }; projectID = [ordered]@{ type = 'string' }; directory = [ordered]@{ type = 'string' }; title = [ordered]@{ type = 'string' }; version = [ordered]@{ type = 'string' }; time = [ordered]@{ type = 'object' } }; required = @('id', 'slug', 'projectID', 'directory', 'title', 'version', 'time') }
+            AssistantMessage = $assistantSchema
+            TextPartInput = [ordered]@{ type = 'object'; properties = [ordered]@{ type = [ordered]@{ type = 'string'; enum = @('text') }; text = [ordered]@{ type = 'string' } }; required = @('type', 'text') }
+        } }
+    }
+    function Write-ServerJson {
+        param([Parameter(Mandatory = $true)][object]$Value, [int]$StatusCode = 200)
+        $json = $Value | ConvertTo-Json -Depth 100 -Compress
+        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($json)
+        $context.Response.StatusCode = $StatusCode
+        $context.Response.ContentType = 'application/json'
+        $context.Response.ContentLength64 = $bytes.Length
+        $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+        $context.Response.Close()
+    }
+    try {
+        $listener.Start()
+        [IO.File]::AppendAllText($logPath, (([ordered]@{ invocation_kind = 'server_start'; hostname = $hostname; port = $port; server_arguments = $arguments } | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        while (-not $stopRequested) {
+            $context = $listener.GetContext()
+            $path = $context.Request.Url.AbsolutePath
+            $method = $context.Request.HttpMethod
+            $requestText = ''
+            if ($context.Request.HasEntityBody) { $requestText = [IO.StreamReader]::new($context.Request.InputStream).ReadToEnd() }
+            if ($method -eq 'GET' -and $path -eq '/global/health') {
+                Write-ServerJson -Value ([ordered]@{ healthy = $true; version = 'recorded-opencode 9.2' })
+            } elseif ($method -eq 'GET' -and $path -eq '/doc') {
+                Write-ServerJson -Value $openApi
+            } elseif ($method -eq 'POST' -and $path -eq '/session') {
+                $requested = if ([string]::IsNullOrWhiteSpace($requestText)) { [ordered]@{} } else { $requestText | ConvertFrom-Json -Depth 50 }
+                $requestedModel = $requested.model
+                $createdSessionId = if ($noSessionFirst) { '' } else { $sessionId }
+                Write-ServerJson -Value ([ordered]@{ id = $createdSessionId; slug = 'recorded'; projectID = 'recorded-project'; directory = (Get-Location).Path; title = 'recorded'; version = '1.0.0'; time = [ordered]@{ created = 1; updated = 1 }; model = [ordered]@{ id = [string]$requestedModel.id; providerID = [string]$requestedModel.providerID } })
+            } elseif ($method -eq 'POST' -and $path -match '^/session/([^/]+)/message$') {
+                $messageCount++
+                $requested = $requestText | ConvertFrom-Json -Depth 50
+                if ($messageCount -eq 1) {
+                    New-Item -ItemType Directory -Path (Join-Path (Get-Location).Path '.opencode\node_modules') -Force | Out-Null
+                    [IO.File]::WriteAllText((Join-Path (Get-Location).Path '.opencode\node_modules\runtime-only.txt'), 'runtime', [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText((Join-Path (Get-Location).Path '.opencode\.gitignore'), 'runtime', [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText((Join-Path (Get-Location).Path 'normal-task-output.snk'), 'task-output', [Text.UTF8Encoding]::new($false))
+                }
+                $requestedPartText = [string]$requested.parts[0].text
+                [IO.File]::AppendAllText($logPath, (([ordered]@{ invocation_kind = 'server_message'; message_number = $messageCount; path = $path; request_text = $requestedPartText; request_model = $requested.model; session_id = $Matches[1] } | ConvertTo-Json -Depth 50 -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+                $responseSessionId = if ($mismatchSession -and $messageCount -eq 1) { 'ses-recorded-opencode-mismatch' } else { $sessionId }
+                $responseParts = if ($noTerminalFirst -and $messageCount -eq 1) { @() } else { @([ordered]@{ type = 'text'; text = "recorded synchronous turn ${messageCount}: $requestedPartText" }) }
+                Write-ServerJson -Value ([ordered]@{ info = [ordered]@{ id = "msg-recorded-$messageCount"; sessionID = $responseSessionId; role = 'assistant'; time = [ordered]@{ created = $messageCount; completed = $messageCount }; parentID = "msg-parent-$messageCount"; modelID = [string]$requested.model.modelID; providerID = [string]$requested.model.providerID; mode = 'build'; agent = 'build'; path = [ordered]@{ cwd = (Get-Location).Path; root = (Get-Location).Path }; cost = 0; tokens = [ordered]@{ input = 2; output = 3; reasoning = 0; cache = [ordered]@{ read = 0; write = 0 } } }; parts = $responseParts })
+            } elseif ($method -eq 'POST' -and $path -eq '/instance/dispose') {
+                Write-ServerJson -Value $true
+                $stopRequested = $true
+            } elseif (($method -eq 'GET' -and $path -eq '/session/status') -or [string]$context.Request.Headers['Accept'] -match '(?i)text/event-stream') {
+                # Deliberately never return from the legacy idle/SSE surface.
+                # The selected synchronous transport must complete without
+                # touching either endpoint; an accidental dependency times out
+                # and fails the execution instead of masking a hang.
+                Start-Sleep -Seconds 60
+            } else {
+                Write-ServerJson -Value ([ordered]@{ error = 'not found' }) -StatusCode 404
+            }
+        }
+    } finally {
+        try { $listener.Stop() } catch { }
+        try { $listener.Close() } catch { }
+    }
+    exit 0
+}
 $fixtureRoot = [Environment]::GetEnvironmentVariable('AGENTIC_RECORDED_FIXTURES')
 if ([string]::IsNullOrWhiteSpace($fixtureRoot)) { $fixtureRoot = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'fixtures' }
 $fixtureHome = [Environment]::GetEnvironmentVariable('HOME')
@@ -644,7 +755,7 @@ try {
     [void]$probe.Start()
     $probeOutput = $probe.StandardOutput.ReadToEnd()
     $probeError = $probe.StandardError.ReadToEnd()
-    $probe.WaitForExit()
+    if (-not $probe.WaitForExit(5000)) { throw 'worker credential probe exceeded its finite test wait.' }
     if ($probe.ExitCode -ne 0) { throw "worker credential probe failed: $probeError" }
     $probeResult = $probeOutput | ConvertFrom-Json
     $record.worker_provider_visible = [bool]$probeResult.provider_visible
@@ -1133,7 +1244,7 @@ exit 2
         mode = 'scripted'
         turns = @(
             [ordered]@{ role = 'user'; content = 'recorded scripted turn one' }
-            [ordered]@{ role = 'user'; content = 'recorded scripted turn two' }
+            [ordered]@{ role = 'user'; source = 'future-turn/turn-2.txt' }
         )
     }
     foreach ($runnerName in @('copilot', 'opencode')) {
@@ -1145,6 +1256,12 @@ exit 2
             [IO.File]::WriteAllText((Join-Path $scriptedRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
             [IO.File]::WriteAllText((Join-Path $scriptedRun.Root ("home\{0}-exact-session-help" -f $runnerName)), 'fixture', [Text.UTF8Encoding]::new($false))
             if ($runnerName -eq 'opencode') { [IO.File]::WriteAllText((Join-Path $scriptedRun.Root 'home\opencode-timing-fixture'), 'fixture', [Text.UTF8Encoding]::new($false)) }
+            Add-TestInteractionSources -TestRun $scriptedRun
+        }
+        if ($runnerName -eq 'opencode') {
+            $preexistingOpenCodeIgnore = Join-Path $scriptedWith.Root 'repo\.opencode\.gitignore'
+            New-Item -ItemType Directory -Path (Split-Path -Parent $preexistingOpenCodeIgnore) -Force | Out-Null
+            [IO.File]::WriteAllText($preexistingOpenCodeIgnore, 'fixture-existing', [Text.UTF8Encoding]::new($false))
         }
         $scriptedRunnerRelativePath = if ($runnerName -eq 'copilot') { 'github-copilot\runner.ps1' } else { 'opencode\runner.ps1' }
         $scriptedRunnerPath = Join-Path $runnerRoot $scriptedRunnerRelativePath
@@ -1160,96 +1277,145 @@ exit 2
         Assert-True ([bool]$scriptedResult.evidence.interaction.same_session) "$runnerName scripted result proves one same session"
         Assert-Equal 2 @($scriptedResult.evidence.interaction.native_turns).Count "$runnerName records both native turns"
         Assert-Equal ([string]$scriptedResult.session.id) ([string]$scriptedResult.evidence.interaction.session_id) "$runnerName shared interaction evidence uses the result session id"
-        Assert-Equal ([string]$scriptedResult.session.id) ([string]$scriptedResult.evidence.exact_session_continuation.exact_session_id) "$runnerName exact continuation evidence uses the captured session id"
-        Assert-True ([bool]$scriptedResult.evidence.exact_session_continuation.turns_started_after_prior_terminal) "$runnerName starts continuation only after a terminal first turn"
         Assert-True ([bool]$scriptedResult.evidence.capture.complete_structured_transcript) "$runnerName records a complete structured multi-turn transcript"
         Assert-Equal 1 $scriptedResult.evidence.delegation.model_execution_count "$runnerName keeps one runner-owned model execution worker across scripted invocations"
         $nativeTurns = @($scriptedResult.evidence.interaction.native_turns)
         $firstNativeTurn = $nativeTurns[0]
         $secondNativeTurn = $nativeTurns[1]
-        Assert-Equal 'fresh' $firstNativeTurn.invocation "$runnerName turn 1 is fresh"
-        Assert-Equal 'explicit_session_resume' $secondNativeTurn.invocation "$runnerName turn 2 explicitly resumes"
-        Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondNativeTurn.session_id) "$runnerName native turn evidence has one session id"
-        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$firstNativeTurn.session_id)) "$runnerName captures an exact session id from turn 1 structured events"
-        Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondNativeTurn.target_session_id) "$runnerName turn 2 targets turn 1's exact session id"
-        Assert-True ([bool]$secondNativeTurn.target_session_match) "$runnerName turn 2 native session identity matches its target"
-        Assert-Equal ([string]$firstNativeTurn.working_directory) ([string]$secondNativeTurn.working_directory) "$runnerName preserves the working directory across turns"
-        Assert-Equal ([string]$firstNativeTurn.home) ([string]$secondNativeTurn.home) "$runnerName preserves the isolated home across turns"
         if ($runnerName -eq 'opencode') {
-            Assert-Equal ([string]$firstNativeTurn.effective_runtime_home) ([string]$secondNativeTurn.effective_runtime_home) 'OpenCode exact-session turn 2 preserves the effective runtime home'
-            Assert-Equal ($firstNativeTurn.skill_policy | ConvertTo-Json -Compress) ($secondNativeTurn.skill_policy | ConvertTo-Json -Compress) 'OpenCode exact-session turn 2 preserves the skill policy'
-            Assert-Equal ([string](Split-Path -Parent $firstNativeTurn.working_directory)) ([string](Split-Path -Parent $secondNativeTurn.working_directory)) 'OpenCode uses one physical projection for all scripted turns'
-            Assert-Equal ([string]$firstNativeTurn.working_directory) ([string]$scriptedResult.evidence.interaction.working_directory) 'OpenCode interaction evidence records the projected cwd used by turn 1'
-            Assert-Equal ([string]$firstNativeTurn.home) ([string]$scriptedResult.evidence.interaction.isolated_home) 'OpenCode interaction evidence records the projected HOME used by turn 1'
-        }
-        Assert-Equal ([string]$firstNativeTurn.requested_model) ([string]$secondNativeTurn.requested_model) "$runnerName preserves the requested model across turns"
-        Assert-True (@($firstNativeTurn.observed_models | Where-Object { [string]$_ -eq [string]$firstNativeTurn.requested_model }).Count -gt 0) "$runnerName records the requested model in first-turn structured evidence"
-        Assert-True (@($secondNativeTurn.observed_models | Where-Object { [string]$_ -eq [string]$secondNativeTurn.requested_model }).Count -gt 0) "$runnerName records the requested model in resumed-turn structured evidence"
-        Assert-Equal 0 $firstNativeTurn.exit_code "$runnerName first turn exits cleanly"
-        Assert-Equal 0 $secondNativeTurn.exit_code "$runnerName resumed turn exits cleanly"
-        Assert-True ([bool]$firstNativeTurn.terminal -and [bool]$secondNativeTurn.terminal) "$runnerName records terminal native turn evidence"
-        Assert-True ([bool]$firstNativeTurn.terminal_assistant_response -and [bool]$firstNativeTurn.terminal_event_observed) "$runnerName proves turn 1 has a terminal assistant response before continuation"
-        Assert-True ([bool]$secondNativeTurn.terminal_assistant_response -and [bool]$secondNativeTurn.terminal_event_observed) "$runnerName proves the resumed turn has a terminal assistant response"
-        Assert-True ([DateTime]::Compare([DateTime]$firstNativeTurn.finished_utc, [DateTime]$secondNativeTurn.started_utc) -le 0) "$runnerName starts turn 2 after turn 1 finishes"
-        Assert-True @($firstNativeTurn.event_timestamps).Count -gt 0 "$runnerName records first-turn event timestamps"
-        Assert-True @($secondNativeTurn.event_timestamps).Count -gt 0 "$runnerName records second-turn event timestamps"
-        if ($runnerName -eq 'copilot') {
-            Assert-Equal ([string]$firstNativeTurn.copilot_home) ([string]$secondNativeTurn.copilot_home) "$runnerName preserves the isolated COPILOT_HOME across turns"
+            Assert-True ($scriptedResult.evidence.PSObject.Properties.Name -notcontains 'exact_session_continuation') 'OpenCode scripted result removes the broken CLI continuation evidence shape'
+            Assert-Equal 'opencode-server-synchronous-http' $scriptedResult.evidence.interaction.transport 'OpenCode scripted result records server transport'
+            Assert-Equal '127.0.0.1' $scriptedResult.evidence.server.bind 'OpenCode server binds only to loopback'
+            Assert-True (-not [bool]$scriptedResult.evidence.future_turn_secrecy.interaction_json_projected) 'OpenCode interaction.json is absent from the physical projection'
+            Assert-True (-not [bool]$scriptedResult.evidence.future_turn_secrecy.future_source_files_projected) 'OpenCode future source files are absent from the physical projection'
+            Assert-True (-not [bool]$scriptedResult.evidence.future_turn_secrecy.canary_in_physical_projection) 'OpenCode future-turn canary is absent from the physical projection'
+            Assert-True (-not [bool]$scriptedResult.evidence.future_turn_secrecy.canary_in_environment) 'OpenCode future-turn canary is absent from the server environment'
+            Assert-True (-not [bool]$scriptedResult.evidence.future_turn_secrecy.canary_in_server_arguments) 'OpenCode future-turn canary is absent from server arguments'
+            Assert-True (-not [bool]$scriptedResult.evidence.future_turn_secrecy.turn_1_request_contains_future_canary) 'OpenCode turn 1 request cannot discover the future-turn canary'
+            Assert-True ([bool]$scriptedResult.evidence.future_turn_secrecy.turn_2_sent_only_after_turn_1_http_completed) 'OpenCode turn 2 is sent only after turn 1 HTTP completion'
+            Assert-Equal ([string]$scriptedResult.session.id) ([string]$firstNativeTurn.exact_session_id) 'OpenCode turn 1 uses the created exact session'
+            Assert-Equal ([string]$firstNativeTurn.exact_session_id) ([string]$secondNativeTurn.exact_session_id) 'OpenCode all scripted turns use one exact session'
+            Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondNativeTurn.session_id) 'OpenCode response session identity remains stable'
+            Assert-True ([bool]$firstNativeTurn.session_id_match -and [bool]$secondNativeTurn.session_id_match) 'OpenCode validates response session identity on every turn'
+            Assert-True ([bool]$firstNativeTurn.terminal_http_response -and [bool]$secondNativeTurn.terminal_http_response) 'OpenCode synchronous HTTP responses are terminal turn evidence'
+            Assert-Equal ([string]$firstNativeTurn.requested_model) ([string]$secondNativeTurn.requested_model) 'OpenCode supplies the exact requested model on every turn'
+            Assert-Equal 'opencode/muse-spark-1.2-contributor-free' $firstNativeTurn.requested_model 'OpenCode preserves the complete provider/model selector'
+            Assert-Equal 'opencode' $firstNativeTurn.requested_provider 'OpenCode supplies the provider selector on turn 1'
+            Assert-Equal 'muse-spark-1.2-contributor-free' $firstNativeTurn.requested_model_id 'OpenCode supplies the model id on turn 1'
+            Assert-Equal $firstNativeTurn.requested_model $firstNativeTurn.observed_model 'OpenCode proves the observed model on turn 1'
+            Assert-Equal $secondNativeTurn.requested_model $secondNativeTurn.observed_model 'OpenCode proves the observed model on turn 2'
+            Assert-True (-not [bool]$firstNativeTurn.request_contains_future_canary) 'OpenCode turn 1 request body excludes future input'
+            Assert-True ([bool]$secondNativeTurn.assistant_text -and [bool]$secondNativeTurn.request_contains_future_canary) 'OpenCode turn 2 request carries only its now-visible future input'
+            Assert-True ([string]$firstNativeTurn.path -match ('/session/' + [regex]::Escape([string]$scriptedResult.session.id) + '/message')) 'OpenCode turn 1 targets the exact session message path'
+            Assert-True ([string]$secondNativeTurn.path -match ('/session/' + [regex]::Escape([string]$scriptedResult.session.id) + '/message')) 'OpenCode turn 2 targets the exact session message path'
+            Assert-Equal 'fresh_session_http' $scriptedResult.evidence.timing.turns[0].invocation 'OpenCode timing labels turn 1 as a fresh session HTTP request'
+            Assert-Equal 'same_session_http' $scriptedResult.evidence.timing.turns[1].invocation 'OpenCode timing labels turn 2 as same-session HTTP'
+            Assert-True ($scriptedResult.evidence.interaction.sse_dependency -eq $false -and $scriptedResult.evidence.interaction.session_status_dependency -eq $false) 'OpenCode completion does not depend on SSE or session idle status'
+            $scriptedLogPath = Join-Path $scriptedWith.Root 'repo\opencode-fake-cli-log.jsonl'
+            $scriptedRecords = @(Get-Content -LiteralPath $scriptedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+            Assert-Equal 1 @($scriptedRecords | Where-Object { $_.invocation_kind -eq 'server_start' }).Count 'OpenCode starts exactly one owned server per scripted execution'
+            Assert-Equal 2 @($scriptedRecords | Where-Object { $_.invocation_kind -eq 'server_message' }).Count 'OpenCode sends exactly two synchronous server messages'
+            Assert-True (@($scriptedRecords | Where-Object { $_.invocation_kind -eq 'server_message' -and $_.request_text -match 'CODEBELT_FUTURE_TURN_CANARY_' }).Count -eq 1) 'OpenCode fake server observes the future canary only in turn 2'
+            Assert-True (@($scriptedRecords | Where-Object { $_.invocation_kind -eq 'server_message' -and $_.request_model.providerID -eq 'opencode' -and $_.request_model.modelID -eq 'muse-spark-1.2-contributor-free' }).Count -eq 2) 'OpenCode fake server observes exact model fields on every turn'
+            Assert-True (@($scriptedRecords | Where-Object { $_.invocation_kind -eq 'server_message' -and $_.session_id -eq [string]$scriptedResult.session.id }).Count -eq 2) 'OpenCode fake server observes one exact session id on every turn'
+            Assert-True (-not (@($scriptedRecords | Where-Object { $_.invocation_kind -eq 'server_start' } | ForEach-Object { $_.server_arguments } | Where-Object { $_ -contains '--session' })) ) 'OpenCode server startup never receives CLI session continuation'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $scriptedWith.Root 'repo\.opencode\node_modules') -PathType Container)) 'OpenCode runtime node_modules does not leak into the logical fixture'
+            Assert-True (Test-Path -LiteralPath (Join-Path $scriptedWith.Root 'repo\.opencode\.gitignore') -PathType Leaf) 'OpenCode pre-existing .opencode/.gitignore remains in the logical fixture'
+            Assert-Equal 'runtime' (Get-Content -LiteralPath (Join-Path $scriptedWith.Root 'repo\.opencode\.gitignore') -Raw).Trim() 'OpenCode legitimate pre-existing .opencode mutation synchronizes into the logical fixture'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $scriptedWith.Root 'repo\.opencode\skills\candidate') -PathType Container)) 'OpenCode candidate skill is removed before copy-back'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $scriptedWithout.Root 'repo\.opencode\.gitignore') -PathType Leaf)) 'OpenCode newly generated .opencode/.gitignore is excluded from copy-back when absent initially'
+            Assert-True (Test-Path -LiteralPath (Join-Path $scriptedWith.Root 'repo\normal-task-output.snk') -PathType Leaf) 'OpenCode normal task output synchronizes into the logical fixture'
+
+            # Repeat the same server transport against the baseline arm. The
+            # future-input boundary and runtime copy-back rules must hold with
+            # and without the candidate skill.
+            $baselinePreflight = Invoke-AdapterJson -RunnerPath $scriptedRunnerPath -Command preflight -RunPath $scriptedWithout.Path -ProfilePath $recordedProfiles[$runnerName]
+            Assert-Equal 'compatible' $baselinePreflight.status 'OpenCode baseline scripted preflight is compatible'
+            Assert-Equal 'supported' $baselinePreflight.resolved_capabilities.scripted_multi_turn_same_session 'OpenCode baseline advertises server scripted capability'
+            $baselineResult = Invoke-AdapterJson -RunnerPath $scriptedRunnerPath -Command execute -RunPath $scriptedWithout.Path -ProfilePath $recordedProfiles[$runnerName]
+            [void](Assert-ExecutionResult -Result $baselineResult)
+            Assert-Equal 'completed' $baselineResult.status 'OpenCode baseline scripted execution completes'
+            [void](Assert-InteractionResultEvidence -ExecutionResult $baselineResult -RunData (Resolve-RunContract -RunPath $scriptedWithout.Path))
+            Assert-True ([bool]$baselineResult.evidence.interaction.same_session) 'OpenCode baseline proves one same session'
+            Assert-Equal 2 @($baselineResult.evidence.interaction.native_turns).Count 'OpenCode baseline records both native turns'
+            Assert-True (-not [bool]$baselineResult.evidence.future_turn_secrecy.interaction_json_projected -and
+                -not [bool]$baselineResult.evidence.future_turn_secrecy.future_source_files_projected -and
+                -not [bool]$baselineResult.evidence.future_turn_secrecy.canary_in_physical_projection -and
+                -not [bool]$baselineResult.evidence.future_turn_secrecy.canary_in_environment -and
+                -not [bool]$baselineResult.evidence.future_turn_secrecy.canary_in_server_arguments -and
+                -not [bool]$baselineResult.evidence.future_turn_secrecy.turn_1_request_contains_future_canary) 'OpenCode baseline keeps future input out of repo/home/config/env/args and turn 1'
+            Assert-True ([bool]$baselineResult.evidence.future_turn_secrecy.turn_2_sent_only_after_turn_1_http_completed) 'OpenCode baseline sends turn 2 only after turn 1 HTTP completion'
+            $baselineLogPath = Join-Path $scriptedWithout.Root 'repo\opencode-fake-cli-log.jsonl'
+            $baselineRecords = @(Get-Content -LiteralPath $baselineLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+            Assert-Equal 1 @($baselineRecords | Where-Object { $_.invocation_kind -eq 'server_start' }).Count 'OpenCode baseline starts exactly one owned server'
+            Assert-Equal 2 @($baselineRecords | Where-Object { $_.invocation_kind -eq 'server_message' }).Count 'OpenCode baseline sends exactly two synchronous messages'
+            Assert-True (@($baselineRecords | Where-Object { $_.invocation_kind -eq 'server_message' -and $_.request_text -match 'CODEBELT_FUTURE_TURN_CANARY_' }).Count -eq 1) 'OpenCode baseline exposes the future canary only in turn 2'
+            Assert-True (@($baselineRecords | Where-Object { $_.invocation_kind -eq 'server_message' -and $_.request_model.providerID -eq 'opencode' -and $_.request_model.modelID -eq 'muse-spark-1.2-contributor-free' }).Count -eq 2) 'OpenCode baseline supplies exact model fields on every turn'
+            Assert-True (@($baselineRecords | Where-Object { $_.invocation_kind -eq 'server_message' -and $_.session_id -eq [string]$baselineResult.session.id }).Count -eq 2) 'OpenCode baseline keeps one exact session id on every turn'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $scriptedWithout.Root 'repo\.opencode\node_modules') -PathType Container)) 'OpenCode baseline runtime node_modules does not leak into the logical fixture'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $scriptedWithout.Root 'repo\.opencode\.gitignore') -PathType Leaf)) 'OpenCode baseline generated .opencode/.gitignore is excluded from copy-back'
+            Assert-True (Test-Path -LiteralPath (Join-Path $scriptedWithout.Root 'repo\normal-task-output.snk') -PathType Leaf) 'OpenCode baseline normal task output synchronizes into the logical fixture'
         } else {
-            Assert-Equal ([string]$firstNativeTurn.config_directory) ([string]$secondNativeTurn.config_directory) "$runnerName preserves the isolated config directory across turns"
-            Assert-Equal ([string]$firstNativeTurn.config_file) ([string]$secondNativeTurn.config_file) "$runnerName preserves the isolated config file across turns"
+            Assert-Equal ([string]$scriptedResult.session.id) ([string]$scriptedResult.evidence.exact_session_continuation.exact_session_id) "$runnerName exact continuation evidence uses the captured session id"
+            Assert-True ([bool]$scriptedResult.evidence.exact_session_continuation.turns_started_after_prior_terminal) "$runnerName starts continuation only after a terminal first turn"
+            Assert-Equal 'fresh' $firstNativeTurn.invocation "$runnerName turn 1 is fresh"
+            Assert-Equal 'explicit_session_resume' $secondNativeTurn.invocation "$runnerName turn 2 explicitly resumes"
+            Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondNativeTurn.session_id) "$runnerName native turn evidence has one session id"
+            Assert-True (-not [string]::IsNullOrWhiteSpace([string]$firstNativeTurn.session_id)) "$runnerName captures an exact session id from turn 1 structured events"
+            Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondNativeTurn.target_session_id) "$runnerName turn 2 targets turn 1's exact session id"
+            Assert-True ([bool]$secondNativeTurn.target_session_match) "$runnerName turn 2 native session identity matches its target"
+            Assert-Equal ([string]$firstNativeTurn.working_directory) ([string]$secondNativeTurn.working_directory) "$runnerName preserves the working directory across turns"
+            Assert-Equal ([string]$firstNativeTurn.home) ([string]$secondNativeTurn.home) "$runnerName preserves the isolated home across turns"
+            Assert-Equal ([string]$firstNativeTurn.requested_model) ([string]$secondNativeTurn.requested_model) "$runnerName preserves the requested model across turns"
+            Assert-True (@($firstNativeTurn.observed_models | Where-Object { [string]$_ -eq [string]$firstNativeTurn.requested_model }).Count -gt 0) "$runnerName records the requested model in first-turn structured evidence"
+            Assert-True (@($secondNativeTurn.observed_models | Where-Object { [string]$_ -eq [string]$secondNativeTurn.requested_model }).Count -gt 0) "$runnerName records the requested model in resumed-turn structured evidence"
+            Assert-Equal 0 $firstNativeTurn.exit_code "$runnerName first turn exits cleanly"
+            Assert-Equal 0 $secondNativeTurn.exit_code "$runnerName resumed turn exits cleanly"
+            Assert-True ([bool]$firstNativeTurn.terminal -and [bool]$secondNativeTurn.terminal) "$runnerName records terminal native turn evidence"
+            Assert-True ([bool]$firstNativeTurn.terminal_assistant_response -and [bool]$firstNativeTurn.terminal_event_observed) "$runnerName proves turn 1 has a terminal assistant response before continuation"
+            Assert-True ([bool]$secondNativeTurn.terminal_assistant_response -and [bool]$secondNativeTurn.terminal_event_observed) "$runnerName proves the resumed turn has a terminal assistant response"
+            Assert-True ([DateTime]::Compare([DateTime]$firstNativeTurn.finished_utc, [DateTime]$secondNativeTurn.started_utc) -le 0) "$runnerName starts turn 2 after turn 1 finishes"
+            Assert-True @($firstNativeTurn.event_timestamps).Count -gt 0 "$runnerName records first-turn event timestamps"
+            Assert-True @($secondNativeTurn.event_timestamps).Count -gt 0 "$runnerName records second-turn event timestamps"
+            Assert-Equal ([string]$firstNativeTurn.copilot_home) ([string]$secondNativeTurn.copilot_home) "$runnerName preserves the isolated COPILOT_HOME across turns"
+            $firstArgs = @($firstNativeTurn.arguments)
+            $secondArgs = @($secondNativeTurn.arguments)
+            Assert-True ($firstArgs -notcontains '--resume') "$runnerName fresh turn does not carry a continuation flag"
+            Assert-True ($secondArgs -contains '--resume') "$runnerName resumed turn carries its explicit continuation flag"
+            Assert-True ($firstArgs -notcontains '--continue' -and $secondArgs -notcontains '--continue') "$runnerName never uses implicit last-session continuation"
+            $continuationIndex = [Array]::IndexOf([string[]]$secondArgs, '--resume')
+            Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondArgs[$continuationIndex + 1]) "$runnerName resumed invocation passes the exact captured session id"
         }
-        $firstArgs = @($firstNativeTurn.arguments)
-        $secondArgs = @($secondNativeTurn.arguments)
-        $continuationFlag = if ($runnerName -eq 'copilot') { '--resume' } else { '--session' }
-        Assert-True ($firstArgs -notcontains $continuationFlag) "$runnerName fresh turn does not carry a continuation flag"
-        Assert-True ($secondArgs -contains $continuationFlag) "$runnerName resumed turn carries its explicit continuation flag"
-        Assert-True ($firstArgs -notcontains '--continue' -and $secondArgs -notcontains '--continue') "$runnerName never uses implicit last-session continuation"
-        $continuationIndex = [Array]::IndexOf([string[]]$secondArgs, $continuationFlag)
-        Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondArgs[$continuationIndex + 1]) "$runnerName resumed invocation passes the exact captured session id"
-        $scriptedLogPath = Join-Path $scriptedWith.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
-        $scriptedRecords = @(Get-Content -LiteralPath $scriptedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
-        $scriptedExecutions = @($scriptedRecords | Where-Object { $_.stdin_received -eq $true })
-        Assert-Equal 2 $scriptedExecutions.Count "$runnerName scripted transport starts exactly two recorded invocations"
-        Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$scriptedExecutions[1].continuation_session_id) "$runnerName recorded transport receives the exact session id on turn 2"
-        Assert-True ([bool]$scriptedExecutions[0].stdin_exact -and [bool]$scriptedExecutions[1].stdin_exact) "$runnerName sends both scripted turn inputs through stdin"
         if ($runnerName -eq 'opencode') {
-            Assert-Equal ([string]$scriptedExecutions[0].home) ([string]$scriptedExecutions[1].home) 'OpenCode exact-session transport preserves HOME'
-            Assert-Equal ([string]$scriptedExecutions[0].userprofile) ([string]$scriptedExecutions[1].userprofile) 'OpenCode exact-session transport preserves USERPROFILE'
-            Assert-Equal ([string]$scriptedExecutions[0].homedrive + [string]$scriptedExecutions[0].homepath) ([string]$scriptedExecutions[1].homedrive + [string]$scriptedExecutions[1].homepath) 'OpenCode exact-session transport preserves Windows profile parts'
-            Assert-Equal ([string]$scriptedExecutions[0].config_file) ([string]$scriptedExecutions[1].config_file) 'OpenCode exact-session transport preserves the config file'
-            Assert-Equal ($scriptedExecutions[0].skill_permission | ConvertTo-Json -Compress) ($scriptedExecutions[1].skill_permission | ConvertTo-Json -Compress) 'OpenCode exact-session transport preserves the skill policy'
-            Assert-True (-not [bool]$scriptedExecutions[0].ambient_agents_skill_visible -and -not [bool]$scriptedExecutions[1].ambient_agents_skill_visible) 'OpenCode exact-session transport hides .agents skills on every turn'
-            Assert-True (-not [bool]$scriptedExecutions[0].ambient_claude_skill_visible -and -not [bool]$scriptedExecutions[1].ambient_claude_skill_visible) 'OpenCode exact-session transport hides .claude skills on every turn'
-            Assert-True (-not [bool]$scriptedExecutions[0].ambient_opencode_skill_visible -and -not [bool]$scriptedExecutions[1].ambient_opencode_skill_visible) 'OpenCode exact-session transport hides native global skills on every turn'
+            $scriptedLogPath = Join-Path $scriptedWith.Root 'repo\opencode-fake-cli-log.jsonl'
+            $scriptedRecords = @(Get-Content -LiteralPath $scriptedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+        } else {
+            $scriptedLogPath = Join-Path $scriptedWith.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
+            $scriptedRecords = @(Get-Content -LiteralPath $scriptedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $scriptedExecutions = @($scriptedRecords | Where-Object { $_.stdin_received -eq $true })
+            Assert-Equal 2 $scriptedExecutions.Count "$runnerName scripted transport starts exactly two recorded invocations"
+            Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$scriptedExecutions[1].continuation_session_id) "$runnerName recorded transport receives the exact session id on turn 2"
+            Assert-True ([bool]$scriptedExecutions[0].stdin_exact -and [bool]$scriptedExecutions[1].stdin_exact) "$runnerName sends both scripted turn inputs through stdin"
         }
         $scriptedFailureValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $scriptedResult -Run (Resolve-RunContract -RunPath $scriptedWith.Path) -RequestedModel ([string]$scriptedResult.requested.model) -ExpectedWorkerSessionId ([string]$scriptedResult.session.id) -ExpectedMechanism ([string]$scriptedResult.evidence.delegation.mechanism)
         Assert-True ([bool]$scriptedFailureValidation.Valid) "$runnerName scripted result satisfies the shared native terminal evidence contract"
         if ($runnerName -eq 'opencode') {
             Assert-Equal 'authoritative_cached_preflight' $scriptedResult.evidence.timing.preflight_source 'OpenCode scripted execution reuses the authoritative same-run preflight observation'
-            Assert-Equal 5 $scriptedResult.evidence.timing.preflight.probe_count 'OpenCode preflight records version, effective-home, run-help, debug-help, and debug-config probes'
+            Assert-Equal 6 $scriptedResult.evidence.timing.preflight.probe_count 'OpenCode preflight records version, effective-home, run-help, debug-help, debug-config, and serve-help probes'
             Assert-True ([double]$scriptedResult.evidence.timing.preflight.version_probe_duration_seconds -gt 0) 'OpenCode preflight records version probe duration'
             Assert-True ([double]$scriptedResult.evidence.timing.preflight.help_probe_duration_seconds -gt 0) 'OpenCode preflight records help probe duration'
             Assert-Equal 2 @($scriptedResult.evidence.timing.turns).Count 'OpenCode timing evidence records both scripted turns'
             $firstTiming = @($scriptedResult.evidence.timing.turns)[0]
             $secondTiming = @($scriptedResult.evidence.timing.turns)[1]
-            Assert-Equal 'fresh' $firstTiming.invocation 'OpenCode timing evidence labels turn 1 as fresh'
-            Assert-Equal 'explicit_session_resume' $secondTiming.invocation 'OpenCode timing evidence labels turn 2 as exact-session resume'
-            Assert-True ([double]$firstTiming.process_duration_seconds -gt 0 -and [double]$secondTiming.process_duration_seconds -gt 0) 'OpenCode timing evidence records positive native process durations'
-            Assert-True ([double]$firstTiming.cli_startup_and_execution_duration_seconds -ge [double]$firstTiming.process_duration_seconds) 'OpenCode turn 1 CLI duration is not shorter than its native process duration'
-            Assert-True ([double]$secondTiming.cli_startup_and_execution_duration_seconds -ge [double]$secondTiming.process_duration_seconds) 'OpenCode resumed CLI duration is not shorter than its native process duration'
-            Assert-Equal 2 ([double]$firstTiming.event_timing.structured_event_span_seconds) 'OpenCode turn 1 event timing uses the recorded fixture timestamps'
-            Assert-Equal 2 ([double]$secondTiming.event_timing.structured_event_span_seconds) 'OpenCode resumed event timing uses the recorded fixture timestamps'
-            Assert-True ([double]$scriptedResult.evidence.timing.total_runner_execution_seconds -ge ([double]$firstTiming.process_duration_seconds + [double]$secondTiming.process_duration_seconds)) 'OpenCode total runner timing covers both native turn processes'
+            Assert-Equal 'fresh_session_http' $firstTiming.invocation 'OpenCode timing evidence labels turn 1 as a fresh session HTTP request'
+            Assert-Equal 'same_session_http' $secondTiming.invocation 'OpenCode timing evidence labels turn 2 as same-session HTTP'
+            Assert-True ([double]$firstTiming.http_duration_seconds -ge 0 -and [double]$secondTiming.http_duration_seconds -ge 0) 'OpenCode timing evidence records both synchronous HTTP durations'
             $timingRecords = @(Get-Content -LiteralPath (Join-Path $scriptedWith.Root 'repo\opencode-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'version_probe' }).Count 'OpenCode performs one version probe for the preflight/execute pair'
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'help_probe' }).Count 'OpenCode performs one help probe for the preflight/execute pair'
+            Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'serve_help_probe' }).Count 'OpenCode performs one serve-help probe for the preflight/execute pair'
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'debug_help_probe' }).Count 'OpenCode performs one model-free debug-help probe for the preflight/execute pair'
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'debug_config_probe' }).Count 'OpenCode performs one model-free debug-config probe for the preflight/execute pair'
-            Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'native_execution' }).Count 'OpenCode performs one fresh native turn process'
-            Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'explicit_session_resume' }).Count 'OpenCode performs one exact-session resume process'
-            Assert-True (@($timingRecords | Where-Object { $_.invocation_kind -eq 'version_probe' -and [int]$_.fake_delay_milliseconds -eq 20 }).Count -eq 1) 'OpenCode timing fixture identifies the deterministic version-probe delay'
-            Assert-True (@($timingRecords | Where-Object { $_.invocation_kind -eq 'help_probe' -and [int]$_.fake_delay_milliseconds -eq 30 }).Count -eq 1) 'OpenCode timing fixture identifies the deterministic help-probe delay'
         }
     }
     $isolatedHomeFailureIteration = Join-Path $recordedRoot 'opencode-isolation-failure'
@@ -1286,44 +1452,55 @@ exit 2
     $installedStyleIteration = Join-Path $recordedRoot 'installed-style-opencode'
     New-Item -ItemType Directory -Path $installedStyleIteration -Force | Out-Null
     $installedStyleRun = New-TestRun -IterationDirectory $installedStyleIteration -Configuration with_skill -EvalName 'installed-style-session' -Interaction $scriptedInteraction
+    Add-TestInteractionSources -TestRun $installedStyleRun
     [IO.File]::WriteAllText((Join-Path $installedStyleRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $installedStyleRun.Root 'home\opencode-installed-style-session-help'), 'fixture', [Text.UTF8Encoding]::new($false))
     $installedStyleRunnerPath = Join-Path $runnerRoot 'opencode\runner.ps1'
     $installedStylePreflight = Invoke-AdapterJson -RunnerPath $installedStyleRunnerPath -Command preflight -RunPath $installedStyleRun.Path -ProfilePath $recordedProfiles['opencode']
-    Assert-Equal 'compatible' $installedStylePreflight.status 'OpenCode installed-style session help is accepted during real adapter preflight'
-    Assert-True ([bool]$installedStylePreflight.protocol_observations.scripted_multi_turn_same_session.available) 'OpenCode installed-style session help proves exact continuation'
-    Assert-Equal 'separate' $installedStylePreflight.protocol_observations.scripted_multi_turn_same_session.argument_style 'OpenCode installed-style session help uses separate argument syntax'
-    Assert-Equal 'session-id' $installedStylePreflight.protocol_observations.scripted_multi_turn_same_session.parameter 'OpenCode installed-style session help identifies the session id semantically'
-    Assert-True ([string]$installedStylePreflight.protocol_observations.scripted_multi_turn_same_session.help_evidence -match '-s, --session\s+session id to continue') 'OpenCode preflight preserves the actual installed-style help evidence'
+    Assert-Equal 'compatible' $installedStylePreflight.status 'OpenCode installed-style legacy session help does not control server transport preflight'
+    Assert-True ([bool]$installedStylePreflight.protocol_observations.scripted_multi_turn_same_session.available) 'OpenCode server API proof controls scripted capability'
+    Assert-Equal 'opencode-server-synchronous-http' $installedStylePreflight.protocol_observations.scripted_multi_turn_same_session.transport 'OpenCode preflight advertises synchronous server transport'
+    Assert-True ($null -ne $installedStylePreflight.protocol_observations.scripted_multi_turn_same_session.api_paths.session_message) 'OpenCode preflight records the installed synchronous message path'
     $installedStyleResult = Invoke-AdapterJson -RunnerPath $installedStyleRunnerPath -Command execute -RunPath $installedStyleRun.Path -ProfilePath $recordedProfiles['opencode']
-    Assert-Equal 'completed' $installedStyleResult.status 'OpenCode executes the installed-style exact-session scenario'
-    $installedStyleSecondArguments = @(@($installedStyleResult.evidence.interaction.native_turns)[1].arguments)
-    Assert-True ($installedStyleSecondArguments -contains '--session') 'OpenCode installed-style execution uses the exact session flag'
+    Assert-Equal 'completed' $installedStyleResult.status 'OpenCode executes the installed-style scenario through the server API'
+    Assert-True (-not [bool]$installedStyleResult.evidence.interaction.implicit_continuation) 'OpenCode installed-style execution does not use implicit continuation'
+    Assert-True (@($installedStyleResult.evidence.interaction.native_turns | Where-Object { $_.PSObject.Properties.Name -contains 'arguments' }).Count -eq 0) 'OpenCode server turns have no CLI argument continuation surface'
     foreach ($runnerName in @('copilot', 'opencode')) {
         $unsupportedIteration = Join-Path $recordedRoot ("unsupported-scripted-{0}" -f $runnerName)
         New-Item -ItemType Directory -Path $unsupportedIteration -Force | Out-Null
         $unsupportedRun = New-TestRun -IterationDirectory $unsupportedIteration -Configuration with_skill -EvalName 'unsupported-scripted' -Interaction $scriptedInteraction
+        Add-TestInteractionSources -TestRun $unsupportedRun
         [IO.File]::WriteAllText((Join-Path $unsupportedRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
         [IO.File]::WriteAllText((Join-Path $unsupportedRun.Root ("home\{0}-no-exact-session-help" -f $runnerName)), 'fixture', [Text.UTF8Encoding]::new($false))
         $unsupportedRunnerRelativePath = if ($runnerName -eq 'copilot') { 'github-copilot\runner.ps1' } else { 'opencode\runner.ps1' }
         $unsupportedRunnerPath = Join-Path $runnerRoot $unsupportedRunnerRelativePath
         $unsupportedPreflight = Invoke-AdapterJson -RunnerPath $unsupportedRunnerPath -Command preflight -RunPath $unsupportedRun.Path -ProfilePath $recordedProfiles[$runnerName]
-        Assert-Equal 'incompatible' $unsupportedPreflight.status "$runnerName unsupported exact-session help fails preflight"
-        Assert-Equal 'unsupported' $unsupportedPreflight.resolved_capabilities.scripted_multi_turn_same_session "$runnerName unsupported continuation is not advertised as supported"
-        Assert-True (@($unsupportedPreflight.checks | Where-Object { $_.name -eq 'scripted_multi_turn_same_session' -and $_.status -eq 'failed' }).Count -eq 1) "$runnerName records a failed scripted continuation preflight check"
-        Assert-True (([string]$unsupportedPreflight.protocol_observations.scripted_multi_turn_same_session.reason) -match '(?i)explicit|session|implicit') "$runnerName explains why implicit or ambiguous continuation is rejected"
-        $unsupportedResult = Invoke-AdapterJson -RunnerPath $unsupportedRunnerPath -Command execute -RunPath $unsupportedRun.Path -ProfilePath $recordedProfiles[$runnerName]
-        [void](Assert-ExecutionResult -Result $unsupportedResult)
-        Assert-Equal 'incompatible' $unsupportedResult.status "$runnerName unsupported continuation never executes"
-        $unsupportedLogPath = Join-Path $unsupportedRun.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
-        $unsupportedRecords = @(Get-Content -LiteralPath $unsupportedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
-        Assert-Equal 0 @($unsupportedRecords | Where-Object { $_.stdin_received -eq $true }).Count "$runnerName unsupported continuation starts zero model invocations"
+        if ($runnerName -eq 'opencode') {
+            Assert-Equal 'compatible' $unsupportedPreflight.status 'OpenCode no-session CLI help does not disable proven server API transport'
+            Assert-Equal 'supported' $unsupportedPreflight.resolved_capabilities.scripted_multi_turn_same_session 'OpenCode scripted capability comes from the server API, not CLI session help'
+            $unsupportedResult = Invoke-AdapterJson -RunnerPath $unsupportedRunnerPath -Command execute -RunPath $unsupportedRun.Path -ProfilePath $recordedProfiles[$runnerName]
+            [void](Assert-ExecutionResult -Result $unsupportedResult)
+            Assert-Equal 'completed' $unsupportedResult.status 'OpenCode server transport executes without CLI continuation help'
+            Assert-True (@($unsupportedResult.evidence.interaction.native_turns | Where-Object { $_.PSObject.Properties.Name -contains 'arguments' }).Count -eq 0) 'OpenCode unsupported CLI session flags are never selected as transport'
+        } else {
+            Assert-Equal 'incompatible' $unsupportedPreflight.status "$runnerName unsupported exact-session help fails preflight"
+            Assert-Equal 'unsupported' $unsupportedPreflight.resolved_capabilities.scripted_multi_turn_same_session "$runnerName unsupported continuation is not advertised as supported"
+            Assert-True (@($unsupportedPreflight.checks | Where-Object { $_.name -eq 'scripted_multi_turn_same_session' -and $_.status -eq 'failed' }).Count -eq 1) "$runnerName records a failed scripted continuation preflight check"
+            Assert-True (([string]$unsupportedPreflight.protocol_observations.scripted_multi_turn_same_session.reason) -match '(?i)explicit|session|implicit') "$runnerName explains why implicit or ambiguous continuation is rejected"
+            $unsupportedResult = Invoke-AdapterJson -RunnerPath $unsupportedRunnerPath -Command execute -RunPath $unsupportedRun.Path -ProfilePath $recordedProfiles[$runnerName]
+            [void](Assert-ExecutionResult -Result $unsupportedResult)
+            Assert-Equal 'incompatible' $unsupportedResult.status "$runnerName unsupported continuation never executes"
+            $unsupportedLogPath = Join-Path $unsupportedRun.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
+            $unsupportedRecords = @(Get-Content -LiteralPath $unsupportedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+            Assert-Equal 0 @($unsupportedRecords | Where-Object { $_.stdin_received -eq $true }).Count "$runnerName unsupported continuation starts zero model invocations"
+        }
     }
     foreach ($runnerName in @('copilot', 'opencode')) {
         foreach ($failureMarker in @('scripted-no-session-first', 'scripted-session-mismatch', 'scripted-no-terminal-first')) {
             $failureIteration = Join-Path $recordedRoot ("scripted-failure-{0}-{1}" -f $runnerName, ($failureMarker -replace '^scripted-', ''))
             New-Item -ItemType Directory -Path $failureIteration -Force | Out-Null
             $failureRun = New-TestRun -IterationDirectory $failureIteration -Configuration with_skill -EvalName 'scripted-failure' -Interaction $scriptedInteraction
+            Add-TestInteractionSources -TestRun $failureRun
             [IO.File]::WriteAllText((Join-Path $failureRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
             [IO.File]::WriteAllText((Join-Path $failureRun.Root ("home\{0}-exact-session-help" -f $runnerName)), 'fixture', [Text.UTF8Encoding]::new($false))
             [IO.File]::WriteAllText((Join-Path $failureRun.Root ("home\{0}" -f $failureMarker)), 'fixture', [Text.UTF8Encoding]::new($false))
@@ -1332,13 +1509,20 @@ exit 2
             $failureResult = Invoke-AdapterJson -RunnerPath $failureRunnerPath -Command execute -RunPath $failureRun.Path -ProfilePath $recordedProfiles[$runnerName]
             [void](Assert-ExecutionResult -Result $failureResult)
             Assert-Equal 'incompatible' $failureResult.status "$runnerName $failureMarker fails closed"
-            $expectedFailureCode = switch ($failureMarker) { 'scripted-no-session-first' { 'session_id_unobservable' } 'scripted-session-mismatch' { 'session_identity_mismatch' } 'scripted-no-terminal-first' { 'terminal_turn_status' } }
+            $expectedFailureCode = if ($runnerName -eq 'opencode' -and $failureMarker -eq 'scripted-no-terminal-first') { 'terminal_response_invalid' } else { switch ($failureMarker) { 'scripted-no-session-first' { 'session_id_unobservable' } 'scripted-session-mismatch' { 'session_identity_mismatch' } 'scripted-no-terminal-first' { 'terminal_turn_status' } } }
             Assert-True (@($failureResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq $expectedFailureCode }).Count -gt 0) "$runnerName $failureMarker records the native interaction failure"
             $failureLogPath = Join-Path $failureRun.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
             $failureRecords = @(Get-Content -LiteralPath $failureLogPath | ForEach-Object { $_ | ConvertFrom-Json })
-            $failureExecutions = @($failureRecords | Where-Object { $_.stdin_received -eq $true })
-            $expectedFailureExecutions = if ($failureMarker -eq 'scripted-session-mismatch') { 2 } else { 1 }
-            Assert-Equal $expectedFailureExecutions $failureExecutions.Count "$runnerName $failureMarker does not continue after an unproven first turn"
+            if ($runnerName -eq 'opencode') {
+                $failureMessages = @($failureRecords | Where-Object { $_.invocation_kind -eq 'server_message' })
+                $expectedFailureMessages = if ($failureMarker -eq 'scripted-no-session-first') { 0 } else { 1 }
+                Assert-Equal 1 @($failureRecords | Where-Object { $_.invocation_kind -eq 'server_start' }).Count "OpenCode $failureMarker starts one owned server"
+                Assert-Equal $expectedFailureMessages $failureMessages.Count "OpenCode $failureMarker stops after the first unproven server response"
+            } else {
+                $failureExecutions = @($failureRecords | Where-Object { $_.stdin_received -eq $true })
+                $expectedFailureExecutions = if ($failureMarker -eq 'scripted-session-mismatch') { 2 } else { 1 }
+                Assert-Equal $expectedFailureExecutions $failureExecutions.Count "$runnerName $failureMarker does not continue after an unproven first turn"
+            }
         }
     }
     $serialOpenCodeProfile = Join-Path $recordedRoot 'opencode-serial-profile.json'
@@ -1648,6 +1832,21 @@ function New-TestRun {
     return [pscustomobject]@{ Root = $runRoot; Path = $path; Contract = $run }
 }
 
+function Add-TestInteractionSources {
+    param([Parameter(Mandatory = $true)][object]$TestRun)
+
+    $runJson = Read-RunnerJson -Path $TestRun.Path
+    $futureCanary = 'CODEBELT_FUTURE_TURN_CANARY_' + ([string]$runJson.interactionHash).Substring(0, 16).ToUpperInvariant()
+    $interaction = Read-RunnerJson -Path (Join-Path $TestRun.Root ([string]$runJson.interactionFile))
+    foreach ($turn in @($interaction.turns)) {
+        $source = [string](Get-JsonProperty -Object $turn -Name 'source' -Default '')
+        if ([string]::IsNullOrWhiteSpace($source)) { continue }
+        $sourcePath = Join-Path $TestRun.Root ($source -replace '/', [IO.Path]::DirectorySeparatorChar)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $sourcePath) -Force | Out-Null
+        [IO.File]::WriteAllText($sourcePath, "recorded scripted turn two $futureCanary", [Text.UTF8Encoding]::new($false))
+    }
+}
+
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-conformance-' + [Guid]::NewGuid().ToString('N'))
 try {
     $iteration = Join-Path $testRoot 'iteration-1'
@@ -1895,6 +2094,7 @@ try {
     Assert-True ($prepareText.Contains('fresh package/code fix is required') -and $prepareText.Contains('Never patch package-local runner code') -and $prepareText.Contains('delete execution results') -and $prepareText.Contains('delete or replace `execution-freeze.json`') -and $prepareText.Contains('rerun Phase 1') -and $prepareText.Contains('manually broaden a capability check')) 'generated handoff must forbid package-local repair, state deletion, retry, and manual capability broadening'
     $generatedHandoff = Invoke-GeneratedRunnerPrompt
     Assert-True ($generatedHandoff.Contains('evaluation is incomplete and a fresh package/code fix is required') -and $generatedHandoff.Contains('Never patch package-local runner code') -and $generatedHandoff.Contains('delete orchestration state') -and $generatedHandoff.Contains('delete execution results') -and $generatedHandoff.Contains('delete or replace `execution-freeze.json`') -and $generatedHandoff.Contains('rerun Phase 1') -and $generatedHandoff.Contains('manually broaden a capability check')) 'generated handoff output forbids package-local repair, state deletion, retry, and manual capability broadening'
+    Assert-True ($generatedHandoff.Contains('allowance of 17 seconds (2 maximum scripted user turn(s) × 7 profile.timeout_seconds + 3 seconds runner grace)') -and $generatedHandoff.Contains('not a default 120-second timeout') -and $generatedHandoff.Contains('must be started exactly once for this iteration') -and $generatedHandoff.Contains('if the original supervisor is alive, wait')) 'generated handoff computes and explains the long-running Phase 1 timeout and no-rerun recovery'
     Assert-True ($prepareText -notmatch '(?i)runs\.<arm>|record-native-result\.ps1|Assert-NativeWorkerDelegation|Assert-OrchestrationConcurrency|capture\.worker_authored') 'runner-owned handoff must not teach manual orchestration, recorder, or evidence repair trivia'
     Assert-True ($bridgeText.Contains('Get-PackageRunnerDescriptor') -and $bridgeText.Contains('Assert-NativeTerminalCaptureArtifact') -and $bridgeText.Contains('ExpectedMechanism')) 'native bridge must require runner-produced terminal evidence'
     Assert-True ($recordText.Contains('eval-native-worker-result/1') -and $recordText.Contains('New-ExecutionResult')) 'native terminal recording must use the runner-owned result builder'
@@ -1906,6 +2106,19 @@ try {
     Assert-True ($manifestBridgeText.Contains('Get-ManifestRunRecords') -and $manifestBridgeText.Contains('$record.ResultPath')) 'package-level bridge must resolve exact manifest records'
     Assert-True ($manifestBridgeText -notmatch 'with[-_]skill\.result\.json|without[-_]skill\.result\.json') 'package-level bridge must not encode arm-derived result filenames'
     Assert-Equal 1 ([regex]::Matches($opencodeRunnerText, '\$directoryArgument = Get-SandboxVisiblePath').Count) 'OpenCode CLI argument construction assigns the sandbox directory once'
+    $opencodeTokens = $null
+    $opencodeErrors = $null
+    $opencodeAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $runnerRoot 'opencode\runner.ps1'), [ref]$opencodeTokens, [ref]$opencodeErrors)
+    if ($opencodeErrors.Count -gt 0) { throw 'OpenCode transport source could not be parsed for dispatch assertions.' }
+    $scriptedFunctionAst = @($opencodeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-OpenCodeScriptedExecute' }, $true) | Select-Object -First 1)
+    $executeFunctionAst = @($opencodeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-OpenCodeExecute' }, $true) | Select-Object -First 1)
+    Assert-Equal 1 $scriptedFunctionAst.Count 'OpenCode has one selected scripted execution function'
+    Assert-Equal 1 $executeFunctionAst.Count 'OpenCode has one execution dispatcher'
+    $scriptedFunctionText = [string]$scriptedFunctionAst[0].Extent.Text
+    $executeFunctionText = [string]$executeFunctionAst[0].Extent.Text
+    Assert-True ($scriptedFunctionText -notmatch '(?i)New-OpenCodeContinuationArguments|Get-OpenCodeContinuationCapability|Invoke-OpenCodeTurnProcess|session/status|prompt_async') 'selected OpenCode scripted transport cannot construct CLI session continuation or use SSE/session-status/async paths'
+    Assert-True ($scriptedFunctionText.Contains('Start-OpenCodeServer') -and $scriptedFunctionText.Contains('SessionCreatePath') -and $scriptedFunctionText.Contains('SessionMessagePath') -and $scriptedFunctionText.Contains('Invoke-OpenCodeHttpRequest')) 'selected OpenCode scripted transport owns one server and synchronous HTTP session flow'
+    Assert-True ($executeFunctionText.Contains('Invoke-OpenCodeScriptedExecute') -and $executeFunctionText -notmatch '(?i)Invoke-OpenCodeScriptedExecuteLegacy\s+-Inputs') 'OpenCode dispatcher selects server transport for interaction runs and never selects the legacy CLI continuation'
 
     $rawPath = Join-Path $iteration 'conformance\results\with-skill.execution-result.json'
     $withoutRawPath = Join-Path $iteration 'conformance\results\without-skill.execution-result.json'

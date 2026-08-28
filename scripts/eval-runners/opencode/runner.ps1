@@ -50,8 +50,8 @@ $descriptor = [ordered]@{
         credential_child_filtering = 'conditional'
         native_skill_activation_evidence = 'unsupported'
         # Behavioral evaluation transport is runner-owned: the runner starts one
-        # fresh OpenCode session per eval execution and captures the session's own
-        # structured event evidence. OpenCode's native Task/General subagent
+        # fresh OpenCode serve process and one session per eval execution, then
+        # captures synchronous HTTP response evidence. OpenCode's native Task/General subagent
         # remains an advertised harness capability but is NOT the benchmark
         # transport. These controls stay conditional because the runner attests
         # the session it locked; the captured terminal evidence proves them.
@@ -65,7 +65,7 @@ $descriptor = [ordered]@{
     delegation = [ordered]@{
         dispatch_owner = 'runner'
         mode = 'native_worker'
-        mechanism = 'Runner-owned OpenCode session (opencode run --format json): the runner starts one fresh process, captures its exact session identity, and uses only an installed-help-proven explicit session continuation for scripted turns'
+        mechanism = 'Runner-owned OpenCode server session (opencode serve on 127.0.0.1): the runner starts one fresh process, captures its exact session identity from the installed OpenAPI session-create response, and sends scripted turns through synchronous HTTP message responses'
         worker_role = 'primary-session'
         full_capability = 'conditional'
         model_lock = 'conditional'
@@ -119,6 +119,17 @@ function Get-OpenCodeHelpResult {
 
     $environment = if ($null -eq $Environment) { New-OpenCodeEnvironment -Inputs $Inputs } else { $Environment }
     return Invoke-OpenCodeCli -CommandInfo $CommandInfo -Arguments @('run', '--help') -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
+}
+
+function Get-OpenCodeServeHelpResult {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [System.Collections.IDictionary]$Environment = $null
+    )
+
+    $environment = if ($null -eq $Environment) { New-OpenCodeEnvironment -Inputs $Inputs } else { $Environment }
+    return Invoke-OpenCodeCli -CommandInfo $CommandInfo -Arguments @('serve', '--help') -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
 }
 
 function Get-OpenCodeDebugHelpResult {
@@ -906,14 +917,29 @@ function Assert-OpenCodeProjectionSource {
 function Copy-OpenCodeProjectionDirectory {
     param(
         [Parameter(Mandatory = $true)][string]$Source,
-        [Parameter(Mandatory = $true)][string]$Destination
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string[]]$ExcludeRelativePaths = @()
     )
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     if (-not (Test-Path -LiteralPath $Source -PathType Container)) { return }
     Assert-OpenCodeProjectionSource -Path $Source
+    $excluded = @($ExcludeRelativePaths | ForEach-Object { ([string]$_).Replace('\', '/').Trim('/') } | Where-Object { $_ })
     foreach ($item in @(Get-ChildItem -LiteralPath $Source -Force -ErrorAction Stop)) {
-        Copy-Item -LiteralPath $item.FullName -Destination $Destination -Recurse -Force
+        $relative = [System.IO.Path]::GetRelativePath($Source, $item.FullName).Replace('\', '/')
+        $isExcluded = @($excluded | Where-Object {
+            $_ -eq $relative -or $relative.StartsWith($_ + '/', [System.StringComparison]::OrdinalIgnoreCase)
+        }).Count -gt 0
+        if ($isExcluded) { continue }
+        $destinationPath = Join-Path $Destination ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        if ($item.PSIsContainer) {
+            Copy-OpenCodeProjectionDirectory -Source $item.FullName -Destination $destinationPath -ExcludeRelativePaths @($excluded | ForEach-Object {
+                if ($_.StartsWith($relative + '/', [System.StringComparison]::OrdinalIgnoreCase)) { $_.Substring($relative.Length + 1) }
+            })
+        } else {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
+            Copy-Item -LiteralPath $item.FullName -Destination $destinationPath -Force
+        }
     }
 }
 
@@ -955,11 +981,37 @@ function New-OpenCodeExecutionProjection {
         [System.IO.File]::WriteAllBytes($physicalPrompt, [byte[]]$Inputs.Run.PromptBytes)
         $physicalRepo = Join-Path $plan.Root 'repo'
         $physicalHome = Join-Path $plan.Root 'home'
-        Copy-OpenCodeProjectionDirectory -Source $Inputs.Run.WorkingDirectoryPath -Destination $physicalRepo
-        Copy-OpenCodeProjectionDirectory -Source $Inputs.Run.HomeDirectoryPath -Destination $physicalHome
+
+        # Scripted interaction inputs are parent-owned data. They are read into
+        # memory by the runner immediately before execution and are never made
+        # part of the physical OpenCode filesystem projection. This prevents a
+        # later turn (or its source file) from being discovered early.
+        $excludedRepositoryFiles = [System.Collections.Generic.List[string]]::new()
+        $excludedHomeFiles = [System.Collections.Generic.List[string]]::new()
+        $excludedLogicalInteractionFiles = [System.Collections.Generic.List[string]]::new()
+        if ($null -ne $Inputs.Run.InteractionPath) {
+            $excludedLogicalInteractionFiles.Add([string]$Inputs.Run.InteractionPath)
+        }
+        if ($null -ne $Inputs.Run.Interaction) {
+            foreach ($turn in @($Inputs.Run.Interaction.turns)) {
+                $source = [string](Get-JsonProperty -Object $turn -Name 'source' -Default '')
+                if ([string]::IsNullOrWhiteSpace($source)) { continue }
+                $excludedLogicalInteractionFiles.Add((Resolve-ContainedPath -BasePath $Inputs.Run.RunRoot -RelativePath $source -FieldName 'interaction turn source' -Kind File))
+            }
+        }
+        foreach ($logicalInteractionFile in @($excludedLogicalInteractionFiles.ToArray() | Select-Object -Unique)) {
+            if (Test-PathInside -BasePath $Inputs.Run.WorkingDirectoryPath -CandidatePath $logicalInteractionFile) {
+                $excludedRepositoryFiles.Add([System.IO.Path]::GetRelativePath($Inputs.Run.WorkingDirectoryPath, $logicalInteractionFile).Replace('\', '/'))
+            } elseif (Test-PathInside -BasePath $Inputs.Run.HomeDirectoryPath -CandidatePath $logicalInteractionFile) {
+                $excludedHomeFiles.Add([System.IO.Path]::GetRelativePath($Inputs.Run.HomeDirectoryPath, $logicalInteractionFile).Replace('\', '/'))
+            }
+        }
+        Copy-OpenCodeProjectionDirectory -Source $Inputs.Run.WorkingDirectoryPath -Destination $physicalRepo -ExcludeRelativePaths @($excludedRepositoryFiles.ToArray())
+        Copy-OpenCodeProjectionDirectory -Source $Inputs.Run.HomeDirectoryPath -Destination $physicalHome -ExcludeRelativePaths @($excludedHomeFiles.ToArray())
 
         $physicalSkill = $null
         $physicalSkillHash = $null
+        $runnerInjectedRepositoryFiles = [System.Collections.Generic.List[string]]::new()
         if ($Inputs.Run.CandidateSkillExposed) {
             $skillName = Get-OpenCodeCandidateSkillName -Run $Inputs.Run
             # OpenCode's installed native discovery surface is the project-local
@@ -975,25 +1027,8 @@ function New-OpenCodeExecutionProjection {
             if ($physicalSkillHash -ne [string]$Inputs.Run.SkillHash) {
                 throw 'OpenCode physical candidate skill hash does not match the prepared run manifest.'
             }
-        }
-
-        $physicalInteraction = $null
-        if ($null -ne $Inputs.Run.InteractionPath) {
-            $interactionRelative = [System.IO.Path]::GetRelativePath($Inputs.Run.RunRoot, $Inputs.Run.InteractionPath)
-            if ($interactionRelative.StartsWith('..', [System.StringComparison]::Ordinal) -or [System.IO.Path]::IsPathRooted($interactionRelative)) {
-                throw 'OpenCode interaction file is not contained by the logical run root.'
-            }
-            $physicalInteraction = Join-Path $plan.Root ($interactionRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-            New-Item -ItemType Directory -Path (Split-Path -Parent $physicalInteraction) -Force | Out-Null
-            Copy-Item -LiteralPath $Inputs.Run.InteractionPath -Destination $physicalInteraction -Force
-            foreach ($turn in @($Inputs.Run.Interaction.turns)) {
-                $source = [string](Get-JsonProperty -Object $turn -Name 'source' -Default '')
-                if ([string]::IsNullOrWhiteSpace($source)) { continue }
-                $logicalSource = Resolve-ContainedPath -BasePath $Inputs.Run.RunRoot -RelativePath $source -FieldName 'interaction turn source' -Kind File
-                $sourceRelative = [System.IO.Path]::GetRelativePath($Inputs.Run.RunRoot, $logicalSource)
-                $physicalSource = Join-Path $plan.Root ($sourceRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-                New-Item -ItemType Directory -Path (Split-Path -Parent $physicalSource) -Force | Out-Null
-                Copy-Item -LiteralPath $logicalSource -Destination $physicalSource -Force
+            foreach ($relative in @(Get-OpenCodeProjectionFileSet -Root $physicalSkill)) {
+                $runnerInjectedRepositoryFiles.Add(('.opencode/skills/{0}' -f $skillName) + '/' + $relative)
             }
         }
 
@@ -1013,7 +1048,7 @@ function New-OpenCodeExecutionProjection {
             CandidateSkillExposed = $Inputs.Run.CandidateSkillExposed
             FixtureHash = $Inputs.Run.FixtureHash
             SkillHash = $Inputs.Run.SkillHash
-            InteractionPath = $physicalInteraction
+            InteractionPath = $null
             InteractionHash = $Inputs.Run.InteractionHash
             Interaction = $Inputs.Run.Interaction
         }
@@ -1031,8 +1066,14 @@ function New-OpenCodeExecutionProjection {
             PhysicalHomeDirectory = $physicalHome
             PhysicalSkillDirectory = $physicalSkill
             PhysicalSkillHash = $physicalSkillHash
+            LogicalRepositoryFiles = @(Get-OpenCodeProjectionFileSet -Root $Inputs.Run.WorkingDirectoryPath)
+            LogicalRepositoryHash = Get-OpenCodeTreeHash -Root $Inputs.Run.WorkingDirectoryPath
+            ExcludedRepositoryFiles = @($excludedRepositoryFiles.ToArray())
+            ExcludedHomeFiles = @($excludedHomeFiles.ToArray())
             InitialRepositoryFiles = @(Get-OpenCodeProjectionFileSet -Root $physicalRepo)
             InitialRepositoryHash = Get-OpenCodeTreeHash -Root $physicalRepo
+            RunnerInjectedRepositoryFiles = @($runnerInjectedRepositoryFiles.ToArray())
+            RuntimeCreatedRepositoryFiles = @()
             SetupStartedUtc = $projectionStarted
             SetupFinishedUtc = $projectionFinished
             SetupDurationSeconds = [Math]::Round(($projectionFinished - $projectionStarted).TotalSeconds, 3)
@@ -1050,15 +1091,51 @@ function Sync-OpenCodeProjectedRepository {
     $logicalRepo = [string]$Projection.LogicalWorkingDirectory
     $physicalRepo = [string]$Projection.PhysicalWorkingDirectory
     Assert-OpenCodeProjectionSource -Path $physicalRepo
-    foreach ($relative in @($Projection.InitialRepositoryFiles)) {
+    $initialLogical = @($Projection.LogicalRepositoryFiles | ForEach-Object { ([string]$_).Replace('\', '/') })
+    $excluded = @($Projection.ExcludedRepositoryFiles | ForEach-Object { ([string]$_).Replace('\', '/') })
+    $injected = @($Projection.RunnerInjectedRepositoryFiles | ForEach-Object { ([string]$_).Replace('\', '/') })
+
+    $isExcluded = {
+        param([string]$Relative)
+        @($excluded | Where-Object { $_ -eq $Relative }).Count -gt 0
+    }
+    $isInjected = {
+        param([string]$Relative)
+        @($injected | Where-Object { $_ -eq $Relative -or $Relative.StartsWith($_ + '/', [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+    }
+    $isKnownRuntimeOnly = {
+        param([string]$Relative)
+        if ($Relative.StartsWith('.opencode/node_modules/', [System.StringComparison]::OrdinalIgnoreCase) -and $initialLogical -notcontains $Relative) { return $true }
+        if ($Relative -eq '.opencode/.gitignore' -and $initialLogical -notcontains $Relative) { return $true }
+        return $false
+    }
+    $copyFile = {
+        param([string]$Relative)
+        $normalized = $Relative.Replace('\', '/')
+        if ((& $isExcluded $normalized) -or (& $isInjected $normalized) -or (& $isKnownRuntimeOnly $normalized)) { return }
+        $physicalPath = Join-Path $physicalRepo ($normalized -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path -LiteralPath $physicalPath -PathType Leaf)) { return }
+        $logicalPath = Join-Path $logicalRepo ($normalized -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $logicalPath) -Force | Out-Null
+        Copy-Item -LiteralPath $physicalPath -Destination $logicalPath -Force
+    }
+
+    # Deletes are limited to the original logical repository set. Interaction
+    # source files are deliberately excluded from the physical projection and
+    # therefore can never be treated as task deletions.
+    foreach ($relative in $initialLogical) {
+        if (& $isExcluded $relative) { continue }
         $physicalPath = Join-Path $physicalRepo ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
         if (-not (Test-Path -LiteralPath $physicalPath -PathType Leaf)) {
             $logicalPath = Join-Path $logicalRepo ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
             if (Test-Path -LiteralPath $logicalPath -PathType Leaf) { Remove-Item -LiteralPath $logicalPath -Force }
         }
     }
-    foreach ($item in @(Get-ChildItem -LiteralPath $physicalRepo -Force -ErrorAction Stop)) {
-        Copy-Item -LiteralPath $item.FullName -Destination $logicalRepo -Recurse -Force
+
+    # Copy both changed original files and newly created task outputs. Candidate
+    # skill files and known OpenCode runtime-only files are never copied back.
+    foreach ($relative in @(Get-OpenCodeProjectionFileSet -Root $physicalRepo)) {
+        & $copyFile $relative
     }
 }
 
@@ -1226,6 +1303,532 @@ function Get-OpenCodeEventTiming {
     }
 }
 
+function Get-OpenCodeApiProperty {
+    param(
+        [object]$Object,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [object]$Default = $null
+    )
+
+    if ($null -eq $Object) { return $Default }
+    if ($Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) { return $Object[$Name] }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -ne $property) { return $property.Value }
+    return $Default
+}
+
+function Resolve-OpenCodeApiSchema {
+    param(
+        [Parameter(Mandatory = $true)][object]$Document,
+        [Parameter(Mandatory = $true)][object]$Schema
+    )
+
+    $current = $Schema
+    for ($depth = 0; $depth -lt 12; $depth++) {
+        $reference = [string](Get-OpenCodeApiProperty -Object $current -Name '$ref' -Default '')
+        if ([string]::IsNullOrWhiteSpace($reference)) { return $current }
+        if (-not $reference.StartsWith('#/components/schemas/', [System.StringComparison]::Ordinal)) { return $current }
+        $schemaName = [Uri]::UnescapeDataString($reference.Substring('#/components/schemas/'.Length))
+        $schemas = Get-OpenCodeApiProperty -Object (Get-OpenCodeApiProperty -Object $Document -Name 'components' -Default $null) -Name 'schemas' -Default $null
+        $current = Get-OpenCodeApiProperty -Object $schemas -Name $schemaName -Default $null
+        if ($null -eq $current) { return $Schema }
+    }
+    return $current
+}
+
+function Get-OpenCodeApiSchemaBranches {
+    param([Parameter(Mandatory = $true)][object]$Schema)
+
+    $branches = [System.Collections.Generic.List[object]]::new()
+    foreach ($name in @('anyOf', 'oneOf', 'allOf')) {
+        $value = Get-OpenCodeApiProperty -Object $Schema -Name $name -Default $null
+        if ($null -ne $value) {
+            foreach ($branch in @($value)) { $branches.Add($branch) }
+        }
+    }
+    return @($branches.ToArray())
+}
+
+function Get-OpenCodeApiSchemaProperty {
+    param(
+        [Parameter(Mandatory = $true)][object]$Document,
+        [Parameter(Mandatory = $true)][object]$Schema,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $resolved = Resolve-OpenCodeApiSchema -Document $Document -Schema $Schema
+    $properties = Get-OpenCodeApiProperty -Object $resolved -Name 'properties' -Default $null
+    $property = Get-OpenCodeApiProperty -Object $properties -Name $Name -Default $null
+    if ($null -ne $property) { return $property }
+    foreach ($branch in @(Get-OpenCodeApiSchemaBranches -Schema $resolved)) {
+        $property = Get-OpenCodeApiSchemaProperty -Document $Document -Schema $branch -Name $Name
+        if ($null -ne $property) { return $property }
+    }
+    return $null
+}
+
+function Get-OpenCodeApiSchemaRequired {
+    param(
+        [Parameter(Mandatory = $true)][object]$Document,
+        [Parameter(Mandatory = $true)][object]$Schema
+    )
+
+    $resolved = Resolve-OpenCodeApiSchema -Document $Document -Schema $Schema
+    $required = Get-OpenCodeApiProperty -Object $resolved -Name 'required' -Default $null
+    if ($null -ne $required) { return @($required | ForEach-Object { [string]$_ }) }
+    foreach ($branch in @(Get-OpenCodeApiSchemaBranches -Schema $resolved)) {
+        $branchRequired = @(Get-OpenCodeApiSchemaRequired -Document $Document -Schema $branch)
+        if ($branchRequired.Count -gt 0) { return $branchRequired }
+    }
+    return @()
+}
+
+function Test-OpenCodeApiSchemaRequired {
+    param(
+        [Parameter(Mandatory = $true)][object]$Document,
+        [Parameter(Mandatory = $true)][object]$Schema,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    $required = @(Get-OpenCodeApiSchemaRequired -Document $Document -Schema $Schema)
+    foreach ($name in $Names) {
+        if ($required -notcontains $name) { return $false }
+    }
+    return $true
+}
+
+function Get-OpenCodeApiJsonBodySchema {
+    param([Parameter(Mandatory = $true)][object]$Document, [Parameter(Mandatory = $true)][object]$Operation)
+
+    $requestBody = Get-OpenCodeApiProperty -Object $Operation -Name 'requestBody' -Default $null
+    $content = Get-OpenCodeApiProperty -Object $requestBody -Name 'content' -Default $null
+    $jsonContent = Get-OpenCodeApiProperty -Object $content -Name 'application/json' -Default $null
+    if ($null -eq $jsonContent) {
+        foreach ($contentProperty in @($content.PSObject.Properties)) {
+            if ([string]$contentProperty.Name -match '(?i)json') { $jsonContent = $contentProperty.Value; break }
+        }
+    }
+    return Get-OpenCodeApiProperty -Object $jsonContent -Name 'schema' -Default $null
+}
+
+function Get-OpenCodeApiResponseSchema {
+    param([Parameter(Mandatory = $true)][object]$Document, [Parameter(Mandatory = $true)][object]$Operation)
+
+    $responses = Get-OpenCodeApiProperty -Object $Operation -Name 'responses' -Default $null
+    foreach ($responseProperty in @($responses.PSObject.Properties | Sort-Object Name)) {
+        if ([string]$responseProperty.Name -match '^2\d\d$') {
+            $content = Get-OpenCodeApiProperty -Object $responseProperty.Value -Name 'content' -Default $null
+            foreach ($contentProperty in @($content.PSObject.Properties)) {
+                if ([string]$contentProperty.Name -match '(?i)json') {
+                    return Get-OpenCodeApiProperty -Object $contentProperty.Value -Name 'schema' -Default $null
+                }
+            }
+        }
+    }
+    return $null
+}
+
+function Test-OpenCodeApiTextPartsSchema {
+    param([Parameter(Mandatory = $true)][object]$Document, [Parameter(Mandatory = $true)][object]$Schema)
+
+    $resolved = Resolve-OpenCodeApiSchema -Document $Document -Schema $Schema
+    $items = Get-OpenCodeApiProperty -Object $resolved -Name 'items' -Default $null
+    if ($null -ne $items) {
+        foreach ($candidate in @($items) + @(Get-OpenCodeApiSchemaBranches -Schema $items)) {
+            $candidateResolved = Resolve-OpenCodeApiSchema -Document $Document -Schema $candidate
+            $typeValues = @(Get-OpenCodeApiProperty -Object $candidateResolved -Name 'enum' -Default @())
+            $candidateType = [string](Get-OpenCodeApiProperty -Object $candidateResolved -Name 'type' -Default '')
+            $required = @(Get-OpenCodeApiSchemaRequired -Document $Document -Schema $candidateResolved)
+            if (($candidateType -eq 'object' -or $null -ne (Get-OpenCodeApiProperty -Object $candidateResolved -Name 'properties' -Default $null)) -and
+                $required -contains 'type' -and $required -contains 'text' -and ($typeValues.Count -eq 0 -or $typeValues -contains 'text')) {
+                $textProperty = Get-OpenCodeApiSchemaProperty -Document $Document -Schema $candidateResolved -Name 'text'
+                if ($null -ne $textProperty) { return $true }
+            }
+        }
+    }
+    return $false
+}
+
+function Test-OpenCodeApiAssistantResponseSchema {
+    param([Parameter(Mandatory = $true)][object]$Document, [Parameter(Mandatory = $true)][object]$Schema)
+
+    $resolved = Resolve-OpenCodeApiSchema -Document $Document -Schema $Schema
+    $infoSchema = Get-OpenCodeApiSchemaProperty -Document $Document -Schema $resolved -Name 'info'
+    $partsSchema = Get-OpenCodeApiSchemaProperty -Document $Document -Schema $resolved -Name 'parts'
+    if ($null -eq $infoSchema -or $null -eq $partsSchema) { return $false }
+    foreach ($infoCandidate in @($infoSchema) + @(Get-OpenCodeApiSchemaBranches -Schema $infoSchema)) {
+        $assistant = Resolve-OpenCodeApiSchema -Document $Document -Schema $infoCandidate
+        $role = Get-OpenCodeApiSchemaProperty -Document $Document -Schema $assistant -Name 'role'
+        $roleValues = @(Get-OpenCodeApiProperty -Object $role -Name 'enum' -Default @())
+        if ((Get-OpenCodeApiSchemaRequired -Document $Document -Schema $assistant) -contains 'sessionID' -and
+            (Get-OpenCodeApiSchemaRequired -Document $Document -Schema $assistant) -contains 'modelID' -and
+            (Get-OpenCodeApiSchemaRequired -Document $Document -Schema $assistant) -contains 'providerID' -and
+            ($roleValues.Count -eq 0 -or $roleValues -contains 'assistant')) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-OpenCodeApiOperationById {
+    param(
+        [Parameter(Mandatory = $true)][object]$Document,
+        [Parameter(Mandatory = $true)][string]$OperationId,
+        [Parameter(Mandatory = $true)][ValidateSet('get', 'post')][string]$Method
+    )
+
+    $paths = Get-OpenCodeApiProperty -Object $Document -Name 'paths' -Default $null
+    foreach ($pathProperty in @($paths.PSObject.Properties)) {
+        $pathItem = $pathProperty.Value
+        $operation = Get-OpenCodeApiProperty -Object $pathItem -Name $Method -Default $null
+        if ($null -ne $operation -and [string](Get-OpenCodeApiProperty -Object $operation -Name 'operationId' -Default '') -eq $OperationId) {
+            return [pscustomobject]@{ Path = [string]$pathProperty.Name; Operation = $operation }
+        }
+    }
+    return $null
+}
+
+function Get-OpenCodeServerApiContract {
+    param([Parameter(Mandatory = $true)][object]$Document)
+
+    $create = Get-OpenCodeApiOperationById -Document $Document -OperationId 'session.create' -Method post
+    $message = Get-OpenCodeApiOperationById -Document $Document -OperationId 'session.prompt' -Method post
+    $abort = Get-OpenCodeApiOperationById -Document $Document -OperationId 'session.abort' -Method post
+    $dispose = Get-OpenCodeApiOperationById -Document $Document -OperationId 'instance.dispose' -Method post
+    $createBody = if ($null -eq $create) { $null } else { Get-OpenCodeApiJsonBodySchema -Document $Document -Operation $create.Operation }
+    $messageBody = if ($null -eq $message) { $null } else { Get-OpenCodeApiJsonBodySchema -Document $Document -Operation $message.Operation }
+    $createModel = if ($null -eq $createBody) { $null } else { Get-OpenCodeApiSchemaProperty -Document $Document -Schema $createBody -Name 'model' }
+    $messageModel = if ($null -eq $messageBody) { $null } else { Get-OpenCodeApiSchemaProperty -Document $Document -Schema $messageBody -Name 'model' }
+    $messageParts = if ($null -eq $messageBody) { $null } else { Get-OpenCodeApiSchemaProperty -Document $Document -Schema $messageBody -Name 'parts' }
+    $messageResponse = if ($null -eq $message) { $null } else { Get-OpenCodeApiResponseSchema -Document $Document -Operation $message.Operation }
+    $createResponse = if ($null -eq $create) { $null } else { Get-OpenCodeApiResponseSchema -Document $Document -Operation $create.Operation }
+    $messageResponseRequired = if ($null -eq $messageResponse) { @() } else { @(Get-OpenCodeApiSchemaRequired -Document $Document -Schema $messageResponse) }
+    $checks = [ordered]@{
+        session_create = $null -ne $create
+        synchronous_message = $null -ne $message
+        message_not_async = $null -ne $message -and [string]$message.Path -notmatch '(?i)async' -and [string](Get-OpenCodeApiProperty -Object $message.Operation -Name 'operationId' -Default '') -notmatch '(?i)async'
+        session_message_path = $null -ne $message -and [string]$message.Path -match '\{sessionID\}'
+        session_create_model = $null -ne $createModel -and (Test-OpenCodeApiSchemaRequired -Document $Document -Schema $createModel -Names @('id', 'providerID'))
+        message_model = $null -ne $messageModel -and (Test-OpenCodeApiSchemaRequired -Document $Document -Schema $messageModel -Names @('providerID', 'modelID'))
+        text_parts = $null -ne $messageParts -and (Test-OpenCodeApiTextPartsSchema -Document $Document -Schema $messageParts)
+        assistant_response = $null -ne $messageResponse -and $messageResponseRequired -contains 'info' -and $messageResponseRequired -contains 'parts' -and (Test-OpenCodeApiAssistantResponseSchema -Document $Document -Schema $messageResponse)
+        session_identity = $null -ne $createResponse -and (Get-OpenCodeApiSchemaProperty -Document $Document -Schema $createResponse -Name 'id') -ne $null -and (Get-OpenCodeApiSchemaRequired -Document $Document -Schema $createResponse) -contains 'id'
+    }
+    $available = @($checks.Values | Where-Object { -not [bool]$_ }).Count -eq 0
+    $reason = if ($available) { $null } else { 'Installed OpenCode OpenAPI did not prove every required synchronous scripted-session operation/schema.' }
+    return [pscustomobject]@{
+        Available = $available
+        Reason = $reason
+        HealthPath = '/global/health'
+        DocPath = '/doc'
+        SessionCreatePath = if ($null -eq $create) { $null } else { [string]$create.Path }
+        SessionMessagePath = if ($null -eq $message) { $null } else { [string]$message.Path }
+        SessionAbortPath = if ($null -eq $abort) { $null } else { [string]$abort.Path }
+        InstanceDisposePath = if ($null -eq $dispose) { $null } else { [string]$dispose.Path }
+        SessionCreateOperation = if ($null -eq $create) { $null } else { $create.Operation }
+        SessionMessageOperation = if ($null -eq $message) { $null } else { $message.Operation }
+        Proof = [ordered]@{
+            checks = $checks
+            openapi = [string](Get-OpenCodeApiProperty -Object $Document -Name 'openapi' -Default '')
+            path_count = @((Get-OpenCodeApiProperty -Object $Document -Name 'paths' -Default $null).PSObject.Properties).Count
+            session_create_operation_id = if ($null -eq $create) { $null } else { [string](Get-OpenCodeApiProperty -Object $create.Operation -Name 'operationId' -Default '') }
+            session_message_operation_id = if ($null -eq $message) { $null } else { [string](Get-OpenCodeApiProperty -Object $message.Operation -Name 'operationId' -Default '') }
+        }
+    }
+}
+
+function Get-OpenCodeLoopbackPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    } finally {
+        try { $listener.Stop() } catch { }
+    }
+}
+
+function Invoke-OpenCodeHttpRequest {
+    param(
+        [Parameter(Mandatory = $true)][object]$Server,
+        [Parameter(Mandatory = $true)][ValidateSet('GET', 'POST')][string]$Method,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [object]$Body = $null,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+
+    $started = [DateTime]::UtcNow
+    $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::$Method, ([string]$Server.BaseUri + $Path))
+    $cancellation = [System.Threading.CancellationTokenSource]::new()
+    $response = $null
+    $responseTask = $null
+    $readTask = $null
+    $bodyText = if ($null -eq $Body) { $null } else { $Body | ConvertTo-Json -Depth 100 -Compress }
+    try {
+        $request.Headers.Accept.ParseAdd('application/json')
+        if ($null -ne $bodyText) {
+            $request.Content = [System.Net.Http.StringContent]::new($bodyText, [System.Text.UTF8Encoding]::new($false), 'application/json')
+        }
+        $cancellation.CancelAfter([Math]::Max(1, [Math]::Min($TimeoutSeconds * 1000, [int]::MaxValue)))
+        $responseTask = $Server.Client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseContentRead, $cancellation.Token)
+        $waitMilliseconds = [int][Math]::Max(1, [Math]::Min($TimeoutSeconds * 1000, [int]::MaxValue))
+        if (-not $responseTask.Wait($waitMilliseconds)) {
+            $cancellation.Cancel()
+            $finished = [DateTime]::UtcNow
+            return [pscustomobject]@{ Succeeded = $false; TimedOut = $true; StatusCode = $null; Body = ''; StartedUtc = $started; FinishedUtc = $finished; DurationSeconds = [Math]::Round(($finished - $started).TotalSeconds, 3); Method = $Method; Path = $Path; RequestBody = $bodyText; Error = 'HTTP request exceeded timeout_seconds.' }
+        }
+        $response = $responseTask.GetAwaiter().GetResult()
+        $readTask = $response.Content.ReadAsStringAsync()
+        $readMilliseconds = [int][Math]::Max(1, [Math]::Min($TimeoutSeconds * 1000, [int]::MaxValue))
+        if (-not $readTask.Wait($readMilliseconds)) {
+            $cancellation.Cancel()
+            $finished = [DateTime]::UtcNow
+            return [pscustomobject]@{ Succeeded = $false; TimedOut = $true; StatusCode = [int]$response.StatusCode; Body = ''; StartedUtc = $started; FinishedUtc = $finished; DurationSeconds = [Math]::Round(($finished - $started).TotalSeconds, 3); Method = $Method; Path = $Path; RequestBody = $bodyText; Error = 'HTTP response body exceeded timeout_seconds.' }
+        }
+        $responseBody = [string]$readTask.GetAwaiter().GetResult()
+        $finished = [DateTime]::UtcNow
+        return [pscustomobject]@{
+            Succeeded = [int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 300
+            TimedOut = $false
+            StatusCode = [int]$response.StatusCode
+            Body = $responseBody
+            StartedUtc = $started
+            FinishedUtc = $finished
+            DurationSeconds = [Math]::Round(($finished - $started).TotalSeconds, 3)
+            Method = $Method
+            Path = $Path
+            RequestBody = $bodyText
+            Error = if ([int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 300) { $null } else { "HTTP status $([int]$response.StatusCode)." }
+        }
+    } catch {
+        $finished = [DateTime]::UtcNow
+        return [pscustomobject]@{ Succeeded = $false; TimedOut = $false; StatusCode = if ($null -eq $response) { $null } else { [int]$response.StatusCode }; Body = ''; StartedUtc = $started; FinishedUtc = $finished; DurationSeconds = [Math]::Round(($finished - $started).TotalSeconds, 3); Method = $Method; Path = $Path; RequestBody = $bodyText; Error = $_.Exception.Message }
+    } finally {
+        try { $response.Dispose() } catch { }
+        try { $request.Dispose() } catch { }
+        try { $cancellation.Dispose() } catch { }
+    }
+}
+
+function Get-OpenCodeDirectoryQuery {
+    param([Parameter(Mandatory = $true)][object]$Operation, [Parameter(Mandatory = $true)][string]$Directory)
+
+    $parameters = Get-OpenCodeApiProperty -Object $Operation -Name 'parameters' -Default @()
+    $directoryParameter = @($parameters | Where-Object {
+        [string](Get-OpenCodeApiProperty -Object $_ -Name 'name' -Default '') -eq 'directory' -and
+        [string](Get-OpenCodeApiProperty -Object $_ -Name 'in' -Default '') -eq 'query'
+    })
+    if ($directoryParameter.Count -eq 0) { return '' }
+    return '?directory=' + [Uri]::EscapeDataString($Directory)
+}
+
+function Start-OpenCodeServer {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment,
+        [Parameter(Mandatory = $true)][string]$Platform,
+        [object]$SandboxInfo,
+        [string]$ExpectedVersion = '',
+        [int]$StartupTimeoutSeconds = 20,
+        [Parameter(Mandatory = $true)][string]$StdoutPath,
+        [Parameter(Mandatory = $true)][string]$StderrPath
+    )
+
+    $port = Get-OpenCodeLoopbackPort
+    $serveArguments = @('serve', '--hostname', '127.0.0.1', '--port', [string]$port)
+    $hardFilesystem = $null -ne $SandboxInfo -and $Platform -in @('linux', 'macos')
+    $fileName = [string]$CommandInfo.FileName
+    $arguments = @($CommandInfo.Prefix) + @($serveArguments)
+    $workingDirectory = [string]$Inputs.Run.WorkingDirectoryPath
+    if ($Platform -eq 'linux' -and $hardFilesystem) {
+        $arguments = @(Get-LinuxSandboxArguments -Inputs $Inputs -CommandInfo $CommandInfo -Environment $Environment) + @($serveArguments)
+        $fileName = [string]$SandboxInfo.FileName
+    } elseif ($Platform -eq 'macos' -and $hardFilesystem) {
+        $sandboxProfile = New-MacosSandboxProfile -Inputs $Inputs -CommandInfo $CommandInfo
+        $arguments = @('-f', $sandboxProfile, '--', $CommandInfo.FileName) + @($CommandInfo.Prefix) + @($serveArguments)
+        $fileName = [string]$SandboxInfo.FileName
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $StdoutPath), (Split-Path -Parent $StderrPath) -Force | Out-Null
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $fileName
+    $startInfo.WorkingDirectory = $workingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $arguments) { [void]$startInfo.ArgumentList.Add([string]$argument) }
+    $startInfo.Environment.Clear()
+    foreach ($key in $Environment.Keys) { $startInfo.Environment[$key] = [string]$Environment[$key] }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $stdoutStream = [System.IO.File]::Open($StdoutPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $stderrStream = [System.IO.File]::Open($StderrPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    $stdoutTask = $null
+    $stderrTask = $null
+    $server = $null
+    try {
+        if (-not $process.Start()) { throw 'Could not start the owned OpenCode serve process.' }
+        $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
+        $stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromSeconds([Math]::Max(1, [Math]::Min(30, $StartupTimeoutSeconds)))
+        $server = [pscustomobject]@{
+            Process = $process
+            Client = $client
+            BaseUri = "http://127.0.0.1:$port"
+            Port = $port
+            StdoutPath = $StdoutPath
+            StderrPath = $StderrPath
+            StdoutStream = $stdoutStream
+            StderrStream = $stderrStream
+            StdoutTask = $stdoutTask
+            StderrTask = $stderrTask
+            Contract = $null
+            HealthResponse = $null
+            DocResponse = $null
+            Version = $null
+            Shutdown = $false
+        }
+        $healthResponse = $null
+        $startupDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $StartupTimeoutSeconds))
+        while ([DateTime]::UtcNow -lt $startupDeadline) {
+            if ($process.HasExited) { throw 'Owned OpenCode serve process exited before loopback health became ready.' }
+            $candidate = Invoke-OpenCodeHttpRequest -Server $server -Method GET -Path '/global/health' -TimeoutSeconds 1
+            if ($candidate.Succeeded) {
+                try {
+                    $health = $candidate.Body | ConvertFrom-Json -Depth 20
+                    if ([bool](Get-OpenCodeApiProperty -Object $health -Name 'healthy' -Default $false)) { $healthResponse = $candidate; break }
+                } catch { }
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        if ($null -eq $healthResponse) { throw 'Owned OpenCode serve process did not expose healthy loopback health before the startup deadline.' }
+        $health = $healthResponse.Body | ConvertFrom-Json -Depth 20
+        $observedVersion = [string](Get-OpenCodeApiProperty -Object $health -Name 'version' -Default '')
+        if ([string]::IsNullOrWhiteSpace($observedVersion)) { throw 'OpenCode loopback health did not expose a version.' }
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and $ExpectedVersion -ne 'unavailable' -and $observedVersion -ne $ExpectedVersion) {
+            throw "OpenCode loopback health version '$observedVersion' does not match preflight version '$ExpectedVersion'."
+        }
+        $docResponse = Invoke-OpenCodeHttpRequest -Server $server -Method GET -Path '/doc' -TimeoutSeconds 5
+        if (-not $docResponse.Succeeded -or [string]::IsNullOrWhiteSpace($docResponse.Body)) { throw "OpenCode loopback OpenAPI document request failed: $($docResponse.Error)" }
+        $document = $docResponse.Body | ConvertFrom-Json -Depth 100
+        $contract = Get-OpenCodeServerApiContract -Document $document
+        if (-not [bool]$contract.Available) { throw [string]$contract.Reason }
+        $server.HealthResponse = $healthResponse
+        $server.DocResponse = $docResponse
+        $server.Contract = $contract
+        $server.Version = $observedVersion
+        return $server
+    } catch {
+        if ($null -ne $server) { Stop-OpenCodeServer -Server $server }
+        else {
+            try {
+                if (-not $process.HasExited) {
+                    $process.Kill($true)
+                    [void]$process.WaitForExit(5000)
+                }
+            } catch { }
+            foreach ($task in @($stdoutTask, $stderrTask)) {
+                if ($null -ne $task) { [void](Wait-RunnerTaskBounded -Task $task -TimeoutMilliseconds 5000) }
+            }
+            try { $stdoutStream.Flush() } catch { }
+            try { $stderrStream.Flush() } catch { }
+            try { $stdoutStream.Dispose() } catch { }
+            try { $stderrStream.Dispose() } catch { }
+            try { $process.Dispose() } catch { }
+        }
+        throw
+    }
+}
+
+function Stop-OpenCodeServer {
+    param([object]$Server)
+
+    if ($null -eq $Server -or [bool]$Server.Shutdown) { return }
+    $Server.Shutdown = $true
+    try {
+        $disposePath = [string](Get-OpenCodeApiProperty -Object $Server.Contract -Name 'InstanceDisposePath' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($disposePath)) { [void](Invoke-OpenCodeHttpRequest -Server $Server -Method POST -Path $disposePath -TimeoutSeconds 1) }
+    } catch { }
+    try { if (-not $Server.Process.HasExited) { [void]$Server.Process.WaitForExit(1000) } } catch { }
+    try {
+        if (-not $Server.Process.HasExited) {
+            $Server.Process.Kill($true)
+            if (-not $Server.Process.HasExited) { [void]$Server.Process.WaitForExit(5000) }
+        }
+    } catch { }
+    $drainDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    foreach ($entry in @(
+            [pscustomobject]@{ Task = $Server.StdoutTask; Stream = $Server.StdoutStream },
+            [pscustomobject]@{ Task = $Server.StderrTask; Stream = $Server.StderrStream }
+        )) {
+        try {
+            $remaining = [int][Math]::Max(1, [Math]::Min(5000, ($drainDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+            if (-not $entry.Task.IsCompleted) { [void]$entry.Task.Wait($remaining) }
+        } catch { }
+        try { $entry.Stream.Flush() } catch { }
+        try { $entry.Stream.Dispose() } catch { }
+    }
+    try { $Server.Client.Dispose() } catch { }
+    try { $Server.Process.Dispose() } catch { }
+}
+
+function Get-OpenCodeRequestedModel {
+    param([Parameter(Mandatory = $true)][string]$Model)
+
+    $provider = Get-OpenCodeModelProvider -Model $Model
+    if ([string]::IsNullOrWhiteSpace($provider)) { throw "OpenCode scripted server transport requires a provider/model selector in 'provider/model' form; '$Model' is not parseable." }
+    $modelId = $Model.Substring($provider.Length + 1)
+    if ([string]::IsNullOrWhiteSpace($modelId)) { throw "OpenCode scripted server transport requires a non-empty model id in '$Model'." }
+    return [ordered]@{ id = $modelId; providerID = $provider; modelID = $modelId }
+}
+
+function Invoke-OpenCodeServerPreflightProbe {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][string]$Platform,
+        [object]$SandboxInfo,
+        [string]$ExpectedVersion = ''
+    )
+
+    $probeProjection = $null
+    $probeServer = $null
+    $probeStarted = [DateTime]::UtcNow
+    try {
+        $probeProjection = New-OpenCodeExecutionProjection -Inputs $Inputs
+        $probeEnvironment = New-OpenCodeEnvironment -Inputs $probeProjection.Inputs
+        $probeServer = Start-OpenCodeServer -CommandInfo $CommandInfo -Inputs $probeProjection.Inputs -Environment $probeEnvironment -Platform $Platform -SandboxInfo $SandboxInfo -ExpectedVersion $ExpectedVersion -StartupTimeoutSeconds 20 -StdoutPath (Join-Path $probeProjection.Root 'opencode-server-preflight-stdout.txt') -StderrPath (Join-Path $probeProjection.Root 'opencode-server-preflight-stderr.txt')
+        $finished = [DateTime]::UtcNow
+        return [pscustomobject]@{
+            Available = $true
+            Version = [string]$probeServer.Version
+            Contract = $probeServer.Contract
+            HealthResponse = $probeServer.HealthResponse
+            DocResponse = $probeServer.DocResponse
+            DurationSeconds = [Math]::Round(($finished - $probeStarted).TotalSeconds, 3)
+            Reason = $null
+        }
+    } catch {
+        $finished = [DateTime]::UtcNow
+        return [pscustomobject]@{
+            Available = $false
+            Version = $null
+            Contract = $null
+            HealthResponse = $null
+            DocResponse = $null
+            DurationSeconds = [Math]::Round(($finished - $probeStarted).TotalSeconds, 3)
+            Reason = $_.Exception.Message
+        }
+    } finally {
+        if ($null -ne $probeServer) { Stop-OpenCodeServer -Server $probeServer }
+        if ($null -ne $probeProjection) {
+            try { Remove-OpenCodeProjectedCandidateSkill -Projection $probeProjection } catch { }
+            try { Remove-OpenCodeExecutionProjection -Projection $probeProjection } catch { }
+        }
+    }
+}
+
 function Get-OpenCodeCapabilityMap {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
@@ -1263,6 +1866,7 @@ function Get-OpenCodePreflight {
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
     $versionObservation = $null
     $help = $null
+    $serveHelp = $null
     $debugHelp = $null
     $debugConfig = $null
     $runtimeHomeObservation = $null
@@ -1272,11 +1876,11 @@ function Get-OpenCodePreflight {
     $openCodeEnvironment = $null
     $continuationCapability = [pscustomobject]@{
         Available = $false
-        Flag = $null
-        ArgumentStyle = $null
-        Parameter = $null
-        HelpEvidence = $null
-        Reason = 'OpenCode exact-session continuation was not probed because the installed run help surface was unavailable.'
+        Transport = 'opencode-server-synchronous-http'
+        Version = $null
+        Contract = $null
+        Proof = $null
+        Reason = 'OpenCode synchronous server transport was not probed because the installed serve surface was unavailable.'
     }
     $projectionPlan = $null
     try {
@@ -1312,8 +1916,8 @@ function Get-OpenCodePreflight {
     if ($null -eq $commandInfo) {
         $reasons.Add('The OpenCode CLI executable is not available on PATH.')
         if ($null -ne $run.Interaction) {
-            $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail 'The OpenCode executable is unavailable, so exact-session continuation cannot be proven before execution.'))
-            $reasons.Add('scripted_multi_turn_same_session is incompatible: the OpenCode executable is unavailable and no model-free continuation probe can run.')
+            $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail 'The OpenCode executable is unavailable, so synchronous server transport cannot be proven before execution.'))
+            $reasons.Add('scripted_multi_turn_same_session is incompatible: the OpenCode executable is unavailable and no model-free server probe can run.')
         }
     } else {
         $checks.Add((New-PreflightCheck -Name 'harness_executable' -Status passed -Detail $commandInfo.Source))
@@ -1345,12 +1949,8 @@ function Get-OpenCodePreflight {
             }
             $help = Get-OpenCodeHelpResult -CommandInfo $commandInfo -Inputs $Inputs -Environment $openCodeEnvironment
             if ($help.TimedOut -or $help.ExitCode -ne 0) {
-                $helpFailureReason = "OpenCode run --help failed with exit status $($help.ExitCode); exact-session continuation cannot be proven."
+                $helpFailureReason = "OpenCode run --help failed with exit status $($help.ExitCode); single-turn CLI controls cannot be proven."
                 $reasons.Add($helpFailureReason)
-                if ($null -ne $run.Interaction) {
-                    $continuationCapability.Reason = $helpFailureReason
-                    $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail $helpFailureReason))
-                }
             } else {
                 $helpText = [string]::Join("`n", @($help.Stdout, $help.Stderr))
                 foreach ($flag in @('--format', '--dir', '--model', '--auto')) {
@@ -1381,11 +1981,26 @@ function Get-OpenCodePreflight {
                 if ($reasons.Count -eq 0) {
                     $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'OpenCode run advertises noninteractive, model, directory, and structured-output controls; the adapter intentionally does not use --pure.'))
                 }
-                if ($null -ne $run.Interaction) {
-                    $continuationCapability = Get-OpenCodeContinuationCapability -HelpText $helpText
-                    if ($continuationCapability.Available) {
-                        $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status passed -Detail ("OpenCode run help proves explicit exact-session continuation through {0} {1}; resumed invocations retain --format json, --model, --dir, and the isolated environment." -f $continuationCapability.Flag, $continuationCapability.Parameter)))
+            }
+            if ($null -ne $run.Interaction) {
+                $serveHelp = Get-OpenCodeServeHelpResult -CommandInfo $commandInfo -Inputs $Inputs -Environment $openCodeEnvironment
+                $serveHelpText = [string]::Join("`n", @($serveHelp.Stdout, $serveHelp.Stderr))
+                $serveHelpUsable = -not $serveHelp.TimedOut -and $serveHelp.ExitCode -eq 0 -and $serveHelpText -match '(?i)--hostname' -and $serveHelpText -match '(?i)--port'
+                if (-not $serveHelpUsable) {
+                    $continuationCapability.Reason = "OpenCode serve --help did not prove loopback hostname/port controls (exit=$($serveHelp.ExitCode), timed_out=$($serveHelp.TimedOut))."
+                    $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail $continuationCapability.Reason))
+                    $reasons.Add('scripted_multi_turn_same_session is incompatible: ' + $continuationCapability.Reason)
+                } else {
+                    $serverProbe = Invoke-OpenCodeServerPreflightProbe -Inputs $Inputs -CommandInfo $commandInfo -Platform $platform -SandboxInfo $sandboxInfo -ExpectedVersion ([string]$versionObservation.Version)
+                    if ([bool]$serverProbe.Available) {
+                        $continuationCapability.Available = $true
+                        $continuationCapability.Version = [string]$serverProbe.Version
+                        $continuationCapability.Contract = $serverProbe.Contract
+                        $continuationCapability.Proof = $serverProbe.Contract.Proof
+                        $continuationCapability.Reason = $null
+                        $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status passed -Detail ("Model-free OpenCode serve probe proved one loopback server, exact session creation, synchronous message POST at {0}, explicit model selection, text parts, assistant response identity, and bounded API discovery." -f $serverProbe.Contract.SessionMessagePath)))
                     } else {
+                        $continuationCapability.Reason = 'OpenCode model-free loopback server/API probe failed: ' + [string]$serverProbe.Reason
                         $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail $continuationCapability.Reason))
                         $reasons.Add('scripted_multi_turn_same_session is incompatible: ' + $continuationCapability.Reason)
                     }
@@ -1394,7 +2009,7 @@ function Get-OpenCodePreflight {
         } catch {
             $reasons.Add("Could not inspect OpenCode CLI capabilities: $($_.Exception.Message)")
             if ($null -ne $run.Interaction -and @($checks | Where-Object { $_.name -eq 'scripted_multi_turn_same_session' }).Count -eq 0) {
-                $continuationCapability.Reason = 'OpenCode capability inspection failed before exact-session continuation could be proven.'
+                $continuationCapability.Reason = 'OpenCode capability inspection failed before synchronous server transport could be proven.'
                 $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail $continuationCapability.Reason))
             }
         }
@@ -1424,14 +2039,14 @@ function Get-OpenCodePreflight {
     $freshSessionDetail = if ($null -eq $run.Interaction) {
         'The adapter starts one new opencode run process and supplies no resume, continue, or session id.'
     } else {
-        'The adapter starts turn 1 in a fresh OpenCode process without continuation, waits for its terminal structured response, then targets only the exact captured session id for later turns.'
+        'The adapter starts one new loopback opencode serve process, creates one fresh session, and sends every scripted turn synchronously to that exact session.'
     }
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail $freshSessionDetail))
     $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter isolates global/user configuration roots, disables external skill discovery, and deliberately preserves repository-owned project configuration; OPENCODE_DISABLE_PROJECT_CONFIG is not used.'))
     $promptFidelityDetail = if ($null -eq $run.Interaction) {
         'The exact prompt bytes are sent on stdin as the first and only task input.'
     } else {
-        'Each scripted user turn is sent as UTF-8 bytes on stdin; execution must prove every requested turn was delivered in order.'
+        'The parent runner reads all scripted inputs into memory, projects none of the interaction sidecar/source files, and sends only the current UTF-8 text part in each synchronous HTTP request.'
     }
     $checks.Add((New-PreflightCheck -Name 'prompt_fidelity' -Status passed -Detail $promptFidelityDetail))
     $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail 'Behavioral eval transport is the runner-owned direct OpenCode session; preflight cannot yet observe that session''s resolved model, cwd, HOME/config, fresh identity, prompt, exclusions, or terminal capture, so those controls stay conditional until execute captures the session''s terminal evidence. OpenCode''s native Task/General subagent (and read-only Explore/Scout) remain separate advertised capabilities and are not the transport.'))
@@ -1448,12 +2063,13 @@ function Get-OpenCodePreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenCode CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('runner-owned fresh OpenCode session per eval execution', 'opencode run --format json terminal event capture', 'native Task/General subagent available as a separate harness capability, not the transport', 'deterministic runner-owned concurrent fan-out', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'coherent Windows HOME/USERPROFILE/HOMEDRIVE/HOMEPATH', 'OPENCODE_DISABLE_EXTERNAL_SKILLS=1', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1', 'permission.skill arm policy', 'repository-owned project configuration preserved', 'prompt on stdin')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('runner-owned fresh OpenCode server/session per eval execution', 'opencode serve on 127.0.0.1', 'installed OpenAPI /global/health and /doc model-free probe', 'synchronous session message HTTP response as turn terminal boundary', 'native Task/General subagent available as a separate harness capability, not the transport', 'deterministic runner-owned concurrent fan-out', '--auto for single-turn CLI transport', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'coherent Windows HOME/USERPROFILE/HOMEDRIVE/HOMEPATH', 'OPENCODE_DISABLE_EXTERNAL_SKILLS=1', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1', 'permission.skill arm policy', 'repository-owned project configuration preserved', 'parent-memory scripted turn inputs')) { $mechanisms.Add($mechanism) }
     if ($null -ne $run.Interaction -and $continuationCapability.Available) {
-        $mechanisms.Add(("explicit OpenCode {0} <session-id> continuation selected from installed help" -f $continuationCapability.Flag))
-        $mechanisms.Add('no implicit last-session continuation')
+        $mechanisms.Add('exact session id retained for every synchronous HTTP turn')
+        $mechanisms.Add('exact requested provider/model supplied on every turn')
+        $mechanisms.Add('no CLI session continuation, SSE idle, or session.status dependency')
     } else {
-        $mechanisms.Add('no session continuation')
+        $mechanisms.Add('no scripted server session')
     }
     if ($hardConfinement) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     $document = New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
@@ -1480,6 +2096,10 @@ function Get-OpenCodePreflight {
     }
     if ($null -ne $debugConfig) {
         $preflightTiming.debug_config_probe_duration_seconds = [double]$debugConfig.DurationSeconds
+        $preflightTiming.probe_count++
+    }
+    if ($null -ne $serveHelp) {
+        $preflightTiming.serve_help_probe_duration_seconds = [double]$serveHelp.DurationSeconds
         $preflightTiming.probe_count++
     }
     $document.timing = $preflightTiming
@@ -1514,15 +2134,17 @@ function Get-OpenCodePreflight {
         }
         scripted_multi_turn_same_session = [ordered]@{
             available = [bool]$continuationCapability.Available
-            flag = $continuationCapability.Flag
-            argument_style = $continuationCapability.ArgumentStyle
-            parameter = $continuationCapability.Parameter
-            help_evidence = $continuationCapability.HelpEvidence
+            transport = [string]$continuationCapability.Transport
+            server_version = [string]$continuationCapability.Version
+            api_paths = if ($null -eq $continuationCapability.Contract) { $null } else { [ordered]@{ health = [string]$continuationCapability.Contract.HealthPath; doc = [string]$continuationCapability.Contract.DocPath; session_create = [string]$continuationCapability.Contract.SessionCreatePath; session_message = [string]$continuationCapability.Contract.SessionMessagePath; session_abort = [string]$continuationCapability.Contract.SessionAbortPath; instance_dispose = [string]$continuationCapability.Contract.InstanceDisposePath } }
+            api_proof = $continuationCapability.Proof
             reason = $continuationCapability.Reason
-            structured_output = 'opencode run --format json'
-            session_identity_source = 'runtime structured event stream'
+            structured_output = 'synchronous HTTP JSON response'
+            session_identity_source = 'session create response and assistant response info.sessionID'
             exact_session_required = $true
             implicit_continuation = $false
+            sse_dependency = $false
+            session_status_dependency = $false
         }
     }
     return $document
@@ -1788,7 +2410,462 @@ function Read-OpenCodeScriptedTurn {
     }
 }
 
+function Get-OpenCodeAssistantResponseObservation {
+    param(
+        [Parameter(Mandatory = $true)][string]$Body,
+        [Parameter(Mandatory = $true)][string]$ExpectedSessionId,
+        [Parameter(Mandatory = $true)][string]$ExpectedModel
+    )
+
+    try { $payload = $Body | ConvertFrom-Json -Depth 100 } catch { return [pscustomobject]@{ Valid = $false; Reason = "OpenCode synchronous message response was not valid JSON: $($_.Exception.Message)" } }
+    $info = Get-OpenCodeApiProperty -Object $payload -Name 'info' -Default $null
+    $parts = @(Get-OpenCodeApiProperty -Object $payload -Name 'parts' -Default @())
+    if ($null -eq $info -or $parts.Count -eq 0) { return [pscustomobject]@{ Valid = $false; Reason = 'OpenCode synchronous message response did not contain info and parts.' } }
+    $role = [string](Get-OpenCodeApiProperty -Object $info -Name 'role' -Default '')
+    $sessionId = [string](Get-OpenCodeApiProperty -Object $info -Name 'sessionID' -Default '')
+    $providerId = [string](Get-OpenCodeApiProperty -Object $info -Name 'providerID' -Default '')
+    $modelId = [string](Get-OpenCodeApiProperty -Object $info -Name 'modelID' -Default '')
+    if ($role -ne 'assistant') { return [pscustomobject]@{ Valid = $false; Reason = "OpenCode synchronous message response role '$role' was not assistant." } }
+    if ([string]::IsNullOrWhiteSpace($sessionId) -or $sessionId -ne $ExpectedSessionId) { return [pscustomobject]@{ Valid = $false; Reason = "OpenCode synchronous message response returned session '$sessionId' instead of '$ExpectedSessionId'." } }
+    if ([string]::IsNullOrWhiteSpace($providerId) -or [string]::IsNullOrWhiteSpace($modelId)) { return [pscustomobject]@{ Valid = $false; Reason = 'OpenCode synchronous assistant response did not expose providerID and modelID.' } }
+    $observedModel = "$providerId/$modelId"
+    if ($observedModel -ne $ExpectedModel) { return [pscustomobject]@{ Valid = $false; Reason = "OpenCode synchronous assistant response selected '$observedModel' instead of requested '$ExpectedModel'." } }
+    $textParts = [System.Collections.Generic.List[string]]::new()
+    $toolCalls = 0
+    foreach ($part in $parts) {
+        $partType = [string](Get-OpenCodeApiProperty -Object $part -Name 'type' -Default '')
+        if ($partType -eq 'text') {
+            $text = [string](Get-OpenCodeApiProperty -Object $part -Name 'text' -Default '')
+            if (-not [string]::IsNullOrWhiteSpace($text)) { $textParts.Add($text) }
+        } elseif ($partType -match '(?i)tool') {
+            $toolCalls++
+        }
+    }
+    $assistantText = if ($textParts.Count -eq 0) { '' } else { [string]::Join('', @($textParts.ToArray())) }
+    if ([string]::IsNullOrWhiteSpace($assistantText)) { return [pscustomobject]@{ Valid = $false; Reason = 'OpenCode synchronous assistant response did not contain a non-empty text part.' } }
+    $tokens = Get-OpenCodeApiProperty -Object $info -Name 'tokens' -Default $null
+    $usage = [ordered]@{}
+    foreach ($mapping in @(
+            [pscustomobject]@{ Source = 'input'; Target = 'input' },
+            [pscustomobject]@{ Source = 'output'; Target = 'output' },
+            [pscustomobject]@{ Source = 'reasoning'; Target = 'reasoning' }
+        )) {
+        $value = Get-OpenCodeApiProperty -Object $tokens -Name $mapping.Source -Default $null
+        if ($null -ne $value) { $usage[$mapping.Target] = $value }
+    }
+    $cache = Get-OpenCodeApiProperty -Object $tokens -Name 'cache' -Default $null
+    foreach ($mapping in @(
+            [pscustomobject]@{ Source = 'read'; Target = 'cache_read' },
+            [pscustomobject]@{ Source = 'write'; Target = 'cache_write' }
+        )) {
+        $value = Get-OpenCodeApiProperty -Object $cache -Name $mapping.Source -Default $null
+        if ($null -ne $value) { $usage[$mapping.Target] = $value }
+    }
+    $cost = Get-OpenCodeApiProperty -Object $info -Name 'cost' -Default $null
+    return [pscustomobject]@{
+        Valid = $true
+        Reason = $null
+        Payload = $payload
+        Info = $info
+        Parts = $parts
+        SessionId = $sessionId
+        MessageId = [string](Get-OpenCodeApiProperty -Object $info -Name 'id' -Default '')
+        ObservedModel = $observedModel
+        AssistantText = $assistantText
+        ToolCalls = $toolCalls
+        Usage = $usage
+        Cost = $cost
+    }
+}
+
+function New-OpenCodeHttpEvidenceRecord {
+    param(
+        [Parameter(Mandatory = $true)][object]$Response,
+        [Parameter(Mandatory = $true)][int]$Sequence,
+        [Parameter(Mandatory = $true)][string]$Kind
+    )
+
+    return [ordered]@{
+        sequence = $Sequence
+        kind = $Kind
+        method = [string]$Response.Method
+        path = [string]$Response.Path
+        request_body_sha256 = if ([string]::IsNullOrEmpty([string]$Response.RequestBody)) { $null } else { Get-Sha256HexFromBytes -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes([string]$Response.RequestBody)) }
+        response_status = $Response.StatusCode
+        succeeded = [bool]$Response.Succeeded
+        timed_out = [bool]$Response.TimedOut
+        response_body_sha256 = if ([string]::IsNullOrEmpty([string]$Response.Body)) { $null } else { Get-Sha256HexFromBytes -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes([string]$Response.Body)) }
+        http_started_utc = Format-UtcTimestamp -Value $Response.StartedUtc
+        http_finished_utc = Format-UtcTimestamp -Value $Response.FinishedUtc
+        duration_seconds = [double]$Response.DurationSeconds
+        error = [string]$Response.Error
+    }
+}
+
+function Get-OpenCodeInteractionSourcePhysicalPaths {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][object]$Projection
+    )
+
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($turn in @($Inputs.Run.Interaction.turns)) {
+        $source = [string](Get-JsonProperty -Object $turn -Name 'source' -Default '')
+        if ([string]::IsNullOrWhiteSpace($source)) { continue }
+        $logicalSource = Resolve-ContainedPath -BasePath $Inputs.Run.RunRoot -RelativePath $source -FieldName 'interaction turn source' -Kind File
+        if (Test-PathInside -BasePath $Inputs.Run.WorkingDirectoryPath -CandidatePath $logicalSource) {
+            $relative = [System.IO.Path]::GetRelativePath($Inputs.Run.WorkingDirectoryPath, $logicalSource)
+            $paths.Add((Join-Path $Projection.PhysicalWorkingDirectory ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+        } elseif (Test-PathInside -BasePath $Inputs.Run.HomeDirectoryPath -CandidatePath $logicalSource) {
+            $relative = [System.IO.Path]::GetRelativePath($Inputs.Run.HomeDirectoryPath, $logicalSource)
+            $paths.Add((Join-Path $Projection.PhysicalHomeDirectory ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+        }
+    }
+    return @($paths.ToArray() | Select-Object -Unique)
+}
+
+function Get-OpenCodeInteractionJsonPhysicalPaths {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][object]$Projection
+    )
+
+    if ($null -eq $Inputs.Run.InteractionPath) { return @() }
+    $paths = [System.Collections.Generic.List[string]]::new()
+    if (Test-PathInside -BasePath $Inputs.Run.WorkingDirectoryPath -CandidatePath $Inputs.Run.InteractionPath) {
+        $relative = [System.IO.Path]::GetRelativePath($Inputs.Run.WorkingDirectoryPath, $Inputs.Run.InteractionPath)
+        $paths.Add((Join-Path $Projection.PhysicalWorkingDirectory ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+    } elseif (Test-PathInside -BasePath $Inputs.Run.HomeDirectoryPath -CandidatePath $Inputs.Run.InteractionPath) {
+        $relative = [System.IO.Path]::GetRelativePath($Inputs.Run.HomeDirectoryPath, $Inputs.Run.InteractionPath)
+        $paths.Add((Join-Path $Projection.PhysicalHomeDirectory ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+    }
+    return @($paths.ToArray() | Select-Object -Unique)
+}
+
+function Get-OpenCodeFutureTurnCanary {
+    param([Parameter(Mandatory = $true)][object]$Run)
+
+    $seed = [string]$Run.InteractionHash
+    if ([string]::IsNullOrWhiteSpace($seed)) { $seed = Get-Sha256HexFromFile -Path $Run.InteractionPath }
+    return 'CODEBELT_FUTURE_TURN_CANARY_' + $seed.Substring(0, [Math]::Min(16, $seed.Length)).ToUpperInvariant()
+}
+
 function Invoke-OpenCodeScriptedExecute {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][object]$Preflight,
+        [Parameter(Mandatory = $true)][object]$ExecutionDescriptor,
+        [string]$PreflightSource = 'fresh_preflight'
+    )
+
+    $started = [DateTime]::UtcNow
+    $requestedTurns = @($Inputs.Run.Interaction.turns)
+    $turnTexts = [System.Collections.Generic.List[string]]::new()
+    $fallbackSessionId = [Guid]::NewGuid().ToString('D')
+    $protocol = Get-JsonProperty -Object $Preflight -Name 'protocol_observations' -Default $null
+    $serverObservation = Get-JsonProperty -Object $protocol -Name 'scripted_multi_turn_same_session' -Default $null
+    $commandInfo = Resolve-ExternalCommand -Name 'opencode'
+    $preflightAvailable = [bool](Get-JsonProperty -Object $serverObservation -Name 'available' -Default $false)
+    if ($null -eq $commandInfo -or -not $preflightAvailable) {
+        $reason = [string](Get-JsonProperty -Object $serverObservation -Name 'reason' -Default 'OpenCode synchronous server transport was not proven by preflight.')
+        return New-ExecutionResult -Descriptor $ExecutionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'preflight_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc ([DateTime]::UtcNow).ToString('o') -DurationSeconds (([DateTime]::UtcNow - $started).TotalSeconds) -Failure (New-ExecutionFailure -Code 'incompatible' -Message $reason) -SessionId $fallbackSessionId -IsolationCapabilities ([ordered]@{}) -IsolationMechanisms @('preflight-only') -Evidence ([ordered]@{ preflight = $Preflight; preflight_source = $PreflightSource; resume = $false; transport = 'opencode-server-synchronous-http' }) -AttemptCount 1
+    }
+
+    try {
+        # Read every source/content value while the runner still owns the
+        # logical run. None of these files is copied into the physical server
+        # projection, so a future turn cannot be discovered by OpenCode.
+        foreach ($turn in $requestedTurns) { $turnTexts.Add([string](Get-InteractionTurnText -Turn $turn -RunData $Inputs.Run)) }
+    } catch {
+        $finished = [DateTime]::UtcNow
+        return New-ExecutionResult -Descriptor $ExecutionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'interaction_input_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -Failure (New-ExecutionFailure -Code 'incompatible' -Message $_.Exception.Message) -SessionId $fallbackSessionId -IsolationCapabilities ([ordered]@{}) -IsolationMechanisms @('interaction inputs were not readable before server startup') -Evidence ([ordered]@{ preflight = $Preflight; preflight_source = $PreflightSource; resume = $false; transport = 'opencode-server-synchronous-http' }) -AttemptCount 1
+    }
+
+    $requestedModelObject = $null
+    try { $requestedModelObject = Get-OpenCodeRequestedModel -Model ([string]$Inputs.Profile.Model) } catch {
+        $finished = [DateTime]::UtcNow
+        return New-ExecutionResult -Descriptor $ExecutionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status incompatible -FinalResponseReason 'model_incompatible' -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -Failure (New-ExecutionFailure -Code 'incompatible' -Message $_.Exception.Message) -SessionId $fallbackSessionId -IsolationCapabilities ([ordered]@{}) -IsolationMechanisms @('provider/model selector was not parseable for the installed OpenAPI model schema') -Evidence ([ordered]@{ preflight = $Preflight; preflight_source = $PreflightSource; resume = $false; transport = 'opencode-server-synchronous-http' }) -AttemptCount 1
+    }
+
+    $projection = $null
+    $server = $null
+    $executionInputs = $null
+    $environment = [ordered]@{}
+    $runtimeHomeObservation = $null
+    $homeIsolationObservation = $null
+    $policyObservation = $null
+    $skillIsolationObservation = $null
+    $serverCapability = [pscustomobject]@{ Available = $true }
+    $platform = Get-PlatformName
+    $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
+    $hardFilesystem = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
+    $turnRecords = [System.Collections.Generic.List[object]]::new()
+    $nativeTurns = [System.Collections.Generic.List[object]]::new()
+    $turnTimingRecords = [System.Collections.Generic.List[object]]::new()
+    $httpRecords = [System.Collections.Generic.List[object]]::new()
+    $responseArtifactPaths = [System.Collections.Generic.List[string]]::new()
+    $observedModels = [System.Collections.Generic.List[string]]::new()
+    $usageBuckets = [ordered]@{}
+    $toolCalls = 0
+    $costValue = $null
+    $capturedSessionId = $null
+    $finalText = $null
+    $status = 'completed'
+    $failureCode = $null
+    $failureMessage = $null
+    $nativeFailures = [System.Collections.Generic.List[string]]::new()
+    $futureCanary = Get-OpenCodeFutureTurnCanary -Run $Inputs.Run
+    $interactionSourcePhysicalPaths = @()
+    $interactionJsonPhysicalPaths = @()
+    $serverArguments = @()
+    $interactionPhysicalPresent = $false
+    $futureSourcePhysicalPresent = $false
+    $canaryInProjection = $false
+    $canaryInEnvironment = $false
+    $canaryInArguments = $false
+
+    try {
+        $projection = New-OpenCodeExecutionProjection -Inputs $Inputs
+        $executionInputs = $projection.Inputs
+        $interactionSourcePhysicalPaths = @(Get-OpenCodeInteractionSourcePhysicalPaths -Inputs $Inputs -Projection $projection)
+        $interactionJsonPhysicalPaths = @(Get-OpenCodeInteractionJsonPhysicalPaths -Inputs $Inputs -Projection $projection)
+        $environment = New-OpenCodeEnvironment -Inputs $executionInputs
+        $runtimeHomeObservation = Get-OpenCodeRuntimeHomeObservation -CommandInfo $commandInfo -Inputs $executionInputs -Environment $environment
+        $homeIsolationObservation = Get-OpenCodeHomeIsolationObservation -Inputs $executionInputs -Environment $environment -RuntimeHome $runtimeHomeObservation
+        $policyObservation = Get-OpenCodeSkillPolicyObservation -Inputs $executionInputs -Environment $environment
+        $skillIsolationObservation = Get-OpenCodeSkillRootObservation -Inputs $executionInputs
+        $isolationReasons = [System.Collections.Generic.List[string]]::new()
+        if (-not [bool]$homeIsolationObservation.Valid) { $isolationReasons.Add([string]$homeIsolationObservation.Reason) }
+        if (-not [bool]$policyObservation.permission_match -or -not [bool]$policyObservation.external_skill_scans_disabled -or -not [bool]$policyObservation.claude_code_skill_scans_disabled) { $isolationReasons.Add([string]$policyObservation.reason) }
+        if (-not [bool]$skillIsolationObservation.Valid) { $isolationReasons.Add([string]$skillIsolationObservation.Reason) }
+        if ($isolationReasons.Count -gt 0) {
+            $status = 'incompatible'
+            $failureCode = 'opencode_isolation_incompatible'
+            $failureMessage = [string]::Join('; ', @($isolationReasons.ToArray()))
+            $nativeFailures.Add('isolation_incompatible')
+        } else {
+            $serverStdoutPath = Join-Path $Inputs.Run.RunRoot 'evidence/opencode-server-stdout.txt'
+            $serverStderrPath = Join-Path $Inputs.Run.RunRoot 'evidence/opencode-server-stderr.txt'
+            $server = Start-OpenCodeServer -CommandInfo $commandInfo -Inputs $executionInputs -Environment $environment -Platform $platform -SandboxInfo $sandboxInfo -ExpectedVersion ([string](Get-JsonProperty -Object $Preflight.harness -Name 'version' -Default '')) -StartupTimeoutSeconds 20 -StdoutPath $serverStdoutPath -StderrPath $serverStderrPath
+            $serverArguments = @('serve', '--hostname', '127.0.0.1', '--port', [string]$server.Port)
+
+            $healthArtifact = Write-OpenCodeCapture -RunData $Inputs -RelativePath 'evidence/opencode-server-health.json' -Text ([string]$server.HealthResponse.Body)
+            $docArtifact = Write-OpenCodeCapture -RunData $Inputs -RelativePath 'evidence/opencode-openapi.json' -Text ([string]$server.DocResponse.Body)
+            $responseArtifactPaths.Add('evidence/opencode-server-health.json')
+            $responseArtifactPaths.Add('evidence/opencode-openapi.json')
+            $httpRecords.Add((New-OpenCodeHttpEvidenceRecord -Response $server.HealthResponse -Sequence 1 -Kind 'health'))
+            $httpRecords.Add((New-OpenCodeHttpEvidenceRecord -Response $server.DocResponse -Sequence 2 -Kind 'openapi'))
+
+            $createPath = [string]$server.Contract.SessionCreatePath
+            $createPath += Get-OpenCodeDirectoryQuery -Operation $server.Contract.SessionCreateOperation -Directory ([string]$executionInputs.Run.WorkingDirectoryPath)
+            $createBody = [ordered]@{ model = [ordered]@{ id = [string]$requestedModelObject.id; providerID = [string]$requestedModelObject.providerID } }
+            $createResponse = Invoke-OpenCodeHttpRequest -Server $server -Method POST -Path $createPath -Body $createBody -TimeoutSeconds ([int]$Inputs.Profile.TimeoutSeconds)
+            $createArtifact = Write-OpenCodeCapture -RunData $Inputs -RelativePath 'evidence/opencode-session-create.json' -Text ([string]$createResponse.Body)
+            $responseArtifactPaths.Add('evidence/opencode-session-create.json')
+            $httpRecords.Add((New-OpenCodeHttpEvidenceRecord -Response $createResponse -Sequence 3 -Kind 'session_create'))
+            if ($createResponse.TimedOut) {
+                $status = 'timed_out'; $failureCode = 'timed_out'; $failureMessage = 'OpenCode session creation exceeded timeout_seconds.'; $nativeFailures.Add('session_create_timeout')
+            } elseif (-not $createResponse.Succeeded) {
+                $status = 'failed'; $failureCode = 'opencode_failure'; $failureMessage = "OpenCode session creation failed: $($createResponse.Error)"; $nativeFailures.Add('session_create_failed')
+            } else {
+                try { $createdSession = $createResponse.Body | ConvertFrom-Json -Depth 100 } catch { $createdSession = $null }
+                $capturedSessionId = [string](Get-OpenCodeApiProperty -Object $createdSession -Name 'id' -Default '')
+                if ([string]::IsNullOrWhiteSpace($capturedSessionId) -or $capturedSessionId -notmatch '^ses') {
+                    $status = 'incompatible'; $failureCode = 'native_interaction_incompatible'; $failureMessage = 'OpenCode session creation did not return a valid exact session id.'; $nativeFailures.Add('session_id_unobservable')
+                } else {
+                    $createdModel = Get-OpenCodeApiProperty -Object $createdSession -Name 'model' -Default $null
+                    if ($null -ne $createdModel) {
+                        $createdProvider = [string](Get-OpenCodeApiProperty -Object $createdModel -Name 'providerID' -Default '')
+                        $createdModelId = [string](Get-OpenCodeApiProperty -Object $createdModel -Name 'id' -Default '')
+                        if ("$createdProvider/$createdModelId" -ne [string]$Inputs.Profile.Model) {
+                            $status = 'incompatible'; $failureCode = 'native_interaction_incompatible'; $failureMessage = "OpenCode session creation selected '$createdProvider/$createdModelId' instead of requested '$($Inputs.Profile.Model)'."; $nativeFailures.Add('session_model_mismatch')
+                        }
+                    }
+                }
+            }
+
+            for ($turnIndex = 0; $turnIndex -lt $turnTexts.Count -and $status -eq 'completed'; $turnIndex++) {
+                $turnNumber = $turnIndex + 1
+                $messagePath = ([string]$server.Contract.SessionMessagePath).Replace('{sessionID}', [Uri]::EscapeDataString($capturedSessionId))
+                $messagePath += Get-OpenCodeDirectoryQuery -Operation $server.Contract.SessionMessageOperation -Directory ([string]$executionInputs.Run.WorkingDirectoryPath)
+                $messageBody = [ordered]@{
+                    model = [ordered]@{ providerID = [string]$requestedModelObject.providerID; modelID = [string]$requestedModelObject.modelID }
+                    parts = @([ordered]@{ type = 'text'; text = [string]$turnTexts[$turnIndex] })
+                }
+                $messageResponse = Invoke-OpenCodeHttpRequest -Server $server -Method POST -Path $messagePath -Body $messageBody -TimeoutSeconds ([int]$Inputs.Profile.TimeoutSeconds)
+                $turnResponsePath = "evidence/opencode-turn-$turnNumber-response.json"
+                [void](Write-OpenCodeCapture -RunData $Inputs -RelativePath $turnResponsePath -Text ([string]$messageResponse.Body))
+                $responseArtifactPaths.Add($turnResponsePath)
+                $httpRecords.Add((New-OpenCodeHttpEvidenceRecord -Response $messageResponse -Sequence ($turnNumber + 3) -Kind ("turn_$turnNumber")))
+                $turnObservation = if ($messageResponse.Succeeded) { Get-OpenCodeAssistantResponseObservation -Body ([string]$messageResponse.Body) -ExpectedSessionId $capturedSessionId -ExpectedModel ([string]$Inputs.Profile.Model) } else { [pscustomobject]@{ Valid = $false; Reason = "OpenCode turn $turnNumber failed: $($messageResponse.Error)" } }
+                $nativeTurn = [ordered]@{
+                    turn = $turnNumber
+                    sequence = ($turnNumber * 2)
+                    transport = 'synchronous_http'
+                    method = 'POST'
+                    path = $messagePath
+                    user_content_sha256 = Get-Sha256HexFromBytes -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes([string]$turnTexts[$turnIndex]))
+                    requested_model = [string]$Inputs.Profile.Model
+                    requested_provider = [string]$requestedModelObject.providerID
+                    requested_model_id = [string]$requestedModelObject.modelID
+                    exact_session_id = $capturedSessionId
+                    http_status = $messageResponse.StatusCode
+                    http_started_utc = Format-UtcTimestamp -Value $messageResponse.StartedUtc
+                    http_finished_utc = Format-UtcTimestamp -Value $messageResponse.FinishedUtc
+                    duration_seconds = [double]$messageResponse.DurationSeconds
+                    response_artifact = $turnResponsePath
+                    request_contains_future_canary = [string]$messageResponse.RequestBody -like "*$futureCanary*"
+                    response_message_id = if ($null -eq $turnObservation -or -not [bool]$turnObservation.Valid) { $null } else { [string]$turnObservation.MessageId }
+                    observed_model = if ($null -eq $turnObservation -or -not [bool]$turnObservation.Valid) { $null } else { [string]$turnObservation.ObservedModel }
+                    session_id = if ($null -eq $turnObservation) { $null } else { [string](Get-JsonProperty -Object $turnObservation -Name 'SessionId' -Default $null) }
+                    session_id_match = $null -ne $turnObservation -and [bool]$turnObservation.Valid
+                    terminal_http_response = [bool]$messageResponse.Succeeded -and $null -ne $turnObservation -and [bool]$turnObservation.Valid
+                }
+                if ($null -ne $turnObservation -and [bool]$turnObservation.Valid) {
+                    $nativeTurn.assistant_text = [string]$turnObservation.AssistantText
+                    $nativeTurn.tool_calls = [int]$turnObservation.ToolCalls
+                    if ($turnObservation.Usage.Count -gt 0) { $nativeTurn.tokens = $turnObservation.Usage }
+                    if ($null -ne $turnObservation.Cost) { $nativeTurn.cost = $turnObservation.Cost }
+                    $nativeTurns.Add($nativeTurn)
+                    $turnRecords.Add([ordered]@{ sequence = ($turnIndex * 2) + 1; role = 'user'; content_sha256 = [string]$nativeTurn.user_content_sha256; session_id = $capturedSessionId; timestamp_utc = Format-UtcTimestamp -Value $messageResponse.StartedUtc })
+                    $turnRecords.Add([ordered]@{ sequence = ($turnIndex * 2) + 2; role = 'assistant'; text = [string]$turnObservation.AssistantText; session_id = $capturedSessionId; timestamp_utc = Format-UtcTimestamp -Value $messageResponse.FinishedUtc })
+                    $turnTimingRecords.Add([ordered]@{ turn = $turnNumber; invocation = if ($turnIndex -eq 0) { 'fresh_session_http' } else { 'same_session_http' }; http_duration_seconds = [double]$messageResponse.DurationSeconds; http_started_utc = Format-UtcTimestamp -Value $messageResponse.StartedUtc; http_finished_utc = Format-UtcTimestamp -Value $messageResponse.FinishedUtc })
+                    if ($observedModels -notcontains [string]$turnObservation.ObservedModel) { $observedModels.Add([string]$turnObservation.ObservedModel) }
+                    $toolCalls += [int]$turnObservation.ToolCalls
+                    foreach ($usageName in $turnObservation.Usage.Keys) { $usageBuckets[$usageName] = if ($usageBuckets.Contains($usageName)) { [int64]$usageBuckets[$usageName] + [int64]$turnObservation.Usage[$usageName] } else { [int64]$turnObservation.Usage[$usageName] } }
+                    if ($null -ne $turnObservation.Cost) { $costValue = if ($null -eq $costValue) { [double]$turnObservation.Cost } else { [double]$costValue + [double]$turnObservation.Cost } }
+                    $finalText = [string]$turnObservation.AssistantText
+                } else {
+                    $nativeTurns.Add($nativeTurn)
+                    $nativeFailures.Add("turn_${turnNumber}_response")
+                    if ($messageResponse.TimedOut) {
+                        $status = 'timed_out'; $failureCode = 'timed_out'; $failureMessage = "OpenCode turn $turnNumber exceeded timeout_seconds."
+                    } elseif (-not $messageResponse.Succeeded) {
+                        $status = 'failed'; $failureCode = 'opencode_failure'; $failureMessage = [string]$turnObservation.Reason
+                    } else {
+                        $status = 'incompatible'; $failureCode = 'native_interaction_incompatible'; $failureMessage = [string]$turnObservation.Reason
+                        if ([string]$turnObservation.Reason -match '(?i)session') { $nativeFailures.Add('session_identity_mismatch') }
+                        elseif ([string]$turnObservation.Reason -match '(?i)model') { $nativeFailures.Add('model_identity_mismatch') }
+                        else { $nativeFailures.Add('terminal_response_invalid') }
+                    }
+                    if ($messageResponse.TimedOut -and -not [string]::IsNullOrWhiteSpace($capturedSessionId) -and -not [string]::IsNullOrWhiteSpace([string]$server.Contract.SessionAbortPath)) {
+                        $abortPath = ([string]$server.Contract.SessionAbortPath).Replace('{sessionID}', [Uri]::EscapeDataString($capturedSessionId))
+                        $abortResponse = Invoke-OpenCodeHttpRequest -Server $server -Method POST -Path $abortPath -TimeoutSeconds 1
+                        $httpRecords.Add((New-OpenCodeHttpEvidenceRecord -Response $abortResponse -Sequence ($turnNumber + 100) -Kind ("turn_$turnNumber-abort")))
+                    }
+                }
+            }
+        }
+    } catch {
+        if ($status -eq 'completed') { $status = 'failed'; $failureCode = 'opencode_failure'; $failureMessage = $_.Exception.Message; $nativeFailures.Add('transport_failure') }
+    } finally {
+        if ($null -ne $server) { Stop-OpenCodeServer -Server $server }
+        if ($null -ne $projection) {
+            $projection.RuntimeCreatedRepositoryFiles = @(Get-OpenCodeProjectionFileSet -Root $projection.PhysicalWorkingDirectory | Where-Object { $projection.InitialRepositoryFiles -notcontains $_ })
+            $interactionPhysicalPresent = @($interactionJsonPhysicalPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -gt 0
+            $futureSourcePhysicalPresent = @($interactionSourcePhysicalPaths | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0
+            $canaryInProjection = @((Get-ChildItem -LiteralPath $projection.Root -Recurse -Force -File -ErrorAction SilentlyContinue) | Where-Object { $_.Name -like "*$futureCanary*" }).Count -gt 0
+            try { Remove-OpenCodeProjectedCandidateSkill -Projection $projection } catch { }
+            Sync-OpenCodeProjectedRepository -Projection $projection
+            Remove-OpenCodeExecutionProjection -Projection $projection
+        }
+    }
+
+    $finished = [DateTime]::UtcNow
+    $serverStdoutArtifact = if (Test-Path -LiteralPath (Join-Path $Inputs.Run.RunRoot 'evidence/opencode-server-stdout.txt') -PathType Leaf) { New-ArtifactReference -Run $Inputs.Run -Path 'evidence/opencode-server-stdout.txt' -Scope run -MediaType 'text/plain; charset=utf-8' } else { $null }
+    $serverStderrArtifact = if (Test-Path -LiteralPath (Join-Path $Inputs.Run.RunRoot 'evidence/opencode-server-stderr.txt') -PathType Leaf) { New-ArtifactReference -Run $Inputs.Run -Path 'evidence/opencode-server-stderr.txt' -Scope run -MediaType 'text/plain; charset=utf-8' } else { $null }
+    if ($null -ne $serverStdoutArtifact) { $responseArtifactPaths.Add('evidence/opencode-server-stdout.txt') }
+    if ($null -ne $serverStderrArtifact) { $responseArtifactPaths.Add('evidence/opencode-server-stderr.txt') }
+    $httpTranscriptPath = 'evidence/opencode-http-transcript.json'
+    $httpTranscriptText = (($httpRecords.ToArray() | ConvertTo-Json -Depth 100) + [Environment]::NewLine)
+    $httpTranscriptArtifact = Write-OpenCodeCapture -RunData $Inputs -RelativePath $httpTranscriptPath -Text $httpTranscriptText
+    $artifacts = [System.Collections.Generic.List[object]]::new()
+    foreach ($path in @('evidence/opencode-server-health.json', 'evidence/opencode-openapi.json', 'evidence/opencode-session-create.json') + @($responseArtifactPaths.ToArray()) | Select-Object -Unique) {
+        $fullPath = Join-Path $Inputs.Run.RunRoot ($path -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        if (Test-Path -LiteralPath $fullPath -PathType Leaf) { $artifacts.Add((New-ArtifactReference -Run $Inputs.Run -Path $path -Scope run -MediaType (Get-MediaType -Path $path))) }
+    }
+    $artifacts.Add($httpTranscriptArtifact)
+    $canaryInEnvironment = @($environment.GetEnumerator() | Where-Object { [string]$_.Value -like "*$futureCanary*" }).Count -gt 0
+    $canaryInArguments = @($serverArguments | Where-Object { [string]$_ -like "*$futureCanary*" }).Count -gt 0
+    $terminalCapture = $status -eq 'completed' -and $nativeFailures.Count -eq 0 -and $turnRecords.Count -eq ($requestedTurns.Count * 2) -and $nativeTurns.Count -eq $requestedTurns.Count
+    if ($status -eq 'completed' -and -not $terminalCapture) { $status = 'incompatible'; $failureCode = 'native_interaction_incompatible'; $failureMessage = 'OpenCode synchronous interaction did not complete every ordered user/assistant turn.'; $nativeFailures.Add('turn_order') }
+    if ([string]::IsNullOrWhiteSpace($capturedSessionId)) { $capturedSessionId = $fallbackSessionId }
+    $modelProvider = Get-OpenCodeModelProvider -Model ([string]$Inputs.Profile.Model)
+    $credentialNames = @(if (-not [string]::IsNullOrWhiteSpace($modelProvider)) { Get-ProviderAuthenticationVariables -Provider $modelProvider })
+    $credentialEvidence = [ordered]@{ model_provider = $modelProvider; provider_environment_variables = $credentialNames; unrelated_environment_excluded = $true; child_tool_visibility = 'provider_credential_may_be_visible_to_native_child_tools; no supported child filter is exposed'; value_observed = $false }
+    $interactionEvidence = [ordered]@{
+        schema = (Get-RunnerSchemaNames).Interaction
+        mode = 'scripted'
+        same_session = [bool]$terminalCapture
+        session_id = $capturedSessionId
+        turns = @($turnRecords.ToArray())
+        final_response_sequence = $turnRecords.Count
+        transport = 'opencode-server-synchronous-http'
+        server_version = if ($null -eq $serverObservation) { $null } else { [string](Get-JsonProperty -Object $serverObservation -Name 'server_version' -Default '') }
+        api_paths = if ($null -eq $serverObservation) { $null } else { Get-JsonProperty -Object $serverObservation -Name 'api_paths' -Default $null }
+        exact_session_id = $capturedSessionId
+        exact_model_every_turn = [bool](@($nativeTurns | Where-Object { [string]$_.requested_model -ne [string]$Inputs.Profile.Model }).Count -eq 0)
+        implicit_continuation = $false
+        sse_dependency = $false
+        session_status_dependency = $false
+        native_turns = @($nativeTurns.ToArray())
+        structured_transcript_complete = [bool]$terminalCapture
+        working_directory = if ($null -eq $projection) { $null } else { [string]$projection.PhysicalWorkingDirectory }
+        isolated_home = if ($null -eq $projection) { $null } else { [string]$projection.PhysicalHomeDirectory }
+        logical_working_directory = [string]$Inputs.Run.WorkingDirectoryPath
+        logical_isolated_home = [string]$Inputs.Run.HomeDirectoryPath
+        config_directory = [string](Get-JsonProperty -Object $environment -Name 'OPENCODE_CONFIG_DIR' -Default '')
+        config_file = [string](Get-JsonProperty -Object $environment -Name 'OPENCODE_CONFIG' -Default '')
+        model = [string]$Inputs.Profile.Model
+    }
+    $executionPaths = if ($null -eq $projection) { [ordered]@{} } else { New-OpenCodeExecutionPaths -LogicalInputs $Inputs -ExecutionInputs $executionInputs -Projection $projection -Environment $environment -HomeIsolation $homeIsolationObservation }
+    $candidateExposure = if ($null -eq $projection) { [ordered]@{} } else { New-OpenCodeCandidateSkillExposure -LogicalInputs $Inputs -Projection $projection -SkillIsolation $skillIsolationObservation }
+    $evidence = [ordered]@{
+        execution_paths = $executionPaths
+        event_counts = [ordered]@{ synchronous_http_responses = $httpRecords.Count; assistant_responses = $nativeTurns.Count }
+        observed_model = if ($observedModels.Count -eq 0) { $null } else { [string]$observedModels[$observedModels.Count - 1] }
+        observed_models = @($observedModels.ToArray())
+        prompt_delivery = 'HTTP text parts from parent-memory turn values'
+        prompt_first_input = $true
+        resume = $false
+        server = [ordered]@{ transport = 'opencode serve'; bind = '127.0.0.1'; port = if ($null -eq $server) { $null } else { $server.Port }; arguments = $serverArguments; health_artifact = 'evidence/opencode-server-health.json'; openapi_artifact = 'evidence/opencode-openapi.json'; stdout_artifact = 'evidence/opencode-server-stdout.txt'; stderr_artifact = 'evidence/opencode-server-stderr.txt'; version = if ($null -eq $serverObservation) { $null } else { [string](Get-JsonProperty -Object $serverObservation -Name 'server_version' -Default '') } }
+        session_create_artifact = 'evidence/opencode-session-create.json'
+        interaction = $interactionEvidence
+        future_turn_secrecy = [ordered]@{ stable_canary = $futureCanary; parent_read_all_inputs_before_server = $true; interaction_json_projected = [bool]$interactionPhysicalPresent; future_source_files_projected = [bool]$futureSourcePhysicalPresent; canary_in_physical_projection = [bool]$canaryInProjection; canary_in_environment = [bool]$canaryInEnvironment; canary_in_server_arguments = [bool]$canaryInArguments; turn_1_request_contains_future_canary = @($nativeTurns | Where-Object { [int]$_.turn -eq 1 -and [bool]$_.request_contains_future_canary }).Count -gt 0; turn_2_sent_only_after_turn_1_http_completed = @($nativeTurns | Where-Object { [int]$_.turn -eq 2 }).Count -eq 1 -and @($nativeTurns | Where-Object { [int]$_.turn -eq 1 }).Count -eq 1 }
+        candidate_skill_exposure = $candidateExposure
+        effective_home = if ($null -eq $homeIsolationObservation) { $null } else { New-OpenCodeHomeIsolationEvidence -Observation $homeIsolationObservation }
+        skill_policy = $policyObservation
+        skill_isolation = if ($null -eq $skillIsolationObservation) { $null } else { New-OpenCodeSkillIsolationEvidence -Observation $skillIsolationObservation }
+        ambient_skill_policy = [ordered]@{ mechanism = if ($null -eq $policyObservation) { $null } else { [string]$policyObservation.mechanism }; permission_skill = if ($null -eq $policyObservation) { $null } else { $policyObservation.configured_permission_skill }; external_skill_scans_disabled = if ($null -eq $policyObservation) { $false } else { [bool]$policyObservation.external_skill_scans_disabled }; claude_code_skill_scans_disabled = if ($null -eq $policyObservation) { $false } else { [bool]$policyObservation.claude_code_skill_scans_disabled }; ambient_skill_roots_hidden = $null -eq $skillIsolationObservation -or [int]$skillIsolationObservation.AmbientSkillCount -eq 0; candidate_skill_exposed = [bool]$Inputs.Run.CandidateSkillExposed }
+        credential = $credentialEvidence
+        timing = [ordered]@{ preflight = Get-JsonProperty -Object $Preflight -Name 'timing' -Default $null; preflight_source = $PreflightSource; projection_setup_duration_seconds = if ($null -eq $projection) { 0 } else { [double]$projection.SetupDurationSeconds }; turns = @($turnTimingRecords.ToArray()); total_runner_execution_seconds = [Math]::Round(($finished - $started).TotalSeconds, 3) }
+        capture = [ordered]@{ source = 'harness_native_transport'; terminal = [bool]$terminalCapture; worker_authored = $false; artifact = $httpTranscriptPath; sha256 = [string]$httpTranscriptArtifact.sha256; complete_structured_transcript = [bool]$terminalCapture; turn_artifacts = @($nativeTurns.ToArray() | ForEach-Object { "evidence/opencode-turn-$(Get-JsonProperty -Object $_ -Name 'turn' -Default 0)-response.json" }); raw_http_artifacts = @($responseArtifactPaths.ToArray() | Select-Object -Unique) }
+        delegation = [ordered]@{ dispatch_owner = 'runner'; mechanism = [string]$descriptor.delegation.mechanism; worker_session_id = $capturedSessionId; observed_model = if ($observedModels.Count -eq 0) { [string]$Inputs.Profile.Model } else { [string]$observedModels[$observedModels.Count - 1] }; observed_working_directory = if ($null -eq $projection) { $null } else { [string]$projection.PhysicalWorkingDirectory }; observed_home = if ($null -eq $projection) { $null } else { [string]$projection.PhysicalHomeDirectory }; effective_runtime_home = if ($null -eq $homeIsolationObservation) { $null } else { [string]$homeIsolationObservation.RuntimeHome }; effective_opencode_config_root = [string](Get-JsonProperty -Object $environment -Name 'OPENCODE_CONFIG_DIR' -Default ''); fresh_worker = $true; home_config_isolated = $true; prompt_fidelity = $true; prompt_sha256 = [string]$Inputs.Run.PromptHash; terminal_result_capture = [bool]$terminalCapture; paired_arm_visible = $false; grading_material_visible = $false; nested_model_execution = $false; model_execution_count = 1; same_session_continuation = [bool]$terminalCapture; continuation_transport = 'synchronous_http'; continuation_session_id = $capturedSessionId }
+        native_worker_evidence_failures = @($nativeFailures | Select-Object -Unique)
+    }
+    $mechanisms = [System.Collections.Generic.List[string]]::new()
+    foreach ($mechanism in @('runner-owned fresh opencode serve process per eval execution', 'loopback-only 127.0.0.1 binding', 'installed /global/health and /doc model-free probe', 'one exact session created through installed OpenAPI', 'synchronous POST session message response is terminal', 'exact provider/model supplied on every turn', 'server transport bypasses CLI continuation and event-idle completion', 'parent-memory scripted inputs; interaction sidecar/source files not projected', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'coherent Windows HOME/USERPROFILE/HOMEDRIVE/HOMEPATH', 'OPENCODE_DISABLE_EXTERNAL_SKILLS=1', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1', 'permission.skill arm policy', 'repository-owned project configuration preserved', 'deterministic runner-owned concurrent fan-out')) { $mechanisms.Add($mechanism) }
+    $sandboxForEvidence = if ($hardFilesystem) { [string]$sandboxInfo.Source } else { 'unavailable' }
+    if ($sandboxForEvidence -eq 'unavailable') { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
+    $capabilities = Get-OpenCodeCapabilityMap -Inputs $Inputs -HardFilesystemConfinement ($sandboxForEvidence -ne 'unavailable') -ContinuationCapability $serverCapability
+    $failureCodeValue = if ([string]::IsNullOrWhiteSpace($failureCode)) { 'native_interaction_incompatible' } else { $failureCode }
+    $failureMessageValue = if ([string]::IsNullOrWhiteSpace($failureMessage)) { 'OpenCode scripted server interaction failed closed.' } else { $failureMessage }
+    $failure = if ($nativeFailures.Count -eq 0) { $null } else { New-ExecutionFailure -Code $failureCodeValue -Message $failureMessageValue }
+    $finalResponseValue = if ($status -eq 'completed') { $finalText } else { $null }
+    $finalResponseReasonValue = if ($status -eq 'completed') { $null } else { 'native_interaction_incompatible' }
+    $exitStatusValue = if ($status -eq 'completed') { [Nullable[int]]0 } else { $null }
+    $telemetry = [ordered]@{
+        transcript = New-AvailableMetric -Value ([ordered]@{ artifact = $httpTranscriptPath; complete = [bool]$terminalCapture })
+        tokens = if ($usageBuckets.Count -eq 0) { New-UnavailableMetric -Reason 'opencode_did_not_expose_usage' } else { New-AvailableMetric -Value $usageBuckets }
+        tool_calls = New-AvailableMetric -Value $toolCalls
+        cost = if ($null -eq $costValue) { New-UnavailableMetric -Reason 'opencode_did_not_expose_cost' } else { New-AvailableMetric -Value $costValue }
+    }
+    $result = New-ExecutionResult -Descriptor $ExecutionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalResponseValue -FinalResponseReason $finalResponseReasonValue -StartedUtc $started.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $started).TotalSeconds -ExitStatus $exitStatusValue -Failure $failure -SessionId $capturedSessionId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms.ToArray()) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'OpenCode synchronous server transport supplied the exact requested provider/model on every turn; backend resolution remains harness-reported telemetry.'; observations = [ordered]@{ model = $Inputs.Profile.Model; observed_models = @($observedModels.ToArray()); transport = 'opencode-server-synchronous-http' } }) -Telemetry $telemetry -Artifacts @($artifacts.ToArray()) -Warnings @() -Evidence $evidence -AttemptCount 1
+    if ($status -eq 'completed') { [void](Assert-InteractionResultEvidence -ExecutionResult $result -RunData $Inputs.Run) }
+    return $result
+}
+
+function Invoke-OpenCodeScriptedExecuteLegacy {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
         [Parameter(Mandatory = $true)][object]$Preflight,

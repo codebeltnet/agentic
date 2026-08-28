@@ -500,9 +500,12 @@ try {
 
     $fanoutPath = Join-Path $runnerRoot 'invoke-runner-owned-arms.ps1'
     $fanoutText = [System.IO.File]::ReadAllText($fanoutPath, [System.Text.UTF8Encoding]::new($false))
+    $fanoutProcessText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'fanout-process.ps1'), [System.Text.UTF8Encoding]::new($false))
     foreach ($needle in @('manifest.json', 'New-EvalOrchestrationPlan', 'dispatch_owner', 'Get-OrchestrationArmByWorkerId', 'arm.parent_paths.execution_result', 'Start-RunnerChildProcess', 'Wait-AnyRunnerChild', 'Register-DelegationAccepted', 'Register-DelegationSession', 'Register-WorkerTerminal', 'Assert-OrchestrationConcurrency', 'orchestration-state.json')) {
         Assert-True $fanoutText.Contains($needle) "runner-owned helper contains deterministic '$needle' behavior"
     }
+    Assert-True ($fanoutText.Contains('runner child watchdog timed out') -and $fanoutText.Contains('no retry or redispatch was performed')) 'runner-owned helper reports the exact timed-out worker and forbids retry or redispatch'
+    Assert-True ($fanoutProcessText.Contains('DeadlineUtc') -and $fanoutProcessText.Contains('Kill($true)') -and $fanoutProcessText.Contains('WaitForExit(5000)')) 'runner-owned process helper has a finite child deadline, tree kill, and kill grace'
     Assert-True (-not $fanoutText.Contains('Start-Process')) 'runner-owned helper no longer uses window-creating Start-Process for child dispatch'
     Assert-True ($fanoutText -notmatch '(?i)spawn[_ -]?agent|subagent|native-worker-result|with_skill.*worker_id|without_skill.*worker_id') 'runner-owned helper does not create outer subagents, synthetic envelopes, or derived worker IDs'
     Assert-True ($fanoutText -notmatch '(?i)(with[-_]skill|without[-_]skill)\.execution-result|execution_result\s*=\s*.*configuration') 'runner-owned helper does not reconstruct result filenames'
@@ -735,6 +738,37 @@ try {
     Assert-True ($headlessStartInfo.RedirectStandardOutput) 'runner child process redirects stdout for exact result capture'
     Assert-True ($headlessStartInfo.RedirectStandardError) 'runner child process redirects stderr for diagnostics'
     Assert-Equal 'runner.ps1' ([string]$headlessStartInfo.ArgumentList[2]) 'runner child process preserves its exact argument vector without manual quoting'
+
+    # Regression (OpenCode hang): both the shared process helper and the
+    # runner-owned child watchdog must return after a forced termination even
+    # when a fake child sleeps forever. The upper bound includes the one-second
+    # test deadline, the finite kill grace, and the finite stream-drain grace.
+    $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
+    $timeoutDirectory = Join-Path $testRoot 'bounded-timeout'
+    New-Item -ItemType Directory -Path $timeoutDirectory -Force | Out-Null
+    $timeoutClock = [Diagnostics.Stopwatch]::StartNew()
+    $sharedTimeoutResult = Invoke-RunnerProcess -FileName $pwshPath -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 60') -WorkingDirectory $timeoutDirectory -TimeoutSeconds 1
+    $timeoutClock.Stop()
+    Assert-True ([bool]$sharedTimeoutResult.TimedOut) 'shared process helper reports a sleeping child as timed_out'
+    Assert-True ([bool]$sharedTimeoutResult.KillAttempted) 'shared process helper attempts entire-process-tree termination at the deadline'
+    Assert-True ($timeoutClock.Elapsed.TotalSeconds -lt 12) ("shared process timeout path remains bounded; elapsed={0:N3}s" -f $timeoutClock.Elapsed.TotalSeconds)
+    Assert-True ($sharedTimeoutResult.DurationSeconds -lt 12) 'shared process timeout result reports a bounded duration'
+
+    $watchdogStdout = Join-Path $timeoutDirectory 'watchdog.stdout'
+    $watchdogStderr = Join-Path $timeoutDirectory 'watchdog.stderr'
+    $watchdogChild = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 60') -WorkingDirectory $timeoutDirectory -StdoutPath $watchdogStdout -StderrPath $watchdogStderr -TimeoutSeconds 1
+    $watchdogRecord = [pscustomobject]@{ worker_id = 'arm-watchdog-with_skill'; child = $watchdogChild; Process = $watchdogChild.Process }
+    $watchdogList = [System.Collections.Generic.List[object]]::new()
+    $watchdogList.Add($watchdogRecord)
+    $watchdogClock = [Diagnostics.Stopwatch]::StartNew()
+    $watchdogIndex = Wait-AnyRunnerChild -Running $watchdogList
+    $watchdogExitCode = Complete-RunnerChildProcess -Child $watchdogChild
+    $watchdogClock.Stop()
+    Assert-Equal 0 $watchdogIndex 'runner-child watchdog selects the exact expired worker'
+    Assert-True ([bool]$watchdogChild.WatchdogExpired) 'runner-child watchdog marks the selected worker expired'
+    Assert-True ([bool]$watchdogChild.TimedOut) 'runner-child completion reports the watchdog timeout'
+    Assert-True ($watchdogClock.Elapsed.TotalSeconds -lt 12) ("runner-child watchdog kill and drain remain bounded; elapsed={0:N3}s" -f $watchdogClock.Elapsed.TotalSeconds)
+    Assert-True ($null -eq $watchdogExitCode) 'timed-out runner child has no synthesized exit success'
 
     # Regression (#5.8): capacity is released when ANY child completes, not only
     # the oldest queued child. Wait-AnyRunnerChild must return whichever child

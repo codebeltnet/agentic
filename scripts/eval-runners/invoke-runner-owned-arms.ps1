@@ -47,7 +47,8 @@ function Invoke-RunnerPreflight {
     param(
         [Parameter(Mandatory = $true)][string]$RunnerPath,
         [Parameter(Mandatory = $true)][string]$RunPath,
-        [Parameter(Mandatory = $true)][string]$ProfilePath
+        [Parameter(Mandatory = $true)][string]$ProfilePath,
+        [int]$TimeoutSeconds = 120
     )
 
     $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-preflight-' + [Guid]::NewGuid().ToString('N') + '.stdout')
@@ -68,8 +69,10 @@ function Invoke-RunnerPreflight {
             '-Profile'
             $ProfilePath
         )
-        $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $RunPath) -StdoutPath $stdoutPath -StderrPath $stderrPath
+        $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $RunPath) -StdoutPath $stdoutPath -StderrPath $stderrPath -TimeoutSeconds $TimeoutSeconds
         $exitCode = Complete-RunnerChildProcess -Child $child
+        $childTimedOut = [bool]$child.TimedOut
+        $childTerminationObserved = [bool]$child.TerminationObserved
         $child = $null
         $stdout = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) { [System.IO.File]::ReadAllText($stdoutPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
         $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
@@ -88,12 +91,48 @@ function Invoke-RunnerPreflight {
             Stdout = $stdout
             Stderr = $stderr
             ParseError = $parseError
+            TimedOut = $childTimedOut
+            TerminationObserved = $childTerminationObserved
         }
     } finally {
         if ($null -ne $child) { try { [void](Complete-RunnerChildProcess -Child $child) } catch { } }
         foreach ($path in @($stdoutPath, $stderrPath)) {
             if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
         }
+    }
+}
+
+function Get-RunnerGraceSeconds {
+    # This is the runner-child watchdog grace advertised in the generated
+    # handoff. Process termination and stream drains have their own smaller,
+    # finite bounds in the process helpers.
+    return 30
+}
+
+function Get-RunnerRunTurnCount {
+    param([Parameter(Mandatory = $true)][string]$RunPath)
+
+    $run = Read-RunnerJson -Path $RunPath
+    $interactionFile = [string](Get-JsonProperty -Object $run -Name 'interactionFile' -Default '')
+    if ([string]::IsNullOrWhiteSpace($interactionFile)) { return 1 }
+    $runRoot = Split-Path -Parent $RunPath
+    $interactionPath = Resolve-ContainedPath -BasePath $runRoot -RelativePath $interactionFile -FieldName 'interactionFile' -Kind File
+    $interaction = Read-RunnerJson -Path $interactionPath
+    $turns = @(Get-JsonProperty -Object $interaction -Name 'turns' -Default @())
+    return [Math]::Max(1, $turns.Count)
+}
+
+function Get-RunnerChildTimeoutSeconds {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunPath,
+        [Parameter(Mandatory = $true)][int]$ProfileTimeoutSeconds
+    )
+
+    $turnCount = Get-RunnerRunTurnCount -RunPath $RunPath
+    return [pscustomobject]@{
+        TurnCount = $turnCount
+        RunnerGraceSeconds = Get-RunnerGraceSeconds
+        TimeoutSeconds = ($turnCount * [Math]::Max(1, $ProfileTimeoutSeconds)) + (Get-RunnerGraceSeconds)
     }
 }
 
@@ -105,6 +144,9 @@ function New-PreflightWorkerSummary {
     )
 
     $preflight = $Invocation.Result
+    $invocationExitCode = Get-JsonProperty -Object $Invocation -Name 'ExitCode' -Default $null
+    $invocationTimedOut = [bool](Get-JsonProperty -Object $Invocation -Name 'TimedOut' -Default $false)
+    $invocationTerminated = [bool](Get-JsonProperty -Object $Invocation -Name 'TerminationObserved' -Default $false)
     $reasons = [System.Collections.Generic.List[string]]::new()
     if ($null -ne $preflight) {
         foreach ($reason in @(Get-JsonProperty -Object $preflight -Name 'reasons' -Default @())) {
@@ -114,11 +156,16 @@ function New-PreflightWorkerSummary {
         if (-not [string]::IsNullOrWhiteSpace([string]$Invocation.ParseError)) { [void]$reasons.Add("runner preflight returned invalid JSON: $($Invocation.ParseError)") }
         if ([string]::IsNullOrWhiteSpace([string]$Invocation.Stdout)) { [void]$reasons.Add('runner preflight returned no JSON result.') }
     }
-    if ([int]$Invocation.ExitCode -ne 0) {
+    if ($null -eq $invocationExitCode -or [int]$invocationExitCode -ne 0) {
         $diagnostic = [string]::Join(' ', @([string]$Invocation.Stderr, [string]$Invocation.Stdout).Where({ -not [string]::IsNullOrWhiteSpace($_) }))
         if ([string]::IsNullOrWhiteSpace($diagnostic)) { $diagnostic = 'no diagnostic output' }
-        [void]$reasons.Add("runner preflight exited with status $($Invocation.ExitCode): $diagnostic")
+        $reportedExitCode = if ($null -eq $invocationExitCode) { 'unknown' } else { [string]$invocationExitCode }
+        [void]$reasons.Add("runner preflight exited with status ${reportedExitCode}: $diagnostic")
     }
+    if ($invocationTimedOut) {
+        [void]$reasons.Add('runner preflight watchdog timed out; no execution was started.')
+    }
+    if (-not $invocationTerminated) { [void]$reasons.Add('runner preflight process termination was not observed; no execution was started.') }
 
     $effectivePreflight = if ($null -ne $preflight) {
         $preflight
@@ -148,13 +195,13 @@ function New-PreflightWorkerSummary {
         configuration = [string]$Record.Configuration
         run_manifest = [string]$Record.RunManifestRelative
         execution_result = [string]$Record.ExecutionResultRelative
-        status = if ($status -eq 'compatible' -and $delegationAssertion -eq 'passed') { 'compatible' } else { 'incompatible' }
+        status = if ($status -eq 'compatible' -and $delegationAssertion -eq 'passed' -and $null -ne $invocationExitCode -and [int]$invocationExitCode -eq 0 -and -not $invocationTimedOut -and $invocationTerminated) { 'compatible' } else { 'incompatible' }
         reasons = @($reasons.ToArray())
         native_delegation_assertion = [ordered]@{
             status = $delegationAssertion
             error = $delegationError
         }
-        runner_exit_code = [int]$Invocation.ExitCode
+        runner_exit_code = if ($null -eq $invocationExitCode) { $null } else { [int]$invocationExitCode }
     }
 }
 
@@ -236,6 +283,7 @@ function Get-FanoutSummary {
     return $summary
 }
 
+$running = $null
 try {
     $manifestPath = Join-Path $iteration 'manifest.json'
     $manifest = Read-RunnerJson -Path $manifestPath
@@ -270,7 +318,7 @@ try {
     $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $manifest)
     $preflightRecords = [System.Collections.Generic.List[object]]::new()
     foreach ($record in $manifestRecords) {
-        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path)
+        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path) -TimeoutSeconds ([Math]::Max(120, [int]$profile.TimeoutSeconds + (Get-RunnerGraceSeconds)))
         $preflightRecords.Add((New-PreflightWorkerSummary -Record $record -Invocation $invocation -Descriptor $descriptor))
     }
     $failedPreflights = @($preflightRecords | Where-Object { [string]$_.status -ne 'compatible' })
@@ -315,18 +363,19 @@ try {
                 ([string]$profile.Path)
             )
             $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
+            $childBudget = Get-RunnerChildTimeoutSeconds -RunPath $runPath -ProfileTimeoutSeconds ([int]$profile.TimeoutSeconds)
             # Headless child: CreateNoWindow suppresses the per-child console
             # window on Windows while the process stays a real isolation
             # boundary. The child's sole stdout is streamed to the exact
             # manifest-declared execution result; stderr is captured separately.
-            $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $runPath) -StdoutPath $executionResultPath -StderrPath $stderrPath
+            $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $runPath) -StdoutPath $executionResultPath -StderrPath $stderrPath -TimeoutSeconds ([int]$childBudget.TimeoutSeconds)
             if (-not [bool]$state.preflight.execution_started) {
                 $state.preflight.execution_started = $true
                 Save-OrchestrationState -Path $statePath -State $state
             }
             [void](Register-DelegationAccepted -State $state -WorkerId $workerId)
             Save-OrchestrationState -Path $statePath -State $state
-            $running.Add([pscustomobject]@{ worker_id = $workerId; child = $child; Process = $child.Process; result_path = $executionResultPath; stderr_path = $stderrPath; run_path = $runPath })
+            $running.Add([pscustomobject]@{ worker_id = $workerId; child = $child; Process = $child.Process; result_path = $executionResultPath; stderr_path = $stderrPath; run_path = $runPath; timeout_seconds = [int]$childBudget.TimeoutSeconds; turn_count = [int]$childBudget.TurnCount })
         }
 
         if ($running.Count -eq 0) { throw 'Runner-owned fan-out has pending arms but no active native process.' }
@@ -336,6 +385,9 @@ try {
         $completedIndex = Wait-AnyRunnerChild -Running $running
         $activeRun = $running[$completedIndex]
         $exitCode = Complete-RunnerChildProcess -Child $activeRun.child
+        if ([bool]$activeRun.child.TimedOut) {
+            throw "$($activeRun.worker_id) runner child watchdog timed out after $($activeRun.timeout_seconds) seconds (turns=$($activeRun.turn_count)); no retry or redispatch was performed."
+        }
         if (-not (Test-Path -LiteralPath $activeRun.result_path -PathType Leaf) -or (Get-Item -LiteralPath $activeRun.result_path).Length -eq 0) {
             $stderr = if (Test-Path -LiteralPath $activeRun.stderr_path -PathType Leaf) { [System.IO.File]::ReadAllText($activeRun.stderr_path, [System.Text.UTF8Encoding]::new($false)).Trim() } else { '' }
             throw "$($activeRun.worker_id) runner exited with status $exitCode without writing its manifest-declared execution result. $stderr"
@@ -374,6 +426,11 @@ try {
     Write-FanoutSummary -Summary $summary
 } catch {
     $errorMessage = $_.Exception.Message
+    if ($null -ne $running) {
+        foreach ($active in @($running.ToArray())) {
+            try { [void](Complete-RunnerChildProcess -Child $active.child -TimeoutSeconds 1) } catch { }
+        }
+    }
     $fallbackProfile = [ordered]@{ runner = ''; model = '' }
     $fallbackPlan = [ordered]@{ dispatch_owner = 'runner'; requested_concurrency = 0 }
     $fallbackState = [ordered]@{ max_observed_active = 0; completed = [ordered]@{} }

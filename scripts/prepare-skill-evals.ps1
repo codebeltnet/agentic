@@ -1626,7 +1626,7 @@ function Invoke-PrepareMode {
 
     Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals))
     $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
-    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -RequestedConcurrency $Concurrency)
+    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -RequestedConcurrency $Concurrency -PerArmTimeoutSeconds $TimeoutSeconds -RunnerGraceSeconds 30)
 
     Write-Host 'Evaluation package prepared.'
     Write-Host ''
@@ -1672,7 +1672,9 @@ function New-RunnerPrompt {
         [int]$IterationNumber,
         [object[]]$ManifestEvals,
         [Parameter(Mandatory = $true)][object]$ExecutionSelection,
-        [Parameter(Mandatory = $true)][int]$RequestedConcurrency
+        [Parameter(Mandatory = $true)][int]$RequestedConcurrency,
+        [int]$PerArmTimeoutSeconds = 900,
+        [int]$RunnerGraceSeconds = 30
     )
 
     $builder = [System.Text.StringBuilder]::new()
@@ -1680,6 +1682,22 @@ function New-RunnerPrompt {
     $runnerOwnedFanoutPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1"
     $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
     $finalizerPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
+    $maxScriptedUserTurns = 1
+    foreach ($manifestEval in @($ManifestEvals)) {
+        $metadataPath = Join-Path $IterationDirectory ([string](Get-JsonProperty -Object $manifestEval -Name 'metadata' -Default ''))
+        if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
+            try {
+                $metadata = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                $turns = @(Get-JsonProperty -Object (Get-JsonProperty -Object $metadata -Name 'interaction' -Default $null) -Name 'turns' -Default @())
+                if ($turns.Count -gt $maxScriptedUserTurns) { $maxScriptedUserTurns = $turns.Count }
+            } catch {
+                # Prompt generation remains usable for the unit-test helper,
+                # while real packages already validate metadata before this
+                # function is called.
+            }
+        }
+    }
+    $phaseOneAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + [Math]::Max(0, $RunnerGraceSeconds)
     [void]$builder.AppendLine('# Execute, grade, and report this evaluation package')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('START NOW. You are the external Eval Orchestrator for this user-directed handoff. Do not execute an eval prompt in your own context. The repository preparation and validation flow remain model-free.')
@@ -1688,6 +1706,9 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine("Profile: $profilePath")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 1 — blind execution')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine(("Phase 1 is a long-running command. Set the caller shell/tool timeout to the package-computed allowance of {0} seconds ({1} maximum scripted user turn(s) × {2} profile.timeout_seconds + {3} seconds runner grace), not a default 120-second timeout." -f $phaseOneAllowanceSeconds, $maxScriptedUserTurns, $PerArmTimeoutSeconds, $RunnerGraceSeconds))
+    [void]$builder.AppendLine('A caller-side shell timeout is NOT permission to invoke Phase 1 again. `invoke-runner-owned-arms.ps1` must be started exactly once for this iteration. If the caller times out, do not rerun it: inspect process/orchestration state read-only; if the original supervisor is alive, wait; if it is gone and no execution freeze exists, mark the package incomplete and require a fresh iteration.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke this deterministic helper exactly once:')
     [void]$builder.AppendLine("pwsh -NoProfile -File `"$runnerOwnedFanoutPath`" -IterationDirectory `"$IterationDirectory`"")

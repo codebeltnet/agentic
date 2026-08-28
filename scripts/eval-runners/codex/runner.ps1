@@ -603,13 +603,25 @@ function Invoke-CodexAppServer {
             try {
                 if (-not $process.HasExited -and -not $process.WaitForExit(2000)) {
                     $process.Kill($true)
-                    $process.WaitForExit()
+                    # Never use an unbounded wait in cleanup. A broken child
+                    # or inherited pipe must not hold the runner forever.
+                    if (-not $process.HasExited) { [void]$process.WaitForExit(5000) }
                 }
                 if ($process.HasExited) { $actualExitCode = $process.ExitCode }
             } catch { }
         }
         if ($null -ne $stderrTask) {
-            try { $stderr = $stderrTask.GetAwaiter().GetResult() } catch { $stderr = $_.Exception.Message }
+            try {
+                # A descendant that inherits stderr can keep this task open
+                # after the app-server has been terminated. Drain only within
+                # the shared finite cleanup grace; never turn cleanup into an
+                # unbounded GetResult() wait.
+                if (Wait-RunnerTaskBounded -Task $stderrTask -TimeoutMilliseconds 5000) {
+                    $stderr = [string]$stderrTask.GetAwaiter().GetResult()
+                } else {
+                    $stderr = 'Codex app-server stderr drain exceeded bounded cleanup grace.'
+                }
+            } catch { $stderr = $_.Exception.Message }
         }
         $process.Dispose()
         if ($null -ne $authHome -and (Test-Path -LiteralPath $authHome.Path)) {

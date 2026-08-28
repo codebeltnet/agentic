@@ -1720,6 +1720,35 @@ function Resolve-ExternalCommand {
     return [pscustomobject]@{ FileName = $source; Prefix = @(); Source = $source }
 }
 
+function Wait-RunnerTaskBounded {
+    param(
+        [Parameter(Mandatory = $true)][System.Threading.Tasks.Task]$Task,
+        [Parameter(Mandatory = $true)][int]$TimeoutMilliseconds
+    )
+
+    if ($Task.IsCompleted) { return $true }
+    $boundedMilliseconds = [Math]::Max(1, [Math]::Min($TimeoutMilliseconds, 5000))
+    try {
+        return [bool]$Task.Wait($boundedMilliseconds)
+    } catch {
+        return [bool]$Task.IsCompleted
+    }
+}
+
+function Get-RunnerTaskResultIfCompleted {
+    param(
+        [System.Threading.Tasks.Task]$Task,
+        [string]$Default = ''
+    )
+
+    if ($null -eq $Task -or -not $Task.IsCompleted) { return $Default }
+    try {
+        return [string]$Task.GetAwaiter().GetResult()
+    } catch {
+        return $Default
+    }
+}
+
 function Invoke-RunnerProcess {
     param(
         [Parameter(Mandatory = $true)][string]$FileName,
@@ -1749,37 +1778,107 @@ function Invoke-RunnerProcess {
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
+    $processStarted = $false
+    $stdoutTask = $null
+    $stderrTask = $null
+    $inputTask = $null
+    $timedOut = $false
+    $killAttempted = $false
+    $terminationObserved = $false
+    $stdoutDrainCompleted = $false
+    $stderrDrainCompleted = $false
+    $timeoutValue = [Math]::Max(1, $TimeoutSeconds)
+    $deadline = $start.AddSeconds($timeoutValue)
     try {
         if (-not $process.Start()) {
             throw "Could not start '$FileName'."
         }
+        $processStarted = $true
 
-        if ($null -ne $InputBytes -and $InputBytes.Length -gt 0) {
-            $process.StandardInput.BaseStream.Write($InputBytes, 0, $InputBytes.Length)
-        }
-        $process.StandardInput.Close()
+        # Start both readers before writing stdin. A child that emits enough
+        # output while reading its prompt must not deadlock the runner.
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        $timeoutMilliseconds = [Math]::Min([int64]::MaxValue, [int64]$TimeoutSeconds * 1000)
-        $exited = $process.WaitForExit([int]([Math]::Min($timeoutMilliseconds, [int]::MaxValue)))
-        $timedOut = -not $exited
-        if ($timedOut) {
-            try { $process.Kill($true) } catch { }
-            $process.WaitForExit()
+        if ($null -ne $InputBytes -and $InputBytes.Length -gt 0) {
+            $inputTask = $process.StandardInput.BaseStream.WriteAsync($InputBytes, 0, $InputBytes.Length)
+            while (-not $inputTask.IsCompleted) {
+                $remainingTotal = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
+                if ($remainingTotal -le 0) {
+                    $timedOut = $true
+                    break
+                }
+                $remaining = [int][Math]::Max(1, [Math]::Min(5000, $remainingTotal))
+                if (Wait-RunnerTaskBounded -Task $inputTask -TimeoutMilliseconds $remaining) { break }
+            }
+            if (-not $timedOut) {
+                # The task is complete, so this cannot introduce an
+                # unbounded wait. It propagates a real pipe-write failure.
+                [void]$inputTask.GetAwaiter().GetResult()
+            }
         }
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
+        try { $process.StandardInput.Close() } catch { }
+
+        if (-not $timedOut) {
+            while (-not $process.HasExited) {
+                $remainingTotal = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
+                if ($remainingTotal -le 0) {
+                    $timedOut = $true
+                    break
+                }
+                $remaining = [int][Math]::Max(1, [Math]::Min(5000, $remainingTotal))
+                if ($process.WaitForExit($remaining)) { break }
+            }
+            if (-not $timedOut) { $terminationObserved = [bool]$process.HasExited }
+        }
+
+        if ($timedOut) {
+            $killAttempted = $true
+            try { $process.Kill($true) } catch { }
+            # A forced termination is allowed a small, finite grace period.
+            # Never call the parameterless WaitForExit on this path: a child
+            # or inherited pipe can remain alive indefinitely.
+            try {
+                if (-not $process.HasExited) { [void]$process.WaitForExit(5000) }
+            } catch { }
+            try { $terminationObserved = [bool]$process.HasExited } catch { $terminationObserved = $false }
+        }
+
+        # Drain stdout/stderr only until one shared finite deadline. If a
+        # descendant keeps a pipe open, return the bounded result instead of
+        # waiting forever for ReadToEndAsync().
+        $drainDeadline = [DateTime]::UtcNow.AddSeconds(5)
+        foreach ($stream in @(
+                [pscustomobject]@{ Task = $stdoutTask; Name = 'stdout' },
+                [pscustomobject]@{ Task = $stderrTask; Name = 'stderr' }
+            )) {
+            if ($null -eq $stream.Task) { continue }
+            $remainingDrain = [int][Math]::Max(1, [Math]::Min(5000, ($drainDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+            $completed = Wait-RunnerTaskBounded -Task $stream.Task -TimeoutMilliseconds $remainingDrain
+            if ($stream.Name -eq 'stdout') { $stdoutDrainCompleted = $completed } else { $stderrDrainCompleted = $completed }
+        }
+        $stdout = Get-RunnerTaskResultIfCompleted -Task $stdoutTask
+        $stderr = Get-RunnerTaskResultIfCompleted -Task $stderrTask
         $finish = [DateTime]::UtcNow
 
         return [pscustomobject]@{
-            ExitCode = if ($timedOut) { $null } else { $process.ExitCode }
+            ExitCode = if ($timedOut -or -not $terminationObserved) { $null } else { $process.ExitCode }
             TimedOut = $timedOut
             Stdout = $stdout
             Stderr = $stderr
             StartedUtc = $start
             FinishedUtc = $finish
             DurationSeconds = [Math]::Round(($finish - $start).TotalSeconds, 3)
+            KillAttempted = $killAttempted
+            TerminationObserved = $terminationObserved
+            StdoutDrainCompleted = $stdoutDrainCompleted
+            StderrDrainCompleted = $stderrDrainCompleted
         }
+    } catch {
+        if ($processStarted) {
+            try { $process.Kill($true) } catch { }
+            try { if (-not $process.HasExited) { [void]$process.WaitForExit(5000) } } catch { }
+        }
+        throw
     } finally {
         $process.Dispose()
     }

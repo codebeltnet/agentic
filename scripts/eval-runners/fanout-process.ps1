@@ -57,7 +57,8 @@ function Start-RunnerChildProcess {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ArgumentList,
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [Parameter(Mandatory = $true)][string]$StdoutPath,
-        [Parameter(Mandatory = $true)][string]$StderrPath
+        [Parameter(Mandatory = $true)][string]$StderrPath,
+        [int]$TimeoutSeconds = 900
     )
 
     New-Item -ItemType Directory -Path (Split-Path -Parent $StdoutPath) -Force | Out-Null
@@ -77,6 +78,7 @@ function Start-RunnerChildProcess {
     }
     $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
     $stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
+    $startedUtc = [DateTime]::UtcNow
     return [pscustomobject]@{
         Process = $process
         StdoutPath = $StdoutPath
@@ -85,7 +87,26 @@ function Start-RunnerChildProcess {
         StderrStream = $stderrStream
         StdoutTask = $stdoutTask
         StderrTask = $stderrTask
+        StartedUtc = $startedUtc
+        TimeoutSeconds = [Math]::Max(1, $TimeoutSeconds)
+        DeadlineUtc = $startedUtc.AddSeconds([Math]::Max(1, $TimeoutSeconds))
+        WatchdogExpired = $false
+        TimedOut = $false
+        TerminationObserved = $false
+        OutputDrainCompleted = $false
+        FinishedUtc = $null
     }
+}
+
+function Wait-RunnerChildTaskBounded {
+    param(
+        [Parameter(Mandatory = $true)][System.Threading.Tasks.Task]$Task,
+        [Parameter(Mandatory = $true)][int]$TimeoutMilliseconds
+    )
+
+    if ($Task.IsCompleted) { return $true }
+    $bounded = [Math]::Max(1, [Math]::Min($TimeoutMilliseconds, 5000))
+    try { return [bool]$Task.Wait($bounded) } catch { return [bool]$Task.IsCompleted }
 }
 
 function Complete-RunnerChildProcess {
@@ -94,18 +115,62 @@ function Complete-RunnerChildProcess {
       tasks, closes the destination streams, and returns the observed exit code.
       Safe to call once per started child.
     #>
-    param([Parameter(Mandatory = $true)][object]$Child)
+    param(
+        [Parameter(Mandatory = $true)][object]$Child,
+        [int]$TimeoutSeconds = 0
+    )
 
-    $Child.Process.WaitForExit()
-    foreach ($task in @($Child.StdoutTask, $Child.StderrTask)) {
-        try { [void]$task.Wait() } catch { }
+    # An explicit timeout is a cleanup override (used by the supervisor's
+    # error path); otherwise honor the absolute deadline captured at start.
+    $deadline = if ($TimeoutSeconds -gt 0) { [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSeconds)) } elseif ($null -ne $Child.DeadlineUtc) { [DateTime]$Child.DeadlineUtc } else { [DateTime]::UtcNow.AddSeconds(1) }
+    $timedOut = [bool]$Child.WatchdogExpired
+    try {
+        if (-not $Child.Process.HasExited -and -not $timedOut) {
+            while (-not $Child.Process.HasExited) {
+                $remainingTotal = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
+                if ($remainingTotal -le 0) {
+                    $timedOut = $true
+                    break
+                }
+                $remaining = [int][Math]::Max(1, [Math]::Min(5000, $remainingTotal))
+                if ($Child.Process.WaitForExit($remaining)) { break }
+            }
+        }
+    } catch { $timedOut = $true }
+
+    if ($timedOut) {
+        $Child.TimedOut = $true
+        try { $Child.Process.Kill($true) } catch { }
+        try { if (-not $Child.Process.HasExited) { [void]$Child.Process.WaitForExit(5000) } } catch { }
     }
+    try { $Child.TerminationObserved = [bool]$Child.Process.HasExited } catch { $Child.TerminationObserved = $false }
+
+    # Use one finite drain deadline. A descendant holding an inherited pipe
+    # open must not make the fan-out supervisor wait forever.
+    $drainDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    $stdoutDone = $false
+    $stderrDone = $false
+    foreach ($entry in @(
+            [pscustomobject]@{ Task = $Child.StdoutTask; Name = 'stdout' },
+            [pscustomobject]@{ Task = $Child.StderrTask; Name = 'stderr' }
+        )) {
+        try {
+            $remaining = [int][Math]::Max(1, [Math]::Min(5000, ($drainDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+            $done = Wait-RunnerChildTaskBounded -Task $entry.Task -TimeoutMilliseconds $remaining
+            if ($entry.Name -eq 'stdout') { $stdoutDone = $done } else { $stderrDone = $done }
+        } catch { }
+    }
+    $Child.OutputDrainCompleted = $stdoutDone -and $stderrDone
     foreach ($stream in @($Child.StdoutStream, $Child.StderrStream)) {
         try { $stream.Flush() } catch { }
         try { $stream.Dispose() } catch { }
     }
-    $exitCode = [int]$Child.Process.ExitCode
+    $exitCode = $null
+    if (-not $timedOut -and $Child.TerminationObserved) {
+        try { $exitCode = [int]$Child.Process.ExitCode } catch { $exitCode = $null }
+    }
     try { $Child.Process.Dispose() } catch { }
+    $Child.FinishedUtc = [DateTime]::UtcNow
     return $exitCode
 }
 
@@ -124,8 +189,36 @@ function Wait-AnyRunnerChild {
     if ($Running.Count -eq 0) { return -1 }
     while ($true) {
         for ($index = 0; $index -lt $Running.Count; $index++) {
-            if ($Running[$index].Process.HasExited) { return $index }
+            $child = $Running[$index]
+            if ($child.Process.HasExited) { return $index }
+            # The public queue record wraps the process helper as `.child`,
+            # while the focused helper tests may pass the process record
+            # directly. Accept both shapes without losing the deadline.
+            $childDeadline = $null
+            if ($null -ne $child.PSObject.Properties['DeadlineUtc']) {
+                $childDeadline = $child.DeadlineUtc
+            } elseif ($null -ne $child.PSObject.Properties['child'] -and $null -ne $child.child -and $null -ne $child.child.PSObject.Properties['DeadlineUtc']) {
+                $childDeadline = $child.child.DeadlineUtc
+            }
+            if ($null -ne $childDeadline -and [DateTime]::UtcNow -ge [DateTime]$childDeadline) {
+                if ($null -ne $child.PSObject.Properties['WatchdogExpired']) { $child.WatchdogExpired = $true }
+                if ($null -ne $child.PSObject.Properties['child']) { $child.child.WatchdogExpired = $true }
+                return $index
+            }
         }
-        Start-Sleep -Milliseconds $PollMilliseconds
+        $sleepMilliseconds = [Math]::Max(1, [Math]::Min($PollMilliseconds, 250))
+        $nextDeadline = @($Running | ForEach-Object {
+                if ($null -ne $_.PSObject.Properties['DeadlineUtc']) {
+                    [DateTime]$_.DeadlineUtc
+                } elseif ($null -ne $_.PSObject.Properties['child'] -and $null -ne $_.child -and $null -ne $_.child.PSObject.Properties['DeadlineUtc']) {
+                    [DateTime]$_.child.DeadlineUtc
+                }
+            } | Sort-Object | Select-Object -First 1)
+        if ($nextDeadline.Count -eq 1) {
+            $untilDeadline = [int][Math]::Max(1, [Math]::Min($sleepMilliseconds, ($nextDeadline[0] - [DateTime]::UtcNow).TotalMilliseconds))
+            Start-Sleep -Milliseconds $untilDeadline
+        } else {
+            Start-Sleep -Milliseconds $sleepMilliseconds
+        }
     }
 }
