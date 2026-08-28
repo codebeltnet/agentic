@@ -1697,7 +1697,12 @@ function New-RunnerPrompt {
             }
         }
     }
-    $phaseOneAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + [Math]::Max(0, $RunnerGraceSeconds)
+    $armCount = [Math]::Max(1, @($ManifestEvals).Count * 2)
+    $preflightTimeoutSeconds = [Math]::Max(120, [Math]::Max(1, $PerArmTimeoutSeconds) + [Math]::Max(0, $RunnerGraceSeconds))
+    $serialPreflightAllowanceSeconds = $armCount * $preflightTimeoutSeconds
+    $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + [Math]::Max(0, $RunnerGraceSeconds)
+    $orchestrationGraceSeconds = [Math]::Max(1, $RunnerGraceSeconds)
+    $phaseOneAllowanceSeconds = $serialPreflightAllowanceSeconds + $longestChildAllowanceSeconds + $orchestrationGraceSeconds
     [void]$builder.AppendLine('# Execute, grade, and report this evaluation package')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('START NOW. You are the external Eval Orchestrator for this user-directed handoff. Do not execute an eval prompt in your own context. The repository preparation and validation flow remain model-free.')
@@ -1707,7 +1712,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 1 — blind execution')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine(("Phase 1 is a long-running command. Set the caller shell/tool timeout to the package-computed allowance of {0} seconds ({1} maximum scripted user turn(s) × {2} profile.timeout_seconds + {3} seconds runner grace), not a default 120-second timeout." -f $phaseOneAllowanceSeconds, $maxScriptedUserTurns, $PerArmTimeoutSeconds, $RunnerGraceSeconds))
+    [void]$builder.AppendLine(("Phase 1 is a long-running command. Set the caller shell/tool timeout to the package-computed allowance of {0} seconds ({1}-second serial preflight allowance for {2} arm(s) at the max(120, profile.timeout_seconds + runner grace) policy + {3}-second longest child allowance + {4}-second orchestration grace), not a default 120-second timeout." -f $phaseOneAllowanceSeconds, $serialPreflightAllowanceSeconds, $armCount, $longestChildAllowanceSeconds, $orchestrationGraceSeconds))
     [void]$builder.AppendLine('A caller-side shell timeout is NOT permission to invoke Phase 1 again. `invoke-runner-owned-arms.ps1` must be started exactly once for this iteration. If the caller times out, do not rerun it: inspect process/orchestration state read-only; if the original supervisor is alive, wait; if it is gone and no execution freeze exists, mark the package incomplete and require a fresh iteration.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke this deterministic helper exactly once:')
