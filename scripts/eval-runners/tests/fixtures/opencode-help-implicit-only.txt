@@ -1,7 +1,0 @@
-Usage: opencode run [options]
-  --format <format>                      Structured output format
-  --dir <directory>                      Project directory
-  --model <model>                        Model selector
-  --auto                                 Approve tool actions
-  --continue                             Continue the most recent session
-  --session <session-id>                 Continue the most recent session by id

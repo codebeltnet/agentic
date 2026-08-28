@@ -1,6 +1,0 @@
-Usage: opencode run [options]
-  --format <format>                      Structured output format
-  --dir <directory>                      Project directory
-  --model <model>                        Model selector
-  --auto                                 Approve tool actions
-  --session SESSION_ID                   Session identifier
