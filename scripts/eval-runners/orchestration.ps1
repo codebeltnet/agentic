@@ -338,13 +338,9 @@ function Register-WorkerTerminal {
     $arm = Get-OrchestrationArmByWorkerId -Plan $Plan -WorkerId $WorkerId
     $activeWorker = $active[$WorkerId]
     $expectedSessionId = [string](Get-JsonProperty -Object $activeWorker -Name 'worker_session_id' -Default '')
-    $effectiveStatus = $status
     $terminalEvidenceFailures = [System.Collections.Generic.List[string]]::new()
 
     # Preserve runner-owned failure codes before the common validator runs.
-    # They are transport evidence, not parent-authored annotations. The common
-    # validator may add portable failures, but it must never erase the
-    # runner's additional Codex checks.
     foreach ($reportedFailure in @(Get-NativeWorkerReportedFailures -ExecutionEvidence $ExecutionEvidence)) {
         $terminalEvidenceFailures.Add([string]$reportedFailure)
     }
@@ -372,18 +368,19 @@ function Register-WorkerTerminal {
         $terminalEvidenceFailures.Add($_.Exception.Message)
     }
 
-    if ($terminalEvidenceFailures.Count -gt 0 -and $effectiveStatus -ne 'incompatible') {
-        $effectiveStatus = 'incompatible'
-    }
+    # Do NOT rewrite the runner-produced terminal status. Keep it authoritative.
+    # Record evidence-validation separately so the execution status remains honest.
+    $evidenceValidationStatus = if ($terminalEvidenceFailures.Count -gt 0) { 'failed' } else { 'passed' }
+
     if ($status -eq 'incompatible' -and $terminalEvidenceFailures.Count -eq 0) {
+        # Runner explicitly reported incompatible; surface that as evidence failure
         $terminalEvidenceFailures.Add('runner_reported_incompatible')
+        $evidenceValidationStatus = 'failed'
     }
-    if ($terminalEvidenceFailures.Count -gt 0) {
-        # A worker that returned an answer without mandatory native evidence is
-        # an incompatible arm, not an invitation to retry through another path.
-        try { $ExecutionEvidence.status = 'incompatible' } catch { }
-        [void](Set-NativeWorkerReportedFailures -ExecutionEvidence $ExecutionEvidence -Failures @($terminalEvidenceFailures.ToArray()))
-    }
+
+    # Persist reported failures into the execution-evidence object without
+    # mutating the runner-reported terminal status field.
+    try { [void](Set-NativeWorkerReportedFailures -ExecutionEvidence $ExecutionEvidence -Failures @($terminalEvidenceFailures.ToArray())) } catch { }
 
     $active.Remove($WorkerId)
     $completed = Get-OrchestrationDictionary -Object $State -Name 'completed'
@@ -392,13 +389,20 @@ function Register-WorkerTerminal {
         eval_id = [int]$arm.eval_id
         eval_name = [string]$arm.eval_name
         configuration = [string]$arm.configuration
-        status = $effectiveStatus
+        # ledger status mirrors the raw runner status exactly (authority retained)
+        status = $status
         terminal_utc = [DateTime]::UtcNow.ToString('o')
         worker_session_id = if ([string]::IsNullOrWhiteSpace($expectedSessionId)) {
             Get-JsonProperty -Object (Get-JsonProperty -Object (Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null) -Name 'delegation' -Default $null) -Name 'worker_session_id' -Default $null
         } else { $expectedSessionId }
-        native_worker_evidence = if ($effectiveStatus -eq 'incompatible' -or $terminalEvidenceFailures.Count -gt 0) { 'incompatible' } else { 'verified' }
+        # Preserve existing compatibility field for backward consumers but do not
+        # let it mutate the authoritative execution status. Mark evidence level.
+        native_worker_evidence = if ($status -eq 'incompatible' -or $terminalEvidenceFailures.Count -gt 0) { 'incompatible' } else { 'verified' }
         native_worker_evidence_failures = @($terminalEvidenceFailures.ToArray())
+        evidence_validation = [ordered]@{
+            status = $evidenceValidationStatus
+            reasons = @($terminalEvidenceFailures.ToArray())
+        }
     }
     return $true
 }

@@ -672,9 +672,25 @@ function Test-NativeWorkerTerminalEvidence {
         return [pscustomobject]@{ Valid = $false; Failures = @($failures); Delegation = $null }
     }
 
-    foreach ($name in @(Get-NativeWorkerTerminalEvidenceRequirements)) {
-        if (-not (Test-JsonProperty -Object $delegation -Name $name)) {
-            $failures.Add($name)
+    # Different evidence requirements depending on terminal status. A
+    # completed scripted run must provide full same-session interaction proof.
+    # Non-success terminal statuses (timed_out/failed/cancelled) have weaker but
+    # truthful evidence expectations and must not be forced to fabricate a final
+    # assistant response.
+    $isSuccessTerminal = ($status -eq 'completed')
+
+    if ($isSuccessTerminal) {
+        foreach ($name in @(Get-NativeWorkerTerminalEvidenceRequirements)) {
+            if (-not (Test-JsonProperty -Object $delegation -Name $name)) {
+                $failures.Add($name)
+            }
+        }
+    } else {
+        # Minimal truthful delegation fields for non-success terminals.
+        foreach ($name in @('mechanism','worker_session_id','observed_model','observed_working_directory','observed_home')) {
+            if (-not (Test-JsonProperty -Object $delegation -Name $name)) {
+                $failures.Add($name)
+            }
         }
     }
 
@@ -696,27 +712,38 @@ function Test-NativeWorkerTerminalEvidence {
     if ([string](Get-JsonProperty -Object $delegation -Name 'observed_model' -Default '') -ne $RequestedModel) {
         $failures.Add('requested_model')
     }
-    if (-not [bool](Get-JsonProperty -Object $delegation -Name 'fresh_worker' -Default $false)) {
-        $failures.Add('fresh_worker')
+
+    if ($isSuccessTerminal) {
+        if (-not [bool](Get-JsonProperty -Object $delegation -Name 'fresh_worker' -Default $false)) {
+            $failures.Add('fresh_worker')
+        }
+        if (-not [bool](Get-JsonProperty -Object $delegation -Name 'home_config_isolated' -Default $false)) {
+            $failures.Add('isolated_home_config')
+        }
+        if (-not [bool](Get-JsonProperty -Object $delegation -Name 'prompt_fidelity' -Default $false) -or
+            [string](Get-JsonProperty -Object $delegation -Name 'prompt_sha256' -Default '') -ne [string]$Run.PromptHash) {
+            $failures.Add('prompt_fidelity')
+        }
+        if (-not [bool](Get-JsonProperty -Object $delegation -Name 'terminal_result_capture' -Default $false)) {
+            $failures.Add('terminal_result_capture')
+        }
+        if ([bool](Get-JsonProperty -Object $delegation -Name 'paired_arm_visible' -Default $true) -or
+            [bool](Get-JsonProperty -Object $delegation -Name 'grading_material_visible' -Default $true)) {
+            $failures.Add('paired_arm_and_grading_exclusion')
+        }
+        if ([bool](Get-JsonProperty -Object $delegation -Name 'nested_model_execution' -Default $true) -or
+            [int](Get-JsonProperty -Object $delegation -Name 'model_execution_count' -Default 0) -ne 1) {
+            $failures.Add('nested_model_execution')
+        }
+    } else {
+        # For non-success terminals, skip strict prompt/terminal-capture checks
+        # but still validate working/home path alignment when provided.
+        if ([bool](Get-JsonProperty -Object $delegation -Name 'paired_arm_visible' -Default $true) -or
+            [bool](Get-JsonProperty -Object $delegation -Name 'grading_material_visible' -Default $true)) {
+            $failures.Add('paired_arm_and_grading_exclusion')
+        }
     }
-    if (-not [bool](Get-JsonProperty -Object $delegation -Name 'home_config_isolated' -Default $false)) {
-        $failures.Add('isolated_home_config')
-    }
-    if (-not [bool](Get-JsonProperty -Object $delegation -Name 'prompt_fidelity' -Default $false) -or
-        [string](Get-JsonProperty -Object $delegation -Name 'prompt_sha256' -Default '') -ne [string]$Run.PromptHash) {
-        $failures.Add('prompt_fidelity')
-    }
-    if (-not [bool](Get-JsonProperty -Object $delegation -Name 'terminal_result_capture' -Default $false)) {
-        $failures.Add('terminal_result_capture')
-    }
-    if ([bool](Get-JsonProperty -Object $delegation -Name 'paired_arm_visible' -Default $true) -or
-        [bool](Get-JsonProperty -Object $delegation -Name 'grading_material_visible' -Default $true)) {
-        $failures.Add('paired_arm_and_grading_exclusion')
-    }
-    if ([bool](Get-JsonProperty -Object $delegation -Name 'nested_model_execution' -Default $true) -or
-        [int](Get-JsonProperty -Object $delegation -Name 'model_execution_count' -Default 0) -ne 1) {
-        $failures.Add('nested_model_execution')
-    }
+
     $executionPaths = Get-JsonProperty -Object (Get-JsonProperty -Object $ExecutionEvidence -Name 'evidence' -Default $null) -Name 'execution_paths' -Default $null
     $expectedWorkingDirectory = [string]$Run.WorkingDirectoryPath
     $expectedHomeDirectory = [string]$Run.HomeDirectoryPath
@@ -742,11 +769,22 @@ function Test-NativeWorkerTerminalEvidence {
     }
 
     $session = Get-JsonProperty -Object $ExecutionEvidence -Name 'session' -Default $null
-    if ($null -eq $session -or
-        -not [bool](Get-JsonProperty -Object $session -Name 'fresh' -Default $false) -or
-        [bool](Get-JsonProperty -Object $session -Name 'resumed' -Default $true) -or
-        [string](Get-JsonProperty -Object $session -Name 'id' -Default '') -ne $workerSessionId) {
-        $failures.Add('fresh_worker')
+    if ($isSuccessTerminal) {
+        if ($null -eq $session -or
+            -not [bool](Get-JsonProperty -Object $session -Name 'fresh' -Default $false) -or
+            [bool](Get-JsonProperty -Object $session -Name 'resumed' -Default $true) -or
+            [string](Get-JsonProperty -Object $session -Name 'id' -Default '') -ne $workerSessionId) {
+            $failures.Add('fresh_worker')
+        }
+    } else {
+        # If a session object exists for a non-success terminal, require the
+        # recorded session id to match the delegation worker_session_id when
+        # present; otherwise do not force fresh/resumed semantics.
+        if ($null -ne $session -and -not [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $session -Name 'id' -Default '')) -and
+            -not [string]::IsNullOrWhiteSpace($workerSessionId) -and
+            [string](Get-JsonProperty -Object $session -Name 'id' -Default '') -ne $workerSessionId) {
+            $failures.Add('worker_session_id')
+        }
     }
 
     return [pscustomobject]@{

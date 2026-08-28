@@ -451,8 +451,10 @@ try {
         })
         [void](Register-DelegationAccepted -State $caseState -WorkerId ([string]$terminalArm.worker_id) -WorkerSessionId 'native-terminal-session')
         [void](Register-WorkerTerminal -Plan ([pscustomobject]@{ arms = @($terminalArm) }) -State $caseState -WorkerId ([string]$terminalArm.worker_id) -ExecutionEvidence $Evidence)
-        Assert-Equal 'incompatible' $Evidence.status "$Name changes the arm to incompatible"
-        Assert-Equal 'incompatible' $caseState.completed[[string]$terminalArm.worker_id].status "$Name is terminally incompatible"
+        # Ledger must preserve the raw runner status and record evidence validation
+        Assert-Equal $Evidence.status $caseState.completed[[string]$terminalArm.worker_id].status "$Name ledger.status must equal raw Evidence.status"
+        $ev = Get-JsonProperty -Object $caseState.completed[[string]$terminalArm.worker_id] -Name 'evidence_validation' -Default $null
+        Assert-Equal 'failed' $ev.status "$Name evidence_validation should be failed"
         Assert-True (([string]::Join(',', @($caseState.completed[[string]$terminalArm.worker_id].native_worker_evidence_failures))) -match [regex]::Escape($ExpectedFailure)) "$Name records $ExpectedFailure"
     }
 
@@ -495,7 +497,10 @@ try {
     $duplicateSessionState.completed['prior-worker'] = [ordered]@{ worker_id = 'prior-worker'; worker_session_id = 'native-terminal-session' }
     [void](Register-DelegationAccepted -State $duplicateSessionState -WorkerId ([string]$terminalArm.worker_id) -WorkerSessionId 'native-terminal-session')
     [void](Register-WorkerTerminal -Plan ([pscustomobject]@{ arms = @($terminalArm) }) -State $duplicateSessionState -WorkerId ([string]$terminalArm.worker_id) -ExecutionEvidence (Copy-TestObject -Value $validTerminalEvidence))
-    Assert-Equal 'incompatible' $duplicateSessionState.completed[[string]$terminalArm.worker_id].status 'reused worker session makes the arm incompatible'
+    # Ledger must preserve the raw runner status even when session reuse is suspicious
+    Assert-Equal $validTerminalEvidence.status $duplicateSessionState.completed[[string]$terminalArm.worker_id].status 'reused worker session ledger preserves raw status'
+    $dupEv = Get-JsonProperty -Object $duplicateSessionState.completed[[string]$terminalArm.worker_id] -Name 'evidence_validation' -Default $null
+    Assert-Equal 'failed' $dupEv.status 'reused worker session records failed evidence_validation'
     Assert-True (([string]::Join(',', @($duplicateSessionState.completed[[string]$terminalArm.worker_id].native_worker_evidence_failures))) -match 'fresh_worker') 'reused worker session records fresh-worker failure'
 
     $fanoutPath = Join-Path $runnerRoot 'invoke-runner-owned-arms.ps1'
