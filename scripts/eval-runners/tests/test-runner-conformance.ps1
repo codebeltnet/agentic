@@ -86,6 +86,20 @@ $recordedOldFixtures = $env:AGENTIC_RECORDED_FIXTURES
 try {
     $fakeBin = Join-Path $recordedRoot 'bin'
     New-Item -ItemType Directory -Path $fakeBin -Force | Out-Null
+    $fakeAmbientUserRoot = Join-Path $fakeBin '.fake-user'
+    $fakeAmbientCandidateRoots = @(
+        (Join-Path $fakeAmbientUserRoot '.agents\skills\dotnet-strong-name-signing'),
+        (Join-Path $fakeAmbientUserRoot '.claude\skills\dotnet-strong-name-signing'),
+        (Join-Path $fakeAmbientUserRoot '.config\opencode\skills\dotnet-strong-name-signing')
+    )
+    foreach ($fakeAmbientCandidateRoot in $fakeAmbientCandidateRoots) {
+        New-Item -ItemType Directory -Path $fakeAmbientCandidateRoot -Force | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $fakeAmbientCandidateRoot 'SKILL.md'), 'CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_8F43D1A7`nfake ambient fact: this value is not in the task prompt.', [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText((Join-Path $fakeAmbientCandidateRoot 'FORMS.md'), 'CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_8F43D1A7`nfake ambient form fact.', [System.Text.UTF8Encoding]::new($false))
+    }
+    Assert-True (Test-Path -LiteralPath (Join-Path $fakeAmbientUserRoot '.agents\skills\dotnet-strong-name-signing\SKILL.md') -PathType Leaf) 'OpenCode fake .agents ambient candidate fixture exists'
+    Assert-True (Test-Path -LiteralPath (Join-Path $fakeAmbientUserRoot '.claude\skills\dotnet-strong-name-signing\FORMS.md') -PathType Leaf) 'OpenCode fake .claude ambient candidate FORMS.md fixture exists'
+    Assert-True (Test-Path -LiteralPath (Join-Path $fakeAmbientUserRoot '.config\opencode\skills\dotnet-strong-name-signing\SKILL.md') -PathType Leaf) 'OpenCode fake native global ambient candidate fixture exists'
     # The OpenCode isolation regression deliberately places a candidate skill,
     # FORMS.md, and project instructions in the source-repository ancestry.
     # A logical run under this directory would expose them; a physical
@@ -115,6 +129,7 @@ $arguments = @($RemainingArguments | ForEach-Object { [string]$_ })
 $fixtureRoot = [Environment]::GetEnvironmentVariable('AGENTIC_RECORDED_FIXTURES')
 if ([string]::IsNullOrWhiteSpace($fixtureRoot)) { $fixtureRoot = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'fixtures' }
 $fixtureHome = [Environment]::GetEnvironmentVariable('HOME')
+$fakeAmbientUserRoot = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '.fake-user'
 function Test-FixtureMarker {
     param([Parameter(Mandatory = $true)][string]$Name)
     if ([string]::IsNullOrWhiteSpace($fixtureHome)) { return $false }
@@ -125,6 +140,7 @@ $exactSessionHelpFixture = Test-FixtureMarker -Name ("{0}-exact-session-help" -f
 $noExactSessionHelpFixture = Test-FixtureMarker -Name ("{0}-no-exact-session-help" -f $harness)
 $installedStyleSessionHelpFixture = Test-FixtureMarker -Name ("{0}-installed-style-session-help" -f $harness)
 $timingFixture = Test-FixtureMarker -Name ("{0}-timing-fixture" -f $harness)
+$fakeHomeFixture = Test-FixtureMarker -Name 'opencode-fake-home'
 $noSessionFirstFixture = Test-FixtureMarker -Name 'scripted-no-session-first'
 $noTerminalFirstFixture = Test-FixtureMarker -Name 'scripted-no-terminal-first'
 $mismatchSessionFixture = Test-FixtureMarker -Name 'scripted-session-mismatch'
@@ -152,7 +168,7 @@ $copilotAuthPresent = @($copilotAuthNames | Where-Object { -not [string]::IsNull
 $copilotHome = [Environment]::GetEnvironmentVariable('COPILOT_HOME')
 $repositoryAgentsPath = Join-Path (Get-Location).Path 'AGENTS.md'
 $repositoryCopilotInstructionsPath = Join-Path (Get-Location).Path '.github\copilot-instructions.md'
-$candidateSkillPath = Join-Path (Split-Path -Parent (Get-Location).Path) 'skill'
+$candidateSkillPath = if ($harness -eq 'opencode') { Join-Path (Get-Location).Path '.opencode\skills\candidate' } else { Join-Path (Split-Path -Parent (Get-Location).Path) 'skill' }
 $sourceAncestorCanaryVisible = $false
 $sourceFormsCanaryVisible = $false
 $sourceAncestorAgentsVisible = $false
@@ -167,10 +183,16 @@ function Test-CanaryUnder {
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $false }
     foreach ($file in @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue)) {
         $text = [IO.File]::ReadAllText($file.FullName, [Text.UTF8Encoding]::new($false))
-        if ($text -match 'CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_BASELINE_FORMS_CANARY_') { return $true }
+        if ($text -match 'CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_BASELINE_FORMS_CANARY_|CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_') { return $true }
     }
     return $false
 }
+$homeRoots = @([Environment]::GetEnvironmentVariable('HOME'), [Environment]::GetEnvironmentVariable('USERPROFILE')) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique
+$ambientAgentsSkillVisible = @($homeRoots | Where-Object { Test-CanaryUnder -Root (Join-Path ([string]$_) '.agents\skills\dotnet-strong-name-signing') }).Count -gt 0
+$ambientClaudeSkillVisible = @($homeRoots | Where-Object { Test-CanaryUnder -Root (Join-Path ([string]$_) '.claude\skills\dotnet-strong-name-signing') }).Count -gt 0
+$configRoots = @([Environment]::GetEnvironmentVariable('XDG_CONFIG_HOME')) + @($homeRoots | ForEach-Object { Join-Path ([string]$_) '.config' }) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique
+$ambientOpenCodeSkillVisible = @($configRoots | Where-Object { Test-CanaryUnder -Root (Join-Path ([string]$_) 'opencode\skills\dotnet-strong-name-signing') }).Count -gt 0
+$fakeAmbientCandidateFixtureVisible = Test-CanaryUnder -Root $fakeAmbientUserRoot
 $stagedRepoCanaryVisible = Test-CanaryUnder -Root (Get-Location).Path
 $homeCanaryVisible = Test-CanaryUnder -Root $fixtureHome
 $configRoot = [Environment]::GetEnvironmentVariable('OPENCODE_CONFIG_DIR')
@@ -197,9 +219,10 @@ if ($stagedCandidateSkillVisible) {
     $stagedSkillFiles = @(Get-ChildItem -LiteralPath $candidateSkillPath -Recurse -File -Force -ErrorAction SilentlyContinue)
     $stagedCandidateSkillHash = [string]::Join('|', @($stagedSkillFiles | Sort-Object FullName | ForEach-Object { "$( [IO.Path]::GetRelativePath($candidateSkillPath, $_.FullName) ):$( [Convert]::ToHexString(([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($_.FullName)))).ToLowerInvariant())" }))
 }
-$candidatePathInArguments = @($arguments | Where-Object { [string]$_ -match '(?i)CODEBELT_BASELINE_LEAK_CANARY_|dotnet-strong-name-signing|[\\/]skill[\\/]candidate' }).Count -gt 0
-$candidatePathInEnvironment = @(Get-ChildItem Env: | Where-Object { [string]$_.Value -match '(?i)CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_BASELINE_FORMS_CANARY_|dotnet-strong-name-signing|[\\/]skill[\\/]candidate' }).Count -gt 0
-$invocationKind = if ($arguments -contains '--version') { 'version_probe' } elseif ($arguments -contains '--help') { 'help_probe' } elseif ($scriptedFixture -and -not [string]::IsNullOrWhiteSpace([string]$continuationSessionId)) { 'explicit_session_resume' } else { 'native_execution' }
+$candidatePathInArguments = @($arguments | Where-Object { [string]$_ -match '(?i)CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_|dotnet-strong-name-signing|[\\/]skill[\\/]candidate|[\\/]\.opencode[\\/]skills[\\/]candidate' }).Count -gt 0
+$candidatePathInEnvironment = @(Get-ChildItem Env: | Where-Object { [string]$_.Value -match '(?i)CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_BASELINE_FORMS_CANARY_|CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_|dotnet-strong-name-signing|[\\/]skill[\\/]candidate|[\\/]\.opencode[\\/]skills[\\/]candidate' }).Count -gt 0
+$candidateCanaryInEnvironment = @(Get-ChildItem Env: | Where-Object { [string]$_.Value -match '(?i)CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_' }).Count -gt 0
+$invocationKind = if ($arguments -contains 'debug' -and $arguments -contains 'config') { 'debug_config_probe' } elseif ($arguments -contains 'debug' -and $arguments -contains 'paths') { 'debug_paths_probe' } elseif ($arguments -contains 'debug' -and $arguments -contains '--help') { 'debug_help_probe' } elseif ($arguments -contains '--version') { 'version_probe' } elseif ($arguments -contains '--help') { 'help_probe' } elseif ($scriptedFixture -and -not [string]::IsNullOrWhiteSpace([string]$continuationSessionId)) { 'explicit_session_resume' } else { 'native_execution' }
 $fakeDelayMilliseconds = if (-not $timingFixture) { 0 } else { switch ($invocationKind) { 'version_probe' { 20 } 'help_probe' { 30 } 'explicit_session_resume' { 50 } default { 40 } } }
 $repositoryInstructionMarkerVisible = $false
 if (Test-Path -LiteralPath $repositoryCopilotInstructionsPath -PathType Leaf) {
@@ -219,11 +242,18 @@ $record = [ordered]@{
     working_directory = (Get-Location).Path
     home = [Environment]::GetEnvironmentVariable('HOME')
     userprofile = [Environment]::GetEnvironmentVariable('USERPROFILE')
+    homedrive = [Environment]::GetEnvironmentVariable('HOMEDRIVE')
+    homepath = [Environment]::GetEnvironmentVariable('HOMEPATH')
     appdata = [Environment]::GetEnvironmentVariable('APPDATA')
     local_appdata = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    xdg_config_home = [Environment]::GetEnvironmentVariable('XDG_CONFIG_HOME')
     node_path = [Environment]::GetEnvironmentVariable('NODE_PATH')
     config_directory = [Environment]::GetEnvironmentVariable('OPENCODE_CONFIG_DIR')
     config_file = [Environment]::GetEnvironmentVariable('OPENCODE_CONFIG')
+    disable_external_skills = [Environment]::GetEnvironmentVariable('OPENCODE_DISABLE_EXTERNAL_SKILLS')
+    disable_claude_code_skills = [Environment]::GetEnvironmentVariable('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS')
+    node_homedir = $null
+    skill_permission = $null
     auth_names_present = $authPresent
     copilot_auth_names_present = $copilotAuthPresent
     copilot_authentication_source = $copilotAuthenticationSource
@@ -252,15 +282,32 @@ $record = [ordered]@{
     staged_repo_canary_visible = $stagedRepoCanaryVisible
     home_canary_visible = $homeCanaryVisible
     config_canary_visible = $configCanaryVisible
+    fake_ambient_candidate_fixture_visible = $fakeAmbientCandidateFixtureVisible
+    ambient_agents_skill_visible = $ambientAgentsSkillVisible
+    ambient_claude_skill_visible = $ambientClaudeSkillVisible
+    ambient_opencode_skill_visible = $ambientOpenCodeSkillVisible
     staged_candidate_skill_visible = $stagedCandidateSkillVisible
     staged_candidate_skill_hash = $stagedCandidateSkillHash
     candidate_skill_path_in_arguments = $candidatePathInArguments
     candidate_skill_path_in_environment = $candidatePathInEnvironment
+    candidate_canary_in_environment = $candidateCanaryInEnvironment
     candidate_skill_exposure = if ($stagedCandidateSkillVisible) { 'included' } else { 'excluded' }
     invocation_kind = $invocationKind
     fake_delay_milliseconds = $fakeDelayMilliseconds
     ambient_copilot_instructions_visible = if ([string]::IsNullOrWhiteSpace($copilotHome)) { $false } else { Test-Path -LiteralPath (Join-Path $copilotHome 'copilot-instructions.md') -PathType Leaf }
     secret_env_vars_arg = @($arguments | Where-Object { $_ -like '--secret-env-vars=*' })
+}
+if ($harness -eq 'opencode') {
+    try {
+        $nodeHomeOutput = @(& node -p 'require("os").homedir()' 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -First 1)
+        if ($nodeHomeOutput.Count -eq 1) { $record.node_homedir = ([string]$nodeHomeOutput[0]).Trim() }
+    } catch { }
+    if (-not [string]::IsNullOrWhiteSpace([string]$record.config_file) -and (Test-Path -LiteralPath $record.config_file -PathType Leaf)) {
+        try {
+            $recordedConfig = [IO.File]::ReadAllText($record.config_file, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 50
+            $record.skill_permission = $recordedConfig.permission.skill
+        } catch { }
+    }
 }
 if ($harness -eq 'codex' -and $arguments -contains 'app-server' -and $arguments -contains 'generate-json-schema') {
     $outArgument = @($arguments | Where-Object { $_ -like '--out=*' } | Select-Object -First 1)
@@ -509,6 +556,30 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     if (-not $fixtureThreadReadUnavailable) { Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadRead.id; result = [ordered]@{ thread = $threadObject } }) }
     exit 0
 }
+if ($harness -eq 'opencode' -and $arguments -contains 'debug' -and $arguments -contains 'config') {
+    if ($fakeDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $fakeDelayMilliseconds }
+    [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    if ([string]::IsNullOrWhiteSpace([string]$record.config_file) -or -not (Test-Path -LiteralPath $record.config_file -PathType Leaf)) {
+        [Console]::Error.WriteLine('recorded OpenCode debug config has no config file')
+        exit 31
+    }
+    Write-Output ([IO.File]::ReadAllText($record.config_file, [Text.UTF8Encoding]::new($false)))
+    exit 0
+}
+if ($harness -eq 'opencode' -and $arguments -contains 'debug' -and $arguments -contains 'paths') {
+    if ($fakeDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $fakeDelayMilliseconds }
+    [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    $debugHome = if ($fakeHomeFixture) { $fakeAmbientUserRoot } else { [Environment]::GetEnvironmentVariable('HOME') }
+    Write-Output ('home ' + $debugHome)
+    Write-Output ('config ' + [Environment]::GetEnvironmentVariable('OPENCODE_CONFIG_DIR'))
+    exit 0
+}
+if ($harness -eq 'opencode' -and $arguments -contains 'debug' -and $arguments -contains '--help') {
+    if ($fakeDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $fakeDelayMilliseconds }
+    [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    Write-Output 'config paths skill'
+    exit 0
+}
 if ($arguments -contains '--version') {
     $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-unknown 9.3' } }
     if ($fakeDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $fakeDelayMilliseconds }
@@ -550,7 +621,7 @@ $record.stdin_sha256 = $stdinHash
 $record.stdin_exact = $stdinHash -eq $expectedPromptHash
 $record.stdin_expected_sha256 = $expectedPromptHash
 $record.stdin_utf8_round_trip = $record.stdin_sha256 -eq $expectedPromptHash
-$record.candidate_canary_in_stdin = ([Text.Encoding]::UTF8.GetString($stdinBytes) -match 'CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_BASELINE_FORMS_CANARY_')
+$record.candidate_canary_in_stdin = ([Text.Encoding]::UTF8.GetString($stdinBytes) -match 'CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_BASELINE_FORMS_CANARY_|CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_')
 $probeCommand = '$result = [ordered]@{ provider_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENAI_API_KEY'')); copilot_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''COPILOT_GITHUB_TOKEN'')); gh_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''GH_TOKEN'')); github_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''GITHUB_TOKEN'')); auth_file_visible = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable(''HOME'')) ''.codex/auth.json''); global_secret_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''AGENTIC_GLOBAL_SECRET'')); project_disable_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENCODE_DISABLE_PROJECT_CONFIG'')) }; $result | ConvertTo-Json -Compress'
 $probeInfo = [Diagnostics.ProcessStartInfo]::new()
 $probeInfo.FileName = (Get-Command pwsh).Source
@@ -612,8 +683,9 @@ if ($scriptedFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot) -and $
         if ($harness -eq 'copilot') { $fixtureText = $fixtureText.Replace('fixture-copilot-session', 'fixture-copilot-mismatch') }
         if ($harness -eq 'opencode') { $fixtureText = $fixtureText.Replace('fixture-opencode-session', 'fixture-opencode-mismatch') }
     }
-    if ($harness -eq 'opencode' -and ($sourceAncestorCanaryVisible -or $sourceFormsCanaryVisible -or $sourceAncestorAgentsVisible -or $sourceAncestorCopilotVisible)) {
-        Write-Output '{"type":"text","text":"CODEBELT_BASELINE_LEAK_CANARY_7C9E4AF2"}'
+    if ($harness -eq 'opencode' -and ($sourceAncestorCanaryVisible -or $sourceFormsCanaryVisible -or $sourceAncestorAgentsVisible -or $sourceAncestorCopilotVisible -or $ambientAgentsSkillVisible -or $ambientClaudeSkillVisible -or $ambientOpenCodeSkillVisible)) {
+        $leakMarker = if ($ambientAgentsSkillVisible -or $ambientClaudeSkillVisible -or $ambientOpenCodeSkillVisible) { 'CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_8F43D1A7' } else { 'CODEBELT_BASELINE_LEAK_CANARY_7C9E4AF2' }
+        Write-Output ('{"type":"text","text":"' + $leakMarker + '"}')
         Write-Output '{"type":"step_finish"}'
         exit 0
     }
@@ -729,6 +801,9 @@ exit 2
         Assert-True ($fixtureEvents.Count -ge 3) "recorded scripted fixture has structured events: $fixtureName"
         Assert-True (@($fixtureEvents | Where-Object { [string]$_.type -in @('assistant.message', 'text') }).Count -ge 1) "recorded scripted fixture has an assistant message: $fixtureName"
     }
+    $debugConfigFixturePath = Join-Path $recordedFixtureRoot 'opencode-debug-config.json'
+    $debugConfigFixture = [IO.File]::ReadAllText($debugConfigFixturePath, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 50
+    Assert-Equal 'deny' ([string]$debugConfigFixture.permission.skill) 'Recorded OpenCode debug config fixture preserves deny-all skill policy syntax'
     foreach ($runnerName in @('codex', 'opencode', 'copilot')) {
         $runnerDir = if ($runnerName -eq 'copilot') { 'github-copilot' } else { $runnerName }
         $runnerPath = Join-Path $runnerRoot "$runnerDir\runner.ps1"
@@ -766,6 +841,12 @@ exit 2
         if ($runnerName -eq 'opencode') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'parallel_dispatch' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight requires bounded concurrent dispatch'
             Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'deterministic runner-owned concurrent fan-out' }).Count -eq 1) 'OpenCode preflight records the runner-owned concurrent fan-out'
+            Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'effective_home' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight proves the effective runtime home'
+            Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'skill_isolation_policy' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight proves the arm skill policy'
+            Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'skill_permission_debug' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight proves the installed debug config permission layer'
+            Assert-Equal 'node.os.homedir' $preflightWith.protocol_observations.effective_home.effective_runtime_home_source 'OpenCode preflight uses the model-free Node homedir proof'
+            Assert-True ([bool]$preflightWith.protocol_observations.effective_home.windows_profile_parts_coherent) 'OpenCode preflight proves coherent Windows profile parts'
+            Assert-Equal 'supported_and_verified' $preflightWith.protocol_observations.skill_isolation.permission_layer 'OpenCode preflight records verified native skill permission support'
         }
         if ($runnerName -eq 'opencode') {
             Assert-True (@($preflightWith.warnings | Where-Object { $_ -match 'child-tool environment filter' }).Count -gt 0) "$runnerName reports the child credential-filter limitation"
@@ -904,6 +985,12 @@ exit 2
             Assert-True ([string]::IsNullOrWhiteSpace([string]$execution.node_path)) 'OpenCode does not inherit NODE_PATH from the ambient environment'
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$execution.config_directory))) 'OpenCode config directory is outside the source-repository fixture ancestry'
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$execution.config_file))) 'OpenCode config file is outside the source-repository fixture ancestry'
+            Assert-Equal ([string]$execution.home) ([string]$execution.node_homedir) 'OpenCode Node runtime resolves the isolated HOME'
+            Assert-Equal ([string]$execution.home) ([string]$execution.userprofile) 'OpenCode USERPROFILE matches the isolated HOME'
+            Assert-Equal ([string]$execution.home) ([string]$execution.homedrive + [string]$execution.homepath) 'OpenCode HOMEDRIVE/HOMEPATH resolve the isolated HOME'
+            Assert-True (Test-PathInside -BasePath ([string]$execution.home) -CandidatePath ([string]$execution.xdg_config_home)) 'OpenCode XDG_CONFIG_HOME is isolated'
+            Assert-Equal '1' $execution.disable_external_skills 'OpenCode disables external skill discovery'
+            Assert-Equal '1' $execution.disable_claude_code_skills 'OpenCode disables Claude/agents skill discovery'
             Assert-True (-not [bool]$execution.source_ancestor_candidate_skill_visible) 'OpenCode execution cannot discover the source-repository candidate skill canary through projected ancestry'
             Assert-True (-not [bool]$execution.source_ancestor_forms_visible) 'OpenCode execution cannot discover the source-repository FORMS.md canary through projected ancestry'
             Assert-True (-not [bool]$execution.source_ancestor_agents_visible) 'OpenCode execution cannot discover source-repository ancestor AGENTS.md through projected ancestry'
@@ -911,19 +998,31 @@ exit 2
             Assert-True (-not [bool]$execution.staged_repo_canary_visible) 'OpenCode staged repository contains no source candidate canary'
             Assert-True (-not [bool]$execution.home_canary_visible) 'OpenCode isolated HOME contains no source candidate canary'
             Assert-True (-not [bool]$execution.config_canary_visible) 'OpenCode isolated config contains no source candidate canary'
+            Assert-True ([bool]$execution.fake_ambient_candidate_fixture_visible) 'OpenCode ambient-skill canary fixture exists outside the isolated boundary'
+            Assert-True (-not [bool]$execution.ambient_agents_skill_visible) 'OpenCode hides fake global .agents skills'
+            Assert-True (-not [bool]$execution.ambient_claude_skill_visible) 'OpenCode hides fake global .claude skills'
+            Assert-True (-not [bool]$execution.ambient_opencode_skill_visible) 'OpenCode hides fake global native OpenCode skills'
             Assert-True ([bool]$execution.staged_candidate_skill_visible) 'OpenCode with_skill projection contains the intended staged candidate skill'
             Assert-Equal 'included' $execution.candidate_skill_exposure 'OpenCode with_skill execution records candidate-skill exposure as included'
             Assert-True (-not [bool]$execution.candidate_skill_path_in_arguments) 'OpenCode does not receive a candidate-skill path through arguments'
             Assert-True (-not [bool]$execution.candidate_skill_path_in_environment) 'OpenCode does not receive a candidate-skill path through environment variables'
+            Assert-True (-not [bool]$execution.candidate_canary_in_environment) 'OpenCode environment contains no ambient-skill canary marker'
             Assert-True (-not [bool]$execution.candidate_canary_in_stdin) 'OpenCode with_skill stdin does not receive the source-repository canary material'
+            Assert-Equal 'deny' (Get-JsonProperty -Object $execution.skill_permission -Name '*' -Default '') 'OpenCode with_skill denies all ambient skill names by default'
+            Assert-Equal 'allow' (Get-JsonProperty -Object $execution.skill_permission -Name 'candidate' -Default '') 'OpenCode with_skill allows only the prepared candidate skill name'
             Assert-True ([bool]$resultWith.evidence.execution_paths.physical_cwd_outside_source_repository) 'OpenCode result records the physical cwd ancestry boundary'
             Assert-True ([bool]$resultWith.evidence.execution_paths.physical_home_outside_source_repository) 'OpenCode result records the physical HOME ancestry boundary'
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$resultWith.evidence.execution_paths.physical_config_directory))) 'OpenCode result records a physical config directory outside the source-repository ancestry'
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$resultWith.evidence.execution_paths.physical_config_file))) 'OpenCode result records a physical config file outside the source-repository ancestry'
             Assert-True ([bool]$resultWith.evidence.candidate_skill_exposure.hash_match) 'OpenCode result proves the projected candidate skill hash matches the prepared skill hash'
+            Assert-Equal 1 $resultWith.evidence.skill_isolation.candidate_skill_count 'OpenCode result exposes exactly one native candidate skill'
+            Assert-Equal 0 $resultWith.evidence.skill_isolation.ambient_skill_count 'OpenCode result exposes no ambient skill roots with_skill'
             Assert-Equal 'removed' $resultWith.evidence.execution_paths.projection_cleanup 'OpenCode removes the physical projection after evidence capture'
             Assert-True (-not (Test-Path -LiteralPath ([string]$resultWith.evidence.execution_paths.physical_projection_root))) 'OpenCode physical projection is cleaned up by default'
-            Assert-True ([string]$resultWith.evidence.candidate_skill_exposure.physical_path -match '(?i)[\\/]skill[\\/]candidate$') 'OpenCode evidence identifies the intended projected candidate skill location'
+            Assert-True ([string]$resultWith.evidence.candidate_skill_exposure.physical_path -match '(?i)[\\/]\.opencode[\\/]skills[\\/]candidate$') 'OpenCode evidence identifies the intended native projected candidate skill location'
+            Assert-True ([bool]$resultWith.evidence.effective_home.valid) 'OpenCode result proves effective runtime home isolation'
+            Assert-True ([bool]$resultWith.evidence.effective_home.windows_profile_parts_coherent) 'OpenCode result proves coherent Windows profile-part isolation'
+            Assert-True ([bool]$resultWith.evidence.ambient_skill_policy.ambient_skill_roots_hidden) 'OpenCode result proves ambient skill roots remain hidden during with_skill'
             Assert-True ($resultWith.evidence.timing.turns[0].PSObject.Properties.Name -notcontains 'event_timing') 'OpenCode omits unavailable structured event timing instead of zero-filling it'
             $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
             Assert-Equal 'opencode/muse-spark-1.2-contributor-free' $args[$modelIndex + 1] 'OpenCode opaque model selector propagates to the CLI invocation'
@@ -981,6 +1080,18 @@ exit 2
             Assert-True ([string]::IsNullOrWhiteSpace([string]$withoutExecution[0].node_path)) 'OpenCode without_skill does not inherit NODE_PATH from the ambient environment'
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$withoutExecution[0].config_directory))) 'OpenCode without_skill config directory is outside the source-repository fixture ancestry'
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$withoutExecution[0].config_file))) 'OpenCode without_skill config file is outside the source-repository fixture ancestry'
+            Assert-Equal ([string]$withoutExecution[0].home) ([string]$withoutExecution[0].node_homedir) 'OpenCode without_skill Node runtime resolves the isolated HOME'
+            Assert-Equal ([string]$withoutExecution[0].home) ([string]$withoutExecution[0].userprofile) 'OpenCode without_skill USERPROFILE matches the isolated HOME'
+            Assert-Equal ([string]$withoutExecution[0].home) ([string]$withoutExecution[0].homedrive + [string]$withoutExecution[0].homepath) 'OpenCode without_skill HOMEDRIVE/HOMEPATH resolve the isolated HOME'
+            Assert-True (Test-PathInside -BasePath ([string]$withoutExecution[0].home) -CandidatePath ([string]$withoutExecution[0].xdg_config_home)) 'OpenCode without_skill XDG_CONFIG_HOME is isolated'
+            Assert-Equal '1' $withoutExecution[0].disable_external_skills 'OpenCode without_skill disables external skill discovery'
+            Assert-Equal '1' $withoutExecution[0].disable_claude_code_skills 'OpenCode without_skill disables Claude/agents skill discovery'
+            Assert-True ([bool]$withoutExecution[0].fake_ambient_candidate_fixture_visible) 'OpenCode without_skill ambient-skill canary fixture exists outside the isolated boundary'
+            Assert-True (-not [bool]$withoutExecution[0].ambient_agents_skill_visible) 'OpenCode without_skill hides fake global .agents skills'
+            Assert-True (-not [bool]$withoutExecution[0].ambient_claude_skill_visible) 'OpenCode without_skill hides fake global .claude skills'
+            Assert-True (-not [bool]$withoutExecution[0].ambient_opencode_skill_visible) 'OpenCode without_skill hides fake global native OpenCode skills'
+            Assert-Equal 'deny' ([string]$withoutExecution[0].skill_permission) 'OpenCode without_skill denies every skill name'
+            Assert-True (-not [bool]$withoutExecution[0].candidate_canary_in_environment) 'OpenCode without_skill environment contains no ambient-skill canary marker'
             Assert-True (-not [bool]$withoutExecution[0].source_ancestor_candidate_skill_visible) 'OpenCode without_skill cannot discover the source candidate skill canary through projected ancestors'
             Assert-True (-not [bool]$withoutExecution[0].source_ancestor_forms_visible) 'OpenCode without_skill cannot discover the FORMS.md canary through projected ancestors'
             Assert-True (-not [bool]$withoutExecution[0].source_ancestor_agents_visible) 'OpenCode without_skill cannot discover source ancestor AGENTS.md through projected ancestors'
@@ -998,6 +1109,10 @@ exit 2
             Assert-True ([string]::IsNullOrWhiteSpace([string]$resultWithout.evidence.candidate_skill_exposure.physical_path)) 'OpenCode without_skill result has no projected candidate skill path'
             Assert-Equal 'removed' $resultWithout.evidence.execution_paths.projection_cleanup 'OpenCode without_skill removes the physical projection after evidence capture'
             Assert-True (-not (Test-Path -LiteralPath ([string]$resultWithout.evidence.execution_paths.physical_projection_root))) 'OpenCode without_skill physical projection is cleaned up by default'
+            Assert-True ([bool]$resultWithout.evidence.effective_home.valid) 'OpenCode without_skill result proves effective runtime home isolation'
+            Assert-Equal 'deny' ([string]$resultWithout.evidence.skill_policy.configured_permission_skill) 'OpenCode without_skill result records deny-all skill policy'
+            Assert-Equal 0 $resultWithout.evidence.skill_isolation.discovered_skills.Count 'OpenCode without_skill result discovers zero candidate or ambient skills'
+            Assert-True ([bool]$resultWithout.evidence.ambient_skill_policy.ambient_skill_roots_hidden) 'OpenCode without_skill result proves ambient skill roots remain hidden'
             Assert-True ([string]$resultWithout.evidence.execution_paths.physical_working_directory -notmatch [regex]::Escape($recordedRoot)) 'OpenCode without_skill result physical cwd does not point into the source repository'
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$resultWithout.evidence.execution_paths.physical_config_directory))) 'OpenCode without_skill result records a physical config directory outside the source-repository ancestry'
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$resultWithout.evidence.execution_paths.physical_config_file))) 'OpenCode without_skill result records a physical config file outside the source-repository ancestry'
@@ -1061,6 +1176,8 @@ exit 2
         Assert-Equal ([string]$firstNativeTurn.working_directory) ([string]$secondNativeTurn.working_directory) "$runnerName preserves the working directory across turns"
         Assert-Equal ([string]$firstNativeTurn.home) ([string]$secondNativeTurn.home) "$runnerName preserves the isolated home across turns"
         if ($runnerName -eq 'opencode') {
+            Assert-Equal ([string]$firstNativeTurn.effective_runtime_home) ([string]$secondNativeTurn.effective_runtime_home) 'OpenCode exact-session turn 2 preserves the effective runtime home'
+            Assert-Equal ($firstNativeTurn.skill_policy | ConvertTo-Json -Compress) ($secondNativeTurn.skill_policy | ConvertTo-Json -Compress) 'OpenCode exact-session turn 2 preserves the skill policy'
             Assert-Equal ([string](Split-Path -Parent $firstNativeTurn.working_directory)) ([string](Split-Path -Parent $secondNativeTurn.working_directory)) 'OpenCode uses one physical projection for all scripted turns'
             Assert-Equal ([string]$firstNativeTurn.working_directory) ([string]$scriptedResult.evidence.interaction.working_directory) 'OpenCode interaction evidence records the projected cwd used by turn 1'
             Assert-Equal ([string]$firstNativeTurn.home) ([string]$scriptedResult.evidence.interaction.isolated_home) 'OpenCode interaction evidence records the projected HOME used by turn 1'
@@ -1096,11 +1213,21 @@ exit 2
         Assert-Equal 2 $scriptedExecutions.Count "$runnerName scripted transport starts exactly two recorded invocations"
         Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$scriptedExecutions[1].continuation_session_id) "$runnerName recorded transport receives the exact session id on turn 2"
         Assert-True ([bool]$scriptedExecutions[0].stdin_exact -and [bool]$scriptedExecutions[1].stdin_exact) "$runnerName sends both scripted turn inputs through stdin"
+        if ($runnerName -eq 'opencode') {
+            Assert-Equal ([string]$scriptedExecutions[0].home) ([string]$scriptedExecutions[1].home) 'OpenCode exact-session transport preserves HOME'
+            Assert-Equal ([string]$scriptedExecutions[0].userprofile) ([string]$scriptedExecutions[1].userprofile) 'OpenCode exact-session transport preserves USERPROFILE'
+            Assert-Equal ([string]$scriptedExecutions[0].homedrive + [string]$scriptedExecutions[0].homepath) ([string]$scriptedExecutions[1].homedrive + [string]$scriptedExecutions[1].homepath) 'OpenCode exact-session transport preserves Windows profile parts'
+            Assert-Equal ([string]$scriptedExecutions[0].config_file) ([string]$scriptedExecutions[1].config_file) 'OpenCode exact-session transport preserves the config file'
+            Assert-Equal ($scriptedExecutions[0].skill_permission | ConvertTo-Json -Compress) ($scriptedExecutions[1].skill_permission | ConvertTo-Json -Compress) 'OpenCode exact-session transport preserves the skill policy'
+            Assert-True (-not [bool]$scriptedExecutions[0].ambient_agents_skill_visible -and -not [bool]$scriptedExecutions[1].ambient_agents_skill_visible) 'OpenCode exact-session transport hides .agents skills on every turn'
+            Assert-True (-not [bool]$scriptedExecutions[0].ambient_claude_skill_visible -and -not [bool]$scriptedExecutions[1].ambient_claude_skill_visible) 'OpenCode exact-session transport hides .claude skills on every turn'
+            Assert-True (-not [bool]$scriptedExecutions[0].ambient_opencode_skill_visible -and -not [bool]$scriptedExecutions[1].ambient_opencode_skill_visible) 'OpenCode exact-session transport hides native global skills on every turn'
+        }
         $scriptedFailureValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $scriptedResult -Run (Resolve-RunContract -RunPath $scriptedWith.Path) -RequestedModel ([string]$scriptedResult.requested.model) -ExpectedWorkerSessionId ([string]$scriptedResult.session.id) -ExpectedMechanism ([string]$scriptedResult.evidence.delegation.mechanism)
         Assert-True ([bool]$scriptedFailureValidation.Valid) "$runnerName scripted result satisfies the shared native terminal evidence contract"
         if ($runnerName -eq 'opencode') {
             Assert-Equal 'authoritative_cached_preflight' $scriptedResult.evidence.timing.preflight_source 'OpenCode scripted execution reuses the authoritative same-run preflight observation'
-            Assert-Equal 2 $scriptedResult.evidence.timing.preflight.probe_count 'OpenCode preflight records exactly one version and one help probe'
+            Assert-Equal 5 $scriptedResult.evidence.timing.preflight.probe_count 'OpenCode preflight records version, effective-home, run-help, debug-help, and debug-config probes'
             Assert-True ([double]$scriptedResult.evidence.timing.preflight.version_probe_duration_seconds -gt 0) 'OpenCode preflight records version probe duration'
             Assert-True ([double]$scriptedResult.evidence.timing.preflight.help_probe_duration_seconds -gt 0) 'OpenCode preflight records help probe duration'
             Assert-Equal 2 @($scriptedResult.evidence.timing.turns).Count 'OpenCode timing evidence records both scripted turns'
@@ -1117,11 +1244,44 @@ exit 2
             $timingRecords = @(Get-Content -LiteralPath (Join-Path $scriptedWith.Root 'repo\opencode-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'version_probe' }).Count 'OpenCode performs one version probe for the preflight/execute pair'
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'help_probe' }).Count 'OpenCode performs one help probe for the preflight/execute pair'
+            Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'debug_help_probe' }).Count 'OpenCode performs one model-free debug-help probe for the preflight/execute pair'
+            Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'debug_config_probe' }).Count 'OpenCode performs one model-free debug-config probe for the preflight/execute pair'
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'native_execution' }).Count 'OpenCode performs one fresh native turn process'
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'explicit_session_resume' }).Count 'OpenCode performs one exact-session resume process'
             Assert-True (@($timingRecords | Where-Object { $_.invocation_kind -eq 'version_probe' -and [int]$_.fake_delay_milliseconds -eq 20 }).Count -eq 1) 'OpenCode timing fixture identifies the deterministic version-probe delay'
             Assert-True (@($timingRecords | Where-Object { $_.invocation_kind -eq 'help_probe' -and [int]$_.fake_delay_milliseconds -eq 30 }).Count -eq 1) 'OpenCode timing fixture identifies the deterministic help-probe delay'
         }
+    }
+    $isolatedHomeFailureIteration = Join-Path $recordedRoot 'opencode-isolation-failure'
+    New-Item -ItemType Directory -Path $isolatedHomeFailureIteration -Force | Out-Null
+    $isolatedHomeFailureRun = New-TestRun -IterationDirectory $isolatedHomeFailureIteration -Configuration without_skill -EvalName 'opencode-isolation-failure'
+    [IO.File]::WriteAllText((Join-Path $isolatedHomeFailureRun.Root 'home\opencode-fake-home'), 'fixture', [Text.UTF8Encoding]::new($false))
+    $failureOldPath = $env:PATH
+    $recordedNodeCommand = Resolve-ExternalCommand -Name 'node'
+    $recordedNodeDirectory = if ($null -eq $recordedNodeCommand) { $null } else { Split-Path -Parent ([string]$recordedNodeCommand.Source) }
+    $failurePathParts = @($failureOldPath -split [regex]::Escape([string][IO.Path]::PathSeparator) | Where-Object {
+            -not [string]::IsNullOrWhiteSpace([string]$_) -and
+            ([string]::IsNullOrWhiteSpace([string]$recordedNodeDirectory) -or -not [string]::Equals(
+                ([IO.Path]::GetFullPath([string]$_)).TrimEnd([char[]]@('\', '/')),
+                ([IO.Path]::GetFullPath([string]$recordedNodeDirectory)).TrimEnd([char[]]@('\', '/')),
+                [StringComparison]::OrdinalIgnoreCase
+            ))
+        })
+    $env:PATH = [string]::Join([IO.Path]::PathSeparator, @($fakeBin) + @($failurePathParts))
+    try {
+        $failedPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command preflight -RunPath $isolatedHomeFailureRun.Path -ProfilePath $recordedProfiles['opencode']
+        Assert-Equal 'incompatible' $failedPreflight.status 'OpenCode fails preflight when the model-free runtime-home probe resolves the fake ambient profile'
+        Assert-True (@($failedPreflight.checks | Where-Object { $_.name -eq 'effective_home' -and $_.status -eq 'failed' }).Count -eq 1) 'OpenCode marks the effective-home check failed for the fake profile'
+        $failedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command execute -RunPath $isolatedHomeFailureRun.Path -ProfilePath $recordedProfiles['opencode']
+        Assert-Equal 'incompatible' $failedResult.status 'OpenCode execution remains incompatible after effective-home failure'
+        Assert-Equal 'preflight_incompatible' $failedResult.final_response.reason 'OpenCode reports the fail-closed preflight isolation reason'
+        $failedLogPath = Join-Path $isolatedHomeFailureRun.Root 'repo\opencode-fake-cli-log.jsonl'
+        if (Test-Path -LiteralPath $failedLogPath -PathType Leaf) {
+            $failedRecords = @(Get-Content -LiteralPath $failedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+            Assert-Equal 0 @($failedRecords | Where-Object { $_.stdin_received -eq $true }).Count 'OpenCode effective-home failure starts zero model executions'
+        }
+    } finally {
+        $env:PATH = $failureOldPath
     }
     $installedStyleIteration = Join-Path $recordedRoot 'installed-style-opencode'
     New-Item -ItemType Directory -Path $installedStyleIteration -Force | Out-Null

@@ -113,11 +113,503 @@ function Invoke-OpenCodeCli {
 function Get-OpenCodeHelpResult {
     param(
         [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [System.Collections.IDictionary]$Environment = $null
+    )
+
+    $environment = if ($null -eq $Environment) { New-OpenCodeEnvironment -Inputs $Inputs } else { $Environment }
+    return Invoke-OpenCodeCli -CommandInfo $CommandInfo -Arguments @('run', '--help') -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
+}
+
+function Get-OpenCodeDebugHelpResult {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment
+    )
+
+    return Invoke-OpenCodeCli -CommandInfo $CommandInfo -Arguments @('debug', '--help') -Inputs $Inputs -Environment $Environment -TimeoutSeconds 30
+}
+
+function Get-OpenCodeDebugConfigResult {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment
+    )
+
+    return Invoke-OpenCodeCli -CommandInfo $CommandInfo -Arguments @('debug', 'config') -Inputs $Inputs -Environment $Environment -TimeoutSeconds 30
+}
+
+function Get-OpenCodeCandidateSkillName {
+    param([Parameter(Mandatory = $true)][object]$Run)
+
+    if (-not [bool]$Run.CandidateSkillExposed) { return $null }
+    $skillPath = [System.IO.Path]::GetFullPath([string]$Run.SkillDirectoryPath).TrimEnd([char[]]@('\', '/'))
+    $skillName = [System.IO.Path]::GetFileName($skillPath)
+    if ([string]::IsNullOrWhiteSpace($skillName) -or $skillName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+        throw "OpenCode prepared candidate skill directory has an unsupported native skill name: '$skillName'."
+    }
+    $declaredName = [string](Get-JsonProperty -Object $Run.Contract -Name 'skillName' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($declaredName) -and $declaredName -ne $skillName) {
+        throw "OpenCode prepared candidate skill name '$skillName' does not match run.json skillName '$declaredName'."
+    }
+    return $skillName
+}
+
+function Get-OpenCodeSkillPermissionPolicy {
+    param([Parameter(Mandatory = $true)][object]$Inputs)
+
+    if (-not [bool]$Inputs.Run.CandidateSkillExposed) { return 'deny' }
+    $skillName = Get-OpenCodeCandidateSkillName -Run $Inputs.Run
+    $permission = [ordered]@{}
+    $permission['*'] = 'deny'
+    $permission[$skillName] = 'allow'
+    return $permission
+}
+
+function Test-OpenCodePathEqual {
+    param(
+        [AllowEmptyString()][string]$Expected,
+        [AllowEmptyString()][string]$Observed
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Expected) -or [string]::IsNullOrWhiteSpace($Observed)) { return $false }
+    try {
+        $expectedFull = [System.IO.Path]::GetFullPath($Expected)
+        $observedFull = [System.IO.Path]::GetFullPath($Observed)
+        $comparison = if ((Get-PlatformName) -eq 'windows') { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+        return [string]::Equals($expectedFull.TrimEnd([char[]]@('\', '/')), $observedFull.TrimEnd([char[]]@('\', '/')), $comparison)
+    } catch {
+        return $false
+    }
+}
+
+function Get-OpenCodeHostHomeCandidates {
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in @('USERPROFILE', 'HOME')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value) -and $candidates -notcontains $value) { $candidates.Add($value) }
+    }
+    if ((Get-PlatformName) -eq 'windows') {
+        $drive = [Environment]::GetEnvironmentVariable('HOMEDRIVE')
+        $path = [Environment]::GetEnvironmentVariable('HOMEPATH')
+        if (-not [string]::IsNullOrWhiteSpace($drive) -and -not [string]::IsNullOrWhiteSpace($path)) {
+            $combined = $drive + $path
+            if ($candidates -notcontains $combined) { $candidates.Add($combined) }
+        }
+    }
+    return @($candidates.ToArray())
+}
+
+function Get-OpenCodeRuntimeHomeObservation {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment
+    )
+
+    $nodeInfo = Resolve-ExternalCommand -Name 'node'
+    if ($null -ne $nodeInfo) {
+        try {
+            $probe = Invoke-RunnerProcess -FileName $nodeInfo.FileName -ArgumentList (@($nodeInfo.Prefix) + @('-p', 'require("os").homedir()')) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -TimeoutSeconds 30
+            $runtimeHomeLines = @($probe.Stdout -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -First 1)
+            if ($probe.ExitCode -eq 0 -and -not $probe.TimedOut -and $runtimeHomeLines.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$runtimeHomeLines[0])) {
+                return [pscustomobject]@{
+                    Available = $true
+                    Home = ([string]$runtimeHomeLines[0]).Trim()
+                    Source = 'node.os.homedir'
+                    Process = $probe
+                    Fallback = $false
+                    Reason = $null
+                }
+            }
+            $nodeReason = "node homedir probe exited with status $($probe.ExitCode) or returned no usable path."
+        } catch {
+            $nodeReason = "node homedir probe failed: $($_.Exception.Message)"
+        }
+    } else {
+        $nodeReason = 'node is unavailable on PATH.'
+    }
+
+    # OpenCode is Node-based, but an installed distribution can theoretically
+    # omit a separately discoverable node executable. Its model-free debug
+    # paths command is the deterministic fallback for that case.
+    try {
+        $paths = Invoke-OpenCodeCli -CommandInfo $CommandInfo -Arguments @('debug', 'paths') -Inputs $Inputs -Environment $Environment -TimeoutSeconds 30
+        $pathLine = @(([string]::Join("`n", @($paths.Stdout, $paths.Stderr))) -split "`r?`n" | Where-Object { $_ -match '(?i)^\s*home\s*:?[ \t]+(?<path>.+?)\s*$' } | Select-Object -First 1)
+        if ($paths.ExitCode -eq 0 -and -not $paths.TimedOut -and $pathLine.Count -eq 1) {
+            $match = [regex]::Match([string]$pathLine[0], '(?i)^\s*home\s*:?[ \t]+(?<path>.+?)\s*$')
+            if ($match.Success -and -not [string]::IsNullOrWhiteSpace($match.Groups['path'].Value)) {
+                return [pscustomobject]@{
+                    Available = $true
+                    Home = $match.Groups['path'].Value.Trim()
+                    Source = 'opencode.debug.paths'
+                    Process = $paths
+                    Fallback = $true
+                    Reason = $null
+                }
+            }
+        }
+        $debugReason = "opencode debug paths did not return a parseable home path (exit=$($paths.ExitCode))."
+    } catch {
+        $debugReason = "opencode debug paths failed: $($_.Exception.Message)"
+    }
+    return [pscustomobject]@{
+        Available = $false
+        Home = $null
+        Source = 'unavailable'
+        Process = $null
+        Fallback = $false
+        Reason = "$nodeReason $debugReason"
+    }
+}
+
+function Get-OpenCodeHomeIsolationObservation {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment,
+        [Parameter(Mandatory = $true)][object]$RuntimeHome
+    )
+
+    $expectedHome = [System.IO.Path]::GetFullPath([string]$Inputs.Run.HomeDirectoryPath)
+    $hostHomes = @(Get-OpenCodeHostHomeCandidates)
+    $runtimeMatchesExpected = [bool]$RuntimeHome.Available -and (Test-OpenCodePathEqual -Expected $expectedHome -Observed ([string]$RuntimeHome.Home))
+    $runtimeMatchesHost = @($hostHomes | Where-Object { Test-OpenCodePathEqual -Expected ([string]$_) -Observed ([string]$RuntimeHome.Home) }).Count -gt 0
+    $windowsProfilePartsCoherent = $true
+    if ((Get-PlatformName) -eq 'windows') {
+        $drive = [string](Get-JsonProperty -Object $Environment -Name 'HOMEDRIVE' -Default '')
+        $path = [string](Get-JsonProperty -Object $Environment -Name 'HOMEPATH' -Default '')
+        $windowsProfilePartsCoherent = -not [string]::IsNullOrWhiteSpace($drive) -and -not [string]::IsNullOrWhiteSpace($path) -and (Test-OpenCodePathEqual -Expected $expectedHome -Observed ($drive + $path))
+    }
+    $pathValues = @('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG')
+    $pathValuesInsideHome = $true
+    foreach ($name in $pathValues) {
+        $value = [string](Get-JsonProperty -Object $Environment -Name $name -Default '')
+        if ([string]::IsNullOrWhiteSpace($value) -or -not (Test-PathInside -BasePath $expectedHome -CandidatePath $value) -and -not (Test-OpenCodePathEqual -Expected $expectedHome -Observed $value)) {
+            $pathValuesInsideHome = $false
+            break
+        }
+    }
+    $nodePathAbsent = -not $Environment.Contains('NODE_PATH')
+    $valid = [bool]$RuntimeHome.Available -and $runtimeMatchesExpected -and -not $runtimeMatchesHost -and $windowsProfilePartsCoherent -and $pathValuesInsideHome -and $nodePathAbsent
+    $reasonParts = [System.Collections.Generic.List[string]]::new()
+    if (-not [bool]$RuntimeHome.Available) { $reasonParts.Add([string]$RuntimeHome.Reason) }
+    if (-not $runtimeMatchesExpected) { $reasonParts.Add("effective runtime home '$($RuntimeHome.Home)' does not match isolated home '$expectedHome'.") }
+    if ($runtimeMatchesHost) { $reasonParts.Add("effective runtime home '$($RuntimeHome.Home)' matches a parent user profile/home.") }
+    if (-not $windowsProfilePartsCoherent) { $reasonParts.Add('HOMEDRIVE/HOMEPATH do not resolve to the isolated home.') }
+    if (-not $pathValuesInsideHome) { $reasonParts.Add('one or more OpenCode home/config environment paths escape the isolated home.') }
+    if (-not $nodePathAbsent) { $reasonParts.Add('NODE_PATH is present in the OpenCode child environment.') }
+    return [pscustomobject]@{
+        Valid = $valid
+        ExpectedHome = $expectedHome
+        RuntimeHome = [string]$RuntimeHome.Home
+        RuntimeHomeAvailable = [bool]$RuntimeHome.Available
+        RuntimeHomeSource = [string]$RuntimeHome.Source
+        RuntimeHomeMatchesExpected = $runtimeMatchesExpected
+        RuntimeHomeMatchesHost = $runtimeMatchesHost
+        HostHomeCandidates = $hostHomes
+        WindowsProfilePartsCoherent = $windowsProfilePartsCoherent
+        PathValuesInsideHome = $pathValuesInsideHome
+        NodePathAbsent = $nodePathAbsent
+        Environment = [ordered]@{
+            HOME = [string](Get-JsonProperty -Object $Environment -Name 'HOME' -Default '')
+            USERPROFILE = [string](Get-JsonProperty -Object $Environment -Name 'USERPROFILE' -Default '')
+            HOMEDRIVE = [string](Get-JsonProperty -Object $Environment -Name 'HOMEDRIVE' -Default '')
+            HOMEPATH = [string](Get-JsonProperty -Object $Environment -Name 'HOMEPATH' -Default '')
+            APPDATA = [string](Get-JsonProperty -Object $Environment -Name 'APPDATA' -Default '')
+            LOCALAPPDATA = [string](Get-JsonProperty -Object $Environment -Name 'LOCALAPPDATA' -Default '')
+            XDG_CONFIG_HOME = [string](Get-JsonProperty -Object $Environment -Name 'XDG_CONFIG_HOME' -Default '')
+            OPENCODE_CONFIG_DIR = [string](Get-JsonProperty -Object $Environment -Name 'OPENCODE_CONFIG_DIR' -Default '')
+            OPENCODE_CONFIG = [string](Get-JsonProperty -Object $Environment -Name 'OPENCODE_CONFIG' -Default '')
+            NODE_PATH_present = -not $nodePathAbsent
+        }
+        Reason = [string]::Join(' ', @($reasonParts.ToArray()))
+    }
+}
+
+function Get-OpenCodeSkillPolicyObservation {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment
+    )
+
+    $configPath = [string](Get-JsonProperty -Object $Environment -Name 'OPENCODE_CONFIG' -Default '')
+    $expectedPermission = Get-OpenCodeSkillPermissionPolicy -Inputs $Inputs
+    $observation = [ordered]@{
+        available = $false
+        config_path = $configPath
+        configured_permission_skill = $null
+        expected_permission_skill = $expectedPermission
+        permission_match = $false
+        external_skill_scans_disabled = [string](Get-JsonProperty -Object $Environment -Name 'OPENCODE_DISABLE_EXTERNAL_SKILLS' -Default '') -eq '1'
+        claude_code_skill_scans_disabled = [string](Get-JsonProperty -Object $Environment -Name 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS' -Default '') -eq '1'
+        candidate_skill_exposed = [bool]$Inputs.Run.CandidateSkillExposed
+        candidate_skill_name = Get-OpenCodeCandidateSkillName -Run $Inputs.Run
+        mechanism = 'isolated home/config plus OpenCode external-skill disable flags and permission.skill'
+        reason = $null
+    }
+    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        $observation.reason = 'OpenCode policy config file is missing.'
+        return [pscustomobject]$observation
+    }
+    try {
+        $config = [IO.File]::ReadAllText($configPath, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 50
+        $permission = Get-JsonProperty -Object $config -Name 'permission' -Default $null
+        $actualPermission = Get-JsonProperty -Object $permission -Name 'skill' -Default $null
+        $observation.available = $true
+        $observation.configured_permission_skill = $actualPermission
+        $observation.permission_match = ($actualPermission | ConvertTo-Json -Depth 20 -Compress) -eq ($expectedPermission | ConvertTo-Json -Depth 20 -Compress)
+        if (-not [bool]$observation.permission_match) { $observation.reason = 'OpenCode policy config permission.skill does not match the requested arm policy.' }
+        elseif (-not [bool]$observation.external_skill_scans_disabled -or -not [bool]$observation.claude_code_skill_scans_disabled) { $observation.reason = 'OpenCode external skill discovery disable flags are not both enabled.' }
+    } catch {
+        $observation.reason = "OpenCode policy config could not be parsed: $($_.Exception.Message)"
+    }
+    return [pscustomobject]$observation
+}
+
+function Get-OpenCodeDebugConfigObservation {
+    param(
+        [Parameter(Mandatory = $true)][object]$DebugResult,
         [Parameter(Mandatory = $true)][object]$Inputs
     )
 
-    $environment = New-RunnerEnvironment -Run $Inputs.Run
-    return Invoke-OpenCodeCli -CommandInfo $CommandInfo -Arguments @('run', '--help') -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
+    $expectedPermission = Get-OpenCodeSkillPermissionPolicy -Inputs $Inputs
+    $observation = [ordered]@{
+        available = $false
+        permission_skill = $null
+        permission_match = $false
+        output_sha256 = $null
+        reason = $null
+    }
+    $text = [string]::Join("`n", @($DebugResult.Stdout, $DebugResult.Stderr)).Trim()
+    if ($DebugResult.TimedOut -or $DebugResult.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($text)) {
+        $observation.reason = "opencode debug config failed (exit=$($DebugResult.ExitCode), timed_out=$($DebugResult.TimedOut))."
+        return [pscustomobject]$observation
+    }
+    try {
+        $config = $text | ConvertFrom-Json -Depth 50
+        $permission = Get-JsonProperty -Object $config -Name 'permission' -Default $null
+        $actualPermission = Get-JsonProperty -Object $permission -Name 'skill' -Default $null
+        $observation.available = $true
+        $observation.permission_skill = $actualPermission
+        $observation.permission_match = ($actualPermission | ConvertTo-Json -Depth 20 -Compress) -eq ($expectedPermission | ConvertTo-Json -Depth 20 -Compress)
+        $observation.output_sha256 = Get-Sha256HexFromBytes -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($text))
+        if (-not [bool]$observation.permission_match) { $observation.reason = 'opencode debug config did not report the exact requested permission.skill policy.' }
+    } catch {
+        $observation.reason = "opencode debug config returned non-JSON output: $($_.Exception.Message)"
+    }
+    return [pscustomobject]$observation
+}
+
+function Get-OpenCodeSkillRootObservation {
+    param([Parameter(Mandatory = $true)][object]$Inputs)
+
+    $repo = [string]$Inputs.Run.WorkingDirectoryPath
+    $isolatedHome = [string]$Inputs.Run.HomeDirectoryPath
+    $projectSkillRoot = Join-Path (Join-Path $repo '.opencode') 'skills'
+    $projectSingularSkillRoot = Join-Path (Join-Path $repo '.opencode') 'skill'
+    $globalOpenCodeSkillRoot = Join-Path (Join-Path (Join-Path $isolatedHome '.config') 'opencode') 'skills'
+    $globalOpenCodeSingularSkillRoot = Join-Path (Join-Path (Join-Path $isolatedHome '.config') 'opencode') 'skill'
+    $agentsSkillRoot = Join-Path (Join-Path $isolatedHome '.agents') 'skills'
+    $claudeSkillRoot = Join-Path (Join-Path $isolatedHome '.claude') 'skills'
+    $roots = @(
+        [ordered]@{ kind = 'project'; path = $projectSkillRoot },
+        [ordered]@{ kind = 'project'; path = $projectSingularSkillRoot },
+        [ordered]@{ kind = 'global_opencode'; path = $globalOpenCodeSkillRoot },
+        [ordered]@{ kind = 'global_opencode'; path = $globalOpenCodeSingularSkillRoot },
+        [ordered]@{ kind = 'external_agents'; path = $agentsSkillRoot },
+        [ordered]@{ kind = 'external_claude'; path = $claudeSkillRoot }
+    )
+    $skills = [System.Collections.Generic.List[object]]::new()
+    $scanErrors = [System.Collections.Generic.List[string]]::new()
+    foreach ($root in $roots) {
+        $rootPath = [string]$root.path
+        try {
+            if (-not (Test-Path -LiteralPath $rootPath -PathType Container -ErrorAction Stop)) { continue }
+            foreach ($directory in @(Get-ChildItem -LiteralPath $rootPath -Directory -Force -ErrorAction Stop)) {
+                $skillFile = Join-Path $directory.FullName 'SKILL.md'
+                if (Test-Path -LiteralPath $skillFile -PathType Leaf -ErrorAction Stop) {
+                    $skills.Add([ordered]@{ kind = [string]$root.kind; name = [string]$directory.Name; path = [string]$directory.FullName })
+                }
+            }
+        } catch {
+            $scanErrors.Add("$($root.kind) skill root '$rootPath' could not be inspected: $($_.Exception.Message)")
+        }
+    }
+    $candidatePath = if ([bool]$Inputs.Run.CandidateSkillExposed) { [string]$Inputs.Run.SkillDirectoryPath } else { $null }
+    $candidateSkills = @($skills | Where-Object { -not [string]::IsNullOrWhiteSpace($candidatePath) -and (Test-OpenCodePathEqual -Expected $candidatePath -Observed ([string]$_.path)) })
+    $ambientSkills = @($skills | ForEach-Object {
+            $skill = $_
+            if (@($candidateSkills | Where-Object { Test-OpenCodePathEqual -Expected ([string]$_.path) -Observed ([string]$skill.path) }).Count -eq 0) { $skill }
+        })
+    $candidateHash = if ($candidateSkills.Count -eq 1) { Get-OpenCodeTreeHash -Root ([string]$candidateSkills[0].path) } else { $null }
+    $preparedHash = if ([bool]$Inputs.Run.CandidateSkillExposed) { [string]$Inputs.Run.SkillHash } else { $null }
+    $valid = if ([bool]$Inputs.Run.CandidateSkillExposed) {
+        $scanErrors.Count -eq 0 -and $candidateSkills.Count -eq 1 -and $ambientSkills.Count -eq 0 -and $candidateHash -eq $preparedHash
+    } else {
+        $scanErrors.Count -eq 0 -and $skills.Count -eq 0
+    }
+    $reason = if ($valid) { $null } elseif ($scanErrors.Count -gt 0) { [string]::Join(' ', @($scanErrors.ToArray())) } elseif ([bool]$Inputs.Run.CandidateSkillExposed) { 'physical OpenCode skill roots do not contain exactly the prepared candidate and no ambient skills.' } else { 'without_skill physical OpenCode skill roots are not empty.' }
+    return [pscustomobject]@{
+        Valid = $valid
+        CandidateSkillExposed = [bool]$Inputs.Run.CandidateSkillExposed
+        CandidateSkillPath = $candidatePath
+        CandidateSkillCount = $candidateSkills.Count
+        CandidateSkillHash = $candidateHash
+        PreparedSkillHash = $preparedHash
+        AmbientSkillCount = $ambientSkills.Count
+        AmbientSkills = @($ambientSkills)
+        DiscoveredSkills = @($skills.ToArray())
+        ScanErrors = @($scanErrors.ToArray())
+        Reason = $reason
+    }
+}
+
+function New-OpenCodeSkillIsolationEvidence {
+    param([Parameter(Mandatory = $true)][object]$Observation)
+
+    return [ordered]@{
+        valid = [bool]$Observation.Valid
+        candidate_skill_exposed = [bool]$Observation.CandidateSkillExposed
+        candidate_skill_path = [string]$Observation.CandidateSkillPath
+        candidate_skill_count = [int]$Observation.CandidateSkillCount
+        candidate_skill_hash = [string]$Observation.CandidateSkillHash
+        prepared_skill_hash = [string]$Observation.PreparedSkillHash
+        ambient_skill_count = [int]$Observation.AmbientSkillCount
+        ambient_skills = @($Observation.AmbientSkills)
+        discovered_skills = @($Observation.DiscoveredSkills)
+        scan_errors = @($Observation.ScanErrors)
+        reason = [string]$Observation.Reason
+    }
+}
+
+function New-OpenCodeHomeIsolationEvidence {
+    param([Parameter(Mandatory = $true)][object]$Observation)
+
+    return [ordered]@{
+        valid = [bool]$Observation.Valid
+        expected_home = [string]$Observation.ExpectedHome
+        effective_runtime_home = [string]$Observation.RuntimeHome
+        effective_runtime_home_available = [bool]$Observation.RuntimeHomeAvailable
+        effective_runtime_home_source = [string]$Observation.RuntimeHomeSource
+        effective_runtime_home_matches_expected = [bool]$Observation.RuntimeHomeMatchesExpected
+        effective_runtime_home_matches_real_user_profile = [bool]$Observation.RuntimeHomeMatchesHost
+        host_home_candidates = @($Observation.HostHomeCandidates)
+        windows_profile_parts_coherent = [bool]$Observation.WindowsProfilePartsCoherent
+        path_values_inside_home = [bool]$Observation.PathValuesInsideHome
+        node_path_absent = [bool]$Observation.NodePathAbsent
+        environment = $Observation.Environment
+        reason = [string]$Observation.Reason
+    }
+}
+
+function New-OpenCodeExecutionPaths {
+    param(
+        [Parameter(Mandatory = $true)][object]$LogicalInputs,
+        [Parameter(Mandatory = $true)][object]$ExecutionInputs,
+        [Parameter(Mandatory = $true)][object]$Projection,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment,
+        [object]$HomeIsolation
+    )
+
+    $physicalCwdOutsideSource = $null -eq $Projection.SourceRepositoryRoot -or -not (Test-PathInside -BasePath $Projection.SourceRepositoryRoot -CandidatePath $Projection.PhysicalWorkingDirectory)
+    $physicalHomeOutsideSource = $null -eq $Projection.SourceRepositoryRoot -or -not (Test-PathInside -BasePath $Projection.SourceRepositoryRoot -CandidatePath $Projection.PhysicalHomeDirectory)
+    return [ordered]@{
+        logical_working_directory = [string]$LogicalInputs.Run.WorkingDirectoryPath
+        logical_home_directory = [string]$LogicalInputs.Run.HomeDirectoryPath
+        physical_working_directory = [string]$Projection.PhysicalWorkingDirectory
+        physical_home_directory = [string]$Projection.PhysicalHomeDirectory
+        physical_isolated_home = [string]$Projection.PhysicalHomeDirectory
+        effective_runtime_home = if ($null -eq $HomeIsolation) { $null } else { [string]$HomeIsolation.RuntimeHome }
+        effective_runtime_home_source = if ($null -eq $HomeIsolation) { 'unavailable' } else { [string]$HomeIsolation.RuntimeHomeSource }
+        effective_opencode_config_root = [string]$Environment['OPENCODE_CONFIG_DIR']
+        physical_config_directory = [string]$Environment['OPENCODE_CONFIG_DIR']
+        physical_config_file = [string]$Environment['OPENCODE_CONFIG']
+        physical_run_root = [string]$Projection.Root
+        physical_projection_root = [string]$Projection.Root
+        physical_cwd_outside_source_repository = [bool]$physicalCwdOutsideSource
+        physical_home_outside_source_repository = [bool]$physicalHomeOutsideSource
+        projection_cleanup = 'pending'
+    }
+}
+
+function New-OpenCodeCandidateSkillExposure {
+    param(
+        [Parameter(Mandatory = $true)][object]$LogicalInputs,
+        [Parameter(Mandatory = $true)][object]$Projection,
+        [object]$SkillIsolation
+    )
+
+    if ([bool]$LogicalInputs.Run.CandidateSkillExposed) {
+        return [ordered]@{
+            status = 'supported'
+            logical_staged = $true
+            native_discovery_root = '.opencode/skills/<name>/SKILL.md'
+            candidate_skill_name = Get-OpenCodeCandidateSkillName -Run $LogicalInputs.Run
+            physical_path = [string]$Projection.PhysicalSkillDirectory
+            physical_tree_hash = [string]$Projection.PhysicalSkillHash
+            prepared_tree_hash = [string]$LogicalInputs.Run.SkillHash
+            hash_match = [string]$Projection.PhysicalSkillHash -eq [string]$LogicalInputs.Run.SkillHash
+            ambient_skill_roots_hidden = $null -eq $SkillIsolation -or [int]$SkillIsolation.AmbientSkillCount -eq 0
+        }
+    }
+    return [ordered]@{
+        status = 'excluded'
+        logical_staged = $false
+        native_discovery_root = $null
+        candidate_skill_name = $null
+        physical_path = $null
+        physical_tree_hash = $null
+        prepared_tree_hash = $null
+        hash_match = $null
+        ambient_skill_roots_hidden = $null -eq $SkillIsolation -or [int]$SkillIsolation.AmbientSkillCount -eq 0
+    }
+}
+
+function New-OpenCodeIsolationFailureResult {
+    param(
+        [Parameter(Mandatory = $true)][object]$LogicalInputs,
+        [Parameter(Mandatory = $true)][object]$ExecutionDescriptor,
+        [Parameter(Mandatory = $true)][object]$Preflight,
+        [Parameter(Mandatory = $true)][object]$Projection,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment,
+        [object]$HomeIsolation,
+        [object]$PolicyObservation,
+        [object]$SkillIsolation,
+        [string]$PreflightSource = 'fresh_preflight',
+        [string[]]$Reasons = @(),
+        [Parameter(Mandatory = $true)][string]$SessionId,
+        [Parameter(Mandatory = $true)][datetime]$StartedUtc,
+        [bool]$Resume = $false
+    )
+
+    $finished = [DateTime]::UtcNow
+    $message = if ($Reasons.Count -gt 0) { [string]::Join('; ', @($Reasons)) } else { 'OpenCode isolation could not be proven before model execution.' }
+    $executionPaths = New-OpenCodeExecutionPaths -LogicalInputs $LogicalInputs -ExecutionInputs $Projection.Inputs -Projection $Projection -Environment $Environment -HomeIsolation $HomeIsolation
+    $evidence = [ordered]@{
+        preflight = $Preflight
+        preflight_source = $PreflightSource
+        execution_paths = $executionPaths
+        effective_home = if ($null -eq $HomeIsolation) { $null } else { New-OpenCodeHomeIsolationEvidence -Observation $HomeIsolation }
+        skill_policy = $PolicyObservation
+        skill_isolation = if ($null -eq $SkillIsolation) { $null } else { New-OpenCodeSkillIsolationEvidence -Observation $SkillIsolation }
+        candidate_skill_exposure = New-OpenCodeCandidateSkillExposure -LogicalInputs $LogicalInputs -Projection $Projection -SkillIsolation $SkillIsolation
+        resume = $Resume
+        native_execution_started = $false
+        delegation = [ordered]@{
+            dispatch_owner = 'runner'
+            worker_session_id = $SessionId
+            fresh_worker = $true
+            home_config_isolated = $false
+            prompt_fidelity = $false
+            paired_arm_visible = $false
+            grading_material_visible = $false
+            nested_model_execution = $false
+            model_execution_count = 0
+        }
+    }
+    return New-ExecutionResult -Descriptor $ExecutionDescriptor -Profile $LogicalInputs.Profile -Run $LogicalInputs.Run -Status incompatible -FinalResponseReason 'isolation_incompatible' -StartedUtc $StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds ($finished - $StartedUtc).TotalSeconds -Failure (New-ExecutionFailure -Code 'opencode_isolation_incompatible' -Message $message) -SessionId $SessionId -IsolationCapabilities ([ordered]@{}) -IsolationMechanisms @('physical home/config/skill isolation was not proven; model execution was not started') -Warnings @('OpenCode model execution was not started because the physical home/config/skill isolation contract failed closed.') -Evidence $evidence -AttemptCount 1
 }
 
 function Remove-OpenCodeAnsiSequences {
@@ -469,11 +961,15 @@ function New-OpenCodeExecutionProjection {
         $physicalSkill = $null
         $physicalSkillHash = $null
         if ($Inputs.Run.CandidateSkillExposed) {
-            $skillRelative = [System.IO.Path]::GetRelativePath($Inputs.Run.RunRoot, $Inputs.Run.SkillDirectoryPath)
-            if ($skillRelative.StartsWith('..', [System.StringComparison]::Ordinal) -or [System.IO.Path]::IsPathRooted($skillRelative)) {
-                throw 'OpenCode candidate skill is not contained by the logical run root.'
+            $skillName = Get-OpenCodeCandidateSkillName -Run $Inputs.Run
+            # OpenCode's installed native discovery surface is the project-local
+            # .opencode/skills/<name>/SKILL.md root. The source is still the
+            # prepared run's staged skill directory; only the projection target
+            # changes so the candidate is discoverable by OpenCode itself.
+            $physicalSkill = Join-Path (Join-Path (Join-Path $physicalRepo '.opencode') 'skills') $skillName
+            if (Test-Path -LiteralPath $physicalSkill) {
+                throw "OpenCode physical repository already contains a native candidate skill at '$physicalSkill'."
             }
-            $physicalSkill = Join-Path $plan.Root ($skillRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
             Copy-OpenCodeProjectionDirectory -Source $Inputs.Run.SkillDirectoryPath -Destination $physicalSkill
             $physicalSkillHash = Get-OpenCodeTreeHash -Root $physicalSkill
             if ($physicalSkillHash -ne [string]$Inputs.Run.SkillHash) {
@@ -563,6 +1059,30 @@ function Sync-OpenCodeProjectedRepository {
     }
     foreach ($item in @(Get-ChildItem -LiteralPath $physicalRepo -Force -ErrorAction Stop)) {
         Copy-Item -LiteralPath $item.FullName -Destination $logicalRepo -Recurse -Force
+    }
+}
+
+function Remove-OpenCodeProjectedCandidateSkill {
+    param([Parameter(Mandatory = $true)][object]$Projection)
+
+    $candidatePath = [string]$Projection.PhysicalSkillDirectory
+    if ([string]::IsNullOrWhiteSpace($candidatePath)) { return }
+    $physicalRepo = [System.IO.Path]::GetFullPath([string]$Projection.PhysicalWorkingDirectory)
+    $candidateFull = [System.IO.Path]::GetFullPath($candidatePath)
+    if (-not (Test-PathInside -BasePath $physicalRepo -CandidatePath $candidateFull)) {
+        throw "Refusing to remove an OpenCode projected candidate skill outside the physical repository: '$candidateFull'."
+    }
+    $relative = [System.IO.Path]::GetRelativePath($physicalRepo, $candidateFull).Replace('\', '/')
+    if ($relative -notmatch '(?i)^\.opencode/skills/[^/]+$') {
+        throw "Refusing to remove an OpenCode projected candidate skill outside the native project skill root: '$relative'."
+    }
+    if (Test-Path -LiteralPath $candidateFull) { Remove-Item -LiteralPath $candidateFull -Recurse -Force }
+    $nativeSkillsRoot = Split-Path -Parent $candidateFull
+    $nativeProjectRoot = Split-Path -Parent $nativeSkillsRoot
+    foreach ($emptyRoot in @($nativeSkillsRoot, $nativeProjectRoot)) {
+        if ((Test-Path -LiteralPath $emptyRoot -PathType Container) -and @((Get-ChildItem -LiteralPath $emptyRoot -Force -ErrorAction SilentlyContinue)).Count -eq 0) {
+            Remove-Item -LiteralPath $emptyRoot -Force
+        }
     }
 }
 
@@ -743,6 +1263,13 @@ function Get-OpenCodePreflight {
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
     $versionObservation = $null
     $help = $null
+    $debugHelp = $null
+    $debugConfig = $null
+    $runtimeHomeObservation = $null
+    $homeIsolationObservation = $null
+    $policyObservation = $null
+    $debugConfigObservation = $null
+    $openCodeEnvironment = $null
     $continuationCapability = [pscustomobject]@{
         Available = $false
         Flag = $null
@@ -791,14 +1318,32 @@ function Get-OpenCodePreflight {
     } else {
         $checks.Add((New-PreflightCheck -Name 'harness_executable' -Status passed -Detail $commandInfo.Source))
         try {
-            $versionObservation = Get-ExternalCommandVersion -CommandInfo $commandInfo -WorkingDirectory $run.WorkingDirectoryPath -Environment (New-RunnerEnvironment -Run $run) -TimeoutSeconds 30
+            # Build the exact child environment once. Every model-free probe
+            # and every later OpenCode turn uses this same isolation policy.
+            $openCodeEnvironment = New-OpenCodeEnvironment -Inputs $Inputs
+            $versionObservation = Get-ExternalCommandVersion -CommandInfo $commandInfo -WorkingDirectory $run.WorkingDirectoryPath -Environment $openCodeEnvironment -TimeoutSeconds 30
             if (-not $versionObservation.Available) {
                 $reasons.Add('The OpenCode CLI did not expose an exact observable version through --version.')
                 $checks.Add((New-PreflightCheck -Name 'harness_version' -Status unavailable -Detail 'opencode --version did not return a usable version string.'))
             } else {
                 $checks.Add((New-PreflightCheck -Name 'harness_version' -Status passed -Detail ([string]$versionObservation.Version)))
             }
-            $help = Get-OpenCodeHelpResult -CommandInfo $commandInfo -Inputs $Inputs
+            $runtimeHomeObservation = Get-OpenCodeRuntimeHomeObservation -CommandInfo $commandInfo -Inputs $Inputs -Environment $openCodeEnvironment
+            $homeIsolationObservation = Get-OpenCodeHomeIsolationObservation -Inputs $Inputs -Environment $openCodeEnvironment -RuntimeHome $runtimeHomeObservation
+            if ([bool]$homeIsolationObservation.Valid) {
+                $checks.Add((New-PreflightCheck -Name 'effective_home' -Status passed -Detail ("Node/OpenCode resolved home '{0}' from the isolated child environment." -f $homeIsolationObservation.RuntimeHome)))
+            } else {
+                $checks.Add((New-PreflightCheck -Name 'effective_home' -Status failed -Detail $homeIsolationObservation.Reason))
+                $reasons.Add('OpenCode effective-home isolation is incompatible: ' + $homeIsolationObservation.Reason)
+            }
+            $policyObservation = Get-OpenCodeSkillPolicyObservation -Inputs $Inputs -Environment $openCodeEnvironment
+            if ([bool]$policyObservation.permission_match -and [bool]$policyObservation.external_skill_scans_disabled -and [bool]$policyObservation.claude_code_skill_scans_disabled) {
+                $checks.Add((New-PreflightCheck -Name 'skill_isolation_policy' -Status passed -Detail 'OpenCode permission.skill and external-skill disable flags match the requested arm.'))
+            } else {
+                $checks.Add((New-PreflightCheck -Name 'skill_isolation_policy' -Status failed -Detail ([string]$policyObservation.reason)))
+                $reasons.Add('OpenCode skill-isolation policy is incompatible: ' + [string]$policyObservation.reason)
+            }
+            $help = Get-OpenCodeHelpResult -CommandInfo $commandInfo -Inputs $Inputs -Environment $openCodeEnvironment
             if ($help.TimedOut -or $help.ExitCode -ne 0) {
                 $helpFailureReason = "OpenCode run --help failed with exit status $($help.ExitCode); exact-session continuation cannot be proven."
                 $reasons.Add($helpFailureReason)
@@ -817,6 +1362,21 @@ function Get-OpenCodePreflight {
                 $constructed = New-OpenCodeCliArguments -Inputs $Inputs -VisiblePlatform $visiblePlatform
                 foreach ($forbidden in @('--pure', '--continue', '--session')) {
                     if (@($constructed) -contains $forbidden) { $reasons.Add("The constructed OpenCode invocation must not use session or project-suppression option '$forbidden'.") }
+                }
+                $debugHelp = Get-OpenCodeDebugHelpResult -CommandInfo $commandInfo -Inputs $Inputs -Environment $openCodeEnvironment
+                $debugHelpText = [string]::Join("`n", @($debugHelp.Stdout, $debugHelp.Stderr))
+                $debugConfigAdvertised = -not $debugHelp.TimedOut -and $debugHelp.ExitCode -eq 0 -and $debugHelpText -match '(?i)(^|\s)config(\s|$)'
+                if ($debugConfigAdvertised) {
+                    $debugConfig = Get-OpenCodeDebugConfigResult -CommandInfo $commandInfo -Inputs $Inputs -Environment $openCodeEnvironment
+                    $debugConfigObservation = Get-OpenCodeDebugConfigObservation -DebugResult $debugConfig -Inputs $Inputs
+                    if (-not [bool]$debugConfigObservation.available -or -not [bool]$debugConfigObservation.permission_match) {
+                        $checks.Add((New-PreflightCheck -Name 'skill_permission_debug' -Status failed -Detail ([string]$debugConfigObservation.reason)))
+                        $reasons.Add('Installed OpenCode advertises debug config, but its effective permission.skill policy was not proven: ' + [string]$debugConfigObservation.reason)
+                    } else {
+                        $checks.Add((New-PreflightCheck -Name 'skill_permission_debug' -Status passed -Detail 'Installed OpenCode debug config reports the exact permission.skill policy for this arm.'))
+                    }
+                } else {
+                    $checks.Add((New-PreflightCheck -Name 'skill_permission_debug' -Status not_applicable -Detail 'Installed OpenCode does not advertise a model-free debug config command; filesystem/home isolation remains authoritative.'))
                 }
                 if ($reasons.Count -eq 0) {
                     $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'OpenCode run advertises noninteractive, model, directory, and structured-output controls; the adapter intentionally does not use --pure.'))
@@ -867,7 +1427,7 @@ function Get-OpenCodePreflight {
         'The adapter starts turn 1 in a fresh OpenCode process without continuation, waits for its terminal structured response, then targets only the exact captured session id for later turns.'
     }
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail $freshSessionDetail))
-    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter isolates global/user configuration roots and deliberately preserves repository-owned project configuration; OPENCODE_DISABLE_PROJECT_CONFIG is not used.'))
+    $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The adapter isolates global/user configuration roots, disables external skill discovery, and deliberately preserves repository-owned project configuration; OPENCODE_DISABLE_PROJECT_CONFIG is not used.'))
     $promptFidelityDetail = if ($null -eq $run.Interaction) {
         'The exact prompt bytes are sent on stdin as the first and only task input.'
     } else {
@@ -888,7 +1448,7 @@ function Get-OpenCodePreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'OpenCode CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('runner-owned fresh OpenCode session per eval execution', 'opencode run --format json terminal event capture', 'native Task/General subagent available as a separate harness capability, not the transport', 'deterministic runner-owned concurrent fan-out', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'repository-owned project configuration preserved', 'prompt on stdin')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('runner-owned fresh OpenCode session per eval execution', 'opencode run --format json terminal event capture', 'native Task/General subagent available as a separate harness capability, not the transport', 'deterministic runner-owned concurrent fan-out', '--auto', 'isolated OPENCODE_CONFIG_DIR', 'isolated OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'coherent Windows HOME/USERPROFILE/HOMEDRIVE/HOMEPATH', 'OPENCODE_DISABLE_EXTERNAL_SKILLS=1', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1', 'permission.skill arm policy', 'repository-owned project configuration preserved', 'prompt on stdin')) { $mechanisms.Add($mechanism) }
     if ($null -ne $run.Interaction -and $continuationCapability.Available) {
         $mechanisms.Add(("explicit OpenCode {0} <session-id> continuation selected from installed help" -f $continuationCapability.Flag))
         $mechanisms.Add('no implicit last-session continuation')
@@ -910,8 +1470,48 @@ function Get-OpenCodePreflight {
         $preflightTiming.help_probe_duration_seconds = [double]$help.DurationSeconds
         $preflightTiming.probe_count++
     }
+    if ($null -ne $runtimeHomeObservation -and $null -ne $runtimeHomeObservation.Process) {
+        $preflightTiming.effective_home_probe_duration_seconds = [double]$runtimeHomeObservation.Process.DurationSeconds
+        $preflightTiming.probe_count++
+    }
+    if ($null -ne $debugHelp) {
+        $preflightTiming.debug_help_probe_duration_seconds = [double]$debugHelp.DurationSeconds
+        $preflightTiming.probe_count++
+    }
+    if ($null -ne $debugConfig) {
+        $preflightTiming.debug_config_probe_duration_seconds = [double]$debugConfig.DurationSeconds
+        $preflightTiming.probe_count++
+    }
     $document.timing = $preflightTiming
     $document.protocol_observations = [ordered]@{
+        effective_home = [ordered]@{
+            logical_home = [string]$run.HomeDirectoryPath
+            physical_isolated_home = [string]$run.HomeDirectoryPath
+            effective_runtime_home = if ($null -eq $homeIsolationObservation) { $null } else { [string]$homeIsolationObservation.RuntimeHome }
+            effective_runtime_home_source = if ($null -eq $homeIsolationObservation) { 'unavailable' } else { [string]$homeIsolationObservation.RuntimeHomeSource }
+            expected_isolated_home = if ($null -eq $homeIsolationObservation) { [string]$run.HomeDirectoryPath } else { [string]$homeIsolationObservation.ExpectedHome }
+            matches_isolated_home = if ($null -eq $homeIsolationObservation) { $false } else { [bool]$homeIsolationObservation.RuntimeHomeMatchesExpected }
+            matches_real_user_profile = if ($null -eq $homeIsolationObservation) { $false } else { [bool]$homeIsolationObservation.RuntimeHomeMatchesHost }
+            windows_profile_parts_coherent = if ($null -eq $homeIsolationObservation) { $false } else { [bool]$homeIsolationObservation.WindowsProfilePartsCoherent }
+            host_home_candidates = if ($null -eq $homeIsolationObservation) { @() } else { @($homeIsolationObservation.HostHomeCandidates) }
+            environment = if ($null -eq $homeIsolationObservation) { $null } else { $homeIsolationObservation.Environment }
+            valid = if ($null -eq $homeIsolationObservation) { $false } else { [bool]$homeIsolationObservation.Valid }
+            reason = if ($null -eq $homeIsolationObservation) { 'OpenCode effective-home probe did not run.' } else { [string]$homeIsolationObservation.Reason }
+        }
+        skill_isolation = [ordered]@{
+            candidate_skill_exposed = [bool]$run.CandidateSkillExposed
+            candidate_skill_name = if ([bool]$run.CandidateSkillExposed) { Get-OpenCodeCandidateSkillName -Run $run } else { $null }
+            candidate_skill_physical_path = $null
+            ambient_skill_roots_hidden = $true
+            permission_skill = if ($null -eq $policyObservation) { $null } else { $policyObservation.configured_permission_skill }
+            expected_permission_skill = if ($null -eq $policyObservation) { Get-OpenCodeSkillPermissionPolicy -Inputs $Inputs } else { $policyObservation.expected_permission_skill }
+            permission_match = if ($null -eq $policyObservation) { $false } else { [bool]$policyObservation.permission_match }
+            permission_layer = if ($null -eq $debugConfigObservation) { 'unavailable' } elseif ([bool]$debugConfigObservation.available -and [bool]$debugConfigObservation.permission_match) { 'supported_and_verified' } else { 'unavailable_or_unverified' }
+            external_skill_scans_disabled = if ($null -eq $policyObservation) { $false } else { [bool]$policyObservation.external_skill_scans_disabled }
+            claude_code_skill_scans_disabled = if ($null -eq $policyObservation) { $false } else { [bool]$policyObservation.claude_code_skill_scans_disabled }
+            mechanism = if ($null -eq $policyObservation) { 'isolated physical home/config boundary' } else { [string]$policyObservation.mechanism }
+            debug_config = $debugConfigObservation
+        }
         scripted_multi_turn_same_session = [ordered]@{
             available = [bool]$continuationCapability.Available
             flag = $continuationCapability.Flag
@@ -931,7 +1531,11 @@ function Get-OpenCodePreflight {
 function New-OpenCodeEnvironment {
     param([Parameter(Mandatory = $true)][object]$Inputs)
 
-    $configDirectory = Join-Path $Inputs.Run.HomeDirectoryPath 'opencode-config'
+    # OpenCode 1.18.x resolves its native global config and skills below
+    # XDG_CONFIG_HOME/opencode. Keep that root inside the physical per-run
+    # home so HOME, USERPROFILE, and the Windows profile-part variables all
+    # identify the same boundary.
+    $configDirectory = Join-Path (Join-Path $Inputs.Run.HomeDirectoryPath '.config') 'opencode'
     $appDataDirectory = Join-Path $Inputs.Run.HomeDirectoryPath 'appdata'
     $localAppDataDirectory = Join-Path $Inputs.Run.HomeDirectoryPath 'localappdata'
     foreach ($directory in @($appDataDirectory, $localAppDataDirectory)) {
@@ -939,17 +1543,36 @@ function New-OpenCodeEnvironment {
     }
     New-Item -ItemType Directory -Path $configDirectory -Force | Out-Null
     $configPath = Join-Path $configDirectory 'opencode.json'
-    [System.IO.File]::WriteAllText($configPath, '{}', [System.Text.UTF8Encoding]::new($false))
+    $skillPermission = Get-OpenCodeSkillPermissionPolicy -Inputs $Inputs
+    $config = [ordered]@{
+        '$schema' = 'https://opencode.ai/config.json'
+        permission = [ordered]@{ skill = $skillPermission }
+    }
+    [System.IO.File]::WriteAllText($configPath, (($config | ConvertTo-Json -Depth 20) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
     $modelProvider = Get-OpenCodeModelProvider -Model ([string]$Inputs.Profile.Model)
     $authVariables = @(if (-not [string]::IsNullOrWhiteSpace($modelProvider)) { Get-ProviderAuthenticationVariables -Provider $modelProvider })
-    return New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables $authVariables -Additional @{
+    $environment = New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables $authVariables -Additional @{
         APPDATA = $appDataDirectory
         LOCALAPPDATA = $localAppDataDirectory
-        NODE_PATH = ''
         OPENCODE_CONFIG_DIR = $configDirectory
         OPENCODE_CONFIG = $configPath
         OPENCODE_DISABLE_AUTOUPDATE = '1'
+        OPENCODE_DISABLE_EXTERNAL_SKILLS = '1'
+        OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = '1'
     }
+    # New-RunnerEnvironment intentionally has a broad cross-runner whitelist
+    # for compatibility. OpenCode must not inherit NODE_PATH: it can redirect
+    # the Node module graph into the user's ambient installation.
+    [void]$environment.Remove('NODE_PATH')
+    if ((Get-PlatformName) -eq 'windows') {
+        $isolatedHomeFull = [System.IO.Path]::GetFullPath([string]$Inputs.Run.HomeDirectoryPath)
+        $root = [System.IO.Path]::GetPathRoot($isolatedHomeFull)
+        if ([string]::IsNullOrWhiteSpace($root)) { throw "OpenCode isolated home '$isolatedHomeFull' has no Windows path root." }
+        $homePart = $isolatedHomeFull.Substring($root.Length).TrimStart([char[]]@('\', '/'))
+        $environment['HOMEDRIVE'] = $root.TrimEnd([char[]]@('\', '/'))
+        $environment['HOMEPATH'] = '\' + $homePart
+    }
+    return $environment
 }
 
 function Get-LinuxSandboxArguments {
@@ -986,9 +1609,13 @@ function Get-LinuxSandboxArguments {
         XDG_CACHE_HOME = '/run/home/.cache'
         TEMP = '/run/home/tmp'
         TMP = '/run/home/tmp'
-        OPENCODE_CONFIG_DIR = '/run/home/opencode-config'
-        OPENCODE_CONFIG = '/run/home/opencode-config/opencode.json'
+        APPDATA = '/run/home/appdata'
+        LOCALAPPDATA = '/run/home/localappdata'
+        OPENCODE_CONFIG_DIR = '/run/home/.config/opencode'
+        OPENCODE_CONFIG = '/run/home/.config/opencode/opencode.json'
         OPENCODE_DISABLE_AUTOUPDATE = [string]$Environment['OPENCODE_DISABLE_AUTOUPDATE']
+        OPENCODE_DISABLE_EXTERNAL_SKILLS = [string]$Environment['OPENCODE_DISABLE_EXTERNAL_SKILLS']
+        OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = [string]$Environment['OPENCODE_DISABLE_CLAUDE_CODE_SKILLS']
         PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
         CI = '1'
         NO_COLOR = '1'
@@ -1196,6 +1823,18 @@ function Invoke-OpenCodeScriptedExecute {
     $projection = New-OpenCodeExecutionProjection -Inputs $Inputs
     $executionInputs = $projection.Inputs
     $environment = New-OpenCodeEnvironment -Inputs $executionInputs
+    $runtimeHomeObservation = Get-OpenCodeRuntimeHomeObservation -CommandInfo $commandInfo -Inputs $executionInputs -Environment $environment
+    $homeIsolationObservation = Get-OpenCodeHomeIsolationObservation -Inputs $executionInputs -Environment $environment -RuntimeHome $runtimeHomeObservation
+    $policyObservation = Get-OpenCodeSkillPolicyObservation -Inputs $executionInputs -Environment $environment
+    $skillIsolationObservation = Get-OpenCodeSkillRootObservation -Inputs $executionInputs
+    $isolationReasons = [System.Collections.Generic.List[string]]::new()
+    if (-not [bool]$homeIsolationObservation.Valid) { $isolationReasons.Add([string]$homeIsolationObservation.Reason) }
+    if (-not [bool]$policyObservation.permission_match -or -not [bool]$policyObservation.external_skill_scans_disabled -or -not [bool]$policyObservation.claude_code_skill_scans_disabled) { $isolationReasons.Add([string]$policyObservation.reason) }
+    if (-not [bool]$skillIsolationObservation.Valid) { $isolationReasons.Add([string]$skillIsolationObservation.Reason) }
+    if ($isolationReasons.Count -gt 0) {
+        $result = New-OpenCodeIsolationFailureResult -LogicalInputs $Inputs -ExecutionDescriptor $ExecutionDescriptor -Preflight $Preflight -Projection $projection -Environment $environment -HomeIsolation $homeIsolationObservation -PolicyObservation $policyObservation -SkillIsolation $skillIsolationObservation -PreflightSource $PreflightSource -Reasons @($isolationReasons.ToArray()) -SessionId ([Guid]::NewGuid().ToString('D')) -StartedUtc $started -Resume $false
+        return $result
+    }
     $requestedTurns = @($executionInputs.Run.Interaction.turns)
     $baseArguments = New-OpenCodeCliArguments -Inputs $executionInputs -VisiblePlatform $visiblePlatform
     $turnRecords = [System.Collections.Generic.List[object]]::new()
@@ -1297,8 +1936,12 @@ function Invoke-OpenCodeScriptedExecute {
             structured_output = 'json'
             working_directory = [string]$executionInputs.Run.WorkingDirectoryPath
             home = [string]$executionInputs.Run.HomeDirectoryPath
+            effective_runtime_home = [string]$homeIsolationObservation.RuntimeHome
+            effective_runtime_home_source = [string]$homeIsolationObservation.RuntimeHomeSource
             config_directory = [string]$environment['OPENCODE_CONFIG_DIR']
             config_file = [string]$environment['OPENCODE_CONFIG']
+            skill_policy = $policyObservation.configured_permission_skill
+            candidate_skill_exposed = [bool]$executionInputs.Run.CandidateSkillExposed
             process_duration_seconds = [double]$process.DurationSeconds
             cli_startup_and_execution_duration_seconds = [double]$process.DurationSeconds
             started_utc = Format-UtcTimestamp -Value $process.StartedUtc
@@ -1371,40 +2014,8 @@ function Invoke-OpenCodeScriptedExecute {
     $transcriptArtifactPath = 'evidence/opencode-events.jsonl'
     $transcriptArtifact = @($artifacts | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'path' -Default '') -eq $transcriptArtifactPath } | Select-Object -First 1)
     $terminalCapture = $nativeFailures.Count -eq 0 -and $turnRecords.Count -eq ($requestedTurns.Count * 2) -and $rawStdout.Count -eq $requestedTurns.Count
-    $physicalCwdOutsideSource = $null -eq $projection.SourceRepositoryRoot -or -not (Test-PathInside -BasePath $projection.SourceRepositoryRoot -CandidatePath $projection.PhysicalWorkingDirectory)
-    $physicalHomeOutsideSource = $null -eq $projection.SourceRepositoryRoot -or -not (Test-PathInside -BasePath $projection.SourceRepositoryRoot -CandidatePath $projection.PhysicalHomeDirectory)
-    $executionPaths = [ordered]@{
-        logical_working_directory = [string]$Inputs.Run.WorkingDirectoryPath
-        logical_home_directory = [string]$Inputs.Run.HomeDirectoryPath
-        physical_working_directory = [string]$projection.PhysicalWorkingDirectory
-        physical_home_directory = [string]$projection.PhysicalHomeDirectory
-        physical_config_directory = [string]$environment['OPENCODE_CONFIG_DIR']
-        physical_config_file = [string]$environment['OPENCODE_CONFIG']
-        physical_run_root = [string]$projection.Root
-        physical_projection_root = [string]$projection.Root
-        physical_cwd_outside_source_repository = [bool]$physicalCwdOutsideSource
-        physical_home_outside_source_repository = [bool]$physicalHomeOutsideSource
-        projection_cleanup = 'pending'
-    }
-    $candidateSkillExposure = if ($Inputs.Run.CandidateSkillExposed) {
-        [ordered]@{
-            status = 'supported'
-            logical_staged = $true
-            physical_path = [string]$projection.PhysicalSkillDirectory
-            physical_tree_hash = [string]$projection.PhysicalSkillHash
-            prepared_tree_hash = [string]$Inputs.Run.SkillHash
-            hash_match = [string]$projection.PhysicalSkillHash -eq [string]$Inputs.Run.SkillHash
-        }
-    } else {
-        [ordered]@{
-            status = 'excluded'
-            logical_staged = $false
-            physical_path = $null
-            physical_tree_hash = $null
-            prepared_tree_hash = $null
-            hash_match = $null
-        }
-    }
+    $executionPaths = New-OpenCodeExecutionPaths -LogicalInputs $Inputs -ExecutionInputs $executionInputs -Projection $projection -Environment $environment -HomeIsolation $homeIsolationObservation
+    $candidateSkillExposure = New-OpenCodeCandidateSkillExposure -LogicalInputs $Inputs -Projection $projection -SkillIsolation $skillIsolationObservation
     $interactionEvidence = [ordered]@{
         schema = (Get-RunnerSchemaNames).Interaction
         mode = 'scripted'
@@ -1448,6 +2059,18 @@ function Invoke-OpenCodeScriptedExecute {
         credential = $credentialEvidence
         interaction = $interactionEvidence
         candidate_skill_exposure = $candidateSkillExposure
+        effective_home = New-OpenCodeHomeIsolationEvidence -Observation $homeIsolationObservation
+        skill_policy = $policyObservation
+        skill_isolation = New-OpenCodeSkillIsolationEvidence -Observation $skillIsolationObservation
+        ambient_skill_policy = [ordered]@{
+            mechanism = [string]$policyObservation.mechanism
+            permission_skill = $policyObservation.configured_permission_skill
+            external_skill_scans_disabled = [bool]$policyObservation.external_skill_scans_disabled
+            claude_code_skill_scans_disabled = [bool]$policyObservation.claude_code_skill_scans_disabled
+            ambient_skill_roots_hidden = [int]$skillIsolationObservation.AmbientSkillCount -eq 0
+            candidate_skill_exposed = [bool]$executionInputs.Run.CandidateSkillExposed
+            candidate_skill_physical_path = if ([bool]$executionInputs.Run.CandidateSkillExposed) { [string]$projection.PhysicalSkillDirectory } else { $null }
+        }
         timing = [ordered]@{
             preflight = Get-JsonProperty -Object $Preflight -Name 'timing' -Default $null
             preflight_source = $PreflightSource
@@ -1472,6 +2095,8 @@ function Invoke-OpenCodeScriptedExecute {
             observed_model = $observedModel
             observed_working_directory = [string]$projection.PhysicalWorkingDirectory
             observed_home = [string]$projection.PhysicalHomeDirectory
+            effective_runtime_home = [string]$homeIsolationObservation.RuntimeHome
+            effective_opencode_config_root = [string]$environment['OPENCODE_CONFIG_DIR']
             fresh_worker = $true
             home_config_isolated = $true
             prompt_fidelity = $true
@@ -1488,7 +2113,7 @@ function Invoke-OpenCodeScriptedExecute {
         native_worker_evidence_failures = @($nativeFailures | Select-Object -Unique)
     }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('runner-owned fresh OpenCode process for turn 1', 'opencode run --format json structured event capture', 'prompt on stdin', '--model on every turn', '--dir on every turn', 'isolated OPENCODE_CONFIG_DIR and OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'same isolated environment on every turn', 'repository-owned project configuration preserved', 'no implicit last-session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('runner-owned fresh OpenCode process for turn 1', 'opencode run --format json structured event capture', 'prompt on stdin', '--model on every turn', '--dir on every turn', 'isolated OPENCODE_CONFIG_DIR and OPENCODE_CONFIG', 'isolated HOME/XDG roots', 'coherent Windows HOME/USERPROFILE/HOMEDRIVE/HOMEPATH', 'OPENCODE_DISABLE_EXTERNAL_SKILLS=1', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1', 'permission.skill arm policy', 'same isolated environment on every turn', 'repository-owned project configuration preserved', 'no implicit last-session continuation')) { $mechanisms.Add($mechanism) }
     $mechanisms.Add(("explicit OpenCode {0} <session-id> continuation selected from installed help" -f $continuationCapability.Flag))
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
@@ -1504,6 +2129,7 @@ function Invoke-OpenCodeScriptedExecute {
     } finally {
         if ($null -ne $projection) {
             try {
+                Remove-OpenCodeProjectedCandidateSkill -Projection $projection
                 Sync-OpenCodeProjectedRepository -Projection $projection
             } finally {
                 Remove-OpenCodeExecutionProjection -Projection $projection
@@ -1549,6 +2175,18 @@ function Invoke-OpenCodeExecute {
     $projection = New-OpenCodeExecutionProjection -Inputs $Inputs
     $executionInputs = $projection.Inputs
     $environment = New-OpenCodeEnvironment -Inputs $executionInputs
+    $runtimeHomeObservation = Get-OpenCodeRuntimeHomeObservation -CommandInfo $commandInfo -Inputs $executionInputs -Environment $environment
+    $homeIsolationObservation = Get-OpenCodeHomeIsolationObservation -Inputs $executionInputs -Environment $environment -RuntimeHome $runtimeHomeObservation
+    $policyObservation = Get-OpenCodeSkillPolicyObservation -Inputs $executionInputs -Environment $environment
+    $skillIsolationObservation = Get-OpenCodeSkillRootObservation -Inputs $executionInputs
+    $isolationReasons = [System.Collections.Generic.List[string]]::new()
+    if (-not [bool]$homeIsolationObservation.Valid) { $isolationReasons.Add([string]$homeIsolationObservation.Reason) }
+    if (-not [bool]$policyObservation.permission_match -or -not [bool]$policyObservation.external_skill_scans_disabled -or -not [bool]$policyObservation.claude_code_skill_scans_disabled) { $isolationReasons.Add([string]$policyObservation.reason) }
+    if (-not [bool]$skillIsolationObservation.Valid) { $isolationReasons.Add([string]$skillIsolationObservation.Reason) }
+    if ($isolationReasons.Count -gt 0) {
+        $singleResult = New-OpenCodeIsolationFailureResult -LogicalInputs $Inputs -ExecutionDescriptor $executionDescriptor -Preflight $preflight -Projection $projection -Environment $environment -HomeIsolation $homeIsolationObservation -PolicyObservation $policyObservation -SkillIsolation $skillIsolationObservation -PreflightSource $preflightSource -Reasons @($isolationReasons.ToArray()) -SessionId $sessionId -StartedUtc $started -Resume $false
+        return $singleResult
+    }
     $platform = Get-PlatformName
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
     $hardFilesystem = $null -ne $sandboxInfo -and $platform -in @('linux', 'macos')
@@ -1665,40 +2303,8 @@ function Invoke-OpenCodeExecute {
     $transcriptArtifactPath = 'evidence/opencode-events.jsonl'
     $transcriptArtifact = @($artifacts | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'path' -Default '') -eq $transcriptArtifactPath } | Select-Object -First 1)
     $terminalCapture = (-not $process.TimedOut) -and (-not [string]::IsNullOrWhiteSpace([string]$process.Stdout))
-    $physicalCwdOutsideSource = $null -eq $projection.SourceRepositoryRoot -or -not (Test-PathInside -BasePath $projection.SourceRepositoryRoot -CandidatePath $projection.PhysicalWorkingDirectory)
-    $physicalHomeOutsideSource = $null -eq $projection.SourceRepositoryRoot -or -not (Test-PathInside -BasePath $projection.SourceRepositoryRoot -CandidatePath $projection.PhysicalHomeDirectory)
-    $executionPaths = [ordered]@{
-        logical_working_directory = [string]$Inputs.Run.WorkingDirectoryPath
-        logical_home_directory = [string]$Inputs.Run.HomeDirectoryPath
-        physical_working_directory = [string]$projection.PhysicalWorkingDirectory
-        physical_home_directory = [string]$projection.PhysicalHomeDirectory
-        physical_config_directory = [string]$environment['OPENCODE_CONFIG_DIR']
-        physical_config_file = [string]$environment['OPENCODE_CONFIG']
-        physical_run_root = [string]$projection.Root
-        physical_projection_root = [string]$projection.Root
-        physical_cwd_outside_source_repository = [bool]$physicalCwdOutsideSource
-        physical_home_outside_source_repository = [bool]$physicalHomeOutsideSource
-        projection_cleanup = 'pending'
-    }
-    $candidateSkillExposure = if ($Inputs.Run.CandidateSkillExposed) {
-        [ordered]@{
-            status = 'supported'
-            logical_staged = $true
-            physical_path = [string]$projection.PhysicalSkillDirectory
-            physical_tree_hash = [string]$projection.PhysicalSkillHash
-            prepared_tree_hash = [string]$Inputs.Run.SkillHash
-            hash_match = [string]$projection.PhysicalSkillHash -eq [string]$Inputs.Run.SkillHash
-        }
-    } else {
-        [ordered]@{
-            status = 'excluded'
-            logical_staged = $false
-            physical_path = $null
-            physical_tree_hash = $null
-            prepared_tree_hash = $null
-            hash_match = $null
-        }
-    }
+    $executionPaths = New-OpenCodeExecutionPaths -LogicalInputs $Inputs -ExecutionInputs $executionInputs -Projection $projection -Environment $environment -HomeIsolation $homeIsolationObservation
+    $candidateSkillExposure = New-OpenCodeCandidateSkillExposure -LogicalInputs $Inputs -Projection $projection -SkillIsolation $skillIsolationObservation
     $evidence = [ordered]@{
         execution_paths = $executionPaths
         event_counts = $eventCounts
@@ -1711,6 +2317,18 @@ function Invoke-OpenCodeExecute {
         disable_project_config_environment = $false
         credential = $credentialEvidence
         candidate_skill_exposure = $candidateSkillExposure
+        effective_home = New-OpenCodeHomeIsolationEvidence -Observation $homeIsolationObservation
+        skill_policy = $policyObservation
+        skill_isolation = New-OpenCodeSkillIsolationEvidence -Observation $skillIsolationObservation
+        ambient_skill_policy = [ordered]@{
+            mechanism = [string]$policyObservation.mechanism
+            permission_skill = $policyObservation.configured_permission_skill
+            external_skill_scans_disabled = [bool]$policyObservation.external_skill_scans_disabled
+            claude_code_skill_scans_disabled = [bool]$policyObservation.claude_code_skill_scans_disabled
+            ambient_skill_roots_hidden = [int]$skillIsolationObservation.AmbientSkillCount -eq 0
+            candidate_skill_exposed = [bool]$executionInputs.Run.CandidateSkillExposed
+            candidate_skill_physical_path = if ([bool]$executionInputs.Run.CandidateSkillExposed) { [string]$projection.PhysicalSkillDirectory } else { $null }
+        }
         timing = [ordered]@{
             preflight = Get-JsonProperty -Object $preflight -Name 'timing' -Default $null
             preflight_source = $preflightSource
@@ -1738,6 +2356,8 @@ function Invoke-OpenCodeExecute {
             observed_model = [string]$model
             observed_working_directory = [string]$projection.PhysicalWorkingDirectory
             observed_home = [string]$projection.PhysicalHomeDirectory
+            effective_runtime_home = [string]$homeIsolationObservation.RuntimeHome
+            effective_opencode_config_root = [string]$environment['OPENCODE_CONFIG_DIR']
             fresh_worker = $true
             home_config_isolated = $true
             prompt_fidelity = $true
@@ -1757,6 +2377,7 @@ function Invoke-OpenCodeExecute {
     } finally {
         if ($null -ne $projection) {
             try {
+                Remove-OpenCodeProjectedCandidateSkill -Projection $projection
                 Sync-OpenCodeProjectedRepository -Projection $projection
             } finally {
                 Remove-OpenCodeExecutionProjection -Projection $projection
