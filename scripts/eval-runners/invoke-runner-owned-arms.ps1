@@ -109,6 +109,12 @@ function Get-RunnerGraceSeconds {
     return 30
 }
 
+function Get-RunnerPreflightTimeoutSeconds {
+    param([Parameter(Mandatory = $true)][int]$ProfileTimeoutSeconds)
+
+    return [Math]::Max(120, [Math]::Max(1, $ProfileTimeoutSeconds) + (Get-RunnerGraceSeconds))
+}
+
 function Get-RunnerRunTurnCount {
     param([Parameter(Mandatory = $true)][string]$RunPath)
 
@@ -318,7 +324,7 @@ try {
     $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $manifest)
     $preflightRecords = [System.Collections.Generic.List[object]]::new()
     foreach ($record in $manifestRecords) {
-        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path) -TimeoutSeconds ([Math]::Max(120, [int]$profile.TimeoutSeconds + (Get-RunnerGraceSeconds)))
+        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path) -TimeoutSeconds (Get-RunnerPreflightTimeoutSeconds -ProfileTimeoutSeconds ([int]$profile.TimeoutSeconds))
         $preflightRecords.Add((New-PreflightWorkerSummary -Record $record -Invocation $invocation -Descriptor $descriptor))
     }
     $failedPreflights = @($preflightRecords | Where-Object { [string]$_.status -ne 'compatible' })
