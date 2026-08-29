@@ -77,6 +77,24 @@ try {
             $mutex.Dispose()
         }
     }
+
+    function Get-FixtureTerminalStatus {
+        $statusPath = Join-Path $inputs.Run.HomeDirectoryPath 'terminal-status'
+        if (-not (Test-Path -LiteralPath $statusPath -PathType Leaf)) {
+            return 'completed'
+        }
+
+        $status = ([System.IO.File]::ReadAllText($statusPath, [Text.UTF8Encoding]::new($false))).Trim()
+        if ($status -notin @('completed', 'failed', 'timed_out', 'cancelled')) {
+            throw "Unsupported fixture terminal status '$status'."
+        }
+        return $status
+    }
+
+    function Test-FixtureEvidenceValidationFailure {
+        return (Test-Path -LiteralPath (Join-Path $inputs.Run.HomeDirectoryPath 'evidence-validation-failed') -PathType Leaf)
+    }
+
     if ($Command -eq 'preflight') {
         Write-FixtureEvent -Kind 'preflight'
         if (Test-Path -LiteralPath (Join-Path $inputs.Run.HomeDirectoryPath 'preflight-incompatible') -PathType Leaf) {
@@ -113,6 +131,7 @@ try {
     foreach ($propertyName in @(Get-JsonPropertyNames -Object $descriptor.capabilities)) { $capabilities[$propertyName] = [string](Get-JsonProperty -Object $descriptor.capabilities -Name $propertyName) }
     if ([string]$inputs.Run.Mode -eq 'without_skill') { $capabilities.candidate_skill_exposure = 'excluded' }
     $sessionId = ('fixture-session-' + [Guid]::NewGuid().ToString('N'))
+    $terminalStatus = Get-FixtureTerminalStatus
     $turnRecords = [System.Collections.Generic.List[object]]::new()
     $fixtureFinalResponse = 'deterministic fixture response'
     if ($null -ne $inputs.Run.Interaction) {
@@ -203,10 +222,32 @@ try {
         }
         turns = if ($turnRecords.Count -gt 0) { @($turnRecords.ToArray()) } else { $null }
     }
-    if ($turnRecords.Count -gt 0) {
+    if (Test-FixtureEvidenceValidationFailure) {
+        $evidence.delegation.prompt_fidelity = $false
+    }
+    if ($turnRecords.Count -gt 0 -and $terminalStatus -eq 'completed') {
         $evidence.interaction = [ordered]@{ schema = (Get-RunnerSchemaNames).Interaction; mode = 'scripted'; same_session = $true; session_id = $sessionId; turns = @($turnRecords.ToArray()); final_response_sequence = $turnRecords.Count }
     }
-    $result = New-ExecutionResult -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Status completed -FinalResponse $fixtureFinalResponse -StartedUtc ($executeStartUtc.ToString('o')) -FinishedUtc ($executeFinishUtc.ToString('o')) -DurationSeconds $durationSeconds -ExitStatus ([Nullable[int]]0) -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @('deterministic runner-owned fixture') -Telemetry ([ordered]@{ transcript = New-AvailableMetric -Value ([ordered]@{ artifact = 'evidence/fixture-events.jsonl'; complete = $true }); tokens = $fixtureTelemetryTokens; tool_calls = $fixtureTelemetryToolCalls; cost = New-UnavailableMetric -Reason 'fixture' }) -Artifacts @($eventsArtifact) -Evidence $evidence -AttemptCount 1
+    $finalResponse = if ($terminalStatus -eq 'completed') { $fixtureFinalResponse } else { $null }
+    $finalResponseReason = switch ($terminalStatus) {
+        'failed' { 'fixture_failure' }
+        'timed_out' { 'fixture_timeout' }
+        'cancelled' { 'fixture_cancelled' }
+        default { $null }
+    }
+    $exitStatus = switch ($terminalStatus) {
+        'completed' { [Nullable[int]]0 }
+        'failed' { [Nullable[int]]17 }
+        'cancelled' { [Nullable[int]]130 }
+        default { $null }
+    }
+    $failure = switch ($terminalStatus) {
+        'failed' { New-ExecutionFailure -Code 'fixture_harness_failure' -Message 'The deterministic runner-owned fixture reported a harness failure.' }
+        'timed_out' { New-ExecutionFailure -Code 'timed_out' -Message 'The deterministic runner-owned fixture exceeded its execution window.' }
+        'cancelled' { New-ExecutionFailure -Code 'cancelled' -Message 'The deterministic runner-owned fixture was cancelled before completion.' }
+        default { $null }
+    }
+    $result = New-ExecutionResult -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Status $terminalStatus -FinalResponse $finalResponse -FinalResponseReason $finalResponseReason -StartedUtc ($executeStartUtc.ToString('o')) -FinishedUtc ($executeFinishUtc.ToString('o')) -DurationSeconds $durationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @('deterministic runner-owned fixture') -Telemetry ([ordered]@{ transcript = New-AvailableMetric -Value ([ordered]@{ artifact = 'evidence/fixture-events.jsonl'; complete = $true }); tokens = $fixtureTelemetryTokens; tool_calls = $fixtureTelemetryToolCalls; cost = New-UnavailableMetric -Reason 'fixture' }) -Artifacts @($eventsArtifact) -Evidence $evidence -AttemptCount 1
     [void](Assert-ExecutionResult -Result $result)
     Write-RunnerJson -Value $result -AsOutput
 } catch {

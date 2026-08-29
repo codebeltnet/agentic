@@ -41,7 +41,10 @@ try {
     # Validate the complete immutable Phase 1 ledger before any one-arm bridge
     # can write a canonical result. This is deliberately read-only: a changed
     # raw result or artifact is a failed evaluation, never a new blessing.
-    [void](Assert-ExecutionFreeze -IterationDirectory $iterationPath -RequireOrchestrationState)
+    $freezeValidation = Assert-ExecutionFreeze -IterationDirectory $iterationPath -RequireOrchestrationState
+    if ($RequireComplete) {
+        [void](Assert-FanoutPhase1Success -Aggregate $freezeValidation.Aggregate -MessagePrefix 'Manifest bridge Phase 1')
+    }
     $profileData = Resolve-ExecutionProfile -ProfilePath (Join-Path $iterationPath 'execution-profile.json')
     $runnerDescriptor = Get-PackageRunnerDescriptor -RunnerName ([string]$profileData.Runner)
     $effectiveRequireNativeDelegation = [bool]$RequireNativeDelegation -or [string](Get-JsonProperty -Object $runnerDescriptor.delegation -Name 'dispatch_owner' -Default '') -eq 'runner'

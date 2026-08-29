@@ -2261,8 +2261,20 @@ try {
     $oneArmState = [ordered]@{
         schema = 'codebeltnet/agentic/eval-orchestration-state/1'
         completed = [ordered]@{
-            'arm-1-with_skill' = [ordered]@{ worker_id = 'arm-1-with_skill'; eval_id = 1; configuration = 'with_skill'; status = [string]$bridgeResult.status }
-            'arm-1-without_skill' = [ordered]@{ worker_id = 'arm-1-without_skill'; eval_id = 1; configuration = 'without_skill'; status = [string]$withoutBridgeResult.status }
+            'arm-1-with_skill' = [ordered]@{
+                worker_id = 'arm-1-with_skill'
+                eval_id = 1
+                configuration = 'with_skill'
+                status = [string]$bridgeResult.status
+                evidence_validation = [ordered]@{ status = 'passed'; reasons = @() }
+            }
+            'arm-1-without_skill' = [ordered]@{
+                worker_id = 'arm-1-without_skill'
+                eval_id = 1
+                configuration = 'without_skill'
+                status = [string]$withoutBridgeResult.status
+                evidence_validation = [ordered]@{ status = 'passed'; reasons = @() }
+            }
         }
         execution_freeze = $null
     }
@@ -2478,8 +2490,20 @@ try {
         pending_worker_ids = @()
         active = [ordered]@{}
         completed = [ordered]@{
-            'arm-1-with_skill' = [ordered]@{ worker_id = 'arm-1-with_skill'; eval_id = 1; configuration = 'with_skill'; status = 'completed' }
-            'arm-1-without_skill' = [ordered]@{ worker_id = 'arm-1-without_skill'; eval_id = 1; configuration = 'without_skill'; status = 'completed' }
+            'arm-1-with_skill' = [ordered]@{
+                worker_id = 'arm-1-with_skill'
+                eval_id = 1
+                configuration = 'with_skill'
+                status = 'completed'
+                evidence_validation = [ordered]@{ status = 'passed'; reasons = @() }
+            }
+            'arm-1-without_skill' = [ordered]@{
+                worker_id = 'arm-1-without_skill'
+                eval_id = 1
+                configuration = 'without_skill'
+                status = 'completed'
+                evidence_validation = [ordered]@{ status = 'passed'; reasons = @() }
+            }
         }
         delegation_rejections = [ordered]@{}
         eval_attempts = [ordered]@{ 'arm-1-with_skill' = 1; 'arm-1-without_skill' = 1 }

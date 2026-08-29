@@ -697,8 +697,9 @@ function New-UpstreamWorkspace {
 
 $iterationPath = (Resolve-Path -LiteralPath $IterationDirectory).Path
 $manifest = Read-JsonFile -Path (Join-Path $iterationPath 'manifest.json')
-[void](Assert-ExecutionFreeze -IterationDirectory $iterationPath -RequireOrchestrationState)
-$manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iterationPath -Manifest $manifest)
+$freezeValidation = Assert-ExecutionFreeze -IterationDirectory $iterationPath -RequireOrchestrationState
+[void](Assert-FanoutPhase1Success -Aggregate $freezeValidation.Aggregate -MessagePrefix 'Report generation Phase 1')
+$manifestRecords = @($freezeValidation.Records)
 $validation = Test-ManifestResults -IterationDirectory $iterationPath -Manifest $manifest -Records $manifestRecords -RequireComplete
 if (-not $validation.Success) {
     throw ([string]::Join([Environment]::NewLine, @($validation.Errors)))

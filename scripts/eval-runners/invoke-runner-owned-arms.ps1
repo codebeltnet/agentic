@@ -243,11 +243,19 @@ function Get-PreflightGateSummary {
 function New-ArmSummary {
     param([Parameter(Mandatory = $true)][object]$State)
 
-    $completed = Get-OrchestrationDictionary -Object $State -Name 'completed'
-    return @($completed.Values | Sort-Object { [string](Get-JsonProperty -Object $_ -Name 'worker_id' -Default '') } | ForEach-Object {
+    return @(Get-OrchestrationCompletedEntries -State $State | Sort-Object { [string](Get-JsonProperty -Object $_ -Name 'worker_id' -Default '') } | ForEach-Object {
+        $evidenceValidation = Get-JsonProperty -Object $_ -Name 'evidence_validation' -Default $null
         [ordered]@{
             worker_id = [string](Get-JsonProperty -Object $_ -Name 'worker_id' -Default '')
+            eval_id = [int](Get-JsonProperty -Object $_ -Name 'eval_id' -Default 0)
+            eval_name = [string](Get-JsonProperty -Object $_ -Name 'eval_name' -Default '')
+            configuration = [string](Get-JsonProperty -Object $_ -Name 'configuration' -Default '')
             status = [string](Get-JsonProperty -Object $_ -Name 'status' -Default '')
+            worker_session_id = Get-JsonProperty -Object $_ -Name 'worker_session_id' -Default $null
+            evidence_validation = [ordered]@{
+                status = [string](Get-JsonProperty -Object $evidenceValidation -Name 'status' -Default '')
+                reasons = @((Get-JsonProperty -Object $evidenceValidation -Name 'reasons' -Default @()))
+            }
             native_worker_evidence = [string](Get-JsonProperty -Object $_ -Name 'native_worker_evidence' -Default '')
             native_worker_evidence_failures = @((Get-JsonProperty -Object $_ -Name 'native_worker_evidence_failures' -Default @()))
         }
@@ -265,22 +273,32 @@ function Get-FanoutSummary {
         [string]$Error = ''
     )
 
-    $completed = Get-OrchestrationDictionary -Object $State -Name 'completed'
-    $incompatible = @($completed.Values | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'incompatible' })
+    $expectedCount = @((Get-JsonProperty -Object $Plan -Name 'arms' -Default @())).Count
+    $aggregate = Get-FanoutPhase1Aggregate -ExpectedCount $expectedCount -State $State
+    $preflight = Get-JsonProperty -Object $State -Name 'preflight' -Default $null
+    $executionStarted = [bool](Get-JsonProperty -Object $preflight -Name 'execution_started' -Default ($aggregate.terminal_count -gt 0))
+    if ([string]::IsNullOrWhiteSpace($Status)) { $Status = [string]$aggregate.status }
     $summary = [ordered]@{
         schema = 'codebeltnet/agentic/runner-owned-fanout-summary/1'
+        phase = 'phase1'
         status = $Status
         runner = [string](Get-JsonProperty -Object $Profile -Name 'runner' -Default '')
         model = [string](Get-JsonProperty -Object $Profile -Name 'model' -Default '')
-        dispatch_owner = [string]$Plan.dispatch_owner
-        requested_concurrency = [int]$Plan.requested_concurrency
-        completed_count = $completed.Count
-        incompatible_count = $incompatible.Count
-        max_observed_active = [int]$State.max_observed_active
+        dispatch_owner = [string](Get-JsonProperty -Object $Plan -Name 'dispatch_owner' -Default 'runner')
+        requested_concurrency = [int](Get-JsonProperty -Object $Plan -Name 'requested_concurrency' -Default 0)
+        expected_count = [int]$aggregate.expected_count
+        terminal_count = [int]$aggregate.terminal_count
+        completed_count = [int]$aggregate.completed_count
+        failed_count = [int]$aggregate.failed_count
+        timed_out_count = [int]$aggregate.timed_out_count
+        cancelled_count = [int]$aggregate.cancelled_count
+        incompatible_count = [int]$aggregate.incompatible_count
+        evidence_validation_failed_count = [int]$aggregate.evidence_validation_failed_count
+        max_observed_active = [int](Get-JsonProperty -Object $State -Name 'max_observed_active' -Default 0)
         orchestration_state = 'orchestration-state.json'
         preflight_count = @($Preflights).Count
-        execution_started = $completed.Count -gt 0
-        execution_count = $completed.Count
+        execution_started = $executionStarted
+        execution_count = [int]$aggregate.terminal_count
         arms = @(New-ArmSummary -State $State)
     }
     if (@($Preflights).Count -gt 0) { $summary.preflights = @($Preflights) }
@@ -422,14 +440,15 @@ try {
         sha256 = Get-Sha256HexFromFile -Path $freezePath
     }
     Save-OrchestrationState -Path $statePath -State $state
-    $status = if (@($state.completed.Values | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'incompatible' }).Count -gt 0) { 'completed_with_incompatible_arms' } else { 'completed' }
-    $summary = Get-FanoutSummary -Profile $profile -Plan $plan -State $state -Concurrency $concurrency -Preflights @($preflightRecords.ToArray()) -Status $status
+    $aggregate = Get-FanoutPhase1Aggregate -ExpectedCount @($plan.arms).Count -State $state
+    $summary = Get-FanoutSummary -Profile $profile -Plan $plan -State $state -Concurrency $concurrency -Preflights @($preflightRecords.ToArray()) -Status ([string]$aggregate.status)
     $summary.execution_freeze = [ordered]@{
         path = $freezePath
         sha256 = [string]$state.execution_freeze.sha256
         schema = [string]$state.execution_freeze.schema
     }
-    Write-FanoutSummary -Summary $summary
+    $phaseOneExitCode = if (Test-FanoutPhase1Success -Aggregate $aggregate) { 0 } else { 2 }
+    Write-FanoutSummary -Summary $summary -ExitCode $phaseOneExitCode
 } catch {
     $errorMessage = $_.Exception.Message
     if ($null -ne $running) {
@@ -451,13 +470,20 @@ try {
         # the failure machine-readable without masking its original reason.
         Write-FanoutSummary -Summary ([ordered]@{
             schema = 'codebeltnet/agentic/runner-owned-fanout-summary/1'
+            phase = 'phase1'
             status = 'failed'
             runner = ''
             model = ''
             dispatch_owner = 'runner'
             requested_concurrency = 0
+            expected_count = 0
+            terminal_count = 0
             completed_count = 0
+            failed_count = 0
+            timed_out_count = 0
+            cancelled_count = 0
             incompatible_count = 0
+            evidence_validation_failed_count = 0
             max_observed_active = 0
             orchestration_state = 'orchestration-state.json'
             arms = @()

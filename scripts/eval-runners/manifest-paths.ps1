@@ -275,8 +275,12 @@ function Test-ManifestResults {
                 $errors.Add("$($record.EvalName)/$($record.Configuration) execution result has non-terminal status '$rawStatus'.")
             } else {
                 $terminalExecutionResults++
-                if ($RequireComplete -and $rawStatus -eq 'incompatible') {
-                    $errors.Add("$($record.EvalName)/$($record.Configuration) is incompatible; incompatible execution evidence is diagnostic only and cannot be graded or benchmarked.")
+                if ($RequireComplete -and $rawStatus -ne 'completed') {
+                    if ($rawStatus -eq 'incompatible') {
+                        $errors.Add("$($record.EvalName)/$($record.Configuration) is incompatible; incompatible execution evidence is diagnostic only and cannot be graded or benchmarked.")
+                    } else {
+                        $errors.Add("$($record.EvalName)/$($record.Configuration) execution status '$rawStatus' is terminal but incomplete; only completed execution evidence can be graded or benchmarked.")
+                    }
                 }
             }
         } elseif ($RequireComplete) {
@@ -341,7 +345,7 @@ function Test-ManifestResults {
                     $errors.Add("$($record.EvalName)/$($record.Configuration) has grading for an incompatible execution; diagnostic arms must not contribute grading evidence.")
                 }
             }
-            if ($canonicalStatus -eq $rawStatus -and $grading.Count -eq $assertionCount -and $rawStatus -ne 'incompatible') {
+            if ($canonicalStatus -eq $rawStatus -and $grading.Count -eq $assertionCount -and $rawStatus -eq 'completed') {
                 $bridgedResults++
             }
         } elseif (-not $rawExists -and $RequireComplete -and $canonicalStatus -ne 'unrun') {

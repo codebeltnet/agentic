@@ -139,6 +139,86 @@ function Assert-FreezeTerminalLedgerEntry {
     return $true
 }
 
+function Get-OrchestrationCompletedEntries {
+    param([AllowNull()][object]$State)
+
+    if ($null -eq $State) { return @() }
+    $completed = Get-JsonProperty -Object $State -Name 'completed' -Default $null
+    if ($null -eq $completed) { return @() }
+
+    return @((Get-JsonPropertyNames -Object $completed | Sort-Object) | ForEach-Object {
+        $entry = Get-JsonProperty -Object $completed -Name ([string]$_) -Default $null
+        if ($null -ne $entry) { $entry }
+    })
+}
+
+function Test-FanoutPhase1Success {
+    param([Parameter(Mandatory = $true)][object]$Aggregate)
+
+    return (
+        [int](Get-JsonProperty -Object $Aggregate -Name 'terminal_count' -Default 0) -eq [int](Get-JsonProperty -Object $Aggregate -Name 'expected_count' -Default 0) -and
+        [int](Get-JsonProperty -Object $Aggregate -Name 'completed_count' -Default 0) -eq [int](Get-JsonProperty -Object $Aggregate -Name 'expected_count' -Default 0) -and
+        [int](Get-JsonProperty -Object $Aggregate -Name 'failed_count' -Default 0) -eq 0 -and
+        [int](Get-JsonProperty -Object $Aggregate -Name 'timed_out_count' -Default 0) -eq 0 -and
+        [int](Get-JsonProperty -Object $Aggregate -Name 'cancelled_count' -Default 0) -eq 0 -and
+        [int](Get-JsonProperty -Object $Aggregate -Name 'incompatible_count' -Default 0) -eq 0 -and
+        [int](Get-JsonProperty -Object $Aggregate -Name 'evidence_validation_failed_count' -Default 0) -eq 0
+    )
+}
+
+function Get-FanoutPhase1Aggregate {
+    param(
+        [Parameter(Mandatory = $true)][int]$ExpectedCount,
+        [AllowNull()][object]$State
+    )
+
+    $entries = @(Get-OrchestrationCompletedEntries -State $State)
+    $aggregate = [ordered]@{
+        expected_count = $ExpectedCount
+        terminal_count = $entries.Count
+        completed_count = @($entries | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'completed' }).Count
+        failed_count = @($entries | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'failed' }).Count
+        timed_out_count = @($entries | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'timed_out' }).Count
+        cancelled_count = @($entries | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'cancelled' }).Count
+        incompatible_count = @($entries | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'incompatible' }).Count
+        evidence_validation_failed_count = @($entries | Where-Object {
+                [string](Get-JsonProperty -Object (Get-JsonProperty -Object $_ -Name 'evidence_validation' -Default $null) -Name 'status' -Default '') -ne 'passed'
+            }).Count
+    }
+    $aggregate.status = if (Test-FanoutPhase1Success -Aggregate $aggregate) { 'completed' } else { 'failed' }
+    return $aggregate
+}
+
+function Format-FanoutPhase1Aggregate {
+    param([Parameter(Mandatory = $true)][object]$Aggregate)
+
+    $orderedFields = @(
+        'expected_count',
+        'terminal_count',
+        'completed_count',
+        'failed_count',
+        'timed_out_count',
+        'cancelled_count',
+        'incompatible_count',
+        'evidence_validation_failed_count'
+    )
+    return [string]::Join(', ', @($orderedFields | ForEach-Object {
+                "$_=$(Get-JsonProperty -Object $Aggregate -Name $_ -Default 0)"
+            }))
+}
+
+function Assert-FanoutPhase1Success {
+    param(
+        [Parameter(Mandatory = $true)][object]$Aggregate,
+        [string]$MessagePrefix = 'Phase 1'
+    )
+
+    if (-not (Test-FanoutPhase1Success -Aggregate $Aggregate)) {
+        throw "$MessagePrefix completion gate failed: $(Format-FanoutPhase1Aggregate -Aggregate $Aggregate)."
+    }
+    return $true
+}
+
 function New-ExecutionFreezeDocument {
     param(
         [Parameter(Mandatory = $true)][string]$IterationDirectory,
@@ -395,5 +475,20 @@ function Assert-ExecutionFreeze {
             }
         }
     }
-    return [pscustomobject]@{ Path = $freezePath; Freeze = $freeze; Manifest = $manifest; Profile = $profile; Records = $records }
+    $aggregate = if ($null -eq $state) {
+        $null
+    } else {
+        Get-FanoutPhase1Aggregate -ExpectedCount $records.Count -State $state
+    }
+
+    return [pscustomobject]@{
+        Path = $freezePath
+        Freeze = $freeze
+        Manifest = $manifest
+        Profile = $profile
+        Records = $records
+        State = $state
+        Aggregate = $aggregate
+        PhaseOneSuccess = if ($null -eq $aggregate) { $null } else { Test-FanoutPhase1Success -Aggregate $aggregate }
+    }
 }

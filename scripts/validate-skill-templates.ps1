@@ -1272,6 +1272,23 @@ Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Phase 1 aggregate fail-closed regressions remain deterministic' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $aggregatePath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-phase1-aggregate-regressions.ps1'
+    if (-not (Test-Path -LiteralPath $aggregatePath -PathType Leaf)) {
+        throw 'The Phase 1 aggregate regression suite is missing.'
+    }
+    $aggregateOutput = & pwsh -NoProfile -File $aggregatePath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Phase 1 aggregate regressions failed: $($aggregateOutput -join [Environment]::NewLine)"
+    }
+    if (@($aggregateOutput -join [Environment]::NewLine) -notmatch 'Phase 1 aggregate regressions:\s+PASS') {
+        throw 'Phase 1 aggregate regressions did not report PASS.'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Frozen evidence, grading isolation, and finalization remain deterministic' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return

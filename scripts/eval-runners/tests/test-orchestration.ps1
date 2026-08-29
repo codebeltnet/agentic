@@ -602,11 +602,19 @@ try {
     $fanoutOutput = & pwsh -NoProfile -File $fanoutHelper -IterationDirectory $fanoutPackage 2>&1
     Assert-Equal 0 $LASTEXITCODE ("deterministic runner-owned fan-out exits successfully; output: " + [string]::Join([Environment]::NewLine, @($fanoutOutput)))
     $fanoutSummary = ([string]::Join([Environment]::NewLine, @($fanoutOutput)) | ConvertFrom-Json)
+    Assert-Equal 'phase1' $fanoutSummary.phase 'deterministic runner-owned fan-out reports a Phase 1 summary'
     Assert-Equal 'completed' $fanoutSummary.status 'deterministic runner-owned fan-out completes six fixture arms'
+    Assert-Equal 6 $fanoutSummary.expected_count 'runner-owned helper preserves the six-arm manifest count'
+    Assert-Equal 6 $fanoutSummary.terminal_count 'runner-owned helper reports all six arms as terminal'
     Assert-Equal 6 $fanoutSummary.preflight_count 'runner-owned helper preflights all six manifest arms before fan-out'
     Assert-True $fanoutSummary.execution_started 'runner-owned helper records that execution started after preflight'
     Assert-Equal 6 $fanoutSummary.execution_count 'runner-owned helper executes exactly six compatible arms'
-    Assert-Equal 6 $fanoutSummary.completed_count 'runner-owned helper completes all six arms'
+    Assert-Equal 6 $fanoutSummary.completed_count 'runner-owned helper counts only completed arms'
+    Assert-Equal 0 $fanoutSummary.failed_count 'runner-owned helper reports zero failed arms in the success fixture'
+    Assert-Equal 0 $fanoutSummary.timed_out_count 'runner-owned helper reports zero timed out arms in the success fixture'
+    Assert-Equal 0 $fanoutSummary.cancelled_count 'runner-owned helper reports zero cancelled arms in the success fixture'
+    Assert-Equal 0 $fanoutSummary.incompatible_count 'runner-owned helper reports zero incompatible arms in the success fixture'
+    Assert-Equal 0 $fanoutSummary.evidence_validation_failed_count 'runner-owned helper reports zero evidence-validation failures in the success fixture'
     Assert-True ([int]$fanoutSummary.max_observed_active -gt 1) 'runner-owned helper reaches parallel active execution'
     $fanoutEvents = @(Get-Content -LiteralPath $fixtureLogPath | ForEach-Object { $_ | ConvertFrom-Json })
     Assert-Equal 12 $fanoutEvents.Count 'runner-owned fixture records six preflight and six execute events'
@@ -624,6 +632,9 @@ try {
     Assert-Equal 'passed' $fanoutState.preflight.status 'orchestration state records the passed preflight gate'
     Assert-Equal 'verified' ([string]$fanoutSummary.concurrency.status) 'runner-owned helper persists verified concurrency state'
     Assert-Equal 16 ([int]$fanoutSummary.concurrency.requested_concurrency) 'runner-owned helper preserves requested concurrency 16'
+    Assert-Equal 'passed' ([string]$fanoutSummary.arms[0].evidence_validation.status) 'runner-owned helper surfaces arm-level evidence validation state'
+    Assert-Equal 'with_skill' ([string]$fanoutSummary.arms[0].configuration) 'runner-owned helper preserves arm-level configuration'
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$fanoutSummary.arms[0].worker_session_id)) 'runner-owned helper preserves arm-level worker session ids'
     $fanoutWorkerIds = @($fanoutState.completed.PSObject.Properties.Name | Sort-Object)
     Assert-Equal 'arm-1-with_skill,arm-1-without_skill,arm-2-with_skill,arm-2-without_skill,arm-3-with_skill,arm-3-without_skill' ([string]::Join(',', $fanoutWorkerIds)) 'runner-owned helper preserves exact manifest plan worker IDs'
     foreach ($record in @(Get-ManifestRunRecords -IterationDirectory $fanoutPackage -Manifest (Read-RunnerJson -Path (Join-Path $fanoutPackage 'manifest.json')))) {
