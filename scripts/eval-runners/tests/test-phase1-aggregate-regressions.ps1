@@ -16,6 +16,7 @@ $runnerRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $runnerRoot 'runner-common.ps1')
 . (Join-Path $runnerRoot 'manifest-paths.ps1')
 . (Join-Path $runnerRoot 'execution-freeze.ps1')
+. (Join-Path $runnerRoot 'package-integrity.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -60,6 +61,19 @@ function Invoke-TestTool {
         ExitCode = $LASTEXITCODE
         Text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
     }
+}
+
+function Invoke-PhaseOneControllerUntilTerminal {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$IterationDirectory)
+
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $invocation = Invoke-TestTool -Path $Path -Arguments @('-IterationDirectory', $IterationDirectory, '-WaitSeconds', '1')
+        $document = $invocation.Text | ConvertFrom-Json -Depth 100
+        if ([string]$document.status -ne 'running') {
+            return [pscustomobject]@{ ExitCode = $invocation.ExitCode; Text = $invocation.Text; Document = $document }
+        }
+    }
+    throw "ASSERT: Phase 1 controller did not become terminal for '$IterationDirectory'."
 }
 
 function Assert-ToolFails {
@@ -208,6 +222,7 @@ function Initialize-PhaseOneFailurePackage {
         })
     }
 
+    $toolIntegrity = Get-PackageTreeIntegrity -Root $packageTools
     Write-TestJson -Path (Join-Path $IterationDirectory 'manifest.json') -Value ([ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         skill_name = 'phase1-aggregate-fixture'
@@ -215,6 +230,7 @@ function Initialize-PhaseOneFailurePackage {
         configurations = @('with_skill')
         execution_profile = 'execution-profile.json'
         runner_tools = 'tools/eval-runners'
+        runner_tools_integrity = [ordered]@{ schema = 'codebeltnet/agentic/package-tree-integrity/1'; path = 'tools/eval-runners'; sha256 = $toolIntegrity.Sha256; file_count = $toolIntegrity.FileCount }
         execution_freeze = 'execution-freeze.json'
         grading = 'grading.json'
         report = [ordered]@{ tool = 'tools/test-report.ps1' }
@@ -233,7 +249,7 @@ function Initialize-PhaseOneFailurePackage {
 
     return [pscustomobject]@{
         IterationDirectory = $IterationDirectory
-        FanoutScript = Join-Path $packageTools 'invoke-runner-owned-arms.ps1'
+        ControllerScript = Join-Path $packageTools 'control-runner-owned-phase1.ps1'
         BridgeScript = Join-Path $packageTools 'bridge-manifest-results.ps1'
         FinalizerScript = Join-Path $packageTools 'finalize-eval-package.ps1'
         LogPath = Join-Path $IterationDirectory 'runner-events.jsonl'
@@ -329,9 +345,10 @@ function Invoke-PhaseOneFailureScenario {
     $package = Initialize-PhaseOneFailurePackage -IterationDirectory $iterationDirectory -StatusesByEvalId $StatusesByEvalId -EvidenceFailureEvalIds $EvidenceFailureEvalIds
     [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_LOG', $package.LogPath)
 
-    $fanout = Invoke-TestTool -Path $package.FanoutScript -Arguments @('-IterationDirectory', $iterationDirectory)
+    $fanout = Invoke-PhaseOneControllerUntilTerminal -Path $package.ControllerScript -IterationDirectory $iterationDirectory
     Assert-Equal 2 $fanout.ExitCode "$ScenarioName Phase 1 exits non-zero"
-    $summary = $fanout.Text | ConvertFrom-Json -Depth 100
+    Assert-Equal 'failed' ([string]$fanout.Document.status) "$ScenarioName controller reports failed"
+    $summary = $fanout.Document.phase1_result
     Assert-Equal 'phase1' ([string](Get-JsonProperty -Object $summary -Name 'phase' -Default '')) "$ScenarioName summary identifies Phase 1"
     Assert-Equal 'failed' ([string](Get-JsonProperty -Object $summary -Name 'status' -Default '')) "$ScenarioName summary is non-success"
     Assert-Counts -Source $summary -Expected $ExpectedCounts -MessagePrefix "$ScenarioName summary"

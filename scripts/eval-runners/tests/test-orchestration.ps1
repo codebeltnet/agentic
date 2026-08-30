@@ -16,6 +16,7 @@ $runnerRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $runnerRoot 'runner-common.ps1')
 . (Join-Path $runnerRoot 'orchestration.ps1')
 . (Join-Path $runnerRoot 'fanout-process.ps1')
+. (Join-Path $runnerRoot 'package-integrity.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -33,6 +34,35 @@ function Write-TestJson {
     param([string]$Path, [object]$Value)
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     [System.IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+}
+
+function Invoke-PhaseOneControllerUntilTerminal {
+    param([Parameter(Mandatory = $true)][string]$IterationDirectory)
+
+    $controller = Join-Path $IterationDirectory 'tools/eval-runners/control-runner-owned-phase1.ps1'
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $output = & pwsh -NoProfile -File $controller -IterationDirectory $IterationDirectory -WaitSeconds 1 2>&1
+        $exitCode = $LASTEXITCODE
+        $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
+        $document = $text | ConvertFrom-Json -Depth 100
+        if ([string]$document.status -ne 'running') {
+            return [pscustomobject]@{ ExitCode = $exitCode; Text = $text; Document = $document }
+        }
+    }
+    throw "ASSERT: Phase 1 controller did not become terminal for '$IterationDirectory'."
+}
+
+function Remove-PhaseOnePackageState {
+    param([Parameter(Mandatory = $true)][string]$IterationDirectory)
+
+    foreach ($name in @(
+            'orchestration-state.json', 'execution-freeze.json', 'phase1-controller.lock',
+            'phase1-supervisor.json', 'phase1-supervisor-runtime.json', 'phase1-supervisor-result.json',
+            'phase1-fanout-invocation.json', 'phase1-supervisor.stdout.log', 'phase1-supervisor.stderr.log',
+            'phase1-supervisor.bootstrap.stdout.log', 'phase1-supervisor.bootstrap.stderr.log'
+        )) {
+        Remove-Item -LiteralPath (Join-Path $IterationDirectory $name) -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Copy-TestObject {
@@ -514,6 +544,7 @@ try {
     Assert-True (-not $fanoutText.Contains('Start-Process')) 'runner-owned helper no longer uses window-creating Start-Process for child dispatch'
     Assert-True ($fanoutText -notmatch '(?i)spawn[_ -]?agent|subagent|native-worker-result|with_skill.*worker_id|without_skill.*worker_id') 'runner-owned helper does not create outer subagents, synthetic envelopes, or derived worker IDs'
     Assert-True ($fanoutText -notmatch '(?i)(with[-_]skill|without[-_]skill)\.execution-result|execution_result\s*=\s*.*configuration') 'runner-owned helper does not reconstruct result filenames'
+    Assert-True ($fanoutText.Contains('Assert-RunnerOwnedFanoutAuthorization') -and $fanoutText.Contains('SupervisorId')) 'raw runner-owned fan-out is guarded by durable supervisor ownership'
 
     # Exercise the helper end-to-end with a deterministic runner-owned fixture.
     # The fixture is a protocol adapter only; it never calls a model or an AI
@@ -589,19 +620,22 @@ try {
         }
         $fanoutManifestEvals.Add([ordered]@{ eval_id = $evalId; eval_name = $evalName; directory = $evalName; metadata = "$evalName/eval-metadata.json"; runs = $runs })
     }
+    $fanoutToolIntegrity = Get-PackageTreeIntegrity -Root $fanoutTools
     Write-TestJson -Path (Join-Path $fanoutPackage 'manifest.json') -Value ([ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
         execution_profile = $fanoutProfileRelative
+        runner_tools = 'tools/eval-runners'
+        runner_tools_integrity = [ordered]@{ schema = 'codebeltnet/agentic/package-tree-integrity/1'; path = 'tools/eval-runners'; sha256 = $fanoutToolIntegrity.Sha256; file_count = $fanoutToolIntegrity.FileCount }
         execution_freeze = 'execution-freeze.json'
         evals = $fanoutManifestEvals.ToArray()
     })
-    $fanoutHelper = Join-Path $fanoutTools 'invoke-runner-owned-arms.ps1'
     $fixtureLogPath = Join-Path $testRoot 'runner-owned-events.jsonl'
     $env:AGENTIC_RUNNER_FIXTURE_LOG = $fixtureLogPath
-    $fanoutOutput = & pwsh -NoProfile -File $fanoutHelper -IterationDirectory $fanoutPackage 2>&1
-    Assert-Equal 0 $LASTEXITCODE ("deterministic runner-owned fan-out exits successfully; output: " + [string]::Join([Environment]::NewLine, @($fanoutOutput)))
-    $fanoutSummary = ([string]::Join([Environment]::NewLine, @($fanoutOutput)) | ConvertFrom-Json)
+    $fanoutControl = Invoke-PhaseOneControllerUntilTerminal -IterationDirectory $fanoutPackage
+    Assert-Equal 0 $fanoutControl.ExitCode ("deterministic runner-owned Phase 1 exits successfully; output: " + $fanoutControl.Text)
+    Assert-Equal 'completed' $fanoutControl.Document.status 'durable Phase 1 controller reports completion'
+    $fanoutSummary = $fanoutControl.Document.phase1_result
     Assert-Equal 'phase1' $fanoutSummary.phase 'deterministic runner-owned fan-out reports a Phase 1 summary'
     Assert-Equal 'completed' $fanoutSummary.status 'deterministic runner-owned fan-out completes six fixture arms'
     Assert-Equal 6 $fanoutSummary.expected_count 'runner-owned helper preserves the six-arm manifest count'
@@ -651,8 +685,7 @@ try {
     foreach ($executionResultFile in @(Get-ChildItem -LiteralPath $gatePackage -Recurse -File -Filter 'execution-result.json')) {
         Remove-Item -LiteralPath $executionResultFile.FullName -Force
     }
-    Remove-Item -LiteralPath (Join-Path $gatePackage 'orchestration-state.json') -Force
-    Remove-Item -LiteralPath (Join-Path $gatePackage 'execution-freeze.json') -Force
+    Remove-PhaseOnePackageState -IterationDirectory $gatePackage
     $gateInteraction = [ordered]@{
         schema = (Get-RunnerSchemaNames).Interaction
         mode = 'scripted'
@@ -673,10 +706,10 @@ try {
     [IO.File]::WriteAllText($gateMarker, 'fixture', [Text.UTF8Encoding]::new($false))
     $gateLogPath = Join-Path $testRoot 'runner-owned-gate-events.jsonl'
     $env:AGENTIC_RUNNER_FIXTURE_LOG = $gateLogPath
-    $gateOutput = & pwsh -NoProfile -File (Join-Path $gatePackage 'tools\eval-runners\invoke-runner-owned-arms.ps1') -IterationDirectory $gatePackage 2>&1
-    $gateExitCode = $LASTEXITCODE
-    Assert-Equal 2 $gateExitCode ("incompatible runner-owned preflight exits non-zero; output: " + [string]::Join([Environment]::NewLine, @($gateOutput)))
-    $gateSummary = ([string]::Join([Environment]::NewLine, @($gateOutput)) | ConvertFrom-Json)
+    $gateControl = Invoke-PhaseOneControllerUntilTerminal -IterationDirectory $gatePackage
+    Assert-Equal 2 $gateControl.ExitCode ("incompatible runner-owned preflight exits non-zero; output: " + $gateControl.Text)
+    Assert-Equal 'failed' $gateControl.Document.status 'controller reports incompatible preflight as failed'
+    $gateSummary = $gateControl.Document.phase1_result
     Assert-Equal 'preflight_incompatible' $gateSummary.status 'incompatible preflight stops before fan-out'
     Assert-Equal 6 $gateSummary.preflight_count 'incompatible gate still preflights every pending arm'
     Assert-Equal 1 $gateSummary.incompatible_count 'incompatible gate reports one failed arm'
@@ -808,7 +841,7 @@ try {
     foreach ($executionResultFile in @(Get-ChildItem -LiteralPath $syntheticStatePackage -Recurse -File -Filter 'execution-result.json')) {
         Remove-Item -LiteralPath $executionResultFile.FullName -Force
     }
-    Remove-Item -LiteralPath (Join-Path $syntheticStatePackage 'execution-freeze.json') -Force
+    Remove-PhaseOnePackageState -IterationDirectory $syntheticStatePackage
     Write-TestJson -Path (Join-Path $syntheticStatePackage 'orchestration-state.json') -Value ([ordered]@{
         schema = 'codebeltnet/agentic/eval-orchestration-state/1'
         dispatch_owner = 'orchestrator'
@@ -825,12 +858,11 @@ try {
     })
     $syntheticStateLog = Join-Path $testRoot 'runner-owned-synthetic-state-events.jsonl'
     $env:AGENTIC_RUNNER_FIXTURE_LOG = $syntheticStateLog
-    $syntheticStateOutput = & pwsh -NoProfile -File (Join-Path $syntheticStatePackage 'tools\eval-runners\invoke-runner-owned-arms.ps1') -IterationDirectory $syntheticStatePackage 2>&1
-    $syntheticStateExit = $LASTEXITCODE
-    Assert-Equal 2 $syntheticStateExit ("runner-owned fan-out rejects a pre-authored orchestration state; output: " + [string]::Join([Environment]::NewLine, @($syntheticStateOutput)))
-    $syntheticStateSummary = ([string]::Join([Environment]::NewLine, @($syntheticStateOutput)) | ConvertFrom-Json)
+    $syntheticStateControl = Invoke-PhaseOneControllerUntilTerminal -IterationDirectory $syntheticStatePackage
+    Assert-Equal 2 $syntheticStateControl.ExitCode ("Phase 1 controller rejects a pre-authored orchestration state; output: " + $syntheticStateControl.Text)
+    $syntheticStateSummary = $syntheticStateControl.Document
     Assert-Equal 'failed' $syntheticStateSummary.status 'synthetic concurrency state cannot drive a completed fan-out'
-    Assert-True ([string]$syntheticStateSummary.error -match 'refuses to replace an existing orchestration state') ("runner-owned fan-out explains it will not reuse a hand-authored orchestration state; error: " + [string]$syntheticStateSummary.error)
+    Assert-True ([string]$syntheticStateSummary.error -match 'Legacy/incomplete orchestration-state.json') ("Phase 1 controller fails closed on unowned legacy state; error: " + [string]$syntheticStateSummary.error)
     Assert-Equal 0 @(Get-ChildItem -LiteralPath $syntheticStatePackage -Recurse -File -Filter 'execution-result.json').Count 'synthetic concurrency rejection starts zero real executions'
 
     Write-Output 'Native worker orchestration: PASS'

@@ -35,13 +35,17 @@ function Get-PackageRunnerDescriptor {
         throw "Package-local runner '$RunnerName' is missing its runner.ps1 descriptor."
     }
 
-    $descriptorOutput = & pwsh -NoProfile -File $runnerPath describe 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Package-local runner '$RunnerName' descriptor failed: $([string]::Join(' ', @($descriptorOutput)))"
+    $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
+    $descriptorProcess = Invoke-RunnerProcess -FileName $pwshPath -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $runnerPath, 'describe') -WorkingDirectory $PSScriptRoot -Environment (New-RunnerProbeEnvironment) -TimeoutSeconds 30
+    if ($descriptorProcess.TimedOut) {
+        throw "Package-local runner '$RunnerName' descriptor exceeded the 30-second model-free probe timeout."
+    }
+    if ($descriptorProcess.ExitCode -ne 0) {
+        throw "Package-local runner '$RunnerName' descriptor failed: $([string]::Join(' ', @($descriptorProcess.Stdout, $descriptorProcess.Stderr)))"
     }
 
     try {
-        $descriptor = [string]::Join([Environment]::NewLine, @($descriptorOutput)) | ConvertFrom-Json
+        $descriptor = [string]$descriptorProcess.Stdout | ConvertFrom-Json
         [void](Assert-RunnerDescriptor -Descriptor $descriptor)
     } catch {
         throw "Package-local runner '$RunnerName' returned an invalid descriptor: $($_.Exception.Message)"

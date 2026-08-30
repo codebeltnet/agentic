@@ -19,6 +19,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 . (Join-Path $runnerRoot 'runner-common.ps1')
 . (Join-Path $runnerRoot 'manifest-paths.ps1')
 . (Join-Path $runnerRoot 'execution-freeze.ps1')
+. (Join-Path $runnerRoot 'package-integrity.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -89,7 +90,7 @@ function Invoke-GeneratedRunnerPrompt {
             ) }
         })
         $manifestEval = [pscustomobject]@{ metadata = 'eval-01/eval-metadata.json' }
-        return New-RunnerPrompt -IterationDirectory $generatedRoot -IterationNumber 1 -ManifestEvals @($manifestEval) -ExecutionSelection $selection -RequestedConcurrency 2 -PerArmTimeoutSeconds 7 -RunnerGraceSeconds 3
+        return New-RunnerPrompt -IterationDirectory $generatedRoot -IterationNumber 1 -ManifestEvals @($manifestEval) -ExecutionSelection $selection
     } finally {
         if (Test-Path -LiteralPath $generatedRoot) { Remove-Item -LiteralPath $generatedRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -2160,6 +2161,8 @@ try {
     $recordText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'record-native-result.ps1'), [System.Text.UTF8Encoding]::new($false))
     $manifestBridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-manifest-results.ps1'), [System.Text.UTF8Encoding]::new($false))
     $runnerOwnedText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'invoke-runner-owned-arms.ps1'), [System.Text.UTF8Encoding]::new($false))
+    $controllerText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'control-runner-owned-phase1.ps1'), [System.Text.UTF8Encoding]::new($false))
+    $supervisorText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'supervise-runner-owned-phase1.ps1'), [System.Text.UTF8Encoding]::new($false))
     $commonText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'runner-common.ps1'), [System.Text.UTF8Encoding]::new($false))
     $orchestrationText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'orchestration.ps1'), [System.Text.UTF8Encoding]::new($false))
     $opencodeRunnerText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'opencode/runner.ps1'), [System.Text.UTF8Encoding]::new($false))
@@ -2168,7 +2171,7 @@ try {
     Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
     Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
     Assert-True ($prepareText.Contains('execution-freeze.json') -and $prepareText.Contains('grading.json') -and $prepareText.Contains('apply-eval-grading.ps1') -and $prepareText.Contains('finalize-eval-package.ps1')) 'handoff preparation must expose the shared freeze, grading, and finalization boundaries'
-    Assert-True ($prepareText.Contains('Read the selected runner descriptor and its `delegation.dispatch_owner`.') -and $prepareText.Contains('invoke this deterministic helper exactly once')) 'handoff preparation must make native dispatch ownership and one-shot Phase 1 explicit'
+    Assert-True ($prepareText.Contains('Read the selected runner descriptor and its `delegation.dispatch_owner`.') -and $prepareText.Contains('control-runner-owned-phase1.ps1') -and $prepareText.Contains('SAME controller command again')) 'handoff preparation must expose bounded, repeatable Phase 1 control'
     Assert-True ($prepareText.Contains('Do not create outer workers') -and $prepareText.Contains('edit raw result/evidence files')) 'handoff preparation must forbid outer runner-owned workers and raw evidence edits'
     Assert-True ($prepareText.Contains('The Grader may author exactly one package-root `grading.json`') -and $prepareText.Contains('It must not edit raw execution results')) 'handoff preparation must isolate the Grader to the grading-only artifact'
     Assert-True ($prepareText.Contains('Return only its machine-readable JSON summary') -and $prepareText.Contains('Never repair, re-freeze, re-bridge a changed raw result')) 'handoff preparation must make finalizer success and fail-closed recovery explicit'
@@ -2176,13 +2179,16 @@ try {
     Assert-True ($prepareText.Contains('fresh package/code fix is required') -and $prepareText.Contains('Never patch package-local runner code') -and $prepareText.Contains('delete execution results') -and $prepareText.Contains('delete or replace `execution-freeze.json`') -and $prepareText.Contains('rerun Phase 1') -and $prepareText.Contains('manually broaden a capability check')) 'generated handoff must forbid package-local repair, state deletion, retry, and manual capability broadening'
     $generatedHandoff = Invoke-GeneratedRunnerPrompt
     Assert-True ($generatedHandoff.Contains('evaluation is incomplete and a fresh package/code fix is required') -and $generatedHandoff.Contains('Never patch package-local runner code') -and $generatedHandoff.Contains('delete orchestration state') -and $generatedHandoff.Contains('delete execution results') -and $generatedHandoff.Contains('delete or replace `execution-freeze.json`') -and $generatedHandoff.Contains('rerun Phase 1') -and $generatedHandoff.Contains('manually broaden a capability check')) 'generated handoff output forbids package-local repair, state deletion, retry, and manual capability broadening'
-    Assert-True ($generatedHandoff.Contains('allowance of 260 seconds (240-second serial preflight allowance for 2 arm(s) at the max(120, profile.timeout_seconds + runner grace) policy + 17-second longest child allowance + 3-second orchestration grace)') -and $generatedHandoff.Contains('not a default 120-second timeout') -and $generatedHandoff.Contains('must be started exactly once for this iteration') -and $generatedHandoff.Contains('if the original supervisor is alive, wait')) 'generated handoff computes serial preflight plus longest child allowance and no-rerun recovery'
+    Assert-True ($generatedHandoff.Contains('control-runner-owned-phase1.ps1') -and $generatedHandoff.Contains('-WaitSeconds 30') -and $generatedHandoff.Contains('SAME controller command again') -and $generatedHandoff.Contains('safe and idempotent') -and $generatedHandoff.Contains('caller/tool timeout or interrupted conversation does not authorize a second supervisor')) 'generated handoff exposes only bounded, idempotent Phase 1 observation'
+    Assert-True (-not $generatedHandoff.Contains('package-computed allowance') -and -not $generatedHandoff.Contains('not a default 120-second timeout')) 'generated handoff contains no long caller-timeout arithmetic'
     Assert-True ($prepareText -notmatch '(?i)runs\.<arm>|record-native-result\.ps1|Assert-NativeWorkerDelegation|Assert-OrchestrationConcurrency|capture\.worker_authored') 'runner-owned handoff must not teach manual orchestration, recorder, or evidence repair trivia'
     Assert-True ($bridgeText.Contains('Get-PackageRunnerDescriptor') -and $bridgeText.Contains('Assert-NativeTerminalCaptureArtifact') -and $bridgeText.Contains('ExpectedMechanism')) 'native bridge must require runner-produced terminal evidence'
     Assert-True ($recordText.Contains('eval-native-worker-result/1') -and $recordText.Contains('New-ExecutionResult')) 'native terminal recording must use the runner-owned result builder'
     Assert-True ($commonText.Contains('exit.status must be a JSON number or null')) 'execution results must reject textual exit statuses'
     Assert-True ($commonText.Contains('requested.timeout_seconds') -and $commonText.Contains('execution-result.json run.$field')) 'raw execution results must retain the complete run and requested configuration contract'
     Assert-True ($runnerOwnedText.Contains('Invoke-RunnerPreflight') -and $runnerOwnedText.Contains('Get-PreflightGateSummary') -and $runnerOwnedText.Contains('execution_started = $false')) 'runner-owned helper must gate all execute processes behind deterministic preflight'
+    Assert-True ($runnerOwnedText.Contains('return 120') -and $runnerOwnedText -notmatch 'Get-RunnerPreflightTimeoutSeconds\s*\{[^}]*ProfileTimeoutSeconds') 'runner-owned preflight uses an independent deterministic timeout'
+    Assert-True ($runnerOwnedText.Contains('Assert-RunnerOwnedFanoutAuthorization') -and $controllerText.Contains('runner-owned-phase1-control/1') -and $supervisorText.Contains('AGENTIC_PHASE1_SUPERVISOR_ID')) 'durable controller owns and authorizes the one internal fan-out invocation'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
     Assert-True ($manifestBridgeText.Contains('Get-ManifestRunRecords') -and $manifestBridgeText.Contains('$record.ResultPath')) 'package-level bridge must resolve exact manifest records'
@@ -2406,6 +2412,11 @@ try {
     $manifestPackage = Join-Path $iteration 'manifest-path-regression'
     $manifestEval = Join-Path $manifestPackage 'conformance'
     New-Item -ItemType Directory -Path $manifestEval -Force | Out-Null
+    $manifestPackageTools = Join-Path $manifestPackage 'tools/eval-runners'
+    New-Item -ItemType Directory -Path $manifestPackageTools -Force | Out-Null
+    foreach ($toolItem in @(Get-ChildItem -LiteralPath $runnerRoot -Force | Where-Object { $_.Name -ne 'tests' })) {
+        Copy-Item -LiteralPath $toolItem.FullName -Destination $manifestPackageTools -Recurse -Force
+    }
     $manifestWith = New-TestRun -IterationDirectory $manifestPackage -Configuration with_skill -EvalName 'manifest-path-regression'
     $manifestWithout = New-TestRun -IterationDirectory $manifestPackage -Configuration without_skill -EvalName 'manifest-path-regression'
     $manifestMetadataPath = Join-Path $manifestEval 'eval-metadata.json'
@@ -2432,9 +2443,12 @@ try {
             )
         })
     }
+    $manifestToolIntegrity = Get-PackageTreeIntegrity -Root $manifestPackageTools
     $manifest = [ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
+        runner_tools = 'tools/eval-runners'
+        runner_tools_integrity = [ordered]@{ schema = 'codebeltnet/agentic/package-tree-integrity/1'; path = 'tools/eval-runners'; sha256 = $manifestToolIntegrity.Sha256; file_count = $manifestToolIntegrity.FileCount }
         execution_freeze = 'execution-freeze.json'
         evals = @([ordered]@{
             eval_id = 1
@@ -2525,7 +2539,7 @@ try {
         execution_status = 'completed'
         grading = @()
     })
-    $manifestBridgePath = Join-Path $runnerRoot 'bridge-manifest-results.ps1'
+    $manifestBridgePath = Join-Path $manifestPackageTools 'bridge-manifest-results.ps1'
     $shadowOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete 2>&1
     $shadowExitCode = $LASTEXITCODE
     Assert-True ($shadowExitCode -ne 0) 'manifest bridge rejects an unreferenced underscore shadow result'

@@ -28,6 +28,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'orchestration.ps1')
 . (Join-Path $PSScriptRoot 'execution-freeze.ps1')
+. (Join-Path $PSScriptRoot 'package-integrity.ps1')
 
 try {
     $iterationPath = (Resolve-Path -LiteralPath $IterationDirectory -ErrorAction Stop).Path
@@ -37,6 +38,7 @@ try {
     }
 
     $manifest = Read-RunnerJson -Path $manifestPath
+    [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iterationPath -Manifest $manifest)
     $records = @(Get-ManifestRunRecords -IterationDirectory $iterationPath -Manifest $manifest)
     # Validate the complete immutable Phase 1 ledger before any one-arm bridge
     # can write a canonical result. This is deliberately read-only: a changed

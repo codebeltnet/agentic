@@ -22,6 +22,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'orchestration.ps1')
 . (Join-Path $PSScriptRoot 'execution-freeze.ps1')
+. (Join-Path $PSScriptRoot 'package-integrity.ps1')
 
 function Invoke-FinalizerCommand {
     param(
@@ -113,6 +114,7 @@ try {
     $manifestPath = Join-Path $iteration 'manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Finalization failed: manifest.json is missing.' }
     $manifest = Read-RunnerJson -Path $manifestPath
+    [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iteration -Manifest $manifest)
     $declaredGradingPath = [string](Get-JsonProperty -Object $manifest -Name 'grading' -Default '')
     if ([string]::IsNullOrWhiteSpace($declaredGradingPath) -or $declaredGradingPath -ne $GradingPath) {
         throw "Finalization failed: grading path '$GradingPath' does not match manifest.grading '$declaredGradingPath'."

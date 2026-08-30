@@ -3,15 +3,17 @@
     Deterministically fans out runner-owned native Eval Worker arms.
 
 .DESCRIPTION
-    This helper is an external-handoff surface only. It does not run during
-    preparation, validation, CI, hooks, or reporting. It starts the selected
-    package-local runner once per manifest arm, redirects each runner's sole
-    JSON stdout directly to the manifest-declared execution_result path, and
-    owns acceptance/terminal registration and orchestration state.
+    This internal helper is invoked exactly once by the durable Phase 1
+    supervisor. It does not run during preparation, validation, CI, hooks, or
+    reporting. It starts the selected package-local runner once per manifest
+    arm, redirects each runner's sole JSON stdout directly to the
+    manifest-declared execution_result path, and owns acceptance/terminal
+    registration and orchestration state.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$IterationDirectory
+    [Parameter(Mandatory = $true)][string]$IterationDirectory,
+    [string]$SupervisorId
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +25,12 @@ $iteration = (Resolve-Path -LiteralPath $IterationDirectory -ErrorAction Stop).P
 . (Join-Path $PSScriptRoot 'orchestration.ps1')
 . (Join-Path $PSScriptRoot 'fanout-process.ps1')
 . (Join-Path $PSScriptRoot 'execution-freeze.ps1')
+. (Join-Path $PSScriptRoot 'package-integrity.ps1')
+. (Join-Path $PSScriptRoot 'phase1-control-common.ps1')
+
+# This guard runs before manifest inspection, preflight, orchestration-state
+# creation, or execution. The raw fan-out is not an external recovery surface.
+[void](Assert-RunnerOwnedFanoutAuthorization -IterationDirectory $iteration -SupervisorId $SupervisorId)
 
 function Write-FanoutSummary {
     param(
@@ -103,16 +111,16 @@ function Invoke-RunnerPreflight {
 }
 
 function Get-RunnerGraceSeconds {
-    # This is the runner-child watchdog grace advertised in the generated
-    # handoff. Process termination and stream drains have their own smaller,
-    # finite bounds in the process helpers.
+    # This is internal runner-child watchdog grace. The external controller
+    # never waits for this model-execution allowance. Process termination and
+    # stream drains have their own smaller, finite bounds in the helpers.
     return 30
 }
 
 function Get-RunnerPreflightTimeoutSeconds {
-    param([Parameter(Mandatory = $true)][int]$ProfileTimeoutSeconds)
-
-    return [Math]::Max(120, [Math]::Max(1, $ProfileTimeoutSeconds) + (Get-RunnerGraceSeconds))
+    # Preflight is a model-free capability probe. Its watchdog is deliberately
+    # independent of the model execution allowance in execution-profile.json.
+    return 120
 }
 
 function Get-RunnerRunTurnCount {
@@ -342,7 +350,7 @@ try {
     $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $manifest)
     $preflightRecords = [System.Collections.Generic.List[object]]::new()
     foreach ($record in $manifestRecords) {
-        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path) -TimeoutSeconds (Get-RunnerPreflightTimeoutSeconds -ProfileTimeoutSeconds ([int]$profile.TimeoutSeconds))
+        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path) -TimeoutSeconds (Get-RunnerPreflightTimeoutSeconds)
         $preflightRecords.Add((New-PreflightWorkerSummary -Record $record -Invocation $invocation -Descriptor $descriptor))
     }
     $failedPreflights = @($preflightRecords | Where-Object { [string]$_.status -ne 'compatible' })

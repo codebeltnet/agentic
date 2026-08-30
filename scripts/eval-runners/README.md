@@ -13,9 +13,8 @@ Eval Orchestrator
     +-- ...
 ```
 
-The Eval Orchestrator coordinates the manifest queue, native child creation,
-terminal evidence, exact manifest destinations, and the phase boundary. It
-does not execute an eval arm in its own model context. Each descriptor declares
+The Eval Orchestrator observes the phase boundary and does not execute an eval
+arm in its own model context. Each descriptor declares
 `delegation.dispatch_owner`: `orchestrator` means the orchestrator creates the
 declared native subagent/task, while `runner` means the orchestrator starts the
 runner-owned native execution surface directly. One arm equals one fresh
@@ -38,13 +37,35 @@ when terminal evidence will be checked. The dispatch owner is part of the
 same descriptor/preflight contract, so generic orchestration does not infer it
 from a runner name.
 
-For `delegation.dispatch_owner=runner`, the external handoff invokes
-`invoke-runner-owned-arms.ps1` as the complete deterministic Phase 1 boundary.
-It reads the manifest/profile, resolves the runner and descriptor, requires
+For `delegation.dispatch_owner=runner`, the external handoff invokes the short,
+idempotent `control-runner-owned-phase1.ps1` boundary with `WaitSeconds` from 0
+through 60. The first call atomically creates one unpredictable supervisor
+identity and starts `supervise-runner-owned-phase1.ps1` as a package-local,
+headless background process. Later calls validate the same supervisor id, PID,
+process start time, executable identity, manifest/profile hashes, and packaged
+tool-tree hash. They observe it or return its final result; they never dispatch
+a replacement. The controller returns `running` with exit 0 while work remains,
+`completed` with exit 0 only after the exact Phase 1 aggregate and immutable
+freeze validate, and `failed` with exit 2 otherwise.
+
+The durable supervisor is the only process authorized to invoke
+`invoke-runner-owned-arms.ps1`. It persists its runtime identity immediately,
+invokes fan-out exactly once, owns that process and its child stdout/stderr pipe
+lifetimes until all work is terminal, captures fan-out logs in package-local
+files, and atomically writes its final result. The raw helper rejects a missing
+or mismatched supervisor identity before creating orchestration state or
+preflighting an arm. A dead supervisor without a valid final result is terminal
+failure and requires a fresh package; Phase 1 is never restarted or adopted.
+Legacy/incomplete orchestration state without controller ownership is likewise
+rejected.
+
+The internal fan-out reads the manifest/profile, resolves the runner and descriptor, requires
 `delegation.dispatch_owner=runner`, preflights every pending manifest run, and
 invokes `Assert-NativeWorkerDelegation` for every preflight result. Any
 incompatible preflight produces a concise machine-readable summary, starts zero
-`execute` processes, and exits non-zero. Only after every preflight passes does
+`execute` processes, and exits non-zero. Preflight has its own deterministic
+120-second model-free capability-probe timeout; it does not inherit the model
+execution timeout. Only after every preflight passes does
 it use the exact orchestration-plan worker IDs and manifest-declared
 execution-result paths, start runner-owned `execute` processes concurrently,
 redirect each process's single JSON stdout directly to its declared path,
@@ -54,11 +75,14 @@ processes are headless isolation boundaries: they start through
 `fanout-process.ps1` with `CreateNoWindow` so no per-child console window
 appears on Windows, and a freed slot is refilled as soon as ANY child completes
 (not only the oldest), so a slow eval execution never blocks a faster sibling.
-It is not called by preparation, validation, CI, hooks, or automatic completion
-gates.
+The background start uses no caller-owned asynchronous output copy and the
+supervisor's standard streams are package-local, so a controller exit, caller
+tool timeout, or interrupted conversation cannot terminate healthy Phase 1
+work. It is not called by preparation, validation, CI, hooks, or automatic
+completion gates.
 Behavioral evaluation for GitHub Copilot, Codex, and OpenCode is runner-owned:
 each declares `delegation.dispatch_owner=runner`, is driven by
-`invoke-runner-owned-arms.ps1`, and produces its own terminal
+the controller-owned durable supervisor and its one internal fan-out, and produces its own terminal
 `execution-result.json`. The orchestrator-owned envelope and
 `record-native-result.ps1` remain available for any runner that still declares
 `dispatch_owner=orchestrator` (for example the deterministic conformance fake).
@@ -157,7 +181,7 @@ Native delegation mechanisms:
   events as terminal evidence. Scripted interactions use only help-proven
   `--session <exact-session-id>` continuation after turn 1; `--continue` is
   never used. Parallelism comes from the deterministic
-  runner-owned process fan-out (`invoke-runner-owned-arms.ps1`), not from an
+  supervisor-owned internal process fan-out (`invoke-runner-owned-arms.ps1`), not from an
   orchestrator emitting sibling Task calls in one assistant turn. OpenCode's
   native Task/General subagent (and read-only `Explore`/`Scout`) remain
   advertised harness capabilities but are not the benchmark transport.

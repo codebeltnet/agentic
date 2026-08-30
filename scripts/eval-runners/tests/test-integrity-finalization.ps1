@@ -21,6 +21,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $runnerRoot '..')).Path
 . (Join-Path $runnerRoot 'manifest-paths.ps1')
 . (Join-Path $runnerRoot 'orchestration.ps1')
 . (Join-Path $runnerRoot 'execution-freeze.ps1')
+. (Join-Path $runnerRoot 'package-integrity.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -65,6 +66,19 @@ function Invoke-TestTool {
         ExitCode = $exitCode
         Text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
     }
+}
+
+function Invoke-PhaseOneControllerUntilTerminal {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$IterationDirectory)
+
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $invocation = Invoke-TestTool -Path $Path -Arguments @('-IterationDirectory', $IterationDirectory, '-WaitSeconds', '1')
+        $document = $invocation.Text | ConvertFrom-Json -Depth 100
+        if ([string]$document.status -ne 'running') {
+            return [pscustomobject]@{ ExitCode = $invocation.ExitCode; Text = $invocation.Text; Document = $document }
+        }
+    }
+    throw "ASSERT: Phase 1 controller did not become terminal for '$IterationDirectory'."
 }
 
 function Assert-ToolPasses {
@@ -269,11 +283,13 @@ for ($index = 0; $index -lt $count; $index++) {
         })
     }
 
+    $toolIntegrity = Get-PackageTreeIntegrity -Root $packageTools
     $manifest = [ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
         execution_profile = 'execution-profile.json'
         runner_tools = 'tools/eval-runners'
+        runner_tools_integrity = [ordered]@{ schema = 'codebeltnet/agentic/package-tree-integrity/1'; path = 'tools/eval-runners'; sha256 = $toolIntegrity.Sha256; file_count = $toolIntegrity.FileCount }
         execution_freeze = 'execution-freeze.json'
         grading = 'grading.json'
         report = [ordered]@{ tool = 'tools/test-report.ps1' }
@@ -292,10 +308,11 @@ for ($index = 0; $index -lt $count; $index++) {
     Write-TestJson -Path (Join-Path $iteration 'manifest.json') -Value $manifest
     Write-TestJson -Path (Join-Path $iteration 'execution-profile.json') -Value $profile
 
-    $fanoutScript = Join-Path $packageTools 'invoke-runner-owned-arms.ps1'
-    $fanout = Invoke-TestTool -Path $fanoutScript -Arguments @('-IterationDirectory', $iteration)
+    $controllerScript = Join-Path $packageTools 'control-runner-owned-phase1.ps1'
+    $fanout = Invoke-PhaseOneControllerUntilTerminal -Path $controllerScript -IterationDirectory $iteration
     Assert-ToolPasses -Invocation $fanout -Description 'runner-owned fixture Phase 1'
-    $fanoutSummary = $fanout.Text | ConvertFrom-Json -Depth 100
+    Assert-Equal 'completed' $fanout.Document.status 'Phase 1 controller reports completed'
+    $fanoutSummary = $fanout.Document.phase1_result
     Assert-Equal 'completed' $fanoutSummary.status 'six deterministic fixture arms complete'
     Assert-Equal 6 $fanoutSummary.execution_count 'six raw execution results are registered'
     Assert-True (Test-Path -LiteralPath (Join-Path $iteration 'execution-freeze.json') -PathType Leaf) 'Phase 1 writes an execution freeze'
