@@ -71,7 +71,8 @@
     Per-arm runner timeout. Defaults to 900 seconds.
 
 .PARAMETER Concurrency
-    Requested external-orchestrator concurrency. Defaults to 16. It does not change paired-arm semantics.
+    Requested concurrency. Defaults to 16 for Codex and GitHub Copilot. OpenCode defaults to 2 when this parameter is
+    omitted; an explicitly bound value is always honored. It does not change paired-arm semantics.
 
 .PARAMETER Changed
     Prepares a package for every repo-managed skill this branch changed, including uncommitted work. This is the form
@@ -706,7 +707,10 @@ function New-ResultStub {
 }
 
 function New-ExecutionProfile {
-    param([Parameter(Mandatory = $true)][object]$ExecutionSelection)
+    param(
+        [Parameter(Mandatory = $true)][object]$ExecutionSelection,
+        [Parameter(Mandatory = $true)][int]$EffectiveConcurrency
+    )
 
     return [ordered]@{
         schema = $executionProfileSchema
@@ -716,7 +720,24 @@ function New-ExecutionProfile {
         configuration_profile = $ConfigurationProfile
         tool_profile = $ToolProfile
         timeout_seconds = $TimeoutSeconds
-        concurrency = $Concurrency
+        concurrency = $EffectiveConcurrency
+    }
+}
+
+function Resolve-EffectiveConcurrency {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunnerName,
+        [Parameter(Mandatory = $true)][int]$RequestedConcurrency,
+        [Parameter(Mandatory = $true)][bool]$ConcurrencyWasExplicit
+    )
+
+    if ($RunnerName -eq 'opencode' -and -not $ConcurrencyWasExplicit) {
+        return [pscustomobject]@{ Value = 2; Source = 'OpenCode safe default'; Explicit = $false }
+    }
+    return [pscustomobject]@{
+        Value = $RequestedConcurrency
+        Source = if ($ConcurrencyWasExplicit) { 'explicit -Concurrency' } else { 'repository default' }
+        Explicit = $ConcurrencyWasExplicit
     }
 }
 
@@ -1322,6 +1343,7 @@ function Invoke-PrepareMode {
     }
 
     $executionSelection = Resolve-ExecutionSelection -RepoRoot $repoRoot
+    $effectiveConcurrency = Resolve-EffectiveConcurrency -RunnerName ([string]$executionSelection.Runner) -RequestedConcurrency $Concurrency -ConcurrencyWasExplicit ($scriptBoundParameters.ContainsKey('Concurrency'))
 
     $workspaceRoot = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
         Join-Path (Join-Path $repoRoot '.bot') "$Skill-workspace"
@@ -1356,8 +1378,14 @@ function Invoke-PrepareMode {
     [void](Copy-ReportTool -RepoRoot $repoRoot -IterationDirectory $iterationDirectory)
     $skillCreatorSourcePath = Resolve-SkillCreatorSourcePath -RequestedPath $null
     [void](Copy-SkillCreatorEvalTools -IterationDirectory $iterationDirectory -SourcePath $skillCreatorSourcePath)
-    [void](Copy-EvalRunnerTools -RepoRoot $repoRoot -IterationDirectory $iterationDirectory)
-    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'execution-profile.json') -Value (New-ExecutionProfile -ExecutionSelection $executionSelection)
+    $copiedRunnerTools = Copy-EvalRunnerTools -RepoRoot $repoRoot -IterationDirectory $iterationDirectory
+    $runnerToolsIntegrity = [ordered]@{
+        schema = 'codebeltnet/agentic/package-tree-integrity/1'
+        path = $evalRunnerToolRelativePath
+        sha256 = Get-TreeHash -Root $copiedRunnerTools
+        file_count = @(Get-ChildItem -LiteralPath $copiedRunnerTools -Recurse -File -Force).Count
+    }
+    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'execution-profile.json') -Value (New-ExecutionProfile -ExecutionSelection $executionSelection -EffectiveConcurrency ([int]$effectiveConcurrency.Value))
 
     $skillText = [System.IO.File]::ReadAllText($skillMarkdownPath, $utf8NoBom)
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
@@ -1578,6 +1606,7 @@ function Invoke-PrepareMode {
         execution_profile = 'execution-profile.json'
         runner_protocol = $runnerProtocolSchema
         runner_tools = $evalRunnerToolRelativePath
+        runner_tools_integrity = $runnerToolsIntegrity
         execution_result_schema = $executionResultSchema
         execution_freeze = 'execution-freeze.json'
         grading = 'grading.json'
@@ -1624,9 +1653,9 @@ function Invoke-PrepareMode {
     }
     ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'manifest.json') -Value $manifest
 
-    Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals))
+    Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -EffectiveConcurrency $effectiveConcurrency)
     $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
-    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -RequestedConcurrency $Concurrency -PerArmTimeoutSeconds $TimeoutSeconds -RunnerGraceSeconds 30)
+    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection)
 
     Write-Host 'Evaluation package prepared.'
     Write-Host ''
@@ -1634,6 +1663,8 @@ function Invoke-PrepareMode {
     Write-Host "  Harness: $($executionSelection.Harness)"
     Write-Host "  Runner:  $($executionSelection.Runner)"
     Write-Host "  Model:   $($executionSelection.Model)"
+    Write-Host "  Timeout: $TimeoutSeconds seconds"
+    Write-Host "  Concurrency: $($effectiveConcurrency.Value) ($($effectiveConcurrency.Source))"
     if (-not [string]::IsNullOrWhiteSpace([string]$executionSelection.Preset)) {
         Write-Host "  Preset:  $($executionSelection.Preset)"
     }
@@ -1656,7 +1687,7 @@ function Invoke-PrepareMode {
     Write-Host ''
     Write-Host 'The runner-aware handoff uses execution-profile.json, the package-local Eval Runner protocol,'
     Write-Host 'and its deterministic native-worker orchestration plan.'
-    Write-Host 'The selected external orchestrator must honor each runner descriptor''s dispatch_owner: orchestrator-owned native workers stay delegated, while runner-owned transports are started directly as the one-arm Eval Workers.'
+    Write-Host 'The selected external orchestrator must honor each runner descriptor''s dispatch_owner: orchestrator-owned native workers stay delegated, while runner-owned transports are owned by one durable background Phase 1 supervisor observed through bounded controller calls.'
     Write-Host 'The orchestrator coordinates; it must not execute an eval arm in its own model context or nest a runner-owned model execution inside another worker.'
     Write-Host 'Independent workers run concurrently up to execution-profile.json.concurrency; harness capacity remains authoritative.'
     Write-Host ''
@@ -1671,38 +1702,14 @@ function New-RunnerPrompt {
         [string]$IterationDirectory,
         [int]$IterationNumber,
         [object[]]$ManifestEvals,
-        [Parameter(Mandatory = $true)][object]$ExecutionSelection,
-        [Parameter(Mandatory = $true)][int]$RequestedConcurrency,
-        [int]$PerArmTimeoutSeconds = 900,
-        [int]$RunnerGraceSeconds = 30
+        [Parameter(Mandatory = $true)][object]$ExecutionSelection
     )
 
     $builder = [System.Text.StringBuilder]::new()
     $profilePath = Join-Path $IterationDirectory 'execution-profile.json'
-    $runnerOwnedFanoutPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1"
+    $runnerOwnedControllerPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/control-runner-owned-phase1.ps1"
     $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
     $finalizerPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
-    $maxScriptedUserTurns = 1
-    foreach ($manifestEval in @($ManifestEvals)) {
-        $metadataPath = Join-Path $IterationDirectory ([string](Get-JsonProperty -Object $manifestEval -Name 'metadata' -Default ''))
-        if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
-            try {
-                $metadata = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
-                $turns = @(Get-JsonProperty -Object (Get-JsonProperty -Object $metadata -Name 'interaction' -Default $null) -Name 'turns' -Default @())
-                if ($turns.Count -gt $maxScriptedUserTurns) { $maxScriptedUserTurns = $turns.Count }
-            } catch {
-                # Prompt generation remains usable for the unit-test helper,
-                # while real packages already validate metadata before this
-                # function is called.
-            }
-        }
-    }
-    $armCount = [Math]::Max(1, @($ManifestEvals).Count * 2)
-    $preflightTimeoutSeconds = [Math]::Max(120, [Math]::Max(1, $PerArmTimeoutSeconds) + [Math]::Max(0, $RunnerGraceSeconds))
-    $serialPreflightAllowanceSeconds = $armCount * $preflightTimeoutSeconds
-    $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + [Math]::Max(0, $RunnerGraceSeconds)
-    $orchestrationGraceSeconds = [Math]::Max(1, $RunnerGraceSeconds)
-    $phaseOneAllowanceSeconds = $serialPreflightAllowanceSeconds + $longestChildAllowanceSeconds + $orchestrationGraceSeconds
     [void]$builder.AppendLine('# Execute, grade, and report this evaluation package')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('START NOW. You are the external Eval Orchestrator for this user-directed handoff. Do not execute an eval prompt in your own context. The repository preparation and validation flow remain model-free.')
@@ -1712,17 +1719,17 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 1 — blind execution')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine(("Phase 1 is a long-running command. Set the caller shell/tool timeout to the package-computed allowance of {0} seconds ({1}-second serial preflight allowance for {2} arm(s) at the max(120, profile.timeout_seconds + runner grace) policy + {3}-second longest child allowance + {4}-second orchestration grace), not a default 120-second timeout." -f $phaseOneAllowanceSeconds, $serialPreflightAllowanceSeconds, $armCount, $longestChildAllowanceSeconds, $orchestrationGraceSeconds))
-    [void]$builder.AppendLine('A caller-side shell timeout is NOT permission to invoke Phase 1 again. `invoke-runner-owned-arms.ps1` must be started exactly once for this iteration. If the caller times out, do not rerun it: inspect process/orchestration state read-only; if the original supervisor is alive, wait; if it is gone and no execution freeze exists, mark the package incomplete and require a fresh iteration.')
+    [void]$builder.AppendLine('For `delegation.dispatch_owner=runner`, invoke the package-local Phase 1 controller with `WaitSeconds` no greater than 60. The call is bounded and returns one JSON status: `running`, `completed`, or `failed`.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke this deterministic helper exactly once:')
-    [void]$builder.AppendLine("pwsh -NoProfile -File `"$runnerOwnedFanoutPath`" -IterationDirectory `"$IterationDirectory`"")
-    [void]$builder.AppendLine('It performs every preflight before any execute process, preserves exact manifest paths, owns concurrency/backpressure and terminal registration, and writes `execution-freeze.json` before Phase 2. Consume its JSON summary. If Phase 1 reports incompatible or fails, stop: the evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check. Do not create outer workers, execute an arm yourself, write orchestration state, or edit raw result/evidence files. If dispatch ownership is orchestrator-owned, use only the descriptor-declared native worker transport, the exact manifest paths, and then run the shared freeze boundary; do not synthesize or repair transport evidence.')
+    [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke:')
+    [void]$builder.AppendLine("pwsh -NoProfile -File `"$runnerOwnedControllerPath`" -IterationDirectory `"$IterationDirectory`" -WaitSeconds 30")
+    [void]$builder.AppendLine('If status is `running`, invoke the SAME controller command again. This is safe and idempotent. Never invoke `invoke-runner-owned-arms.ps1` directly. A caller/tool timeout or interrupted conversation does not authorize a second supervisor. The durable supervisor performs every preflight before any execute process, owns concurrency/backpressure and terminal registration, and writes `execution-freeze.json` before Phase 2. If controller status is `failed`, stop: the evaluation is incomplete and a fresh package/code fix is required. Do not create outer workers, execute an arm yourself, write orchestration state, or edit raw result/evidence files. If dispatch ownership is orchestrator-owned, use only the descriptor-declared native worker transport, the exact manifest paths, and then run the shared freeze boundary; do not synthesize or repair transport evidence.')
+    [void]$builder.AppendLine('Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check. A failed supervisor or invalid control record requires a fresh package.')
     [void]$builder.AppendLine('Workers receive only their isolated run directory. Keep the paired arm, metadata, expected output, assertions, grading, reports, and orchestration files out of Phase 1. Preserve runner-owned terminal results and all referenced raw transcript/event artifacts exactly as written.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 2 — grading and finalization')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('After Phase 1 reports success, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
+    [void]$builder.AppendLine('Only after controller status is `completed`, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
     [void]$builder.AppendLine("pwsh -NoProfile -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
     [void]$builder.AppendLine('Only if that bridge succeeds, reveal the grading key in `eval-metadata.json` to the Grader. The Grader may author exactly one package-root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`; each entry contains only `eval_id`, `eval_name`, `configuration`, `assertion_index`, `assertion`, `passed`, and `evidence`. It must not edit raw execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.')
     [void]$builder.AppendLine('Write that artifact. Do not invoke the application helper separately; the finalizer invokes `apply-eval-grading.ps1` deterministically. Then invoke exactly once:')
@@ -1740,13 +1747,17 @@ function New-PackageReadme {
         [string]$SkillName,
         [int]$IterationNumber,
         [string]$IterationDirectory,
-        [object[]]$ManifestEvals
+        [object[]]$ManifestEvals,
+        [Parameter(Mandatory = $true)][object]$ExecutionSelection,
+        [Parameter(Mandatory = $true)][object]$EffectiveConcurrency
     )
 
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine("# Eval package: $SkillName (iteration $IterationNumber)")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. `execution-profile.json` selects the user-chosen Eval Runner, runner-native model, and limits; the external Eval Orchestrator follows the selected descriptor''s `delegation.dispatch_owner`, using either orchestrator-owned native workers or runner-owned native transports, then grades and generates the report.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine("Execution selection: runner=$($ExecutionSelection.Runner); model=$($ExecutionSelection.Model); timeout_seconds=$TimeoutSeconds; concurrency=$($EffectiveConcurrency.Value); concurrency_source=$($EffectiveConcurrency.Source).")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## What is here')
     [void]$builder.AppendLine()
@@ -1778,8 +1789,8 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## How to run')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine(('1. Read `execution-profile.json` and the selected runner descriptor. If `runner` or `model` is missing or unsupported, fail clearly instead of guessing. For `delegation.dispatch_owner=runner`, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1") + ' exactly once. It performs all preflight, native dispatch, concurrency, terminal registration, and raw-evidence freezing. For `delegation.dispatch_owner=orchestrator`, use only the descriptor-declared native worker mechanism, then invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/freeze-execution-evidence.ps1") + ' after every arm is terminal.'))
-    [void]$builder.AppendLine('2. Do not execute an arm in the parent context, create a second worker for a runner-owned arm, expose grading material during execution, or author/repair raw evidence. If Phase 1 reports incompatible or Phase 1/freezing fails, stop: the evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check.')
+    [void]$builder.AppendLine(('1. Read `execution-profile.json` and the selected runner descriptor. If `runner` or `model` is missing or unsupported, fail clearly instead of guessing. For `delegation.dispatch_owner=runner`, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/control-runner-owned-phase1.ps1") + ' with `-WaitSeconds 30`; while status is `running`, repeat that same bounded, idempotent controller command. Never invoke `invoke-runner-owned-arms.ps1` directly. For `delegation.dispatch_owner=orchestrator`, use only the descriptor-declared native worker mechanism, then invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/freeze-execution-evidence.ps1") + ' after every arm is terminal.'))
+    [void]$builder.AppendLine('2. A caller/tool timeout or interrupted conversation does not authorize a second supervisor. Do not execute an arm in the parent context, create a second worker for a runner-owned arm, expose grading material during execution, or author/repair raw evidence. If the controller reports `failed` or Phase 1/freezing fails, stop: the evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check.')
     [void]$builder.AppendLine(('3. After the freeze succeeds, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1") + ' with `-RequireComplete -RequireParallelDispatch` and add `-RequireNativeDelegation` when the selected descriptor has `dispatch_owner=runner`. Only after that deterministic bridge succeeds, give the grading key to the Grader. The Grader writes only the package-root `grading.json` grading-only artifact. It must not modify execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.'))
     [void]$builder.AppendLine(('4. Invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1") + ' exactly once. It invokes the deterministic apply-eval-grading boundary, validates the frozen evidence, idempotent bridge, complete grading, and report outputs. Return only its machine-readable summary.'))
     [void]$builder.AppendLine()

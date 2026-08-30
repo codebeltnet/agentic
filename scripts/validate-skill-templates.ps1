@@ -1272,6 +1272,23 @@ Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Durable Phase 1 controller survives caller interruption' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $lifecyclePath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-phase1-controller-lifecycle.ps1'
+    if (-not (Test-Path -LiteralPath $lifecyclePath -PathType Leaf)) {
+        throw 'The durable Phase 1 controller lifecycle suite is missing.'
+    }
+    $lifecycleOutput = & pwsh -NoProfile -File $lifecyclePath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Durable Phase 1 controller lifecycle regressions failed: $($lifecycleOutput -join [Environment]::NewLine)"
+    }
+    if (@($lifecycleOutput -join [Environment]::NewLine) -notmatch 'Runner-owned Phase 1 controller lifecycle:\s+PASS') {
+        throw 'Durable Phase 1 controller lifecycle regressions did not report PASS.'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Phase 1 aggregate fail-closed regressions remain deterministic' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
@@ -1452,8 +1469,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw "prepare-skill-evals.ps1 -CodebeltReference failed against the fake current catalog: $($referencePrepareOutput -join [Environment]::NewLine)"
         }
         $referenceProfile = [System.IO.File]::ReadAllText((Join-Path $referencePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
-        if ([string]$referenceProfile.runner -ne 'github-copilot' -or [string]$referenceProfile.model -ne 'claude-haiku-4.5') {
-            throw 'Codebelt Reference preparation must write github-copilot + claude-haiku-4.5 atomically.'
+        if ([string]$referenceProfile.runner -ne 'github-copilot' -or [string]$referenceProfile.model -ne 'claude-haiku-4.5' -or [int]$referenceProfile.concurrency -ne 16) {
+            throw 'Codebelt Reference preparation must write github-copilot + claude-haiku-4.5 atomically and preserve default concurrency 16.'
         }
 
         $codexPackageRoot = Join-Path $packageRoot 'codex-package'
@@ -1465,6 +1482,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         if ([string]$codexProfile.runner -ne 'codex' -or [string]$codexProfile.model -ne 'gpt-5.6-luna' -or [string]$codexProfile.reasoning_effort -ne 'low') {
             throw 'Codex preparation must preserve gpt-5.6-luna and default omitted reasoning effort to low.'
         }
+        if ([int]$codexProfile.concurrency -ne 16) { throw 'Codex omitted -Concurrency must preserve the repository default of 16.' }
 
         $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
         $opencodePrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'opencode/muse-spark-1.2-contributor-free' 2>&1
@@ -1472,9 +1490,17 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw "prepare-skill-evals.ps1 failed for the OpenCode fixture: $($opencodePrepareOutput -join [Environment]::NewLine)"
         }
         $opencodeProfile = [System.IO.File]::ReadAllText((Join-Path $opencodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
-        if ([string]$opencodeProfile.runner -ne 'opencode' -or [string]$opencodeProfile.model -ne 'opencode/muse-spark-1.2-contributor-free') {
-            throw 'OpenCode preparation must preserve the selected runner-native model.'
+        if ([string]$opencodeProfile.runner -ne 'opencode' -or [string]$opencodeProfile.model -ne 'opencode/muse-spark-1.2-contributor-free' -or [int]$opencodeProfile.concurrency -ne 2) {
+            throw 'OpenCode preparation must preserve the selected runner-native model and use concurrency 2 when -Concurrency is omitted.'
         }
+        if (($opencodePrepareOutput -join [Environment]::NewLine) -notmatch 'Concurrency:\s+2 \(OpenCode safe default\)') { throw 'OpenCode preparation output must identify the safe default concurrency source.' }
+
+        $explicitOpenCodePackageRoot = Join-Path $packageRoot 'opencode-explicit-concurrency-package'
+        $explicitOpenCodeOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'opencode/muse-spark-1.2-contributor-free' -Concurrency 16 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit OpenCode concurrency: $($explicitOpenCodeOutput -join [Environment]::NewLine)" }
+        $explicitOpenCodeProfile = [System.IO.File]::ReadAllText((Join-Path $explicitOpenCodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
+        if ([int]$explicitOpenCodeProfile.concurrency -ne 16) { throw 'Explicit OpenCode -Concurrency 16 must be honored without clamping.' }
+        if (($explicitOpenCodeOutput -join [Environment]::NewLine) -notmatch 'Concurrency:\s+16 \(explicit -Concurrency\)') { throw 'Explicit OpenCode preparation output must identify -Concurrency as explicit.' }
 
         $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
         $missingSelectionOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingSelectionRoot 2>&1
@@ -1501,6 +1527,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         if ([string]$manifest.schema -ne 'codebeltnet/agentic/eval-package/2') {
             throw "The package manifest must declare schema eval-package/2; got '$($manifest.schema)'."
+        }
+        if ([string]$manifest.runner_tools_integrity.schema -ne 'codebeltnet/agentic/package-tree-integrity/1' -or
+            [string]$manifest.runner_tools_integrity.path -ne 'tools/eval-runners' -or
+            [string]$manifest.runner_tools_integrity.sha256 -notmatch '^[0-9a-f]{64}$' -or
+            [int]$manifest.runner_tools_integrity.file_count -lt 1) {
+            throw 'The package manifest must anchor the complete package-local Eval Runner tool tree.'
         }
         if ([string]$manifest.report.tool -ne 'tools/generate-eval-report.ps1' -or
             [string]$manifest.report.template -ne 'tools/eval-report-template.html' -or
@@ -1536,12 +1568,16 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'START NOW. You are the external Eval Orchestrator',
             'Do not execute an eval prompt in your own context.',
             'execution-freeze.json',
-            'invoke-runner-owned-arms.ps1',
-            'exactly once',
-            'If it fails, stop.',
+            'control-runner-owned-phase1.ps1',
+            '-WaitSeconds 30',
+            'status is `running`',
+            'SAME controller command again',
+            'safe and idempotent',
+            'Never invoke `invoke-runner-owned-arms.ps1` directly',
+            'caller/tool timeout or interrupted conversation',
             'Do not create outer workers',
             'edit raw result/evidence files',
-            'Only after Phase 1 reports success and the freeze exists',
+            'Only after controller status is `completed`',
             'grading.json',
             'codebeltnet/agentic/eval-grading/1',
             'assertion_index',
@@ -1572,6 +1608,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'recompute or re-bless',
             'hand-author preflight',
             'paste-ready JSON'
+            'package-computed allowance'
+            'not a default 120-second timeout'
         )) {
             if ($runner.Contains($forbidden)) {
                 throw "RUN-THIS.prompt.md must not contain forbidden handoff text '$forbidden'."
@@ -1590,10 +1628,11 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             }
             $generatedPrompt = [System.IO.File]::ReadAllText($generatedPromptPath, $utf8NoBom)
             foreach ($needle in @(
-                'invoke-runner-owned-arms.ps1',
+                'control-runner-owned-phase1.ps1',
                 'delegation.dispatch_owner',
-                'exactly once',
-                'Consume its JSON summary',
+                'SAME controller command again',
+                'safe and idempotent',
+                'Never invoke `invoke-runner-owned-arms.ps1` directly',
                 'bridge-manifest-results.ps1',
                 'Only if that bridge succeeds',
                 'Do not create outer workers',
@@ -1612,6 +1651,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                 'If the harness cannot write to the package machine',
                 'state it in chat',
                 '-CollectResults'
+                'package-computed allowance'
             )) {
                 Assert-NotContains -Name $generatedHandoff.Name -Content $generatedPrompt -Needle $forbidden
             }
@@ -1619,6 +1659,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             $generatedReadmePath = Join-Path $generatedHandoff.Iteration 'README.md'
             $generatedReadme = [System.IO.File]::ReadAllText($generatedReadmePath, $utf8NoBom)
             Assert-Contains -Name "$($generatedHandoff.Name) package README" -Content $generatedReadme -Needle 'evaluation is incomplete and must fail closed'
+            Assert-Contains -Name "$($generatedHandoff.Name) package README" -Content $generatedReadme -Needle 'timeout_seconds='
+            Assert-Contains -Name "$($generatedHandoff.Name) package README" -Content $generatedReadme -Needle 'concurrency_source='
             Assert-NotContains -Name "$($generatedHandoff.Name) package README" -Content $generatedReadme -Needle 'paste-ready JSON array'
             Assert-NotContains -Name "$($generatedHandoff.Name) package README" -Content $generatedReadme -Needle '-CollectResults'
         }
@@ -1819,6 +1861,11 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         $runnerTools = [System.Collections.Generic.List[string]]::new()
         foreach ($runnerTool in @(
                 'runner-common.ps1',
+                'package-integrity.ps1',
+                'phase1-control-common.ps1',
+                'control-runner-owned-phase1.ps1',
+                'supervise-runner-owned-phase1.ps1',
+                'invoke-runner-owned-arms.ps1',
                 'resolve-runner.ps1',
                 'orchestration.ps1',
                 'execution-freeze.ps1',
@@ -1844,6 +1891,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory "tools/eval-runners/$runnerTool") -PathType Leaf)) {
                 throw "Prepared package is missing runner tool '$runnerTool'."
             }
+        }
+        . (Join-Path $iterationDirectory 'tools/eval-runners/runner-common.ps1')
+        . (Join-Path $iterationDirectory 'tools/eval-runners/package-integrity.ps1')
+        $preparedToolIntegrity = Get-PackageTreeIntegrity -Root (Join-Path $iterationDirectory 'tools/eval-runners')
+        if ($preparedToolIntegrity.Sha256 -ne [string]$manifest.runner_tools_integrity.sha256 -or $preparedToolIntegrity.FileCount -ne [int]$manifest.runner_tools_integrity.file_count) {
+            throw 'Prepared package runner-tool integrity does not match manifest.json.'
         }
 
         $collectOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
@@ -1875,6 +1928,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         $deterministicProfile.runner = 'fixture'
         $deterministicProfile.model = 'fixture-model'
         [System.IO.File]::WriteAllText($profilePath, (($deterministicProfile | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+        . (Join-Path $iterationDirectory 'tools/eval-runners/runner-common.ps1')
+        . (Join-Path $iterationDirectory 'tools/eval-runners/package-integrity.ps1')
+        $deterministicToolIntegrity = Get-PackageTreeIntegrity -Root (Join-Path $iterationDirectory 'tools/eval-runners')
+        $manifest.runner_tools_integrity.sha256 = $deterministicToolIntegrity.Sha256
+        $manifest.runner_tools_integrity.file_count = $deterministicToolIntegrity.FileCount
+        [System.IO.File]::WriteAllText((Join-Path $iterationDirectory 'manifest.json'), (($manifest | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
         $fixtureMetricEnvironment = [ordered]@{
             AGENTIC_RUNNER_FIXTURE_FINAL_RESPONSE = 'validator output'
             AGENTIC_RUNNER_FIXTURE_DURATION_SECONDS = '1.25'
@@ -1886,10 +1945,17 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             [Environment]::SetEnvironmentVariable($environmentName, [string]$fixtureMetricEnvironment[$environmentName])
         }
         try {
-            $fanoutPath = Join-Path $iterationDirectory 'tools/eval-runners/invoke-runner-owned-arms.ps1'
-            $fanoutOutput = & pwsh -NoProfile -File $fanoutPath -IterationDirectory $iterationDirectory 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                throw "The deterministic runner-owned fixture could not complete the package: $($fanoutOutput -join [Environment]::NewLine)"
+            $controllerPath = Join-Path $iterationDirectory 'tools/eval-runners/control-runner-owned-phase1.ps1'
+            $controllerDocument = $null
+            $controllerExitCode = 0
+            for ($controllerAttempt = 0; $controllerAttempt -lt 60; $controllerAttempt++) {
+                $controllerOutput = & pwsh -NoProfile -File $controllerPath -IterationDirectory $iterationDirectory -WaitSeconds 1 2>&1
+                $controllerExitCode = $LASTEXITCODE
+                $controllerDocument = ([string]::Join([Environment]::NewLine, @($controllerOutput)) | ConvertFrom-Json -Depth 100)
+                if ([string]$controllerDocument.status -ne 'running') { break }
+            }
+            if ($controllerExitCode -ne 0 -or [string]$controllerDocument.status -ne 'completed') {
+                throw "The deterministic runner-owned fixture could not complete the package: $($controllerOutput -join [Environment]::NewLine)"
             }
         } finally {
             foreach ($environmentName in $fixtureMetricEnvironment.Keys) {
