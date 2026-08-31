@@ -148,7 +148,17 @@ try {
     # changing the normal fixture behavior. These values are injected before
     # the Phase 1 freeze, never by grading or report code.
     $finalResponseOverride = [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_FINAL_RESPONSE')
-    if (-not [string]::IsNullOrWhiteSpace($finalResponseOverride)) { $fixtureFinalResponse = $finalResponseOverride }
+    if (-not [string]::IsNullOrWhiteSpace($finalResponseOverride)) {
+        $fixtureFinalResponse = $finalResponseOverride
+        if ($turnRecords.Count -gt 0) {
+            $lastTurn = $turnRecords[$turnRecords.Count - 1]
+            if ($lastTurn -is [System.Collections.IDictionary]) {
+                $lastTurn['text'] = $finalResponseOverride
+            } else {
+                Add-Member -InputObject $lastTurn -MemberType NoteProperty -Name text -Value $finalResponseOverride -Force
+            }
+        }
+    }
     $durationSeconds = [Math]::Round(($executeFinishUtc - $executeStartUtc).TotalSeconds, 3)
     $durationOverride = [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_DURATION_SECONDS')
     $parsedDuration = 0.0

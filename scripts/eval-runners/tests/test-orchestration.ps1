@@ -36,31 +36,21 @@ function Write-TestJson {
     [System.IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
 }
 
-function Invoke-PhaseOneControllerUntilTerminal {
+function Invoke-ForegroundPhaseOne {
     param([Parameter(Mandatory = $true)][string]$IterationDirectory)
 
-    $controller = Join-Path $IterationDirectory 'tools/eval-runners/control-runner-owned-phase1.ps1'
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
-        $output = & pwsh -NoProfile -File $controller -IterationDirectory $IterationDirectory -WaitSeconds 1 2>&1
-        $exitCode = $LASTEXITCODE
-        $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
-        $document = $text | ConvertFrom-Json -Depth 100
-        if ([string]$document.status -ne 'running') {
-            return [pscustomobject]@{ ExitCode = $exitCode; Text = $text; Document = $document }
-        }
-    }
-    throw "ASSERT: Phase 1 controller did not become terminal for '$IterationDirectory'."
+    $fanout = Join-Path $IterationDirectory 'tools/eval-runners/invoke-runner-owned-arms.ps1'
+    $output = & pwsh -NoProfile -File $fanout -IterationDirectory $IterationDirectory 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
+    $document = $text | ConvertFrom-Json -Depth 100
+    return [pscustomobject]@{ ExitCode = $exitCode; Text = $text; Document = $document }
 }
 
 function Remove-PhaseOnePackageState {
     param([Parameter(Mandatory = $true)][string]$IterationDirectory)
 
-    foreach ($name in @(
-            'orchestration-state.json', 'execution-freeze.json', 'phase1-controller.lock',
-            'phase1-supervisor.json', 'phase1-supervisor-runtime.json', 'phase1-supervisor-result.json',
-            'phase1-fanout-invocation.json', 'phase1-supervisor.stdout.log', 'phase1-supervisor.stderr.log',
-            'phase1-supervisor.bootstrap.stdout.log', 'phase1-supervisor.bootstrap.stderr.log'
-        )) {
+    foreach ($name in @('orchestration-state.json', 'execution-freeze.json')) {
         Remove-Item -LiteralPath (Join-Path $IterationDirectory $name) -Force -ErrorAction SilentlyContinue
     }
 }
@@ -544,7 +534,7 @@ try {
     Assert-True (-not $fanoutText.Contains('Start-Process')) 'runner-owned helper no longer uses window-creating Start-Process for child dispatch'
     Assert-True ($fanoutText -notmatch '(?i)spawn[_ -]?agent|subagent|native-worker-result|with_skill.*worker_id|without_skill.*worker_id') 'runner-owned helper does not create outer subagents, synthetic envelopes, or derived worker IDs'
     Assert-True ($fanoutText -notmatch '(?i)(with[-_]skill|without[-_]skill)\.execution-result|execution_result\s*=\s*.*configuration') 'runner-owned helper does not reconstruct result filenames'
-    Assert-True ($fanoutText.Contains('Assert-RunnerOwnedFanoutAuthorization') -and $fanoutText.Contains('SupervisorId')) 'raw runner-owned fan-out is guarded by durable supervisor ownership'
+    Assert-True ($fanoutText.Contains('[Parameter(Mandatory = $true)][string]$IterationDirectory') -and -not $fanoutText.Contains('Assert-RunnerOwnedFanoutAuthorization') -and -not $fanoutText.Contains('SupervisorId') -and -not $fanoutText.Contains('phase1-control-common.ps1')) 'runner-owned fan-out is the foreground Phase 1 surface without durable supervisor authorization'
 
     # Exercise the helper end-to-end with a deterministic runner-owned fixture.
     # The fixture is a protocol adapter only; it never calls a model or an AI
@@ -632,10 +622,9 @@ try {
     })
     $fixtureLogPath = Join-Path $testRoot 'runner-owned-events.jsonl'
     $env:AGENTIC_RUNNER_FIXTURE_LOG = $fixtureLogPath
-    $fanoutControl = Invoke-PhaseOneControllerUntilTerminal -IterationDirectory $fanoutPackage
+    $fanoutControl = Invoke-ForegroundPhaseOne -IterationDirectory $fanoutPackage
     Assert-Equal 0 $fanoutControl.ExitCode ("deterministic runner-owned Phase 1 exits successfully; output: " + $fanoutControl.Text)
-    Assert-Equal 'completed' $fanoutControl.Document.status 'durable Phase 1 controller reports completion'
-    $fanoutSummary = $fanoutControl.Document.phase1_result
+    $fanoutSummary = $fanoutControl.Document
     Assert-Equal 'phase1' $fanoutSummary.phase 'deterministic runner-owned fan-out reports a Phase 1 summary'
     Assert-Equal 'completed' $fanoutSummary.status 'deterministic runner-owned fan-out completes six fixture arms'
     Assert-Equal 6 $fanoutSummary.expected_count 'runner-owned helper preserves the six-arm manifest count'
@@ -706,10 +695,9 @@ try {
     [IO.File]::WriteAllText($gateMarker, 'fixture', [Text.UTF8Encoding]::new($false))
     $gateLogPath = Join-Path $testRoot 'runner-owned-gate-events.jsonl'
     $env:AGENTIC_RUNNER_FIXTURE_LOG = $gateLogPath
-    $gateControl = Invoke-PhaseOneControllerUntilTerminal -IterationDirectory $gatePackage
+    $gateControl = Invoke-ForegroundPhaseOne -IterationDirectory $gatePackage
     Assert-Equal 2 $gateControl.ExitCode ("incompatible runner-owned preflight exits non-zero; output: " + $gateControl.Text)
-    Assert-Equal 'failed' $gateControl.Document.status 'controller reports incompatible preflight as failed'
-    $gateSummary = $gateControl.Document.phase1_result
+    $gateSummary = $gateControl.Document
     Assert-Equal 'preflight_incompatible' $gateSummary.status 'incompatible preflight stops before fan-out'
     Assert-Equal 6 $gateSummary.preflight_count 'incompatible gate still preflights every pending arm'
     Assert-Equal 1 $gateSummary.incompatible_count 'incompatible gate reports one failed arm'
@@ -858,11 +846,11 @@ try {
     })
     $syntheticStateLog = Join-Path $testRoot 'runner-owned-synthetic-state-events.jsonl'
     $env:AGENTIC_RUNNER_FIXTURE_LOG = $syntheticStateLog
-    $syntheticStateControl = Invoke-PhaseOneControllerUntilTerminal -IterationDirectory $syntheticStatePackage
-    Assert-Equal 2 $syntheticStateControl.ExitCode ("Phase 1 controller rejects a pre-authored orchestration state; output: " + $syntheticStateControl.Text)
+    $syntheticStateControl = Invoke-ForegroundPhaseOne -IterationDirectory $syntheticStatePackage
+    Assert-Equal 2 $syntheticStateControl.ExitCode ("foreground Phase 1 rejects a pre-authored orchestration state; output: " + $syntheticStateControl.Text)
     $syntheticStateSummary = $syntheticStateControl.Document
     Assert-Equal 'failed' $syntheticStateSummary.status 'synthetic concurrency state cannot drive a completed fan-out'
-    Assert-True ([string]$syntheticStateSummary.error -match 'Legacy/incomplete orchestration-state.json') ("Phase 1 controller fails closed on unowned legacy state; error: " + [string]$syntheticStateSummary.error)
+    Assert-True ([string]$syntheticStateSummary.error -match 'Runner-owned fan-out refuses to replace an existing orchestration state') ("foreground Phase 1 fails closed on pre-authored state; error: " + [string]$syntheticStateSummary.error)
     Assert-Equal 0 @(Get-ChildItem -LiteralPath $syntheticStatePackage -Recurse -File -Filter 'execution-result.json').Count 'synthetic concurrency rejection starts zero real executions'
 
     Write-Output 'Native worker orchestration: PASS'

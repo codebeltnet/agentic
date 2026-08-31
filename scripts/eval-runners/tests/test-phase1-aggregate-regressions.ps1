@@ -63,17 +63,12 @@ function Invoke-TestTool {
     }
 }
 
-function Invoke-PhaseOneControllerUntilTerminal {
+function Invoke-ForegroundPhaseOne {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$IterationDirectory)
 
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
-        $invocation = Invoke-TestTool -Path $Path -Arguments @('-IterationDirectory', $IterationDirectory, '-WaitSeconds', '1')
-        $document = $invocation.Text | ConvertFrom-Json -Depth 100
-        if ([string]$document.status -ne 'running') {
-            return [pscustomobject]@{ ExitCode = $invocation.ExitCode; Text = $invocation.Text; Document = $document }
-        }
-    }
-    throw "ASSERT: Phase 1 controller did not become terminal for '$IterationDirectory'."
+    $invocation = Invoke-TestTool -Path $Path -Arguments @('-IterationDirectory', $IterationDirectory)
+    $document = $invocation.Text | ConvertFrom-Json -Depth 100
+    return [pscustomobject]@{ ExitCode = $invocation.ExitCode; Text = $invocation.Text; Document = $document }
 }
 
 function Assert-ToolFails {
@@ -249,7 +244,7 @@ function Initialize-PhaseOneFailurePackage {
 
     return [pscustomobject]@{
         IterationDirectory = $IterationDirectory
-        ControllerScript = Join-Path $packageTools 'control-runner-owned-phase1.ps1'
+        FanoutScript = Join-Path $packageTools 'invoke-runner-owned-arms.ps1'
         BridgeScript = Join-Path $packageTools 'bridge-manifest-results.ps1'
         FinalizerScript = Join-Path $packageTools 'finalize-eval-package.ps1'
         LogPath = Join-Path $IterationDirectory 'runner-events.jsonl'
@@ -345,10 +340,9 @@ function Invoke-PhaseOneFailureScenario {
     $package = Initialize-PhaseOneFailurePackage -IterationDirectory $iterationDirectory -StatusesByEvalId $StatusesByEvalId -EvidenceFailureEvalIds $EvidenceFailureEvalIds
     [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_LOG', $package.LogPath)
 
-    $fanout = Invoke-PhaseOneControllerUntilTerminal -Path $package.ControllerScript -IterationDirectory $iterationDirectory
+    $fanout = Invoke-ForegroundPhaseOne -Path $package.FanoutScript -IterationDirectory $iterationDirectory
     Assert-Equal 2 $fanout.ExitCode "$ScenarioName Phase 1 exits non-zero"
-    Assert-Equal 'failed' ([string]$fanout.Document.status) "$ScenarioName controller reports failed"
-    $summary = $fanout.Document.phase1_result
+    $summary = $fanout.Document
     Assert-Equal 'phase1' ([string](Get-JsonProperty -Object $summary -Name 'phase' -Default '')) "$ScenarioName summary identifies Phase 1"
     Assert-Equal 'failed' ([string](Get-JsonProperty -Object $summary -Name 'status' -Default '')) "$ScenarioName summary is non-success"
     Assert-Counts -Source $summary -Expected $ExpectedCounts -MessagePrefix "$ScenarioName summary"
