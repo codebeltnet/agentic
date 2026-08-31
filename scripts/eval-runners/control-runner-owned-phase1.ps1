@@ -105,10 +105,54 @@ function Enter-ControllerLock {
     } while ($true)
 }
 
+function New-WindowsPhaseOneDetachmentFailure {
+    param(
+        [string]$Reason = '',
+        [AllowNull()][object]$LaunchContext = $null
+    )
+
+    $details = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $LaunchContext) {
+        $controllerJob = Get-JsonProperty -Object $LaunchContext -Name 'ControllerJob' -Default $null
+        $details.Add("controller_in_job=$([bool](Get-JsonProperty -Object $controllerJob -Name 'InJob' -Default $false))")
+        $details.Add("controller_job_kill_on_close=$([bool](Get-JsonProperty -Object $controllerJob -Name 'KillOnJobClose' -Default $false))")
+        $details.Add("controller_job_breakaway_ok=$([bool](Get-JsonProperty -Object $controllerJob -Name 'BreakawayOk' -Default $false))")
+        $details.Add("controller_job_silent_breakaway_ok=$([bool](Get-JsonProperty -Object $controllerJob -Name 'SilentBreakawayOk' -Default $false))")
+        $details.Add("durable_parent_pid=$([int](Get-JsonProperty -Object $LaunchContext -Name 'ParentProcessId' -Default 0))")
+        $details.Add("durable_parent_in_job=$([bool](Get-JsonProperty -Object $LaunchContext -Name 'ParentInJob' -Default $false))")
+        $details.Add("breakaway_required=$([bool](Get-JsonProperty -Object $LaunchContext -Name 'BreakawayRequired' -Default $false))")
+        $details.Add("breakaway_requested=$([bool](Get-JsonProperty -Object $LaunchContext -Name 'BreakawayRequested' -Default $false))")
+    }
+
+    $message = 'Durable Phase 1 cannot escape the caller Windows Job Object in this environment. No eval execution was started. Use a host that permits durable Phase 1 detachment.'
+    if (-not [string]::IsNullOrWhiteSpace($Reason)) { $message += ' ' + $Reason.Trim() }
+    if ($details.Count -gt 0) { $message += ' Details: ' + [string]::Join('; ', @($details.ToArray())) }
+    return $message
+}
+
+function Get-WindowsDurableSupervisorLaunchContext {
+    if (-not $IsWindows) { return $null }
+
+    $controllerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop
+    $durableParentPid = [int]$controllerProcess.ParentProcessId
+    if ($durableParentPid -lt 1) { throw 'Could not resolve a stable parent process for the durable Phase 1 supervisor.' }
+
+    $controllerJob = Get-WindowsCurrentProcessJobInfo
+    $parentJob = Get-WindowsProcessJobMembership -ProcessId $durableParentPid
+    return [pscustomobject]@{
+        ParentProcessId = $durableParentPid
+        ParentInJob = [bool]$parentJob.InJob
+        ControllerJob = $controllerJob
+        BreakawayRequired = [bool]($controllerJob.InJob -or $parentJob.InJob)
+        BreakawayRequested = [bool]($controllerJob.InJob -and -not $controllerJob.SilentBreakawayOk)
+    }
+}
+
 function Start-DurableSupervisor {
     param(
         [Parameter(Mandatory = $true)][string]$SupervisorId,
-        [Parameter(Mandatory = $true)][string]$SupervisorPath
+        [Parameter(Mandatory = $true)][string]$SupervisorPath,
+        [AllowNull()][object]$WindowsLaunchContext = $null
     )
 
     $scriptBase64 = [Convert]::ToBase64String([System.Text.UTF8Encoding]::new($false).GetBytes($SupervisorPath))
@@ -118,213 +162,9 @@ function Start-DurableSupervisor {
     $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
     foreach ($logPath in @($paths.BootstrapStdout, $paths.BootstrapStderr)) { [System.IO.File]::WriteAllBytes($logPath, [byte[]]::new(0)) }
     $processId = if ($IsWindows) {
-        if ($null -eq ('AgenticPhaseOne.NativeProcess' -as [type])) {
-            Add-Type -TypeDefinition @'
-using System;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Text;
-
-namespace AgenticPhaseOne
-{
-    public static class NativeProcess
-    {
-        private const uint GENERIC_READ = 0x80000000;
-        private const uint GENERIC_WRITE = 0x40000000;
-        private const uint FILE_SHARE_READ = 0x00000001;
-        private const uint FILE_SHARE_WRITE = 0x00000002;
-        private const uint OPEN_EXISTING = 3;
-        private const uint CREATE_ALWAYS = 2;
-        private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
-        private const uint STARTF_USESTDHANDLES = 0x00000100;
-        private const uint CREATE_NO_WINDOW = 0x08000000;
-        private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
-        private const uint PROCESS_CREATE_PROCESS = 0x0080;
-        private const uint HANDLE_FLAG_INHERIT = 0x00000001;
-        private const int STD_INPUT_HANDLE = -10;
-        private const int STD_OUTPUT_HANDLE = -11;
-        private const int STD_ERROR_HANDLE = -12;
-        private static readonly IntPtr PROC_THREAD_ATTRIBUTE_PARENT_PROCESS = new IntPtr(0x00020000);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct SECURITY_ATTRIBUTES
-        {
-            public int nLength;
-            public IntPtr lpSecurityDescriptor;
-            [MarshalAs(UnmanagedType.Bool)] public bool bInheritHandle;
-        }
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct STARTUPINFO
-        {
-            public int cb;
-            public string lpReserved;
-            public string lpDesktop;
-            public string lpTitle;
-            public uint dwX;
-            public uint dwY;
-            public uint dwXSize;
-            public uint dwYSize;
-            public uint dwXCountChars;
-            public uint dwYCountChars;
-            public uint dwFillAttribute;
-            public uint dwFlags;
-            public short wShowWindow;
-            public short cbReserved2;
-            public IntPtr lpReserved2;
-            public IntPtr hStdInput;
-            public IntPtr hStdOutput;
-            public IntPtr hStdError;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct PROCESS_INFORMATION
-        {
-            public IntPtr hProcess;
-            public IntPtr hThread;
-            public int dwProcessId;
-            public int dwThreadId;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct STARTUPINFOEX
-        {
-            public STARTUPINFO StartupInfo;
-            public IntPtr lpAttributeList;
-        }
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr CreateFileW(string name, uint access, uint share, ref SECURITY_ATTRIBUTES attributes, uint creation, uint flags, IntPtr template);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool CreateProcessW(string applicationName, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags, IntPtr environment, string currentDirectory, ref STARTUPINFOEX startupInfo, out PROCESS_INFORMATION processInformation);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool InitializeProcThreadAttributeList(IntPtr attributeList, int attributeCount, int flags, ref IntPtr size);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool UpdateProcThreadAttribute(IntPtr attributeList, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previousValue, IntPtr returnSize);
-
-        [DllImport("kernel32.dll")]
-        private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool CloseHandle(IntPtr handle);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr OpenProcess(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, int processId);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr GetStdHandle(int standardHandle);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool GetHandleInformation(IntPtr handle, out uint flags);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
-
-        public static int Start(string application, string commandLine, string currentDirectory, string stdoutPath, string stderrPath, int parentProcessId)
-        {
-            var attributes = new SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>(), bInheritHandle = true };
-            IntPtr stdin = CreateFileW("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, ref attributes, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
-            IntPtr stdout = CreateFileW(stdoutPath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, ref attributes, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
-            IntPtr stderr = CreateFileW(stderrPath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, ref attributes, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
-            if (stdin == new IntPtr(-1) || stdout == new IntPtr(-1) || stderr == new IntPtr(-1))
-            {
-                int error = Marshal.GetLastWin32Error();
-                if (stdin != new IntPtr(-1)) CloseHandle(stdin);
-                if (stdout != new IntPtr(-1)) CloseHandle(stdout);
-                if (stderr != new IntPtr(-1)) CloseHandle(stderr);
-                throw new Win32Exception(error, "Could not open durable supervisor standard-stream files.");
-            }
-            try
-            {
-                IntPtr parentProcess = OpenProcess(PROCESS_CREATE_PROCESS, false, parentProcessId);
-                if (parentProcess == IntPtr.Zero)
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open the durable supervisor parent process.");
-                IntPtr attributeSize = IntPtr.Zero;
-                InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeSize);
-                IntPtr attributeList = Marshal.AllocHGlobal(attributeSize);
-                IntPtr parentValue = Marshal.AllocHGlobal(IntPtr.Size);
-                IntPtr[] controllerStandardHandles = { GetStdHandle(STD_INPUT_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE) };
-                uint[] controllerStandardFlags = new uint[3];
-                try
-                {
-                    if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeSize))
-                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not initialize the durable supervisor process attribute.");
-                    Marshal.WriteIntPtr(parentValue, parentProcess);
-                    if (!UpdateProcThreadAttribute(attributeList, 0, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, parentValue, new IntPtr(IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
-                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not reparent the durable supervisor outside the controller process tree.");
-                    for (int index = 0; index < controllerStandardHandles.Length; index++)
-                    {
-                        uint handleFlags;
-                        if (controllerStandardHandles[index] != IntPtr.Zero && controllerStandardHandles[index] != new IntPtr(-1) && GetHandleInformation(controllerStandardHandles[index], out handleFlags))
-                        {
-                            controllerStandardFlags[index] = handleFlags;
-                            if ((handleFlags & HANDLE_FLAG_INHERIT) != 0)
-                                SetHandleInformation(controllerStandardHandles[index], HANDLE_FLAG_INHERIT, 0);
-                        }
-                    }
-                    var startup = new STARTUPINFOEX
-                    {
-                        StartupInfo = new STARTUPINFO
-                        {
-                            cb = Marshal.SizeOf<STARTUPINFOEX>(),
-                            dwFlags = STARTF_USESTDHANDLES,
-                            hStdInput = stdin,
-                            hStdOutput = stdout,
-                            hStdError = stderr
-                        },
-                        lpAttributeList = attributeList
-                    };
-                    PROCESS_INFORMATION process;
-                    // PROC_THREAD_ATTRIBUTE_PARENT_PROCESS makes Windows take
-                    // the job object and process-tree identity from the stable
-                    // parent rather than the short controller process.
-                    uint flags = CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT;
-                    if (!CreateProcessW(application, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true, flags, IntPtr.Zero, currentDirectory, ref startup, out process))
-                    {
-                        int error = Marshal.GetLastWin32Error();
-                        throw new Win32Exception(error, "Could not create the reparented durable Phase 1 supervisor process (Win32 error " + error + ").");
-                    }
-                    try { return process.dwProcessId; }
-                    finally { CloseHandle(process.hThread); CloseHandle(process.hProcess); }
-                }
-                finally
-                {
-                    for (int index = 0; index < controllerStandardHandles.Length; index++)
-                    {
-                        if ((controllerStandardFlags[index] & HANDLE_FLAG_INHERIT) != 0)
-                            SetHandleInformation(controllerStandardHandles[index], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-                    }
-                    DeleteProcThreadAttributeList(attributeList);
-                    Marshal.FreeHGlobal(parentValue);
-                    Marshal.FreeHGlobal(attributeList);
-                    CloseHandle(parentProcess);
-                }
-            }
-            finally
-            {
-                CloseHandle(stdin);
-                CloseHandle(stdout);
-                CloseHandle(stderr);
-            }
-        }
-    }
-}
-'@
-        }
         $windowsCommandLine = '"' + $pwshPath + '" -NoProfile -NonInteractive -EncodedCommand ' + $encodedCommand
-        $controllerProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction Stop
-        $durableParentPid = [int]$controllerProcess.ParentProcessId
-        if ($durableParentPid -lt 1) { throw 'Could not resolve a stable parent process for the durable Phase 1 supervisor.' }
-        [AgenticPhaseOne.NativeProcess]::Start($pwshPath, $windowsCommandLine, $iteration, $paths.BootstrapStdout, $paths.BootstrapStderr, $durableParentPid)
+        if ($null -eq $WindowsLaunchContext) { throw 'Windows durable supervisor launch requires a validated job-detachment context.' }
+        Start-WindowsDetachedPhaseOneProcess -Application $pwshPath -CommandLine $windowsCommandLine -CurrentDirectory $iteration -StdoutPath $paths.BootstrapStdout -StderrPath $paths.BootstrapStderr -ParentProcessId ([int]$WindowsLaunchContext.ParentProcessId) -RequestBreakawayFromJob ([bool]$WindowsLaunchContext.BreakawayRequested)
     } else {
         $setsid = Get-Command setsid -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -eq $setsid) { throw 'Durable Phase 1 supervisor start requires the platform setsid utility on non-Windows hosts.' }
@@ -354,7 +194,10 @@ namespace AgenticPhaseOne
     while ($null -eq $identity -and [DateTime]::UtcNow -lt $deadline) {
         try { $identity = Get-RunnerOwnedPhaseOneProcessIdentity -ProcessId $processId } catch { Start-Sleep -Milliseconds 10 }
     }
-    if ($null -eq $identity) { throw 'Durable Phase 1 supervisor started but its exact process identity could not be captured.' }
+    if ($null -eq $identity) {
+        [void](Stop-RunnerOwnedPhaseOneProcessIdentity -ProcessId $processId)
+        throw 'Durable Phase 1 supervisor started but its exact process identity could not be captured.'
+    }
     return $identity
 }
 
@@ -389,8 +232,10 @@ try {
             $fanoutPath = Join-Path $PSScriptRoot 'invoke-runner-owned-arms.ps1'
             $supervisorPath = Join-Path $PSScriptRoot 'supervise-runner-owned-phase1.ps1'
             $controllerPath = $PSCommandPath
+            $windowsLaunchContext = if ($IsWindows) { Get-WindowsDurableSupervisorLaunchContext } else { $null }
             $pendingOwnership = [ordered]@{
                 schema = 'codebeltnet/agentic/runner-owned-phase1-supervisor/1'
+                ownership_state = 'reserved'
                 supervisor_id = $supervisorId
                 iteration = [ordered]@{
                     path = $iteration
@@ -411,20 +256,92 @@ try {
                 final_result_path = [System.IO.Path]::GetRelativePath($iteration, $paths.Result).Replace('\', '/')
                 stdout_path = [System.IO.Path]::GetRelativePath($iteration, $paths.Stdout).Replace('\', '/')
                 stderr_path = [System.IO.Path]::GetRelativePath($iteration, $paths.Stderr).Replace('\', '/')
+                failure = $null
+            }
+            if ($null -ne $windowsLaunchContext) {
+                $pendingOwnership.windows_job = [ordered]@{
+                    controller_in_job = [bool]$windowsLaunchContext.ControllerJob.InJob
+                    controller_job_kill_on_close = [bool]$windowsLaunchContext.ControllerJob.KillOnJobClose
+                    controller_job_breakaway_ok = [bool]$windowsLaunchContext.ControllerJob.BreakawayOk
+                    controller_job_silent_breakaway_ok = [bool]$windowsLaunchContext.ControllerJob.SilentBreakawayOk
+                    durable_parent_pid = [int]$windowsLaunchContext.ParentProcessId
+                    durable_parent_in_job = [bool]$windowsLaunchContext.ParentInJob
+                    breakaway_required = [bool]$windowsLaunchContext.BreakawayRequired
+                    breakaway_requested = [bool]$windowsLaunchContext.BreakawayRequested
+                    supervisor_in_controller_job = $null
+                    supervisor_in_any_job = $null
+                    breakaway_succeeded = $null
+                }
+                if ($windowsLaunchContext.ParentInJob -and -not $windowsLaunchContext.ControllerJob.InJob) {
+                    $pendingOwnership.ownership_state = 'failed'
+                    $pendingOwnership.failure = New-WindowsPhaseOneDetachmentFailure -Reason 'The selected durable parent process is inside a Windows Job Object and the controller process cannot request breakaway from it.' -LaunchContext $windowsLaunchContext
+                    Write-RunnerOwnedPhaseOneAtomicJson -Path $paths.Ownership -Value $pendingOwnership
+                    $ownership = Read-RunnerJson -Path $paths.Ownership
+                    throw $pendingOwnership.failure
+                }
+                if ($windowsLaunchContext.BreakawayRequired -and $windowsLaunchContext.ControllerJob.InJob -and -not ($windowsLaunchContext.ControllerJob.BreakawayOk -or $windowsLaunchContext.ControllerJob.SilentBreakawayOk)) {
+                    $pendingOwnership.ownership_state = 'failed'
+                    $pendingOwnership.failure = New-WindowsPhaseOneDetachmentFailure -Reason 'The controller Windows Job Object does not permit durable breakaway.' -LaunchContext $windowsLaunchContext
+                    Write-RunnerOwnedPhaseOneAtomicJson -Path $paths.Ownership -Value $pendingOwnership
+                    $ownership = Read-RunnerJson -Path $paths.Ownership
+                    throw $pendingOwnership.failure
+                }
             }
             Write-RunnerOwnedPhaseOneAtomicJson -Path $paths.Ownership -Value $pendingOwnership
             try {
-                $processIdentity = Start-DurableSupervisor -SupervisorId $supervisorId -SupervisorPath $supervisorPath
+                $processIdentity = Start-DurableSupervisor -SupervisorId $supervisorId -SupervisorPath $supervisorPath -WindowsLaunchContext $windowsLaunchContext
             } catch {
-                throw "Durable Phase 1 supervisor ownership was reserved but process start failed; it will not be retried for this iteration. Requires a fresh package. $($_.Exception.Message)"
+                $pendingOwnership.ownership_state = 'failed'
+                $pendingOwnership.failure = if ($null -ne $windowsLaunchContext) {
+                    New-WindowsPhaseOneDetachmentFailure -Reason $_.Exception.Message -LaunchContext $windowsLaunchContext
+                } else {
+                    "Durable Phase 1 supervisor ownership was reserved but process start failed; it will not be retried for this iteration. Requires a fresh package. $($_.Exception.Message)"
+                }
+                Write-RunnerOwnedPhaseOneAtomicJson -Path $paths.Ownership -Value $pendingOwnership
+                $ownership = Read-RunnerJson -Path $paths.Ownership
+                throw $pendingOwnership.failure
             }
             $pendingOwnership.pid = $processIdentity.Pid
             $pendingOwnership.process_started_utc = $processIdentity.StartedUtcText
             $pendingOwnership.process_start_ticks_utc = $processIdentity.StartTicksUtc
             $pendingOwnership.process_executable = $processIdentity.ExecutablePath
             $pendingOwnership.process_executable_sha256 = $processIdentity.ExecutableSha256
-            Write-RunnerOwnedPhaseOneAtomicJson -Path $paths.Ownership -Value $pendingOwnership
-            $ownership = Read-RunnerJson -Path $paths.Ownership
+            try {
+                if ($null -ne $windowsLaunchContext) {
+                    $supervisorAnyJob = Get-WindowsProcessJobMembership -ProcessId $processIdentity.Pid
+                    $pendingOwnership.windows_job.supervisor_in_any_job = [bool]$supervisorAnyJob.InJob
+                    if ($windowsLaunchContext.ControllerJob.InJob) {
+                        $supervisorInControllerJob = Test-WindowsProcessInCurrentJob -ProcessId $processIdentity.Pid
+                        $pendingOwnership.windows_job.supervisor_in_controller_job = [bool]$supervisorInControllerJob
+                        $pendingOwnership.windows_job.breakaway_succeeded = -not [bool]$supervisorInControllerJob
+                        if ($supervisorInControllerJob) {
+                            throw (New-WindowsPhaseOneDetachmentFailure -Reason "Supervisor PID $($processIdentity.Pid) remained inside the controller Windows Job Object after launch." -LaunchContext $windowsLaunchContext)
+                        }
+                    } else {
+                        $pendingOwnership.windows_job.supervisor_in_controller_job = $false
+                        $pendingOwnership.windows_job.breakaway_succeeded = -not [bool]$supervisorAnyJob.InJob
+                        if ($supervisorAnyJob.InJob) {
+                            throw (New-WindowsPhaseOneDetachmentFailure -Reason "Supervisor PID $($processIdentity.Pid) remained inside a Windows Job Object after launch." -LaunchContext $windowsLaunchContext)
+                        }
+                    }
+                }
+                $pendingOwnership.ownership_state = 'committed'
+                $pendingOwnership.failure = $null
+                Write-RunnerOwnedPhaseOneAtomicJson -Path $paths.Ownership -Value $pendingOwnership
+                $ownership = Read-RunnerJson -Path $paths.Ownership
+            } catch {
+                [void](Stop-RunnerOwnedPhaseOneProcessIdentity -ProcessId $processIdentity.Pid -ExpectedStartTicksUtc $processIdentity.StartTicksUtc)
+                $pendingOwnership.ownership_state = 'failed'
+                $pendingOwnership.failure = if ($null -ne $windowsLaunchContext) {
+                    $probeFailure = $_.Exception.Message
+                    if ($probeFailure -like 'Durable Phase 1 cannot escape the caller Windows Job Object*') { $probeFailure } else { New-WindowsPhaseOneDetachmentFailure -Reason $probeFailure -LaunchContext $windowsLaunchContext }
+                } else {
+                    "Durable Phase 1 supervisor ownership could not be committed; it will not be retried for this iteration. Requires a fresh package. $($_.Exception.Message)"
+                }
+                Write-RunnerOwnedPhaseOneAtomicJson -Path $paths.Ownership -Value $pendingOwnership
+                $ownership = Read-RunnerJson -Path $paths.Ownership
+                throw $pendingOwnership.failure
+            }
         } else {
             $ownership = Read-RunnerJson -Path $paths.Ownership
             [void](Assert-RunnerOwnedPhaseOneOwnershipRecord -IterationDirectory $iteration -Ownership $ownership -Manifest $manifest -ProfilePath $profilePath)

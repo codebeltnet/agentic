@@ -36,13 +36,16 @@ try {
     $ownershipDeadline = [DateTime]::UtcNow.AddSeconds(10)
     while ([DateTime]::UtcNow -lt $ownershipDeadline) {
         if (Test-Path -LiteralPath $paths.Ownership -PathType Leaf) {
-            try {
-                $candidate = Read-RunnerJson -Path $paths.Ownership
-                if ([string](Get-JsonProperty -Object $candidate -Name 'supervisor_id' -Default '') -eq $SupervisorId -and [int](Get-JsonProperty -Object $candidate -Name 'pid' -Default 0) -eq $PID) {
+            $candidate = $null
+            try { $candidate = Read-RunnerJson -Path $paths.Ownership } catch { }
+            if ($null -ne $candidate -and [string](Get-JsonProperty -Object $candidate -Name 'supervisor_id' -Default '') -eq $SupervisorId -and [int](Get-JsonProperty -Object $candidate -Name 'pid' -Default 0) -eq $PID) {
+                $ownershipState = Get-RunnerOwnedPhaseOneOwnershipState -Ownership $candidate
+                if ($ownershipState -eq 'failed') { throw (Get-RunnerOwnedPhaseOneOwnershipFailure -Ownership $candidate) }
+                if ($ownershipState -eq 'committed') {
                     $ownership = $candidate
                     break
                 }
-            } catch { }
+            }
         }
         Start-Sleep -Milliseconds 25
     }

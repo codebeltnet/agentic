@@ -10,6 +10,7 @@ function Assert-True([bool]$Condition, [string]$Message) { if (-not $Condition) 
 function Assert-Equal($Expected, $Actual, [string]$Message) { if ($Expected -ne $Actual) { throw "Assertion failed: $Message (expected '$Expected', got '$Actual')" } }
 function Write-TestJson([string]$Path, [object]$Value) { New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null; [IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false)) }
 function Read-TestJson([string]$Path) { return [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 100 }
+function Read-TestText([string]$Path) { return [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false)) }
 
 function New-LifecyclePackage {
     param(
@@ -146,6 +147,58 @@ function Wait-File([string]$Path, [int]$TimeoutSeconds = 10) {
     throw "Timed out waiting for '$Path'."
 }
 
+function New-ControllerJobHarnessScript {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $script = @'
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)][string]$GatePath,
+    [Parameter(Mandatory = $true)][string]$ControllerPath,
+    [Parameter(Mandatory = $true)][string]$IterationDirectory,
+    [int]$WaitSeconds = 60
+)
+
+$ErrorActionPreference = 'Stop'
+$deadline = [DateTime]::UtcNow.AddSeconds(10)
+while (-not (Test-Path -LiteralPath $GatePath -PathType Leaf)) {
+    if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for '$GatePath'." }
+    Start-Sleep -Milliseconds 25
+}
+
+& pwsh -NoProfile -File $ControllerPath -IterationDirectory $IterationDirectory -WaitSeconds $WaitSeconds
+exit $LASTEXITCODE
+'@
+    [IO.File]::WriteAllText($Path, $script, [Text.UTF8Encoding]::new($false))
+}
+
+function Start-ControllerHarnessInJob {
+    param(
+        [Parameter(Mandatory = $true)][object]$Package,
+        [Parameter(Mandatory = $true)][object]$Job,
+        [int]$WaitSeconds = 60
+    )
+
+    $harnessRoot = Join-Path $Package.Iteration 'job-harness'
+    New-Item -ItemType Directory -Path $harnessRoot -Force | Out-Null
+    $gatePath = Join-Path $harnessRoot 'launch.gate'
+    $scriptPath = Join-Path $harnessRoot 'harness.ps1'
+    $stdoutPath = Join-Path $harnessRoot 'harness.stdout'
+    $stderrPath = Join-Path $harnessRoot 'harness.stderr'
+    New-ControllerJobHarnessScript -Path $scriptPath
+    $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
+    $process = Start-Process -FilePath $pwshPath -ArgumentList @('-NoProfile', '-File', $scriptPath, '-GatePath', $gatePath, '-ControllerPath', $Package.Controller, '-IterationDirectory', $Package.Iteration, '-WaitSeconds', [string]$WaitSeconds) -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+    Add-WindowsProcessToJobObject -Job $Job -ProcessId $process.Id
+    [IO.File]::WriteAllText($gatePath, "go`n", [Text.UTF8Encoding]::new($false))
+    return [pscustomobject]@{
+        Process = $process
+        GatePath = $gatePath
+        ScriptPath = $scriptPath
+        StdoutPath = $stdoutPath
+        StderrPath = $stderrPath
+    }
+}
+
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('agentic-phase1-controller-' + [Guid]::NewGuid().ToString('N'))
 $oldEventLog = [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_LOG')
 try {
@@ -190,6 +243,97 @@ try {
     $killedTerminal = Wait-ControllerTerminal -Package $killed
     Assert-Equal 'completed' ([string]$killedTerminal.Result.status) 'Phase 1 completes after controller kill'
     Assert-ExactlyOnce -Package $killed
+
+    if ($IsWindows) {
+        # Closing the caller job (KILL_ON_JOB_CLOSE) must not kill the durable
+        # supervisor when the controller job explicitly permits breakaway.
+        $jobClose = New-LifecyclePackage -IterationDirectory (Join-Path $testRoot 'job-close-survival') -DelayMilliseconds 4000
+        [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_LOG', $jobClose.EventLog)
+        $jobHandle = $null
+        $jobClosed = $false
+        $harness = $null
+        try {
+            $jobHandle = New-WindowsJobObject -KillOnJobClose -BreakawayOk
+            $harness = Start-ControllerHarnessInJob -Package $jobClose -Job $jobHandle -WaitSeconds 60
+            Wait-File -Path (Join-Path $jobClose.Iteration 'phase1-supervisor.json')
+            Wait-File -Path (Join-Path $jobClose.Iteration 'phase1-supervisor-runtime.json')
+            $jobCloseOwnership = Read-TestJson -Path (Join-Path $jobClose.Iteration 'phase1-supervisor.json')
+            Assert-Equal 'committed' (Get-RunnerOwnedPhaseOneOwnershipState -Ownership $jobCloseOwnership) 'breakaway-enabled job commits Phase 1 ownership'
+            [void](Assert-RunnerOwnedPhaseOneOwnershipRecord -IterationDirectory $jobClose.Iteration -Ownership $jobCloseOwnership -Manifest (Read-TestJson -Path (Join-Path $jobClose.Iteration 'manifest.json')) -ProfilePath (Join-Path $jobClose.Iteration 'execution-profile.json'))
+            $jobMetadata = Get-JsonProperty -Object $jobCloseOwnership -Name 'windows_job' -Default $null
+            Assert-True ([bool](Get-JsonProperty -Object $jobMetadata -Name 'breakaway_required' -Default $false)) 'breakaway-enabled job requires Windows job detachment'
+            Assert-True ([bool](Get-JsonProperty -Object $jobMetadata -Name 'breakaway_requested' -Default $false)) 'breakaway-enabled job requests CREATE_BREAKAWAY_FROM_JOB'
+            Assert-True ([bool](Get-JsonProperty -Object $jobMetadata -Name 'breakaway_succeeded' -Default $false)) 'breakaway-enabled job records successful detachment'
+            Assert-True (-not [bool](Get-JsonProperty -Object $jobMetadata -Name 'supervisor_in_controller_job' -Default $true)) 'breakaway-enabled job proves the supervisor escaped the controller job'
+            Assert-True (-not (Test-WindowsProcessInJobObject -Job $jobHandle -ProcessId ([int]$jobCloseOwnership.pid))) 'breakaway-enabled job proves the supervisor is not in the caller job before closure'
+            $preCloseIdentity = Get-RunnerOwnedPhaseOneProcessIdentity -ProcessId ([int]$jobCloseOwnership.pid)
+            Close-WindowsHandle -Handle $jobHandle
+            $jobClosed = $true
+            Assert-True ([bool]$harness.Process.WaitForExit(5000)) 'KILL_ON_JOB_CLOSE terminates the caller harness/controller job'
+            Assert-True ($null -ne (Get-Process -Id ([int]$jobCloseOwnership.pid) -ErrorAction SilentlyContinue)) 'durable supervisor survives caller job closure'
+            $postCloseIdentity = Get-RunnerOwnedPhaseOneProcessIdentity -ProcessId ([int]$jobCloseOwnership.pid)
+            Assert-Equal $preCloseIdentity.StartTicksUtc $postCloseIdentity.StartTicksUtc 'job-close survival preserves the exact supervisor process identity'
+            $jobCloseObserved = Invoke-Controller -Package $jobClose -WaitSeconds 0
+            Assert-Equal ([string]$jobCloseOwnership.supervisor_id) ([string]$jobCloseObserved.Result.supervisor_id) 'new controller observes the same supervisor id after caller job closure'
+            Assert-Equal ([int]$jobCloseOwnership.pid) ([int]$jobCloseObserved.Result.supervisor_pid) 'new controller observes the same supervisor pid after caller job closure'
+            $jobCloseTerminal = Wait-ControllerTerminal -Package $jobClose
+            Assert-Equal 0 $jobCloseTerminal.ExitCode 'breakaway-enabled caller-job closure still completes Phase 1'
+            Assert-Equal 'completed' ([string]$jobCloseTerminal.Result.status) 'breakaway-enabled caller-job closure reports completed'
+            Assert-True ([bool]$jobCloseTerminal.Result.freeze_exists) 'breakaway-enabled caller-job closure writes the freeze'
+            Assert-ExactlyOnce -Package $jobClose
+        } finally {
+            if ($null -ne $harness) {
+                try {
+                    if (-not $harness.Process.HasExited) { $harness.Process.Kill($true) }
+                } catch { }
+                $harness.Process.Dispose()
+            }
+            if ($null -ne $jobHandle -and -not $jobClosed) { Close-WindowsHandle -Handle $jobHandle }
+        }
+
+        # A controller inside a non-breakaway caller job must fail before any
+        # runtime, fan-out, preflight, execute, or freeze work begins.
+        $jobForbidden = New-LifecyclePackage -IterationDirectory (Join-Path $testRoot 'job-breakaway-forbidden') -DelayMilliseconds 4000
+        [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_LOG', $jobForbidden.EventLog)
+        $forbiddenJobHandle = $null
+        $forbiddenJobClosed = $false
+        $forbiddenHarness = $null
+        try {
+            $forbiddenJobHandle = New-WindowsJobObject -KillOnJobClose
+            $forbiddenHarness = Start-ControllerHarnessInJob -Package $jobForbidden -Job $forbiddenJobHandle -WaitSeconds 0
+            Assert-True ([bool]$forbiddenHarness.Process.WaitForExit(15000)) 'breakaway-forbidden controller exits deterministically'
+            $forbiddenText = (Read-TestText -Path $forbiddenHarness.StdoutPath).Trim()
+            Assert-True (-not [string]::IsNullOrWhiteSpace($forbiddenText)) 'breakaway-forbidden controller emits machine-readable failure'
+            $forbiddenDocument = $forbiddenText | ConvertFrom-Json -Depth 100
+            Assert-Equal 2 $forbiddenHarness.Process.ExitCode 'breakaway-forbidden controller exits non-zero'
+            Assert-Equal 'failed' ([string]$forbiddenDocument.status) 'breakaway-forbidden controller reports failed'
+            Assert-True ([string]$forbiddenDocument.error -match 'Durable Phase 1 cannot escape the caller Windows Job Object') 'breakaway-forbidden controller names the Windows Job Object detachment failure'
+            $forbiddenOwnership = Read-TestJson -Path (Join-Path $jobForbidden.Iteration 'phase1-supervisor.json')
+            Assert-Equal 'failed' (Get-RunnerOwnedPhaseOneOwnershipState -Ownership $forbiddenOwnership) 'breakaway-forbidden ownership is recorded as failed, not committed'
+            $forbiddenJobMetadata = Get-JsonProperty -Object $forbiddenOwnership -Name 'windows_job' -Default $null
+            Assert-True ([bool](Get-JsonProperty -Object $forbiddenJobMetadata -Name 'breakaway_required' -Default $false)) 'breakaway-forbidden controller records that Windows detachment was required'
+            Assert-True (-not [bool](Get-JsonProperty -Object $forbiddenJobMetadata -Name 'controller_job_breakaway_ok' -Default $false)) 'breakaway-forbidden controller records that the job did not permit BREAKAWAY_OK'
+            Assert-True (-not [bool](Get-JsonProperty -Object $forbiddenJobMetadata -Name 'controller_job_silent_breakaway_ok' -Default $false)) 'breakaway-forbidden controller records that the job did not permit SILENT_BREAKAWAY_OK'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $jobForbidden.Iteration 'phase1-supervisor-runtime.json') -PathType Leaf)) 'breakaway-forbidden controller writes no runtime record'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $jobForbidden.Iteration 'orchestration-state.json') -PathType Leaf)) 'breakaway-forbidden controller writes no orchestration state'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $jobForbidden.Iteration 'phase1-fanout-invocation.json') -PathType Leaf)) 'breakaway-forbidden controller starts no fan-out'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $jobForbidden.Iteration 'execution-freeze.json') -PathType Leaf)) 'breakaway-forbidden controller writes no execution freeze'
+            Assert-True (-not (Test-Path -LiteralPath $jobForbidden.EventLog -PathType Leaf)) 'breakaway-forbidden controller emits no preflight or execute events'
+            $forbiddenAgain = Invoke-Controller -Package $jobForbidden -WaitSeconds 0
+            Assert-Equal 2 $forbiddenAgain.ExitCode 'repeat controller call keeps the breakaway-forbidden package failed'
+            Assert-Equal 'failed' ([string]$forbiddenAgain.Result.status) 'repeat controller call keeps the breakaway-forbidden package terminal'
+            Assert-Equal ([string]$forbiddenOwnership.supervisor_id) ([string]$forbiddenAgain.Result.supervisor_id) 'repeat controller call observes the same failed supervisor ownership'
+            Assert-True ([string]$forbiddenAgain.Result.error -match 'Durable Phase 1 cannot escape the caller Windows Job Object') 'repeat controller call preserves the Windows job detachment failure'
+        } finally {
+            if ($null -ne $forbiddenHarness) {
+                try {
+                    if (-not $forbiddenHarness.Process.HasExited) { $forbiddenHarness.Process.Kill($true) }
+                } catch { }
+                $forbiddenHarness.Process.Dispose()
+            }
+            if ($null -ne $forbiddenJobHandle -and -not $forbiddenJobClosed) { Close-WindowsHandle -Handle $forbiddenJobHandle }
+        }
+    }
 
     # Concurrent and sequential controller calls race through one exclusive
     # ownership lock and all observe one supervisor.
@@ -242,6 +386,7 @@ try {
     $deadSupervisorId = [Guid]::NewGuid().ToString('D')
     Write-TestJson -Path (Join-Path $dead.Iteration 'phase1-supervisor.json') -Value ([ordered]@{
         schema = 'codebeltnet/agentic/runner-owned-phase1-supervisor/1'; supervisor_id = $deadSupervisorId
+        ownership_state = 'committed'
         iteration = [ordered]@{ path = $dead.Iteration; skill_name = 'lifecycle-fixture'; number = 1 }
         manifest_sha256 = Get-Sha256HexFromFile -Path (Join-Path $dead.Iteration 'manifest.json')
         profile_sha256 = Get-Sha256HexFromFile -Path (Join-Path $dead.Iteration 'execution-profile.json')
@@ -251,6 +396,20 @@ try {
         internal_fanout = [ordered]@{ path = $dead.Fanout; sha256 = Get-Sha256HexFromFile -Path $dead.Fanout }
         supervisor = [ordered]@{ path = Join-Path (Split-Path -Parent $dead.Fanout) 'supervise-runner-owned-phase1.ps1'; sha256 = Get-Sha256HexFromFile -Path (Join-Path (Split-Path -Parent $dead.Fanout) 'supervise-runner-owned-phase1.ps1') }
         controller = [ordered]@{ path = $dead.Controller; sha256 = Get-Sha256HexFromFile -Path $dead.Controller }
+        windows_job = if ($IsWindows) { [ordered]@{
+                controller_in_job = $false
+                controller_job_kill_on_close = $false
+                controller_job_breakaway_ok = $false
+                controller_job_silent_breakaway_ok = $false
+                durable_parent_pid = 0
+                durable_parent_in_job = $false
+                breakaway_required = $false
+                breakaway_requested = $false
+                supervisor_in_controller_job = $false
+                supervisor_in_any_job = $false
+                breakaway_succeeded = $true
+            }
+        } else { $null }
         final_result_path = 'phase1-supervisor-result.json'; stdout_path = 'phase1-supervisor.stdout.log'; stderr_path = 'phase1-supervisor.stderr.log'
     })
     [void]$shortProcess.WaitForExit(5000)
