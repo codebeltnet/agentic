@@ -1272,20 +1272,20 @@ Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Durable Phase 1 controller survives caller interruption' -Action {
+Add-ValidationResult -Results $results -Name 'Foreground Phase 1 lifecycle remains deterministic' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
     $lifecyclePath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-phase1-controller-lifecycle.ps1'
     if (-not (Test-Path -LiteralPath $lifecyclePath -PathType Leaf)) {
-        throw 'The durable Phase 1 controller lifecycle suite is missing.'
+        throw 'The foreground Phase 1 lifecycle suite is missing.'
     }
     $lifecycleOutput = & pwsh -NoProfile -File $lifecyclePath 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "Durable Phase 1 controller lifecycle regressions failed: $($lifecycleOutput -join [Environment]::NewLine)"
+        throw "Foreground Phase 1 lifecycle regressions failed: $($lifecycleOutput -join [Environment]::NewLine)"
     }
-    if (@($lifecycleOutput -join [Environment]::NewLine) -notmatch 'Runner-owned Phase 1 controller lifecycle:\s+PASS') {
-        throw 'Durable Phase 1 controller lifecycle regressions did not report PASS.'
+    if (@($lifecycleOutput -join [Environment]::NewLine) -notmatch 'Runner-owned foreground Phase 1 lifecycle:\s+PASS') {
+        throw 'Foreground Phase 1 lifecycle regressions did not report PASS.'
     }
 }
 
@@ -1585,16 +1585,13 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'START NOW. You are the external Eval Orchestrator',
             'Do not execute an eval prompt in your own context.',
             'execution-freeze.json',
-            'control-runner-owned-phase1.ps1',
-            '-WaitSeconds 30',
-            'status is `running`',
-            'SAME controller command again',
-            'safe and idempotent',
-            'Never invoke `invoke-runner-owned-arms.ps1` directly',
-            'caller/tool timeout or interrupted conversation',
+            'invoke-runner-owned-arms.ps1',
+            'package-computed Phase 1 allowance',
+            'must be started exactly once',
+            'If execution is interrupted and no valid `execution-freeze.json` exists',
             'Do not create outer workers',
             'edit raw result/evidence files',
-            'Only after controller status is `completed`',
+            'Only after Phase 1 returns a successful terminal JSON summary',
             'grading.json',
             'codebeltnet/agentic/eval-grading/1',
             'assertion_index',
@@ -1624,9 +1621,11 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'manufacture a native envelope',
             'recompute or re-bless',
             'hand-author preflight',
-            'paste-ready JSON'
-            'package-computed allowance'
-            'not a default 120-second timeout'
+            'paste-ready JSON',
+            'control-runner-owned-phase1.ps1',
+            '-WaitSeconds',
+            'SAME controller command again',
+            'Never invoke `invoke-runner-owned-arms.ps1` directly'
         )) {
             if ($runner.Contains($forbidden)) {
                 throw "RUN-THIS.prompt.md must not contain forbidden handoff text '$forbidden'."
@@ -1645,11 +1644,10 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             }
             $generatedPrompt = [System.IO.File]::ReadAllText($generatedPromptPath, $utf8NoBom)
             foreach ($needle in @(
-                'control-runner-owned-phase1.ps1',
+                'invoke-runner-owned-arms.ps1',
                 'delegation.dispatch_owner',
-                'SAME controller command again',
-                'safe and idempotent',
-                'Never invoke `invoke-runner-owned-arms.ps1` directly',
+                'package-computed Phase 1 allowance',
+                'must be started exactly once',
                 'bridge-manifest-results.ps1',
                 'Only if that bridge succeeds',
                 'Do not create outer workers',
@@ -1667,8 +1665,10 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
                 'paste-ready JSON array',
                 'If the harness cannot write to the package machine',
                 'state it in chat',
-                '-CollectResults'
-                'package-computed allowance'
+                '-CollectResults',
+                'control-runner-owned-phase1.ps1',
+                '-WaitSeconds',
+                'SAME controller command again'
             )) {
                 Assert-NotContains -Name $generatedHandoff.Name -Content $generatedPrompt -Needle $forbidden
             }
@@ -1879,9 +1879,6 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         foreach ($runnerTool in @(
                 'runner-common.ps1',
                 'package-integrity.ps1',
-                'phase1-control-common.ps1',
-                'control-runner-owned-phase1.ps1',
-                'supervise-runner-owned-phase1.ps1',
                 'invoke-runner-owned-arms.ps1',
                 'resolve-runner.ps1',
                 'orchestration.ps1',
@@ -1962,17 +1959,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             [Environment]::SetEnvironmentVariable($environmentName, [string]$fixtureMetricEnvironment[$environmentName])
         }
         try {
-            $controllerPath = Join-Path $iterationDirectory 'tools/eval-runners/control-runner-owned-phase1.ps1'
-            $controllerDocument = $null
-            $controllerExitCode = 0
-            for ($controllerAttempt = 0; $controllerAttempt -lt 60; $controllerAttempt++) {
-                $controllerOutput = & pwsh -NoProfile -File $controllerPath -IterationDirectory $iterationDirectory -WaitSeconds 1 2>&1
-                $controllerExitCode = $LASTEXITCODE
-                $controllerDocument = ([string]::Join([Environment]::NewLine, @($controllerOutput)) | ConvertFrom-Json -Depth 100)
-                if ([string]$controllerDocument.status -ne 'running') { break }
-            }
-            if ($controllerExitCode -ne 0 -or [string]$controllerDocument.status -ne 'completed') {
-                throw "The deterministic runner-owned fixture could not complete the package: $($controllerOutput -join [Environment]::NewLine)"
+            $fanoutPath = Join-Path $iterationDirectory 'tools/eval-runners/invoke-runner-owned-arms.ps1'
+            $fanoutOutput = & pwsh -NoProfile -File $fanoutPath -IterationDirectory $iterationDirectory 2>&1
+            $fanoutExitCode = $LASTEXITCODE
+            $fanoutDocument = ([string]::Join([Environment]::NewLine, @($fanoutOutput)) | ConvertFrom-Json -Depth 100)
+            if ($fanoutExitCode -ne 0 -or [string]$fanoutDocument.status -ne 'completed') {
+                throw "The deterministic runner-owned fixture could not complete the package: $($fanoutOutput -join [Environment]::NewLine)"
             }
         } finally {
             foreach ($environmentName in $fixtureMetricEnvironment.Keys) {
@@ -2021,7 +2013,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw "prepare-skill-evals.ps1 -CollectResults failed on recorded metrics: $($metricsOutput -join [Environment]::NewLine)"
         }
         $comparison = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'comparison.md'), $utf8NoBom)
-        foreach ($needle in @('## Run metrics', '| 1.25 | 123 | 2 | recorded |', '## Isolation reported', 'fresh=Y home=Y cwd=Y fs=Y skill=Y tx=Y', 'fresh=Y home=Y cwd=Y fs=Y skill=N tx=Y')) {
+        foreach ($needle in @('## Run metrics', '| 1.25 | 123 | 2 | recorded |', '## Isolation reported', 'fresh=Y home=Y cwd=Y fs=N skill=Y tx=Y', 'fresh=Y home=Y cwd=Y fs=N skill=N tx=Y')) {
             if (-not $comparison.Contains($needle)) {
                 throw "comparison.md must report available run metric '$needle'."
             }
@@ -2036,7 +2028,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         }
         $benchmark = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'benchmark.json'), $utf8NoBom) | ConvertFrom-Json
         $expectedEvalCount = @($manifest.evals).Count
-        if ([int]$benchmark.metadata.runs_per_configuration -ne 1 -or @($benchmark.metadata.evals_run).Count -ne $expectedEvalCount -or @($benchmark.runs).Count -ne 2) {
+        if ([int]$benchmark.metadata.runs_per_configuration -ne 1 -or @($benchmark.metadata.evals_run).Count -ne $expectedEvalCount -or @($benchmark.runs).Count -ne ($expectedEvalCount * 2)) {
             throw "benchmark.json must use the upstream skill-creator schema for the recorded paired run set (runs_per_configuration=$($benchmark.metadata.runs_per_configuration), evals=$(@($benchmark.metadata.evals_run).Count), runs=$(@($benchmark.runs).Count), expected_evals=$expectedEvalCount)."
         }
         if ([int]$benchmark.run_summary.with_skill.tokens.mean -ne 123 -or [int]$benchmark.run_summary.without_skill.tokens.mean -ne 123) {

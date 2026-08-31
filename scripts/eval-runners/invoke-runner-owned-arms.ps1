@@ -3,17 +3,17 @@
     Deterministically fans out runner-owned native Eval Worker arms.
 
 .DESCRIPTION
-    This internal helper is invoked exactly once by the durable Phase 1
-    supervisor. It does not run during preparation, validation, CI, hooks, or
-    reporting. It starts the selected package-local runner once per manifest
-    arm, redirects each runner's sole JSON stdout directly to the
-    manifest-declared execution_result path, and owns acceptance/terminal
-    registration and orchestration state.
+    This helper is the runner-owned Phase 1 external-handoff surface. It is
+    invoked exactly once by the external Eval Orchestrator, runs in the
+    foreground, and returns one terminal JSON summary. It does not run during
+    preparation, validation, CI, hooks, or reporting. It starts the selected
+    package-local runner once per manifest arm, redirects each runner's sole
+    JSON stdout directly to the manifest-declared execution_result path, and
+    owns acceptance/terminal registration and orchestration state.
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$IterationDirectory,
-    [string]$SupervisorId
+    [Parameter(Mandatory = $true)][string]$IterationDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,11 +26,6 @@ $iteration = (Resolve-Path -LiteralPath $IterationDirectory -ErrorAction Stop).P
 . (Join-Path $PSScriptRoot 'fanout-process.ps1')
 . (Join-Path $PSScriptRoot 'execution-freeze.ps1')
 . (Join-Path $PSScriptRoot 'package-integrity.ps1')
-. (Join-Path $PSScriptRoot 'phase1-control-common.ps1')
-
-# This guard runs before manifest inspection, preflight, orchestration-state
-# creation, or execution. The raw fan-out is not an external recovery surface.
-[void](Assert-RunnerOwnedFanoutAuthorization -IterationDirectory $iteration -SupervisorId $SupervisorId)
 
 function Write-FanoutSummary {
     param(

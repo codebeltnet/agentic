@@ -73,6 +73,20 @@ try {
         throw "Grading is incomplete: grading-only artifact '$GradingPath' is missing."
     }
 
+    $gradingDocument = Read-RunnerJson -Path $gradingFullPath
+    $schemas = Get-RunnerSchemaNames
+    if ([string](Get-JsonProperty -Object $gradingDocument -Name 'schema' -Default '') -ne $schemas.Grading) {
+        throw "grading.json must declare '$($schemas.Grading)'."
+    }
+    $topLevelAllowed = @('schema', 'grading')
+    foreach ($name in @(Get-JsonPropertyNames -Object $gradingDocument)) {
+        if ($topLevelAllowed -notcontains $name) { throw "grading.json contains unsupported field '$name'; the Grader may author only grading entries." }
+    }
+    $submitted = @(Get-JsonProperty -Object $gradingDocument -Name 'grading' -Default @())
+    foreach ($entry in $submitted) {
+        Assert-GradingEntryShape -Entry $entry
+    }
+
     $freezeValidation = Assert-ExecutionFreeze -IterationDirectory $iteration -RequireOrchestrationState
     $manifest = $freezeValidation.Manifest
     $declaredGradingPath = [string](Get-JsonProperty -Object $manifest -Name 'grading' -Default '')
@@ -89,16 +103,6 @@ try {
     }
 
     $records = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $manifest | Sort-Object EvalId, Configuration)
-    $gradingDocument = Read-RunnerJson -Path $gradingFullPath
-    $schemas = Get-RunnerSchemaNames
-    if ([string](Get-JsonProperty -Object $gradingDocument -Name 'schema' -Default '') -ne $schemas.Grading) {
-        throw "grading.json must declare '$($schemas.Grading)'."
-    }
-    $topLevelAllowed = @('schema', 'grading')
-    foreach ($name in @(Get-JsonPropertyNames -Object $gradingDocument)) {
-        if ($topLevelAllowed -notcontains $name) { throw "grading.json contains unsupported field '$name'; the Grader may author only grading entries." }
-    }
-    $submitted = @(Get-JsonProperty -Object $gradingDocument -Name 'grading' -Default @())
     $expected = @{}
     $canonicalByKey = @{}
     foreach ($record in $records) {

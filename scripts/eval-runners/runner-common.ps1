@@ -1533,7 +1533,7 @@ function New-ExecutionResult {
         resolved = $resolved
         started_utc = Format-UtcTimestamp -Value $started
         finished_utc = Format-UtcTimestamp -Value $finished
-        duration_seconds = [Math]::Max(0, [Math]::Round($DurationSeconds, 3))
+        duration_seconds = [Math]::Max([double]0, [Math]::Round([double]$DurationSeconds, 3))
         exit = [ordered]@{ status = $effectiveExitStatus; failure = $effectiveFailure }
         input = [ordered]@{
             prompt_sha256 = $Run.PromptHash
