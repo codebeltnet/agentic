@@ -310,19 +310,23 @@ try {
                 if ($null -ne $windowsLaunchContext) {
                     $supervisorAnyJob = Get-WindowsProcessJobMembership -ProcessId $processIdentity.Pid
                     $pendingOwnership.windows_job.supervisor_in_any_job = [bool]$supervisorAnyJob.InJob
+                    $supervisorInControllerJob = $false
                     if ($windowsLaunchContext.ControllerJob.InJob) {
-                        $supervisorInControllerJob = Test-WindowsProcessInCurrentJob -ProcessId $processIdentity.Pid
+                        $supervisorInControllerJob = [bool](Test-WindowsProcessInCurrentJob -ProcessId $processIdentity.Pid)
                         $pendingOwnership.windows_job.supervisor_in_controller_job = [bool]$supervisorInControllerJob
-                        $pendingOwnership.windows_job.breakaway_succeeded = -not [bool]$supervisorInControllerJob
-                        if ($supervisorInControllerJob) {
-                            throw (New-WindowsPhaseOneDetachmentFailure -Reason "Supervisor PID $($processIdentity.Pid) remained inside the controller Windows Job Object after launch." -LaunchContext $windowsLaunchContext)
-                        }
                     } else {
                         $pendingOwnership.windows_job.supervisor_in_controller_job = $false
-                        $pendingOwnership.windows_job.breakaway_succeeded = -not [bool]$supervisorAnyJob.InJob
-                        if ($supervisorAnyJob.InJob) {
-                            throw (New-WindowsPhaseOneDetachmentFailure -Reason "Supervisor PID $($processIdentity.Pid) remained inside a Windows Job Object after launch." -LaunchContext $windowsLaunchContext)
+                    }
+                    $pendingOwnership.windows_job.breakaway_succeeded = -not [bool]$supervisorAnyJob.InJob
+                    if ($supervisorAnyJob.InJob) {
+                        $detachmentFailure = if ($windowsLaunchContext.ControllerJob.InJob -and $supervisorInControllerJob) {
+                            "Supervisor PID $($processIdentity.Pid) remained inside the controller Windows Job Object after launch."
+                        } elseif ($windowsLaunchContext.ControllerJob.InJob) {
+                            "Supervisor PID $($processIdentity.Pid) escaped the controller Windows Job Object but remained inside another Windows Job Object after launch."
+                        } else {
+                            "Supervisor PID $($processIdentity.Pid) remained inside a Windows Job Object after launch."
                         }
+                        throw (New-WindowsPhaseOneDetachmentFailure -Reason $detachmentFailure -LaunchContext $windowsLaunchContext)
                     }
                 }
                 $pendingOwnership.ownership_state = 'committed'

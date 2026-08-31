@@ -700,10 +700,11 @@ function Assert-RunnerOwnedPhaseOneOwnershipRecord {
     }
     if ($IsWindows -and $null -ne $windowsJob) {
         $controllerInJob = [bool](Get-JsonProperty -Object $windowsJob -Name 'controller_in_job' -Default $false)
+        $supervisorInAnyJob = [bool](Get-JsonProperty -Object $windowsJob -Name 'supervisor_in_any_job' -Default $true)
         if ($controllerInJob -and [bool](Get-JsonProperty -Object $windowsJob -Name 'supervisor_in_controller_job' -Default $true)) {
             throw 'Phase 1 supervisor ownership does not prove detachment from the controller Windows Job Object.'
         }
-        if (-not $controllerInJob -and [bool](Get-JsonProperty -Object $windowsJob -Name 'supervisor_in_any_job' -Default $true)) {
+        if ($supervisorInAnyJob) {
             throw 'Phase 1 supervisor ownership does not prove Windows Job Object independence.'
         }
         if ([bool](Get-JsonProperty -Object $windowsJob -Name 'breakaway_required' -Default $false) -and -not [bool](Get-JsonProperty -Object $windowsJob -Name 'breakaway_succeeded' -Default $false)) {
