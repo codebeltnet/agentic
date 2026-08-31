@@ -370,7 +370,88 @@ function Get-ObservableVersionFromText {
     return $null
 }
 
+function Get-RunnerSystemDirectorySet {
+    # System/OS directories that must never be used as writable scratch, even by
+    # an elevated process. A model-free probe that resolves its temp here is the
+    # iteration-11 failure (GetTempPath() -> %WINDIR% when TEMP/TMP/USERPROFILE
+    # are absent), so any temp candidate resolving to one of these is rejected.
+    $set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $folders = @(
+        [Environment]::GetEnvironmentVariable('WINDIR'),
+        [Environment]::GetEnvironmentVariable('SystemRoot'),
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows),
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::System),
+        [Environment]::GetFolderPath([Environment+SpecialFolder]::SystemX86)
+    )
+    foreach ($value in $folders) {
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        try { [void]$set.Add(([System.IO.Path]::GetFullPath($value)).TrimEnd('\', '/')) } catch { }
+    }
+    return $set
+}
+
+function Test-RunnerDirectoryWritable {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            New-Item -ItemType Directory -Path $Path -Force -ErrorAction Stop | Out-Null
+        }
+        $probe = Join-Path $Path ('.agentic-writable-probe-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $probe -Force -ErrorAction Stop | Out-Null
+        Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-RunnerProbeTempRoot {
+    <#
+      Resolves one explicit, writable scratch directory for a MODEL-FREE harness
+      probe (a --version/--help or `describe` capability check). A model-free
+      probe is an ordinary, possibly non-elevated OS process: it needs a writable
+      temporary directory and has nothing to do with eval skill isolation. This
+      resolver deliberately avoids the implicit [System.IO.Path]::GetTempPath()
+      fallback that resolves to %WINDIR% when TEMP/TMP/USERPROFILE are stripped,
+      and it never returns the Windows/system directory even for an elevated user.
+    #>
+    $systemDirectories = Get-RunnerSystemDirectorySet
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($name in @('TEMP', 'TMP')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) { $candidates.Add($value) }
+    }
+    $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    if (-not [string]::IsNullOrWhiteSpace($localAppData)) { $candidates.Add((Join-Path $localAppData 'Temp')) }
+    try {
+        $frameworkTemp = [System.IO.Path]::GetTempPath()
+        if (-not [string]::IsNullOrWhiteSpace($frameworkTemp)) { $candidates.Add($frameworkTemp) }
+    } catch { }
+
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $full = $null
+        try { $full = [System.IO.Path]::GetFullPath($candidate) } catch { continue }
+        if ($systemDirectories.Contains($full.TrimEnd('\', '/'))) { continue }
+        if (Test-RunnerDirectoryWritable -Path $full) { return $full }
+    }
+
+    throw 'Unable to resolve a writable model-free probe temporary directory from TEMP, TMP, or LOCALAPPDATA. A model-free harness probe must not require write access to the Windows system directory.'
+}
+
 function New-RunnerProbeEnvironment {
+    <#
+      Builds the environment for a MODEL-FREE harness probe (a --version/--help or
+      `describe` capability check). This is intentionally NOT the model-backed eval
+      isolation environment; New-RunnerEnvironment builds that. The distinction is
+      load-bearing and must not be merged: a probe is an ordinary OS process, so it
+      is given an explicit writable TEMP/TMP, but it carries no HOME/USERPROFILE and
+      no ambient skill/config roots, so it can never establish or stand in for the
+      eval isolation environment. TEMP/TMP are OS scratch infrastructure resolved
+      explicitly here so neither this process nor a child launched with this
+      environment falls back to %WINDIR% via GetTempPath() (the iteration-11 bug).
+    #>
     $environment = [ordered]@{}
     foreach ($name in @('PATH', 'SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'LANG', 'LC_ALL', 'TZ', 'SSL_CERT_FILE', 'NODE_PATH')) {
         $value = [Environment]::GetEnvironmentVariable($name)
@@ -378,6 +459,9 @@ function New-RunnerProbeEnvironment {
             $environment[$name] = $value
         }
     }
+    $probeTempRoot = Resolve-RunnerProbeTempRoot
+    $environment['TEMP'] = $probeTempRoot
+    $environment['TMP'] = $probeTempRoot
     $environment['CI'] = '1'
     $environment['NO_COLOR'] = '1'
     return $environment
@@ -394,7 +478,16 @@ function Get-ExternalCommandVersion {
     $probeDirectory = $WorkingDirectory
     $ownsProbeDirectory = $false
     if ([string]::IsNullOrWhiteSpace($probeDirectory)) {
-        $probeDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-version-probe-' + [Guid]::NewGuid().ToString('N'))
+        # Use the explicit writable probe temp carried by the probe environment
+        # rather than GetTempPath(), which resolves to %WINDIR% inside a stripped
+        # probe child. Fall back to an explicit resolution only if the caller
+        # supplied an environment without TEMP.
+        $probeTempRoot = if ($null -ne $Environment -and $Environment.Contains('TEMP') -and -not [string]::IsNullOrWhiteSpace([string]$Environment['TEMP'])) {
+            [string]$Environment['TEMP']
+        } else {
+            Resolve-RunnerProbeTempRoot
+        }
+        $probeDirectory = Join-Path $probeTempRoot ('agentic-version-probe-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
         $ownsProbeDirectory = $true
     }
@@ -1627,6 +1720,17 @@ function Assert-ExecutionResult {
 }
 
 function New-RunnerEnvironment {
+    <#
+      Builds the MODEL-BACKED eval isolation environment. This is deliberately
+      NOT the model-free probe environment (New-RunnerProbeEnvironment): here
+      HOME, USERPROFILE, XDG_*, and TEMP/TMP are all pinned INSIDE the per-run
+      isolated home so the harness cannot consult the real user profile, ambient
+      config, or ambient skill roots. A model-free --version/--help/describe probe
+      must never be routed through this environment, and this environment must
+      never be reduced to the probe environment: the probe carries OS scratch
+      TEMP/TMP but no isolated home, and the eval carries an isolated home but
+      never the host profile.
+    #>
     param(
         [Parameter(Mandatory = $true)][object]$Run,
         [string[]]$AuthenticationVariables = @(),

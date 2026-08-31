@@ -1340,6 +1340,23 @@ Add-ValidationResult -Results $results -Name 'Windows UTF-8 report generation su
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Model-free harness probes resolve a writable temp separate from eval isolation' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $probeEnvironmentPath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-probe-environment.ps1'
+    if (-not (Test-Path -LiteralPath $probeEnvironmentPath -PathType Leaf)) {
+        throw 'The probe-environment regression is missing.'
+    }
+    $probeEnvironmentOutput = & pwsh -NoProfile -File $probeEnvironmentPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Probe-environment regression failed: $($probeEnvironmentOutput -join [Environment]::NewLine)"
+    }
+    if (@($probeEnvironmentOutput -join [Environment]::NewLine) -notmatch 'Probe environment regression:\s+PASS') {
+        throw 'Probe-environment regression did not report PASS.'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Action {
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
