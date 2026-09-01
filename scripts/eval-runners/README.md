@@ -297,7 +297,7 @@ CLI version and passes only documented environment credentials when the selected
 runner supports them. None copies a global skill directory, memory store, plugin
 set, or normal agent profile into a run.
 
-Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list, Codex through `codex debug models`, OpenCode through `opencode models opencode --verbose`. OpenCode discovery returns only models with current metadata proving free availability; zero free models is a clear local failure, not a fallback to paid models.
+Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list, Codex through `codex debug models`, and OpenCode through `opencode models --verbose`, which lists all configured providers. OpenCode preserves exact `provider/model` selectors and retains free, paid, or unknown availability as metadata without filtering the selectable catalog. Interactive preparation must present the discovered OpenCode selectors and wait for the user's explicit choice when no model was supplied; an explicit selector is preserved verbatim and is never silently replaced.
 
 Freebuff is currently documented as planned/blocked. Its supported CLI remains
 TUI-oriented and does not provide the required one-prompt, noninteractive,
