@@ -3,9 +3,10 @@
     Lists current model selectors for a supported eval harness.
 
 .DESCRIPTION
-    Discovers runner-native model selectors without executing model requests. GitHub Copilot and Codex return every
-    model the harness exposes. OpenCode returns only models whose current catalog metadata proves free
-    availability. Discovery failures are local to the selected harness and never fall back to stale hardcoded catalogs.
+    Discovers runner-native model selectors without executing model requests. Each supported harness returns every
+    model it exposes. OpenCode mirrors the models exposed by all configured providers; availability is metadata for
+    presentation and does not filter the selectable catalog. Discovery failures are local to the selected harness and
+    never fall back to stale hardcoded catalogs.
 
 .PARAMETER Runner
     Internal Eval Runner id: github-copilot, codex, or opencode.
@@ -50,15 +51,6 @@ function Get-HarnessDisplayName {
         'opencode' { return 'OpenCode' }
         default { return $RunnerName }
     }
-}
-
-function Get-PolicyName {
-    param([Parameter(Mandatory = $true)][string]$RunnerName)
-
-    if ($RunnerName -eq 'opencode') {
-        return 'free'
-    }
-    return 'all'
 }
 
 function Read-CatalogJson {
@@ -248,24 +240,6 @@ function ConvertTo-ModelChoices {
     return @($deduped)
 }
 
-function Select-ModelsByPolicy {
-    param(
-        [object[]]$Models,
-        [Parameter(Mandatory = $true)][string]$RunnerName
-    )
-
-    $policy = Get-PolicyName -RunnerName $RunnerName
-    if ($policy -eq 'free') {
-        $freeModels = @($Models | Where-Object { [string]$_.availability -eq 'free' })
-        if ($freeModels.Count -eq 0) {
-            throw "No free $((Get-HarnessDisplayName -RunnerName $RunnerName)) models are currently available from discovery. Choose another harness or update the harness catalog."
-        }
-        return @($freeModels)
-    }
-
-    return @($Models)
-}
-
 function Invoke-JsonCommand {
     param(
         [Parameter(Mandatory = $true)][object]$CommandInfo,
@@ -380,7 +354,7 @@ function Get-OpenCodeModels {
     if ($null -eq $command) {
         throw 'OpenCode CLI executable is not available on PATH.'
     }
-    $arguments = @('models', 'opencode', '--verbose')
+    $arguments = @('models', '--verbose')
     if ($Refresh) { $arguments += '--refresh' }
     $result = Invoke-JsonCommand -CommandInfo $command -Arguments $arguments -TimeoutSeconds 180
     return ConvertFrom-OpenCodeTextCatalog -Text $result.Stdout
@@ -417,7 +391,7 @@ try {
             'opencode' { Get-OpenCodeModels }
         }
     }
-    $models = @(Select-ModelsByPolicy -Models @($rawModels) -RunnerName $Runner)
+    $models = @($rawModels)
     if ($models.Count -eq 0) {
         throw "No models were returned for $((Get-HarnessDisplayName -RunnerName $Runner))."
     }
@@ -431,7 +405,7 @@ try {
         schema = 'codebeltnet/agentic/harness-models/1'
         runner = $Runner
         harness = Get-HarnessDisplayName -RunnerName $Runner
-        policy = Get-PolicyName -RunnerName $Runner
+        policy = 'all'
         models = @($models)
     } | ConvertTo-Json -Depth 20
 } catch {
