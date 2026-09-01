@@ -23,6 +23,12 @@ function Get-RunnerSchemaNames {
     }
 }
 
+function Get-RunnerPreflightTimeoutSeconds {
+    # Preflight is a model-free capability probe. Keep its watchdog independent
+    # of the model execution allowance in execution-profile.json.
+    return 120
+}
+
 function Get-PackageRunnerDescriptor {
     param([Parameter(Mandatory = $true)][string]$RunnerName)
 
@@ -387,7 +393,10 @@ function Get-RunnerSystemDirectorySet {
         if ([string]::IsNullOrWhiteSpace($value)) { continue }
         try { [void]$set.Add(([System.IO.Path]::GetFullPath($value)).TrimEnd('\', '/')) } catch { }
     }
-    return $set
+    # Preserve the collection object when it is empty. PowerShell otherwise
+    # unwraps an empty enumerable to $null on return, which breaks callers that
+    # use the set's Contains method on platforms without Windows directories.
+    return ,$set
 }
 
 function Test-RunnerDirectoryWritable {

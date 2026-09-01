@@ -1731,7 +1731,7 @@ function New-RunnerPrompt {
     $armCount = [Math]::Max(1, @($ManifestEvals).Count * 2)
     $effectiveConcurrency = [Math]::Max(1, $RequestedConcurrency)
     $executionBatches = [Math]::Max(1, [int][Math]::Ceiling($armCount / [double]$effectiveConcurrency))
-    $preflightTimeoutSeconds = [Math]::Max(120, [Math]::Max(1, $PerArmTimeoutSeconds) + [Math]::Max(0, $RunnerGraceSeconds))
+    $preflightTimeoutSeconds = Get-RunnerPreflightTimeoutSeconds
     $serialPreflightAllowanceSeconds = $armCount * $preflightTimeoutSeconds
     $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + [Math]::Max(0, $RunnerGraceSeconds)
     $executionAllowanceSeconds = $executionBatches * $longestChildAllowanceSeconds
@@ -1746,7 +1746,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 1 — blind execution')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine(("Phase 1 is one long-running foreground command. Set the caller shell/tool timeout to at least the package-computed Phase 1 allowance of {0} seconds ({1}-second serial preflight allowance for {2} arm(s) at the max(120, profile.timeout_seconds + runner grace) policy + {3}-second execution allowance for {4} concurrent batch(es) + {5}-second orchestration grace), not a default short timeout. For OpenCode, pass this allowance to the shell tool's explicit timeout setting before invoking the command." -f $phaseOneAllowanceSeconds, $serialPreflightAllowanceSeconds, $armCount, $executionAllowanceSeconds, $executionBatches, $orchestrationGraceSeconds))
+    [void]$builder.AppendLine(("Phase 1 is one long-running foreground command. Set the caller shell/tool timeout to at least the package-computed Phase 1 allowance of {0} seconds ({1} arm(s) × {2}-second fixed model-free runner preflight timeout = {3}-second serial preflight allowance + {4}-second execution allowance across {5} batch(es) at concurrency {6}; each child allows {7} scripted user turn(s) × profile.timeout_seconds {8} + {9} seconds runner grace; + {10} seconds orchestration grace), not a default short timeout. For OpenCode, pass this allowance to the shell tool's explicit timeout setting before invoking the command." -f $phaseOneAllowanceSeconds, $armCount, $preflightTimeoutSeconds, $serialPreflightAllowanceSeconds, $executionAllowanceSeconds, $executionBatches, $effectiveConcurrency, $maxScriptedUserTurns, $PerArmTimeoutSeconds, [Math]::Max(0, $RunnerGraceSeconds), $orchestrationGraceSeconds))
     [void]$builder.AppendLine('A caller-side shell timeout is not permission to invoke Phase 1 again. `invoke-runner-owned-arms.ps1` must be started exactly once for this iteration. If execution is interrupted and no valid `execution-freeze.json` exists, the package is incomplete and requires a fresh iteration.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke:')
@@ -1794,7 +1794,7 @@ function New-PackageReadme {
     $requestedConcurrency = [Math]::Max(1, [int]$EffectiveConcurrency.Value)
     $executionBatches = [Math]::Max(1, [int][Math]::Ceiling($armCount / [double]$requestedConcurrency))
     $runnerGraceSeconds = 30
-    $preflightTimeoutSeconds = [Math]::Max(120, [Math]::Max(1, $TimeoutSeconds) + $runnerGraceSeconds)
+    $preflightTimeoutSeconds = Get-RunnerPreflightTimeoutSeconds
     $serialPreflightAllowanceSeconds = $armCount * $preflightTimeoutSeconds
     $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $TimeoutSeconds)) + $runnerGraceSeconds
     $executionAllowanceSeconds = $executionBatches * $longestChildAllowanceSeconds
@@ -1837,7 +1837,7 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## How to run')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine(("Phase 1 allowance: {0} seconds ({1} arm(s), concurrency {2}, {3} execution batch(es), timeout_seconds {4}). For OpenCode, use the shell tool's explicit timeout setting with at least this value." -f $phaseOneAllowanceSeconds, $armCount, $requestedConcurrency, $executionBatches, $TimeoutSeconds))
+    [void]$builder.AppendLine(("Phase 1 allowance: {0} seconds ({1} arm(s) × {2}-second fixed model-free runner preflight timeout = {3}-second serial preflight allowance + {4}-second execution allowance across {5} batch(es) at concurrency {6}; each child allows {7} scripted user turn(s) × profile.timeout_seconds {8} + {9} seconds runner grace; + {10} seconds orchestration grace). For OpenCode, use the shell tool's explicit timeout setting with at least this value." -f $phaseOneAllowanceSeconds, $armCount, $preflightTimeoutSeconds, $serialPreflightAllowanceSeconds, $executionAllowanceSeconds, $executionBatches, $requestedConcurrency, $maxScriptedUserTurns, $TimeoutSeconds, $runnerGraceSeconds, $orchestrationGraceSeconds))
     [void]$builder.AppendLine()
     [void]$builder.AppendLine(('1. Read `execution-profile.json` and the selected runner descriptor. If `runner` or `model` is missing or unsupported, fail clearly instead of guessing. For `delegation.dispatch_owner=runner`, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1") + ' exactly once with the caller shell/tool timeout set to at least the package-computed Phase 1 allowance. It performs all preflight, native dispatch, concurrency, terminal registration, timeout handling, and raw-evidence freezing. For `delegation.dispatch_owner=orchestrator`, use only the descriptor-declared native worker mechanism, then invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/freeze-execution-evidence.ps1") + ' after every arm is terminal.'))
     [void]$builder.AppendLine('2. A caller/tool timeout or interrupted conversation does not authorize rerunning Phase 1. Do not execute an arm in the parent context, create a second worker for a runner-owned arm, expose grading material during execution, or author/repair raw evidence. If Phase 1 reports incompatible or Phase 1/freezing fails, stop: the evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check.')

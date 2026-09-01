@@ -45,6 +45,8 @@ function Import-OpenCodeRunnerFunctions {
 }
 
 $systemDirectories = Get-RunnerSystemDirectorySet
+Assert-True ($null -ne $systemDirectories) 'system directory resolver must return an empty-or-populated set, never null'
+Assert-True ($systemDirectories -is [System.Collections.Generic.HashSet[string]]) 'system directory resolver must preserve its HashSet return type'
 
 function Test-IsSystemDirectory {
     param([string]$Path)

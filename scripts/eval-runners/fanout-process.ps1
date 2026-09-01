@@ -120,8 +120,8 @@ function Complete-RunnerChildProcess {
         [int]$TimeoutSeconds = 0
     )
 
-    # An explicit timeout is a cleanup override (used by the supervisor's
-    # error path); otherwise honor the absolute deadline captured at start.
+    # An explicit timeout is a cleanup override (used by the fan-out error
+    # path); otherwise honor the absolute deadline captured at start.
     $deadline = if ($TimeoutSeconds -gt 0) { [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSeconds)) } elseif ($null -ne $Child.DeadlineUtc) { [DateTime]$Child.DeadlineUtc } else { [DateTime]::UtcNow.AddSeconds(1) }
     $timedOut = [bool]$Child.WatchdogExpired
     try {
@@ -146,7 +146,7 @@ function Complete-RunnerChildProcess {
     try { $Child.TerminationObserved = [bool]$Child.Process.HasExited } catch { $Child.TerminationObserved = $false }
 
     # Use one finite drain deadline. A descendant holding an inherited pipe
-    # open must not make the fan-out supervisor wait forever.
+    # open must not make the fan-out process wait forever.
     $drainDeadline = [DateTime]::UtcNow.AddSeconds(5)
     $stdoutDone = $false
     $stderrDone = $false

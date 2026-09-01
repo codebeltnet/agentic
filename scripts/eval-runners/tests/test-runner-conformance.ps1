@@ -59,6 +59,12 @@ function New-TestChildEnvironment {
 }
 
 function Invoke-GeneratedRunnerPrompt {
+    param(
+        [int]$EvalCount = 3,
+        [int]$TimeoutSeconds = 900,
+        [int]$RequestedConcurrency = 2
+    )
+
     $preparePath = Join-Path $repoRoot 'scripts\prepare-skill-evals.ps1'
     $tokens = $null
     $errors = $null
@@ -71,15 +77,19 @@ function Invoke-GeneratedRunnerPrompt {
     $selection = [pscustomobject]@{ Harness = 'OpenCode CLI'; Runner = 'opencode'; Model = 'opencode/muse-spark-1.2-contributor-free'; Preset = '' }
     $generatedRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-generated-handoff-' + [Guid]::NewGuid().ToString('N'))
     try {
-        $metadataPath = Join-Path $generatedRoot 'eval-01\eval-metadata.json'
-        Write-TestJson -Path $metadataPath -Value ([ordered]@{
-            interaction = [ordered]@{ turns = @(
-                [ordered]@{ role = 'user'; content = 'first' }
-                [ordered]@{ role = 'user'; content = 'second' }
-            ) }
-        })
-        $manifestEval = [pscustomobject]@{ metadata = 'eval-01/eval-metadata.json' }
-        return New-RunnerPrompt -IterationDirectory $generatedRoot -IterationNumber 1 -ManifestEvals @($manifestEval) -ExecutionSelection $selection -RequestedConcurrency 2 -PerArmTimeoutSeconds 30
+        $manifestEvals = [System.Collections.Generic.List[object]]::new()
+        for ($evalId = 1; $evalId -le $EvalCount; $evalId++) {
+            $evalName = 'eval-{0:d2}' -f $evalId
+            $metadataPath = Join-Path $generatedRoot "$evalName\eval-metadata.json"
+            Write-TestJson -Path $metadataPath -Value ([ordered]@{
+                interaction = [ordered]@{ turns = @(
+                    [ordered]@{ role = 'user'; content = 'first' }
+                    [ordered]@{ role = 'user'; content = 'second' }
+                ) }
+            })
+            $manifestEvals.Add([pscustomobject]@{ metadata = "$evalName/eval-metadata.json" })
+        }
+        return New-RunnerPrompt -IterationDirectory $generatedRoot -IterationNumber 1 -ManifestEvals @($manifestEvals.ToArray()) -ExecutionSelection $selection -RequestedConcurrency $RequestedConcurrency -PerArmTimeoutSeconds $TimeoutSeconds
     } finally {
         if (Test-Path -LiteralPath $generatedRoot) { Remove-Item -LiteralPath $generatedRoot -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -1964,16 +1974,22 @@ try {
     Assert-True ($prepareText.Contains('evaluation is incomplete') -and $prepareText.Contains('Only persisted runner-produced evidence')) 'handoff preparation must fail closed when runner evidence cannot be persisted'
     Assert-True ($prepareText.Contains('fresh package/code fix is required') -and $prepareText.Contains('Never patch package-local runner code') -and $prepareText.Contains('delete execution results') -and $prepareText.Contains('delete or replace `execution-freeze.json`') -and $prepareText.Contains('rerun Phase 1') -and $prepareText.Contains('manually broaden a capability check')) 'generated handoff must forbid package-local repair, state deletion, retry, and manual capability broadening'
     $generatedHandoff = Invoke-GeneratedRunnerPrompt
+    $generatedConcurrencyThreeHandoff = Invoke-GeneratedRunnerPrompt -RequestedConcurrency 3
     Assert-True ($generatedHandoff.Contains('evaluation is incomplete and a fresh package/code fix is required') -and $generatedHandoff.Contains('Never patch package-local runner code') -and $generatedHandoff.Contains('delete orchestration state') -and $generatedHandoff.Contains('delete execution results') -and $generatedHandoff.Contains('delete or replace `execution-freeze.json`') -and $generatedHandoff.Contains('rerun Phase 1') -and $generatedHandoff.Contains('manually broaden a capability check')) 'generated handoff output forbids package-local repair, state deletion, retry, and manual capability broadening'
     Assert-True ($generatedHandoff.Contains('invoke-runner-owned-arms.ps1') -and $generatedHandoff.Contains('package-computed Phase 1 allowance') -and $generatedHandoff.Contains('must be started exactly once') -and $generatedHandoff.Contains('If execution is interrupted and no valid `execution-freeze.json` exists')) 'generated handoff exposes one foreground Phase 1 invocation with fail-closed interruption handling'
+    Assert-True ($generatedHandoff.Contains('allowance of 6240 seconds') -and $generatedHandoff.Contains('6 arm(s) × 120-second fixed model-free runner preflight timeout = 720-second serial preflight allowance') -and $generatedHandoff.Contains('5490-second execution allowance across 3 batch(es) at concurrency 2') -and $generatedHandoff.Contains('2 scripted user turn(s) × profile.timeout_seconds 900 + 30 seconds runner grace') -and $generatedHandoff.Contains('+ 30 seconds orchestration grace')) 'generated handoff uses the fixed preflight timeout, scripted-turn model timeout, execution batches, and separate orchestration grace'
+    Assert-True (-not $generatedHandoff.Contains('max(120, profile.timeout_seconds + runner grace)') -and -not $generatedHandoff.Contains('5580-second serial preflight allowance')) 'generated handoff does not budget preflight from the model timeout plus runner grace'
+    Assert-True ($generatedConcurrencyThreeHandoff.Contains('allowance of 4410 seconds') -and $generatedConcurrencyThreeHandoff.Contains('execution allowance across 2 batch(es) at concurrency 3')) 'generated handoff recalculates execution batches when concurrency changes'
     Assert-True (-not $generatedHandoff.Contains('control-runner-owned-phase1.ps1') -and -not $generatedHandoff.Contains('WaitSeconds') -and -not $generatedHandoff.Contains('SAME controller command again')) 'generated handoff contains no durable controller polling'
     Assert-True ($prepareText -notmatch '(?i)runs\.<arm>|record-native-result\.ps1|Assert-NativeWorkerDelegation|Assert-OrchestrationConcurrency|capture\.worker_authored') 'runner-owned handoff must not teach manual orchestration, recorder, or evidence repair trivia'
     Assert-True ($bridgeText.Contains('Get-PackageRunnerDescriptor') -and $bridgeText.Contains('Assert-NativeTerminalCaptureArtifact') -and $bridgeText.Contains('ExpectedMechanism')) 'native bridge must require runner-produced terminal evidence'
     Assert-True ($recordText.Contains('eval-native-worker-result/1') -and $recordText.Contains('New-ExecutionResult')) 'native terminal recording must use the runner-owned result builder'
     Assert-True ($commonText.Contains('exit.status must be a JSON number or null')) 'execution results must reject textual exit statuses'
     Assert-True ($commonText.Contains('requested.timeout_seconds') -and $commonText.Contains('execution-result.json run.$field')) 'raw execution results must retain the complete run and requested configuration contract'
+    Assert-Equal 120 (Get-RunnerPreflightTimeoutSeconds) 'runner protocol uses the fixed 120-second model-free preflight timeout'
+    Assert-True ($commonText.Contains('function Get-RunnerPreflightTimeoutSeconds') -and $commonText.Contains('return 120')) 'runner-common owns the authoritative preflight timeout contract'
     Assert-True ($runnerOwnedText.Contains('Invoke-RunnerPreflight') -and $runnerOwnedText.Contains('Get-PreflightGateSummary') -and $runnerOwnedText.Contains('execution_started = $false')) 'runner-owned helper must gate all execute processes behind deterministic preflight'
-    Assert-True ($runnerOwnedText.Contains('return 120') -and $runnerOwnedText -notmatch 'Get-RunnerPreflightTimeoutSeconds\s*\{[^}]*ProfileTimeoutSeconds') 'runner-owned preflight uses an independent deterministic timeout'
+    Assert-True ($runnerOwnedText.Contains('-TimeoutSeconds (Get-RunnerPreflightTimeoutSeconds)') -and $runnerOwnedText -notmatch '(?m)^function Get-RunnerPreflightTimeoutSeconds\b') 'foreground fan-out uses the shared authoritative preflight timeout'
     Assert-True ($runnerOwnedText.Contains('This helper is the runner-owned Phase 1 external-handoff surface') -and -not $runnerOwnedText.Contains('Assert-RunnerOwnedFanoutAuthorization') -and -not $runnerOwnedText.Contains('SupervisorId') -and -not (Test-Path -LiteralPath (Join-Path $runnerRoot 'control-runner-owned-phase1.ps1') -PathType Leaf) -and -not (Test-Path -LiteralPath (Join-Path $runnerRoot 'supervise-runner-owned-phase1.ps1') -PathType Leaf) -and -not (Test-Path -LiteralPath (Join-Path $runnerRoot 'phase1-control-common.ps1') -PathType Leaf)) 'foreground fan-out replaces durable controller authorization'
     Assert-True ($prepareText -notmatch '<result-file>') 'handoff preparation must not expose an unconstrained result-file placeholder'
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'

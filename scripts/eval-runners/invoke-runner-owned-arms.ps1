@@ -51,7 +51,7 @@ function Invoke-RunnerPreflight {
         [Parameter(Mandatory = $true)][string]$RunnerPath,
         [Parameter(Mandatory = $true)][string]$RunPath,
         [Parameter(Mandatory = $true)][string]$ProfilePath,
-        [int]$TimeoutSeconds = 120
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
     )
 
     $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-preflight-' + [Guid]::NewGuid().ToString('N') + '.stdout')
@@ -106,16 +106,11 @@ function Invoke-RunnerPreflight {
 }
 
 function Get-RunnerGraceSeconds {
-    # This is internal runner-child watchdog grace. The external controller
-    # never waits for this model-execution allowance. Process termination and
-    # stream drains have their own smaller, finite bounds in the helpers.
+    # This is internal runner-child watchdog grace for model execution. The
+    # external Eval Orchestrator budgets it separately from model-free
+    # preflight. Process termination and stream drains have their own smaller,
+    # finite bounds in the helpers.
     return 30
-}
-
-function Get-RunnerPreflightTimeoutSeconds {
-    # Preflight is a model-free capability probe. Its watchdog is deliberately
-    # independent of the model execution allowance in execution-profile.json.
-    return 120
 }
 
 function Get-RunnerRunTurnCount {
