@@ -1361,6 +1361,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
     $contributing = Get-FileText -RepoRoot $repoRoot -RelativePath 'CONTRIBUTING.md' -GitRef $Ref
+    $runnerReadme = Get-FileText -RepoRoot $repoRoot -RelativePath 'scripts/eval-runners/README.md' -GitRef $Ref
     $prepare = Get-FileText -RepoRoot $repoRoot -RelativePath 'scripts/prepare-skill-evals.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '## Portable Eval Handoff'
@@ -1373,7 +1374,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'repository automation remains deterministic and never invokes a model.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Resolve the execution configuration before running the package preparation script.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'scripts/Get-HarnessModels.ps1'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'OpenCode discovery is free-only'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'OpenCode discovery mirrors every model exposed by all configured OpenCode providers'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'availability is presentation metadata only and never filters the selectable catalog'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'If OpenCode is selected and no model was explicitly supplied, present every discovered selector to the user, ask the user to choose one, and stop until that choice is made.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Do not choose the first, free, recommended, previous-iteration, previous-successful, or previous-failed model'
+    $oldOpenCodePolicyPhrase = 'OpenCode discovery is ' + 'free-only'
+    Assert-NotContains -Name 'AGENTS.md' -Content $agents -Needle $oldOpenCodePolicyPhrase
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name> -Runner <runner-id> -Model <runner-native-model>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Handing the package over'
@@ -1400,7 +1406,22 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares the paired candidate and baseline inputs as a portable package and stops'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name> -Runner <runner-id> -Model <runner-native-model>'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'Before running the script, choose a Harness + Model.'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'OpenCode mirrors every model exposed by all configured providers'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'ask the user to choose one, and wait'
     Assert-NotContains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'run-skill-benchmark.ps1'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'OpenCode discovery mirrors every model exposed by all configured providers'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'the user must choose from the discovered selectors before package preparation'
+    Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'OpenCode through `opencode models --verbose`'
+    Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'without filtering the selectable catalog'
+    foreach ($document in @(
+            [pscustomobject]@{ Name = 'AGENTS.md'; Content = $agents },
+            [pscustomobject]@{ Name = 'README.md'; Content = $readme },
+            [pscustomobject]@{ Name = 'CONTRIBUTING.md'; Content = $contributing },
+            [pscustomobject]@{ Name = 'scripts/eval-runners/README.md'; Content = $runnerReadme })) {
+        Assert-NotContains -Name $document.Name -Content $document.Content -Needle $oldOpenCodePolicyPhrase
+        Assert-NotContains -Name $document.Name -Content $document.Content -Needle ('OpenCode is ' + 'free-only')
+        Assert-NotContains -Name $document.Name -Content $document.Content -Needle ('opencode models ' + 'opencode --verbose')
+    }
     Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'Eval packages inside this repository must live under .bot/.'
     Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'git does not ignore it'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`.bot/<skill-name>-workspace/` — the default.'
@@ -1423,49 +1444,122 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
   "models": [
     { "id": "claude-haiku-4.5", "display_name": "Claude Haiku 4.5", "availability": "paid", "operation": "language" },
     { "id": "gpt-5.6-luna", "display_name": "GPT-5.6 Luna", "availability": "paid", "operation": "language" },
+    { "id": "provider-free/free-model", "display_name": "Free Provider Model", "availability": "free", "operation": "language" },
+    { "id": "provider-paid/Paid.Model", "display_name": "Paid Provider Model", "availability": "paid", "operation": "language" },
+    { "id": "provider-unknown/Unknown_Model", "display_name": "Unknown Provider Model", "availability": "unknown", "operation": "language" },
     { "id": "deepseek/deepseek-v4-flash", "display_name": "DeepSeek V4 Flash", "availability": "free", "operation": "language" },
-    { "id": "paid-model", "display_name": "Paid Model", "availability": "paid", "operation": "language" },
-    { "id": "unknown-model", "display_name": "Unknown Model", "availability": "unknown", "operation": "language" },
     { "id": "opencode/muse-spark-1.2-contributor-free", "display_name": "Muse Spark 1.2", "cost": { "input": 0, "output": 0, "cache": { "read": 0, "write": 0 } }, "operation": "language" }
   ]
 }
 '@), $utf8NoBom)
 
+        $expectedSelectors = @(
+            'claude-haiku-4.5',
+            'gpt-5.6-luna',
+            'provider-free/free-model',
+            'provider-paid/Paid.Model',
+            'provider-unknown/Unknown_Model',
+            'deepseek/deepseek-v4-flash',
+            'opencode/muse-spark-1.2-contributor-free'
+        )
+
         $copilotDiscovery = (& pwsh -NoProfile -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath 2>&1)
         if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for Copilot fixture: $($copilotDiscovery -join [Environment]::NewLine)" }
         $copilotModels = ($copilotDiscovery -join [Environment]::NewLine) | ConvertFrom-Json
-        if (@($copilotModels.models).Count -ne 6) { throw 'Copilot discovery must return all available fixture models.' }
+        $copilotIds = @($copilotModels.models | ForEach-Object { [string]$_.id })
+        if ([string]$copilotModels.policy -ne 'all' -or $copilotIds.Count -ne $expectedSelectors.Count -or @($expectedSelectors | Where-Object { $copilotIds -notcontains $_ }).Count -gt 0) {
+            throw 'Copilot discovery must retain its all-model behavior and return every fixture selector.'
+        }
 
         $codexDiscovery = (& pwsh -NoProfile -File $modelDiscoveryPath -Runner 'codex' -CatalogPath $catalogPath 2>&1)
         if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for Codex fixture: $($codexDiscovery -join [Environment]::NewLine)" }
         $codexModels = ($codexDiscovery -join [Environment]::NewLine) | ConvertFrom-Json
-        if (@($codexModels.models).Count -ne 6) { throw 'Codex discovery must return all available fixture models.' }
+        $codexIds = @($codexModels.models | ForEach-Object { [string]$_.id })
+        if ([string]$codexModels.policy -ne 'all' -or $codexIds.Count -ne $expectedSelectors.Count -or @($expectedSelectors | Where-Object { $codexIds -notcontains $_ }).Count -gt 0) {
+            throw 'Codex discovery must retain its all-model behavior and return every fixture selector.'
+        }
 
-        foreach ($runnerName in @('opencode')) {
-            $discoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner $runnerName -CatalogPath $catalogPath 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for ${runnerName}: $($discoveryOutput -join [Environment]::NewLine)" }
-            $discovery = ($discoveryOutput -join [Environment]::NewLine) | ConvertFrom-Json
-            $ids = @($discovery.models | ForEach-Object { [string]$_.id })
-            if ($ids -notcontains 'deepseek/deepseek-v4-flash' -or $ids -notcontains 'opencode/muse-spark-1.2-contributor-free') {
-                throw "$runnerName discovery must retain free fixture model selectors."
-            }
-            if ($ids -contains 'paid-model' -or $ids -contains 'unknown-model') {
-                throw "$runnerName discovery must not include paid or unknown-availability models."
-            }
+        $discoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $catalogPath 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for OpenCode: $($discoveryOutput -join [Environment]::NewLine)" }
+        $discovery = ($discoveryOutput -join [Environment]::NewLine) | ConvertFrom-Json
+        $ids = @($discovery.models | ForEach-Object { [string]$_.id })
+        if ([string]$discovery.policy -ne 'all' -or $ids.Count -ne $expectedSelectors.Count -or @($expectedSelectors | Where-Object { $ids -notcontains $_ }).Count -gt 0) {
+            throw 'OpenCode discovery must return every free, paid, and unknown-availability fixture selector.'
+        }
+        $providerNames = @($ids | Where-Object { [string]$_ -match '/' } | ForEach-Object { ([string]$_).Split('/')[0] } | Sort-Object -Unique)
+        if ($providerNames.Count -ne 5 -or @('provider-free', 'provider-paid', 'provider-unknown', 'deepseek', 'opencode' | Where-Object { $providerNames -notcontains $_ }).Count -gt 0) {
+            throw 'OpenCode discovery must return models from all configured providers.'
+        }
+        $paidModel = @($discovery.models | Where-Object { [string]$_.id -eq 'provider-paid/Paid.Model' })[0]
+        $unknownModel = @($discovery.models | Where-Object { [string]$_.id -eq 'provider-unknown/Unknown_Model' })[0]
+        if ($null -eq $paidModel -or [string]$paidModel.display_name -ne 'Paid Provider Model' -or [string]$paidModel.availability -ne 'paid' -or
+            $null -eq $unknownModel -or [string]$unknownModel.display_name -ne 'Unknown Provider Model' -or [string]$unknownModel.availability -ne 'unknown') {
+            throw 'OpenCode discovery must preserve exact selectors and available display/availability metadata.'
         }
 
         $paidCatalogPath = Join-Path $packageRoot 'paid-model-catalog.json'
         [System.IO.File]::WriteAllText($paidCatalogPath, (@'
 {
   "models": [
-    { "id": "paid-model", "display_name": "Paid Model", "availability": "paid", "operation": "language" },
-    { "id": "unknown-model", "display_name": "Unknown Model", "availability": "unknown", "operation": "language" }
+    { "id": "provider-paid/Paid.Model", "display_name": "Paid Provider Model", "availability": "paid", "operation": "language" },
+    { "id": "provider-unknown/Unknown_Model", "display_name": "Unknown Provider Model", "availability": "unknown", "operation": "language" }
   ]
 }
 '@), $utf8NoBom)
-        $noFreeOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $paidCatalogPath 2>&1
-        if ($LASTEXITCODE -eq 0 -or ($noFreeOutput -join ' ') -notmatch 'No free OpenCode models') {
-            throw 'OpenCode discovery must fail clearly when free discovery returns zero models.'
+        $paidOnlyOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $paidCatalogPath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "OpenCode discovery must allow a catalog with no free models: $($paidOnlyOutput -join [Environment]::NewLine)"
+        }
+        $paidOnly = ($paidOnlyOutput -join [Environment]::NewLine) | ConvertFrom-Json
+        if ([string]$paidOnly.policy -ne 'all' -or @($paidOnly.models).Count -ne 2) {
+            throw 'OpenCode discovery must not require a free model or filter paid/unknown models.'
+        }
+        foreach ($requiredModel in @('provider-paid/Paid.Model', 'provider-unknown/Unknown_Model')) {
+            $requiredOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $catalogPath -RequireModel $requiredModel 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "OpenCode -RequireModel must accept '$requiredModel': $($requiredOutput -join [Environment]::NewLine)"
+            }
+        }
+
+        $fakeOpenCodeDirectory = Join-Path $packageRoot 'fake-opencode'
+        New-Item -ItemType Directory -Path $fakeOpenCodeDirectory -Force | Out-Null
+        $fakeOpenCodePath = Join-Path $fakeOpenCodeDirectory 'opencode.ps1'
+        [System.IO.File]::WriteAllText($fakeOpenCodePath, (@'
+$argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
+[System.IO.File]::WriteAllText($argumentsPath, [string]::Join("`n", [string[]]$args), [System.Text.UTF8Encoding]::new($false))
+@(
+    'provider-free/free-model'
+    '{"display_name":"Free Provider Model","availability":"free","operation":"language"}'
+    'provider-paid/Paid.Model'
+    '{"display_name":"Paid Provider Model","availability":"paid","operation":"language"}'
+    'provider-unknown/Unknown_Model'
+    '{"display_name":"Unknown Provider Model","availability":"unknown","operation":"language"}'
+) | Write-Output
+'@), $utf8NoBom)
+        $originalPath = [Environment]::GetEnvironmentVariable('PATH', 'Process')
+        try {
+            [Environment]::SetEnvironmentVariable('PATH', "$fakeOpenCodeDirectory;$originalPath", 'Process')
+
+            $liveDiscoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "OpenCode fake CLI discovery failed: $($liveDiscoveryOutput -join [Environment]::NewLine)" }
+            $liveDiscovery = ($liveDiscoveryOutput -join [Environment]::NewLine) | ConvertFrom-Json
+            $liveIds = @($liveDiscovery.models | ForEach-Object { [string]$_.id })
+            if ([string]$liveDiscovery.policy -ne 'all' -or @('provider-free/free-model', 'provider-paid/Paid.Model', 'provider-unknown/Unknown_Model' | Where-Object { $liveIds -notcontains $_ }).Count -gt 0) {
+                throw 'OpenCode fake CLI discovery must return all providers and availability classes.'
+            }
+            $plainArguments = [System.IO.File]::ReadAllLines((Join-Path $fakeOpenCodeDirectory 'arguments.txt'))
+            if ([string]::Join('|', [string[]]$plainArguments) -ne 'models|--verbose') {
+                throw "OpenCode discovery must invoke 'opencode models --verbose' without a provider filter or implicit refresh; observed '$([string]::Join(' ', [string[]]$plainArguments))'."
+            }
+
+            $refreshDiscoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -Refresh 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "OpenCode fake CLI refresh discovery failed: $($refreshDiscoveryOutput -join [Environment]::NewLine)" }
+            $refreshArguments = [System.IO.File]::ReadAllLines((Join-Path $fakeOpenCodeDirectory 'arguments.txt'))
+            if ([string]::Join('|', [string[]]$refreshArguments) -ne 'models|--verbose|--refresh') {
+                throw "OpenCode -Refresh must add '--refresh' only when explicitly requested; observed '$([string]::Join(' ', [string[]]$refreshArguments))'."
+            }
+        } finally {
+            [Environment]::SetEnvironmentVariable('PATH', $originalPath, 'Process')
         }
 
         $missingCatalogOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'codex' -CatalogPath (Join-Path $packageRoot 'missing-catalog.json') 2>&1
@@ -1502,18 +1596,18 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         if ([int]$codexProfile.concurrency -ne 16) { throw 'Codex omitted -Concurrency must preserve the repository default of 16.' }
 
         $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
-        $opencodePrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'opencode/muse-spark-1.2-contributor-free' 2>&1
+        $opencodePrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed for the OpenCode fixture: $($opencodePrepareOutput -join [Environment]::NewLine)"
         }
         $opencodeProfile = [System.IO.File]::ReadAllText((Join-Path $opencodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
-        if ([string]$opencodeProfile.runner -ne 'opencode' -or [string]$opencodeProfile.model -ne 'opencode/muse-spark-1.2-contributor-free' -or [int]$opencodeProfile.concurrency -ne 2) {
+        if ([string]$opencodeProfile.runner -ne 'opencode' -or [string]$opencodeProfile.model -ne 'provider-paid/Paid.Model' -or [int]$opencodeProfile.concurrency -ne 2) {
             throw 'OpenCode preparation must preserve the selected runner-native model and use concurrency 2 when -Concurrency is omitted.'
         }
         if (($opencodePrepareOutput -join [Environment]::NewLine) -notmatch 'Concurrency:\s+2 \(OpenCode safe default\)') { throw 'OpenCode preparation output must identify the safe default concurrency source.' }
 
         $explicitOpenCodePackageRoot = Join-Path $packageRoot 'opencode-explicit-concurrency-package'
-        $explicitOpenCodeOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'opencode/muse-spark-1.2-contributor-free' -Concurrency 16 2>&1
+        $explicitOpenCodeOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -Concurrency 16 2>&1
         if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit OpenCode concurrency: $($explicitOpenCodeOutput -join [Environment]::NewLine)" }
         $explicitOpenCodeProfile = [System.IO.File]::ReadAllText((Join-Path $explicitOpenCodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
         if ([int]$explicitOpenCodeProfile.concurrency -ne 16) { throw 'Explicit OpenCode -Concurrency 16 must be honored without clamping.' }
@@ -1530,6 +1624,16 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         if (Test-Path -LiteralPath $missingSelectionRoot) {
             Remove-Item -LiteralPath $missingSelectionRoot -Recurse -Force
             throw 'prepare-skill-evals.ps1 must not create an unresolved eval package.'
+        }
+
+        $missingOpenCodeModelRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-opencode-model-' + [Guid]::NewGuid().ToString('N'))
+        $missingOpenCodeModelOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Runner 'opencode' -OutputRoot $missingOpenCodeModelRoot 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($missingOpenCodeModelOutput -join ' ') -notmatch 'Runner/model selection is atomic') {
+            throw 'OpenCode preparation must not choose a model when the user has not supplied one.'
+        }
+        if (Test-Path -LiteralPath $missingOpenCodeModelRoot) {
+            Remove-Item -LiteralPath $missingOpenCodeModelRoot -Recurse -Force
+            throw 'OpenCode preparation must not create a package without an explicit model choice.'
         }
 
         $prepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
