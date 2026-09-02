@@ -304,7 +304,8 @@ function Invoke-CodexAppServer {
         [Parameter(Mandatory = $true)][object]$Inputs,
         [Parameter(Mandatory = $true)][object]$Auth,
         [bool]$SupportsProviderModelFallback = $false,
-        [int]$TimeoutSeconds = 900
+        [int]$TimeoutSeconds = 900,
+        [hashtable]$ProgressContext = $null
     )
 
     if ($Auth.Kind -ne 'subscription_file') {
@@ -322,6 +323,66 @@ function Invoke-CodexAppServer {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     foreach ($argument in @($CommandInfo.Prefix) + @('app-server', '--stdio', '-c', 'shell_environment_policy.inherit=none')) { [void]$psi.ArgumentList.Add([string]$argument) }
+
+    # Shared progress context for the app-server protocol exchange. When the
+    # orchestration environment enables progress (AGENTIC_RUNNER_PROGRESS), the
+    # exchange emits periodic heartbeats carrying safe protocol activity metadata
+    # (event count, byte count, elapsed, remaining timeout) so an operator can
+    # distinguish an app-server that is producing protocol traffic from one that
+    # is merely alive. Never exposes JSON-RPC content or model response text.
+    $appProgressEnabled = $false
+    $appProgressRunner = 'codex'
+    $appProgressWorker = ''
+    $appProgressPhase = 'codex-app-server'
+    $appProgressChannel = 'Relayable'
+    $appProgressLog = ''
+    $appHeartbeatSeconds = Get-RunnerHeartbeatIntervalSeconds
+    if ($null -ne $ProgressContext) {
+        $appProgressEnabled = if ($ProgressContext.ContainsKey('enabled')) { [bool]$ProgressContext['enabled'] } else { $true }
+        if ($ProgressContext.ContainsKey('runner')) { $appProgressRunner = [string]$ProgressContext['runner'] }
+        if ($ProgressContext.ContainsKey('worker')) { $appProgressWorker = [string]$ProgressContext['worker'] }
+        if ($ProgressContext.ContainsKey('phase') -and -not [string]::IsNullOrWhiteSpace([string]$ProgressContext['phase'])) { $appProgressPhase = [string]$ProgressContext['phase'] }
+        if ($ProgressContext.ContainsKey('channel') -and -not [string]::IsNullOrWhiteSpace([string]$ProgressContext['channel'])) { $appProgressChannel = [string]$ProgressContext['channel'] }
+        if ($ProgressContext.ContainsKey('logPath')) { $appProgressLog = [string]$ProgressContext['logPath'] }
+        if ($ProgressContext.ContainsKey('heartbeatSeconds')) {
+            $hb = 0.0
+            if ([double]::TryParse([string]$ProgressContext['heartbeatSeconds'], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$hb) -and $hb -gt 0) { $appHeartbeatSeconds = $hb }
+        }
+    }
+    # Mutable protocol activity counters shared across the readMessage scriptblock
+    # and the heartbeat emitter. Stored in a hashtable so scriptblock closures can
+    # write back through the same reference.
+    $appState = @{ protocolEvents = 0; protocolBytes = [long]0; lastHeartbeatUtc = $start; processPid = $null }
+    $emitAppServerProgress = {
+        param([string]$State, [string]$Detail)
+        if (-not $appProgressEnabled) { return }
+        $now = [DateTime]::UtcNow
+        $elapsedSeconds = [Math]::Max(0, ($now - $start).TotalSeconds)
+        $remainingSeconds = [Math]::Max(0, ($deadline - $now).TotalSeconds)
+        $fields = @{
+            runner = $appProgressRunner
+            state = $State
+            origin = 'child'
+            phase = $appProgressPhase
+            elapsed = Format-RunnerElapsed -Seconds $elapsedSeconds
+            elapsedSeconds = [Math]::Round($elapsedSeconds, 3)
+            timeoutRemaining = Format-RunnerElapsed -Seconds $remainingSeconds
+            timeoutRemainingSeconds = [Math]::Round($remainingSeconds, 3)
+            stdoutEvents = $appState.protocolEvents
+            stdoutBytes = $appState.protocolBytes
+        }
+        if (-not [string]::IsNullOrWhiteSpace($appProgressWorker)) { $fields.worker = $appProgressWorker }
+        if ($null -ne $appState.processPid) { $fields.pid = $appState.processPid }
+        if (-not [string]::IsNullOrWhiteSpace($Detail)) { $fields.detail = $Detail }
+        Write-RunnerProgress -Fields $fields -LogPath $appProgressLog -Channel $appProgressChannel
+        $appState.lastHeartbeatUtc = $now
+    }
+    $tickAppServerHeartbeat = {
+        if (-not $appProgressEnabled) { return }
+        if (([DateTime]::UtcNow - $appState.lastHeartbeatUtc).TotalSeconds -ge $appHeartbeatSeconds) {
+            & $emitAppServerProgress 'running' $null
+        }
+    }
 
     $authHome = $null
     $authOnlyHomeRemoved = $false
@@ -373,15 +434,18 @@ function Invoke-CodexAppServer {
 
         if (-not $process.Start()) { throw 'Could not start Codex app-server.' }
         $processStarted = $true
+        $appState.processPid = try { [int]$process.Id } catch { $null }
         $writer = $process.StandardInput
         $reader = $process.StandardOutput
         $stderrTask = $process.StandardError.ReadToEndAsync()
+        & $emitAppServerProgress 'running' 'codex app-server launched'
 
         $writeMessage = {
             param([Parameter(Mandatory = $true)][object]$Value)
             $writer.WriteLine(($Value | ConvertTo-Json -Depth 50 -Compress))
             $writer.Flush()
         }
+        $utf8NoBomForAppServer = [System.Text.UTF8Encoding]::new($false)
         $readMessage = {
             $remaining = $deadline - [DateTime]::UtcNow
             if ($remaining.TotalMilliseconds -le 0) { throw [TimeoutException]::new('Codex app-server timed out.') }
@@ -391,6 +455,11 @@ function Invoke-CodexAppServer {
             $line = $readTask.GetAwaiter().GetResult()
             if ($null -eq $line) { throw [EndOfStreamException]::new('Codex app-server closed stdout before the expected response.') }
             $events.Add($line)
+            # Update shared protocol activity counters. The line text is the
+            # complete JSON-RPC message; its byte length is safe activity metadata.
+            $appState.protocolEvents++
+            $appState.protocolBytes += [long]$utf8NoBomForAppServer.GetByteCount($line)
+            & $tickAppServerHeartbeat
             try { return ($line | ConvertFrom-Json -Depth 50) } catch { throw [FormatException]::new("Codex app-server emitted malformed JSON: $($_.Exception.Message)") }
         }
         $recordModelReroute = {
@@ -1424,7 +1493,7 @@ function Invoke-CodexProjectedTransport {
         $environment = if ($Auth.Kind -eq 'environment') { New-CodexEnvironment -Inputs $executionInputs -Auth $Auth } else { $null }
         $arguments = New-CodexCliArguments -Inputs $executionInputs -LastResponsePath $physicalLastResponsePath -VisiblePlatform $VisiblePlatform
         if ($Auth.Kind -eq 'subscription_file') {
-            $process = Invoke-CodexAppServer -CommandInfo $CommandInfo -Inputs $executionInputs -Auth $Auth -SupportsProviderModelFallback $SupportsProviderModelFallback -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+            $process = Invoke-CodexAppServer -CommandInfo $CommandInfo -Inputs $executionInputs -Auth $Auth -SupportsProviderModelFallback $SupportsProviderModelFallback -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'codex' -Phase 'codex-app-server')
         } elseif ($Platform -eq 'linux' -and $HardFilesystem) {
             $sandboxArguments = Get-LinuxCodexSandboxArguments -Inputs $executionInputs -CommandInfo $CommandInfo -Environment $environment
             $process = Invoke-RunnerProcess -FileName $SandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $executionInputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'codex' -Phase 'codex-cli')

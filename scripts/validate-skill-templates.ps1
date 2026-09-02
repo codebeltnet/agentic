@@ -2806,7 +2806,7 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not create a Changed section or Changed bullet for dotnet-test refinements made before its first release'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not preserve the earlier draft bullet as a frozen baseline that forces later refinements into `Changed`'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not treat the top-level scripts/eval-runners directory as the only release entity when independently selectable adapters have distinct final states'
-    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Does not claim the planned or blocked Freebuff TUI is a supported runner or a completed Added capability'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $changelogEvals -Needle 'Places first-time GitHub Copilot and OpenCode support under Added'
 
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'History is evidence; the resulting state is truth.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Classify each user-facing package capability from whether it existed at the resolved base'

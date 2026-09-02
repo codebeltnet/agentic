@@ -439,6 +439,171 @@ $r = Invoke-RunnerProcess -FileName $pwsh -ArgumentList @('-NoProfile', '-Comman
     Assert-True ($driverStderr.Contains((Get-RunnerProgressSentinel))) 'the shared primitive relays model-process progress on STDERR'
     Assert-True ($driverStderr -match '"state":"running"') 'the relayed model-process progress reports a running lifecycle state'
 
+    # ------------------------------------------------------------------
+    # Test 9b - active inner model process: incremental output advances
+    # stdout/stderr event and byte counters BEFORE the process completes.
+    # A sleeping grandchild with one final write does NOT satisfy this test.
+    # ------------------------------------------------------------------
+    $activeInnerDriver = New-SyntheticChildScript -Name 'active-inner-driver' -Body @'
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+. (Join-Path $env:AGENTIC_OBS_RUNNER_ROOT 'runner-common.ps1')
+. (Join-Path $env:AGENTIC_OBS_RUNNER_ROOT 'runner-progress.ps1')
+$pwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
+$ctx = @{ enabled = $true; runner = 'opencode'; phase = 'opencode-cli'; channel = 'Relayable'; heartbeatSeconds = 0.15 }
+# Grandchild emits 6 stderr lines at 130ms intervals, then the final stdout result.
+$grandchildBody = 'for ($i = 0; $i -lt 6; $i++) { [Console]::Error.WriteLine("event-" + $i); [System.Threading.Thread]::Sleep(130) }; [Console]::Out.Write("{""result"":""active-inner-done""}")'
+$r = Invoke-RunnerProcess -FileName $pwsh -ArgumentList @('-NoProfile', '-Command', $grandchildBody) -WorkingDirectory $env:AGENTIC_OBS_RUNNER_ROOT -TimeoutSeconds 20 -ProgressContext $ctx
+# Forward captured stdout verbatim so the outer driver can verify fidelity.
+[Console]::Out.Write([string]$r.Stdout)
+'@
+    $activeInnerStderrPath = Join-Path $testRoot 'active-inner-driver.stderr'
+    $previousRoot2 = [Environment]::GetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT')
+    [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $runnerRoot)
+    try {
+        $activeInnerOut = & $pwshPath -NoProfile -File $activeInnerDriver 2>$activeInnerStderrPath
+    } finally {
+        [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $previousRoot2)
+    }
+    $activeInnerStdout = ([string]::Join('', @($activeInnerOut | ForEach-Object { [string]$_ }))).Trim()
+    $activeInnerStderr = if (Test-Path -LiteralPath $activeInnerStderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($activeInnerStderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
+    # Machine STDOUT must be the exact captured model result, uncorrupted.
+    Assert-Equal '{"result":"active-inner-done"}' $activeInnerStdout 'active inner process: captured stdout passes through uncorrupted'
+    Assert-True (-not $activeInnerStdout.Contains((Get-RunnerProgressSentinel))) 'active inner process: no sentinel leaks onto captured STDOUT'
+    # Parse the relayed sentinel lines to verify live activity tracking.
+    $sentinel = Get-RunnerProgressSentinel
+    $relayedLines = @($activeInnerStderr -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith($sentinel) })
+    Assert-True ($relayedLines.Count -ge 2) "active inner process: at least two relayed heartbeats (got $($relayedLines.Count))"
+    $relayedEvents = @($relayedLines | ForEach-Object {
+            $payload = $_.TrimStart().Substring($sentinel.Length).TrimStart()
+            try { $payload | ConvertFrom-Json } catch { $null }
+        } | Where-Object { $null -ne $_ })
+    # Counters must advance: the last heartbeat must show more events than the first.
+    $eventCounts = @($relayedEvents | Where-Object { $null -ne $_.PSObject.Properties['stderrEvents'] } | ForEach-Object { [int64]$_.stderrEvents })
+    Assert-True ($eventCounts.Count -ge 2) 'active inner process: multiple heartbeats carry stderrEvents'
+    $firstCount = ($eventCounts | Measure-Object -Minimum).Minimum
+    $lastCount = ($eventCounts | Measure-Object -Maximum).Maximum
+    Assert-True ($lastCount -gt $firstCount) "active inner process: stderrEvents increase across heartbeats (first=$firstCount last=$lastCount)"
+    # Byte counters must also advance.
+    $byteCounts = @($relayedEvents | Where-Object { $null -ne $_.PSObject.Properties['stderrBytes'] } | ForEach-Object { [int64]$_.stderrBytes })
+    Assert-True ($byteCounts.Count -ge 2) 'active inner process: multiple heartbeats carry stderrBytes'
+    Assert-True (($byteCounts | Measure-Object -Maximum).Maximum -gt ($byteCounts | Measure-Object -Minimum).Minimum) 'active inner process: stderrBytes increase across heartbeats'
+    # lastActivity must appear once any real output has arrived.
+    $withLastActivity = @($relayedEvents | Where-Object { $null -ne $_.PSObject.Properties['lastActivitySeconds'] })
+    Assert-True ($withLastActivity.Count -ge 1) 'active inner process: lastActivity is present once real output is received'
+
+    # ------------------------------------------------------------------
+    # Test 9c - OpenCode-shaped streaming: a grandchild emitting structured
+    # JSONL/event-like output (simulating OpenCode session events) advances
+    # activity metadata safely without echoing model content to the operator.
+    # ------------------------------------------------------------------
+    $openCodeGrandchild = New-SyntheticChildScript -Name 'oc-stream-grandchild' -Body @'
+$events = @(
+    '{"type":"session.start","session_id":"abc123","model":"claude-3-5-haiku"}',
+    '{"type":"assistant.delta","session_id":"abc123","content":"I will"}',
+    '{"type":"assistant.delta","session_id":"abc123","content":"analyze"}',
+    '{"type":"tool.use","tool":"read_file","path":"input.txt"}',
+    '{"type":"assistant.delta","session_id":"abc123","content":"the result"}',
+    '{"type":"session.complete","session_id":"abc123","cost":0.002}'
+)
+foreach ($ev in $events) {
+    [Console]::Error.WriteLine($ev)
+    [System.Threading.Thread]::Sleep(100)
+}
+[Console]::Out.Write('{"status":"completed","session_id":"abc123"}')
+'@
+    $openCodeStreamDriver = New-SyntheticChildScript -Name 'opencode-stream-driver' -Body (
+'$ErrorActionPreference = "Stop"; Set-StrictMode -Version Latest' + "`n" +
+'. (Join-Path $env:AGENTIC_OBS_RUNNER_ROOT "runner-common.ps1")' + "`n" +
+'. (Join-Path $env:AGENTIC_OBS_RUNNER_ROOT "runner-progress.ps1")' + "`n" +
+'$pwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source' + "`n" +
+'$ctx = @{ enabled = $true; runner = "opencode"; phase = "opencode-cli"; channel = "Relayable"; heartbeatSeconds = 0.15 }' + "`n" +
+('$r = Invoke-RunnerProcess -FileName $pwsh -ArgumentList @("-NoProfile", "-File", $env:AGENTIC_OBS_GRANDCHILD) -WorkingDirectory $env:AGENTIC_OBS_RUNNER_ROOT -TimeoutSeconds 20 -ProgressContext $ctx') + "`n" +
+'[Console]::Out.Write([string]$r.Stdout)'
+)
+    $ocStreamStderrPath = Join-Path $testRoot 'oc-stream-driver.stderr'
+    $previousRoot3 = [Environment]::GetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT')
+    $previousGrandchild = [Environment]::GetEnvironmentVariable('AGENTIC_OBS_GRANDCHILD')
+    [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $runnerRoot)
+    [Environment]::SetEnvironmentVariable('AGENTIC_OBS_GRANDCHILD', $openCodeGrandchild)
+    try {
+        $ocStreamOut = & $pwshPath -NoProfile -File $openCodeStreamDriver 2>$ocStreamStderrPath
+    } finally {
+        [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $previousRoot3)
+        [Environment]::SetEnvironmentVariable('AGENTIC_OBS_GRANDCHILD', $previousGrandchild)
+    }
+    $ocStreamStdout = ([string]::Join('', @($ocStreamOut | ForEach-Object { [string]$_ }))).Trim()
+    $ocStreamStderr = if (Test-Path -LiteralPath $ocStreamStderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($ocStreamStderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
+    Assert-Equal '{"status":"completed","session_id":"abc123"}' $ocStreamStdout 'opencode streaming: final stdout captured exactly'
+    Assert-True (-not $ocStreamStdout.Contains('assistant.delta')) 'opencode streaming: model content not present on stdout'
+    Assert-True (-not $ocStreamStderr.Contains('"content":"I will"')) 'opencode streaming: model delta content not echoed to operator stderr'
+    Assert-True (-not $ocStreamStderr.Contains('"content":"analyze"')) 'opencode streaming: second delta not echoed to operator stderr'
+    $ocRelayedLines = @($ocStreamStderr -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith($sentinel) })
+    Assert-True ($ocRelayedLines.Count -ge 2) "opencode streaming: operator receives multiple heartbeats (got $($ocRelayedLines.Count))"
+    $ocRelayedEvents = @($ocRelayedLines | ForEach-Object {
+            $p = $_.TrimStart().Substring($sentinel.Length).TrimStart()
+            try { $p | ConvertFrom-Json } catch { $null }
+        } | Where-Object { $null -ne $_ })
+    $ocEventCounts = @($ocRelayedEvents | Where-Object { $null -ne $_.PSObject.Properties['stderrEvents'] } | ForEach-Object { [int64]$_.stderrEvents })
+    Assert-True ($ocEventCounts.Count -ge 2) 'opencode streaming: multiple heartbeats carry stderrEvents'
+    Assert-True (($ocEventCounts | Measure-Object -Maximum).Maximum -gt ($ocEventCounts | Measure-Object -Minimum).Minimum) 'opencode streaming: stderrEvents advance as events are received'
+
+    # ------------------------------------------------------------------
+    # Test 9d - Codex app-server-shaped activity: the shared progress format
+    # correctly carries protocol event counts and bytes. We verify this using
+    # a synthetic write of a progress event with stdoutEvents/stdoutBytes
+    # fields (the same shape Invoke-CodexAppServer emits for its protocol loop)
+    # and confirm the format is correct and the context returns the right phase.
+    # ------------------------------------------------------------------
+    [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_PROGRESS', '1')
+    try {
+        $codexAppServerContext = Get-RunnerModelProgressContext -Runner 'codex' -Phase 'codex-app-server'
+        Assert-True ($null -ne $codexAppServerContext) 'codex app-server: progress context is available when orchestration flag is set'
+        Assert-Equal 'codex' ([string]$codexAppServerContext['runner']) 'codex app-server: context carries runner identity'
+        Assert-Equal 'codex-app-server' ([string]$codexAppServerContext['phase']) 'codex app-server: context carries the app-server phase'
+        Assert-Equal 'Relayable' ([string]$codexAppServerContext['channel']) 'codex app-server: context uses the relayable channel'
+    } finally {
+        [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_PROGRESS', $previousFlag)
+    }
+    # Verify the shared format: a progress event with stdoutEvents/stdoutBytes is
+    # formatted correctly by ConvertTo-RunnerProgressText (same path used by app-server).
+    $appServerProgressEvent = @{
+        runner = 'codex'; state = 'running'; origin = 'child'; phase = 'codex-app-server'
+        pid = 99999; elapsed = '00:00:12'; timeoutRemaining = '00:14:48'
+        stdoutEvents = 42; stdoutBytes = 18722
+    }
+    $appServerLine = ConvertTo-RunnerProgressText -Event $appServerProgressEvent
+    Assert-True ($appServerLine -match '\[codex\]') 'codex app-server progress line carries runner label'
+    Assert-True ($appServerLine -match 'phase=codex-app-server') 'codex app-server progress line carries phase'
+    Assert-True ($appServerLine -match 'stdoutEvents=42') 'codex app-server progress line carries protocol event count'
+    Assert-True ($appServerLine -match 'stdoutBytes=18722') 'codex app-server progress line carries byte count'
+
+    # ------------------------------------------------------------------
+    # Test 9e - synchronous wait/preflight heartbeat: Complete-RunnerChildProcess
+    # must emit heartbeats while waiting even when the caller is not using the
+    # concurrent Wait-AnyRunnerChild loop.
+    # ------------------------------------------------------------------
+    $slowPreflightScript = New-SyntheticChildScript -Name 'slow-preflight' -Body @'
+Start-Sleep -Milliseconds 1500
+[Console]::Out.Write('{"status":"compatible"}')
+'@
+    $preflightStdoutPath = Join-Path $testRoot 'preflight.stdout'
+    $preflightStderrPath = Join-Path $testRoot 'preflight.stderr'
+    $preflightLogPath = Join-Path $testRoot 'preflight-progress.jsonl'
+    $preflightChild = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-File', $slowPreflightScript) -WorkingDirectory $testRoot -StdoutPath $preflightStdoutPath -StderrPath $preflightStderrPath -TimeoutSeconds 30 -Runner 'opencode' -WorkerId 'preflight-arm-99' -EvalId 99 -Configuration 'with_skill' -Phase 'preflight' -ProgressLogPath $preflightLogPath -HeartbeatSeconds 0.3
+    # Call Complete-RunnerChildProcess directly (the synchronous preflight path),
+    # without using Wait-AnyRunnerChild.
+    $preflightExit = Complete-RunnerChildProcess -Child $preflightChild
+    $preflightEvents = @()
+    if (Test-Path -LiteralPath $preflightLogPath -PathType Leaf) {
+        $preflightEvents = @(Get-Content -LiteralPath $preflightLogPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_ | ConvertFrom-Json })
+    }
+    Assert-Equal 0 $preflightExit 'synchronous preflight completes cleanly'
+    $preflightHeartbeats = @($preflightEvents | Where-Object { [string]$_.state -eq 'running' -and [string]$_.origin -eq 'parent' })
+    Assert-True ($preflightHeartbeats.Count -ge 2) "synchronous Complete-RunnerChildProcess emits heartbeats during wait (got $($preflightHeartbeats.Count))"
+    $preflightCompleted = @($preflightEvents | Where-Object { [string]$_.state -eq 'completed' })
+    Assert-Equal 1 $preflightCompleted.Count 'synchronous preflight reports exactly one completed state'
+
     Write-Output 'Runner observability: PASS'
 } finally {
     if (Test-Path -LiteralPath $testRoot) {

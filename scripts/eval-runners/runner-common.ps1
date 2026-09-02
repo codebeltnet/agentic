@@ -1977,6 +1977,13 @@ function Invoke-RunnerProcess {
     $waitCapMs = if ($progressEnabled) { [int][Math]::Max(50, [Math]::Min(5000, $heartbeatSeconds * 1000)) } else { 5000 }
     $processPid = $null
     $lastHeartbeatUtc = $start
+    # Incremental stream wrappers. Initialized after process.Start() inside the
+    # try block; declared here so $emitProgress can safely read them as null
+    # before the process starts and as live activity streams once it has.
+    $stdoutActivity = $null
+    $stderrActivity = $null
+    $stdoutMemory = $null
+    $stderrMemory = $null
     $emitProgress = {
         param([string]$State, [string]$Detail)
         if (-not $progressEnabled) { return }
@@ -1995,6 +2002,28 @@ function Invoke-RunnerProcess {
         }
         if (-not [string]::IsNullOrWhiteSpace($progressWorker)) { $fields.worker = $progressWorker }
         if ($null -ne $processPid) { $fields.pid = $processPid }
+        # Live activity counters from the incremental stream wrappers. When
+        # present these distinguish an actively producing model process from one
+        # that is merely alive: a heartbeat with rising stdoutEvents/stderrEvents
+        # proves real output arrived since the last tick.
+        if ($null -ne $stdoutActivity) {
+            $fields.stdoutEvents = [int64]$stdoutActivity.RealEvents
+            $fields.stdoutBytes = [int64]$stdoutActivity.RealBytes
+        }
+        if ($null -ne $stderrActivity) {
+            $fields.stderrEvents = [int64]$stderrActivity.RealEvents
+            $fields.stderrBytes = [int64]$stderrActivity.RealBytes
+        }
+        $stdoutAge = Get-RunnerActivityAgeSeconds -ActivityStream $stdoutActivity
+        $stderrAge = Get-RunnerActivityAgeSeconds -ActivityStream $stderrActivity
+        $lastAge = $null
+        foreach ($age in @($stdoutAge, $stderrAge)) {
+            if ($null -ne $age -and ($null -eq $lastAge -or $age -lt $lastAge)) { $lastAge = $age }
+        }
+        if ($null -ne $lastAge) {
+            $fields.lastActivity = Format-RunnerElapsed -Seconds $lastAge
+            $fields.lastActivitySeconds = [Math]::Round($lastAge, 3)
+        }
         if (-not [string]::IsNullOrWhiteSpace($Detail)) { $fields.detail = $Detail }
         Write-RunnerProgress -Fields $fields -LogPath $progressLog -Channel $progressChannel
     }
@@ -2004,13 +2033,26 @@ function Invoke-RunnerProcess {
         }
         $processStarted = $true
         $processPid = try { [int]$process.Id } catch { $null }
+
+        # Set up incremental stream tees before starting the async reads.
+        # Each tee forwards all bytes to the evidence MemoryStream (faithful
+        # capture) while counting real events and bytes live. The result STDOUT
+        # uses ClassifyProgress=$false (only counted, never relayed); STDERR
+        # also uses ClassifyProgress=$false here because the model CLI's own
+        # STDERR is structural/diagnostic output that the runner evidence
+        # consumers need verbatim rather than as relayable progress events.
+        Initialize-RunnerActivityType
+        $stdoutMemory = [System.IO.MemoryStream]::new()
+        $stderrMemory = [System.IO.MemoryStream]::new()
+        $stdoutActivity = New-RunnerActivityStream -Inner $stdoutMemory -ClassifyProgress $false
+        $stderrActivity = New-RunnerActivityStream -Inner $stderrMemory -ClassifyProgress $false
         & $emitProgress 'running' 'model process launched'
         $lastHeartbeatUtc = [DateTime]::UtcNow
 
-        # Start both readers before writing stdin. A child that emits enough
+        # Start both copy tasks before writing stdin. A child that emits enough
         # output while reading its prompt must not deadlock the runner.
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutActivity)
+        $stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderrActivity)
         if ($null -ne $InputBytes -and $InputBytes.Length -gt 0) {
             $inputTask = $process.StandardInput.BaseStream.WriteAsync($InputBytes, 0, $InputBytes.Length)
             while (-not $inputTask.IsCompleted) {
@@ -2062,7 +2104,7 @@ function Invoke-RunnerProcess {
 
         # Drain stdout/stderr only until one shared finite deadline. If a
         # descendant keeps a pipe open, return the bounded result instead of
-        # waiting forever for ReadToEndAsync().
+        # waiting forever for the CopyToAsync task.
         $drainDeadline = [DateTime]::UtcNow.AddSeconds(5)
         foreach ($stream in @(
                 [pscustomobject]@{ Task = $stdoutTask; Name = 'stdout' },
@@ -2073,8 +2115,12 @@ function Invoke-RunnerProcess {
             $completed = Wait-RunnerTaskBounded -Task $stream.Task -TimeoutMilliseconds $remainingDrain
             if ($stream.Name -eq 'stdout') { $stdoutDrainCompleted = $completed } else { $stderrDrainCompleted = $completed }
         }
-        $stdout = Get-RunnerTaskResultIfCompleted -Task $stdoutTask
-        $stderr = Get-RunnerTaskResultIfCompleted -Task $stderrTask
+        # Finalize trailing partial-line activity before reading final counters.
+        if ($null -ne $stdoutActivity) { try { $stdoutActivity.FinalizeActivity() } catch { } }
+        if ($null -ne $stderrActivity) { try { $stderrActivity.FinalizeActivity() } catch { } }
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        $stdout = if ($null -ne $stdoutMemory) { $utf8NoBom.GetString($stdoutMemory.ToArray()) } else { '' }
+        $stderr = if ($null -ne $stderrMemory) { $utf8NoBom.GetString($stderrMemory.ToArray()) } else { '' }
         $finish = [DateTime]::UtcNow
         $exitCodeValue = if ($timedOut -or -not $terminationObserved) { $null } else { try { [int]$process.ExitCode } catch { $null } }
         # Final lifecycle for the model process. A timeout or non-zero exit is a
@@ -2111,6 +2157,9 @@ function Invoke-RunnerProcess {
         throw
     } finally {
         $process.Dispose()
+        foreach ($disposable in @($stdoutActivity, $stderrActivity, $stdoutMemory, $stderrMemory)) {
+            if ($null -ne $disposable) { try { $disposable.Dispose() } catch { } }
+        }
     }
 }
 

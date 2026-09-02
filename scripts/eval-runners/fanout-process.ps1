@@ -369,14 +369,21 @@ function Complete-RunnerChildProcess {
     $timedOut = [bool]$Child.WatchdogExpired
     try {
         if (-not $Child.Process.HasExited -and -not $timedOut) {
+            # Poll in slices no longer than the heartbeat interval so the tick
+            # fires on schedule even when the child is slow. The 5 s cap
+            # from before would have silenced a 30 s quiet preflight.
+            $heartbeatMs = if ($null -ne $Child.PSObject.Properties['HeartbeatSeconds'] -and [double]$Child.HeartbeatSeconds -gt 0) { [int][Math]::Max(50, [Math]::Min(2000, [double]$Child.HeartbeatSeconds * 1000)) } else { 2000 }
             while (-not $Child.Process.HasExited) {
                 $remainingTotal = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
                 if ($remainingTotal -le 0) {
                     $timedOut = $true
                     break
                 }
-                $remaining = [int][Math]::Max(1, [Math]::Min(5000, $remainingTotal))
+                $remaining = [int][Math]::Max(1, [Math]::Min($heartbeatMs, $remainingTotal))
                 if ($Child.Process.WaitForExit($remaining)) { break }
+                # Tick heartbeat/relay so a long synchronous wait (e.g. preflight)
+                # never goes externally silent past the configured interval.
+                try { Invoke-RunnerChildHeartbeatTick -Child $Child } catch { }
             }
         }
     } catch { $timedOut = $true }
