@@ -1538,7 +1538,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
 '@), $utf8NoBom)
         $originalPath = [Environment]::GetEnvironmentVariable('PATH', 'Process')
         try {
-            [Environment]::SetEnvironmentVariable('PATH', "$fakeOpenCodeDirectory;$originalPath", 'Process')
+            $pathSeparator = [System.IO.Path]::PathSeparator
+            [Environment]::SetEnvironmentVariable('PATH', "$fakeOpenCodeDirectory$pathSeparator$originalPath", 'Process')
 
             $liveDiscoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' 2>&1
             if ($LASTEXITCODE -ne 0) { throw "OpenCode fake CLI discovery failed: $($liveDiscoveryOutput -join [Environment]::NewLine)" }
@@ -2139,7 +2140,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw "benchmark.json must preserve recorded token metrics through the upstream skill-creator aggregation (with_skill=$($benchmark.run_summary.with_skill.tokens.mean), without_skill=$($benchmark.run_summary.without_skill.tokens.mean))."
         }
 
-        $changedOutput = & pwsh -NoProfile -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot 2>&1
+        $changedOutput = & pwsh -NoProfile -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -Changed failed: $($changedOutput -join [Environment]::NewLine)"
         }
@@ -2420,12 +2421,70 @@ Add-ValidationResult -Results $results -Name 'Agent Smith protects informational
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Strong-name skill matches FORMS summary flow and 1024-bit default' -Action {
+Add-ValidationResult -Results $results -Name 'Strong-name skill enforces post-summary confirmation before generation' -Action {
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-strong-name-signing/SKILL.md' -GitRef $Ref
-    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'compute the defaults silently, and present a single summary for confirmation'
+    $forms = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-strong-name-signing/FORMS.md' -GitRef $Ref
+    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-strong-name-signing/evals/evals.json' -GitRef $Ref
+
+    # The protected operation must be separated from the initial request by a
+    # presented, explicitly accepted summary. Keep these checks semantic so a
+    # wording cleanup cannot accidentally remove the behavioral boundary.
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle '### Confirmation Gate'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'Generating or writing the `.snk` file is a protected operation.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'The initial request to create or generate a key starts the workflow; it is not confirmation of the resolved summary that will be presented.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'supplies every parameter explicitly, leaves nothing unresolved, or otherwise appears completely actionable.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'A summary that has not yet been presented cannot already be confirmed.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'After presenting the summary, stop without creating or modifying the `.snk` file.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'If the user changes any value, present the updated complete summary and obtain confirmation again before generation.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'Explicitly supplied values fill fields and remove the need to ask for those fields; they do not remove the confirmation gate.'
     Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 1024'
-    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'Run this PowerShell command block with `pwsh` 7+ in the target directory:'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'Only after the user confirms the presented summary, run this PowerShell command block with `pwsh` 7+ in the target directory:'
     Assert-NotContains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'default: 4096'
+    Assert-Contains -Name 'dotnet-strong-name-signing/SKILL.md' -Content $skill -Needle 'Confirm these values to generate the key, or tell me which value to change.'
+
+    Assert-Contains -Name 'dotnet-strong-name-signing/FORMS.md' -Content $forms -Needle 'This form separates resolving values from approving the operation.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/FORMS.md' -Content $forms -Needle 'it does not confirm the complete summary that will be presented afterward.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/FORMS.md' -Content $forms -Needle 'Generating or writing the `.snk` file is a protected operation.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/FORMS.md' -Content $forms -Needle 'After presenting the summary and confirmation request, stop.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/FORMS.md' -Content $forms -Needle 'The initial request cannot satisfy this gate because it precedes the presented summary.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/FORMS.md' -Content $forms -Needle 'recompute and present the complete updated summary, and obtain confirmation again before generation.'
+    Assert-Contains -Name 'dotnet-strong-name-signing/FORMS.md' -Content $forms -Needle 'Confirm these values to generate the key, or tell me which value to change.'
+
+    $evalDocument = $evals | ConvertFrom-Json
+    $eval1 = @($evalDocument.evals | Where-Object { [int]$_.id -eq 1 })[0]
+    $eval2 = @($evalDocument.evals | Where-Object { [int]$_.id -eq 2 })[0]
+    $eval3 = @($evalDocument.evals | Where-Object { [int]$_.id -eq 3 })[0]
+    if ($null -eq $eval1 -or $null -eq $eval2 -or $null -eq $eval3) {
+        throw 'dotnet-strong-name-signing evals must define eval ids 1, 2, and 3.'
+    }
+
+    foreach ($scriptedEval in @($eval1, $eval2)) {
+        $turns = @($scriptedEval.interaction.turns)
+        if ([string]$scriptedEval.interaction.mode -ne 'scripted' -or $turns.Count -ne 2 -or
+            [string]$turns[1].role -ne 'user' -or [string]$turns[1].content -ne 'Yes, proceed.') {
+            throw "Strong-name eval $([int]$scriptedEval.id) must retain its scripted 'Yes, proceed.' confirmation turn."
+        }
+    }
+
+    $eval1Expectations = @($eval1.expectations | ForEach-Object { [string]$_ })
+    $eval2Expectations = @($eval2.expectations | ForEach-Object { [string]$_ })
+    if ($eval1Expectations -notcontains 'Does not generate the key before the confirmation turn') {
+        throw 'Strong-name eval 1 must retain the pre-confirmation generation assertion.'
+    }
+    if ($eval2Expectations -notcontains 'Does not perform the protected generation before the confirmation turn') {
+        throw 'Strong-name eval 2 must retain the pre-confirmation generation assertion.'
+    }
+
+    if ([string]$eval3.prompt -notmatch '(?i)Do not create anything\.') {
+        throw 'Strong-name eval 3 must remain an informational scenario that forbids creation.'
+    }
+    if ([string]$eval3.expected_output -notmatch '(?i)informational guidance only' -or
+        [string]$eval3.expected_output -notmatch '(?i)does not create or modify a key file') {
+        throw 'Strong-name eval 3 expected output must not claim generation without a confirmation workflow.'
+    }
+    if ($eval3.PSObject.Properties.Name -contains 'interaction') {
+        throw 'Strong-name eval 3 must not add a synthetic confirmation interaction to its informational scenario.'
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces subject, identity, and grouping locks' -Action {

@@ -1058,7 +1058,11 @@ exit 2
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$execution.config_file))) 'OpenCode config file is outside the source-repository fixture ancestry'
             Assert-Equal ([string]$execution.home) ([string]$execution.node_homedir) 'OpenCode Node runtime resolves the isolated HOME'
             Assert-Equal ([string]$execution.home) ([string]$execution.userprofile) 'OpenCode USERPROFILE matches the isolated HOME'
-            Assert-Equal ([string]$execution.home) ([string]$execution.homedrive + [string]$execution.homepath) 'OpenCode HOMEDRIVE/HOMEPATH resolve the isolated HOME'
+            if ((Get-PlatformName) -eq 'windows') {
+                Assert-Equal ([string]$execution.home) ([string]$execution.homedrive + [string]$execution.homepath) 'OpenCode HOMEDRIVE/HOMEPATH resolve the isolated HOME'
+            } else {
+                Assert-True ([string]::IsNullOrWhiteSpace([string]$execution.homedrive) -and [string]::IsNullOrWhiteSpace([string]$execution.homepath)) 'OpenCode non-Windows child omits Windows profile-part variables'
+            }
             Assert-True (Test-PathInside -BasePath ([string]$execution.home) -CandidatePath ([string]$execution.xdg_config_home)) 'OpenCode XDG_CONFIG_HOME is isolated'
             Assert-Equal '1' $execution.disable_external_skills 'OpenCode disables external skill discovery'
             Assert-Equal '1' $execution.disable_claude_code_skills 'OpenCode disables Claude/agents skill discovery'
@@ -1156,7 +1160,11 @@ exit 2
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$withoutExecution[0].config_file))) 'OpenCode without_skill config file is outside the source-repository fixture ancestry'
             Assert-Equal ([string]$withoutExecution[0].home) ([string]$withoutExecution[0].node_homedir) 'OpenCode without_skill Node runtime resolves the isolated HOME'
             Assert-Equal ([string]$withoutExecution[0].home) ([string]$withoutExecution[0].userprofile) 'OpenCode without_skill USERPROFILE matches the isolated HOME'
-            Assert-Equal ([string]$withoutExecution[0].home) ([string]$withoutExecution[0].homedrive + [string]$withoutExecution[0].homepath) 'OpenCode without_skill HOMEDRIVE/HOMEPATH resolve the isolated HOME'
+            if ((Get-PlatformName) -eq 'windows') {
+                Assert-Equal ([string]$withoutExecution[0].home) ([string]$withoutExecution[0].homedrive + [string]$withoutExecution[0].homepath) 'OpenCode without_skill HOMEDRIVE/HOMEPATH resolve the isolated HOME'
+            } else {
+                Assert-True ([string]::IsNullOrWhiteSpace([string]$withoutExecution[0].homedrive) -and [string]::IsNullOrWhiteSpace([string]$withoutExecution[0].homepath)) 'OpenCode without_skill non-Windows child omits Windows profile-part variables'
+            }
             Assert-True (Test-PathInside -BasePath ([string]$withoutExecution[0].home) -CandidatePath ([string]$withoutExecution[0].xdg_config_home)) 'OpenCode without_skill XDG_CONFIG_HOME is isolated'
             Assert-Equal '1' $withoutExecution[0].disable_external_skills 'OpenCode without_skill disables external skill discovery'
             Assert-Equal '1' $withoutExecution[0].disable_claude_code_skills 'OpenCode without_skill disables Claude/agents skill discovery'
