@@ -48,11 +48,19 @@ function Invoke-ForegroundPhaseOne {
     param([Parameter(Mandatory = $true)][string]$IterationDirectory)
 
     $fanout = Join-Path $IterationDirectory 'tools/eval-runners/invoke-runner-owned-arms.ps1'
-    $output = & pwsh -NoProfile -File $fanout -IterationDirectory $IterationDirectory 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
+    # STDOUT carries the machine protocol; STDERR carries live observability.
+    # Keep them separate so heartbeats never corrupt the terminal JSON.
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('phase1-stderr-' + [Guid]::NewGuid().ToString('N') + '.log')
+    try {
+        $output = & pwsh -NoProfile -File $fanout -IterationDirectory $IterationDirectory 2>$stderrPath
+        $exitCode = $LASTEXITCODE
+        $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
+        $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
+    } finally {
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
     $document = $text | ConvertFrom-Json -Depth 100
-    return [pscustomobject]@{ ExitCode = $exitCode; Text = $text; Document = $document }
+    return [pscustomobject]@{ ExitCode = $exitCode; Text = $text; Stderr = $stderr; Document = $document }
 }
 
 function New-ForegroundPackage {

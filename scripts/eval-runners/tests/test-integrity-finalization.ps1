@@ -71,9 +71,19 @@ function Invoke-TestTool {
 function Invoke-ForegroundPhaseOne {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$IterationDirectory)
 
-    $invocation = Invoke-TestTool -Path $Path -Arguments @('-IterationDirectory', $IterationDirectory)
-    $document = $invocation.Text | ConvertFrom-Json -Depth 100
-    return [pscustomobject]@{ ExitCode = $invocation.ExitCode; Text = $invocation.Text; Document = $document }
+    # STDOUT is the machine protocol; STDERR is live observability. Capture them
+    # separately so relayed heartbeats never contaminate the terminal JSON.
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('phase1-stderr-' + [Guid]::NewGuid().ToString('N') + '.log')
+    try {
+        $output = & pwsh -NoProfile -File $Path -IterationDirectory $IterationDirectory 2>$stderrPath
+        $exitCode = $LASTEXITCODE
+        $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
+        $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
+    } finally {
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+    $document = $text | ConvertFrom-Json -Depth 100
+    return [pscustomobject]@{ ExitCode = $exitCode; Text = $text; Stderr = $stderr; Document = $document }
 }
 
 function Assert-ToolPasses {
