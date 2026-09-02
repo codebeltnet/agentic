@@ -109,7 +109,7 @@ function Invoke-OpenCodeCli {
     )
 
     $allArguments = @($CommandInfo.Prefix) + @($Arguments)
-    return Invoke-RunnerProcess -FileName $CommandInfo.FileName -ArgumentList $allArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
+    return Invoke-RunnerProcess -FileName $CommandInfo.FileName -ArgumentList $allArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'opencode' -Phase 'opencode-cli')
 }
 
 function Get-OpenCodeHelpResult {
@@ -2373,11 +2373,11 @@ function Invoke-OpenCodeExecute {
 
     if ($platform -eq 'linux' -and $hardFilesystem) {
         $sandboxArguments = Get-LinuxSandboxArguments -Inputs $executionInputs -CommandInfo $commandInfo -Environment $environment
-        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $executionInputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $executionInputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $executionInputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $executionInputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'opencode' -Phase 'opencode-cli')
     } elseif ($platform -eq 'macos' -and $hardFilesystem) {
         $sandboxProfile = New-MacosSandboxProfile -Inputs $executionInputs -CommandInfo $commandInfo
         $sandboxArguments = @('-f', $sandboxProfile, '--', $commandInfo.FileName) + @($commandInfo.Prefix) + $arguments
-        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $executionInputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $executionInputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $executionInputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $executionInputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'opencode' -Phase 'opencode-cli')
     } else {
         $process = Invoke-OpenCodeCli -CommandInfo $commandInfo -Arguments $arguments -Inputs $executionInputs -Environment $environment -InputBytes $executionInputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
     }
