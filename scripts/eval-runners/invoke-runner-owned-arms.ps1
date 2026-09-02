@@ -51,7 +51,12 @@ function Invoke-RunnerPreflight {
         [Parameter(Mandatory = $true)][string]$RunnerPath,
         [Parameter(Mandatory = $true)][string]$RunPath,
         [Parameter(Mandatory = $true)][string]$ProfilePath,
-        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds,
+        [string]$Runner = '',
+        [string]$WorkerId = '',
+        [object]$EvalId = $null,
+        [string]$Configuration = '',
+        [string]$ProgressLogPath = ''
     )
 
     $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-preflight-' + [Guid]::NewGuid().ToString('N') + '.stdout')
@@ -72,7 +77,7 @@ function Invoke-RunnerPreflight {
             '-Profile'
             $ProfilePath
         )
-        $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $RunPath) -StdoutPath $stdoutPath -StderrPath $stderrPath -TimeoutSeconds $TimeoutSeconds
+        $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $RunPath) -StdoutPath $stdoutPath -StderrPath $stderrPath -TimeoutSeconds $TimeoutSeconds -Runner $Runner -WorkerId $WorkerId -EvalId $EvalId -Configuration $Configuration -Phase 'preflight' -ProgressLogPath $ProgressLogPath
         $exitCode = Complete-RunnerChildProcess -Child $child
         $childTimedOut = [bool]$child.TimedOut
         $childTerminationObserved = [bool]$child.TerminationObserved
@@ -232,6 +237,7 @@ function Get-PreflightGateSummary {
         incompatible_count = $incompatible.Count
         execution_started = $ExecutionStarted
         execution_count = $ExecutionCount
+        progress_log = 'progress/phase1-progress.jsonl'
         preflights = @($Preflights)
     }
     if (-not [string]::IsNullOrWhiteSpace($Error)) { $summary.error = $Error }
@@ -294,6 +300,7 @@ function Get-FanoutSummary {
         evidence_validation_failed_count = [int]$aggregate.evidence_validation_failed_count
         max_observed_active = [int](Get-JsonProperty -Object $State -Name 'max_observed_active' -Default 0)
         orchestration_state = 'orchestration-state.json'
+        progress_log = 'progress/phase1-progress.jsonl'
         preflight_count = @($Preflights).Count
         execution_started = $executionStarted
         execution_count = [int]$aggregate.terminal_count
@@ -337,10 +344,23 @@ try {
     if (Test-Path -LiteralPath $statePath -PathType Leaf) {
         throw "Runner-owned fan-out refuses to replace an existing orchestration state at '$statePath'."
     }
+    # Persisted live-observability evidence. Progress heartbeats and diagnostics
+    # stream to this process's STDERR for the operator and are also appended here
+    # as JSON lines so a failed or detached run can be inspected afterwards. The
+    # terminal summary advertises this relative path as progress_log.
+    $progressDirectory = Join-Path $iteration 'progress'
+    New-Item -ItemType Directory -Path $progressDirectory -Force | Out-Null
+    $progressLogPath = Join-Path $progressDirectory 'phase1-progress.jsonl'
+    # Enable runner model-CLI progress for every child. Children inherit this
+    # process environment, so each runner relays its model-process lifecycle and
+    # heartbeats through STDERR, which the fan-out surfaces and persists. Runners
+    # invoked standalone (no flag) stay byte-identical and silent.
+    [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_PROGRESS', '1')
     $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $manifest)
     $preflightRecords = [System.Collections.Generic.List[object]]::new()
     foreach ($record in $manifestRecords) {
-        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path) -TimeoutSeconds (Get-RunnerPreflightTimeoutSeconds)
+        $preflightWorkerId = 'arm-{0}-{1}' -f $record.EvalId, $record.Configuration
+        $invocation = Invoke-RunnerPreflight -RunnerPath $runnerPath -RunPath $record.RunManifestPath -ProfilePath ([string]$profile.Path) -TimeoutSeconds (Get-RunnerPreflightTimeoutSeconds) -Runner $runnerName -WorkerId $preflightWorkerId -EvalId ([int]$record.EvalId) -Configuration ([string]$record.Configuration) -ProgressLogPath $progressLogPath
         $preflightRecords.Add((New-PreflightWorkerSummary -Record $record -Invocation $invocation -Descriptor $descriptor))
     }
     $failedPreflights = @($preflightRecords | Where-Object { [string]$_.status -ne 'compatible' })
@@ -390,7 +410,7 @@ try {
             # window on Windows while the process stays a real isolation
             # boundary. The child's sole stdout is streamed to the exact
             # manifest-declared execution result; stderr is captured separately.
-            $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $runPath) -StdoutPath $executionResultPath -StderrPath $stderrPath -TimeoutSeconds ([int]$childBudget.TimeoutSeconds)
+            $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList $arguments -WorkingDirectory (Split-Path -Parent $runPath) -StdoutPath $executionResultPath -StderrPath $stderrPath -TimeoutSeconds ([int]$childBudget.TimeoutSeconds) -Runner $runnerName -WorkerId $workerId -EvalId ([int]$arm.eval_id) -Configuration ([string]$arm.configuration) -Phase 'runner-cli' -Turn ([int]$childBudget.TurnCount) -ProgressLogPath $progressLogPath
             if (-not [bool]$state.preflight.execution_started) {
                 $state.preflight.execution_started = $true
                 Save-OrchestrationState -Path $statePath -State $state

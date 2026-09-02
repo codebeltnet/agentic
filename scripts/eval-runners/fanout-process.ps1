@@ -18,6 +18,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+if (-not (Get-Command Write-RunnerProgress -ErrorAction SilentlyContinue)) {
+    . (Join-Path $PSScriptRoot 'runner-progress.ps1')
+}
+
 function New-RunnerChildProcessStartInfo {
     <#
       Builds the headless child-process configuration used for every
@@ -58,7 +62,15 @@ function Start-RunnerChildProcess {
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [Parameter(Mandatory = $true)][string]$StdoutPath,
         [Parameter(Mandatory = $true)][string]$StderrPath,
-        [int]$TimeoutSeconds = 900
+        [int]$TimeoutSeconds = 900,
+        [string]$Runner = '',
+        [string]$WorkerId = '',
+        [object]$EvalId = $null,
+        [string]$Configuration = '',
+        [string]$Phase = '',
+        [object]$Turn = $null,
+        [string]$ProgressLogPath = '',
+        [double]$HeartbeatSeconds = 0
     )
 
     New-Item -ItemType Directory -Path (Split-Path -Parent $StdoutPath) -Force | Out-Null
@@ -76,15 +88,27 @@ function Start-RunnerChildProcess {
         $process.Dispose()
         throw
     }
-    $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
-    $stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
     $startedUtc = [DateTime]::UtcNow
-    return [pscustomobject]@{
+    # Tee the child's captured streams: every byte still reaches the exact
+    # evidence/result file, while the wrapper exposes live activity metadata and
+    # pulls structured child progress (sentinel lines) out of the captured STDERR
+    # for relay. The result STDOUT is only ever counted, never echoed.
+    $stdoutActivity = New-RunnerActivityStream -Inner $stdoutStream -ClassifyProgress $false
+    $stderrActivity = New-RunnerActivityStream -Inner $stderrStream -ClassifyProgress $true
+    $stdoutTask = $process.StandardOutput.BaseStream.CopyToAsync($stdoutActivity)
+    $stderrTask = $process.StandardError.BaseStream.CopyToAsync($stderrActivity)
+    $progressEnabled = (-not [string]::IsNullOrWhiteSpace($Runner)) -or (-not [string]::IsNullOrWhiteSpace($WorkerId))
+    $heartbeat = if ($HeartbeatSeconds -gt 0) { $HeartbeatSeconds } else { Get-RunnerHeartbeatIntervalSeconds }
+    $processId = try { [int]$process.Id } catch { $null }
+    $child = [pscustomobject]@{
         Process = $process
+        ProcessId = $processId
         StdoutPath = $StdoutPath
         StderrPath = $StderrPath
         StdoutStream = $stdoutStream
         StderrStream = $stderrStream
+        StdoutActivity = $stdoutActivity
+        StderrActivity = $stderrActivity
         StdoutTask = $stdoutTask
         StderrTask = $stderrTask
         StartedUtc = $startedUtc
@@ -95,7 +119,226 @@ function Start-RunnerChildProcess {
         TerminationObserved = $false
         OutputDrainCompleted = $false
         FinishedUtc = $null
+        Runner = $Runner
+        WorkerId = $WorkerId
+        EvalId = $EvalId
+        Configuration = $Configuration
+        Phase = $Phase
+        Turn = $Turn
+        ProgressLogPath = $ProgressLogPath
+        HeartbeatSeconds = $heartbeat
+        ProgressEnabled = $progressEnabled
+        LastHeartbeatUtc = $startedUtc
+        FirstStdoutSeen = $false
+        FirstStderrSeen = $false
+        LifecycleState = 'running'
     }
+    if ($progressEnabled) {
+        Write-RunnerChildProgress -Child $child -State 'running' -Detail 'process launched'
+    }
+    return $child
+}
+
+function Get-RunnerChildRecord {
+    <#
+      The live fan-out queue wraps the process helper as `.child`; focused helper
+      tests pass the process record directly. Accept both shapes.
+    #>
+    param([Parameter(Mandatory = $true)][object]$Item)
+
+    if ($null -ne $Item.PSObject.Properties['child'] -and $null -ne $Item.child) { return $Item.child }
+    return $Item
+}
+
+function Test-RunnerChildProgressEnabled {
+    param([object]$Child)
+
+    if ($null -eq $Child) { return $false }
+    $property = $Child.PSObject.Properties['ProgressEnabled']
+    return ($null -ne $property -and [bool]$Child.ProgressEnabled)
+}
+
+function Get-RunnerChildSnapshot {
+    <#
+      Safe, live activity metadata for one child: elapsed runtime, remaining
+      timeout budget, real stdout/stderr event and byte counts, and the age of the
+      most recent real (non-progress) output. Never returns output content.
+    #>
+    param([Parameter(Mandatory = $true)][object]$Child)
+
+    $now = [DateTime]::UtcNow
+    $elapsed = [Math]::Max(0, ($now - [DateTime]$Child.StartedUtc).TotalSeconds)
+    $remaining = $null
+    if ($null -ne $Child.PSObject.Properties['DeadlineUtc'] -and $null -ne $Child.DeadlineUtc) {
+        $remaining = [Math]::Max(0, ([DateTime]$Child.DeadlineUtc - $now).TotalSeconds)
+    }
+    $stdoutAge = Get-RunnerActivityAgeSeconds -ActivityStream $Child.StdoutActivity
+    $stderrAge = Get-RunnerActivityAgeSeconds -ActivityStream $Child.StderrActivity
+    $lastActivity = $null
+    foreach ($age in @($stdoutAge, $stderrAge)) {
+        if ($null -ne $age -and ($null -eq $lastActivity -or $age -lt $lastActivity)) { $lastActivity = $age }
+    }
+    return [pscustomobject]@{
+        ElapsedSeconds = $elapsed
+        TimeoutRemainingSeconds = $remaining
+        LastActivitySeconds = $lastActivity
+        StdoutEvents = if ($null -ne $Child.StdoutActivity) { [int64]$Child.StdoutActivity.RealEvents } else { 0 }
+        StderrEvents = if ($null -ne $Child.StderrActivity) { [int64]$Child.StderrActivity.RealEvents } else { 0 }
+        StdoutBytes = if ($null -ne $Child.StdoutActivity) { [int64]$Child.StdoutActivity.RealBytes } else { 0 }
+        StderrBytes = if ($null -ne $Child.StderrActivity) { [int64]$Child.StderrActivity.RealBytes } else { 0 }
+    }
+}
+
+function Get-RunnerChildProgressFields {
+    param(
+        [Parameter(Mandatory = $true)][object]$Child,
+        [Parameter(Mandatory = $true)][string]$State,
+        [string]$Detail = ''
+    )
+
+    $snapshot = Get-RunnerChildSnapshot -Child $Child
+    $fields = @{
+        runner = [string]$Child.Runner
+        worker = [string]$Child.WorkerId
+        state = $State
+        origin = 'parent'
+    }
+    if ($null -ne $Child.EvalId) { $fields.eval = $Child.EvalId }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Child.Configuration)) { $fields.configuration = [string]$Child.Configuration }
+    if ($null -ne $Child.ProcessId) { $fields.pid = $Child.ProcessId }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Child.Phase)) { $fields.phase = [string]$Child.Phase }
+    if ($null -ne $Child.Turn) { $fields.turn = $Child.Turn }
+    $fields.elapsed = Format-RunnerElapsed -Seconds $snapshot.ElapsedSeconds
+    $fields.elapsedSeconds = [Math]::Round($snapshot.ElapsedSeconds, 3)
+    if ($null -ne $snapshot.TimeoutRemainingSeconds) {
+        $fields.timeoutRemaining = Format-RunnerElapsed -Seconds $snapshot.TimeoutRemainingSeconds
+        $fields.timeoutRemainingSeconds = [Math]::Round($snapshot.TimeoutRemainingSeconds, 3)
+    }
+    if ($null -ne $snapshot.LastActivitySeconds) {
+        $fields.lastActivity = Format-RunnerElapsed -Seconds $snapshot.LastActivitySeconds
+        $fields.lastActivitySeconds = [Math]::Round($snapshot.LastActivitySeconds, 3)
+    }
+    $fields.stdoutEvents = $snapshot.StdoutEvents
+    $fields.stderrEvents = $snapshot.StderrEvents
+    $fields.stdoutBytes = $snapshot.StdoutBytes
+    $fields.stderrBytes = $snapshot.StderrBytes
+    if (-not [string]::IsNullOrWhiteSpace($Detail)) { $fields.detail = $Detail }
+    return $fields
+}
+
+function Write-RunnerChildProgress {
+    param(
+        [Parameter(Mandatory = $true)][object]$Child,
+        [Parameter(Mandatory = $true)][string]$State,
+        [string]$Detail = ''
+    )
+
+    if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return }
+    $fields = Get-RunnerChildProgressFields -Child $Child -State $State -Detail $Detail
+    Write-RunnerProgress -Fields $fields -LogPath ([string]$Child.ProgressLogPath) -Channel Operator
+    if ($null -ne $Child.PSObject.Properties['LastHeartbeatUtc']) { $Child.LastHeartbeatUtc = [DateTime]::UtcNow }
+    if ($null -ne $Child.PSObject.Properties['LifecycleState']) { $Child.LifecycleState = $State }
+}
+
+function Send-RunnerChildRelay {
+    <#
+      Drains structured progress a child emitted to its own STDERR and re-emits it
+      through the parent's operator channel, re-stamped with the correct
+      runner/worker identity so concurrent arms never interleave anonymously. The
+      raw bytes remain captured in the child's evidence file untouched.
+    #>
+    param([Parameter(Mandatory = $true)][object]$Child)
+
+    if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return }
+    $logPath = [string]$Child.ProgressLogPath
+    foreach ($stream in @($Child.StderrActivity, $Child.StdoutActivity)) {
+        if ($null -eq $stream) { continue }
+        $payload = $null
+        $guard = 0
+        while ($stream.TryDequeueRelay([ref]$payload)) {
+            $guard++
+            if ($guard -gt 10000) { break }
+            $fields = ConvertFrom-RunnerRelayPayload -Payload ([string]$payload)
+            if ($null -eq $fields) { continue }
+            $fields['origin'] = 'relay'
+            $fields['runner'] = [string]$Child.Runner
+            $fields['worker'] = [string]$Child.WorkerId
+            if ($null -ne $Child.EvalId -and -not $fields.ContainsKey('eval')) { $fields['eval'] = $Child.EvalId }
+            if (-not [string]::IsNullOrWhiteSpace([string]$Child.Configuration) -and -not $fields.ContainsKey('configuration')) { $fields['configuration'] = [string]$Child.Configuration }
+            Write-RunnerProgress -Fields $fields -LogPath $logPath -Channel Operator
+        }
+    }
+}
+
+function Invoke-RunnerChildHeartbeatTick {
+    <#
+      One non-blocking observability tick for a running child: relay structured
+      child progress, announce first observed real activity once per stream, and
+      emit a heartbeat when the child has been silent past its interval. Never
+      blocks the process, and is a no-op for progress-disabled children.
+    #>
+    param([Parameter(Mandatory = $true)][object]$Child)
+
+    if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return }
+    Send-RunnerChildRelay -Child $Child
+    if ($null -ne $Child.PSObject.Properties['FirstStderrSeen'] -and -not $Child.FirstStderrSeen -and $null -ne $Child.StderrActivity -and [int64]$Child.StderrActivity.RealEvents -gt 0) {
+        $Child.FirstStderrSeen = $true
+        Write-RunnerChildProgress -Child $Child -State 'active' -Detail 'first stderr activity'
+        return
+    }
+    if ($null -ne $Child.PSObject.Properties['FirstStdoutSeen'] -and -not $Child.FirstStdoutSeen -and $null -ne $Child.StdoutActivity -and [int64]$Child.StdoutActivity.RealEvents -gt 0) {
+        $Child.FirstStdoutSeen = $true
+        Write-RunnerChildProgress -Child $Child -State 'active' -Detail 'first stdout activity'
+        return
+    }
+    $interval = if ($null -ne $Child.PSObject.Properties['HeartbeatSeconds'] -and [double]$Child.HeartbeatSeconds -gt 0) { [double]$Child.HeartbeatSeconds } else { Get-RunnerHeartbeatIntervalSeconds }
+    $last = if ($null -ne $Child.PSObject.Properties['LastHeartbeatUtc'] -and $null -ne $Child.LastHeartbeatUtc) { [DateTime]$Child.LastHeartbeatUtc } else { [DateTime]$Child.StartedUtc }
+    if (([DateTime]::UtcNow - $last).TotalSeconds -ge $interval) {
+        Write-RunnerChildProgress -Child $Child -State 'running'
+    }
+}
+
+function Get-RunnerChildStderrTail {
+    param(
+        [Parameter(Mandatory = $true)][object]$Child,
+        [int]$MaxBytes = 4096,
+        [int]$MaxLength = 400
+    )
+
+    $path = [string]$Child.StderrPath
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return '' }
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        if ($bytes.Length -gt $MaxBytes) { $bytes = $bytes[($bytes.Length - $MaxBytes)..($bytes.Length - 1)] }
+        $text = [System.Text.UTF8Encoding]::new($false).GetString($bytes)
+        $sentinel = Get-RunnerProgressSentinel
+        $lines = @($text -split "`r?`n" | Where-Object { -not ($_.TrimStart().StartsWith($sentinel)) })
+        return Get-RunnerProgressSafeTail -Text ([string]::Join(' ', $lines)) -MaxLength $MaxLength
+    } catch { return '' }
+}
+
+function Write-RunnerChildDiagnostic {
+    <#
+      Final safe diagnostic snapshot answering "what was this child doing just
+      before it failed or timed out?": identity, PID, elapsed, timeout budget,
+      last-activity age, phase, stdout/stderr counts, exit code, whether
+      termination was required and observed, and a bounded sanitized stderr tail.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][object]$Child,
+        [Parameter(Mandatory = $true)][string]$State,
+        [object]$ExitCode = $null
+    )
+
+    if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return }
+    $fields = Get-RunnerChildProgressFields -Child $Child -State $State
+    if ($null -ne $ExitCode) { $fields['exitCode'] = [int]$ExitCode }
+    if ($null -ne $Child.PSObject.Properties['TimedOut']) { $fields['terminationRequested'] = [bool]$Child.TimedOut }
+    if ($null -ne $Child.PSObject.Properties['TerminationObserved']) { $fields['terminationObserved'] = [bool]$Child.TerminationObserved }
+    $tail = Get-RunnerChildStderrTail -Child $Child
+    if (-not [string]::IsNullOrWhiteSpace($tail)) { $fields['detail'] = 'last stderr: ' + $tail }
+    Write-RunnerProgress -Fields $fields -LogPath ([string]$Child.ProgressLogPath) -Channel Operator
+    if ($null -ne $Child.PSObject.Properties['LifecycleState']) { $Child.LifecycleState = $State }
 }
 
 function Wait-RunnerChildTaskBounded {
@@ -140,6 +383,7 @@ function Complete-RunnerChildProcess {
 
     if ($timedOut) {
         $Child.TimedOut = $true
+        Write-RunnerChildProgress -Child $Child -State 'terminating' -Detail 'watchdog deadline reached'
         try { $Child.Process.Kill($true) } catch { }
         try { if (-not $Child.Process.HasExited) { [void]$Child.Process.WaitForExit(5000) } } catch { }
     }
@@ -161,6 +405,12 @@ function Complete-RunnerChildProcess {
         } catch { }
     }
     $Child.OutputDrainCompleted = $stdoutDone -and $stderrDone
+    # Account for any trailing partial line before reading final activity counts.
+    foreach ($activity in @($Child.PSObject.Properties['StdoutActivity'], $Child.PSObject.Properties['StderrActivity'])) {
+        if ($null -ne $activity -and $null -ne $activity.Value) { try { $activity.Value.FinalizeActivity() } catch { } }
+    }
+    # Surface any structured child progress that arrived just before exit.
+    Send-RunnerChildRelay -Child $Child
     foreach ($stream in @($Child.StdoutStream, $Child.StderrStream)) {
         try { $stream.Flush() } catch { }
         try { $stream.Dispose() } catch { }
@@ -171,6 +421,16 @@ function Complete-RunnerChildProcess {
     }
     try { $Child.Process.Dispose() } catch { }
     $Child.FinishedUtc = [DateTime]::UtcNow
+    # Final lifecycle: a timeout or non-zero exit yields a diagnostic snapshot so
+    # the operator learns the last-known state before control returns to the
+    # caller (which may then throw). A clean exit reports completion.
+    if ($timedOut) {
+        Write-RunnerChildDiagnostic -Child $Child -State 'timed-out' -ExitCode $exitCode
+    } elseif ($null -ne $exitCode -and $exitCode -ne 0) {
+        Write-RunnerChildDiagnostic -Child $Child -State 'failed' -ExitCode $exitCode
+    } else {
+        Write-RunnerChildProgress -Child $Child -State 'completed' -Detail 'process exited'
+    }
     return $exitCode
 }
 
@@ -188,6 +448,12 @@ function Wait-AnyRunnerChild {
 
     if ($Running.Count -eq 0) { return -1 }
     while ($true) {
+        # Non-blocking observability pass: relay structured child progress and
+        # emit heartbeats so no actively running arm goes silent past its
+        # interval. A no-op for progress-disabled records used by focused tests.
+        foreach ($item in $Running) {
+            try { Invoke-RunnerChildHeartbeatTick -Child (Get-RunnerChildRecord -Item $item) } catch { }
+        }
         for ($index = 0; $index -lt $Running.Count; $index++) {
             $child = $Running[$index]
             if ($child.Process.HasExited) { return $index }

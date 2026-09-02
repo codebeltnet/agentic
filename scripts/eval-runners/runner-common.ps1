@@ -1,6 +1,10 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+if (-not (Get-Command Write-RunnerProgress -ErrorAction SilentlyContinue)) {
+    . (Join-Path $PSScriptRoot 'runner-progress.ps1')
+}
+
 function Format-UtcTimestamp {
     param([Parameter(Mandatory = $true)][DateTime]$Value)
 
@@ -1911,7 +1915,8 @@ function Invoke-RunnerProcess {
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [System.Collections.IDictionary]$Environment = @{},
         [AllowEmptyCollection()][byte[]]$InputBytes = @(),
-        [int]$TimeoutSeconds = 900
+        [int]$TimeoutSeconds = 900,
+        [hashtable]$ProgressContext = $null
     )
 
     $start = [DateTime]::UtcNow
@@ -1944,11 +1949,63 @@ function Invoke-RunnerProcess {
     $stderrDrainCompleted = $false
     $timeoutValue = [Math]::Max(1, $TimeoutSeconds)
     $deadline = $start.AddSeconds($timeoutValue)
+
+    # Opt-in live observability for the model process this primitive runs. When a
+    # context is supplied the primitive reports lifecycle and periodic heartbeats
+    # to STDERR (never STDOUT) so a long, quiet model CLI is visibly alive. The
+    # default path (no context, e.g. version/describe probes) is unchanged and
+    # never emits, keeping the exact captured output and decode behavior intact.
+    $progressEnabled = $false
+    $progressRunner = ''
+    $progressWorker = ''
+    $progressPhase = 'model-cli'
+    $progressChannel = 'Relayable'
+    $progressLog = ''
+    $heartbeatSeconds = Get-RunnerHeartbeatIntervalSeconds
+    if ($null -ne $ProgressContext) {
+        $progressEnabled = if ($ProgressContext.ContainsKey('enabled')) { [bool]$ProgressContext['enabled'] } else { $true }
+        if ($ProgressContext.ContainsKey('runner')) { $progressRunner = [string]$ProgressContext['runner'] }
+        if ($ProgressContext.ContainsKey('worker')) { $progressWorker = [string]$ProgressContext['worker'] }
+        if ($ProgressContext.ContainsKey('phase') -and -not [string]::IsNullOrWhiteSpace([string]$ProgressContext['phase'])) { $progressPhase = [string]$ProgressContext['phase'] }
+        if ($ProgressContext.ContainsKey('channel') -and -not [string]::IsNullOrWhiteSpace([string]$ProgressContext['channel'])) { $progressChannel = [string]$ProgressContext['channel'] }
+        if ($ProgressContext.ContainsKey('logPath')) { $progressLog = [string]$ProgressContext['logPath'] }
+        if ($ProgressContext.ContainsKey('heartbeatSeconds')) {
+            $hb = 0.0
+            if ([double]::TryParse([string]$ProgressContext['heartbeatSeconds'], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$hb) -and $hb -gt 0) { $heartbeatSeconds = $hb }
+        }
+    }
+    $waitCapMs = if ($progressEnabled) { [int][Math]::Max(50, [Math]::Min(5000, $heartbeatSeconds * 1000)) } else { 5000 }
+    $processPid = $null
+    $lastHeartbeatUtc = $start
+    $emitProgress = {
+        param([string]$State, [string]$Detail)
+        if (-not $progressEnabled) { return }
+        $nowUtc = [DateTime]::UtcNow
+        $elapsedSeconds = [Math]::Max(0, ($nowUtc - $start).TotalSeconds)
+        $remainingSeconds = [Math]::Max(0, ($deadline - $nowUtc).TotalSeconds)
+        $fields = @{
+            runner = $progressRunner
+            state = $State
+            origin = 'child'
+            phase = $progressPhase
+            elapsed = Format-RunnerElapsed -Seconds $elapsedSeconds
+            elapsedSeconds = [Math]::Round($elapsedSeconds, 3)
+            timeoutRemaining = Format-RunnerElapsed -Seconds $remainingSeconds
+            timeoutRemainingSeconds = [Math]::Round($remainingSeconds, 3)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($progressWorker)) { $fields.worker = $progressWorker }
+        if ($null -ne $processPid) { $fields.pid = $processPid }
+        if (-not [string]::IsNullOrWhiteSpace($Detail)) { $fields.detail = $Detail }
+        Write-RunnerProgress -Fields $fields -LogPath $progressLog -Channel $progressChannel
+    }
     try {
         if (-not $process.Start()) {
             throw "Could not start '$FileName'."
         }
         $processStarted = $true
+        $processPid = try { [int]$process.Id } catch { $null }
+        & $emitProgress 'running' 'model process launched'
+        $lastHeartbeatUtc = [DateTime]::UtcNow
 
         # Start both readers before writing stdin. A child that emits enough
         # output while reading its prompt must not deadlock the runner.
@@ -1980,13 +2037,18 @@ function Invoke-RunnerProcess {
                     $timedOut = $true
                     break
                 }
-                $remaining = [int][Math]::Max(1, [Math]::Min(5000, $remainingTotal))
+                $remaining = [int][Math]::Max(1, [Math]::Min($waitCapMs, $remainingTotal))
                 if ($process.WaitForExit($remaining)) { break }
+                if ($progressEnabled -and ([DateTime]::UtcNow - $lastHeartbeatUtc).TotalSeconds -ge $heartbeatSeconds) {
+                    & $emitProgress 'running' $null
+                    $lastHeartbeatUtc = [DateTime]::UtcNow
+                }
             }
             if (-not $timedOut) { $terminationObserved = [bool]$process.HasExited }
         }
 
         if ($timedOut) {
+            & $emitProgress 'terminating' 'model process watchdog deadline reached'
             $killAttempted = $true
             try { $process.Kill($true) } catch { }
             # A forced termination is allowed a small, finite grace period.
@@ -2014,9 +2076,22 @@ function Invoke-RunnerProcess {
         $stdout = Get-RunnerTaskResultIfCompleted -Task $stdoutTask
         $stderr = Get-RunnerTaskResultIfCompleted -Task $stderrTask
         $finish = [DateTime]::UtcNow
+        $exitCodeValue = if ($timedOut -or -not $terminationObserved) { $null } else { try { [int]$process.ExitCode } catch { $null } }
+        # Final lifecycle for the model process. A timeout or non-zero exit is a
+        # diagnostic; a clean exit is completion. Emitted before the shared
+        # process is disposed so the last-known state reaches the operator.
+        if ($progressEnabled) {
+            if ($timedOut) {
+                & $emitProgress 'timed-out' 'model process terminated at watchdog deadline'
+            } elseif ($null -ne $exitCodeValue -and $exitCodeValue -ne 0) {
+                & $emitProgress 'failed' ('model process exited with ' + $exitCodeValue)
+            } else {
+                & $emitProgress 'completed' 'model process exited'
+            }
+        }
 
         return [pscustomobject]@{
-            ExitCode = if ($timedOut -or -not $terminationObserved) { $null } else { $process.ExitCode }
+            ExitCode = $exitCodeValue
             TimedOut = $timedOut
             Stdout = $stdout
             Stderr = $stderr
