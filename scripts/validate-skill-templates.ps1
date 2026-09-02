@@ -1357,6 +1357,23 @@ Add-ValidationResult -Results $results -Name 'Model-free harness probes resolve 
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Runner live observability remains deterministic and model-free' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $observabilityPath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-runner-observability.ps1'
+    if (-not (Test-Path -LiteralPath $observabilityPath -PathType Leaf)) {
+        throw 'The runner observability regression is missing.'
+    }
+    $observabilityOutput = & pwsh -NoProfile -File $observabilityPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Runner observability regression failed: $($observabilityOutput -join [Environment]::NewLine)"
+    }
+    if (@($observabilityOutput -join [Environment]::NewLine) -notmatch 'Runner observability:\s+PASS') {
+        throw 'Runner observability regression did not report PASS.'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Action {
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
@@ -2065,11 +2082,22 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
         try {
             $fanoutPath = Join-Path $iterationDirectory 'tools/eval-runners/invoke-runner-owned-arms.ps1'
-            $fanoutOutput = & pwsh -NoProfile -File $fanoutPath -IterationDirectory $iterationDirectory 2>&1
-            $fanoutExitCode = $LASTEXITCODE
-            $fanoutDocument = ([string]::Join([Environment]::NewLine, @($fanoutOutput)) | ConvertFrom-Json -Depth 100)
+            # STDOUT is the machine protocol (terminal JSON); STDERR is the live
+            # observability channel. Keep them separate so heartbeats never
+            # corrupt the summary this validator parses.
+            $fanoutStderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('validator-phase1-stderr-' + [Guid]::NewGuid().ToString('N') + '.log')
+            $fanoutStderrText = ''
+            try {
+                $fanoutOutput = & pwsh -NoProfile -File $fanoutPath -IterationDirectory $iterationDirectory 2>$fanoutStderrPath
+                $fanoutExitCode = $LASTEXITCODE
+                if (Test-Path -LiteralPath $fanoutStderrPath -PathType Leaf) { $fanoutStderrText = [System.IO.File]::ReadAllText($fanoutStderrPath, $utf8NoBom) }
+            } finally {
+                Remove-Item -LiteralPath $fanoutStderrPath -Force -ErrorAction SilentlyContinue
+            }
+            $fanoutStdoutText = [string]::Join([Environment]::NewLine, @($fanoutOutput | ForEach-Object { [string]$_ }))
+            $fanoutDocument = ($fanoutStdoutText | ConvertFrom-Json -Depth 100)
             if ($fanoutExitCode -ne 0 -or [string]$fanoutDocument.status -ne 'completed') {
-                throw "The deterministic runner-owned fixture could not complete the package: $($fanoutOutput -join [Environment]::NewLine)"
+                throw "The deterministic runner-owned fixture could not complete the package: $fanoutStdoutText $fanoutStderrText"
             }
         } finally {
             foreach ($environmentName in $fixtureMetricEnvironment.Keys) {
