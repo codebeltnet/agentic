@@ -57,8 +57,8 @@
     },
     {
       "id": 3,
-      "prompt": "I need a strong name key for an open source NuGet package. Show me how to generate it and remind me how to handle the file afterward.",
-      "expected_output": "The workflow generates the key and includes the open-source guidance about checking the .snk file into source control.",
+      "prompt": "I maintain an open source NuGet package. Explain how I should configure strong-name signing and how the .snk file should be handled. Do not create anything.",
+      "expected_output": "The response provides informational guidance only, including the .csproj usage snippet, the identity-not-security explanation, and open-source versus proprietary .snk handling guidance; it does not create or modify a key file.",
       "expectations": [
         "Includes the .csproj usage snippet",
         "Mentions Microsoft guidance that strong names are about identity, not security",
