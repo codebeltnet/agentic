@@ -89,7 +89,7 @@ Do not use a top-level directory or the first framework commit as the only relea
 - Refinements to a pre-existing adapter or framework are `Changed` or `Fixed` from their final delta. A defect repaired before first release of a base-absent capability remains part of that capability's `Added` outcome.
 - A planned, blocked, or unsupported CLI/TUI/harness is not support and must not be listed as an `Added` adapter.
 
-Use the final state, not commit verbs: newly usable execution support belongs under `Added`; changes to existing runner, orchestration, report, telemetry, or package behavior belong under `Changed`; and distinct supported repairs belong under `Fixed`. For example, a new framework followed by Cline or GitHub Copilot adapters gets `Added` outcomes for the framework and adapters, while changes to an existing Codex adapter are classified separately.
+Use the final state, not commit verbs: newly usable execution support belongs under `Added`; changes to existing runner, orchestration, report, telemetry, or package behavior belong under `Changed`; and distinct supported repairs belong under `Fixed`. For example, a new framework followed by GitHub Copilot and OpenCode adapters gets `Added` outcomes for the framework and adapters, while changes to an existing Codex adapter are classified separately.
 
 1. Inspect cumulative manifest and version deltas across `diff_range`.
 2. Inspect the cumulative base-to-`HEAD` diff.

@@ -254,15 +254,14 @@
     },
     {
       "id": 22,
-      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start from a tagged base release containing `CHANGELOG.md`, an existing `scripts/eval-runners/README.md`, an existing `scripts/eval-runners/codex/runner.ps1`, an existing report generator, and an existing conformance test. On branch `v1.1.0/eval-runner-support`, add the shared execution contracts and package bridge, add `scripts/eval-runners/cline/runner.ps1` and `scripts/eval-runners/github-copilot/runner.ps1` with their fixtures and documentation, refine the existing report telemetry and Codex command behavior, add a `freebuff-readiness.md` file that says its TUI transport is planned and blocked, and repair a distinct existing Codex evidence-directory defect. Include commits from multiple contributors. Update `CHANGELOG.md` and stop after the edit.",
-      "expected_output": "The changelog separates the new execution framework and independently selectable Cline and GitHub Copilot adapters as Added outcomes, classifies changes to the pre-existing report/Codex behavior separately, records the supported Codex repair when justified, does not repeat the new adapters under Changed, and does not claim the planned Freebuff TUI is supported.",
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start from a tagged base release containing `CHANGELOG.md`, an existing `scripts/eval-runners/README.md`, an existing `scripts/eval-runners/codex/runner.ps1`, an existing report generator, and an existing conformance test. On branch `v1.1.0/eval-runner-support`, add the shared execution contracts and package bridge, add `scripts/eval-runners/github-copilot/runner.ps1` and `scripts/eval-runners/opencode/runner.ps1` with their fixtures and documentation, refine the existing report telemetry and Codex command behavior, and repair a distinct existing Codex evidence-directory defect. Include commits from multiple contributors. Update `CHANGELOG.md` and stop after the edit.",
+      "expected_output": "The changelog separates the new execution framework and independently selectable GitHub Copilot and OpenCode adapters as Added outcomes, classifies changes to the pre-existing report/Codex behavior separately, records the supported Codex repair when justified, and does not repeat the new adapters under Changed.",
       "expectations": [
         "Does not treat the top-level scripts/eval-runners directory as the only release entity when independently selectable adapters have distinct final states",
-        "Runs or applies path-backed base-versus-HEAD classification to the shared framework and the Cline and GitHub Copilot adapter boundaries",
-        "Places first-time Cline and GitHub Copilot support under Added even when the parent eval-runner framework already existed at the base or earlier in the branch",
+        "Runs or applies path-backed base-versus-HEAD classification to the shared framework and the GitHub Copilot and OpenCode adapter boundaries",
+        "Places first-time GitHub Copilot and OpenCode support under Added even when the parent eval-runner framework already existed at the base or earlier in the branch",
         "Classifies refinements to the pre-existing report generator or Codex adapter from their surviving base-to-HEAD behavior rather than calling them new support",
         "Does not repeat a newly supported adapter in both Added and Changed or describe it merely as added to an existing lineup under Changed",
-        "Does not claim the planned or blocked Freebuff TUI is a supported runner or a completed Added capability",
         "Keeps the changelog grounded in the final state and includes contributions from every selected author"
       ]
     }
