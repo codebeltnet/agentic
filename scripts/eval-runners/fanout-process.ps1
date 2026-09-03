@@ -298,31 +298,13 @@ function Invoke-RunnerChildHeartbeatTick {
     }
 }
 
-function Get-RunnerChildStderrTail {
-    param(
-        [Parameter(Mandatory = $true)][object]$Child,
-        [int]$MaxBytes = 4096,
-        [int]$MaxLength = 400
-    )
-
-    $path = [string]$Child.StderrPath
-    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return '' }
-    try {
-        $bytes = [System.IO.File]::ReadAllBytes($path)
-        if ($bytes.Length -gt $MaxBytes) { $bytes = $bytes[($bytes.Length - $MaxBytes)..($bytes.Length - 1)] }
-        $text = [System.Text.UTF8Encoding]::new($false).GetString($bytes)
-        $sentinel = Get-RunnerProgressSentinel
-        $lines = @($text -split "`r?`n" | Where-Object { -not ($_.TrimStart().StartsWith($sentinel)) })
-        return Get-RunnerProgressSafeTail -Text ([string]::Join(' ', $lines)) -MaxLength $MaxLength
-    } catch { return '' }
-}
-
 function Write-RunnerChildDiagnostic {
     <#
       Final safe diagnostic snapshot answering "what was this child doing just
       before it failed or timed out?": identity, PID, elapsed, timeout budget,
       last-activity age, phase, stdout/stderr counts, exit code, whether
-      termination was required and observed, and a bounded sanitized stderr tail.
+      termination was required and observed, whether bounded output draining
+      finished, and a structured state detail. Raw stderr remains in evidence.
     #>
     param(
         [Parameter(Mandatory = $true)][object]$Child,
@@ -335,8 +317,11 @@ function Write-RunnerChildDiagnostic {
     if ($null -ne $ExitCode) { $fields['exitCode'] = [int]$ExitCode }
     if ($null -ne $Child.PSObject.Properties['TimedOut']) { $fields['terminationRequested'] = [bool]$Child.TimedOut }
     if ($null -ne $Child.PSObject.Properties['TerminationObserved']) { $fields['terminationObserved'] = [bool]$Child.TerminationObserved }
-    $tail = Get-RunnerChildStderrTail -Child $Child
-    if (-not [string]::IsNullOrWhiteSpace($tail)) { $fields['detail'] = 'last stderr: ' + $tail }
+    if ($null -ne $Child.PSObject.Properties['OutputDrainCompleted']) { $fields['outputDrainCompleted'] = [bool]$Child.OutputDrainCompleted }
+    switch ($State) {
+        'timed-out' { $fields['detail'] = 'watchdog timeout expired' }
+        'failed' { $fields['detail'] = 'process exited with non-zero status' }
+    }
     Write-RunnerProgress -Fields $fields -LogPath ([string]$Child.ProgressLogPath) -Channel Operator
     if ($null -ne $Child.PSObject.Properties['LifecycleState']) { $Child.LifecycleState = $State }
 }

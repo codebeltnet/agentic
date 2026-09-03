@@ -293,6 +293,8 @@ function ConvertTo-RunnerProgressText {
     if ($terminationRequested -is [bool] -and $terminationRequested) { [void]$parts.Add('terminationRequested=true') }
     $terminationObserved = Get-RunnerProgressField -Event $Event -Name 'terminationObserved'
     if ($terminationObserved -is [bool]) { [void]$parts.Add(('terminationObserved={0}' -f ([string]$terminationObserved).ToLowerInvariant())) }
+    $outputDrainCompleted = Get-RunnerProgressField -Event $Event -Name 'outputDrainCompleted'
+    if ($outputDrainCompleted -is [bool]) { [void]$parts.Add(('outputDrainCompleted={0}' -f ([string]$outputDrainCompleted).ToLowerInvariant())) }
     $detail = [string](Get-RunnerProgressField -Event $Event -Name 'detail')
     if (-not [string]::IsNullOrWhiteSpace($detail)) { [void]$parts.Add("- $detail") }
     return [string]::Join(' ', $parts)
@@ -308,29 +310,6 @@ function Get-RunnerProgressField {
     return $null
 }
 
-function Get-RunnerProgressSafeTail {
-    <#
-      Bounded, sanitized tail of captured text for a final diagnostic. Redacts
-      obvious secret-looking assignments, collapses whitespace, drops non-safe
-      control characters, and hard-caps the length so a diagnostic never becomes a
-      credential or prompt leak.
-    #>
-    param(
-        [string]$Text,
-        [int]$MaxLength = 400
-    )
-
-    if ([string]::IsNullOrEmpty($Text)) { return '' }
-    $sanitized = $Text -replace '(?im)([A-Za-z0-9_\-]*(?:TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL|BEARER|AUTHORIZATION)[A-Za-z0-9_\-]*)\s*[:=]\s*\S+', '$1=<redacted>'
-    $sanitized = $sanitized -replace '(?i)\b(bearer|token)\s+[A-Za-z0-9._\-]{8,}', '$1 <redacted>'
-    $sanitized = $sanitized -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ' '
-    $sanitized = ($sanitized -replace '\s+', ' ').Trim()
-    if ($sanitized.Length -gt $MaxLength) {
-        $sanitized = '...' + $sanitized.Substring($sanitized.Length - $MaxLength)
-    }
-    return $sanitized
-}
-
 function New-RunnerProgressEvent {
     <#
       Assembles an ordered progress event from safe fields only. Never accepts or
@@ -344,6 +323,7 @@ function New-RunnerProgressEvent {
             'elapsed', 'elapsedSeconds', 'timeoutRemaining', 'timeoutRemainingSeconds',
             'lastActivity', 'lastActivitySeconds', 'stdoutEvents', 'stderrEvents',
             'stdoutBytes', 'stderrBytes', 'turn', 'exitCode', 'terminationRequested',
+            'outputDrainCompleted',
             'terminationObserved', 'origin', 'detail'
         )) {
         if ($Fields.ContainsKey($name)) {

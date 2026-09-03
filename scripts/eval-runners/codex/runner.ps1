@@ -352,13 +352,19 @@ function Invoke-CodexAppServer {
     # Mutable protocol activity counters shared across the readMessage scriptblock
     # and the heartbeat emitter. Stored in a hashtable so scriptblock closures can
     # write back through the same reference.
-    $appState = @{ protocolEvents = 0; protocolBytes = [long]0; lastHeartbeatUtc = $start; processPid = $null }
+    $appState = @{
+        protocolEvents = 0
+        protocolBytes = [long]0
+        lastProtocolActivityUtc = $null
+        lastHeartbeatUtc = $start
+        processPid = $null
+    }
     $emitAppServerProgress = {
         param([string]$State, [string]$Detail)
         if (-not $appProgressEnabled) { return }
         $now = [DateTime]::UtcNow
-        $elapsedSeconds = [Math]::Max(0, ($now - $start).TotalSeconds)
-        $remainingSeconds = [Math]::Max(0, ($deadline - $now).TotalSeconds)
+        $elapsedSeconds = [Math]::Max(0.0, ($now - $start).TotalSeconds)
+        $remainingSeconds = [Math]::Max(0.0, ($deadline - $now).TotalSeconds)
         $fields = @{
             runner = $appProgressRunner
             state = $State
@@ -373,6 +379,11 @@ function Invoke-CodexAppServer {
         }
         if (-not [string]::IsNullOrWhiteSpace($appProgressWorker)) { $fields.worker = $appProgressWorker }
         if ($null -ne $appState.processPid) { $fields.pid = $appState.processPid }
+        if ($null -ne $appState.lastProtocolActivityUtc) {
+            $lastActivitySeconds = [Math]::Max(0.0, ($now - [DateTime]$appState.lastProtocolActivityUtc).TotalSeconds)
+            $fields.lastActivity = Format-RunnerElapsed -Seconds $lastActivitySeconds
+            $fields.lastActivitySeconds = [Math]::Round($lastActivitySeconds, 3)
+        }
         if (-not [string]::IsNullOrWhiteSpace($Detail)) { $fields.detail = $Detail }
         Write-RunnerProgress -Fields $fields -LogPath $appProgressLog -Channel $appProgressChannel
         $appState.lastHeartbeatUtc = $now
@@ -447,11 +458,22 @@ function Invoke-CodexAppServer {
         }
         $utf8NoBomForAppServer = [System.Text.UTF8Encoding]::new($false)
         $readMessage = {
-            $remaining = $deadline - [DateTime]::UtcNow
-            if ($remaining.TotalMilliseconds -le 0) { throw [TimeoutException]::new('Codex app-server timed out.') }
             $readTask = $reader.ReadLineAsync()
-            $waitMilliseconds = [int][Math]::Min([int]::MaxValue, [Math]::Ceiling($remaining.TotalMilliseconds))
-            if (-not $readTask.Wait($waitMilliseconds)) { throw [TimeoutException]::new('Codex app-server timed out.') }
+            if ($appProgressEnabled) {
+                $heartbeatSliceMilliseconds = [int][Math]::Max(50, [Math]::Min(5000, [Math]::Ceiling($appHeartbeatSeconds * 1000)))
+                while (-not $readTask.IsCompleted) {
+                    $remainingTotal = ($deadline - [DateTime]::UtcNow).TotalMilliseconds
+                    if ($remainingTotal -le 0) { throw [TimeoutException]::new('Codex app-server timed out.') }
+                    $waitMilliseconds = [int][Math]::Max(1, [Math]::Min($heartbeatSliceMilliseconds, [Math]::Ceiling($remainingTotal)))
+                    if (Wait-RunnerTaskBounded -Task $readTask -TimeoutMilliseconds $waitMilliseconds) { break }
+                    & $tickAppServerHeartbeat
+                }
+            } else {
+                $remaining = $deadline - [DateTime]::UtcNow
+                if ($remaining.TotalMilliseconds -le 0) { throw [TimeoutException]::new('Codex app-server timed out.') }
+                $waitMilliseconds = [int][Math]::Min([int]::MaxValue, [Math]::Ceiling($remaining.TotalMilliseconds))
+                if (-not $readTask.Wait($waitMilliseconds)) { throw [TimeoutException]::new('Codex app-server timed out.') }
+            }
             $line = $readTask.GetAwaiter().GetResult()
             if ($null -eq $line) { throw [EndOfStreamException]::new('Codex app-server closed stdout before the expected response.') }
             $events.Add($line)
@@ -459,7 +481,7 @@ function Invoke-CodexAppServer {
             # complete JSON-RPC message; its byte length is safe activity metadata.
             $appState.protocolEvents++
             $appState.protocolBytes += [long]$utf8NoBomForAppServer.GetByteCount($line)
-            & $tickAppServerHeartbeat
+            $appState.lastProtocolActivityUtc = [DateTime]::UtcNow
             try { return ($line | ConvertFrom-Json -Depth 50) } catch { throw [FormatException]::new("Codex app-server emitted malformed JSON: $($_.Exception.Message)") }
         }
         $recordModelReroute = {
