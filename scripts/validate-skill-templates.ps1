@@ -1374,6 +1374,40 @@ Add-ValidationResult -Results $results -Name 'Runner live observability remains 
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Preflight raw-output boundary is closed' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $preflightPath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-preflight-summary.ps1'
+    if (-not (Test-Path -LiteralPath $preflightPath -PathType Leaf)) {
+        throw 'The preflight raw-output boundary test suite is missing.'
+    }
+    $preflightOutput = & pwsh -NoProfile -File $preflightPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Preflight raw-output boundary tests failed: $($preflightOutput -join [Environment]::NewLine)"
+    }
+    if (@($preflightOutput -join [Environment]::NewLine) -notmatch 'Preflight raw-output boundary:\s+PASS') {
+        throw 'Preflight raw-output boundary tests did not report PASS.'
+    }
+}
+
+Add-ValidationResult -Results $results -Name 'Progress coalescing renders selectively without changing telemetry' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $coalescingPath = Join-Path $repoRoot 'scripts/eval-runners/tests/test-progress-coalescing.ps1'
+    if (-not (Test-Path -LiteralPath $coalescingPath -PathType Leaf)) {
+        throw 'The progress coalescing test suite is missing.'
+    }
+    $coalescingOutput = & pwsh -NoProfile -File $coalescingPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Progress coalescing tests failed: $($coalescingOutput -join [Environment]::NewLine)"
+    }
+    if (@($coalescingOutput -join [Environment]::NewLine) -notmatch 'Progress coalescing:\s+PASS') {
+        throw 'Progress coalescing tests did not report PASS.'
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Action {
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
