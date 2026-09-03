@@ -129,6 +129,7 @@ function Start-RunnerChildProcess {
         HeartbeatSeconds = $heartbeat
         ProgressEnabled = $progressEnabled
         LastHeartbeatUtc = $startedUtc
+        LastRelayActivityUtc = $null
         FirstStdoutSeen = $false
         FirstStderrSeen = $false
         LifecycleState = 'running'
@@ -230,12 +231,13 @@ function Write-RunnerChildProgress {
     param(
         [Parameter(Mandatory = $true)][object]$Child,
         [Parameter(Mandatory = $true)][string]$State,
-        [string]$Detail = ''
+        [string]$Detail = '',
+        [switch]$LogOnly
     )
 
     if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return }
     $fields = Get-RunnerChildProgressFields -Child $Child -State $State -Detail $Detail
-    Write-RunnerProgress -Fields $fields -LogPath ([string]$Child.ProgressLogPath) -Channel Operator
+    Write-RunnerProgress -Fields $fields -LogPath ([string]$Child.ProgressLogPath) -Channel Operator -LogOnly:$LogOnly
     if ($null -ne $Child.PSObject.Properties['LastHeartbeatUtc']) { $Child.LastHeartbeatUtc = [DateTime]::UtcNow }
     if ($null -ne $Child.PSObject.Properties['LifecycleState']) { $Child.LifecycleState = $State }
 }
@@ -249,8 +251,9 @@ function Send-RunnerChildRelay {
     #>
     param([Parameter(Mandatory = $true)][object]$Child)
 
-    if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return }
+    if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return 0 }
     $logPath = [string]$Child.ProgressLogPath
+    $emittedCount = 0
     foreach ($stream in @($Child.StderrActivity, $Child.StdoutActivity)) {
         if ($null -eq $stream) { continue }
         $payload = $null
@@ -266,8 +269,10 @@ function Send-RunnerChildRelay {
             if ($null -ne $Child.EvalId -and -not $fields.ContainsKey('eval')) { $fields['eval'] = $Child.EvalId }
             if (-not [string]::IsNullOrWhiteSpace([string]$Child.Configuration) -and -not $fields.ContainsKey('configuration')) { $fields['configuration'] = [string]$Child.Configuration }
             Write-RunnerProgress -Fields $fields -LogPath $logPath -Channel Operator
+            $emittedCount++
         }
     }
+    return $emittedCount
 }
 
 function Invoke-RunnerChildHeartbeatTick {
@@ -276,11 +281,21 @@ function Invoke-RunnerChildHeartbeatTick {
       child progress, announce first observed real activity once per stream, and
       emit a heartbeat when the child has been silent past its interval. Never
       blocks the process, and is a no-op for progress-disabled children.
+
+      Console coalescing: when the nested relay is actively producing useful
+      progress for this worker, the parent periodic heartbeat is still recorded
+      in structured JSONL evidence but suppressed from the human console. The
+      parent heartbeat resumes on the console once the relay has been quiet for
+      at least one heartbeat interval, so a genuinely silent worker remains
+      visibly alive. Terminal events and state transitions are never suppressed.
     #>
     param([Parameter(Mandatory = $true)][object]$Child)
 
     if (-not (Test-RunnerChildProgressEnabled -Child $Child)) { return }
-    Send-RunnerChildRelay -Child $Child
+    $relayedCount = Send-RunnerChildRelay -Child $Child
+    if ($relayedCount -gt 0 -and $null -ne $Child.PSObject.Properties['LastRelayActivityUtc']) {
+        $Child.LastRelayActivityUtc = [DateTime]::UtcNow
+    }
     if ($null -ne $Child.PSObject.Properties['FirstStderrSeen'] -and -not $Child.FirstStderrSeen -and $null -ne $Child.StderrActivity -and [int64]$Child.StderrActivity.RealEvents -gt 0) {
         $Child.FirstStderrSeen = $true
         Write-RunnerChildProgress -Child $Child -State 'active' -Detail 'first stderr activity'
@@ -294,7 +309,13 @@ function Invoke-RunnerChildHeartbeatTick {
     $interval = if ($null -ne $Child.PSObject.Properties['HeartbeatSeconds'] -and [double]$Child.HeartbeatSeconds -gt 0) { [double]$Child.HeartbeatSeconds } else { Get-RunnerHeartbeatIntervalSeconds }
     $last = if ($null -ne $Child.PSObject.Properties['LastHeartbeatUtc'] -and $null -ne $Child.LastHeartbeatUtc) { [DateTime]$Child.LastHeartbeatUtc } else { [DateTime]$Child.StartedUtc }
     if (([DateTime]::UtcNow - $last).TotalSeconds -ge $interval) {
-        Write-RunnerChildProgress -Child $Child -State 'running'
+        # Always write to JSONL for structured evidence. Suppress the human
+        # console line when the nested relay is actively demonstrating liveness
+        # for this worker within the same heartbeat interval: the relay already
+        # satisfies the operator-facing liveness requirement.
+        $lastRelayActivity = if ($null -ne $Child.PSObject.Properties['LastRelayActivityUtc'] -and $null -ne $Child.LastRelayActivityUtc) { [DateTime]$Child.LastRelayActivityUtc } else { [DateTime]::MinValue }
+        $relaySuppressConsole = (([DateTime]::UtcNow - $lastRelayActivity).TotalSeconds -lt $interval)
+        Write-RunnerChildProgress -Child $Child -State 'running' -LogOnly:$relaySuppressConsole
     }
 }
 
@@ -402,7 +423,7 @@ function Complete-RunnerChildProcess {
         if ($null -ne $activity -and $null -ne $activity.Value) { try { $activity.Value.FinalizeActivity() } catch { } }
     }
     # Surface any structured child progress that arrived just before exit.
-    Send-RunnerChildRelay -Child $Child
+    [void](Send-RunnerChildRelay -Child $Child)
     foreach ($stream in @($Child.StdoutStream, $Child.StderrStream)) {
         try { $stream.Flush() } catch { }
         try { $stream.Dispose() } catch { }

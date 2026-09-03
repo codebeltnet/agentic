@@ -348,28 +348,36 @@ function Write-RunnerProgress {
         Relayable - sentinel-tagged compact JSON on a child's STDERR so a parent
                     that captures it can relay it verbatim; written as raw UTF-8
                     bytes so the parent's UTF-8 classifier always matches.
+
+      LogOnly - when set, skip the STDERR/console write and only append to the
+                JSONL log. Used for structured evidence of parent periodic
+                heartbeats that are suppressed from the human console because a
+                nested relay is already demonstrating liveness for the worker.
     #>
     param(
         [Parameter(Mandatory = $true)][hashtable]$Fields,
         [string]$LogPath,
-        [ValidateSet('Operator', 'Relayable')][string]$Channel = 'Operator'
+        [ValidateSet('Operator', 'Relayable')][string]$Channel = 'Operator',
+        [switch]$LogOnly
     )
 
-    try {
-        $event = New-RunnerProgressEvent -Fields $Fields
-        if ($Channel -eq 'Relayable') {
-            $compact = ($event | ConvertTo-Json -Depth 20 -Compress)
-            $line = $script:RunnerProgressSentinel + ' ' + $compact
-            $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($line + "`n")
-            $stderr = [Console]::OpenStandardError()
-            $stderr.Write($bytes, 0, $bytes.Length)
-            $stderr.Flush()
-        } else {
-            $hashEvent = @{}
-            foreach ($key in $event.Keys) { $hashEvent[$key] = $event[$key] }
-            [Console]::Error.WriteLine((ConvertTo-RunnerProgressText -Event $hashEvent))
-        }
-    } catch { }
+    if (-not $LogOnly) {
+        try {
+            $event = New-RunnerProgressEvent -Fields $Fields
+            if ($Channel -eq 'Relayable') {
+                $compact = ($event | ConvertTo-Json -Depth 20 -Compress)
+                $line = $script:RunnerProgressSentinel + ' ' + $compact
+                $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($line + "`n")
+                $stderr = [Console]::OpenStandardError()
+                $stderr.Write($bytes, 0, $bytes.Length)
+                $stderr.Flush()
+            } else {
+                $hashEvent = @{}
+                foreach ($key in $event.Keys) { $hashEvent[$key] = $event[$key] }
+                [Console]::Error.WriteLine((ConvertTo-RunnerProgressText -Event $hashEvent))
+            }
+        } catch { }
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
         try {
