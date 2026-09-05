@@ -449,6 +449,7 @@ for ($index = 0; $index -lt $count; $index++) {
     $manifest = [ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
+        execution_selection = [ordered]@{ harness = 'Deterministic runner-owned fixture'; runner = 'fixture'; model = 'fixture-model'; preset = 'Integrity fixture' }
         execution_profile = 'execution-profile.json'
         runner_tools = 'tools/eval-runners'
         runner_tools_integrity = [ordered]@{ schema = 'codebeltnet/agentic/package-tree-integrity/1'; path = 'tools/eval-runners'; sha256 = $toolIntegrity.Sha256; file_count = $toolIntegrity.FileCount }

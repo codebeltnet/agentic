@@ -541,6 +541,8 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $fixtureReroute = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-reroute') -PathType Leaf
     $fixtureAmbientInstruction = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-ambient-instruction') -PathType Leaf
     $fixtureThreadReadUnavailable = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-thread-read-unavailable') -PathType Leaf
+    $fixturePolicyBlocked = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-policy-blocked') -PathType Leaf
+    $fixtureProsePolicyText = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-prose-blocked-by-policy') -PathType Leaf
     $instructionSources = if ($fixtureAmbientInstruction) { @('C:\ambient\AGENTS.md') } else { @($repositoryAgentsPath) }
     $threadObject = [ordered]@{
         id = 'recorded-subscription-thread'
@@ -612,9 +614,16 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $record.turn_params = $turnStart.params
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Depth 50 -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
 
-    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'commandExecution'; id = 'command-1'; command = 'recorded command'; commandActions = @(); cwd = (Get-Location).Path; status = 'completed'; exitCode = 0; aggregatedOutput = 'recorded output' } } })
-    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 2; item = [ordered]@{ type = 'fileChange'; id = 'file-1'; status = 'completed'; changes = @([ordered]@{ path = 'recorded.txt'; kind = [ordered]@{ type = 'add' } }) } } })
-    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 3; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = 'recorded subscription response' } } })
+    if ($fixturePolicyBlocked) {
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'commandExecution'; id = 'command-1'; command = 'Get-Content C:\ambient\skills\candidate\SKILL.md'; commandActions = @(); cwd = (Get-Location).Path; status = 'failed'; exitCode = 1; aggregatedOutput = 'blocked by policy' } } })
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 2; item = [ordered]@{ type = 'fileChange'; id = 'file-1'; status = 'failed'; error = [ordered]@{ code = 'blocked_by_policy'; message = 'blocked by policy' }; changes = @() } } })
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 3; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = 'recorded subscription response after policy rejection' } } })
+    } else {
+        $agentText = if ($fixtureProsePolicyText) { 'The phrase blocked by policy appears in ordinary prose, not in a tool result.' } else { 'recorded subscription response' }
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'commandExecution'; id = 'command-1'; command = 'recorded command'; commandActions = @(); cwd = (Get-Location).Path; status = 'completed'; exitCode = 0; aggregatedOutput = 'recorded output' } } })
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 2; item = [ordered]@{ type = 'fileChange'; id = 'file-1'; status = 'completed'; changes = @([ordered]@{ path = 'recorded.txt'; kind = [ordered]@{ type = 'add' } }) } } })
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 3; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = $agentText } } })
+    }
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'thread/tokenUsage/updated'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; tokenUsage = [ordered]@{ total = [ordered]@{ inputTokens = 2; cachedInputTokens = 1; outputTokens = 3; reasoningOutputTokens = 1; totalTokens = 6 }; last = [ordered]@{ inputTokens = 2; cachedInputTokens = 1; outputTokens = 3; reasoningOutputTokens = 1; totalTokens = 6 } } } })
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'turn/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turn = [ordered]@{ id = 'recorded-subscription-turn'; status = 'completed'; items = @() } } })
     $threadRead = Read-AppServerMessage
@@ -1510,6 +1519,39 @@ exit 2
     $authHomePath = [string]$subscriptionRecord.parent_codex_home
     Assert-True (-not (Test-Path -LiteralPath $authHomePath)) 'Codex temporary auth-only home is removed after the arm completes'
 
+    $prosePolicyMarker = Join-Path $with.Root 'home\codex-prose-blocked-by-policy'
+    [System.IO.File]::WriteAllText($prosePolicyMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $prosePolicyResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'completed' $prosePolicyResult.status 'Codex does not treat ordinary assistant prose as a policy-blocked tool result'
+    Assert-True ([string]$prosePolicyResult.final_response.text -match 'blocked by policy') 'Codex false-positive fixture includes the policy wording in model prose'
+    Assert-Equal 'no_structured_policy_rejection_observed' $prosePolicyResult.evidence.behavioral_capability.status 'Codex behavior classifier ignores prose-only policy wording'
+    Assert-Equal 0 @($prosePolicyResult.evidence.behavioral_capability.failures).Count 'Codex prose-only fixture records no structured behavior failures'
+    Remove-Item -LiteralPath $prosePolicyMarker -Force
+
+    $policyBlockedMarker = Join-Path $with.Root 'home\codex-policy-blocked'
+    [System.IO.File]::WriteAllText($policyBlockedMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $policyBlockedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'incompatible' $policyBlockedResult.status 'Codex structured policy-blocked tool results fail closed'
+    Assert-Equal 'behavioral_capability_incompatible' $policyBlockedResult.exit.failure.code 'Codex policy-blocked execution uses a capability failure code'
+    Assert-Equal 'rejected_by_effective_runtime_policy' $policyBlockedResult.evidence.behavioral_capability.status 'Codex records effective runtime policy rejection separately from app-server startup'
+    Assert-Equal 'structured item.completed tool result' $policyBlockedResult.evidence.behavioral_capability.authoritative_signal 'Codex records the structured transport signal used for behavior capability'
+    Assert-Equal 'readOnly' $policyBlockedResult.evidence.app_server.thread_start.observed_sandbox.type 'Codex app-server evidence records the read-only thread state'
+    Assert-Equal 'workspaceWrite' $policyBlockedResult.evidence.app_server.turn_start.requested_sandbox_policy.type 'Codex app-server evidence records the requested workspace-write turn policy'
+    Assert-True (@($policyBlockedResult.evidence.behavioral_capability.failures | Where-Object { $_.code -eq 'workspace_operation_blocked_by_policy' }).Count -ge 1) 'Codex captures the structured blocked-by-policy tool failure'
+    Assert-True (@($policyBlockedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'workspace_operation_blocked_by_policy' }).Count -eq 1) 'Codex surfaces policy-blocked workspace execution as native evidence failure'
+    Assert-Equal 'unsupported' $policyBlockedResult.isolation.level 'Codex policy-blocked execution cannot report verified isolation'
+    Assert-Equal 'unsupported' $policyBlockedResult.isolation.capabilities.delegated_worker_full_capability 'Codex policy-blocked execution cannot claim full delegated-worker capability'
+    Remove-Item -LiteralPath $policyBlockedMarker -Force
+
+    $baselinePolicyBlockedMarker = Join-Path $without.Root 'home\codex-policy-blocked'
+    [System.IO.File]::WriteAllText($baselinePolicyBlockedMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $baselinePolicyBlockedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $without.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'incompatible' $baselinePolicyBlockedResult.status 'Codex baseline policy-blocked execution fails closed'
+    Assert-True (@($baselinePolicyBlockedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'ambient_candidate_skill_exclusion_unverified' }).Count -eq 1) 'Codex baseline exclusion is not proven by a globally policy-blocked filesystem'
+    Assert-Equal 'unsupported' $baselinePolicyBlockedResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex baseline candidate-skill exclusion claim is unverified when general filesystem access is policy-blocked'
+    Assert-Equal 'rejected_by_effective_runtime_policy' $baselinePolicyBlockedResult.evidence.behavioral_capability.status 'Codex baseline records the effective policy rejection'
+    Remove-Item -LiteralPath $baselinePolicyBlockedMarker -Force
+
     $threadReadUnavailableMarker = Join-Path $with.Root 'home\codex-thread-read-unavailable'
     [System.IO.File]::WriteAllText($threadReadUnavailableMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
     $threadReadUnavailableResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
@@ -2259,6 +2301,8 @@ try {
     $manifest = [ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
+        execution_selection = [ordered]@{ harness = 'Deterministic fake runner'; runner = 'fake'; model = 'fixture-model'; preset = 'Conformance fixture' }
+        execution_profile = 'execution-profile.json'
         runner_tools = 'tools/eval-runners'
         runner_tools_integrity = [ordered]@{ schema = 'codebeltnet/agentic/package-tree-integrity/1'; path = 'tools/eval-runners'; sha256 = $manifestToolIntegrity.Sha256; file_count = $manifestToolIntegrity.FileCount }
         execution_freeze = 'execution-freeze.json'

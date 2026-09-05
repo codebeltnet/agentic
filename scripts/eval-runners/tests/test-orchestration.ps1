@@ -623,6 +623,7 @@ try {
     Write-TestJson -Path (Join-Path $fanoutPackage 'manifest.json') -Value ([ordered]@{
         schema = 'codebeltnet/agentic/eval-package/2'
         configurations = @('with_skill', 'without_skill')
+        execution_selection = [ordered]@{ harness = 'Deterministic runner-owned fixture'; runner = 'fixture'; model = 'fixture-model'; preset = 'Orchestration fixture' }
         execution_profile = $fanoutProfileRelative
         runner_tools = 'tools/eval-runners'
         runner_tools_integrity = [ordered]@{ schema = 'codebeltnet/agentic/package-tree-integrity/1'; path = 'tools/eval-runners'; sha256 = $fanoutToolIntegrity.Sha256; file_count = $fanoutToolIntegrity.FileCount }

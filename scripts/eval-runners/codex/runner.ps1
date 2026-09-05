@@ -604,6 +604,10 @@ function Invoke-CodexAppServer {
                         default { $itemType }
                     }
                     $normalizedItem = [ordered]@{ type = $normalizedType; id = Get-JsonProperty -Object $item -Name 'id' -Default $null }
+                    $itemStatus = Get-JsonProperty -Object $item -Name 'status' -Default $null
+                    if ($null -ne $itemStatus) { $normalizedItem.status = $itemStatus }
+                    $itemError = Get-JsonProperty -Object $item -Name 'error' -Default $null
+                    if ($null -ne $itemError) { $normalizedItem.error = $itemError }
                     if ($itemType -eq 'agentMessage') {
                         $normalizedItem.text = [string]$item.text
                         $finalText = [string]$item.text
@@ -1189,6 +1193,51 @@ function New-CodexCliArguments {
     return @($arguments)
 }
 
+function ConvertTo-CodexToolSignalText {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [string]) { return [string]$Value }
+    try { return ($Value | ConvertTo-Json -Depth 20 -Compress) } catch { return [string]$Value }
+}
+
+function Test-CodexPolicyBlockedToolSignal {
+    param([Parameter(Mandatory = $true)][object]$Item)
+
+    $status = ([string](Get-JsonProperty -Object $Item -Name 'status' -Default '')).ToLowerInvariant()
+    $error = Get-JsonProperty -Object $Item -Name 'error' -Default $null
+    $errorCode = ([string](Get-JsonProperty -Object $error -Name 'code' -Default '')).ToLowerInvariant()
+    $signalParts = @(
+            ConvertTo-CodexToolSignalText -Value (Get-JsonProperty -Object $Item -Name 'aggregated_output' -Default $null)
+            ConvertTo-CodexToolSignalText -Value (Get-JsonProperty -Object $Item -Name 'output' -Default $null)
+            ConvertTo-CodexToolSignalText -Value (Get-JsonProperty -Object $error -Name 'message' -Default $null)
+            ConvertTo-CodexToolSignalText -Value (Get-JsonProperty -Object $Item -Name 'reason' -Default $null)
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+    $signalText = if ($null -eq $signalParts) { '' } else { [string]::Join("`n", [string[]]@($signalParts)) }
+
+    if ($status -in @('blocked', 'denied', 'rejected', 'policy_blocked', 'policyblocked')) { return $true }
+    if ($errorCode -match '^(blocked[_-]?by[_-]?policy|policy[_-]?blocked|sandbox[_-]?blocked|read[_-]?only|readonly)$') { return $true }
+    return $signalText -match '(?im)\bblocked by policy\b'
+}
+
+function Get-CodexBehavioralCapabilityFailure {
+    param([Parameter(Mandatory = $true)][object]$Item)
+
+    $itemType = [string](Get-JsonProperty -Object $Item -Name 'type' -Default '')
+    if ($itemType -notin @('command_execution', 'file_change', 'mcp_tool_call')) { return $null }
+    if (-not (Test-CodexPolicyBlockedToolSignal -Item $Item)) { return $null }
+
+    return [ordered]@{
+        code = 'workspace_operation_blocked_by_policy'
+        signal = 'structured_tool_result'
+        item_type = $itemType
+        item_id = Get-JsonProperty -Object $Item -Name 'id' -Default $null
+        status = Get-JsonProperty -Object $Item -Name 'status' -Default $null
+        exit_code = Get-JsonProperty -Object $Item -Name 'exit_code' -Default $null
+        command = Get-JsonProperty -Object $Item -Name 'command' -Default $null
+    }
+}
+
 function Get-CodexCapabilityMap {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
@@ -1602,6 +1651,7 @@ function Invoke-CodexExecute {
     $toolCalls = 0
     $commands = [System.Collections.Generic.List[object]]::new()
     $files = [System.Collections.Generic.List[object]]::new()
+    $behavioralCapabilityFailures = [System.Collections.Generic.List[object]]::new()
     $eventCounts = @{}
     foreach ($event in @($parsed.Events)) {
         $eventType = [string](Get-JsonProperty -Object $event -Name 'type' -Default '')
@@ -1621,9 +1671,18 @@ function Invoke-CodexExecute {
                 } elseif ($itemType -in @('command_execution', 'mcp_tool_call', 'file_change')) {
                     $toolCalls++
                     if ($itemType -eq 'command_execution') {
-                        $commands.Add([ordered]@{ type = $itemType; command = Get-JsonProperty -Object $item -Name 'command'; exit_code = Get-JsonProperty -Object $item -Name 'exit_code' })
+                        $commands.Add([ordered]@{
+                                type = $itemType
+                                command = Get-JsonProperty -Object $item -Name 'command'
+                                status = Get-JsonProperty -Object $item -Name 'status' -Default $null
+                                exit_code = Get-JsonProperty -Object $item -Name 'exit_code'
+                            })
                     } else {
-                        $files.Add([ordered]@{ type = $itemType; item = $item })
+                        $files.Add([ordered]@{ type = $itemType; status = Get-JsonProperty -Object $item -Name 'status' -Default $null; item = $item })
+                    }
+                    $behavioralFailure = Get-CodexBehavioralCapabilityFailure -Item $item
+                    if ($null -ne $behavioralFailure) {
+                        $behavioralCapabilityFailures.Add($behavioralFailure)
                     }
                 }
             }
@@ -1719,6 +1778,17 @@ function Invoke-CodexExecute {
         $warnings.Add('Codex exited successfully without a final agent message.')
         $reason = 'codex_did_not_return_final_response'
     }
+    $behavioralCapabilityFailureNames = [System.Collections.Generic.List[string]]::new()
+    if ($behavioralCapabilityFailures.Count -gt 0 -and -not $process.TimedOut) {
+        $status = 'incompatible'
+        $reason = 'codex_behavioral_capability_incompatible'
+        $failure = New-ExecutionFailure -Code 'behavioral_capability_incompatible' -Message ("Codex structured tool results show required workspace execution was rejected by the effective runtime policy: {0}." -f ([string]::Join(', ', @($behavioralCapabilityFailures | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'code' -Default 'workspace_operation_blocked_by_policy') } | Select-Object -Unique))))
+        $exitStatus = $null
+        $behavioralCapabilityFailureNames.Add('workspace_operation_blocked_by_policy')
+        if (-not [bool]$Inputs.Run.CandidateSkillExposed) {
+            $behavioralCapabilityFailureNames.Add('ambient_candidate_skill_exclusion_unverified')
+        }
+    }
     $tokenMetric = if ($null -eq $usage) {
         New-UnavailableMetric -Reason 'codex_did_not_expose_turn_usage'
     } else {
@@ -1738,6 +1808,12 @@ function Invoke-CodexExecute {
     $finished = [DateTime]::UtcNow
     $sessionResultId = if ([string]::IsNullOrWhiteSpace($threadId)) { $sessionId } else { $threadId }
     $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem -NativeWorkerAvailable ($auth.Kind -eq 'subscription_file') -AuthKind $auth.Kind
+    if ($behavioralCapabilityFailureNames.Count -gt 0) {
+        $capabilities['delegated_worker_full_capability'] = 'unsupported'
+        if (-not [bool]$Inputs.Run.CandidateSkillExposed) {
+            $capabilities['ambient_candidate_skill_exclusion'] = 'unsupported'
+        }
+    }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
         foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
@@ -1774,6 +1850,16 @@ function Invoke-CodexExecute {
         sandbox = $sandboxEvidence
         output_last_message_argument = $outputLastMessageArgument
         credential = $credentialEvidence
+    }
+    $evidence.behavioral_capability = [ordered]@{
+        requested_workspace_write = $true
+        requested_policy_source = if ($auth.Kind -eq 'subscription_file') { 'turn/start.sandboxPolicy' } else { 'codex exec --sandbox workspace-write' }
+        status = if ($behavioralCapabilityFailures.Count -gt 0) { 'rejected_by_effective_runtime_policy' } else { 'no_structured_policy_rejection_observed' }
+        authoritative_signal = 'structured item.completed tool result'
+        failures = @($behavioralCapabilityFailures.ToArray())
+    }
+    if ($behavioralCapabilityFailureNames.Count -gt 0) {
+        $evidence.native_worker_evidence_failures = @($behavioralCapabilityFailureNames.ToArray())
     }
     if ($null -ne $Inputs.Run.Interaction) { $evidence.turns = @($process.TurnRecords) }
     if ($auth.Kind -eq 'subscription_file') {
@@ -1907,9 +1993,11 @@ function Invoke-CodexExecute {
         foreach ($failureName in $uniqueNativeEvidenceFailures) { $nativeEvidenceFailures.Add([string]$failureName) }
         if ($nativeEvidenceFailures.Count -gt 0) {
             $status = 'incompatible'
-            $reason = 'codex_native_evidence_incompatible'
+            $isBehavioralCapabilityFailure = $behavioralCapabilityFailureNames.Count -gt 0
+            $reason = if ($isBehavioralCapabilityFailure) { 'codex_behavioral_capability_incompatible' } else { 'codex_native_evidence_incompatible' }
             $baseFailureMessage = if ($null -ne $failure) { [string]$failure.message } elseif (-not [string]::IsNullOrWhiteSpace([string]$process.TransportFailure)) { [string]$process.TransportFailure } else { 'Codex app-server terminal evidence was not accepted.' }
-            $failure = New-ExecutionFailure -Code 'native_evidence_incompatible' -Message ("Codex app-server evidence failed closed: {0}. Transport detail: {1}" -f ([string]::Join(', ', @($nativeEvidenceFailures)), $baseFailureMessage))
+            $failureCode = if ($isBehavioralCapabilityFailure) { 'behavioral_capability_incompatible' } else { 'native_evidence_incompatible' }
+            $failure = New-ExecutionFailure -Code $failureCode -Message ("Codex app-server evidence failed closed: {0}. Transport detail: {1}" -f ([string]::Join(', ', @($nativeEvidenceFailures)), $baseFailureMessage))
             $exitStatus = $null
         }
         $evidence.native_worker_evidence_failures = @($nativeEvidenceFailures.ToArray())

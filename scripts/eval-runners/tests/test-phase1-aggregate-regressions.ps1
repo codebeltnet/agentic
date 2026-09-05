@@ -233,6 +233,12 @@ function Initialize-PhaseOneFailurePackage {
         skill_name = 'phase1-aggregate-fixture'
         iteration = 1
         configurations = @('with_skill')
+        execution_selection = [ordered]@{
+            harness = 'Deterministic runner-owned fixture'
+            runner = 'fixture'
+            model = 'fixture-model'
+            preset = 'Phase 1 aggregate fixture'
+        }
         execution_profile = 'execution-profile.json'
         runner_tools = 'tools/eval-runners'
         runner_tools_integrity = [ordered]@{ schema = 'codebeltnet/agentic/package-tree-integrity/1'; path = 'tools/eval-runners'; sha256 = $toolIntegrity.Sha256; file_count = $toolIntegrity.FileCount }
