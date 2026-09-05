@@ -224,19 +224,12 @@ try {
     if (Test-Path -LiteralPath $freezePath) {
         throw "Execution integrity failure: Phase 1 is already frozen at '$freezePath'; refusing a second runner-owned execution. Requires fresh Phase 1 execution."
     }
-    $profileRelativePath = [string](Get-JsonProperty -Object $manifest -Name 'execution_profile' -Default '')
-    if ([string]::IsNullOrWhiteSpace($profileRelativePath)) { throw 'manifest.json must declare execution_profile.' }
-    $profilePath = Resolve-ManifestDeclaredPath -IterationDirectory $iteration -RelativePath $profileRelativePath -FieldName 'execution_profile' -Kind File -RequireExists
-    $profile = Resolve-ExecutionProfile -ProfilePath $profilePath
-    $runnerName = [string]$profile.Runner
-
-    $resolverPath = Join-Path $PSScriptRoot 'resolve-runner.ps1'
-    $resolutionOutput = & pwsh -NoProfile -File $resolverPath $runnerName 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Selected runner '$runnerName' could not be resolved: $([string]::Join(' ', @($resolutionOutput)))" }
-    $resolution = ([string]::Join([Environment]::NewLine, @($resolutionOutput)) | ConvertFrom-Json)
-    $runnerPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ([string]$resolution.path -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
-    if (-not (Test-Path -LiteralPath $runnerPath -PathType Leaf)) { throw "Resolved runner '$runnerName' is missing its runner.ps1." }
-    $descriptor = Get-PackageRunnerDescriptor -RunnerName $runnerName
+    [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iteration -Manifest $manifest)
+    $identity = Assert-PackageRunnerIdentity -IterationDirectory $iteration -Manifest $manifest
+    $profile = $identity.Profile
+    $runnerName = [string]$identity.Runner
+    $runnerPath = [string]$identity.RunnerPath
+    $descriptor = $identity.Descriptor
     $delegation = Get-JsonProperty -Object $descriptor -Name 'delegation' -Default $null
     if ([string](Get-JsonProperty -Object $delegation -Name 'dispatch_owner' -Default '') -ne 'runner') {
         throw "Selected runner '$runnerName' does not declare delegation.dispatch_owner=runner."

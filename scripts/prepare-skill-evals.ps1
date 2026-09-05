@@ -180,6 +180,7 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = $utf8NoBom
 
 . (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
+. (Join-Path $PSScriptRoot 'eval-runners/package-integrity.ps1')
 
 $packageSchema = 'codebeltnet/agentic/eval-package/2'
 $metadataSchema = 'codebeltnet/agentic/eval-metadata/2'
@@ -747,6 +748,13 @@ function Get-JsonProperty {
         [string]$Name,
         [object]$Default = $null
     )
+
+    if ($null -ne $Object -and $Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) {
+        if ($null -ne $Object[$Name]) {
+            return $Object[$Name]
+        }
+        return $Default
+    }
 
     if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name -and $null -ne $Object.$Name) {
         return $Object.$Name
@@ -1658,6 +1666,8 @@ function Invoke-PrepareMode {
     Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -EffectiveConcurrency $effectiveConcurrency)
     $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
     Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -RequestedConcurrency ([int]$effectiveConcurrency.Value) -PerArmTimeoutSeconds $TimeoutSeconds)
+    [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iterationDirectory -Manifest $manifest)
+    [void](Assert-PackageRunnerIdentity -IterationDirectory $iterationDirectory -Manifest $manifest -ExpectedRunner ([string]$executionSelection.Runner))
 
     Write-Host 'Evaluation package prepared.'
     Write-Host ''
@@ -1746,6 +1756,8 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("Package: $IterationDirectory")
     [void]$builder.AppendLine("Profile: $profilePath")
+    [void]$builder.AppendLine("Selected runner: $($ExecutionSelection.Runner)")
+    [void]$builder.AppendLine("Selected model: $($ExecutionSelection.Model)")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 1 — blind execution')
     [void]$builder.AppendLine()

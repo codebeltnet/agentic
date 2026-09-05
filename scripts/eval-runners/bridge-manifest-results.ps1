@@ -39,6 +39,7 @@ try {
 
     $manifest = Read-RunnerJson -Path $manifestPath
     [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iterationPath -Manifest $manifest)
+    $identity = Assert-PackageRunnerIdentity -IterationDirectory $iterationPath -Manifest $manifest
     $records = @(Get-ManifestRunRecords -IterationDirectory $iterationPath -Manifest $manifest)
     # Validate the complete immutable Phase 1 ledger before any one-arm bridge
     # can write a canonical result. This is deliberately read-only: a changed
@@ -47,8 +48,8 @@ try {
     if ($RequireComplete) {
         [void](Assert-FanoutPhase1Success -Aggregate $freezeValidation.Aggregate -MessagePrefix 'Manifest bridge Phase 1')
     }
-    $profileData = Resolve-ExecutionProfile -ProfilePath (Join-Path $iterationPath 'execution-profile.json')
-    $runnerDescriptor = Get-PackageRunnerDescriptor -RunnerName ([string]$profileData.Runner)
+    $profileData = $identity.Profile
+    $runnerDescriptor = $identity.Descriptor
     $effectiveRequireNativeDelegation = [bool]$RequireNativeDelegation -or [string](Get-JsonProperty -Object $runnerDescriptor.delegation -Name 'dispatch_owner' -Default '') -eq 'runner'
     $parallelDispatch = $null
     if ($RequireParallelDispatch) {

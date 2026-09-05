@@ -43,15 +43,15 @@ function Assert-FinalizerState {
     param(
         [Parameter(Mandatory = $true)][string]$IterationDirectory,
         [Parameter(Mandatory = $true)][object]$Manifest,
-        [Parameter(Mandatory = $true)][object]$Profile
+        [Parameter(Mandatory = $true)][object]$Profile,
+        [Parameter(Mandatory = $true)][object]$Descriptor
     )
 
     $statePath = Join-Path $IterationDirectory 'orchestration-state.json'
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
         throw 'Finalization failed: orchestration-state.json is missing.'
     }
-    $descriptor = Get-PackageRunnerDescriptor -RunnerName $Profile.Runner
-    $plan = New-EvalOrchestrationPlan -IterationDirectory $IterationDirectory -Manifest $Manifest -Profile $Profile.Profile -Descriptor $descriptor
+    $plan = New-EvalOrchestrationPlan -IterationDirectory $IterationDirectory -Manifest $Manifest -Profile $Profile.Profile -Descriptor $Descriptor
     [void](Assert-OrchestrationPlanContract -Plan $plan)
     $state = Read-RunnerJson -Path $statePath
     if ([string](Get-JsonProperty -Object $state -Name 'plan_schema' -Default '') -ne [string]$plan.schema -or
@@ -83,7 +83,7 @@ function Assert-FinalizerState {
     if ([string](Get-JsonProperty -Object $preflight -Name 'status' -Default '') -ne 'passed') {
         throw 'Finalization failed: Phase 1 preflight gate did not pass.'
     }
-    return [pscustomobject]@{ Plan = $plan; State = $state; Descriptor = $descriptor; Concurrency = (Assert-OrchestrationConcurrency -Plan $plan -State $state) }
+    return [pscustomobject]@{ Plan = $plan; State = $state; Descriptor = $Descriptor; Concurrency = (Assert-OrchestrationConcurrency -Plan $plan -State $state) }
 }
 
 function Assert-FinalizerGrading {
@@ -115,12 +115,13 @@ try {
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Finalization failed: manifest.json is missing.' }
     $manifest = Read-RunnerJson -Path $manifestPath
     [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iteration -Manifest $manifest)
+    $identity = Assert-PackageRunnerIdentity -IterationDirectory $iteration -Manifest $manifest
     $declaredGradingPath = [string](Get-JsonProperty -Object $manifest -Name 'grading' -Default '')
     if ([string]::IsNullOrWhiteSpace($declaredGradingPath) -or $declaredGradingPath -ne $GradingPath) {
         throw "Finalization failed: grading path '$GradingPath' does not match manifest.grading '$declaredGradingPath'."
     }
-    $profile = Resolve-ExecutionProfile -ProfilePath (Join-Path $iteration 'execution-profile.json')
-    $stateValidation = Assert-FinalizerState -IterationDirectory $iteration -Manifest $manifest -Profile $profile
+    $profile = $identity.Profile
+    $stateValidation = Assert-FinalizerState -IterationDirectory $iteration -Manifest $manifest -Profile $profile -Descriptor $identity.Descriptor
     $freezeValidation = Assert-ExecutionFreeze -IterationDirectory $iteration -RequireOrchestrationState
     $records = @(Get-ManifestRunRecords -IterationDirectory $iteration -Manifest $manifest)
 

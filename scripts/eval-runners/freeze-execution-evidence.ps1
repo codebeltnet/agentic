@@ -21,6 +21,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'orchestration.ps1')
 . (Join-Path $PSScriptRoot 'execution-freeze.ps1')
+. (Join-Path $PSScriptRoot 'package-integrity.ps1')
 
 function Save-FreezeOrchestrationState {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][object]$State)
@@ -39,8 +40,10 @@ try {
     if (Test-Path -LiteralPath $freezePath) {
         throw "Execution integrity failure: execution-freeze.json already exists at '$freezePath'; refusing to re-freeze raw evidence. Requires fresh Phase 1 execution."
     }
-    $profile = Resolve-ExecutionProfile -ProfilePath (Join-Path $iteration 'execution-profile.json')
-    $descriptor = Get-PackageRunnerDescriptor -RunnerName $profile.Runner
+    [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iteration -Manifest $manifest)
+    $identity = Assert-PackageRunnerIdentity -IterationDirectory $iteration -Manifest $manifest
+    $profile = $identity.Profile
+    $descriptor = $identity.Descriptor
     $plan = New-EvalOrchestrationPlan -IterationDirectory $iteration -Manifest $manifest -Profile $profile.Profile -Descriptor $descriptor
     [void](Assert-OrchestrationPlanContract -Plan $plan)
     $state = Read-RunnerJson -Path $statePath

@@ -1487,6 +1487,75 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     $modelDiscoveryPath = Join-Path $repoRoot 'scripts/Get-HarnessModels.ps1'
     $packageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-package-' + [Guid]::NewGuid().ToString('N'))
     $taskMarker = "`n# Task`n"
+    function Assert-PreparedRunnerIdentity {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [Parameter(Mandatory = $true)][string]$IterationDirectory,
+            [Parameter(Mandatory = $true)][string]$ExpectedRunner,
+            [Parameter(Mandatory = $true)][string]$ExpectedModel
+        )
+
+        $manifestPath = Join-Path $IterationDirectory 'manifest.json'
+        $profilePath = Join-Path $IterationDirectory 'execution-profile.json'
+        $promptPath = Join-Path $IterationDirectory 'RUN-THIS.prompt.md'
+        $manifest = [System.IO.File]::ReadAllText($manifestPath, $utf8NoBom) | ConvertFrom-Json
+        $profile = [System.IO.File]::ReadAllText($profilePath, $utf8NoBom) | ConvertFrom-Json
+        if ([string]$profile.runner -ne $ExpectedRunner -or [string]$profile.model -ne $ExpectedModel) {
+            throw "$Name execution-profile.json must preserve requested runner/model '$ExpectedRunner'/'$ExpectedModel'."
+        }
+        if ([string]$manifest.execution_selection.runner -ne $ExpectedRunner -or [string]$manifest.execution_selection.model -ne $ExpectedModel) {
+            throw "$Name manifest.execution_selection must preserve requested runner/model '$ExpectedRunner'/'$ExpectedModel'."
+        }
+
+        $runnerTools = Join-Path $IterationDirectory ([string]$manifest.runner_tools)
+        . (Join-Path $runnerTools 'runner-common.ps1')
+        . (Join-Path $runnerTools 'manifest-paths.ps1')
+        . (Join-Path $runnerTools 'orchestration.ps1')
+        . (Join-Path $runnerTools 'package-integrity.ps1')
+        $identity = Assert-PackageRunnerIdentity -IterationDirectory $IterationDirectory -Manifest $manifest -ExpectedRunner $ExpectedRunner
+        if ([string]$identity.Runner -ne $ExpectedRunner -or [string]$identity.ManifestRunner -ne $ExpectedRunner -or [string]$identity.Resolution.runner -ne $ExpectedRunner -or [string]$identity.Descriptor.name -ne $ExpectedRunner) {
+            throw "$Name package-local runner identity is inconsistent."
+        }
+
+        $plan = New-EvalOrchestrationPlan -IterationDirectory $IterationDirectory -Manifest $manifest -Profile $identity.Profile.Profile -Descriptor $identity.Descriptor
+        if ([string]$plan.runner -ne $ExpectedRunner -or [string]$plan.model -ne $ExpectedModel) {
+            throw "$Name Phase 1 orchestration plan must preserve the selected runner/model."
+        }
+        foreach ($arm in @($plan.arms)) {
+            if ([string]$arm.worker.model -ne $ExpectedModel -or [string]$arm.worker.runner_execute_invocation -ne 'required') {
+                throw "$Name Phase 1 dispatch envelope must carry the selected model and runner-owned execution requirement."
+            }
+        }
+
+        $prompt = [System.IO.File]::ReadAllText($promptPath, $utf8NoBom)
+        Assert-Contains -Name "$Name RUN-THIS.prompt.md" -Content $prompt -Needle "Selected runner: $ExpectedRunner"
+        Assert-Contains -Name "$Name RUN-THIS.prompt.md" -Content $prompt -Needle "Selected model: $ExpectedModel"
+    }
+
+    function Assert-PackageIdentityValidationFails {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [Parameter(Mandatory = $true)][string]$IterationDirectory,
+            [Parameter(Mandatory = $true)][string]$ExpectedRunner,
+            [Parameter(Mandatory = $true)][string]$ExpectedMessagePattern
+        )
+
+        $manifest = [System.IO.File]::ReadAllText((Join-Path $IterationDirectory 'manifest.json'), $utf8NoBom) | ConvertFrom-Json
+        $runnerTools = Join-Path $IterationDirectory ([string]$manifest.runner_tools)
+        . (Join-Path $runnerTools 'runner-common.ps1')
+        . (Join-Path $runnerTools 'package-integrity.ps1')
+        $failed = $false
+        $message = ''
+        try {
+            [void](Assert-PackageRunnerIdentity -IterationDirectory $IterationDirectory -Manifest $manifest -ExpectedRunner $ExpectedRunner)
+        } catch {
+            $failed = $true
+            $message = $_.Exception.Message
+        }
+        if (-not $failed -or $message -notmatch $ExpectedMessagePattern) {
+            throw "$Name must fail package runner identity validation; observed '$message'."
+        }
+    }
     try {
         $catalogPath = Join-Path $packageRoot 'fake-model-catalog.json'
         New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
@@ -1635,6 +1704,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         if ([string]$referenceProfile.runner -ne 'github-copilot' -or [string]$referenceProfile.model -ne 'claude-haiku-4.5' -or [int]$referenceProfile.concurrency -ne 16) {
             throw 'Codebelt Reference preparation must write github-copilot + claude-haiku-4.5 atomically and preserve default concurrency 16.'
         }
+        Assert-PreparedRunnerIdentity -Name 'GitHub Copilot Codebelt Reference package' -IterationDirectory (Join-Path $referencePackageRoot 'iteration-1') -ExpectedRunner 'github-copilot' -ExpectedModel 'claude-haiku-4.5'
 
         $codexPackageRoot = Join-Path $packageRoot 'codex-package'
         $codexPrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $codexPackageRoot -Runner 'codex' -Model 'gpt-5.6-luna' 2>&1
@@ -1646,6 +1716,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'Codex preparation must preserve gpt-5.6-luna and default omitted reasoning effort to low.'
         }
         if ([int]$codexProfile.concurrency -ne 16) { throw 'Codex omitted -Concurrency must preserve the repository default of 16.' }
+        Assert-PreparedRunnerIdentity -Name 'Codex package' -IterationDirectory (Join-Path $codexPackageRoot 'iteration-1') -ExpectedRunner 'codex' -ExpectedModel 'gpt-5.6-luna'
 
         $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
         $opencodePrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' 2>&1
@@ -1657,6 +1728,26 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'OpenCode preparation must preserve the selected runner-native model and use concurrency 2 when -Concurrency is omitted.'
         }
         if (($opencodePrepareOutput -join [Environment]::NewLine) -notmatch 'Concurrency:\s+2 \(OpenCode safe default\)') { throw 'OpenCode preparation output must identify the safe default concurrency source.' }
+        Assert-PreparedRunnerIdentity -Name 'OpenCode package' -IterationDirectory (Join-Path $opencodePackageRoot 'iteration-1') -ExpectedRunner 'opencode' -ExpectedModel 'provider-paid/Paid.Model'
+
+        $explicitGithubPackageRoot = Join-Path $packageRoot 'github-explicit-runner-package'
+        $explicitGithubOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitGithubPackageRoot -Runner 'github-copilot' -Model 'gpt-5.6-luna' 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit GitHub Copilot selection: $($explicitGithubOutput -join [Environment]::NewLine)" }
+        $explicitGithubProfile = [System.IO.File]::ReadAllText((Join-Path $explicitGithubPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
+        if ([string]$explicitGithubProfile.runner -ne 'github-copilot' -or [string]$explicitGithubProfile.model -ne 'gpt-5.6-luna' -or $null -ne $explicitGithubProfile.reasoning_effort) {
+            throw 'An explicit GitHub Copilot runner selection must not be overwritten by Codex defaults.'
+        }
+        Assert-PreparedRunnerIdentity -Name 'Explicit GitHub Copilot package' -IterationDirectory (Join-Path $explicitGithubPackageRoot 'iteration-1') -ExpectedRunner 'github-copilot' -ExpectedModel 'gpt-5.6-luna'
+
+        $mismatchIteration = Join-Path $packageRoot 'mismatched-profile-package'
+        Copy-Item -LiteralPath (Join-Path $referencePackageRoot 'iteration-1') -Destination $mismatchIteration -Recurse
+        $mismatchProfilePath = Join-Path $mismatchIteration 'execution-profile.json'
+        $mismatchProfile = [System.IO.File]::ReadAllText($mismatchProfilePath, $utf8NoBom) | ConvertFrom-Json
+        $mismatchProfile.runner = 'codex'
+        $mismatchProfile.model = 'gpt-5.6-luna'
+        $mismatchProfile.reasoning_effort = 'low'
+        [System.IO.File]::WriteAllText($mismatchProfilePath, (($mismatchProfile | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+        Assert-PackageIdentityValidationFails -Name 'mismatched runner package' -IterationDirectory $mismatchIteration -ExpectedRunner 'github-copilot' -ExpectedMessagePattern 'execution-profile\.json runner .+ does not match manifest\.execution_selection\.runner'
 
         $explicitOpenCodePackageRoot = Join-Path $packageRoot 'opencode-explicit-concurrency-package'
         $explicitOpenCodeOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -Concurrency 16 2>&1
@@ -1678,6 +1769,16 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'prepare-skill-evals.ps1 must not create an unresolved eval package.'
         }
 
+        $missingRunnerRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-runner-' + [Guid]::NewGuid().ToString('N'))
+        $missingRunnerOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingRunnerRoot -Runner 'missing-runner' -Model 'fixture-model' 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($missingRunnerOutput -join ' ') -notmatch "Unsupported runner 'missing-runner'") {
+            throw 'An unresolved explicit runner must fail closed instead of falling back to a supported runner.'
+        }
+        if (Test-Path -LiteralPath $missingRunnerRoot) {
+            Remove-Item -LiteralPath $missingRunnerRoot -Recurse -Force
+            throw 'prepare-skill-evals.ps1 must not create a package for an unresolved explicit runner.'
+        }
+
         $missingOpenCodeModelRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-opencode-model-' + [Guid]::NewGuid().ToString('N'))
         $missingOpenCodeModelOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Runner 'opencode' -OutputRoot $missingOpenCodeModelRoot 2>&1
         if ($LASTEXITCODE -eq 0 -or ($missingOpenCodeModelOutput -join ' ') -notmatch 'Runner/model selection is atomic') {
@@ -1695,6 +1796,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
 
         $iterationDirectory = Join-Path $packageRoot 'iteration-1'
         $manifest = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'manifest.json'), $utf8NoBom) | ConvertFrom-Json
+        Assert-PreparedRunnerIdentity -Name 'GitHub Copilot package' -IterationDirectory $iterationDirectory -ExpectedRunner 'github-copilot' -ExpectedModel 'claude-haiku-4.5'
         if (@($manifest.evals).Count -lt 1) {
             throw 'The prepared package must contain at least one eval case.'
         }
@@ -2114,6 +2216,10 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         $deterministicToolIntegrity = Get-PackageTreeIntegrity -Root (Join-Path $iterationDirectory 'tools/eval-runners')
         $manifest.runner_tools_integrity.sha256 = $deterministicToolIntegrity.Sha256
         $manifest.runner_tools_integrity.file_count = $deterministicToolIntegrity.FileCount
+        $manifest.execution_selection.runner = 'fixture'
+        $manifest.execution_selection.model = 'fixture-model'
+        $manifest.execution_selection.harness = 'Deterministic runner-owned fixture'
+        $manifest.execution_selection.preset = 'Deterministic validator'
         [System.IO.File]::WriteAllText((Join-Path $iterationDirectory 'manifest.json'), (($manifest | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
         $fixtureMetricEnvironment = [ordered]@{
             AGENTIC_RUNNER_FIXTURE_FINAL_RESPONSE = 'validator output'
