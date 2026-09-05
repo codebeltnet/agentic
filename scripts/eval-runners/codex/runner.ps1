@@ -1238,6 +1238,36 @@ function Get-CodexBehavioralCapabilityFailure {
     }
 }
 
+function Get-CodexStderrPolicyRejections {
+    param([AllowNull()][string]$StderrText)
+
+    # Detects Codex runtime/tool-router policy-rejection signals from STDERR.
+    # Covers the iteration-12 failure shape where the app-server turn completes
+    # but runtime-level tool executions are rejected below the protocol layer,
+    # producing no structured commandExecution items in the event stream.
+    # Requires codex_core provenance PLUS an execution-failure pattern AND a
+    # policy indicator on the same line; bare 'blocked by policy' without
+    # runtime provenance is not sufficient.
+    $result = [System.Collections.Generic.List[object]]::new()
+    if ([string]::IsNullOrWhiteSpace($StderrText)) { return $result }
+
+    foreach ($line in ($StderrText -split '\r?\n')) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -notmatch 'codex_core') { continue }
+        $hasExecFailure = $line -match '(?i)exec_command.{0,80}fail' -or $line -match 'CreateProcess'
+        if (-not $hasExecFailure) { continue }
+        $hasPolicyIndicator = $line -match 'Rejected\s*\(' -or $line -match '(?i)\bblocked\s+by\s+policy\b'
+        if (-not $hasPolicyIndicator) { continue }
+
+        [void]$result.Add([ordered]@{
+            code   = 'workspace_operation_blocked_by_policy'
+            signal = 'runtime_stderr'
+            source = 'codex_core_tools_router'
+        })
+    }
+    return $result
+}
+
 function Get-CodexCapabilityMap {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
@@ -1778,11 +1808,26 @@ function Invoke-CodexExecute {
         $warnings.Add('Codex exited successfully without a final agent message.')
         $reason = 'codex_did_not_return_final_response'
     }
+    # Positive evidence that the execution substrate is usable.
+    $successfulWorkspaceOps = @($commands | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'completed' }).Count +
+                              @($files   | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'completed' }).Count
+    # Detect Codex runtime STDERR policy rejections (iteration-12 shape).  The
+    # app-server turn may complete while the runtime tool-router rejects every
+    # execution attempt before it reaches the protocol layer, emitting no
+    # structured commandExecution items.  Classify as a global workspace failure
+    # only when no successful workspace operation was observed; an outside-workspace
+    # isolation denial in an otherwise working environment must not be misclassified.
+    $stderrPolicyRejections = @(Get-CodexStderrPolicyRejections -StderrText $process.Stderr)
+    $stderrIndicatesGlobalWorkspaceFailure = $stderrPolicyRejections.Count -gt 0 -and $successfulWorkspaceOps -eq 0
     $behavioralCapabilityFailureNames = [System.Collections.Generic.List[string]]::new()
-    if ($behavioralCapabilityFailures.Count -gt 0 -and -not $process.TimedOut) {
+    if (($behavioralCapabilityFailures.Count -gt 0 -or $stderrIndicatesGlobalWorkspaceFailure) -and -not $process.TimedOut) {
         $status = 'incompatible'
         $reason = 'codex_behavioral_capability_incompatible'
-        $failure = New-ExecutionFailure -Code 'behavioral_capability_incompatible' -Message ("Codex structured tool results show required workspace execution was rejected by the effective runtime policy: {0}." -f ([string]::Join(', ', @($behavioralCapabilityFailures | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'code' -Default 'workspace_operation_blocked_by_policy') } | Select-Object -Unique))))
+        $failure = if ($behavioralCapabilityFailures.Count -gt 0) {
+            New-ExecutionFailure -Code 'behavioral_capability_incompatible' -Message ("Codex structured tool results show required workspace execution was rejected by the effective runtime policy: {0}." -f ([string]::Join(', ', @($behavioralCapabilityFailures | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'code' -Default 'workspace_operation_blocked_by_policy') } | Select-Object -Unique))))
+        } else {
+            New-ExecutionFailure -Code 'behavioral_capability_incompatible' -Message ("Codex runtime indicates required workspace execution was rejected by the effective runtime policy: {0} rejection(s) observed." -f $stderrPolicyRejections.Count)
+        }
         $exitStatus = $null
         $behavioralCapabilityFailureNames.Add('workspace_operation_blocked_by_policy')
         if (-not [bool]$Inputs.Run.CandidateSkillExposed) {
@@ -1852,11 +1897,11 @@ function Invoke-CodexExecute {
         credential = $credentialEvidence
     }
     $evidence.behavioral_capability = [ordered]@{
-        requested_workspace_write = $true
-        requested_policy_source = if ($auth.Kind -eq 'subscription_file') { 'turn/start.sandboxPolicy' } else { 'codex exec --sandbox workspace-write' }
-        status = if ($behavioralCapabilityFailures.Count -gt 0) { 'rejected_by_effective_runtime_policy' } else { 'no_structured_policy_rejection_observed' }
-        authoritative_signal = 'structured item.completed tool result'
-        failures = @($behavioralCapabilityFailures.ToArray())
+        requested_workspace_write  = $true
+        requested_policy_source    = if ($auth.Kind -eq 'subscription_file') { 'turn/start.sandboxPolicy' } else { 'codex exec --sandbox workspace-write' }
+        status                     = if ($behavioralCapabilityFailures.Count -gt 0 -or $stderrIndicatesGlobalWorkspaceFailure) { 'rejected_by_effective_runtime_policy' } else { 'no_structured_policy_rejection_observed' }
+        authoritative_signal       = if ($behavioralCapabilityFailures.Count -gt 0) { 'structured item.completed tool result' } elseif ($stderrIndicatesGlobalWorkspaceFailure) { 'codex_runtime_stderr' } else { 'structured item.completed tool result' }
+        failures                   = @(@($behavioralCapabilityFailures.ToArray()) + @(if ($stderrIndicatesGlobalWorkspaceFailure) { $stderrPolicyRejections } else { @() }))
     }
     if ($behavioralCapabilityFailureNames.Count -gt 0) {
         $evidence.native_worker_evidence_failures = @($behavioralCapabilityFailureNames.ToArray())

@@ -543,6 +543,9 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $fixtureThreadReadUnavailable = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-thread-read-unavailable') -PathType Leaf
     $fixturePolicyBlocked = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-policy-blocked') -PathType Leaf
     $fixtureProsePolicyText = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-prose-blocked-by-policy') -PathType Leaf
+    $fixtureStderrPolicyRejected = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-stderr-runtime-policy-rejected') -PathType Leaf
+    $fixtureStderrIsolationDenial = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-stderr-isolation-denial') -PathType Leaf
+    $fixtureStderrBarePolicyText = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-stderr-bare-blocked-by-policy') -PathType Leaf
     $instructionSources = if ($fixtureAmbientInstruction) { @('C:\ambient\AGENTS.md') } else { @($repositoryAgentsPath) }
     $threadObject = [ordered]@{
         id = 'recorded-subscription-thread'
@@ -618,8 +621,28 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
         Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'commandExecution'; id = 'command-1'; command = 'Get-Content C:\ambient\skills\candidate\SKILL.md'; commandActions = @(); cwd = (Get-Location).Path; status = 'failed'; exitCode = 1; aggregatedOutput = 'blocked by policy' } } })
         Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 2; item = [ordered]@{ type = 'fileChange'; id = 'file-1'; status = 'failed'; error = [ordered]@{ code = 'blocked_by_policy'; message = 'blocked by policy' }; changes = @() } } })
         Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 3; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = 'recorded subscription response after policy rejection' } } })
+    } elseif ($fixtureStderrPolicyRejected) {
+        # Iteration-12 shape: no structured tool items, turn completes, STDERR has runtime rejections.
+        # Models the case where Codex tool-router rejects execution below the app-server protocol layer.
+        [Console]::Error.WriteLine('2024-01-01T00:00:00Z ERROR codex_core::tools::router exec_command failed: CreateProcess failed for Get-Location: Rejected(blocked by policy)')
+        [Console]::Error.WriteLine('2024-01-01T00:00:01Z ERROR codex_core::tools::router exec_command failed: CreateProcess failed for Get-ChildItem: Rejected(blocked by policy)')
+        [Console]::Error.WriteLine('2024-01-01T00:00:02Z ERROR codex_core::tools::router exec_command failed: CreateProcess failed for git rev-parse: Rejected(blocked by policy)')
+        [Console]::Error.Flush()
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = 'recorded response after runtime stderr policy rejection' } } })
+    } elseif ($fixtureStderrIsolationDenial) {
+        # Fixture B: one successful workspace command, STDERR has an outside-workspace isolation denial.
+        # The workspace is usable; only a specific outside-workspace access is rejected.
+        [Console]::Error.WriteLine('2024-01-01T00:00:01Z ERROR codex_core::tools::router exec_command failed: CreateProcess failed for Get-Content C:\ambient\skill\SKILL.md: Rejected(blocked by policy)')
+        [Console]::Error.Flush()
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'commandExecution'; id = 'command-1'; command = 'Get-Location'; commandActions = @(); cwd = (Get-Location).Path; status = 'completed'; exitCode = 0; aggregatedOutput = (Get-Location).Path } } })
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 2; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = 'recorded response with workspace success and isolation denial' } } })
     } else {
         $agentText = if ($fixtureProsePolicyText) { 'The phrase blocked by policy appears in ordinary prose, not in a tool result.' } else { 'recorded subscription response' }
+        if ($fixtureStderrBarePolicyText) {
+            # Bare 'blocked by policy' in STDERR without codex_core provenance; must not trigger the runtime classifier.
+            [Console]::Error.WriteLine('blocked by policy without codex_core runtime provenance')
+            [Console]::Error.Flush()
+        }
         Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'commandExecution'; id = 'command-1'; command = 'recorded command'; commandActions = @(); cwd = (Get-Location).Path; status = 'completed'; exitCode = 0; aggregatedOutput = 'recorded output' } } })
         Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 2; item = [ordered]@{ type = 'fileChange'; id = 'file-1'; status = 'completed'; changes = @([ordered]@{ path = 'recorded.txt'; kind = [ordered]@{ type = 'add' } }) } } })
         Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 3; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = $agentText } } })
@@ -1551,6 +1574,47 @@ exit 2
     Assert-Equal 'unsupported' $baselinePolicyBlockedResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex baseline candidate-skill exclusion claim is unverified when general filesystem access is policy-blocked'
     Assert-Equal 'rejected_by_effective_runtime_policy' $baselinePolicyBlockedResult.evidence.behavioral_capability.status 'Codex baseline records the effective policy rejection'
     Remove-Item -LiteralPath $baselinePolicyBlockedMarker -Force
+
+    # Fixture A: iteration-12 STDERR-only runtime rejection — app-server turn completes but no
+    # structured tool items; Codex runtime STDERR carries the tool-router rejection family.
+    $stderrPolicyRejectedMarker = Join-Path $with.Root 'home\codex-stderr-runtime-policy-rejected'
+    [System.IO.File]::WriteAllText($stderrPolicyRejectedMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $stderrPolicyRejectedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'incompatible' $stderrPolicyRejectedResult.status 'Codex STDERR-only runtime rejection fails closed'
+    Assert-Equal 'behavioral_capability_incompatible' $stderrPolicyRejectedResult.exit.failure.code 'Codex STDERR runtime rejection uses behavioral_capability_incompatible failure code'
+    Assert-Equal 'rejected_by_effective_runtime_policy' $stderrPolicyRejectedResult.evidence.behavioral_capability.status 'Codex STDERR runtime rejection records effective runtime policy rejection'
+    Assert-Equal 'codex_runtime_stderr' $stderrPolicyRejectedResult.evidence.behavioral_capability.authoritative_signal 'Codex STDERR-only rejection identifies runtime STDERR as the authoritative signal'
+    Assert-True (@($stderrPolicyRejectedResult.evidence.behavioral_capability.failures | Where-Object { $_.signal -eq 'runtime_stderr' }).Count -ge 1) 'Codex STDERR runtime rejection records runtime_stderr signal in evidence failures'
+    Assert-Equal 0 @($stderrPolicyRejectedResult.evidence.behavioral_capability.failures | Where-Object { $_.signal -eq 'structured_tool_result' }).Count 'Iteration-12 shape produces no structured tool-result failures'
+    Assert-True (@($stderrPolicyRejectedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'workspace_operation_blocked_by_policy' }).Count -eq 1) 'Codex STDERR runtime rejection surfaces workspace_operation_blocked_by_policy evidence'
+    Assert-True (([string]$stderrPolicyRejectedResult.exit.failure.message) -notmatch 'Get-Location|Get-ChildItem|git rev-parse') 'Codex STDERR failure message does not expose rejected command names from raw STDERR'
+    Remove-Item -LiteralPath $stderrPolicyRejectedMarker -Force
+
+    # Fixture A baseline: globally broken execution must not claim candidate-skill exclusion.
+    $stderrPolicyRejectedBaselineMarker = Join-Path $without.Root 'home\codex-stderr-runtime-policy-rejected'
+    [System.IO.File]::WriteAllText($stderrPolicyRejectedBaselineMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $stderrPolicyRejectedBaselineResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $without.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'incompatible' $stderrPolicyRejectedBaselineResult.status 'Codex baseline STDERR runtime rejection fails closed'
+    Assert-True (@($stderrPolicyRejectedBaselineResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'ambient_candidate_skill_exclusion_unverified' }).Count -eq 1) 'Codex baseline STDERR rejection does not claim exclusion when workspace execution is globally broken'
+    Assert-Equal 'unsupported' $stderrPolicyRejectedBaselineResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex baseline STDERR rejection marks ambient_candidate_skill_exclusion unsupported when execution is globally blocked'
+    Remove-Item -LiteralPath $stderrPolicyRejectedBaselineMarker -Force
+
+    # Fixture B: legitimate outside-workspace isolation denial with a usable workspace.
+    $stderrIsolationDenialMarker = Join-Path $with.Root 'home\codex-stderr-isolation-denial'
+    [System.IO.File]::WriteAllText($stderrIsolationDenialMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $stderrIsolationDenialResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'completed' $stderrIsolationDenialResult.status 'Outside-workspace isolation denial alone does not make the workspace globally incompatible'
+    Assert-Equal 'no_structured_policy_rejection_observed' $stderrIsolationDenialResult.evidence.behavioral_capability.status 'Isolation denial in STDERR does not set rejected_by_effective_runtime_policy when workspace execution succeeds'
+    Assert-True (@($stderrIsolationDenialResult.evidence.commands | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'completed' }).Count -ge 1) 'Fixture B has at least one successful workspace command confirming usable substrate'
+    Remove-Item -LiteralPath $stderrIsolationDenialMarker -Force
+
+    # False-positive protection: bare 'blocked by policy' in STDERR without codex_core provenance.
+    $stderrBarePolicyMarker = Join-Path $with.Root 'home\codex-stderr-bare-blocked-by-policy'
+    [System.IO.File]::WriteAllText($stderrBarePolicyMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $stderrBarePolicyResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'completed' $stderrBarePolicyResult.status 'Bare STDERR blocked-by-policy text without codex_core provenance does not trigger the runtime classifier'
+    Assert-Equal 'no_structured_policy_rejection_observed' $stderrBarePolicyResult.evidence.behavioral_capability.status 'Bare STDERR policy text leaves behavioral capability status as no_structured_policy_rejection_observed'
+    Remove-Item -LiteralPath $stderrBarePolicyMarker -Force
 
     $threadReadUnavailableMarker = Join-Path $with.Root 'home\codex-thread-read-unavailable'
     [System.IO.File]::WriteAllText($threadReadUnavailableMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
