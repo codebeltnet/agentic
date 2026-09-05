@@ -147,7 +147,7 @@ function ConvertTo-CanonicalJsonValue {
 function Get-JsonFingerprint {
     param([Parameter(Mandatory = $true)][object]$Object)
 
-    $json = ConvertTo-CanonicalJsonValue -Value $Object | ConvertTo-Json -Depth 100 -Compress
+    $json = ConvertTo-RunnerJson -Value (ConvertTo-CanonicalJsonValue -Value $Object) -Depth 100 -Compress
     return Get-Sha256HexFromBytes -Bytes ([System.Text.UTF8Encoding]::new($false).GetBytes($json))
 }
 
@@ -181,16 +181,52 @@ function Read-RunnerJson {
 function Write-RunnerJson {
     param(
         [Parameter(Mandatory = $true)][object]$Value,
+        [int]$Depth = 100,
+        [switch]$Compress,
         [switch]$AsOutput
     )
 
-    $json = ((ConvertTo-Json -InputObject $Value -Depth 100) + [Environment]::NewLine)
+    $json = ((ConvertTo-RunnerJson -Value $Value -Depth $Depth -Compress:$Compress) + [Environment]::NewLine)
     if ($AsOutput) {
         [Console]::Out.Write($json)
         return
     }
 
     return $json
+}
+
+function ConvertTo-RunnerJson {
+    param(
+        [Parameter(Mandatory = $true)][AllowNull()][object]$Value,
+        [int]$Depth = 100,
+        [switch]$Compress
+    )
+
+    $parameters = @{
+        InputObject = $Value
+        Depth = $Depth
+    }
+    if ($Compress) { $parameters['Compress'] = $true }
+    $command = Get-Command ConvertTo-Json -ErrorAction Stop
+    if ($command.Parameters.ContainsKey('EscapeHandling')) {
+        $parameters['EscapeHandling'] = 'EscapeNonAscii'
+    }
+    return ConvertTo-Json @parameters
+}
+
+function Write-RunnerJsonFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][object]$Value,
+        [int]$Depth = 100,
+        [switch]$Compress
+    )
+
+    $directory = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText($Path, (Write-RunnerJson -Value $Value -Depth $Depth -Compress:$Compress), [System.Text.UTF8Encoding]::new($false))
 }
 
 function Get-Sha256HexFromBytes {

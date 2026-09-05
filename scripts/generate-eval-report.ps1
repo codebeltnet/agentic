@@ -81,7 +81,7 @@ function Write-JsonFile {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
-    [System.IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 30) + [Environment]::NewLine), $utf8NoBom)
+    Write-RunnerJsonFile -Path $Path -Value $Value -Depth 30
 }
 
 function Write-TextFile {

@@ -182,7 +182,7 @@ function Write-FakeEvidence {
     }
     [System.IO.File]::WriteAllText($eventsPath, ([string]::Join("`n", $events) + "`n"), [System.Text.UTF8Encoding]::new($false))
 
-    [ordered]@{
+    Write-RunnerJsonFile -Path $promptEvidencePath -Value ([ordered]@{
         prompt_sha256 = $Inputs.Run.PromptHash
         first_task_input_sha256 = $Inputs.Run.PromptHash
         first_task_input_bytes = $Inputs.Run.PromptBytes.Length
@@ -194,7 +194,7 @@ function Write-FakeEvidence {
         global_memory_visible = $false
         global_plugins_visible = $false
         global_same_name_skill_visible = $false
-    } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $promptEvidencePath -Encoding utf8NoBOM
+    }) -Depth 20
 
     $boundary = [ordered]@{
         read_outside_run = [ordered]@{ attempted = $false; blocked = $true; path = '../eval-metadata.json' }
@@ -212,7 +212,7 @@ function Write-FakeEvidence {
             }
         }
     }
-    $boundary | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $boundaryEvidencePath -Encoding utf8NoBOM
+    Write-RunnerJsonFile -Path $boundaryEvidencePath -Value $boundary -Depth 20
 
     return @(
         (New-ArtifactReference -Run $Inputs.Run -Path 'evidence/fake-events.jsonl' -Scope run -MediaType 'application/x-ndjson'),

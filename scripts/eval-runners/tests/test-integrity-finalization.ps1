@@ -22,6 +22,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $runnerRoot '..')).Path
 . (Join-Path $runnerRoot 'orchestration.ps1')
 . (Join-Path $runnerRoot 'execution-freeze.ps1')
 . (Join-Path $runnerRoot 'package-integrity.ps1')
+. (Join-Path $runnerRoot 'fanout-process.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -45,8 +46,7 @@ function Assert-Contains {
 function Write-TestJson {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][object]$Value)
 
-    New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
-    [System.IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+    Write-RunnerJsonFile -Path $Path -Value $Value
 }
 
 function Read-TestJson {
@@ -202,9 +202,166 @@ function Remove-TestReportArtifacts {
     }
 }
 
+function New-ProblematicProtocolString {
+    return [string]::Concat('prefix:', [char]0x1A, [char]0x00, [char]0x09, [char]0x0D, [char]0x0A, [char]0x22, [char]0x5C, ':suffix')
+}
+
+function Assert-ProblematicProtocolString {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    foreach ($codePoint in @(0x1A, 0x00, 0x09, 0x0D, 0x0A, 0x22, 0x5C)) {
+        Assert-True ($Value.IndexOf([char]$codePoint) -ge 0) ("problematic protocol string contains literal 0x{0:X2}" -f $codePoint)
+    }
+}
+
+function Get-StrictJsonString {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$PropertyPath
+    )
+
+    $json = [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false))
+    $document = [System.Text.Json.JsonDocument]::Parse($json)
+    try {
+        $element = $document.RootElement
+        foreach ($segment in $PropertyPath) {
+            if ($element.ValueKind -eq [System.Text.Json.JsonValueKind]::Array) {
+                $element = $element[[int]$segment]
+            } else {
+                $element = $element.GetProperty($segment)
+            }
+        }
+        return $element.GetString()
+    } finally {
+        $document.Dispose()
+    }
+}
+
+function Assert-StrictJsonRoundTrip {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$PropertyPath,
+        [Parameter(Mandatory = $true)][string]$Expected,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    $actual = Get-StrictJsonString -Path $Path -PropertyPath $PropertyPath
+    if ($Expected -cne $actual) {
+        throw "ASSERT: $Message did not round-trip through strict JSON parsing"
+    }
+}
+
+function Assert-ProtocolJsonSerializationRoundTrip {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $problematic = New-ProblematicProtocolString
+    Assert-ProblematicProtocolString -Value $problematic
+    $jsonPath = Join-Path $Root 'strict-json\protocol-owned-artifact.json'
+    Write-RunnerJsonFile -Path $jsonPath -Value ([ordered]@{
+        schema = 'codebeltnet/agentic/eval-protocol-json-roundtrip-test/1'
+        payload = [ordered]@{
+            text = $problematic
+            diagnostics = @([ordered]@{ message = $problematic })
+        }
+    })
+    Assert-StrictJsonRoundTrip -Path $jsonPath -PropertyPath @('payload', 'text') -Expected $problematic -Message 'protocol-owned JSON string with control characters'
+    Assert-StrictJsonRoundTrip -Path $jsonPath -PropertyPath @('payload', 'diagnostics', '0', 'message') -Expected $problematic -Message 'nested protocol-owned JSON diagnostic string with control characters'
+}
+
+function Assert-ExecutionResultSerializationRoundTrip {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $problematic = New-ProblematicProtocolString
+    Assert-ProblematicProtocolString -Value $problematic
+    $executionRoot = Join-Path $Root 'strict-json\execution-result-path'
+    New-Item -ItemType Directory -Path $executionRoot -Force | Out-Null
+    $runJson = Join-Path $executionRoot 'run.json'
+    $promptPath = Join-Path $executionRoot 'prompt.md'
+    $childScript = Join-Path $executionRoot 'write-execution-result.ps1'
+    $executionResultPath = Join-Path $executionRoot 'model-output.execution-result.json'
+    $stderrPath = Join-Path $executionRoot 'model-output.stderr.txt'
+    [System.IO.File]::WriteAllText($runJson, '{}', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($promptPath, 'strict JSON production path prompt', [System.Text.UTF8Encoding]::new($false))
+    $childScriptText = @'
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)][string]$CommonPath,
+    [Parameter(Mandatory = $true)][string]$RunRoot,
+    [Parameter(Mandatory = $true)][string]$RunPath,
+    [Parameter(Mandatory = $true)][string]$PromptHash
+)
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+. $CommonPath
+$problematic = [string]::Concat('prefix:', [char]0x1A, [char]0x00, [char]0x09, [char]0x0D, [char]0x0A, [char]0x22, [char]0x5C, ':suffix')
+$hash = '0000000000000000000000000000000000000000000000000000000000000000'
+$descriptor = [ordered]@{ name = 'strict-json-fixture'; version = '1'; harness = [ordered]@{ name = 'strict-json-fixture'; version = '1' } }
+$profile = [pscustomobject]@{ Model = 'fixture-model'; ReasoningEffort = ''; ConfigurationProfile = 'isolated-default'; ToolProfile = 'default'; TimeoutSeconds = 1; Hash = $hash }
+$run = [pscustomobject]@{ EvalId = 1; EvalName = 'strict-json'; Mode = 'with_skill'; PromptHash = $PromptHash; RunPath = $RunPath; RunRoot = $RunRoot; CandidateSkillExposed = $false }
+$result = New-ExecutionResult -Descriptor $descriptor -Profile $profile -Run $run -Status completed -FinalResponse $problematic -StartedUtc ([DateTime]::UtcNow.ToString('o')) -FinishedUtc ([DateTime]::UtcNow.ToString('o')) -DurationSeconds 0 -ExitStatus 0 -Failure $null -SessionId 'strict-json-session' -IsolationCapabilities ([ordered]@{ fresh_context = 'supported'; isolated_home_config = 'supported'; isolated_working_directory = 'supported'; ambient_candidate_skill_exclusion = 'supported'; candidate_skill_exposure = 'excluded'; prompt_fidelity = 'supported'; model_configuration_lock = 'supported'; response_capture = 'supported'; filesystem_confinement = 'unsupported' }) -IsolationMechanisms @('strict-json-production-path') -Warnings @($problematic) -Evidence ([ordered]@{ diagnostic = $problematic }) -AttemptCount 1
+Write-RunnerJson -Value $result -AsOutput
+'@
+    [System.IO.File]::WriteAllText($childScript, $childScriptText, [System.Text.UTF8Encoding]::new($false))
+    $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
+    $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-File', $childScript, '-CommonPath', (Join-Path $runnerRoot 'runner-common.ps1'), '-RunRoot', $executionRoot, '-RunPath', $runJson, '-PromptHash', (Get-Sha256HexFromFile -Path $promptPath)) -WorkingDirectory $executionRoot -StdoutPath $executionResultPath -StderrPath $stderrPath -TimeoutSeconds 30
+    $exitCode = Complete-RunnerChildProcess -Child $child
+    Assert-Equal 0 $exitCode 'execution-result child writer exits successfully'
+    Assert-StrictJsonRoundTrip -Path $executionResultPath -PropertyPath @('final_response', 'text') -Expected $problematic -Message 'execution-result final response with control characters'
+    Assert-StrictJsonRoundTrip -Path $executionResultPath -PropertyPath @('warnings', '0') -Expected $problematic -Message 'execution-result warning with control characters'
+    Assert-StrictJsonRoundTrip -Path $executionResultPath -PropertyPath @('evidence', 'diagnostic') -Expected $problematic -Message 'execution-result evidence with control characters'
+}
+
+function Get-TestFileHashSnapshot {
+    param([Parameter(Mandatory = $true)][string[]]$Paths)
+
+    $snapshot = @{}
+    foreach ($path in @($Paths | Sort-Object -Unique)) {
+        $snapshot[$path] = if (Test-Path -LiteralPath $path -PathType Leaf) { Get-Sha256HexFromFile -Path $path } else { '<missing>' }
+    }
+    return $snapshot
+}
+
+function Assert-TestFileHashSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Expected,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    foreach ($path in @($Expected.Keys)) {
+        $actual = if (Test-Path -LiteralPath $path -PathType Leaf) { Get-Sha256HexFromFile -Path $path } else { '<missing>' }
+        Assert-Equal $Expected[$path] $actual "$Message preserves $path"
+    }
+}
+
+function Get-GradingValidationSideEffectPaths {
+    param(
+        [Parameter(Mandatory = $true)][string]$IterationDirectory,
+        [Parameter(Mandatory = $true)][object[]]$Records
+    )
+
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($record in $Records) {
+        $paths.Add([string]$record.ExecutionResultPath)
+        $paths.Add([string]$record.ResultPath)
+    }
+    foreach ($relative in @('orchestration-state.json', 'execution-freeze.json', 'report.html', 'skill-creator-report.html', 'benchmark.json', 'benchmark.md')) {
+        $paths.Add((Join-Path $IterationDirectory $relative))
+    }
+    return @($paths.ToArray())
+}
+
+function Copy-TestGradingDocument {
+    param([Parameter(Mandatory = $true)][object]$Document)
+
+    return ConvertTo-RunnerJson -Value $Document -Depth 100 | ConvertFrom-Json -Depth 100
+}
+
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-integrity-finalization-' + [Guid]::NewGuid().ToString('N'))
 $oldReportMode = [Environment]::GetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE')
 try {
+    Assert-ProtocolJsonSerializationRoundTrip -Root $testRoot
+    Assert-ExecutionResultSerializationRoundTrip -Root $testRoot
+
     $iteration = Join-Path $testRoot 'iteration-1'
     $packageTools = Join-Path $iteration 'tools/eval-runners'
     New-Item -ItemType Directory -Path $packageTools -Force | Out-Null
@@ -394,7 +551,57 @@ for ($index = 0; $index -lt $count; $index++) {
 
     $gradingPath = Join-Path $iteration 'grading.json'
     $validGrading = New-TestGradingDocument -Records $records
+    $validationScript = Join-Path $packageTools 'validate-eval-grading.ps1'
+    $validationArguments = @('-IterationDirectory', $iteration, '-GradingPath', 'grading.json')
+    $validationSideEffectPaths = Get-GradingValidationSideEffectPaths -IterationDirectory $iteration -Records $records
+    $validationSnapshot = Get-TestFileHashSnapshot -Paths $validationSideEffectPaths
+
+    $skeleton = Invoke-TestTool -Path $validationScript -Arguments @('-ShowSkeleton')
+    Assert-ToolPasses -Invocation $skeleton -Description 'grading skeleton emission'
+    $skeletonDocument = $skeleton.Text | ConvertFrom-Json -Depth 100
+    Assert-Equal (Get-RunnerSchemaNames).Grading ([string]$skeletonDocument.schema) 'grading skeleton uses the authoritative grading schema'
+    Assert-Equal 0 @($skeletonDocument.grading).Count 'grading skeleton exposes an empty grading array'
+    Assert-Equal 'schema,grading' ([string]::Join(',', @($skeletonDocument.PSObject.Properties.Name))) 'grading skeleton exposes only the grading envelope'
+    Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'grading skeleton emission'
+
+    [System.IO.File]::WriteAllText($gradingPath, '{', [System.Text.UTF8Encoding]::new($false))
+    $malformedValidation = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
+    Assert-ToolFails -Invocation $malformedValidation -Description 'malformed grading JSON validation'
+    Assert-True (-not [string]::IsNullOrWhiteSpace($malformedValidation.Text)) 'malformed grading validation emits a diagnostic'
+    $malformedValidationAgain = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
+    Assert-ToolFails -Invocation $malformedValidationAgain -Description 'repeated malformed grading JSON validation'
+    Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'repeated invalid grading validation'
+
+    Write-TestJson -Path $gradingPath -Value ([ordered]@{ grading = @() })
+    Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'missing grading schema validation' -ExpectedText 'must declare'
+    Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = 'wrong/schema'; grading = @() })
+    Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'wrong grading schema validation' -ExpectedText 'must declare'
+    Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = [ordered]@{} })
+    Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'wrong grading envelope validation' -ExpectedText 'grading must be an array'
+    $invalidEntry = Copy-TestGradingDocument -Document $validGrading
+    $invalidEntry.grading[0].passed = 'yes'
+    Write-TestJson -Path $gradingPath -Value $invalidEntry
+    Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'invalid grading entry validation' -ExpectedText 'passed must be a boolean'
+    Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'invalid grading validation'
+
     Write-TestJson -Path $gradingPath -Value $validGrading
+    $validValidation = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
+    Assert-ToolPasses -Invocation $validValidation -Description 'valid grading validation'
+    $validValidationAgain = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
+    Assert-ToolPasses -Invocation $validValidationAgain -Description 'repeated valid grading validation'
+    Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'repeated valid grading validation'
+
+    $invalidDirectFinalizer = Copy-TestGradingDocument -Document $validGrading
+    $invalidDirectFinalizer.grading[0].evidence = 123
+    Write-TestJson -Path $gradingPath -Value $invalidDirectFinalizer
+    $finalizerScript = Join-Path $packageTools 'finalize-eval-package.ps1'
+    $finalizerArguments = @('-IterationDirectory', $iteration, '-GradingPath', 'grading.json')
+    $directInvalidFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+    Assert-ToolFails -Invocation $directInvalidFinalizer -Description 'finalizer performs its own grading validation' -ExpectedText 'evidence must be a string'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $iteration 'report.html') -PathType Leaf)) 'invalid direct finalizer produces no report'
+
+    Write-TestJson -Path $gradingPath -Value $validGrading
+    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'valid grading validation before application'
     $canonicalBeforeGrading = @{}
     foreach ($record in $records) { $canonicalBeforeGrading[$record.ResultPath] = Get-JsonFingerprint -Object (Get-JsonWithoutProperty -Object (Read-TestJson -Path $record.ResultPath) -PropertyName 'grading') }
     $applyScript = Join-Path $packageTools 'apply-eval-grading.ps1'
@@ -431,8 +638,6 @@ for ($index = 0; $index -lt $count; $index++) {
     $tamperedCanonical = Read-TestJson -Path $canonicalPath
     $tamperedCanonical.output = 'manual canonical tampering'
     Write-TestJson -Path $canonicalPath -Value $tamperedCanonical
-    $finalizerScript = Join-Path $packageTools 'finalize-eval-package.ps1'
-    $finalizerArguments = @('-IterationDirectory', $iteration, '-GradingPath', 'grading.json')
     $canonicalTamperFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
     Assert-ToolFails -Invocation $canonicalTamperFinalizer -Description 'finalizer rejects canonical non-grading mutation' -ExpectedText 'Execution integrity failure'
     Remove-TestReportArtifacts -IterationDirectory $iteration
@@ -471,6 +676,8 @@ for ($index = 0; $index -lt $count; $index++) {
 
     [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', '')
     Remove-TestReportArtifacts -IterationDirectory $iteration
+    Write-TestJson -Path $gradingPath -Value $validGrading
+    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'correctly validated grading before finalization'
     $successfulFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
     Assert-ToolPasses -Invocation $successfulFinalizer -Description 'deterministic finalizer success'
     $finalSummary = $successfulFinalizer.Text | ConvertFrom-Json -Depth 100 | Select-Object -Last 1

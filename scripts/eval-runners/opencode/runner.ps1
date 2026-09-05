@@ -1654,7 +1654,7 @@ function Save-OpenCodePreflightObservation {
         harness_version = [string](Get-JsonProperty -Object $Preflight.harness -Name 'version' -Default 'unavailable')
         preflight = $Preflight
     }
-    [System.IO.File]::WriteAllText($identity.Path, (($record | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+    Write-RunnerJsonFile -Path $identity.Path -Value $record
     return $identity.Path
 }
 
@@ -2044,7 +2044,7 @@ function New-OpenCodeEnvironment {
         '$schema' = 'https://opencode.ai/config.json'
         permission = [ordered]@{ skill = $skillPermission }
     }
-    [System.IO.File]::WriteAllText($configPath, (($config | ConvertTo-Json -Depth 20) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+    Write-RunnerJsonFile -Path $configPath -Value $config -Depth 20
     $modelProvider = Get-OpenCodeModelProvider -Model ([string]$Inputs.Profile.Model)
     $authVariables = @(if (-not [string]::IsNullOrWhiteSpace($modelProvider)) { Get-ProviderAuthenticationVariables -Provider $modelProvider })
     $environment = New-RunnerEnvironment -Run $Inputs.Run -AuthenticationVariables $authVariables -Additional @{

@@ -25,7 +25,7 @@ Set-StrictMode -Version Latest
 function Save-FreezeOrchestrationState {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][object]$State)
 
-    [System.IO.File]::WriteAllText($Path, (($State | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+    Write-RunnerJsonFile -Path $Path -Value $State
 }
 
 try {

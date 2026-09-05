@@ -34,7 +34,7 @@ function Write-FanoutSummary {
         [int]$ExitCode = 0
     )
 
-    [Console]::Out.WriteLine(($Summary | ConvertTo-Json -Depth 100 -Compress))
+    Write-RunnerJson -Value $Summary -Compress -AsOutput
     if ($ExitCode -ne 0) { exit $ExitCode }
 }
 
@@ -44,7 +44,7 @@ function Save-OrchestrationState {
         [Parameter(Mandatory = $true)][object]$State
     )
 
-    [System.IO.File]::WriteAllText($Path, (($State | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+    Write-RunnerJsonFile -Path $Path -Value $State
 }
 
 function Invoke-RunnerPreflight {

@@ -11,7 +11,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$protocol = 'codebeltnet/agentic/eval-runner-protocol/1'
+. (Join-Path $PSScriptRoot 'runner-common.ps1')
+
+$protocol = (Get-RunnerSchemaNames).Protocol
 if ($Runner -notmatch '^[a-z0-9][a-z0-9-]*$') {
     throw "Runner name '$Runner' is not a safe package-local runner name."
 }
@@ -25,9 +27,9 @@ $resolved = (Resolve-Path -LiteralPath $runnerPath).Path
 $root = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $relative = [System.IO.Path]::GetRelativePath($root, $resolved).Replace('\', '/')
 
-[ordered]@{
+Write-RunnerJson -Value ([ordered]@{
     schema = 'codebeltnet/agentic/eval-runner-resolution/1'
     protocol_version = $protocol
     runner = $Runner
     path = $relative
-} | ConvertTo-Json -Depth 10 -Compress
+}) -Depth 10 -Compress -AsOutput

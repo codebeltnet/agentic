@@ -280,7 +280,7 @@ function ConvertTo-JsonFile {
         [object]$Value
     )
 
-    Write-Utf8File -Path $Path -Content (($Value | ConvertTo-Json -Depth 12) + [Environment]::NewLine)
+    Write-Utf8File -Path $Path -Content ((ConvertTo-RunnerJson -Value $Value -Depth 12) + [Environment]::NewLine)
 }
 
 function Test-IsBinaryFile {
@@ -1610,6 +1610,8 @@ function Invoke-PrepareMode {
         execution_result_schema = $executionResultSchema
         execution_freeze = 'execution-freeze.json'
         grading = 'grading.json'
+        grading_validator = "$evalRunnerToolRelativePath/validate-eval-grading.ps1"
+        grading_contract = "$evalRunnerToolRelativePath/contracts/grading.schema.json"
         finalizer = "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
         report = [ordered]@{
             tool = $reportToolRelativePath
@@ -1712,6 +1714,7 @@ function New-RunnerPrompt {
     $profilePath = Join-Path $IterationDirectory 'execution-profile.json'
     $runnerOwnedFanoutPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1"
     $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
+    $gradingValidatorPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/validate-eval-grading.ps1"
     $finalizerPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
     $maxScriptedUserTurns = 1
     foreach ($manifestEval in @($ManifestEvals)) {
@@ -1759,7 +1762,11 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('Only after Phase 1 returns a successful terminal JSON summary, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
     [void]$builder.AppendLine("pwsh -NoProfile -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
     [void]$builder.AppendLine('Only if that bridge succeeds, reveal the grading key in `eval-metadata.json` to the Grader. The Grader may author exactly one package-root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`; each entry contains only `eval_id`, `eval_name`, `configuration`, `assertion_index`, `assertion`, `passed`, and `evidence`. It must not edit raw execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.')
-    [void]$builder.AppendLine('Write that artifact. Do not invoke the application helper separately; the finalizer invokes `apply-eval-grading.ps1` deterministically. Then invoke exactly once:')
+    [void]$builder.AppendLine('To display the authoritative top-level grading skeleton, run:')
+    [void]$builder.AppendLine("pwsh -NoProfile -File `"$gradingValidatorPath`" -ShowSkeleton")
+    [void]$builder.AppendLine('Write `grading.json`, then validate it before finalization:')
+    [void]$builder.AppendLine("pwsh -NoProfile -File `"$gradingValidatorPath`" -IterationDirectory `"$IterationDirectory`" -GradingPath `"grading.json`"")
+    [void]$builder.AppendLine('Grading validation is retryable; finalization is not. If validation fails, correct `grading.json` and rerun the validation command as many times as required. Do not invoke the application helper separately; the finalizer invokes `apply-eval-grading.ps1` deterministically after revalidating grading. Invoke finalization exactly once, and only after grading validation succeeds:')
     [void]$builder.AppendLine("pwsh -NoProfile -File `"$finalizerPath`" -IterationDirectory `"$IterationDirectory`"")
     [void]$builder.AppendLine('The finalizer revalidates the manifest, profile, terminal orchestration/concurrency evidence, immutable freeze, raw artifacts, bridge, canonical results, and grading; it then generates and verifies all required reports. Return only its machine-readable JSON summary and artifact paths. A non-zero exit, missing artifact, integrity error, or report error means the evaluation is incomplete. Never repair, re-freeze, re-bridge a changed raw result, or report prose success.')
     [void]$builder.AppendLine()
@@ -1842,7 +1849,8 @@ function New-PackageReadme {
     [void]$builder.AppendLine(('1. Read `execution-profile.json` and the selected runner descriptor. If `runner` or `model` is missing or unsupported, fail clearly instead of guessing. For `delegation.dispatch_owner=runner`, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1") + ' exactly once with the caller shell/tool timeout set to at least the package-computed Phase 1 allowance. It performs all preflight, native dispatch, concurrency, terminal registration, timeout handling, and raw-evidence freezing. For `delegation.dispatch_owner=orchestrator`, use only the descriptor-declared native worker mechanism, then invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/freeze-execution-evidence.ps1") + ' after every arm is terminal.'))
     [void]$builder.AppendLine('2. A caller/tool timeout or interrupted conversation does not authorize rerunning Phase 1. Do not execute an arm in the parent context, create a second worker for a runner-owned arm, expose grading material during execution, or author/repair raw evidence. If Phase 1 reports incompatible or Phase 1/freezing fails, stop: the evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check.')
     [void]$builder.AppendLine(('3. After the freeze succeeds, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1") + ' with `-RequireComplete -RequireParallelDispatch` and add `-RequireNativeDelegation` when the selected descriptor has `dispatch_owner=runner`. Only after that deterministic bridge succeeds, give the grading key to the Grader. The Grader writes only the package-root `grading.json` grading-only artifact. It must not modify execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.'))
-    [void]$builder.AppendLine(('4. Invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1") + ' exactly once. It invokes the deterministic apply-eval-grading boundary, validates the frozen evidence, idempotent bridge, complete grading, and report outputs. Return only its machine-readable summary.'))
+    [void]$builder.AppendLine(('4. To display the authoritative grading skeleton, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/validate-eval-grading.ps1") + ' with `-ShowSkeleton`. After writing `grading.json`, invoke the same helper with `-IterationDirectory "' + $IterationDirectory + '" -GradingPath "grading.json"` before finalization. Grading validation is retryable; finalization is not. Correct and rerun validation until it succeeds.'))
+    [void]$builder.AppendLine(('5. Invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1") + ' exactly once, only after grading validation succeeds. It invokes the deterministic apply-eval-grading boundary, validates the frozen evidence, idempotent bridge, complete grading, and report outputs. Return only its machine-readable summary.'))
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It never executes an eval arm in its own model context. Same-session scripted interactions are allowed only when the selected runner proves that capability; paired runs receive identical deterministic turns. The package is complete only when the finalizer exits successfully.')
     [void]$builder.AppendLine()

@@ -206,8 +206,7 @@ try {
         Assert-NativeTerminalCaptureArtifact -ExecutionResult $result
     }
 
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-    [System.IO.File]::WriteAllText($outputPath, ((ConvertTo-Json -InputObject $result -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+    Write-RunnerJsonFile -Path $outputPath -Value $result
     $relativeOutput = [System.IO.Path]::GetRelativePath($iterationDirectory, $outputPath).Replace('\', '/')
     Write-RunnerJson -Value ([ordered]@{
         schema = 'codebeltnet/agentic/eval-native-worker-record/1'

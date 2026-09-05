@@ -1753,6 +1753,10 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             'assertion_index',
             'passed',
             'evidence',
+            'validate-eval-grading.ps1',
+            'Write `grading.json`, then validate it before finalization',
+            'Grading validation is retryable; finalization is not',
+            'only after grading validation succeeds',
             'apply-eval-grading.ps1',
             'finalize-eval-package.ps1',
             'machine-readable JSON summary',
@@ -1809,6 +1813,9 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                 'Do not create outer workers',
                 'execution-freeze.json',
                 'grading.json',
+                'validate-eval-grading.ps1',
+                'Grading validation is retryable; finalization is not',
+                'only after grading validation succeeds',
                 'apply-eval-grading.ps1',
                 'finalize-eval-package.ps1',
                 'evaluation is incomplete and must fail closed',
@@ -2012,8 +2019,10 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             [string]$manifest.execution_profile -ne 'execution-profile.json' -or
             [string]$manifest.runner_protocol -ne 'codebeltnet/agentic/eval-runner-protocol/1' -or
             [string]$manifest.runner_tools -ne 'tools/eval-runners' -or
+            [string]$manifest.grading_validator -ne 'tools/eval-runners/validate-eval-grading.ps1' -or
+            [string]$manifest.grading_contract -ne 'tools/eval-runners/contracts/grading.schema.json' -or
             [string]$manifest.execution_result_schema -ne 'codebeltnet/agentic/eval-execution-result/1') {
-            throw 'Runner-aware packages must declare the execution profile, runner protocol, runner tools, and execution-result schema.'
+            throw 'Runner-aware packages must declare the execution profile, runner protocol, runner tools, grading validator, grading contract, and execution-result schema.'
         }
         $profilePath = Join-Path $iterationDirectory ([string]$manifest.execution_profile)
         $profile = [System.IO.File]::ReadAllText($profilePath, $utf8NoBom) | ConvertFrom-Json
@@ -2040,6 +2049,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                 'orchestration.ps1',
                 'execution-freeze.ps1',
                 'freeze-execution-evidence.ps1',
+                'eval-grading-contract.ps1',
+                'validate-eval-grading.ps1',
                 'apply-eval-grading.ps1',
                 'finalize-eval-package.ps1',
                 'bridge-execution-result.ps1',
@@ -2165,6 +2176,11 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
         $gradingPath = Join-Path $iterationDirectory ([string]$manifest.grading)
         [System.IO.File]::WriteAllText($gradingPath, (([ordered]@{ schema = 'codebeltnet/agentic/eval-grading/1'; grading = @($gradingEntries.ToArray()) } | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+        $validateGradingPath = Join-Path $iterationDirectory 'tools/eval-runners/validate-eval-grading.ps1'
+        $validateGradingOutput = & pwsh -NoProfile -File $validateGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "The deterministic grading validation failed: $($validateGradingOutput -join [Environment]::NewLine)"
+        }
         $applyGradingPath = Join-Path $iterationDirectory 'tools/eval-runners/apply-eval-grading.ps1'
         $applyOutput = & pwsh -NoProfile -File $applyGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
         if ($LASTEXITCODE -ne 0) {

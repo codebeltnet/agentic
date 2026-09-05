@@ -42,7 +42,7 @@ function Write-BridgeJson {
     } else {
         $Value
     }
-    [System.IO.File]::WriteAllText($Path, ((ConvertTo-Json -InputObject $serializable -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+    Write-RunnerJsonFile -Path $Path -Value $serializable
 }
 
 function Get-CapabilityBoolean {

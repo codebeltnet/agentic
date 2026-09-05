@@ -322,7 +322,7 @@ function Write-ExecutionFreezeDocument {
     if ([string]$Freeze.schema -ne $schemas.ExecutionFreeze -or [int]$Freeze.version -ne 1) {
         throw 'Execution freeze has an unsupported schema or version.'
     }
-    [System.IO.File]::WriteAllText($freezePath, (($Freeze | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+    Write-RunnerJsonFile -Path $freezePath -Value $Freeze
     return $freezePath
 }
 
