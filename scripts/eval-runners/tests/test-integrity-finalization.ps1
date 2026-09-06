@@ -137,6 +137,7 @@ function New-TestRun {
         schema = (Get-RunnerSchemaNames).Run
         evalId = $EvalId
         evalName = $EvalName
+        candidateSkillName = 'test-skill'
         skillName = if ($Configuration -eq 'with_skill') { 'test-skill' } else { $null }
         iteration = 1
         mode = $Configuration

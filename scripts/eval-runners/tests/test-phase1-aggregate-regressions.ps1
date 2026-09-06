@@ -116,6 +116,7 @@ function New-TestRun {
         schema = (Get-RunnerSchemaNames).Run
         evalId = $EvalId
         evalName = $EvalName
+        candidateSkillName = 'test-skill'
         skillName = 'test-skill'
         iteration = 1
         mode = 'with_skill'

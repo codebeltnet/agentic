@@ -133,7 +133,9 @@ runner-owned native worker surface when `dispatch_owner=runner`; for
 orchestrator-owned runners it remains a compatibility/conformance surface and
 must not be invoked inside the native subagent.
 
-Native delegation mechanisms use full harness operational permission inside each isolated eval boundary. That permission lets the evaluated agent perform ordinary engineering work without interactive prompts. It is separate from eval isolation: fresh session/process identity, isolated harness home/config, exact model lock, correct working directory, baseline skill exclusion, with-skill candidate exposure, prompt fidelity, and terminal evidence remain mandatory. Hard filesystem confinement is an optional outer capability supplied by `bwrap`, `sandbox-exec`, or another already-supported platform mechanism; it raises isolation confidence to `strict` when proven, and otherwise the run reports `pragmatic` isolation without downgrading valid mandatory controls.
+Native delegation mechanisms use full harness operational permission inside each isolated eval boundary. That permission lets the evaluated agent perform ordinary engineering work without interactive prompts. It is separate from eval isolation: fresh session/process identity, isolated harness home/config, exact model lock, correct working directory, baseline skill exclusion, with-skill candidate exposure, prompt fidelity, and terminal evidence remain mandatory.
+
+Operational permission, native skill isolation, and filesystem isolation are distinct. Operational permission is full inside the behavioral eval (`dangerFullAccess`/`danger-full-access`) so normal engineering work can proceed. Native skill isolation suppresses native skill catalogue injection, disables the evaluated candidate in the native registry when the harness exposes such a registry, verifies the effective candidate state before model execution, and fails closed when structured runtime evidence shows ambient native skill access outside the staged eval boundary. Filesystem isolation is `pragmatic` on native Windows unless an outer hard sandbox is actually proven; the runner does not claim that a native Windows worker cannot access the rest of the host filesystem. Hard filesystem confinement is an optional outer capability supplied by `bwrap`, `sandbox-exec`, or another already-supported platform mechanism; it raises isolation confidence to `strict` when proven, and otherwise the run reports `pragmatic` isolation without downgrading valid mandatory controls.
 
 Native delegation mechanisms:
 
@@ -149,17 +151,30 @@ Native delegation mechanisms:
   captures the first session id from structured events, and adds only that
   exact id on later turns; it never resumes the most recent session.
 - Codex: the installed CLI's runner-owned app-server child-session surface,
-  `thread/start` followed by `turn/start`, with supplemental post-completion
-  `thread/read` when available, and the arm's `cwd`, selected model, and
-  ephemeral/fresh session settings. The schema/feature probe is preflight
-  readiness only; terminal evidence must prove the actual thread. Subscription
-  auth uses a temporary auth-only `CODEX_HOME` containing only `auth.json`; the
-  runner physically projects only the arm's `repo/`, `home/`, and candidate
-  `skill/` outside the source-repository ancestor chain, does not copy ambient
-  config, skills, agents, sessions, memories, plugins, MCP configuration, or
-  AGENTS.md, and removes the projection/home in `finally`. `model/rerouted`
-  and instruction sources outside that physical arm boundary are incompatible.
-  `turn/start` requests `approvalPolicy=never` with
+  `config/read` and `skills/list(forceReload=true)` before `thread/start`,
+  then `thread/start` followed by `turn/start`, with supplemental
+  post-completion `thread/read` when available, and the arm's `cwd`, selected
+  model, and ephemeral/fresh session settings. The schema/feature probe is
+  preflight readiness only; terminal evidence must prove the actual thread.
+  Every Codex eval session passes session-level `-c` controls that set
+  `skills.include_instructions=false` and disable the evaluated
+  `candidateSkillName` through `skills.config`. The app-server path verifies
+  the effective `skills.include_instructions=false` value with `config/read`
+  and accepts `skills/list` only when the candidate is either absent or every
+  matching native entry is disabled. The compatibility `codex exec` path uses
+  the same session controls and additionally verifies model-visible suppression
+  with `debug prompt-input` before it can start `codex exec`. Subscription auth
+  uses a temporary auth-only `CODEX_HOME` containing only `auth.json`; that
+  excludes copied ambient config but is not, by itself, candidate-skill
+  exclusion proof. The runner physically projects only the arm's `repo/`,
+  `home/`, and candidate `skill/` outside the source-repository ancestor chain,
+  does not copy ambient config, skills, agents, sessions, memories, plugins,
+  MCP configuration, or AGENTS.md, and removes the projection/home in
+  `finally`. `model/rerouted`, instruction sources outside that physical arm
+  boundary, an enabled native candidate entry, unproven native catalogue
+  suppression, unavailable runtime path-bearing evidence, or observed access to
+  an ambient native skill path outside the staged with-skill copy is
+  incompatible. `turn/start` requests `approvalPolicy=never` with
   `sandboxPolicy.type=dangerFullAccess`; the compatibility `codex exec` path
   uses `--ask-for-approval never --sandbox danger-full-access`. Do not wrap a
   native Codex app-server worker in another Codex subagent.
@@ -187,7 +202,11 @@ dispatch_owner=runner:       run.json + execution-profile.json -> runner-owned n
 
 `run.json` is the existing portable one-arm contract. It owns the prompt,
 working directory, isolated home, staged candidate skill, and required
-experimental controls. Its `filesystemIsolationRequired` and
+experimental controls. `candidateSkillName` is immutable runner/control-plane
+metadata present in both arms so the runner can disable and verify the evaluated
+native skill without adding candidate instructions to the baseline prompt;
+`skillName` and `skillDirectory` remain populated only for the with-skill arm
+that receives the staged candidate copy. Its `filesystemIsolationRequired` and
 `mustNotReadOutsideSandbox` fields describe the staged worker-facing package
 boundary; they do not claim that the host has a hard OS filesystem sandbox.
 `execution-profile.json` selects the runner, runner-native model selector, and

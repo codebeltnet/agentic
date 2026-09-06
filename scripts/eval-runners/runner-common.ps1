@@ -1006,6 +1006,13 @@ function Resolve-RunContract {
     if ($mode -notin @('with_skill', 'without_skill')) {
         throw "run.json mode '$mode' is not with_skill or without_skill."
     }
+    $candidateSkillName = [string](Get-JsonProperty -Object $run -Name 'candidateSkillName' -Default '')
+    if ([string]::IsNullOrWhiteSpace($candidateSkillName)) {
+        throw 'run.json must declare candidateSkillName for both with_skill and without_skill arms.'
+    }
+    if ($candidateSkillName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+        throw "run.json candidateSkillName '$candidateSkillName' is not a supported native skill selector."
+    }
 
     $promptPath = Resolve-ContainedPath -BasePath $runRoot -RelativePath ([string]$run.promptFile) -FieldName 'promptFile' -Kind File
     $workingPath = Resolve-ContainedPath -BasePath $runRoot -RelativePath ([string]$run.workingDirectory) -FieldName 'workingDirectory' -Kind Directory
@@ -1057,9 +1064,19 @@ function Resolve-RunContract {
         if (-not (Test-Path -LiteralPath (Join-Path $skillPath 'SKILL.md') -PathType Leaf)) {
             throw 'with_skill skillDirectory must contain SKILL.md.'
         }
+        $skillName = [string](Get-JsonProperty -Object $run -Name 'skillName' -Default '')
+        if ([string]::IsNullOrWhiteSpace($skillName)) {
+            throw 'with_skill run.json must declare skillName.'
+        }
+        if ($skillName -ne $candidateSkillName) {
+            throw 'with_skill run.json skillName must match candidateSkillName.'
+        }
     } else {
         if ($null -ne $run.skillDirectory -and -not [string]::IsNullOrWhiteSpace([string]$run.skillDirectory)) {
             throw 'without_skill run.json must not declare skillDirectory.'
+        }
+        if ($null -ne $run.skillName -and -not [string]::IsNullOrWhiteSpace([string]$run.skillName)) {
+            throw 'without_skill run.json must not declare skillName.'
         }
         $skillRoot = Join-Path $runRoot 'skill'
         if (Test-Path -LiteralPath $skillRoot) {
@@ -1090,6 +1107,7 @@ function Resolve-RunContract {
         HomeDirectoryPath = $homePath
         SkillDirectoryPath = $skillPath
         CandidateSkillExposed = $mode -eq 'with_skill'
+        CandidateSkillName = $candidateSkillName
         FixtureHash = $fixtureHash
         SkillHash = if ($mode -eq 'with_skill') { [string]$run.skillHash } else { $null }
         InteractionPath = $interactionPath

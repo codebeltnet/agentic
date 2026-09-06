@@ -159,6 +159,340 @@ function New-CodexAuthOnlyHome {
     }
 }
 
+function Assert-CodexCandidateSkillName {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$CandidateSkillName)
+
+    if ([string]::IsNullOrWhiteSpace($CandidateSkillName)) {
+        throw 'Codex native skill isolation requires run.json candidateSkillName.'
+    }
+    if ($CandidateSkillName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+        throw "Codex native skill selector '$CandidateSkillName' is not supported by this runner."
+    }
+    return $CandidateSkillName
+}
+
+function Get-CodexSkillSessionConfigValues {
+    param([Parameter(Mandatory = $true)][string]$CandidateSkillName)
+
+    $candidate = Assert-CodexCandidateSkillName -CandidateSkillName $CandidateSkillName
+    return @(
+        'skills.include_instructions=false',
+        ('skills.config=[{{name="{0}",enabled=false}}]' -f $candidate)
+    )
+}
+
+function Add-CodexSessionConfigArguments {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$CandidateSkillName,
+        [string]$SwitchName = '-c',
+        [switch]$IncludeShellEnvironmentPolicy
+    )
+
+    if ($IncludeShellEnvironmentPolicy) {
+        $Arguments.Add($SwitchName)
+        $Arguments.Add('shell_environment_policy.inherit=none')
+    }
+    foreach ($value in @(Get-CodexSkillSessionConfigValues -CandidateSkillName $CandidateSkillName)) {
+        $Arguments.Add($SwitchName)
+        $Arguments.Add($value)
+    }
+}
+
+function ConvertTo-CodexComparablePath {
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    $value = [string]$Path
+    try { $value = [System.IO.Path]::GetFullPath($value) } catch { }
+    $value = $value.Replace('/', '\')
+    if ($IsWindows) { $value = $value.ToLowerInvariant() }
+    return $value.TrimEnd('\')
+}
+
+function ConvertTo-CodexComparableText {
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    $value = ([string]$Text).Replace('/', '\')
+    if ($IsWindows) { return $value.ToLowerInvariant() }
+    return $value
+}
+
+function Get-CodexAmbientSkillRoot {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    $normalized = ConvertTo-CodexComparablePath -Path $Path
+    if ([string]::IsNullOrWhiteSpace($normalized)) { return $null }
+    $extension = [System.IO.Path]::GetExtension($normalized)
+    if (-not [string]::IsNullOrWhiteSpace($extension)) {
+        try { return ConvertTo-CodexComparablePath -Path (Split-Path -Parent $normalized) } catch { return $normalized }
+    }
+    return $normalized
+}
+
+function Test-CodexTextReferencesRoot {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory = $true)][string]$Root
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+    $normalizedText = ConvertTo-CodexComparableText -Text $Text
+    $normalizedRoot = ConvertTo-CodexComparablePath -Path $Root
+    if ([string]::IsNullOrWhiteSpace($normalizedRoot)) { return $false }
+    return $normalizedText.Contains($normalizedRoot)
+}
+
+function Test-CodexPathInsideComparableRoot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Candidate
+    )
+
+    $rootComparable = ConvertTo-CodexComparablePath -Path $Root
+    $candidateComparable = ConvertTo-CodexComparablePath -Path $Candidate
+    if ([string]::IsNullOrWhiteSpace($rootComparable) -or [string]::IsNullOrWhiteSpace($candidateComparable)) { return $false }
+    return $candidateComparable -eq $rootComparable -or $candidateComparable.StartsWith($rootComparable + '\', [StringComparison]::Ordinal)
+}
+
+function Test-CodexPromptInputSuppressesNativeSkills {
+    param(
+        [Parameter(Mandatory = $true)][string]$PromptInputJson,
+        [Parameter(Mandatory = $true)][string]$CandidateSkillName
+    )
+
+    $candidate = Assert-CodexCandidateSkillName -CandidateSkillName $CandidateSkillName
+    $text = [string]$PromptInputJson
+    if ($text -match [regex]::Escape($candidate)) { return $false }
+    if ($text -match '(?i)available[- ]skills|<available_skills>|skills/list') { return $false }
+    return $true
+}
+
+function New-CodexNativeSkillIsolationObservation {
+    param(
+        [Parameter(Mandatory = $true)][string]$CandidateSkillName,
+        [Parameter(Mandatory = $true)][string]$Transport,
+        [AllowNull()][object]$ConfigReadRequest = $null,
+        [AllowNull()][object]$ConfigReadResponse = $null,
+        [AllowNull()][object]$SkillsListRequest = $null,
+        [AllowNull()][object]$SkillsListResponse = $null,
+        [AllowNull()][string]$PromptInputJson = $null,
+        [AllowNull()][string]$PromptInputMethod = $null
+    )
+
+    $candidate = Assert-CodexCandidateSkillName -CandidateSkillName $CandidateSkillName
+    $failures = [System.Collections.Generic.List[string]]::new()
+    $skillsConfig = Get-JsonProperty -Object (Get-JsonProperty -Object (Get-JsonProperty -Object $ConfigReadResponse -Name 'result' -Default $null) -Name 'config' -Default $null) -Name 'skills' -Default $null
+    $includeEffective = Get-JsonProperty -Object $skillsConfig -Name 'include_instructions' -Default $null
+    $configEntries = @(Get-JsonProperty -Object $skillsConfig -Name 'config' -Default @())
+    $disableEntries = @($configEntries | Where-Object {
+        [string](Get-JsonProperty -Object $_ -Name 'name' -Default '') -eq $candidate -and
+        $null -ne (Get-JsonProperty -Object $_ -Name 'enabled' -Default $null) -and
+        -not [bool](Get-JsonProperty -Object $_ -Name 'enabled' -Default $true)
+    })
+
+    if ($includeEffective -ne $false) {
+        [void]$failures.Add('native_skill_catalog_injection_unverified')
+    }
+    if ($disableEntries.Count -lt 1) {
+        [void]$failures.Add('native_candidate_skill_disable_unverified')
+    }
+
+    $skillsListData = @(Get-JsonProperty -Object (Get-JsonProperty -Object $SkillsListResponse -Name 'result' -Default $null) -Name 'data' -Default @())
+    if ($skillsListData.Count -eq 0) {
+        [void]$failures.Add('native_skills_list_unavailable')
+    }
+    $skillEntries = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in $skillsListData) {
+        foreach ($skill in @(Get-JsonProperty -Object $entry -Name 'skills' -Default @())) {
+            [void]$skillEntries.Add($skill)
+        }
+    }
+    $candidateMatches = @($skillEntries | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'name' -Default '') -eq $candidate })
+    $candidateState = if ($candidateMatches.Count -eq 0) {
+        'absent'
+    } elseif (@($candidateMatches | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'enabled' -Default $true) }).Count -gt 0) {
+        'enabled'
+    } else {
+        'disabled'
+    }
+    if ($candidateState -eq 'enabled') {
+        [void]$failures.Add('native_candidate_skill_still_enabled')
+    }
+
+    $candidateMatchEvidence = @($candidateMatches | ForEach-Object {
+        [ordered]@{
+            name = Get-JsonProperty -Object $_ -Name 'name' -Default $null
+            path = Get-JsonProperty -Object $_ -Name 'path' -Default $null
+            enabled = Get-JsonProperty -Object $_ -Name 'enabled' -Default $null
+            scope = Get-JsonProperty -Object $_ -Name 'scope' -Default $null
+        }
+    })
+    if (@($candidateMatchEvidence | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.path) }).Count -gt 0) {
+        [void]$failures.Add('native_skills_list_missing_candidate_path')
+    }
+
+    $ambientPaths = @($skillEntries |
+        ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'path' -Default '') } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique)
+
+    if (-not [string]::IsNullOrWhiteSpace($PromptInputJson) -and -not (Test-CodexPromptInputSuppressesNativeSkills -PromptInputJson $PromptInputJson -CandidateSkillName $candidate)) {
+        [void]$failures.Add('native_skill_catalog_prompt_input_unverified')
+    }
+
+    $evidence = [ordered]@{
+        candidate_skill_name = $candidate
+        transport = $Transport
+        include_instructions_requested = $false
+        include_instructions_effective = $includeEffective
+        include_instructions_verification_method = 'config/read'
+        candidate_disable_selector = [ordered]@{ name = $candidate; enabled = $false; source = 'session -c skills.config' }
+        candidate_disable_effective = $disableEntries.Count -gt 0
+        skills_list_method = 'skills/list'
+        force_reload = [bool](Get-JsonProperty -Object (Get-JsonProperty -Object $SkillsListRequest -Name 'params' -Default $null) -Name 'forceReload' -Default $false)
+        candidate_matches_count = $candidateMatches.Count
+        candidate_state = $candidateState
+        candidate_matches = @($candidateMatchEvidence)
+        all_candidate_matches_disabled = if ($candidateMatches.Count -eq 0) { $null } else { $candidateState -eq 'disabled' }
+        ambient_skill_paths_observed = @($ambientPaths)
+        runtime_access_observation = 'unavailable'
+        ambient_skill_accesses_detected = @()
+        config_read_request = $ConfigReadRequest
+        config_read_response = $ConfigReadResponse
+        skills_list_request = $SkillsListRequest
+        skills_list_response = $SkillsListResponse
+        prompt_input_verification_method = $PromptInputMethod
+        prompt_input_catalog_suppressed = if ([string]::IsNullOrWhiteSpace($PromptInputJson)) { $null } else { Test-CodexPromptInputSuppressesNativeSkills -PromptInputJson $PromptInputJson -CandidateSkillName $candidate }
+        failures = @()
+    }
+    if (-not [bool]$evidence.force_reload) {
+        [void]$failures.Add('native_skills_list_force_reload_missing')
+    }
+    $evidence.failures = @($failures | Select-Object -Unique)
+
+    return [pscustomobject]@{
+        Evidence = $evidence
+        Failures = @($evidence.failures)
+        Verified = @($evidence.failures).Count -eq 0
+    }
+}
+
+function Update-CodexNativeSkillRuntimeAccessEvidence {
+    param(
+        [Parameter(Mandatory = $true)][object]$NativeSkillIsolation,
+        [AllowEmptyCollection()][object[]]$Commands = @(),
+        [AllowEmptyCollection()][object[]]$Files = @(),
+        [AllowNull()][string]$AllowedStagedSkillRoot = $null
+    )
+
+    $evidence = Get-JsonProperty -Object $NativeSkillIsolation -Name 'Evidence' -Default $NativeSkillIsolation
+    $failures = [System.Collections.Generic.List[string]]::new()
+    foreach ($failure in @(Get-JsonProperty -Object $evidence -Name 'failures' -Default @())) { [void]$failures.Add([string]$failure) }
+    $accesses = [System.Collections.Generic.List[object]]::new()
+    $ambientRoots = [System.Collections.Generic.List[string]]::new()
+    foreach ($path in @(Get-JsonProperty -Object $evidence -Name 'ambient_skill_paths_observed' -Default @())) {
+        $root = Get-CodexAmbientSkillRoot -Path ([string]$path)
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        if (-not [string]::IsNullOrWhiteSpace($AllowedStagedSkillRoot) -and (Test-CodexPathInsideComparableRoot -Root $AllowedStagedSkillRoot -Candidate $root)) { continue }
+        if ($ambientRoots -notcontains $root) { [void]$ambientRoots.Add($root) }
+    }
+
+    $pathEvidenceUnavailable = $false
+    foreach ($command in @($Commands)) {
+        $commandText = [string](Get-JsonProperty -Object $command -Name 'command' -Default '')
+        if ([string]::IsNullOrWhiteSpace($commandText)) {
+            $pathEvidenceUnavailable = $true
+            continue
+        }
+        foreach ($root in @($ambientRoots)) {
+            if (Test-CodexTextReferencesRoot -Text $commandText -Root $root) {
+                [void]$accesses.Add([ordered]@{
+                    evidence_type = 'command'
+                    root = $root
+                    command = $commandText
+                    status = Get-JsonProperty -Object $command -Name 'status' -Default $null
+                    exit_code = Get-JsonProperty -Object $command -Name 'exit_code' -Default $null
+                })
+            }
+        }
+    }
+
+    foreach ($file in @($Files)) {
+        $itemType = [string](Get-JsonProperty -Object $file -Name 'type' -Default '')
+        if ($itemType -eq 'mcp_tool_call') {
+            $pathEvidenceUnavailable = $true
+            continue
+        }
+        $changes = @(Get-JsonProperty -Object (Get-JsonProperty -Object $file -Name 'item' -Default $file) -Name 'changes' -Default @())
+        foreach ($change in $changes) {
+            $changePath = [string](Get-JsonProperty -Object $change -Name 'path' -Default '')
+            if ([string]::IsNullOrWhiteSpace($changePath)) {
+                $pathEvidenceUnavailable = $true
+                continue
+            }
+            foreach ($root in @($ambientRoots)) {
+                if (Test-CodexTextReferencesRoot -Text $changePath -Root $root) {
+                    [void]$accesses.Add([ordered]@{
+                        evidence_type = 'file_change'
+                        root = $root
+                        path = $changePath
+                        status = Get-JsonProperty -Object $file -Name 'status' -Default $null
+                    })
+                }
+            }
+        }
+    }
+
+    $runtimeObservation = if ($pathEvidenceUnavailable) { 'unavailable' } else { 'supported' }
+    if ($pathEvidenceUnavailable) { [void]$failures.Add('runtime_ambient_skill_access_observation_unavailable') }
+    if ($accesses.Count -gt 0) { [void]$failures.Add('ambient_skill_access_detected') }
+
+    if ($evidence -is [System.Collections.IDictionary]) {
+        $evidence['runtime_access_observation'] = $runtimeObservation
+        $evidence['ambient_skill_accesses_detected'] = @($accesses.ToArray())
+        $evidence['ambient_skill_roots_observed'] = @($ambientRoots.ToArray())
+        $evidence['failures'] = @($failures | Select-Object -Unique)
+    } else {
+        Add-Member -InputObject $evidence -MemberType NoteProperty -Name runtime_access_observation -Value $runtimeObservation -Force
+        Add-Member -InputObject $evidence -MemberType NoteProperty -Name ambient_skill_accesses_detected -Value @($accesses.ToArray()) -Force
+        Add-Member -InputObject $evidence -MemberType NoteProperty -Name ambient_skill_roots_observed -Value @($ambientRoots.ToArray()) -Force
+        Add-Member -InputObject $evidence -MemberType NoteProperty -Name failures -Value @($failures | Select-Object -Unique) -Force
+    }
+
+    return [pscustomobject]@{
+        Evidence = $evidence
+        Failures = @(Get-JsonProperty -Object $evidence -Name 'failures' -Default @())
+        Verified = @(Get-JsonProperty -Object $evidence -Name 'failures' -Default @()).Count -eq 0
+    }
+}
+
+function Set-CodexNativeSkillIsolationProperty {
+    param(
+        [Parameter(Mandatory = $true)][object]$Evidence,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()][object]$Value
+    )
+
+    if ($Evidence -is [System.Collections.IDictionary]) {
+        $Evidence[$Name] = $Value
+    } else {
+        Add-Member -InputObject $Evidence -MemberType NoteProperty -Name $Name -Value $Value -Force
+    }
+}
+
+function Add-CodexNativeSkillIsolationFailure {
+    param(
+        [Parameter(Mandatory = $true)][object]$Evidence,
+        [Parameter(Mandatory = $true)][string]$Failure
+    )
+
+    $failures = @(@(Get-JsonProperty -Object $Evidence -Name 'failures' -Default @()) + @($Failure) | Select-Object -Unique)
+    Set-CodexNativeSkillIsolationProperty -Evidence $Evidence -Name 'failures' -Value $failures
+}
+
 function Assert-CodexProjectionSource {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -248,6 +582,7 @@ function New-CodexExecutionProjection {
         HomeDirectoryPath = $physicalHome
         SkillDirectoryPath = $physicalSkill
         CandidateSkillExposed = $Inputs.Run.CandidateSkillExposed
+        CandidateSkillName = $Inputs.Run.CandidateSkillName
         FixtureHash = $Inputs.Run.FixtureHash
         SkillHash = $Inputs.Run.SkillHash
         InteractionPath = $physicalInteraction
@@ -262,6 +597,7 @@ function New-CodexExecutionProjection {
         LogicalHomeDirectory = $Inputs.Run.HomeDirectoryPath
         PhysicalWorkingDirectory = $physicalRepo
         PhysicalHomeDirectory = $physicalHome
+        PhysicalSkillDirectory = $physicalSkill
         InitialRepositoryFiles = @(Get-CodexProjectionFileSet -Root $physicalRepo)
         Proven = $true
     }
@@ -322,7 +658,10 @@ function Invoke-CodexAppServer {
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    foreach ($argument in @($CommandInfo.Prefix) + @('app-server', '--stdio', '-c', 'shell_environment_policy.inherit=none')) { [void]$psi.ArgumentList.Add([string]$argument) }
+    $appServerArguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @($CommandInfo.Prefix) + @('app-server', '--strict-config', '--stdio')) { $appServerArguments.Add([string]$argument) }
+    Add-CodexSessionConfigArguments -Arguments $appServerArguments -CandidateSkillName $Inputs.Run.CandidateSkillName -IncludeShellEnvironmentPolicy
+    foreach ($argument in @($appServerArguments)) { [void]$psi.ArgumentList.Add([string]$argument) }
 
     # Shared progress context for the app-server protocol exchange. When the
     # orchestration environment enables progress (AGENTIC_RUNNER_PROGRESS), the
@@ -419,6 +758,11 @@ function Invoke-CodexAppServer {
     $processStarted = $false
     $threadStartRequest = $null
     $threadStartResponse = $null
+    $configReadRequest = $null
+    $configReadResponse = $null
+    $skillsListRequest = $null
+    $skillsListResponse = $null
+    $nativeSkillIsolation = $null
     $turnStartRequest = $null
     $turnStartResponse = $null
     $turnStartRequests = [System.Collections.Generic.List[object]]::new()
@@ -526,7 +870,37 @@ function Invoke-CodexAppServer {
         $null = & $waitForResponse $initializeRequest 'initialize'
         & $writeMessage ([ordered]@{ jsonrpc = '2.0'; method = 'initialized' })
 
-        $threadRequest = 2
+        $configReadRequestId = 2
+        $configReadRequest = [ordered]@{
+            jsonrpc = '2.0'
+            id = $configReadRequestId
+            method = 'config/read'
+            params = [ordered]@{
+                includeLayers = $false
+                cwd = $Inputs.Run.WorkingDirectoryPath
+            }
+        }
+        & $writeMessage $configReadRequest
+        $configReadResponse = & $waitForResponse $configReadRequestId 'config/read'
+
+        $skillsListRequestId = 3
+        $skillsListRequest = [ordered]@{
+            jsonrpc = '2.0'
+            id = $skillsListRequestId
+            method = 'skills/list'
+            params = [ordered]@{
+                cwds = @($Inputs.Run.WorkingDirectoryPath)
+                forceReload = $true
+            }
+        }
+        & $writeMessage $skillsListRequest
+        $skillsListResponse = & $waitForResponse $skillsListRequestId 'skills/list'
+        $nativeSkillIsolation = New-CodexNativeSkillIsolationObservation -CandidateSkillName $Inputs.Run.CandidateSkillName -Transport 'app-server' -ConfigReadRequest $configReadRequest -ConfigReadResponse $configReadResponse -SkillsListRequest $skillsListRequest -SkillsListResponse $skillsListResponse
+        if (-not [bool]$nativeSkillIsolation.Verified) {
+            throw "Codex native skill isolation failed before model turn: $([string]::Join(', ', @($nativeSkillIsolation.Failures)))."
+        }
+
+        $threadRequest = 4
         $threadStartParams = [ordered]@{
             model = $Inputs.Profile.Model
             cwd = $Inputs.Run.WorkingDirectoryPath
@@ -555,7 +929,7 @@ function Invoke-CodexAppServer {
         $latestUsage = $null
         $terminalTurn = $null
         $turnStartedUtc = [DateTime]::UtcNow
-        $turnRequest = 3 + $scriptedTurnIndex
+        $turnRequest = 5 + $scriptedTurnIndex
         $promptText = Get-InteractionTurnText -Turn $requestedInteractionTurns[$scriptedTurnIndex] -RunData $Inputs.Run
         $turnStartParams = [ordered]@{
             threadId = $threadId
@@ -677,7 +1051,7 @@ function Invoke-CodexAppServer {
         # The installed schema exposes thread/read after completion. Use it as
         # a second observation of ephemeral identity, cwd, and session metadata
         # when the server provides the response; never reconstruct it locally.
-        $threadReadRequest = 3 + $requestedInteractionTurns.Count + 1
+        $threadReadRequest = 5 + $requestedInteractionTurns.Count
         & $writeMessage ([ordered]@{ jsonrpc = '2.0'; id = $threadReadRequest; method = 'thread/read'; params = [ordered]@{ threadId = $threadId; includeTurns = $true } })
         try {
             $threadReadResponse = & $waitForResponse $threadReadRequest 'thread/read'
@@ -752,6 +1126,11 @@ function Invoke-CodexAppServer {
         AllTurnsCompleted = $allTurnsCompleted
         ThreadReadResponse = $threadReadResponse
         ThreadReadFailure = $threadReadFailure
+        ConfigReadRequest = $configReadRequest
+        ConfigReadResponse = $configReadResponse
+        SkillsListRequest = $skillsListRequest
+        SkillsListResponse = $skillsListResponse
+        NativeSkillIsolation = $nativeSkillIsolation
         InstructionSources = @($instructionSources)
         InstructionSourcesObserved = $instructionSourcesObserved
         ModelReroutes = @($modelReroutes.ToArray())
@@ -980,7 +1359,7 @@ function Get-CodexNativeWorkerProbe {
     if ($schemaProcess.TimedOut -or $schemaProcess.ExitCode -ne 0) {
         return [pscustomobject]@{ Available = $false; Detail = "Codex app-server schema generation failed with exit status $($schemaProcess.ExitCode): $([string]::Join(' ', @($schemaProcess.Stdout, $schemaProcess.Stderr)))." }
     }
-    $requiredSchemaNames = @('ThreadStartParams', 'ThreadStartResponse', 'TurnStartParams', 'TurnStartResponse', 'ModelReroutedNotification')
+    $requiredSchemaNames = @('ConfigReadParams', 'ConfigReadResponse', 'SkillsListParams', 'SkillsListResponse', 'ThreadStartParams', 'ThreadStartResponse', 'TurnStartParams', 'TurnStartResponse', 'ModelReroutedNotification')
     $supplementalSchemaNames = @('ThreadReadParams', 'ThreadReadResponse')
     $schemaResolution = Resolve-CodexSchemaSource -SchemaDirectory $schemaDirectory -RequiredNames $requiredSchemaNames -OptionalNames $supplementalSchemaNames
     if (-not $schemaResolution.Available) {
@@ -1017,10 +1396,33 @@ function Get-CodexNativeWorkerProbe {
     $threadStartResponse = $schemaCache['ThreadStartResponse']
     $turnStartParams = $schemaCache['TurnStartParams']
     $turnStartResponse = $schemaCache['TurnStartResponse']
+    $configReadParams = $schemaCache['ConfigReadParams']
+    $configReadResponse = $schemaCache['ConfigReadResponse']
+    $skillsListParams = $schemaCache['SkillsListParams']
+    $skillsListResponse = $schemaCache['SkillsListResponse']
     $threadReadParams = $schemaCache['ThreadReadParams']
     $threadReadResponse = $schemaCache['ThreadReadResponse']
     $modelRerouted = $schemaCache['ModelReroutedNotification']
     $threadReadSchemaAvailable = [bool]$schemaResolution.SupplementalAvailable
+
+    $configReadCwd = Get-CodexSchemaProperty -Schema $configReadParams -PropertyName 'cwd'
+    if ($null -eq $configReadCwd -or -not (Test-CodexSchemaType -Schema $configReadCwd -TypeName 'string')) { [void]$errors.Add('ConfigReadParams.properties.cwd must include type string.') }
+    $configReadIncludeLayers = Get-CodexSchemaProperty -Schema $configReadParams -PropertyName 'includeLayers'
+    if ($null -eq $configReadIncludeLayers -or -not (Test-CodexSchemaType -Schema $configReadIncludeLayers -TypeName 'boolean')) { [void]$errors.Add('ConfigReadParams.properties.includeLayers must include type boolean.') }
+    [void](Test-CodexSchemaRequiredProperty -Schema $configReadResponse -PropertyName 'config' -Errors $errors -SchemaName 'ConfigReadResponse')
+
+    $skillsListCwds = Get-CodexSchemaProperty -Schema $skillsListParams -PropertyName 'cwds'
+    if ($null -eq $skillsListCwds -or -not (Test-CodexSchemaType -Schema $skillsListCwds -TypeName 'array')) { [void]$errors.Add('SkillsListParams.properties.cwds must include type array.') }
+    $skillsListForceReload = Get-CodexSchemaProperty -Schema $skillsListParams -PropertyName 'forceReload'
+    if ($null -eq $skillsListForceReload -or -not (Test-CodexSchemaType -Schema $skillsListForceReload -TypeName 'boolean')) { [void]$errors.Add('SkillsListParams.properties.forceReload must include type boolean.') }
+    $skillsListData = Test-CodexSchemaRequiredProperty -Schema $skillsListResponse -PropertyName 'data' -Errors $errors -SchemaName 'SkillsListResponse'
+    if (-not (Test-CodexSchemaType -Schema $skillsListData -TypeName 'array')) { [void]$errors.Add('SkillsListResponse.properties.data must include type array.') }
+    $skillsListEntry = Get-CodexSchemaDefinition -Schema $skillsListResponse -DefinitionName 'SkillsListEntry' -Definitions $schemaDefinitions -Errors $errors -SchemaName 'SkillsListResponse'
+    $skillMetadata = Get-CodexSchemaDefinition -Schema $skillsListResponse -DefinitionName 'SkillMetadata' -Definitions $schemaDefinitions -Errors $errors -SchemaName 'SkillsListResponse'
+    [void](Test-CodexSchemaRequiredProperty -Schema $skillsListEntry -PropertyName 'skills' -Errors $errors -SchemaName 'SkillsListResponse.definitions.SkillsListEntry')
+    foreach ($field in @('name', 'path', 'enabled')) { [void](Test-CodexSchemaRequiredProperty -Schema $skillMetadata -PropertyName $field -Errors $errors -SchemaName 'SkillsListResponse.definitions.SkillMetadata') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $skillMetadata -PropertyName 'name') -TypeName 'string')) { [void]$errors.Add('SkillMetadata.name must include type string.') }
+    if (-not (Test-CodexSchemaType -Schema (Get-CodexSchemaProperty -Schema $skillMetadata -PropertyName 'enabled') -TypeName 'boolean')) { [void]$errors.Add('SkillMetadata.enabled must include type boolean.') }
 
     foreach ($field in @('model', 'cwd', 'approvalPolicy', 'sandbox', 'ephemeral')) {
         if ($null -eq (Get-CodexSchemaProperty -Schema $threadStartParams -PropertyName $field)) { [void]$errors.Add("ThreadStartParams.properties.$field is missing.") }
@@ -1125,9 +1527,9 @@ function Get-CodexNativeWorkerProbe {
         }
     }
     $schemaDetail = if ($threadReadSchemaAvailable) {
-        'Codex multi_agent is stable and the installed v2 app-server schema structurally proves the consumed thread/start, turn/start, thread/read, and model/rerouted fields.'
+        'Codex multi_agent is stable and the installed v2 app-server schema structurally proves the consumed config/read, skills/list, thread/start, turn/start, thread/read, and model/rerouted fields.'
     } else {
-        'Codex multi_agent is stable and the installed v2 app-server schema structurally proves the consumed thread/start, turn/start, and model/rerouted fields; thread/read is supplemental and not advertised.'
+        'Codex multi_agent is stable and the installed v2 app-server schema structurally proves the consumed config/read, skills/list, thread/start, turn/start, and model/rerouted fields; thread/read is supplemental and not advertised.'
     }
     if ($supportsProviderModelFallback) {
         $schemaDetail += ' allowProviderModelFallback is supported and will be sent as false; reroute notifications remain fail-closed.'
@@ -1143,6 +1545,97 @@ function Get-CodexNativeWorkerProbe {
         SchemaSourceKind = [string]$schemaResolution.SourceKind
         SandboxModes = @($sandboxEnum)
         ThreadReadSchemaAvailable = $threadReadSchemaAvailable
+    }
+}
+
+function Invoke-CodexNativeSkillConfigProbe {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [System.Collections.IDictionary]$Environment = $null,
+        [string]$Transport = 'preflight',
+        [int]$TimeoutSeconds = 30
+    )
+
+    $environmentToUse = if ($null -eq $Environment) { New-RunnerEnvironment -Run $Inputs.Run } else { $Environment }
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    foreach ($argument in @('app-server', '--strict-config', '--stdio')) { $arguments.Add($argument) }
+    Add-CodexSessionConfigArguments -Arguments $arguments -CandidateSkillName $Inputs.Run.CandidateSkillName -IncludeShellEnvironmentPolicy
+    $requests = @(
+        [ordered]@{ jsonrpc = '2.0'; id = 1; method = 'initialize'; params = [ordered]@{ clientInfo = [ordered]@{ name = 'codebelt-agentic-eval-runner'; title = 'Codebelt Eval Runner'; version = '0.9.1' }; capabilities = [ordered]@{ experimentalApi = $true } } }
+        [ordered]@{ jsonrpc = '2.0'; method = 'initialized' }
+        [ordered]@{ jsonrpc = '2.0'; id = 2; method = 'config/read'; params = [ordered]@{ includeLayers = $false; cwd = $Inputs.Run.WorkingDirectoryPath } }
+        [ordered]@{ jsonrpc = '2.0'; id = 3; method = 'skills/list'; params = [ordered]@{ cwds = @($Inputs.Run.WorkingDirectoryPath); forceReload = $true } }
+    )
+    $requestText = [string]::Join("`n", @($requests | ForEach-Object { ConvertTo-RunnerJson -Value $_ -Depth 50 -Compress })) + "`n"
+    $process = Invoke-CodexCli -CommandInfo $CommandInfo -Arguments @($arguments) -Inputs $Inputs -Environment $environmentToUse -InputBytes ([System.Text.UTF8Encoding]::new($false).GetBytes($requestText)) -TimeoutSeconds $TimeoutSeconds
+    if ($process.TimedOut -or $process.ExitCode -ne 0) {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = "Codex app-server strict native-skill config probe failed with exit status $($process.ExitCode): $([string]::Join(' ', @($process.Stdout, $process.Stderr)))."
+            Evidence = [ordered]@{ failures = @('native_skill_config_probe_failed') }
+            Failures = @('native_skill_config_probe_failed')
+        }
+    }
+
+    $parsedMessages = ConvertFrom-JsonLines -Text ([string]$process.Stdout)
+    if (@($parsedMessages.Errors).Count -gt 0) {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = "Codex app-server strict native-skill config probe emitted malformed JSON: $([string]::Join(', ', @($parsedMessages.Errors)))."
+            Evidence = [ordered]@{ failures = @('native_skill_config_probe_malformed_json') }
+            Failures = @('native_skill_config_probe_malformed_json')
+        }
+    }
+    $messages = @($parsedMessages.Events)
+    $configReadResponse = @($messages | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'id' -Default $null) -and [int](Get-JsonProperty -Object $_ -Name 'id' -Default 0) -eq 2 } | Select-Object -First 1)
+    $skillsListResponse = @($messages | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'id' -Default $null) -and [int](Get-JsonProperty -Object $_ -Name 'id' -Default 0) -eq 3 } | Select-Object -First 1)
+    if ($configReadResponse.Count -ne 1 -or $skillsListResponse.Count -ne 1) {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = 'Codex app-server strict native-skill config probe did not return both config/read and skills/list responses.'
+            Evidence = [ordered]@{ failures = @('native_skill_config_probe_missing_response') }
+            Failures = @('native_skill_config_probe_missing_response')
+        }
+    }
+
+    $configReadRequest = $requests[2]
+    $skillsListRequest = $requests[3]
+    $observation = New-CodexNativeSkillIsolationObservation -CandidateSkillName $Inputs.Run.CandidateSkillName -Transport $Transport -ConfigReadRequest $configReadRequest -ConfigReadResponse $configReadResponse[0] -SkillsListRequest $skillsListRequest -SkillsListResponse $skillsListResponse[0]
+    return [pscustomobject]@{
+        Available = [bool]$observation.Verified
+        Detail = if ([bool]$observation.Verified) { 'Installed Codex accepted the session-level native skill controls and proved skills.include_instructions=false through config/read plus candidate state through skills/list.' } else { "Installed Codex native skill config probe failed: $([string]::Join(', ', @($observation.Failures)))." }
+        Evidence = $observation.Evidence
+        Failures = @($observation.Failures)
+    }
+}
+
+function Invoke-CodexPromptInputNativeSkillProbe {
+    param(
+        [Parameter(Mandatory = $true)][object]$CommandInfo,
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Environment,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $arguments = [System.Collections.Generic.List[string]]::new()
+    $arguments.Add('debug')
+    $arguments.Add('prompt-input')
+    Add-CodexSessionConfigArguments -Arguments $arguments -CandidateSkillName $Inputs.Run.CandidateSkillName
+    $arguments.Add('model-free native skill suppression probe')
+    $process = Invoke-CodexCli -CommandInfo $CommandInfo -Arguments @($arguments) -Inputs $Inputs -Environment $Environment -TimeoutSeconds $TimeoutSeconds
+    if ($process.TimedOut -or $process.ExitCode -ne 0) {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = "Codex debug prompt-input native-skill probe failed with exit status $($process.ExitCode): $([string]::Join(' ', @($process.Stdout, $process.Stderr)))."
+            PromptInput = ''
+        }
+    }
+    $suppressed = Test-CodexPromptInputSuppressesNativeSkills -PromptInputJson ([string]$process.Stdout) -CandidateSkillName $Inputs.Run.CandidateSkillName
+    return [pscustomobject]@{
+        Available = $suppressed
+        Detail = if ($suppressed) { 'Codex debug prompt-input showed no model-visible native skill catalog or candidate skill instructions with the session controls applied.' } else { 'Codex debug prompt-input still exposed native skill catalog or candidate skill instructions.' }
+        PromptInput = [string]$process.Stdout
     }
 }
 
@@ -1175,7 +1668,11 @@ function New-CodexCliArguments {
     $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $outputArgument = Get-SandboxVisiblePath -HostPath $LastResponsePath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $arguments = [System.Collections.Generic.List[string]]::new()
-    foreach ($argument in @('--ask-for-approval', 'never', 'exec', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--json', '--color', 'never', '--cd', $directoryArgument, '--model', $Inputs.Profile.Model, '--sandbox', 'danger-full-access', '--config', 'shell_environment_policy.inherit=none', '--output-last-message', $outputArgument)) {
+    foreach ($argument in @('--ask-for-approval', 'never', 'exec', '--strict-config', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--json', '--color', 'never', '--cd', $directoryArgument, '--model', $Inputs.Profile.Model, '--sandbox', 'danger-full-access', '--config', 'shell_environment_policy.inherit=none')) {
+        $arguments.Add([string]$argument)
+    }
+    Add-CodexSessionConfigArguments -Arguments $arguments -CandidateSkillName $Inputs.Run.CandidateSkillName -SwitchName '--config'
+    foreach ($argument in @('--output-last-message', $outputArgument)) {
         $arguments.Add([string]$argument)
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$Inputs.Profile.ReasoningEffort)) {
@@ -1308,6 +1805,7 @@ function Get-CodexPreflight {
     $sandboxInfo = if ([string]::IsNullOrWhiteSpace([string]$sandboxName)) { $null } else { Resolve-SandboxCommand -Name $sandboxName }
     $versionObservation = $null
     $nativeWorkerObservation = $null
+    $nativeSkillConfigObservation = $null
 
     if ($profile.Runner -ne 'codex') {
         $reasons.Add("execution-profile.json selects '$($profile.Runner)' rather than codex.")
@@ -1348,7 +1846,7 @@ function Get-CodexPreflight {
                 $reasons.Add("Codex --ask-for-approval never exec --help failed with exit status $($help.ExitCode).")
             } else {
                 $helpText = [string]::Join("`n", @($globalHelp.Stdout, $globalHelp.Stderr, $help.Stdout, $help.Stderr))
-                foreach ($flag in @('--ask-for-approval', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--json', '--output-last-message', '--sandbox', '--cd', '--model', '--config')) {
+                foreach ($flag in @('--ask-for-approval', '--strict-config', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--json', '--output-last-message', '--sandbox', '--cd', '--model', '--config')) {
                     if ($helpText -notmatch [regex]::Escape($flag)) {
                         $reasons.Add("The installed Codex CLI does not advertise required flag '$flag'.")
                     }
@@ -1367,8 +1865,13 @@ function Get-CodexPreflight {
                 if ($approvalIndex -lt 0 -or $execIndex -lt 0 -or $approvalIndex -gt $execIndex -or $sandboxIndex -lt 0 -or $sandboxIndex + 1 -ge $constructed.Count -or $constructed[$sandboxIndex + 1] -ne 'danger-full-access') {
                     $reasons.Add('The constructed Codex invocation must set --ask-for-approval never before exec and retain --sandbox danger-full-access.')
                 }
+                foreach ($requiredConfig in @(Get-CodexSkillSessionConfigValues -CandidateSkillName $run.CandidateSkillName)) {
+                    if (@($constructed | Where-Object { [string]$_ -eq $requiredConfig }).Count -ne 1) {
+                        $reasons.Add("The constructed Codex invocation must include session config '$requiredConfig'.")
+                    }
+                }
                 if ($reasons.Count -eq 0) {
-                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Codex accepts the constructed noninteractive invocation: --ask-for-approval never, exec, --sandbox danger-full-access, ephemeral JSON output, and isolated configuration controls.'))
+                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Codex accepts the constructed noninteractive invocation: --ask-for-approval never, exec, --strict-config, --sandbox danger-full-access, ephemeral JSON output, and session native-skill controls.'))
                 }
             }
             $nativeWorkerObservation = Get-CodexNativeWorkerProbe -CommandInfo $commandInfo -Inputs $Inputs
@@ -1378,6 +1881,13 @@ function Get-CodexPreflight {
             } else {
                 $checks.Add((New-PreflightCheck -Name 'native_worker_delegation' -Status unavailable -Detail $nativeWorkerObservation.Detail))
                 $reasons.Add($nativeWorkerObservation.Detail)
+            }
+            $nativeSkillConfigObservation = Invoke-CodexNativeSkillConfigProbe -CommandInfo $commandInfo -Inputs $Inputs -Transport 'preflight'
+            if ($nativeSkillConfigObservation.Available) {
+                $checks.Add((New-PreflightCheck -Name 'native_skill_isolation_controls' -Status passed -Detail $nativeSkillConfigObservation.Detail))
+            } else {
+                $checks.Add((New-PreflightCheck -Name 'native_skill_isolation_controls' -Status failed -Detail $nativeSkillConfigObservation.Detail))
+                $reasons.Add($nativeSkillConfigObservation.Detail)
             }
         } catch {
             $reasons.Add("Could not inspect Codex CLI capabilities: $($_.Exception.Message)")
@@ -1420,7 +1930,7 @@ function Get-CodexPreflight {
 
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The selected transport starts an ephemeral thread and never supplies a resume, continue, or existing session identifier.'))
     if ($auth.Kind -eq 'subscription_file') {
-        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The app-server parent receives a filtered environment plus a temporary auth-only CODEX_HOME. Child shell inheritance is disabled with shell_environment_policy.inherit=none, and the runner validates instructionSources against the staged arm root.'))
+        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The app-server parent receives a filtered environment plus a temporary auth-only CODEX_HOME. Child shell inheritance is disabled with shell_environment_policy.inherit=none. Native skill isolation is proven separately through session skill controls, config/read, skills/list, and runtime access evidence.'))
         $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "thread/start and turn/start set cwd to $($run.WorkingDirectoryPath); HOME and USERPROFILE remain staged under $($run.HomeDirectoryPath)."))
         $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only auth.json is copied into a temporary auth-only CODEX_HOME and it is removed in finally; config.toml, skills, agents, sessions, memories, plugins, MCP configuration, and AGENTS.md are not copied. This does not claim hard filesystem confinement where none is available.'))
     } else {
@@ -1437,10 +1947,10 @@ function Get-CodexPreflight {
     $descriptorCopy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + config/read + skills/list + thread/start + turn/start', 'session skills.include_instructions=false', 'session skills.config candidate disable', 'pre-turn skills/list candidate-state verification', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
         if ($null -ne $run.Interaction) { $mechanisms.Add('same-thread repeated turn/start for scripted interaction') } else { $mechanisms.Add('no session continuation') }
     } else {
-        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--strict-config', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'session skills.include_instructions=false', 'session skills.config candidate disable', 'pre-turn debug prompt-input native-skill suppression proof', 'pre-turn skills/list candidate-state verification', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
     if ($hardConfinement) { $mechanisms.Add("external $sandboxName filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     $document = New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
@@ -1453,6 +1963,9 @@ function Get-CodexPreflight {
             allow_provider_model_fallback = [bool]$nativeWorkerObservation.SupportsProviderModelFallback
             thread_read_schema_available = [bool]$nativeWorkerObservation.ThreadReadSchemaAvailable
         }
+    }
+    if ($null -ne $nativeSkillConfigObservation) {
+        $document.native_skill_isolation = $nativeSkillConfigObservation.Evidence
     }
     return $document
 }
@@ -1567,6 +2080,26 @@ function Write-CodexCapture {
     return New-ArtifactReference -Run $RunData.Run -Path $RelativePath -Scope run -MediaType (Get-MediaType -Path $RelativePath)
 }
 
+function New-CodexBlockedProcessObservation {
+    param(
+        [Parameter(Mandatory = $true)][DateTime]$StartedUtc,
+        [Parameter(Mandatory = $true)][string]$FailureMessage
+    )
+
+    $finished = [DateTime]::UtcNow
+    return [pscustomobject]@{
+        Stdout = ([ordered]@{ type = 'error'; message = $FailureMessage } | ConvertTo-Json -Compress)
+        RawStdout = ''
+        Stderr = ''
+        ExitCode = 1
+        TimedOut = $false
+        StartedUtc = $StartedUtc
+        FinishedUtc = $finished
+        DurationSeconds = [Math]::Round(($finished - $StartedUtc).TotalSeconds, 3)
+        TransportFailure = $FailureMessage
+    }
+}
+
 function Invoke-CodexProjectedTransport {
     param(
         [Parameter(Mandatory = $true)][object]$CommandInfo,
@@ -1584,6 +2117,7 @@ function Invoke-CodexProjectedTransport {
     $executionInputs = [pscustomobject]@{ Run = $projection.Run; Profile = $Inputs.Profile }
     $process = $null
     $projectedFinalResponse = $null
+    $nativeSkillIsolation = $null
     try {
         $physicalLastResponsePath = Join-Path $projection.Root ($LastResponseRelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
         New-Item -ItemType Directory -Path (Split-Path -Parent $physicalLastResponsePath) -Force | Out-Null
@@ -1591,15 +2125,49 @@ function Invoke-CodexProjectedTransport {
         $arguments = New-CodexCliArguments -Inputs $executionInputs -LastResponsePath $physicalLastResponsePath -VisiblePlatform $VisiblePlatform
         if ($Auth.Kind -eq 'subscription_file') {
             $process = Invoke-CodexAppServer -CommandInfo $CommandInfo -Inputs $executionInputs -Auth $Auth -SupportsProviderModelFallback $SupportsProviderModelFallback -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'codex' -Phase 'codex-app-server')
+            $nativeSkillIsolation = Get-JsonProperty -Object $process -Name 'NativeSkillIsolation' -Default $null
         } elseif ($Platform -eq 'linux' -and $HardFilesystem) {
+            $nativeSkillIsolation = (Invoke-CodexNativeSkillConfigProbe -CommandInfo $CommandInfo -Inputs $executionInputs -Environment $environment -Transport 'cli-compatibility').Evidence
+            $promptProbe = Invoke-CodexPromptInputNativeSkillProbe -CommandInfo $CommandInfo -Inputs $executionInputs -Environment $environment
+            if ($null -ne $nativeSkillIsolation) {
+                Set-CodexNativeSkillIsolationProperty -Evidence $nativeSkillIsolation -Name 'prompt_input_verification_method' -Value 'debug prompt-input'
+                Set-CodexNativeSkillIsolationProperty -Evidence $nativeSkillIsolation -Name 'prompt_input_catalog_suppressed' -Value ([bool]$promptProbe.Available)
+                if (-not [bool]$promptProbe.Available) { Add-CodexNativeSkillIsolationFailure -Evidence $nativeSkillIsolation -Failure 'native_skill_catalog_prompt_input_unverified' }
+            }
+            if ($null -eq $nativeSkillIsolation -or @($nativeSkillIsolation.failures).Count -gt 0) {
+                $process = New-CodexBlockedProcessObservation -StartedUtc ([DateTime]::UtcNow) -FailureMessage 'Codex CLI native skill suppression was not proven before model execution.'
+            } else {
             $sandboxArguments = Get-LinuxCodexSandboxArguments -Inputs $executionInputs -CommandInfo $CommandInfo -Environment $environment
             $process = Invoke-RunnerProcess -FileName $SandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $executionInputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'codex' -Phase 'codex-cli')
+            }
         } elseif ($Platform -eq 'macos' -and $HardFilesystem) {
+            $nativeSkillIsolation = (Invoke-CodexNativeSkillConfigProbe -CommandInfo $CommandInfo -Inputs $executionInputs -Environment $environment -Transport 'cli-compatibility').Evidence
+            $promptProbe = Invoke-CodexPromptInputNativeSkillProbe -CommandInfo $CommandInfo -Inputs $executionInputs -Environment $environment
+            if ($null -ne $nativeSkillIsolation) {
+                Set-CodexNativeSkillIsolationProperty -Evidence $nativeSkillIsolation -Name 'prompt_input_verification_method' -Value 'debug prompt-input'
+                Set-CodexNativeSkillIsolationProperty -Evidence $nativeSkillIsolation -Name 'prompt_input_catalog_suppressed' -Value ([bool]$promptProbe.Available)
+                if (-not [bool]$promptProbe.Available) { Add-CodexNativeSkillIsolationFailure -Evidence $nativeSkillIsolation -Failure 'native_skill_catalog_prompt_input_unverified' }
+            }
+            if ($null -eq $nativeSkillIsolation -or @($nativeSkillIsolation.failures).Count -gt 0) {
+                $process = New-CodexBlockedProcessObservation -StartedUtc ([DateTime]::UtcNow) -FailureMessage 'Codex CLI native skill suppression was not proven before model execution.'
+            } else {
             $sandboxProfile = New-CodexMacosSandboxProfile -Inputs $executionInputs -CommandInfo $CommandInfo
             $sandboxArguments = @('-f', $sandboxProfile, '--', $CommandInfo.FileName) + @($CommandInfo.Prefix) + @($arguments)
             $process = Invoke-RunnerProcess -FileName $SandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $executionInputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'codex' -Phase 'codex-cli')
+            }
         } else {
+            $nativeSkillIsolation = (Invoke-CodexNativeSkillConfigProbe -CommandInfo $CommandInfo -Inputs $executionInputs -Environment $environment -Transport 'cli-compatibility').Evidence
+            $promptProbe = Invoke-CodexPromptInputNativeSkillProbe -CommandInfo $CommandInfo -Inputs $executionInputs -Environment $environment
+            if ($null -ne $nativeSkillIsolation) {
+                Set-CodexNativeSkillIsolationProperty -Evidence $nativeSkillIsolation -Name 'prompt_input_verification_method' -Value 'debug prompt-input'
+                Set-CodexNativeSkillIsolationProperty -Evidence $nativeSkillIsolation -Name 'prompt_input_catalog_suppressed' -Value ([bool]$promptProbe.Available)
+                if (-not [bool]$promptProbe.Available) { Add-CodexNativeSkillIsolationFailure -Evidence $nativeSkillIsolation -Failure 'native_skill_catalog_prompt_input_unverified' }
+            }
+            if ($null -eq $nativeSkillIsolation -or @($nativeSkillIsolation.failures).Count -gt 0) {
+                $process = New-CodexBlockedProcessObservation -StartedUtc ([DateTime]::UtcNow) -FailureMessage 'Codex CLI native skill suppression was not proven before model execution.'
+            } else {
             $process = Invoke-CodexCli -CommandInfo $CommandInfo -Arguments $arguments -Inputs $executionInputs -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
+            }
         }
         if (Test-Path -LiteralPath $physicalLastResponsePath -PathType Leaf) {
             $projectedFinalResponse = [System.IO.File]::ReadAllText($physicalLastResponsePath, [System.Text.UTF8Encoding]::new($false))
@@ -1618,8 +2186,10 @@ function Invoke-CodexProjectedTransport {
                 physical_run_root = [string]$projection.Root
                 physical_working_directory = [string]$projection.PhysicalWorkingDirectory
                 physical_home_directory = [string]$projection.PhysicalHomeDirectory
+                physical_skill_directory = [string]$projection.PhysicalSkillDirectory
             }
             PhysicalProjectionProven = [bool]$projection.Proven
+            NativeSkillIsolation = $nativeSkillIsolation
         }
     } finally {
         try { Sync-CodexProjectedRepository -Projection $projection } finally { Remove-CodexExecutionProjection -Projection $projection }
@@ -1732,6 +2302,11 @@ function Invoke-CodexExecute {
         [bool]$process.TurnCompleted
     } else {
         @($parsed.Events | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'type' -Default '') -eq 'turn.completed' }).Count -gt 0
+    }
+    $nativeSkillIsolation = Get-JsonProperty -Object $transport -Name 'NativeSkillIsolation' -Default (Get-JsonProperty -Object $process -Name 'NativeSkillIsolation' -Default $null)
+    if ($null -ne $nativeSkillIsolation) {
+        $nativeSkillRuntimeObservation = Update-CodexNativeSkillRuntimeAccessEvidence -NativeSkillIsolation $nativeSkillIsolation -Commands @($commands) -Files @($files) -AllowedStagedSkillRoot ([string]$transport.ExecutionPaths.physical_skill_directory)
+        $nativeSkillIsolation = $nativeSkillRuntimeObservation.Evidence
     }
 
     $nativeEvidenceFailures = [System.Collections.Generic.List[string]]::new()
@@ -1853,11 +2428,11 @@ function Invoke-CodexExecute {
     }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + config/read + skills/list + thread/start + turn/start', 'session skills.include_instructions=false', 'session skills.config candidate disable', 'pre-turn skills/list candidate-state verification', 'runtime ambient skill access validation', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
         $continuationMechanism = if ($null -ne $Inputs.Run.Interaction) { 'same-thread repeated turn/start for scripted interaction' } else { 'no session continuation' }
         $mechanisms.Add($continuationMechanism)
     } else {
-        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--strict-config', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'session skills.include_instructions=false', 'session skills.config candidate disable', 'pre-turn debug prompt-input native-skill suppression proof', 'pre-turn skills/list candidate-state verification', 'runtime ambient skill access validation', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
@@ -1887,6 +2462,9 @@ function Invoke-CodexExecute {
         sandbox = $sandboxEvidence
         output_last_message_argument = $outputLastMessageArgument
         credential = $credentialEvidence
+    }
+    if ($null -ne $nativeSkillIsolation) {
+        $evidence.native_skill_isolation = $nativeSkillIsolation
     }
     $evidence.behavioral_capability = [ordered]@{
         requested_operational_permission = 'full'
@@ -1956,6 +2534,10 @@ function Invoke-CodexExecute {
         $threadReadThreadEvidence = if ($null -ne $process.ThreadReadResponse) { Get-JsonProperty -Object (Get-JsonProperty -Object $process.ThreadReadResponse -Name 'result' -Default $null) -Name 'thread' -Default $null } else { $null }
         $turnCompletionEvidence = if ($null -ne $process.TerminalTurn) { [ordered]@{ thread_id = $process.ThreadId; turn_id = $process.TurnId; status = Get-JsonProperty -Object $process.TerminalTurn -Name 'status' -Default $null } } else { $null }
         $evidence.app_server = [ordered]@{
+            config_read_request = $process.ConfigReadRequest
+            config_read_response = $process.ConfigReadResponse
+            skills_list_request = $process.SkillsListRequest
+            skills_list_response = $process.SkillsListResponse
             thread_start_request = $process.ThreadStartRequest
             thread_start_response = $process.ThreadStartResponse
             turn_start_request = $process.TurnStartRequest
@@ -1999,6 +2581,14 @@ function Invoke-CodexExecute {
         }
     }
 
+    $nativeSkillIsolationFailures = @(if ($null -eq $nativeSkillIsolation) { 'native_skill_isolation_unverified' } else { Get-JsonProperty -Object $nativeSkillIsolation -Name 'failures' -Default @() })
+    if (@($nativeSkillIsolationFailures).Count -gt 0) {
+        $ambientCandidateSkillExclusionUnverified = $true
+        foreach ($failureName in @($nativeSkillIsolationFailures)) {
+            if ($nativeEvidenceFailures -notcontains [string]$failureName) { $nativeEvidenceFailures.Add([string]$failureName) }
+        }
+    }
+
     if ($auth.Kind -eq 'subscription_file') {
         # Run the common portable validator over the same evidence object that
         # the Codex-specific checks use. This is the single terminal decision:
@@ -2035,11 +2625,22 @@ function Invoke-CodexExecute {
             $isBehavioralCapabilityFailure = $behavioralCapabilityFailureNames.Count -gt 0
             $reason = if ($isBehavioralCapabilityFailure) { 'codex_operational_permission_incompatible' } else { 'codex_native_evidence_incompatible' }
             $baseFailureMessage = if ($null -ne $failure) { [string]$failure.message } elseif (-not [string]::IsNullOrWhiteSpace([string]$process.TransportFailure)) { [string]$process.TransportFailure } else { 'Codex app-server terminal evidence was not accepted.' }
-            $failureCode = if ($isBehavioralCapabilityFailure) { 'harness_operational_permission_incompatible' } else { 'native_evidence_incompatible' }
+            $nativeSkillFailureCode = @($nativeSkillIsolationFailures | Where-Object { $_ -ne 'ambient_candidate_skill_exclusion_unverified' } | Select-Object -First 1)
+            $failureCode = if ($isBehavioralCapabilityFailure) { 'harness_operational_permission_incompatible' } elseif ($nativeSkillFailureCode.Count -eq 1) { [string]$nativeSkillFailureCode[0] } else { 'native_evidence_incompatible' }
             $failure = New-ExecutionFailure -Code $failureCode -Message ("Codex app-server evidence failed closed: {0}. Transport detail: {1}" -f ([string]::Join(', ', @($nativeEvidenceFailures)), $baseFailureMessage))
             $exitStatus = $null
         }
         $evidence.native_worker_evidence_failures = @($nativeEvidenceFailures.ToArray())
+    }
+    if ($auth.Kind -ne 'subscription_file' -and $nativeEvidenceFailures.Count -gt 0) {
+        $uniqueNativeEvidenceFailures = @($nativeEvidenceFailures | Select-Object -Unique)
+        $status = 'incompatible'
+        $reason = 'codex_native_skill_isolation_incompatible'
+        $failureCode = [string](@($uniqueNativeEvidenceFailures | Select-Object -First 1)[0])
+        if ([string]::IsNullOrWhiteSpace($failureCode)) { $failureCode = 'ambient_candidate_skill_exclusion_unverified' }
+        $failure = New-ExecutionFailure -Code $failureCode -Message ("Codex CLI native skill isolation failed closed: {0}." -f ([string]::Join(', ', @($uniqueNativeEvidenceFailures))))
+        $exitStatus = $null
+        $evidence.native_worker_evidence_failures = @($uniqueNativeEvidenceFailures)
     }
     if ($ambientCandidateSkillExclusionUnverified) {
         $capabilities['ambient_candidate_skill_exclusion'] = 'unsupported'

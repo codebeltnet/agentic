@@ -2052,9 +2052,15 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                 if ([string]$run.workingDirectory -ne 'repo' -or [string]$run.homeDirectory -ne 'home') {
                     throw "$($entry.eval_name) run.json must set workingDirectory=repo and homeDirectory=home."
                 }
+                if ([string]$run.candidateSkillName -ne [string]$manifest.skill_name) {
+                    throw "$($entry.eval_name) run.json must carry the immutable candidateSkillName control-plane identity."
+                }
             }
             if ([string]$withRun.skillDirectory -ne 'skill/dotnet-strong-name-signing') {
                 throw "$($entry.eval_name)/with_skill run.json must point skillDirectory at the staged candidate skill."
+            }
+            if ([string]$withRun.skillName -ne [string]$manifest.skill_name) {
+                throw "$($entry.eval_name)/with_skill run.json must name the exposed candidate skill."
             }
             if ($null -ne $withoutRun.skillDirectory -or $null -ne $withoutRun.skillName) {
                 throw "$($entry.eval_name)/without_skill run.json must not name a skill or skill directory."
@@ -2065,9 +2071,6 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                         throw "$($entry.eval_name) run.json references '$leak', which points outside the run package."
                     }
                 }
-            }
-            if ($withoutRunJson.Contains([string]$manifest.skill_name)) {
-                throw "$($entry.eval_name)/without_skill run.json must not name the skill under test."
             }
 
             # 9. The with_skill and without_skill repositories are identical (proven by fixture hash).

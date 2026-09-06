@@ -116,6 +116,7 @@ function New-ForegroundPackage {
                 schema = (Get-RunnerSchemaNames).Run
                 evalId = $evalId
                 evalName = $evalName
+                candidateSkillName = 'candidate'
                 skillName = if ($configuration -eq 'with_skill') { 'candidate' } else { $null }
                 iteration = 1
                 mode = $configuration

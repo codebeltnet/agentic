@@ -25,7 +25,10 @@ $evalDirectory = Join-Path $iteration $evalName
 New-Item -ItemType Directory -Path (Join-Path $evalDirectory 'with_skill') -Force | Out-Null
 # run manifest
 $runPath = Join-Path $evalDirectory 'with_skill'
-$runJson = [ordered]@{ schema = (Get-RunnerSchemaNames).Run; evalId = 1; evalName = $evalName; mode = 'with_skill'; promptFile = 'prompt.md'; workingDirectory = 'repo'; homeDirectory = 'home'; freshContextRequired = $true; filesystemIsolationRequired = $true; isolatedHomeRequired = $true; fixtureHash = ('a' * 64); skillHash = ('b' * 64) }
+$skillPath = Join-Path $runPath 'skill\test-skill'
+New-Item -ItemType Directory -Path $skillPath -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $skillPath 'SKILL.md'), '# deterministic fixture skill', [System.Text.UTF8Encoding]::new($false))
+$runJson = [ordered]@{ schema = (Get-RunnerSchemaNames).Run; evalId = 1; evalName = $evalName; candidateSkillName = 'test-skill'; skillName = 'test-skill'; mode = 'with_skill'; promptFile = 'prompt.md'; workingDirectory = 'repo'; homeDirectory = 'home'; skillDirectory = 'skill/test-skill'; freshContextRequired = $true; filesystemIsolationRequired = $true; isolatedHomeRequired = $true; fixtureHash = ('a' * 64); skillHash = ('b' * 64) }
 [System.IO.File]::WriteAllText((Join-Path $runPath 'run.json'), ($runJson | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
 New-Item -ItemType Directory -Path (Join-Path $runPath 'repo') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $runPath 'home') -Force | Out-Null

@@ -136,6 +136,8 @@ try {
                 schema = (Get-RunnerSchemaNames).Run
                 evalId = $evalId
                 evalName = $evalName
+                candidateSkillName = 'candidate'
+                skillName = if ($configuration -eq 'with_skill') { 'candidate' } else { $null }
                 mode = $configuration
                 promptFile = 'prompt.md'
                 workingDirectory = 'repo'
@@ -594,6 +596,7 @@ try {
                 schema = (Get-RunnerSchemaNames).Run
                 evalId = $evalId
                 evalName = $evalName
+                candidateSkillName = 'candidate'
                 skillName = if ($configuration -eq 'with_skill') { 'candidate' } else { $null }
                 iteration = 1
                 mode = $configuration

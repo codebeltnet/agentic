@@ -168,6 +168,7 @@ function New-ObservabilityFanoutPackage {
                 schema = (Get-RunnerSchemaNames).Run
                 evalId = $evalId
                 evalName = $evalName
+                candidateSkillName = 'candidate'
                 skillName = if ($configuration -eq 'with_skill') { 'candidate' } else { $null }
                 iteration = 1
                 mode = $configuration
@@ -289,10 +290,11 @@ if (-not [string]::IsNullOrWhiteSpace($heartbeatOverride)) {
     }
 }
 $homeRoot = [Environment]::GetEnvironmentVariable('HOME')
-$mode = if (
+$isProjectedExecution = [string](Get-Location).Path -match 'agentic-codex-projection-'
+$mode = if ($isProjectedExecution -and (
     (-not [string]::IsNullOrWhiteSpace($homeRoot) -and (Test-Path -LiteralPath (Join-Path $homeRoot 'codex-observability-timeout') -PathType Leaf)) -or
     (Test-Path -LiteralPath (Join-Path (Get-Location).Path 'codex-observability-timeout') -PathType Leaf)
-) { 'timeout' } else { 'success' }
+)) { 'timeout' } else { 'success' }
 
 function Get-DelayMilliseconds {
     param([double]$Multiplier)
@@ -301,8 +303,13 @@ function Get-DelayMilliseconds {
 }
 
 function Read-AppServerMessage {
+    param([switch]$AllowEndOfStream)
+
     $line = [Console]::In.ReadLine()
-    if ($null -eq $line) { throw 'observability fake app-server reached EOF before the expected request' }
+    if ($null -eq $line) {
+        if ($AllowEndOfStream) { return $null }
+        throw 'observability fake app-server reached EOF before the expected request'
+    }
     return ($line | ConvertFrom-Json -Depth 50)
 }
 
@@ -338,6 +345,41 @@ function Write-CodexSchemas {
         ) }
         Thread = [ordered]@{ type = 'object'; required = @('id', 'cwd', 'ephemeral', 'sessionId', 'turns'); properties = [ordered]@{ id = [ordered]@{ type = 'string' }; cwd = [ordered]@{ allOf = @([ordered]@{ '$ref' = '#/definitions/AbsolutePathBuf' }) }; ephemeral = [ordered]@{ type = 'boolean' }; sessionId = [ordered]@{ type = 'string' }; turns = [ordered]@{ type = 'array' } } }
         Turn = [ordered]@{ type = 'object'; required = @('id', 'items', 'status'); properties = [ordered]@{ id = [ordered]@{ type = 'string' }; items = [ordered]@{ type = 'array' }; status = [ordered]@{ '$ref' = '#/definitions/TurnStatus' } } }
+        SkillMetadata = [ordered]@{ type = 'object'; required = @('name', 'path', 'enabled'); properties = [ordered]@{ name = [ordered]@{ type = 'string' }; path = [ordered]@{ '$ref' = '#/definitions/AbsolutePathBuf' }; enabled = [ordered]@{ type = 'boolean' }; scope = [ordered]@{ type = 'string'; enum = @('user', 'repo', 'system', 'admin') }; description = [ordered]@{ type = 'string' } } }
+        SkillsListEntry = [ordered]@{ type = 'object'; required = @('cwd', 'errors', 'skills'); properties = [ordered]@{ cwd = [ordered]@{ type = 'string' }; errors = [ordered]@{ type = 'array' }; skills = [ordered]@{ type = 'array'; items = [ordered]@{ '$ref' = '#/definitions/SkillMetadata' } } } }
+        Config = [ordered]@{ type = 'object'; additionalProperties = $true }
+    }
+    $definitions.ConfigReadParams = [ordered]@{
+        '$schema' = $schema
+        title = 'ConfigReadParams'
+        type = 'object'
+        properties = [ordered]@{
+            includeLayers = [ordered]@{ type = 'boolean' }
+            cwd = [ordered]@{ type = @('string', 'null') }
+        }
+    }
+    $definitions.ConfigReadResponse = [ordered]@{
+        '$schema' = $schema
+        title = 'ConfigReadResponse'
+        type = 'object'
+        required = @('config')
+        properties = [ordered]@{ config = [ordered]@{ '$ref' = '#/definitions/Config' } }
+    }
+    $definitions.SkillsListParams = [ordered]@{
+        '$schema' = $schema
+        title = 'SkillsListParams'
+        type = 'object'
+        properties = [ordered]@{
+            cwds = [ordered]@{ type = 'array'; items = [ordered]@{ type = 'string' } }
+            forceReload = [ordered]@{ type = 'boolean' }
+        }
+    }
+    $definitions.SkillsListResponse = [ordered]@{
+        '$schema' = $schema
+        title = 'SkillsListResponse'
+        type = 'object'
+        required = @('data')
+        properties = [ordered]@{ data = [ordered]@{ type = 'array'; items = [ordered]@{ '$ref' = '#/definitions/SkillsListEntry' } } }
     }
     $definitions.ThreadStartParams = [ordered]@{
         '$schema' = $schema
@@ -418,7 +460,7 @@ function Write-CodexSchemas {
     $schemaFiles = [ordered]@{
         'codex_app_server_protocol.v2.schemas.json' = [ordered]@{ '$schema' = $schema; title = 'codex_app_server_protocol.v2.schemas'; type = 'object'; definitions = $definitions }
     }
-    foreach ($schemaName in @('ThreadStartParams', 'ThreadStartResponse', 'TurnStartParams', 'TurnStartResponse', 'ThreadReadParams', 'ThreadReadResponse', 'ModelReroutedNotification')) {
+    foreach ($schemaName in @('ConfigReadParams', 'ConfigReadResponse', 'SkillsListParams', 'SkillsListResponse', 'ThreadStartParams', 'ThreadStartResponse', 'TurnStartParams', 'TurnStartResponse', 'ThreadReadParams', 'ThreadReadResponse', 'ModelReroutedNotification')) {
         $source = $definitions[$schemaName]
         $individual = [ordered]@{ '$schema' = $schema }
         foreach ($propertyName in @('title', 'type', 'properties', 'required')) {
@@ -439,7 +481,7 @@ if ($arguments -contains '--version') {
     exit 0
 }
 if ($arguments -contains '--help' -and -not ($arguments -contains 'app-server')) {
-    Write-Output '--ask-for-approval never --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox danger-full-access --cd --model --config'
+    Write-Output '--ask-for-approval never --strict-config --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox danger-full-access --cd --model --config'
     exit 0
 }
 if ($arguments -contains 'features' -and $arguments -contains 'list') {
@@ -491,7 +533,22 @@ if ($arguments -contains 'app-server' -and $arguments -contains '--stdio') {
     })
 
     $null = Read-AppServerMessage
-    $threadStart = Read-AppServerMessage
+    $configRead = Read-AppServerMessage
+    $candidateConfig = @($arguments | Where-Object { [string]$_ -like 'skills.config=*' } | Select-Object -First 1)
+    $candidateName = if ($candidateConfig.Count -eq 1 -and [string]$candidateConfig[0] -match 'name="(?<name>[^"]+)"') { $Matches['name'] } else { 'candidate' }
+    Write-AppServerMessage ([ordered]@{
+        jsonrpc = '2.0'
+        id = $configRead.id
+        result = [ordered]@{ config = [ordered]@{ skills = [ordered]@{ include_instructions = $false; config = @([ordered]@{ name = $candidateName; enabled = $false }) } } }
+    })
+    $skillsList = Read-AppServerMessage
+    Write-AppServerMessage ([ordered]@{
+        jsonrpc = '2.0'
+        id = $skillsList.id
+        result = [ordered]@{ data = @([ordered]@{ cwd = (Get-Location).Path; errors = @(); skills = @([ordered]@{ name = $candidateName; path = "C:\Users\some-user\.agents\skills\$candidateName\SKILL.md"; enabled = $false; scope = 'user'; description = 'observability candidate' }) }) }
+    })
+    $threadStart = Read-AppServerMessage -AllowEndOfStream
+    if ($null -eq $threadStart) { exit 0 }
     Start-Sleep -Milliseconds (Get-DelayMilliseconds 2.8)
     Write-AppServerMessage ([ordered]@{
         jsonrpc = '2.0'
@@ -607,6 +664,7 @@ exit 0
         schema = (Get-RunnerSchemaNames).Run
         evalId = 99
         evalName = 'codex-observability'
+        candidateSkillName = 'candidate'
         skillName = $null
         iteration = 1
         mode = 'without_skill'
@@ -1095,7 +1153,7 @@ foreach ($ev in $events) {
     Assert-Equal 0 $codexTimeout.ExitCode 'codex app-server timeout: runner still returns a terminal result object'
     Assert-True ($codexTimeout.ElapsedSeconds -lt 12) ("codex app-server timeout: transport remains bounded; elapsed={0:N3}s" -f $codexTimeout.ElapsedSeconds)
     Assert-Equal 'incompatible' ([string]$codexTimeout.Result.status) 'codex app-server timeout: native evidence still fails closed after the bounded timeout'
-    Assert-Equal 'native_evidence_incompatible' ([string]$codexTimeout.Result.exit.failure.code) 'codex app-server timeout: the failure remains structured'
+    Assert-Equal 'native_skill_isolation_unverified' ([string]$codexTimeout.Result.exit.failure.code) 'codex app-server timeout: the failure remains structured'
     Assert-True ([string]$codexTimeout.Result.exit.failure.message -match 'Codex did not finish before timeout_seconds') 'codex app-server timeout: the failure message preserves the bounded timeout detail'
     $timeoutAppEvents = @($codexTimeout.AppServerEvents)
     Assert-True ($timeoutAppEvents.Count -ge 2) 'codex app-server timeout: quiet heartbeats occur before the timeout result'

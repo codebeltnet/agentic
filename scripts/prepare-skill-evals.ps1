@@ -1210,9 +1210,40 @@ function Get-CandidateSkillHash {
     return Get-Sha256Hex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($joined))
 }
 
+function Get-CandidateSkillName {
+    param(
+        [Parameter(Mandatory = $true)][string]$SkillDirectory,
+        [Parameter(Mandatory = $true)][string]$FolderName,
+        [Parameter(Mandatory = $true)][string]$SkillText
+    )
+
+    $declaredName = ''
+    if ($SkillText -match '(?ms)\A---\r?\n(?<frontmatter>.*?)\r?\n---\r?\n') {
+        foreach ($line in @($Matches['frontmatter'] -split '\r?\n')) {
+            if ($line -match '^\s*name\s*:\s*(?<value>.+?)\s*$') {
+                $declaredName = $Matches['value'].Trim().Trim('"', "'")
+                break
+            }
+        }
+    }
+
+    $candidateName = if ([string]::IsNullOrWhiteSpace($declaredName)) { $FolderName } else { $declaredName }
+    if ($candidateName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+        throw "Skill '$FolderName' declares unsupported Codex-visible candidate skill name '$candidateName'."
+    }
+
+    $skillMarkdownPath = Join-Path $SkillDirectory 'SKILL.md'
+    if (-not (Test-Path -LiteralPath $skillMarkdownPath -PathType Leaf)) {
+        throw "Candidate skill '$FolderName' is missing SKILL.md."
+    }
+
+    return $candidateName
+}
+
 function New-RunManifest {
     param(
         [string]$SkillName,
+        [string]$CandidateSkillName,
         [int]$IterationNumber,
         [object]$EvalEntry,
         [string]$EvalName,
@@ -1226,12 +1257,14 @@ function New-RunManifest {
     )
 
     $skillDirectory = if ($Configuration -eq 'with_skill') { "$($runDirectoryNames.Skill)/$SkillName" } else { $null }
+    $effectiveCandidateSkillName = if ([string]::IsNullOrWhiteSpace($CandidateSkillName)) { $SkillName } else { $CandidateSkillName }
 
     $manifest = [ordered]@{
         schema = $runSchema
         evalId = [int]$EvalEntry.id
         evalName = $EvalName
-        skillName = if ($Configuration -eq 'with_skill') { $SkillName } else { $null }
+        candidateSkillName = $effectiveCandidateSkillName
+        skillName = if ($Configuration -eq 'with_skill') { $effectiveCandidateSkillName } else { $null }
         iteration = $IterationNumber
         mode = $Configuration
         promptFile = $runDirectoryNames.Prompt
@@ -1437,6 +1470,7 @@ function Invoke-PrepareMode {
 
     $skillText = [System.IO.File]::ReadAllText($skillMarkdownPath, $utf8NoBom)
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
+    $candidateSkillName = Get-CandidateSkillName -SkillDirectory $skillDirectory -FolderName $Skill -SkillText $skillText
 
     $inventory = Get-SkillFileInventory -SkillDirectory $skillDirectory -SkillBody $skillBody -Budget $MaxInlineBytes
     $skillHash = Get-CandidateSkillHash -SkillDirectory $skillDirectory
@@ -1535,8 +1569,8 @@ function Invoke-PrepareMode {
                 if ((Get-FileSha256 -Path $interactionPath) -ne $interactionHash) { throw "Scripted interaction sidecar diverged between configurations for '$evalName'." }
             }
         }
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
 
         $assumptions = [System.Collections.Generic.List[string]]::new()
         $assumptions.Add('Run with_skill and without_skill on the same model, same version, and same configuration. Different models measure the model, not the skill.')
