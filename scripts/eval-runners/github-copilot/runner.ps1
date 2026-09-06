@@ -32,6 +32,92 @@ Set-StrictMode -Version Latest
 # GitHub CLI fallback. The values are forwarded only to the Copilot process;
 # --secret-env-vars removes them from shell and MCP child environments.
 $copilotAuthVariables = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
+$script:copilotHomeCleanupSafe = $true
+
+function Invoke-CopilotProcess {
+    param(
+        [string]$FileName, [string[]]$ArgumentList, [string]$WorkingDirectory,
+        [System.Collections.IDictionary]$Environment, [byte[]]$InputBytes = @(),
+        [int]$TimeoutSeconds = 60, [object]$ProgressContext
+    )
+
+    if (-not $script:copilotHomeCleanupSafe) { throw 'A prior Copilot process has not proven termination and stream completion.' }
+    $script:copilotHomeCleanupSafe = $false
+    $process = Invoke-RunnerProcess @PSBoundParameters
+    $script:copilotHomeCleanupSafe = $process.TerminationObserved -and $process.StdoutDrainCompleted -and $process.StderrDrainCompleted
+    return $process
+}
+
+function Get-CopilotHomeBaseline {
+    param([Parameter(Mandatory = $true)][string]$HomePath)
+
+    # Keep the prepared bytes in runner memory, outside every model-visible tree.
+    $entries = [System.Collections.Generic.List[object]]::new()
+    function Read-BaselineDirectory {
+        param([string]$Directory)
+        $item = Get-Item -LiteralPath $Directory -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Prepared Copilot home must not contain filesystem links.' }
+        foreach ($child in @(Get-ChildItem -LiteralPath $Directory -Force)) {
+            if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Prepared Copilot home must not contain filesystem links.' }
+            $entries.Add([pscustomobject]@{
+                Path = [IO.Path]::GetRelativePath($HomePath, $child.FullName)
+                Directory = [bool]$child.PSIsContainer
+                Bytes = if ($child.PSIsContainer) { $null } else { Write-Output -NoEnumerate ([IO.File]::ReadAllBytes($child.FullName)) }
+            })
+            if ($child.PSIsContainer) { Read-BaselineDirectory -Directory $child.FullName }
+        }
+    }
+    Read-BaselineDirectory -Directory $HomePath
+    return [pscustomobject]@{ HomePath = [IO.Path]::GetFullPath($HomePath); Entries = @($entries.ToArray()) }
+}
+
+function Restore-CopilotHomeBaseline {
+    param([Parameter(Mandatory = $true)][object]$Baseline)
+
+    $homePath = [string]$Baseline.HomePath
+    # Never traverse a runtime-created junction/symlink. Delete the link itself.
+    function Remove-HomeEntry {
+        param([System.IO.FileSystemInfo]$Entry)
+        if (-not (Test-PathInside -BasePath $homePath -CandidatePath $Entry.FullName)) { throw 'Copilot home cleanup escaped its resolved home.' }
+        if ($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { $Entry.Delete(); return }
+        if ($Entry -is [IO.DirectoryInfo]) {
+            foreach ($child in @($Entry.GetFileSystemInfos())) { Remove-HomeEntry -Entry $child }
+        }
+        $Entry.Attributes = $Entry.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+        $Entry.Delete()
+    }
+    $root = Get-Item -LiteralPath $homePath -Force -ErrorAction SilentlyContinue
+    if ($null -ne $root -and (($root.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $root.PSIsContainer)) {
+        $root.Delete()
+        $root = $null
+    }
+    if ($null -ne $root) {
+        foreach ($child in @($root.GetFileSystemInfos())) { Remove-HomeEntry -Entry $child }
+    }
+    [void][IO.Directory]::CreateDirectory($homePath)
+    foreach ($entry in $Baseline.Entries) {
+        $path = Join-Path $homePath $entry.Path
+        if ($entry.Directory) { [void][IO.Directory]::CreateDirectory($path) }
+        else { [IO.File]::WriteAllBytes($path, [byte[]]$entry.Bytes) }
+    }
+}
+
+function Invoke-CopilotWithPreparedHome {
+    param([Parameter(Mandatory = $true)][object]$Inputs, [Parameter(Mandatory = $true)][scriptblock]$Action)
+
+    $homePath = [IO.Path]::GetFullPath($Inputs.Run.HomeDirectoryPath)
+    if (-not (Test-PathInside -BasePath $Inputs.Run.RunRoot -CandidatePath $homePath) -or
+        (Test-PathInside -BasePath $homePath -CandidatePath $Inputs.Run.WorkingDirectoryPath) -or
+        (Test-PathInside -BasePath $homePath -CandidatePath (Join-Path $Inputs.Run.RunRoot 'evidence'))) {
+        throw 'Copilot home cleanup requires a separate manifest-resolved home inside the arm.'
+    }
+    $baseline = Get-CopilotHomeBaseline -HomePath $homePath
+    $script:copilotHomeCleanupSafe = $true
+    try { & $Action } finally {
+        if (-not $script:copilotHomeCleanupSafe) { throw 'Copilot termination and stream completion were not proven; home cleanup is unsafe and execution cannot be finalized.' }
+        Restore-CopilotHomeBaseline -Baseline $baseline
+    }
+}
 
 $descriptor = [ordered]@{
     schema = (Get-RunnerSchemaNames).Descriptor
@@ -221,7 +307,7 @@ function Invoke-CopilotCli {
     )
 
     $allArguments = @($CommandInfo.Prefix) + @($Arguments)
-    return Invoke-RunnerProcess -FileName $CommandInfo.FileName -ArgumentList $allArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'copilot' -Phase 'copilot-cli')
+    return Invoke-CopilotProcess -FileName $CommandInfo.FileName -ArgumentList $allArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'copilot' -Phase 'copilot-cli')
 }
 
 function Get-CopilotHelpResult {
@@ -231,7 +317,7 @@ function Get-CopilotHelpResult {
         [string[]]$Arguments = @('--help')
     )
 
-    $environment = New-RunnerEnvironment -Run $Inputs.Run
+    $environment = New-CopilotEnvironment -Inputs $Inputs -WithoutAuthentication
     return Invoke-CopilotCli -CommandInfo $CommandInfo -Arguments $Arguments -Inputs $Inputs -Environment $environment -TimeoutSeconds 30
 }
 
@@ -454,7 +540,7 @@ function Get-CopilotPreflight {
     } else {
         $checks.Add((New-PreflightCheck -Name 'harness_executable' -Status passed -Detail $commandInfo.Source))
         try {
-            $versionObservation = Get-ExternalCommandVersion -CommandInfo $commandInfo -WorkingDirectory $run.WorkingDirectoryPath -Environment (New-RunnerEnvironment -Run $run) -TimeoutSeconds 30
+            $versionObservation = Get-ExternalCommandVersion -CommandInfo $commandInfo -WorkingDirectory $run.WorkingDirectoryPath -Environment (New-CopilotEnvironment -Inputs $Inputs -WithoutAuthentication) -TimeoutSeconds 30
             if (-not $versionObservation.Available) {
                 $reasons.Add('The GitHub Copilot CLI did not expose an exact observable version through --version.')
                 $checks.Add((New-PreflightCheck -Name 'harness_version' -Status unavailable -Detail 'copilot --version did not return a usable version string.'))
@@ -587,17 +673,25 @@ function Get-CopilotPreflight {
 }
 
 function New-CopilotEnvironment {
-    param([Parameter(Mandatory = $true)][object]$Inputs)
+    param([Parameter(Mandatory = $true)][object]$Inputs, [switch]$WithoutAuthentication)
 
     $copilotHome = Join-Path $Inputs.Run.HomeDirectoryPath '.copilot'
-    $copilotCacheHome = Join-Path $Inputs.Run.HomeDirectoryPath '.copilot-cache'
+    $copilotCacheHome = Join-Path $Inputs.Run.HomeDirectoryPath '.cache/copilot'
     New-Item -ItemType Directory -Path $copilotHome -Force | Out-Null
     New-Item -ItemType Directory -Path $copilotCacheHome -Force | Out-Null
     $additional = @{
         COPILOT_HOME = $copilotHome
         COPILOT_CACHE_HOME = $copilotCacheHome
         COPILOT_AUTO_UPDATE = 'false'
+        # Git stops before searching the arm's parent, while repo/.git remains visible.
+        GIT_CEILING_DIRECTORIES = [System.IO.Path]::GetFullPath($Inputs.Run.RunRoot)
     }
+    if ((Get-PlatformName) -eq 'windows') {
+        $additional['LOCALAPPDATA'] = Join-Path $Inputs.Run.HomeDirectoryPath '.cache'
+        $additional['APPDATA'] = Join-Path $Inputs.Run.HomeDirectoryPath '.config'
+    }
+    # Model-free help/version bootstrap must use the same cache roots too.
+    if ($WithoutAuthentication) { return New-RunnerEnvironment -Run $Inputs.Run -Additional $additional }
     $tokenVariable = Get-CopilotTokenVariable
     $authState = Resolve-CopilotAuthentication
     if ($authState.Source -eq 'github_cli_token') {
@@ -621,7 +715,8 @@ function New-CopilotInsideEnvironment {
         TEMP = '/run/home/tmp'
         TMP = '/run/home/tmp'
         COPILOT_HOME = '/run/home/.copilot'
-        COPILOT_CACHE_HOME = '/run/home/.copilot-cache'
+        COPILOT_CACHE_HOME = '/run/home/.cache/copilot'
+        GIT_CEILING_DIRECTORIES = '/run'
         COPILOT_AUTO_UPDATE = 'false'
         PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
         CI = '1'
@@ -659,7 +754,8 @@ function Add-NullableInt64 {
 function Read-CopilotEvents {
     param(
         [Parameter(Mandatory = $true)][object]$Parsed,
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Warnings
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Warnings,
+        [System.Collections.IDictionary]$UnknownEventCounts = [ordered]@{}
     )
 
     $assistantContents = [System.Collections.Generic.List[string]]::new()
@@ -728,7 +824,10 @@ function Read-CopilotEvents {
             'tool.execution_start' { $toolStarts++ }
             'session.error' { $sessionError = [string](Get-JsonProperty -Object $data -Name 'message' -Default 'Copilot reported a session error.') }
             { $_ -in @('session.start', 'session.info', 'session.idle', 'session.shutdown', 'session.task_complete', 'user.message', 'assistant.message_start', 'assistant.message_delta', 'assistant.turn_start', 'assistant.turn_end', 'assistant.reasoning', 'assistant.tool_call_delta', 'tool.execution_progress', 'tool.execution_partial_result', 'tool.execution_complete', 'command.execute', 'command.completed', 'session.usage_info', 'session.usage_checkpoint') } { }
-            default { $Warnings.Add("Unknown Copilot event '$eventType' was preserved as a warning.") }
+            default {
+                if ($UnknownEventCounts.Contains($eventType)) { $UnknownEventCounts[$eventType]++ }
+                else { $UnknownEventCounts[$eventType] = 1 }
+            }
         }
         if ($eventType -in @('session.task_complete', 'session.idle', 'session.shutdown', 'assistant.turn_end')) { $terminalEventObserved = $true }
     }
@@ -759,6 +858,13 @@ function Read-CopilotEvents {
     }
 }
 
+function Add-CopilotUnknownEventWarnings {
+    param([System.Collections.IDictionary]$Counts, [AllowEmptyCollection()][System.Collections.Generic.List[string]]$Warnings)
+    foreach ($eventType in $Counts.Keys) {
+        $Warnings.Add("Unknown Copilot event '$eventType' was preserved ($($Counts[$eventType]) occurrences).")
+    }
+}
+
 function Invoke-CopilotTurnProcess {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
@@ -775,12 +881,12 @@ function Invoke-CopilotTurnProcess {
     if ($Platform -eq 'linux' -and $hardFilesystem) {
         $insideEnvironment = New-CopilotInsideEnvironment -Inputs $Inputs -Environment $Environment
         $sandboxArguments = Get-LinuxEvalSandboxArguments -Inputs $Inputs -CommandInfo $CommandInfo -InsideEnvironment $insideEnvironment
-        return Invoke-RunnerProcess -FileName $SandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($Arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
+        return Invoke-CopilotProcess -FileName $SandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($Arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
     }
     if ($Platform -eq 'macos' -and $hardFilesystem) {
         $sandboxProfile = New-MacosEvalSandboxProfile -Inputs $Inputs -CommandInfo $CommandInfo
         $sandboxArguments = @('-f', $sandboxProfile, '--', $CommandInfo.FileName) + @($CommandInfo.Prefix) + @($Arguments)
-        return Invoke-RunnerProcess -FileName $SandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
+        return Invoke-CopilotProcess -FileName $SandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
     }
     return Invoke-CopilotCli -CommandInfo $CommandInfo -Arguments $Arguments -Inputs $Inputs -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
 }
@@ -822,6 +928,7 @@ function Invoke-CopilotScriptedExecute {
     $rawStderr = [System.Collections.Generic.List[string]]::new()
     $artifacts = [System.Collections.Generic.List[object]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
+    $unknownEventCounts = [ordered]@{}
     $nativeFailures = [System.Collections.Generic.List[string]]::new()
     $eventCounts = @{}
     $observedModels = [System.Collections.Generic.List[string]]::new()
@@ -878,7 +985,7 @@ function Invoke-CopilotScriptedExecute {
 
         $parsed = if ([string]::IsNullOrEmpty([string]$process.Stdout)) { [pscustomobject]@{ Events = @(); Errors = @() } } else { ConvertFrom-JsonLines -Text $process.Stdout }
         foreach ($parseError in @($parsed.Errors)) { $warnings.Add("Copilot turn $turnNumber event parse error: $parseError") }
-        $parsedEvents = Read-CopilotEvents -Parsed $parsed -Warnings $warnings
+        $parsedEvents = Read-CopilotEvents -Parsed $parsed -Warnings $warnings -UnknownEventCounts $unknownEventCounts
         foreach ($eventName in $parsedEvents.EventCounts.Keys) {
             if ($eventCounts.ContainsKey($eventName)) { $eventCounts[$eventName] += [int]$parsedEvents.EventCounts[$eventName] } else { $eventCounts[$eventName] = [int]$parsedEvents.EventCounts[$eventName] }
         }
@@ -941,6 +1048,7 @@ function Invoke-CopilotScriptedExecute {
         $turnRecords.Add([ordered]@{ sequence = ($turnIndex * 2) + 2; role = 'assistant'; text = $finalText; session_id = $capturedSessionId; timestamp_utc = Format-UtcTimestamp -Value $process.FinishedUtc })
     }
 
+    Add-CopilotUnknownEventWarnings -Counts $unknownEventCounts -Warnings $warnings
     if ($null -eq $firstProcess) {
         $firstProcess = [pscustomobject]@{ StartedUtc = $started; FinishedUtc = [DateTime]::UtcNow; DurationSeconds = ([DateTime]::UtcNow - $started).TotalSeconds; ExitCode = $null; TimedOut = $false }
     }
@@ -1114,11 +1222,11 @@ function Invoke-CopilotExecute {
     if ($platform -eq 'linux' -and $hardFilesystem) {
         $insideEnvironment = New-CopilotInsideEnvironment -Inputs $Inputs -Environment $environment
         $sandboxArguments = Get-LinuxEvalSandboxArguments -Inputs $Inputs -CommandInfo $commandInfo -InsideEnvironment $insideEnvironment
-        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'copilot' -Phase 'copilot-cli')
+        $process = Invoke-CopilotProcess -FileName $sandboxInfo.FileName -ArgumentList (@($sandboxArguments) + @($arguments)) -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'copilot' -Phase 'copilot-cli')
     } elseif ($platform -eq 'macos' -and $hardFilesystem) {
         $sandboxProfile = New-MacosEvalSandboxProfile -Inputs $Inputs -CommandInfo $commandInfo
         $sandboxArguments = @('-f', $sandboxProfile, '--', $commandInfo.FileName) + @($commandInfo.Prefix) + @($arguments)
-        $process = Invoke-RunnerProcess -FileName $sandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'copilot' -Phase 'copilot-cli')
+        $process = Invoke-CopilotProcess -FileName $sandboxInfo.FileName -ArgumentList $sandboxArguments -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds -ProgressContext (Get-RunnerModelProgressContext -Runner 'copilot' -Phase 'copilot-cli')
     } else {
         $process = Invoke-CopilotCli -CommandInfo $commandInfo -Arguments $arguments -Inputs $Inputs -Environment $environment -InputBytes $Inputs.Run.PromptBytes -TimeoutSeconds $Inputs.Profile.TimeoutSeconds
     }
@@ -1136,7 +1244,9 @@ function Invoke-CopilotExecute {
         ConvertFrom-JsonLines -Text $process.Stdout
     }
     foreach ($parseError in @($parsed.Errors)) { $warnings.Add("Copilot event parse error: $parseError") }
-    $parsedEvents = Read-CopilotEvents -Parsed $parsed -Warnings $warnings
+    $unknownEventCounts = [ordered]@{}
+    $parsedEvents = Read-CopilotEvents -Parsed $parsed -Warnings $warnings -UnknownEventCounts $unknownEventCounts
+    Add-CopilotUnknownEventWarnings -Counts $unknownEventCounts -Warnings $warnings
 
     $finalText = $parsedEvents.FinalText
     $status = 'completed'
@@ -1256,12 +1366,12 @@ try {
         'describe' { Write-RunnerJson -Value (Get-CopilotDescriptor) -AsOutput }
         'preflight' {
             $inputs = Resolve-CopilotInputs
-            Write-RunnerJson -Value (Get-CopilotPreflight -Inputs $inputs) -AsOutput
+            Write-RunnerJson -Value (Invoke-CopilotWithPreparedHome -Inputs $inputs -Action { Get-CopilotPreflight -Inputs $inputs }) -AsOutput
         }
         'execute' {
             $inputs = Resolve-CopilotInputs
             [void](Assert-PhaseOneEvidenceWritable -Run $inputs.Run)
-            $result = Invoke-CopilotExecute -Inputs $inputs
+            $result = Invoke-CopilotWithPreparedHome -Inputs $inputs -Action { Invoke-CopilotExecute -Inputs $inputs }
             [void](Assert-ExecutionResult -Result $result)
             Write-RunnerJson -Value $result -AsOutput
         }

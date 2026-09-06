@@ -2836,3 +2836,6 @@ try {
 }
 
 Invoke-RecordedRunnerTests
+
+& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'test-copilot-boundaries.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Copilot boundary regressions failed.' }

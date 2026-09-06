@@ -66,6 +66,74 @@ function Get-MetricValue {
     return Get-JsonProperty -Object $metric -Name 'value' -Default $null
 }
 
+function Get-PortableTranscript {
+    param([Parameter(Mandatory = $true)][object]$Raw, [Parameter(Mandatory = $true)][object]$RunData)
+
+    $interaction = Get-JsonProperty -Object $Raw.evidence -Name 'interaction' -Default $null
+    if ([string]$Raw.runner.name -eq 'github-copilot' -and
+        [string](Get-JsonProperty -Object $interaction -Name 'mode' -Default '') -eq 'scripted') {
+        if ($null -eq $RunData.Interaction -or [string]$Raw.status -ne 'completed' -or
+            [string]$Raw.final_response.status -ne 'available' -or
+            $interaction.same_session -isnot [bool] -or -not $interaction.same_session) {
+            throw 'Copilot scripted transcript requires a complete prepared interaction and terminal response.'
+        }
+        [void](Assert-InteractionResultEvidence -ExecutionResult $Raw -RunData $RunData)
+        $sessionId = [string]$interaction.session_id
+        $turns = @($interaction.turns)
+        $nativeTurns = @(Get-JsonProperty -Object $interaction -Name 'native_turns' -Default @())
+        $requestedTurns = @($RunData.Interaction.turns)
+        if ([string]::IsNullOrWhiteSpace($sessionId) -or $nativeTurns.Count -ne $requestedTurns.Count -or
+            -not [string]::Equals($sessionId, [string]$Raw.session.id, [StringComparison]::Ordinal)) {
+            throw 'Copilot scripted transcript has inconsistent native turn/session evidence.'
+        }
+        $parts = [System.Collections.Generic.List[string]]::new()
+        $parts.Add("# GitHub Copilot Transcript`n`nSession: $sessionId`nSame session: true")
+        for ($index = 0; $index -lt $requestedTurns.Count; $index++) {
+            $user = $turns[$index * 2]
+            $assistant = $turns[($index * 2) + 1]
+            $native = $nativeTurns[$index]
+            if ([string]$user.sequence -cne [string](($index * 2) + 1) -or [string]$user.role -cne 'user' -or
+                [string]$assistant.sequence -cne [string](($index * 2) + 2) -or [string]$assistant.role -cne 'assistant' -or
+                $assistant.text -isnot [string]) {
+                throw 'Copilot scripted transcript requires each ordered captured user/assistant pair exactly once.'
+            }
+            $observedIds = @($native.session_ids_observed)
+            if ([int]$native.turn -ne ($index + 1) -or -not [bool]$native.terminal -or
+                -not [bool]$native.terminal_assistant_response -or $observedIds.Count -ne 1 -or
+                -not [string]::Equals([string]$observedIds[0], $sessionId, [StringComparison]::Ordinal) -or
+                -not [string]::Equals([string]$native.session_id, $sessionId, [StringComparison]::Ordinal) -or
+                -not [string]::Equals([string]$user.session_id, $sessionId, [StringComparison]::Ordinal) -or
+                -not [string]::Equals([string]$assistant.session_id, $sessionId, [StringComparison]::Ordinal)) {
+                throw 'Copilot scripted transcript has inconsistent ordered native capture evidence.'
+            }
+            if (($index -eq 0 -and [string]$native.invocation -ne 'fresh') -or
+                ($index -gt 0 -and ([string]$native.invocation -ne 'explicit_session_resume' -or
+                    -not [string]::Equals([string]$native.target_session_id, $sessionId, [StringComparison]::Ordinal)))) {
+                throw 'Copilot scripted transcript does not prove exact session continuation.'
+            }
+            $userText = Get-InteractionTurnText -Turn $requestedTurns[$index] -RunData $RunData
+            $hash = Get-Sha256HexFromBytes -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($userText))
+            if (-not [string]::Equals($hash, [string]$user.content_sha256, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Copilot scripted transcript user text does not match the captured input hash.'
+            }
+            $parts.Add("## Message $($user.sequence) - User`n`n$userText")
+            $parts.Add("## Message $($assistant.sequence) - Assistant`n`n$($assistant.text)")
+        }
+        if ([string]$interaction.final_response_sequence -cne [string]$turns.Count -or
+            -not [string]::Equals([string]$turns[-1].text, [string]$Raw.final_response.text, [StringComparison]::Ordinal)) {
+            throw 'Copilot scripted transcript terminal assistant text does not match final_response.'
+        }
+        return [string]::Join("`n`n", $parts)
+    }
+
+    $metric = Get-MetricValue -Result $Raw -Name 'transcript'
+    if ($null -ne $metric) {
+        $artifact = [string](Get-JsonProperty -Object $metric -Name 'artifact' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($artifact)) { return "artifact: $artifact" }
+    }
+    return ''
+}
+
 function Get-NormalizedTotalTokens {
     param([object]$Tokens)
 
@@ -207,15 +275,8 @@ try {
 
     $finalStatus = [string]$raw.final_response.status
     $output = if ($finalStatus -eq 'available') { [string]$raw.final_response.text } else { '' }
-    $transcript = ''
+    $transcript = Get-PortableTranscript -Raw $raw -RunData $runData
     $transcriptMetricObject = Get-JsonProperty -Object $raw.telemetry -Name 'transcript' -Default $null
-    $transcriptMetric = Get-MetricValue -Result $raw -Name 'transcript'
-    if ($null -ne $transcriptMetric) {
-        $transcriptArtifact = [string](Get-JsonProperty -Object $transcriptMetric -Name 'artifact' -Default '')
-        if (-not [string]::IsNullOrWhiteSpace($transcriptArtifact)) {
-            $transcript = "artifact: $transcriptArtifact"
-        }
-    }
     $toolCallsValue = Get-MetricValue -Result $raw -Name 'tool_calls'
     $costValue = Get-MetricValue -Result $raw -Name 'cost'
     $tokenValue = Get-MetricValue -Result $raw -Name 'tokens'
