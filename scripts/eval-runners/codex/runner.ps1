@@ -633,6 +633,10 @@ function Invoke-CodexAppServerSkillsListProbe {
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $psi.StandardInputEncoding = $utf8NoBom
+    $psi.StandardOutputEncoding = $utf8NoBom
+    $psi.StandardErrorEncoding = $utf8NoBom
     foreach ($argument in @($arguments)) { [void]$psi.ArgumentList.Add([string]$argument) }
     $psi.Environment.Clear()
     foreach ($name in @($Environment.Keys)) { $psi.Environment[[string]$name] = [string]$Environment[$name] }
@@ -1101,6 +1105,10 @@ function Invoke-CodexAppServer {
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $psi.StandardInputEncoding = $utf8NoBom
+    $psi.StandardOutputEncoding = $utf8NoBom
+    $psi.StandardErrorEncoding = $utf8NoBom
     $ambientSkillEntries = @(Get-JsonProperty -Object $NativeSkillDiscovery -Name 'AmbientSkills' -Default @())
     $suppressionSelectors = @(New-CodexNativeSkillSuppressionSelectors -AmbientSkillEntries $ambientSkillEntries)
     $appServerArguments = [System.Collections.Generic.List[string]]::new()

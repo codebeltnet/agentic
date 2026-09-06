@@ -1255,6 +1255,12 @@ Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance r
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Token normalization and benchmark reporting remain deterministic' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-token-reporting.ps1') 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Token reporting regression failed: $($output -join [Environment]::NewLine)" }
+}
+
 Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains deterministic' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
@@ -2102,6 +2108,29 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             }
             if ($withSkill.Substring($withSkillTaskIndex) -ne $withoutSkill.Substring($withoutSkillTaskIndex)) {
                 throw "$($entry.eval_name) must vary only the operating-instructions section; the task, inputs, or response contract differ."
+            }
+
+            if ([int]$entry.eval_id -eq 2) {
+                # This particular eval writes concurrently under pragmatic isolation.
+                # Its identical logical destination must resolve separately in each arm.
+                $request = [string]$metadata.prompt
+                if ($request -notmatch '^Create a 4096-bit strong name key called signing-key in the relative directory (?<directory>[^ ]+) under this repository\.$') {
+                    throw 'Strong-name override eval must specify an explicit arm-local relative directory.'
+                }
+                $destination = Join-Path $Matches.directory 'signing-key.snk'
+                if ([IO.Path]::IsPathRooted($destination)) { throw 'Strong-name override destination must be relative.' }
+                $resolvedOutputs = foreach ($armRoot in @($withRunDir, $withoutRunDir)) {
+                    $cwd = [IO.Path]::GetFullPath((Join-Path $armRoot 'repo'))
+                    $output = [IO.Path]::GetFullPath((Join-Path $cwd $destination))
+                    if (-not $output.StartsWith($cwd + [IO.Path]::DirectorySeparatorChar, [StringComparison]::Ordinal)) {
+                        throw 'Strong-name override destination escapes its staged working directory.'
+                    }
+                    $output
+                }
+                if ($resolvedOutputs[0] -eq $resolvedOutputs[1]) { throw 'Paired strong-name arms share a physical output destination.' }
+                foreach ($prompt in @($withSkill, $withoutSkill)) {
+                    if (-not $prompt.Contains($request)) { throw 'Paired strong-name prompts must preserve the same relative destination request.' }
+                }
             }
 
             if ($withoutSkill.Contains([string]$manifest.skill_name)) {

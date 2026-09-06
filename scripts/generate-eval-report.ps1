@@ -60,6 +60,45 @@ $OutputEncoding = $utf8NoBom
 . (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'eval-runners/execution-freeze.ps1')
 
+function Set-BenchmarkTokenMetrics {
+    param([object]$Benchmark, [object[]]$ManifestRecords)
+
+    # Upstream substitutes zero (or output characters) for missing usage. Restore
+    # the canonical metric without modifying the packaged third-party tools.
+    foreach ($run in @($Benchmark.runs)) {
+        $record = @($ManifestRecords | Where-Object { $_.EvalId -eq $run.eval_id -and $_.Configuration -eq $run.configuration })
+        if ($record.Count -ne 1) { throw 'Benchmark token metric requires exactly one canonical result per arm.' }
+        $canonical = Read-JsonFile -Path $record[0].ResultPath
+        $run.result.tokens = Get-Property -Object $canonical -Name 'total_tokens' -Default $null
+    }
+    foreach ($configuration in @('with_skill', 'without_skill')) {
+        $runs = @($Benchmark.runs | Where-Object configuration -eq $configuration)
+        $values = @($runs | ForEach-Object { $_.result.tokens } | Where-Object { $null -ne $_ })
+        $stats = $null
+        # A whole-configuration comparison is unavailable if any arm lacks usage.
+        if ($values.Count -gt 0 -and $values.Count -eq $runs.Count) {
+            $stats = [ordered]@{ mean = $null; stddev = $null; min = $null; max = $null }
+            $measurement = $values | Measure-Object -Average -Minimum -Maximum
+            $mean = $measurement.Average
+            $variance = 0.0
+            foreach ($value in $values) { $variance += [math]::Pow(($value - $mean), 2) }
+            $stats.mean = [math]::Round($mean, 4)
+            $stats.stddev = if ($values.Count -gt 1) { [math]::Round([math]::Sqrt($variance / ($values.Count - 1)), 4) } else { 0.0 }
+            $stats.min = $measurement.Minimum
+            $stats.max = $measurement.Maximum
+        }
+        $Benchmark.run_summary.$configuration.tokens = if ($null -eq $stats) { $null } else { [pscustomobject]$stats }
+    }
+    $with = $Benchmark.run_summary.with_skill.tokens
+    $without = $Benchmark.run_summary.without_skill.tokens
+    $delta = if ($null -eq $with -or $null -eq $without) { $null } else { ($with.mean - $without.mean).ToString('+0;-0;+0', [Globalization.CultureInfo]::InvariantCulture) }
+    $Benchmark.run_summary.delta.tokens = $delta
+    $withText = if ($null -eq $with) { 'unavailable' } else { '{0:F0} ± {1:F0}' -f $with.mean, $with.stddev }
+    $withoutText = if ($null -eq $without) { 'unavailable' } else { '{0:F0} ± {1:F0}' -f $without.mean, $without.stddev }
+    $deltaText = if ($null -eq $delta) { 'unavailable' } else { $delta }
+    return "| Tokens | $withText | $withoutText | $deltaText |"
+}
+
 function Read-JsonFile {
     param([string]$Path)
 
@@ -763,13 +802,17 @@ foreach ($run in @($benchmark.runs)) {
 }
 
 $benchmarkOutputPath = if ([string]::IsNullOrWhiteSpace($BenchmarkPath)) { Join-Path $iterationPath 'benchmark.json' } else { $BenchmarkPath }
+$tokenMarkdownRow = Set-BenchmarkTokenMetrics -Benchmark $benchmark -ManifestRecords $manifestRecords
 $benchmarkMarkdownOutputPath = if ([string]::IsNullOrWhiteSpace($BenchmarkMarkdownPath)) { Join-Path $iterationPath 'benchmark.md' } else { $BenchmarkMarkdownPath }
 Write-JsonFile -Path $benchmarkOutputPath -Value $benchmark
+Write-JsonFile -Path $benchmarkWorkspacePath -Value $benchmark
 
 $benchmarkMarkdown = [System.IO.File]::ReadAllText((Join-Path $workspacePath 'benchmark.md'), $utf8NoBom)
 $benchmarkMarkdown = $benchmarkMarkdown.Replace('3 runs each per configuration', '1 run each per configuration')
 $benchmarkMarkdown = $benchmarkMarkdown.Replace('<model-name>', [string]$benchmark.metadata.executor_model)
+$benchmarkMarkdown = [regex]::Replace($benchmarkMarkdown, '(?m)^\| Tokens \|.*$', $tokenMarkdownRow)
 Write-TextFile -Path $benchmarkMarkdownOutputPath -Content $benchmarkMarkdown
+Write-TextFile -Path (Join-Path $workspacePath 'benchmark.md') -Content $benchmarkMarkdown
 
 $htmlOutputPath = if ([string]::IsNullOrWhiteSpace($OutputPath)) { Join-Path $iterationPath 'report.html' } else { $OutputPath }
 $upstreamHtmlOutputPath = Join-Path $iterationPath 'skill-creator-report.html'

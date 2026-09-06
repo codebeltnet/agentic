@@ -66,6 +66,28 @@ function Get-MetricValue {
     return Get-JsonProperty -Object $metric -Name 'value' -Default $null
 }
 
+function Get-NormalizedTotalTokens {
+    param([object]$Tokens)
+
+    function Test-TokenCount {
+        param([object]$Value)
+        return ($Value -is [byte] -or $Value -is [int16] -or $Value -is [int32] -or $Value -is [int64] -or $Value -is [decimal] -or $Value -is [double] -or $Value -is [single]) -and
+            $Value -ge 0 -and -not [double]::IsInfinity([double]$Value) -and -not [double]::IsNaN([double]$Value)
+    }
+
+    if ($null -eq $Tokens) { return $null }
+    $total = Get-JsonProperty -Object $Tokens -Name 'total_tokens' -Default $null
+    if (Test-TokenCount $total) { return $total }
+    $inputCount = Get-JsonProperty -Object $Tokens -Name 'input_tokens' -Default $null
+    $outputCount = Get-JsonProperty -Object $Tokens -Name 'output_tokens' -Default $null
+    if ((Test-TokenCount $inputCount) -and (Test-TokenCount $outputCount)) {
+        # Cache reads and reasoning are subsets of these buckets, not additional tokens.
+        $total = $inputCount + $outputCount
+        if (Test-TokenCount $total) { return $total }
+    }
+    return $null
+}
+
 function Get-ArtifactPath {
     param(
         [Parameter(Mandatory = $true)][object]$RunData,
@@ -239,7 +261,7 @@ try {
         stderr = if (@($artifactPaths | Where-Object { $_ -match 'stderr\.txt$' }).Count -gt 0) { 'artifact: stderr.txt' } else { '' }
         exit_status = Get-JsonProperty -Object $raw.exit -Name 'status' -Default $null
         duration_seconds = [double]$raw.duration_seconds
-        total_tokens = if ($null -ne $tokenValue) { Get-JsonProperty -Object $tokenValue -Name 'total_tokens' -Default $null } else { $null }
+        total_tokens = Get-NormalizedTotalTokens -Tokens $tokenValue
         tool_calls = $toolCallsValue
         turns = Get-JsonProperty -Object $evidence -Name 'turns' -Default $null
         base_input_tokens = if ($null -ne $tokenValue) { Get-JsonProperty -Object $tokenValue -Name 'input_tokens' -Default (Get-JsonProperty -Object $tokenValue -Name 'input' -Default $null) } else { $null }

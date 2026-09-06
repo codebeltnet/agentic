@@ -571,6 +571,11 @@ if ($harness -eq 'codex' -and $arguments -contains 'debug' -and $arguments -cont
     exit 0
 }
 if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
+    [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+    $unicodeCanary = "I’m testing Microsoft’s guidance. ÆØÅ"
+    [Console]::Error.WriteLine($unicodeCanary)
+    [Console]::Error.Flush()
     function Read-AppServerMessage {
         param([switch]$AllowEndOfStream)
 
@@ -611,7 +616,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
         )
 
         $enabled = if ($nativeSuppressionEnabled -and -not $ForceEnabled) { -not (Test-SuppressedSkillPath -Path $Path) } else { $true }
-        return [ordered]@{ name = $Name; path = $Path; enabled = [bool]$enabled; scope = 'user'; description = 'fixture' }
+        return [ordered]@{ name = $Name; path = $Path; enabled = [bool]$enabled; scope = 'user'; description = $unicodeCanary }
     }
     $candidateAbsent = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-native-skill-candidate-absent') -PathType Leaf
     $candidateEnabledEverywhere = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-native-skill-candidate-enabled') -PathType Leaf
@@ -619,9 +624,10 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $candidateEnabled = $candidateEnabledEverywhere -or $candidateEnabledInProjection
     $newAmbientEnabled = (Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-new-ambient-enabled') -PathType Leaf) -and $nativeSuppressionEnabled -and ([string](Get-Location).Path -match 'agentic-codex-projection-')
     $duplicateAmbient = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-duplicate-ambient') -PathType Leaf
-    $ambientAPath = 'C:\Users\test\.agents\skills\a\SKILL.md'
-    $ambientBPath = 'C:\Users\test\.agents\skills\b\SKILL.md'
-    $ambientCandidatePath = "C:\Users\test\.agents\skills\$candidateName\SKILL.md"
+    $ambientRoot = Join-Path $PSScriptRoot '.fake-user/.agents/skills'
+    $ambientAPath = Join-Path $ambientRoot 'a/SKILL.md'
+    $ambientBPath = Join-Path $ambientRoot 'b/SKILL.md'
+    $ambientCandidatePath = Join-Path $ambientRoot "$candidateName/SKILL.md"
     $skills = [System.Collections.Generic.List[object]]::new()
     [void]$skills.Add((New-RecordedSkill -Name 'a' -Path $ambientAPath))
     [void]$skills.Add((New-RecordedSkill -Name 'b' -Path $ambientBPath))
@@ -629,10 +635,10 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
         [void]$skills.Add((New-RecordedSkill -Name $candidateName -Path $ambientCandidatePath -ForceEnabled:$candidateEnabled))
     }
     if ($duplicateAmbient) {
-        [void]$skills.Add((New-RecordedSkill -Name 'a' -Path 'D:\alternate-root\.agents\skills\a\SKILL.md'))
+        [void]$skills.Add((New-RecordedSkill -Name 'a' -Path (Join-Path $PSScriptRoot '.alternate-user/.agents/skills/a/SKILL.md')))
     }
     if ($newAmbientEnabled) {
-        [void]$skills.Add([ordered]@{ name = 'c'; path = 'C:\Users\test\.agents\skills\c\SKILL.md'; enabled = $true; scope = 'user'; description = 'new fixture' })
+        [void]$skills.Add([ordered]@{ name = 'c'; path = (Join-Path $ambientRoot 'c/SKILL.md'); enabled = $true; scope = 'user'; description = 'new fixture' })
     }
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $skillsList.id; result = [ordered]@{ data = @([ordered]@{ cwd = (Get-Location).Path; errors = @(); skills = @($skills.ToArray()) }) } })
     $threadStart = Read-AppServerMessage -AllowEndOfStream
@@ -758,7 +764,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
         Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 1; item = [ordered]@{ type = 'commandExecution'; id = 'command-without-path-evidence'; commandActions = @(); cwd = (Get-Location).Path; status = 'completed'; exitCode = 0; aggregatedOutput = 'command ran but command field is unavailable' } } })
         Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'item/completed'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; completedAtMs = 2; item = [ordered]@{ type = 'agentMessage'; id = 'message-1'; text = 'recorded response without path-bearing command evidence' } } })
     } else {
-        $agentText = if ($fixtureProsePolicyText) { 'The phrase blocked by policy appears in ordinary prose, not in a tool result.' } elseif ($fixtureAmbientSkillProse) { "This prose mentions .agents, skill, and $candidateName without accessing files." } else { 'recorded subscription response' }
+        $agentText = if ($fixtureProsePolicyText) { 'The phrase blocked by policy appears in ordinary prose, not in a tool result.' } elseif ($fixtureAmbientSkillProse) { "This prose mentions $ambientCandidatePath without accessing files." } else { $unicodeCanary }
         if ($fixtureStderrBarePolicyText) {
             # Bare 'blocked by policy' in STDERR without codex_core provenance; must not trigger the runtime classifier.
             [Console]::Error.WriteLine('blocked by policy without codex_core runtime provenance')
@@ -1220,8 +1226,8 @@ exit 2
             $codexSkillConfigArg = @($args | Where-Object { [string]$_ -like 'skills.config=*' } | Select-Object -First 1)
             Assert-Equal 1 $codexSkillConfigArg.Count 'Codex CLI emits one structured skills.config selector list'
             Assert-True ([string]$codexSkillConfigArg[0] -match 'path=') 'Codex CLI uses path-based ambient skill selectors'
-            Assert-True (([string]$codexSkillConfigArg[0]).Contains('C:\\Users\\test\\.agents\\skills\\a\\SKILL.md')) 'Codex CLI suppresses ambient skill A by path'
-            Assert-True (([string]$codexSkillConfigArg[0]).Contains('C:\\Users\\test\\.agents\\skills\\b\\SKILL.md')) 'Codex CLI suppresses ambient skill B by path'
+            Assert-True (([string]$codexSkillConfigArg[0]).Contains((Join-Path $fakeBin '.fake-user/.agents/skills/a/SKILL.md').Replace('\', '\\'))) 'Codex CLI suppresses ambient skill A by path'
+            Assert-True (([string]$codexSkillConfigArg[0]).Contains((Join-Path $fakeBin '.fake-user/.agents/skills/b/SKILL.md').Replace('\', '\\'))) 'Codex CLI suppresses ambient skill B by path'
             $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
             Assert-Equal 'gpt-5.6-luna' $args[$modelIndex + 1] 'Codex opaque model selector propagates to the CLI invocation'
             $outputIndex = [Array]::IndexOf([string[]]$args, '--output-last-message')
@@ -1657,10 +1663,12 @@ exit 2
     Assert-Equal $false $fileAuthPreflight.native_skill_isolation.include_instructions_requested 'Codex preflight requests skills.include_instructions=false'
     Assert-Equal 3 $fileAuthPreflight.native_skill_isolation.discovered_ambient_skill_count 'Codex preflight discovers all ambient fixture skills'
     Assert-Equal 3 $fileAuthPreflight.native_skill_isolation.suppression_selector_count 'Codex preflight suppresses all ambient fixture skills'
+    Assert-Equal "I’m testing Microsoft’s guidance. ÆØÅ" $fileAuthPreflight.native_skill_isolation.discovery_skills_list_response.result.data[0].skills[0].description 'Codex model-free discovery stdout preserves Unicode'
+    Assert-Equal "I’m testing Microsoft’s guidance. ÆØÅ" $fileAuthPreflight.native_skill_isolation.skills_list_response.result.data[0].skills[0].description 'Codex model-free verification stdout preserves Unicode'
     $fileAuthResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
     $fileAuthFailureText = "Codex subscription app-server execution completes (native_failures={0}; failure={1})" -f ([string]::Join(',', @($fileAuthResult.evidence.native_worker_evidence_failures))), ([string](Get-JsonProperty -Object $fileAuthResult.exit.failure -Name 'message' -Default ''))
     Assert-Equal 'completed' $fileAuthResult.status $fileAuthFailureText
-    Assert-Equal 'recorded subscription response' $fileAuthResult.final_response.text 'Codex app-server captures the final agent message'
+    Assert-Equal "I’m testing Microsoft’s guidance. ÆØÅ" $fileAuthResult.final_response.text 'Codex app-server captures exact Unicode without mojibake'
     Assert-Equal $with.Contract.candidateSkillName $fileAuthResult.evidence.native_skill_isolation.candidate_skill_name 'Codex app-server records the immutable candidate identity'
     Assert-Equal $false $fileAuthResult.evidence.native_skill_isolation.include_instructions_requested 'Codex app-server requests native catalog suppression'
     Assert-Equal 'defense_in_depth_session_config' $fileAuthResult.evidence.native_skill_isolation.include_instructions_verification_method 'Codex app-server does not use config/read as authoritative skill proof'
@@ -1720,6 +1728,15 @@ exit 2
     Assert-True ($fileAuthEvidenceJson -notmatch 'recorded-canary|not-logged' -and $fileAuthEvidenceJson -notmatch [regex]::Escape($fileAuthHome)) 'Codex result evidence does not include the copied credential or auth path'
     $subscriptionLogPath = Join-Path $with.Root 'repo\codex-fake-cli-log.jsonl'
     $subscriptionRecord = Get-Content -LiteralPath $subscriptionLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.PSObject.Properties.Name -contains 'rpc_methods' } | Select-Object -Last 1
+    Assert-True ([bool]$subscriptionRecord.stdin_exact -and [bool]$subscriptionRecord.stdin_utf8_round_trip) 'Codex app-server stdin preserves the Unicode prompt UTF-8 hash'
+    $unicodeCanary = "I’m testing Microsoft’s guidance. ÆØÅ"
+    foreach ($evidenceName in @('codex-app-server-events.jsonl', 'codex-events.jsonl', 'codex-stderr.txt')) {
+        $artifact = @($fileAuthResult.artifacts | Where-Object { [IO.Path]::GetFileName($_.path) -eq $evidenceName })
+        Assert-Equal 1 $artifact.Count "Codex captures $evidenceName"
+        $evidenceText = [IO.File]::ReadAllText((Join-Path $with.Root $artifact[0].path), [Text.UTF8Encoding]::new($false, $true))
+        Assert-True ($evidenceText.Contains($unicodeCanary)) "Codex $evidenceName preserves exact Unicode"
+        Assert-True (-not $evidenceText.Contains([string][char]0xfffd)) "Codex $evidenceName contains no Unicode replacement characters"
+    }
     $codexNativeValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $fileAuthResult -Run (Resolve-RunContract -RunPath $with.Path) -RequestedModel 'gpt-5.6-luna' -ExpectedRunner 'codex' -ExpectedMechanism $fileAuthResult.evidence.delegation.mechanism
     Assert-True ([bool]$codexNativeValidation.Valid) 'Codex app-server result satisfies the common native terminal evidence contract'
     [void](Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $fileAuthResult -Run (Resolve-RunContract -RunPath $with.Path) -RequestedModel 'gpt-5.6-luna' -ExpectedRunner 'codex' -ExpectedMechanism $fileAuthResult.evidence.delegation.mechanism)
@@ -1764,7 +1781,25 @@ exit 2
     Assert-Equal 'ambient_skill_access_detected' $ambientAccessResult.exit.failure.code 'Codex reports the stable ambient skill access failure code'
     Assert-Equal 'unsupported' $ambientAccessResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex does not report ambient exclusion as supported after ambient skill access'
     Assert-True (@($ambientAccessResult.evidence.native_skill_isolation.ambient_skill_accesses_detected).Count -ge 1) 'Codex records the structured ambient skill access'
+    $expectedAmbientPath = Join-Path $fakeBin '.fake-user/.agents/skills/candidate/SKILL.md'
+    Assert-True (@($ambientAccessResult.evidence.native_skill_isolation.ambient_skill_paths_observed) -contains $expectedAmbientPath) 'Codex discovery records the exact platform-native ambient candidate path'
+    Assert-True (@($ambientAccessResult.evidence.native_skill_isolation.ambient_skill_accesses_detected | Where-Object { $_.command.Contains($expectedAmbientPath) }).Count -ge 1) 'Codex runtime access uses the exact discovered native path'
     Remove-Item -LiteralPath $ambientAccessMarker -Force
+
+    # The override eval supplies one identical relative destination. Resolve it
+    # against actual independently allocated Codex projections from recorded arms.
+    $strongNameEvals = Read-RunnerJson -Path (Join-Path $repoRoot 'skills/dotnet-strong-name-signing/evals/evals.json')
+    $overrideRequest = [string]@($strongNameEvals.evals | Where-Object id -eq 2)[0].prompt
+    Assert-True ($overrideRequest -match 'in the relative directory (?<directory>[^ ]+) under this repository\.$') 'strong-name eval keeps an explicit relative directory override'
+    $overridePath = Join-Path $Matches.directory 'signing-key.snk'
+    Assert-True (-not [IO.Path]::IsPathRooted($overridePath)) 'strong-name destination is arm-local'
+    $projectedOutputs = foreach ($armResult in @($fileAuthResult, $ambientAccessResult)) {
+        $cwd = [string]$armResult.evidence.execution_paths.physical_working_directory
+        $destination = [IO.Path]::GetFullPath((Join-Path $cwd $overridePath))
+        Assert-True (Test-PathInside -BasePath $cwd -CandidatePath $destination) 'strong-name destination remains beneath its actual physical arm cwd'
+        $destination
+    }
+    Assert-True ($projectedOutputs[0] -ne $projectedOutputs[1]) 'paired Codex projections resolve the same strong-name override to distinct physical outputs'
 
     $runtimeUnavailableMarker = Join-Path $with.Root 'home\codex-runtime-evidence-unavailable'
     [System.IO.File]::WriteAllText($runtimeUnavailableMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
@@ -2059,7 +2094,7 @@ function New-TestRun {
     [System.IO.File]::WriteAllText((Join-Path $repo 'AGENTS.md'), '# repo-owned-agent-instruction', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $repo '.github\copilot-instructions.md'), '# repo-owned-copilot-instruction', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $repo 'opencode.json'), '{"fixture_project_config":true}', [System.Text.UTF8Encoding]::new($false))
-    $prompt = "# task`r`n`r`nByte fidelity: Δ and emoji 🚀.`r`n" + ("large-prompt-line-0123456789`r`n" * 4096)
+    $prompt = "# task`r`n`r`nByte fidelity: Δ and emoji 🚀. I’m testing Microsoft’s guidance. ÆØÅ`r`n" + ("large-prompt-line-0123456789`r`n" * 4096)
     [System.IO.File]::WriteAllBytes((Join-Path $runRoot 'prompt.md'), [System.Text.UTF8Encoding]::new($false).GetBytes($prompt))
     [System.IO.File]::WriteAllText((Join-Path $homeDirectory 'expected-prompt-sha256.txt'), (Get-Sha256HexFromFile -Path (Join-Path $runRoot 'prompt.md')), [System.Text.UTF8Encoding]::new($false))
     if ($Configuration -eq 'with_skill') {
@@ -2423,6 +2458,7 @@ try {
         grading = @([ordered]@{ text = 'preserved assertion'; passed = $null; evidence = '' })
     })
     $bridgeResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $with.Path -Profile $profilePath
+    $bridgeResult.telemetry.tokens = New-AvailableMetric -Value ([ordered]@{ input_tokens = 18245; cached_input_tokens = 17152; output_tokens = 200; reasoning_output_tokens = 43 })
     $withoutBridgeResult = Invoke-Fake -FakePath $fakePath -Command execute -Run $without.Path -Profile $profilePath
     Write-TestJson -Path $rawPath -Value $bridgeResult
     Write-TestJson -Path $withoutRawPath -Value $withoutBridgeResult
@@ -2587,7 +2623,8 @@ try {
     Assert-Equal 'completed' $portable.execution_status 'bridge carries execution status'
     Assert-Equal 'fixture-model' $portable.model 'bridge carries resolved model'
     Assert-True ($portable.PSObject.Properties.Name -notcontains 'provider') 'bridge removes provider from portable result'
-    Assert-True ($null -eq $portable.total_tokens) 'bridge keeps unavailable total tokens unavailable'
+    Assert-Equal 18445 $portable.total_tokens 'bridge derives total from input plus output without double-counting cache or reasoning'
+    Assert-Equal 17152 $bridgeResult.telemetry.tokens.value.cached_input_tokens 'bridge retains original raw cache telemetry'
     Assert-Equal 0 $portable.tool_calls 'bridge carries available tool-call count'
     Assert-True $portable.isolation.transcript_captured 'bridge carries transcript availability'
     Assert-Equal 'strict' $portable.isolation.level 'bridge carries isolation confidence level'
