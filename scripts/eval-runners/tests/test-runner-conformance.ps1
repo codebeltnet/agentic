@@ -590,28 +590,54 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $initialize = Read-AppServerMessage
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $initialize.id; result = [ordered]@{ serverInfo = [ordered]@{ name = 'recorded-codex'; version = '9.1' } } })
     $initialized = Read-AppServerMessage
-    $configRead = Read-AppServerMessage
-    $candidateConfig = @($arguments | Where-Object { [string]$_ -like 'skills.config=*' } | Select-Object -First 1)
-    $candidateName = if ($candidateConfig.Count -eq 1 -and [string]$candidateConfig[0] -match 'name="(?<name>[^"]+)"') { $Matches['name'] } else { 'candidate' }
-    $includeInstructionsDisabled = @($arguments | Where-Object { [string]$_ -eq 'skills.include_instructions=false' }).Count -eq 1
-    $candidateDisabledRequested = $candidateConfig.Count -eq 1 -and [string]$candidateConfig[0] -match 'enabled=false'
-    Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $configRead.id; result = [ordered]@{ config = [ordered]@{ skills = [ordered]@{ include_instructions = (-not $includeInstructionsDisabled); config = @([ordered]@{ name = $candidateName; enabled = (-not $candidateDisabledRequested) }) } } } })
     $skillsList = Read-AppServerMessage
+    $skillConfigArgs = @($arguments | Where-Object { [string]$_ -like 'skills.config=*' })
+    $candidateName = 'candidate'
+    $includeInstructionsDisabled = @($arguments | Where-Object { [string]$_ -eq 'skills.include_instructions=false' }).Count -eq 1
+    $bundledSkillsDisabled = @($arguments | Where-Object { [string]$_ -eq 'skills.bundled.enabled=false' }).Count -eq 1
+    $nativeSuppressionEnabled = $includeInstructionsDisabled -and $bundledSkillsDisabled
+    $skillConfigText = [string]::Join("`n", @($skillConfigArgs))
+    function Test-SuppressedSkillPath {
+        param([Parameter(Mandatory = $true)][string]$Path)
+        if ([string]::IsNullOrWhiteSpace($skillConfigText)) { return $false }
+        $escapedBackslashPath = $Path.Replace('\', '\\')
+        return $skillConfigText.Contains($Path) -or $skillConfigText.Contains($escapedBackslashPath)
+    }
+    function New-RecordedSkill {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [Parameter(Mandatory = $true)][string]$Path,
+            [bool]$ForceEnabled = $false
+        )
+
+        $enabled = if ($nativeSuppressionEnabled -and -not $ForceEnabled) { -not (Test-SuppressedSkillPath -Path $Path) } else { $true }
+        return [ordered]@{ name = $Name; path = $Path; enabled = [bool]$enabled; scope = 'user'; description = 'fixture' }
+    }
     $candidateAbsent = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-native-skill-candidate-absent') -PathType Leaf
     $candidateEnabledEverywhere = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-native-skill-candidate-enabled') -PathType Leaf
     $candidateEnabledInProjection = (Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-native-skill-candidate-enabled-execute-only') -PathType Leaf) -and ([string](Get-Location).Path -match 'agentic-codex-projection-')
     $candidateEnabled = $candidateEnabledEverywhere -or $candidateEnabledInProjection
-    $ambientCandidatePath = "C:\Users\some-user\.agents\skills\$candidateName\SKILL.md"
+    $newAmbientEnabled = (Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-new-ambient-enabled') -PathType Leaf) -and $nativeSuppressionEnabled -and ([string](Get-Location).Path -match 'agentic-codex-projection-')
+    $duplicateAmbient = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable('HOME')) 'codex-duplicate-ambient') -PathType Leaf
+    $ambientAPath = 'C:\Users\test\.agents\skills\a\SKILL.md'
+    $ambientBPath = 'C:\Users\test\.agents\skills\b\SKILL.md'
+    $ambientCandidatePath = "C:\Users\test\.agents\skills\$candidateName\SKILL.md"
     $skills = [System.Collections.Generic.List[object]]::new()
-    [void]$skills.Add([ordered]@{ name = 'unrelated-skill'; path = 'C:\Users\some-user\.codex\skills\unrelated-skill\SKILL.md'; enabled = $true; scope = 'user'; description = 'fixture' })
+    [void]$skills.Add((New-RecordedSkill -Name 'a' -Path $ambientAPath))
+    [void]$skills.Add((New-RecordedSkill -Name 'b' -Path $ambientBPath))
     if (-not $candidateAbsent) {
-        [void]$skills.Add([ordered]@{ name = $candidateName; path = $ambientCandidatePath; enabled = [bool]$candidateEnabled; scope = 'user'; description = 'fixture candidate' })
+        [void]$skills.Add((New-RecordedSkill -Name $candidateName -Path $ambientCandidatePath -ForceEnabled:$candidateEnabled))
+    }
+    if ($duplicateAmbient) {
+        [void]$skills.Add((New-RecordedSkill -Name 'a' -Path 'D:\alternate-root\.agents\skills\a\SKILL.md'))
+    }
+    if ($newAmbientEnabled) {
+        [void]$skills.Add([ordered]@{ name = 'c'; path = 'C:\Users\test\.agents\skills\c\SKILL.md'; enabled = $true; scope = 'user'; description = 'new fixture' })
     }
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $skillsList.id; result = [ordered]@{ data = @([ordered]@{ cwd = (Get-Location).Path; errors = @(); skills = @($skills.ToArray()) }) } })
     $threadStart = Read-AppServerMessage -AllowEndOfStream
     if ($null -eq $threadStart) {
-        $record.rpc_methods = @($initialize.method, $initialized.method, $configRead.method, $skillsList.method)
-        $record.config_read_params = $configRead.params
+        $record.rpc_methods = @($initialize.method, $initialized.method, $skillsList.method)
         $record.skills_list_params = $skillsList.params
         $record.native_skill_config_args = @($arguments | Where-Object { [string]$_ -like 'skills.*' -or [string]$_ -eq 'shell_environment_policy.inherit=none' })
         [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Depth 50 -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
@@ -695,8 +721,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $record.parent_mcp_configuration_visible = (Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'mcp.json') -PathType Leaf) -or (Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'mcp') -PathType Container)
     $record.parent_agents_file_visible = Test-Path -LiteralPath (Join-Path $record.parent_codex_home 'AGENTS.md') -PathType Leaf
     $record.auth_only_home = [bool]$record.parent_auth_file_visible -and -not [bool]$record.parent_config_file_visible -and -not [bool]$record.parent_skills_directory_visible -and -not [bool]$record.parent_agents_directory_visible -and -not [bool]$record.parent_sessions_directory_visible -and -not [bool]$record.parent_memories_directory_visible -and -not [bool]$record.parent_plugins_directory_visible -and -not [bool]$record.parent_mcp_configuration_visible -and -not [bool]$record.parent_agents_file_visible
-    $record.rpc_methods = @($initialize.method, $initialized.method, $configRead.method, $skillsList.method, $threadStart.method, $turnStart.method, 'thread/read')
-    $record.config_read_params = $configRead.params
+    $record.rpc_methods = @($initialize.method, $initialized.method, $skillsList.method, $threadStart.method, $turnStart.method, 'thread/read')
     $record.skills_list_params = $skillsList.params
     $record.native_skill_config_args = @($arguments | Where-Object { [string]$_ -like 'skills.*' -or [string]$_ -eq 'shell_environment_policy.inherit=none' })
     $record.thread_params = $threadStart.params
@@ -1057,8 +1082,25 @@ exit 2
             Assert-Equal 'read-only,workspace-write,danger-full-access' ([string]::Join(',', @($preflightWith.protocol_observations.sandbox_modes))) 'Codex fixture validates the installed sandbox enum'
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'native_skill_isolation_controls' -and $_.status -eq 'passed' }).Count -eq 1) 'Codex preflight verifies installed native skill controls'
             Assert-Equal 'candidate' $preflightWith.native_skill_isolation.candidate_skill_name 'Codex preflight records candidate identity'
-            Assert-Equal $false $preflightWith.native_skill_isolation.include_instructions_effective 'Codex preflight proves effective native catalog injection is disabled'
-            Assert-Equal 'disabled' $preflightWith.native_skill_isolation.candidate_state 'Codex preflight proves candidate disablement through skills/list'
+            Assert-Equal $false $preflightWith.native_skill_isolation.include_instructions_requested 'Codex preflight requests native catalog injection suppression'
+            Assert-Equal 'defense_in_depth_session_config' $preflightWith.native_skill_isolation.include_instructions_verification_method 'Codex preflight does not use config/read as authoritative skill proof'
+            Assert-Equal 3 $preflightWith.native_skill_isolation.discovered_ambient_skill_count 'Codex preflight discovers every fixture ambient skill entry'
+            Assert-Equal 3 $preflightWith.native_skill_isolation.suppression_selector_count 'Codex preflight suppresses every discovered ambient skill entry'
+            Assert-Equal 'disabled' $preflightWith.native_skill_isolation.candidate_state 'Codex preflight proves ambient candidate disablement through skills/list'
+
+            $duplicateAmbientMarker = Join-Path $with.Root 'home\codex-duplicate-ambient'
+            [IO.File]::WriteAllText($duplicateAmbientMarker, 'fixture', [Text.UTF8Encoding]::new($false))
+            try {
+                $duplicateAmbientPreflight = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
+                Assert-Equal 'compatible' $duplicateAmbientPreflight.status 'Codex preflight handles duplicate-name multi-root ambient skills'
+                Assert-Equal 4 $duplicateAmbientPreflight.native_skill_isolation.discovered_ambient_skill_count 'Codex preflight records duplicate-name ambient entries independently'
+                Assert-Equal 4 $duplicateAmbientPreflight.native_skill_isolation.suppression_selector_count 'Codex preflight emits one suppression selector per ambient entry'
+                Assert-True ([bool]$duplicateAmbientPreflight.native_skill_isolation.duplicate_names_present) 'Codex preflight detects duplicate ambient skill names'
+                Assert-True ([bool]$duplicateAmbientPreflight.native_skill_isolation.duplicate_names_multiple_roots_present) 'Codex preflight detects duplicate ambient skill names across multiple roots'
+                Assert-Equal 4 @($duplicateAmbientPreflight.native_skill_isolation.suppression_selectors | Where-Object { [string]$_.selector_kind -eq 'path' }).Count 'Codex preflight prefers path selectors for every ambient entry'
+            } finally {
+                Remove-Item -LiteralPath $duplicateAmbientMarker -Force
+            }
 
             $individualSchemaMarker = Join-Path $with.Root 'home\codex-schema-individual-v2'
             [IO.File]::WriteAllText($individualSchemaMarker, 'fixture', [Text.UTF8Encoding]::new($false))
@@ -1174,13 +1216,19 @@ exit 2
             Assert-True ($args -contains '--sandbox' -and $args -contains 'danger-full-access') 'Codex grants full operational sandbox permission'
             Assert-True ($args -notcontains '--approve-for-me') 'Codex avoids the conflicting approve-for-me flag'
             Assert-True (@($args | Where-Object { $_ -eq 'skills.include_instructions=false' }).Count -eq 1) 'Codex CLI disables native skill catalog injection at session scope'
-            Assert-True (@($args | Where-Object { $_ -eq 'skills.config=[{name="candidate",enabled=false}]' }).Count -eq 1) 'Codex CLI disables the evaluated candidate native skill at session scope'
+            Assert-True (@($args | Where-Object { $_ -eq 'skills.bundled.enabled=false' }).Count -eq 1) 'Codex CLI disables bundled native skills at session scope'
+            $codexSkillConfigArg = @($args | Where-Object { [string]$_ -like 'skills.config=*' } | Select-Object -First 1)
+            Assert-Equal 1 $codexSkillConfigArg.Count 'Codex CLI emits one structured skills.config selector list'
+            Assert-True ([string]$codexSkillConfigArg[0] -match 'path=') 'Codex CLI uses path-based ambient skill selectors'
+            Assert-True (([string]$codexSkillConfigArg[0]).Contains('C:\\Users\\test\\.agents\\skills\\a\\SKILL.md')) 'Codex CLI suppresses ambient skill A by path'
+            Assert-True (([string]$codexSkillConfigArg[0]).Contains('C:\\Users\\test\\.agents\\skills\\b\\SKILL.md')) 'Codex CLI suppresses ambient skill B by path'
             $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
             Assert-Equal 'gpt-5.6-luna' $args[$modelIndex + 1] 'Codex opaque model selector propagates to the CLI invocation'
             $outputIndex = [Array]::IndexOf([string[]]$args, '--output-last-message')
             Assert-Equal (Join-Path $resultWith.evidence.execution_paths.physical_run_root 'evidence\codex-final.txt') $args[$outputIndex + 1] 'Codex output path uses the runner-declared physical projection'
             Assert-Equal 'candidate' $resultWith.evidence.native_skill_isolation.candidate_skill_name 'Codex CLI evidence records candidate identity'
-            Assert-Equal $false $resultWith.evidence.native_skill_isolation.include_instructions_effective 'Codex CLI evidence proves effective include_instructions=false model-free'
+            Assert-Equal $false $resultWith.evidence.native_skill_isolation.include_instructions_requested 'Codex CLI requests include_instructions=false as defense in depth'
+            Assert-Equal 3 $resultWith.evidence.native_skill_isolation.suppression_selector_count 'Codex CLI records one suppression selector per discovered ambient skill'
             Assert-Equal 'disabled' $resultWith.evidence.native_skill_isolation.candidate_state 'Codex CLI evidence records disabled candidate native skill'
             Assert-Equal 'debug prompt-input' $resultWith.evidence.native_skill_isolation.prompt_input_verification_method 'Codex CLI uses debug prompt-input for model-visible native skill suppression proof'
             Assert-True ([bool]$resultWith.evidence.native_skill_isolation.prompt_input_catalog_suppressed) 'Codex CLI prompt-input proof reports no native skill catalog'
@@ -1606,16 +1654,33 @@ exit 2
     Assert-True (@($fileAuthPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Codex subscription authentication is explicit in preflight'
     Assert-True (@($fileAuthPreflight.checks | Where-Object { $_.name -eq 'native_skill_isolation_controls' -and $_.status -eq 'passed' }).Count -eq 1) 'Codex preflight proves installed native skill config controls model-free'
     Assert-Equal $with.Contract.candidateSkillName $fileAuthPreflight.native_skill_isolation.candidate_skill_name 'Codex preflight carries the control-plane candidate identity'
-    Assert-Equal $false $fileAuthPreflight.native_skill_isolation.include_instructions_effective 'Codex preflight proves effective skills.include_instructions=false'
+    Assert-Equal $false $fileAuthPreflight.native_skill_isolation.include_instructions_requested 'Codex preflight requests skills.include_instructions=false'
+    Assert-Equal 3 $fileAuthPreflight.native_skill_isolation.discovered_ambient_skill_count 'Codex preflight discovers all ambient fixture skills'
+    Assert-Equal 3 $fileAuthPreflight.native_skill_isolation.suppression_selector_count 'Codex preflight suppresses all ambient fixture skills'
     $fileAuthResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
     $fileAuthFailureText = "Codex subscription app-server execution completes (native_failures={0}; failure={1})" -f ([string]::Join(',', @($fileAuthResult.evidence.native_worker_evidence_failures))), ([string](Get-JsonProperty -Object $fileAuthResult.exit.failure -Name 'message' -Default ''))
     Assert-Equal 'completed' $fileAuthResult.status $fileAuthFailureText
     Assert-Equal 'recorded subscription response' $fileAuthResult.final_response.text 'Codex app-server captures the final agent message'
     Assert-Equal $with.Contract.candidateSkillName $fileAuthResult.evidence.native_skill_isolation.candidate_skill_name 'Codex app-server records the immutable candidate identity'
     Assert-Equal $false $fileAuthResult.evidence.native_skill_isolation.include_instructions_requested 'Codex app-server requests native catalog suppression'
-    Assert-Equal $false $fileAuthResult.evidence.native_skill_isolation.include_instructions_effective 'Codex app-server proves native catalog suppression through config/read'
+    Assert-Equal 'defense_in_depth_session_config' $fileAuthResult.evidence.native_skill_isolation.include_instructions_verification_method 'Codex app-server does not use config/read as authoritative skill proof'
+    Assert-Equal 3 $fileAuthResult.evidence.native_skill_isolation.discovered_ambient_skill_count 'Codex app-server discovers all ambient fixture skills before behavior'
+    Assert-Equal 3 $fileAuthResult.evidence.native_skill_isolation.suppression_selector_count 'Codex app-server applies one selector for every discovered ambient skill'
     Assert-Equal 'disabled' $fileAuthResult.evidence.native_skill_isolation.candidate_state 'Codex app-server records disabled candidate native skill state'
     Assert-Equal 1 $fileAuthResult.evidence.native_skill_isolation.candidate_matches_count 'Codex app-server records the disabled candidate match'
+    Assert-Equal 0 @($fileAuthResult.evidence.native_skill_isolation.ambient_skill_effective_state | Where-Object { [string]$_.verification_state -eq 'enabled' }).Count 'Codex app-server verifies no discovered ambient skill remains enabled'
+    Assert-Equal 0 @($fileAuthResult.evidence.native_skill_isolation.newly_enabled_ambient_skills).Count 'Codex app-server verifies no newly enabled ambient skill appears'
+    $discoveryContext = $fileAuthResult.evidence.native_skill_isolation.discovery_context
+    $behavioralContext = $fileAuthResult.evidence.native_skill_isolation.behavioral_context
+    Assert-Equal $discoveryContext.codex_executable $behavioralContext.codex_executable 'Codex discovery and behavior use the same executable'
+    Assert-Equal $discoveryContext.physical_working_directory $behavioralContext.physical_working_directory 'Codex discovery and behavior use the same physical cwd'
+    Assert-Equal $discoveryContext.home $behavioralContext.home 'Codex discovery and behavior use the same HOME'
+    Assert-Equal $discoveryContext.userprofile $behavioralContext.userprofile 'Codex discovery and behavior use the same USERPROFILE'
+    Assert-Equal $discoveryContext.codex_home $behavioralContext.codex_home 'Codex discovery and behavior use the same auth-only CODEX_HOME'
+    Assert-Equal 0 $discoveryContext.per_skill_suppression_selector_count 'Codex discovery omits per-skill suppression selectors'
+    Assert-Equal 3 $behavioralContext.per_skill_suppression_selector_count 'Codex behavior applies per-skill suppression selectors'
+    Assert-True (-not [bool]$discoveryContext.native_skill_suppression_enabled) 'Codex discovery runs without native skill suppression controls'
+    Assert-True ([bool]$behavioralContext.native_skill_suppression_enabled) 'Codex behavior runs with native skill suppression controls'
     Assert-Equal 'supported' $fileAuthResult.evidence.native_skill_isolation.runtime_access_observation 'Codex app-server supports structured runtime ambient-skill access observation'
     Assert-Equal 0 @($fileAuthResult.evidence.native_skill_isolation.ambient_skill_accesses_detected).Count 'Codex app-server records no ambient skill accesses for the normal fixture'
     Assert-Equal 'recorded-subscription-thread' $fileAuthResult.session.id 'Codex app-server preserves thread identity'
@@ -1680,8 +1745,17 @@ exit 2
     Assert-Equal 'enabled' $candidateEnabledResult.evidence.native_skill_isolation.candidate_state 'Codex records the enabled candidate state'
     Assert-Equal 0 @($candidateEnabledResult.evidence.app_server.turn_starts).Count 'Codex does not start a model turn after native-skill verification fails'
     $candidateEnabledLog = Get-Content -LiteralPath (Join-Path $without.Root 'repo\codex-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.PSObject.Properties.Name -contains 'rpc_methods' } | Select-Object -Last 1
-    Assert-Equal 'initialize,initialized,config/read,skills/list' ([string]::Join(',', @($candidateEnabledLog.rpc_methods))) 'Codex app-server verification failure closes before thread/start or turn/start'
+    Assert-Equal 'initialize,initialized,skills/list' ([string]::Join(',', @($candidateEnabledLog.rpc_methods))) 'Codex app-server verification failure closes before thread/start or turn/start'
     Remove-Item -LiteralPath $candidateEnabledMarker -Force
+
+    $newAmbientMarker = Join-Path $without.Root 'home\codex-new-ambient-enabled'
+    [System.IO.File]::WriteAllText($newAmbientMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
+    $newAmbientResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $without.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'incompatible' $newAmbientResult.status 'Codex fails closed when behavioral skills/list exposes a newly enabled ambient skill'
+    Assert-Equal 'new_enabled_ambient_native_skill' $newAmbientResult.exit.failure.code 'Codex reports the stable newly enabled ambient skill failure code'
+    Assert-Equal 1 @($newAmbientResult.evidence.native_skill_isolation.newly_enabled_ambient_skills | Where-Object { [string]$_.name -eq 'c' }).Count 'Codex records the newly enabled ambient skill'
+    Assert-Equal 0 @($newAmbientResult.evidence.app_server.turn_starts).Count 'Codex does not start a model turn after a newly enabled ambient skill appears'
+    Remove-Item -LiteralPath $newAmbientMarker -Force
 
     $ambientAccessMarker = Join-Path $without.Root 'home\codex-ambient-skill-access'
     [System.IO.File]::WriteAllText($ambientAccessMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
@@ -1816,13 +1890,16 @@ exit 2
     Assert-Equal 'unsupported' $ambientInstructionResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex downgrades ambient candidate-skill exclusion only for relevant instruction/configuration evidence'
     Assert-True ([string]$ambientInstructionResult.exit.failure.message -match 'unexpected_instruction_sources') 'Codex instruction-source reason survives in normalized exit failure'
     Remove-Item -LiteralPath $ambientInstructionMarker -Force
-    Assert-Equal 'initialize,initialized,config/read,skills/list,thread/start,turn/start,thread/read' ([string]::Join(',', @($subscriptionRecord.rpc_methods))) 'Codex app-server verifies native skills before the first model turn and then follows the required post-completion read order'
+    Assert-Equal 'initialize,initialized,skills/list,thread/start,turn/start,thread/read' ([string]::Join(',', @($subscriptionRecord.rpc_methods))) 'Codex app-server verifies native skills before the first model turn and then follows the required post-completion read order'
     Assert-True (@($subscriptionRecord.native_skill_config_args | Where-Object { $_ -eq 'skills.include_instructions=false' }).Count -eq 1) 'Codex app-server process receives session native-catalog suppression'
-    Assert-True (@($subscriptionRecord.native_skill_config_args | Where-Object { $_ -eq 'skills.config=[{name="candidate",enabled=false}]' }).Count -eq 1) 'Codex app-server process receives the session candidate disable selector'
-    Assert-Equal 'config/read' $fileAuthResult.evidence.app_server.config_read_request.method 'Codex evidence retains config/read request'
+    Assert-True (@($subscriptionRecord.native_skill_config_args | Where-Object { $_ -eq 'skills.bundled.enabled=false' }).Count -eq 1) 'Codex app-server process receives bundled native-skill suppression'
+    $subscriptionSkillConfig = @($subscriptionRecord.native_skill_config_args | Where-Object { [string]$_ -like 'skills.config=*' } | Select-Object -First 1)
+    Assert-Equal 1 $subscriptionSkillConfig.Count 'Codex app-server process receives one structured ambient selector list'
+    Assert-True ([string]$subscriptionSkillConfig[0] -match 'path=') 'Codex app-server uses path selectors for ambient skills'
+    Assert-True ($null -eq $fileAuthResult.evidence.app_server.config_read_request) 'Codex evidence does not use config/read request for native-skill isolation'
     Assert-Equal 'skills/list' $fileAuthResult.evidence.app_server.skills_list_request.method 'Codex evidence retains skills/list request'
     Assert-True ([bool]$fileAuthResult.evidence.app_server.skills_list_request.params.forceReload) 'Codex skills/list verification uses forceReload=true'
-    Assert-Equal $false $fileAuthResult.evidence.app_server.config_read_response.result.config.skills.include_instructions 'Codex evidence proves effective include_instructions=false'
+    Assert-True ($null -eq $fileAuthResult.evidence.app_server.config_read_response) 'Codex evidence does not require config/read response for native-skill isolation'
     Assert-Equal 'gpt-5.6-luna' $subscriptionRecord.thread_params.model 'Codex app-server thread receives the requested model'
     Assert-True ([bool]$subscriptionRecord.thread_params.ephemeral) 'Codex app-server thread is ephemeral'
     Assert-Equal 'read-only' $subscriptionRecord.thread_params.sandbox 'Codex app-server thread uses the installed request enum'

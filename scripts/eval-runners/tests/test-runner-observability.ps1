@@ -291,7 +291,8 @@ if (-not [string]::IsNullOrWhiteSpace($heartbeatOverride)) {
 }
 $homeRoot = [Environment]::GetEnvironmentVariable('HOME')
 $isProjectedExecution = [string](Get-Location).Path -match 'agentic-codex-projection-'
-$mode = if ($isProjectedExecution -and (
+$nativeSuppressionEnabled = @($arguments | Where-Object { [string]$_ -eq 'skills.include_instructions=false' -or [string]$_ -eq 'skills.bundled.enabled=false' }).Count -gt 0
+$mode = if ($isProjectedExecution -and $nativeSuppressionEnabled -and (
     (-not [string]::IsNullOrWhiteSpace($homeRoot) -and (Test-Path -LiteralPath (Join-Path $homeRoot 'codex-observability-timeout') -PathType Leaf)) -or
     (Test-Path -LiteralPath (Join-Path (Get-Location).Path 'codex-observability-timeout') -PathType Leaf)
 )) { 'timeout' } else { 'success' }
@@ -533,19 +534,16 @@ if ($arguments -contains 'app-server' -and $arguments -contains '--stdio') {
     })
 
     $null = Read-AppServerMessage
-    $configRead = Read-AppServerMessage
-    $candidateConfig = @($arguments | Where-Object { [string]$_ -like 'skills.config=*' } | Select-Object -First 1)
-    $candidateName = if ($candidateConfig.Count -eq 1 -and [string]$candidateConfig[0] -match 'name="(?<name>[^"]+)"') { $Matches['name'] } else { 'candidate' }
-    Write-AppServerMessage ([ordered]@{
-        jsonrpc = '2.0'
-        id = $configRead.id
-        result = [ordered]@{ config = [ordered]@{ skills = [ordered]@{ include_instructions = $false; config = @([ordered]@{ name = $candidateName; enabled = $false }) } } }
-    })
     $skillsList = Read-AppServerMessage
+    $candidateName = 'candidate'
+    $ambientCandidatePath = "C:\Users\some-user\.agents\skills\$candidateName\SKILL.md"
+    $skillConfigText = [string]::Join("`n", @($arguments | Where-Object { [string]$_ -like 'skills.config=*' }))
+    $ambientCandidateEscaped = $ambientCandidatePath.Replace('\', '\\')
+    $ambientCandidateEnabled = -not ($skillConfigText.Contains($ambientCandidatePath) -or $skillConfigText.Contains($ambientCandidateEscaped))
     Write-AppServerMessage ([ordered]@{
         jsonrpc = '2.0'
         id = $skillsList.id
-        result = [ordered]@{ data = @([ordered]@{ cwd = (Get-Location).Path; errors = @(); skills = @([ordered]@{ name = $candidateName; path = "C:\Users\some-user\.agents\skills\$candidateName\SKILL.md"; enabled = $false; scope = 'user'; description = 'observability candidate' }) }) }
+        result = [ordered]@{ data = @([ordered]@{ cwd = (Get-Location).Path; errors = @(); skills = @([ordered]@{ name = $candidateName; path = $ambientCandidatePath; enabled = $ambientCandidateEnabled; scope = 'user'; description = 'observability candidate' }) }) }
     })
     $threadStart = Read-AppServerMessage -AllowEndOfStream
     if ($null -eq $threadStart) { exit 0 }
@@ -1151,7 +1149,7 @@ foreach ($ev in $events) {
     # ------------------------------------------------------------------
     $codexTimeout = Invoke-CodexAppServerFixture -Mode 'timeout' -HeartbeatSeconds 0.15 -TimeoutSeconds 2
     Assert-Equal 0 $codexTimeout.ExitCode 'codex app-server timeout: runner still returns a terminal result object'
-    Assert-True ($codexTimeout.ElapsedSeconds -lt 12) ("codex app-server timeout: transport remains bounded; elapsed={0:N3}s" -f $codexTimeout.ElapsedSeconds)
+    Assert-True ($codexTimeout.ElapsedSeconds -lt 20) ("codex app-server timeout: transport remains bounded after discovery/verification probes; elapsed={0:N3}s" -f $codexTimeout.ElapsedSeconds)
     Assert-Equal 'incompatible' ([string]$codexTimeout.Result.status) 'codex app-server timeout: native evidence still fails closed after the bounded timeout'
     Assert-Equal 'native_skill_isolation_unverified' ([string]$codexTimeout.Result.exit.failure.code) 'codex app-server timeout: the failure remains structured'
     Assert-True ([string]$codexTimeout.Result.exit.failure.message -match 'Codex did not finish before timeout_seconds') 'codex app-server timeout: the failure message preserves the bounded timeout detail'
