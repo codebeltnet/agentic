@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-runner-descriptor/1",
+  "title": "Codebelt Agentic Eval Runner Descriptor",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "protocol_version",
+    "name",
+    "version",
+    "platforms",
+    "harness",
+    "capabilities",
+    "delegation",
+    "supported_telemetry",
+    "configuration_profiles",
+    "tool_profiles"
+  ],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-runner-descriptor/1" },
+    "protocol_version": { "const": "codebeltnet/agentic/eval-runner-protocol/1" },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "platforms": { "type": "array", "items": { "type": "string" } },
+    "harness": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "enum": ["supported", "conditional", "unsupported"] },
+      "required": ["single_turn", "scripted_multi_turn_same_session"]
+    },
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dispatch_owner",
+        "mode",
+        "mechanism",
+        "worker_role",
+        "full_capability",
+        "model_lock",
+        "working_directory",
+        "result_capture",
+        "capacity",
+        "nested_model_execution"
+      ],
+      "properties": {
+        "dispatch_owner": { "enum": ["orchestrator", "runner"] },
+        "mode": { "enum": ["native_worker", "conditional", "unsupported"] },
+        "mechanism": { "type": "string", "minLength": 1 },
+        "worker_role": { "type": "string", "minLength": 1 },
+        "full_capability": { "enum": ["supported", "conditional", "unsupported"] },
+        "model_lock": { "enum": ["supported", "conditional", "unsupported"] },
+        "working_directory": { "enum": ["supported", "conditional", "unsupported"] },
+        "result_capture": { "enum": ["supported", "conditional", "unsupported"] },
+        "capacity": { "enum": ["supported", "conditional", "unsupported", "harness_authoritative"] },
+        "nested_model_execution": { "const": false }
+      }
+    },
+    "supported_telemetry": { "type": "array", "items": { "type": "string" } },
+    "configuration_profiles": { "type": "array", "items": { "type": "string" } },
+    "tool_profiles": { "type": "array", "items": { "type": "string" } }
+  }
+}

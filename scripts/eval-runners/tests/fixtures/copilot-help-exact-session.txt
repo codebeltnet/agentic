@@ -1,0 +1,12 @@
+Usage: copilot [options]
+  -C, --directory <directory>             Working directory
+  --model <model>                         Model selector
+  --output-format <format>                Structured output format
+  --allow-all                             Enable all permissions
+  --allow-all-tools                       Allow tools
+  --no-ask-user                           Disable prompts
+  --disable-builtin-mcps                  Disable built-in MCP servers
+  --secret-env-vars <names>               Secret environment variables
+  --no-auto-update                        Disable updates
+  --resume <session-id>                   Resume a previous Copilot session by its exact session id
+  --continue                              Continue the most recent session

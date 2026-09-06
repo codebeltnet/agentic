@@ -1,0 +1,4 @@
+{"type":"session.start","timestamp":"2026-01-01T00:00:01.000Z","data":{"sessionId":"fixture-copilot-session"}}
+{"type":"assistant.message","timestamp":"2026-01-01T00:00:02.000Z","data":{"model":"claude-haiku-4.5","content":"copilot scripted turn one"}}
+{"type":"assistant.usage","timestamp":"2026-01-01T00:00:03.000Z","data":{"model":"claude-haiku-4.5","inputTokens":2,"outputTokens":3}}
+{"type":"session.task_complete","timestamp":"2026-01-01T00:00:04.000Z","data":{}}

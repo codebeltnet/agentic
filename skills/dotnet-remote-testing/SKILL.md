@@ -1,7 +1,7 @@
 ---
 name: dotnet-remote-testing
 description: >
-  Run .NET tests inside a resolved remote Docker environment — Visual Studio's Remote Testing without hand-writing container plumbing. Invoking this skill IS the request: run the tests immediately. Never reply with a menu of options or a questionnaire. Use when asked to remote test, run tests in Docker or a container, target a specific .NET SDK, list or select test environments, or honor an existing testenvironments.json. Honors configured Docker environments, or derives them from Microsoft's live .NET release index using mcr.microsoft.com/dotnet/sdk images, plus codebeltnet/ubuntu-testrunner for multi-targeted repos, via the runner scripts/remote-test.cs. Docker only; WSL and SSH are unsupported. Do NOT use to author or refactor test code, choose a testing framework, generate Dockerfiles, or run tests on the host.
+  Use when the user wants to run, list, or plan .NET tests in Docker remote-test environments, including `testenvironments.json` or a requested SDK/container. Do not use to write or refactor tests, create Dockerfiles, use WSL/SSH, or run tests on the host.
 compatibility: >
   Requires the .NET 10 SDK or later (`dotnet run --file`), a running Docker daemon, and PowerShell 7+. Zero-config discovery needs network access; a cache enables offline reuse.
 ---

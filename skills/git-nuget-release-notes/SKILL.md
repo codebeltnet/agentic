@@ -1,7 +1,7 @@
 ---
 name: git-nuget-release-notes
 description: >
-  Create or update per-package NuGet release notes from git history for .NET repositories that store cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files. Use this skill whenever the user asks for NuGet release notes, `PackageReleaseNotes.txt`, per-assembly or per-package release notes, or wants git commits turned into package release notes instead of a repo-wide changelog. Treat requests like "update PackageReleaseNotes.txt", "write NuGet release notes from git", "summarize this release per assembly", or "create missing package release notes under .nuget" as automatic triggers. The skill discovers packable `src/` projects, resolves concrete release version and availability per package, creates missing files when needed, preserves cumulative newest-first history, reduces each package to its surviving base-to-HEAD delta before using history as context, and avoids raw commit-log dumps or unsupported claims.
+  Use when the user wants per-package NuGet release notes in cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files, including creating missing files for packable `src/` projects. Do not use for repository `CHANGELOG.md`, GitHub releases, or package README work.
 ---
 
 # Git NuGet Release Notes

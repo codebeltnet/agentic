@@ -165,7 +165,7 @@
       if (!run) return '<article class="run-card"><div class="run-card-header ' + kind + '">' + runLabel(config) + '</div><div class="empty">Run not recorded.</div></article>';
       const summary = gradeSummary(run);
       const rate = passRate(run);
-      const meta = [run.model, run.provider, run.harness].filter(Boolean).join(' · ') || 'Runtime details not recorded';
+      const meta = [run.model, run.harness].filter(Boolean).join(' · ') || 'Runtime details not recorded';
       let html = '<article class="run-card"><div class="run-card-header ' + kind + '">' + runLabel(config) + '<span class="run-meta">' + esc(meta) + '</span></div>';
       html += '<div class="metric-list">';
       html += metric('Turns', run.metrics.turns, config);
@@ -303,7 +303,7 @@
     document.getElementById('eval-select').addEventListener('change', e => { current = Number(e.target.value); renderOutputs(); });
     document.addEventListener('keydown', e => { if (e.target.tagName === 'TEXTAREA') return; if (e.key === 'ArrowLeft') document.getElementById('prev').click(); if (e.key === 'ArrowRight') document.getElementById('next').click(); });
     document.getElementById('skill-name').textContent = DATA.skill_name || 'skill';
-    document.getElementById('run-meta').textContent = [DATA.metadata && DATA.metadata.model, DATA.metadata && DATA.metadata.provider, DATA.metadata && DATA.metadata.completed_runs + '/' + DATA.metadata.expected_runs + ' runs'].filter(Boolean).join(' · ');
+    document.getElementById('run-meta').textContent = [DATA.metadata && DATA.metadata.model, DATA.metadata && DATA.metadata.completed_runs + '/' + DATA.metadata.expected_runs + ' runs'].filter(Boolean).join(' · ');
     for (let i = 0; i < (DATA.evals || []).length; i++) { const option = document.createElement('option'); option.value = String(i); option.textContent = (i + 1) + '. ' + DATA.evals[i].name; document.getElementById('eval-select').appendChild(option); }
     renderOutputs(); renderBenchmark(); renderSkill();
   </script>

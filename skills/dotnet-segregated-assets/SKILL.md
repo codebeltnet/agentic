@@ -1,7 +1,7 @@
 ---
 name: dotnet-segregated-assets
 description: >
-  Migrate or configure an ASP.NET Core web application so developers keep authoring static files in the conventional wwwroot while deployed static content is served by Codebelt Static Content Provider (codebeltnet/web-cdn-origin:2.0.0), a separate asset host rather than the web app. Use when asked to segregate static assets, move wwwroot off the web app, stop shipping wwwroot with the app, or reconcile Cuemon App/CDN TagHelpers with a segregated topology. Reuse existing Cuemon or project abstractions, distinguish App assets from shared CDN assets, preserve Static Web Assets, and verify publish/local invariants deterministically. Do NOT use to build a general-purpose CDN or migrate non-ASP.NET static sites.
+  Use when the user wants an ASP.NET Core app to keep authoring static files in `wwwroot` while serving deployed app assets from `codebeltnet/web-cdn-origin`, including Cuemon `app-*`/`cdn-*` migration. Do not use for general CDN design or non-ASP.NET sites.
 compatibility: >
   Requires the .NET SDK 10+ and PowerShell 7+. NuGet.org access is required when plan resolves an existing Cuemon package reference. Docker is optional (only for the local origin). CI guidance targets GitHub Actions, which is the assumed delivery surface.
 ---

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-orchestration-plan/1",
+  "title": "Codebelt Agentic Eval Native Worker Orchestration Plan",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "protocol_version",
+    "runner",
+    "model",
+    "dispatch_owner",
+    "requested_concurrency",
+    "parallel_dispatch_required",
+    "minimum_parallel_workers",
+    "native_worker_required",
+    "parent_executes_arms",
+    "nested_model_execution",
+    "arms"
+  ],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-orchestration-plan/1" },
+    "protocol_version": { "const": "codebeltnet/agentic/eval-runner-protocol/1" },
+    "runner": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "dispatch_owner": { "enum": ["orchestrator", "runner"] },
+    "requested_concurrency": { "type": "integer", "minimum": 1 },
+    "parallel_dispatch_required": { "type": "boolean" },
+    "minimum_parallel_workers": { "type": "integer", "minimum": 1 },
+    "native_worker_required": { "const": true },
+    "parent_executes_arms": { "const": false },
+    "nested_model_execution": { "const": false },
+    "arms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["worker_id", "eval_id", "eval_name", "configuration", "depends_on", "parent_paths", "dispatch_owner", "worker"],
+        "properties": {
+          "worker_id": { "type": "string", "minLength": 1 },
+          "eval_id": { "type": "integer", "minimum": 1 },
+          "eval_name": { "type": "string", "minLength": 1 },
+          "configuration": { "enum": ["with_skill", "without_skill"] },
+          "dispatch_owner": { "enum": ["orchestrator", "runner"] },
+          "depends_on": { "type": "array", "maxItems": 0 },
+          "parent_paths": {
+            "type": "object",
+            "required": ["run_manifest", "execution_result", "result"],
+            "properties": {
+              "run_manifest": { "type": "string", "minLength": 1 },
+              "execution_result": { "type": "string", "minLength": 1 },
+              "result": { "type": "string", "minLength": 1 }
+            }
+          },
+          "worker": {
+            "type": "object",
+            "required": [
+              "worker_id", "eval_id", "eval_name", "configuration", "run_manifest", "run_manifest_path",
+              "model", "one_arm_only", "paired_arm_visible", "grading_material_visible", "parent_executes_arm",
+              "dispatch_owner", "runner_execute_invocation", "nested_model_execution", "model_execution_count"
+            ],
+            "properties": {
+              "worker_id": { "type": "string", "minLength": 1 },
+              "eval_id": { "type": "integer", "minimum": 1 },
+              "eval_name": { "type": "string", "minLength": 1 },
+              "configuration": { "enum": ["with_skill", "without_skill"] },
+              "run_manifest": { "type": "string", "minLength": 1 },
+              "run_manifest_path": { "type": "string", "minLength": 1 },
+              "model": { "type": "string", "minLength": 1 },
+              "one_arm_only": { "const": true },
+              "paired_arm_visible": { "const": false },
+              "grading_material_visible": { "const": false },
+              "parent_executes_arm": { "const": false },
+              "dispatch_owner": { "enum": ["orchestrator", "runner"] },
+              "runner_execute_invocation": { "enum": ["forbidden", "required"] },
+              "nested_model_execution": { "const": false },
+              "model_execution_count": { "const": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

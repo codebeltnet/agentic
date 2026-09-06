@@ -1,0 +1,5 @@
+{"type":"step_start","timestamp":"2026-01-01T00:00:01.000Z","sessionID":"fixture-opencode-session","modelID":"opencode/muse-spark-1.2-contributor-free","part":{"id":"fixture-step"}}
+{"type":"text","timestamp":"2026-01-01T00:00:02.000Z","sessionID":"fixture-opencode-session","modelID":"opencode/muse-spark-1.2-contributor-free","part":{"text":"fixture response"}}
+{"type":"tool_use","timestamp":"2026-01-01T00:00:03.000Z","sessionID":"fixture-opencode-session","modelID":"opencode/muse-spark-1.2-contributor-free","part":{"tool":"read"}}
+{"type":"step_finish","timestamp":"2026-01-01T00:00:04.000Z","sessionID":"fixture-opencode-session","modelID":"opencode/muse-spark-1.2-contributor-free","part":{"tokens":{"input":12,"output":4},"cost":0.01}}
+{"type":"future.event.v99","payload":"unknown"}

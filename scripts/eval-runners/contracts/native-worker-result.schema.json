@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-native-worker-result/1",
+  "title": "Codebelt Agentic Native Worker Terminal Result",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "run_id",
+    "session",
+    "status",
+    "run",
+    "final_response",
+    "timing",
+    "exit",
+    "isolation",
+    "telemetry",
+    "evidence",
+    "capture",
+    "artifacts",
+    "warnings",
+    "compatibility_deviations",
+    "attempt_count"
+  ],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-native-worker-result/1" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "session": {
+      "type": "object",
+      "required": ["id", "fresh", "resumed"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "fresh": { "const": true },
+        "resumed": { "const": false }
+      }
+    },
+    "status": { "enum": ["completed", "failed", "timed_out", "cancelled", "incompatible"] },
+    "run": {
+      "type": "object",
+      "required": ["eval_id", "eval_name", "configuration"],
+      "properties": {
+        "eval_id": { "type": "integer", "minimum": 1 },
+        "eval_name": { "type": "string", "minLength": 1 },
+        "configuration": { "enum": ["with_skill", "without_skill"] }
+      }
+    },
+    "final_response": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["available", "unavailable"] },
+        "text": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "required": ["started_utc", "finished_utc", "duration_seconds"],
+      "properties": {
+        "started_utc": { "type": "string", "format": "date-time" },
+        "finished_utc": { "type": "string", "format": "date-time" },
+        "duration_seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "exit": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "type": ["integer", "null"] },
+        "failure": {}
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "required": ["capabilities", "mechanisms"],
+      "properties": {
+        "capabilities": { "type": "object" },
+        "mechanisms": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "telemetry": { "type": "object" },
+    "evidence": {
+      "type": "object",
+      "required": ["delegation"],
+      "properties": {
+        "delegation": { "type": "object" }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "required": ["source", "terminal", "worker_authored"],
+      "properties": {
+        "source": { "const": "harness_native_transport" },
+        "terminal": { "const": true },
+        "worker_authored": { "const": false }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "scope", "sha256", "size", "media_type"]
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "compatibility_deviations": { "type": "array", "items": { "type": "string" } },
+    "attempt_count": { "const": 1 }
+  }
+}

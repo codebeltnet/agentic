@@ -5,19 +5,21 @@
 .DESCRIPTION
     This script computes and prints. It never executes a prompt, never spawns an agent, and never calls a model.
     It turns skills/<name>/evals/evals.json into a paste-ready evaluation package that a human can run in whatever
-    harness, provider, and model they choose, then validates the results that come back.
+    harness and model they choose, then validates the results that come back.
 
     Prepare mode writes one directory per eval. The grading key and result stubs stay at the eval-case level, outside
-    the two hermetic run directories a worker actually sees:
+    the two isolated run directories a worker actually sees:
       eval-metadata.json        id, name, prompt, expected output, assertions, fixtures, hashes, assumptions
       results/                  one prefilled result stub per configuration
-      with_skill/               a hermetic run: prompt.md, run.json, repo/ (materialized fixtures), home/, skill/<name>/
+      with_skill/               an isolated run: prompt.md, run.json, repo/ (materialized fixtures), home/, skill/<name>/
       without_skill/            the same run without any skill/ directory and no skill instructions
 
-    Each run directory is the worker's sandbox root: repo/ is the working tree, home/ is an isolated profile, and skill/
+    Each run directory is the worker's staged root: repo/ is the working tree, home/ is an isolated profile, and skill/
     (with_skill only) holds the candidate skill revision. run.json is a harness-neutral contract naming only paths inside
-    the run directory. Preparation validates the isolation invariants and fails early if a package would let a baseline
-    reach the skill, let a worker reach the source repository, or stage mismatched fixtures.
+    the run directory. The selected runner enforces the isolation and reports strict confidence when it also proves hard
+    filesystem confinement or pragmatic confidence when it does not. Preparation validates the isolation invariants and
+    fails early if a package would let a baseline reach the skill, stage the source repository into a run, or stage
+    mismatched fixtures.
 
     Collect mode reads a prepared package plus whatever result files were filled in, validates them, and invokes the
     packaged Anthropic skill-creator aggregator and static eval viewer after writing a deterministic comparison. The
@@ -42,6 +44,39 @@
 .PARAMETER Force
     Overwrite an existing iteration directory.
 
+.PARAMETER Runner
+    Package-local Eval Runner id written to execution-profile.json when -CodebeltReference is not used. GitHub Copilot
+    and Codex can resolve repository-defined default models; OpenCode requires an explicit model selector.
+
+.PARAMETER Model
+    Runner-native model selector written to execution-profile.json when -CodebeltReference is not used. When omitted for
+    Codex, preparation selects gpt-5.6-luna with low reasoning. When omitted for GitHub Copilot, preparation selects the
+    Codebelt Reference model claude-haiku-4.5. Preparation validates the resolved model against current harness discovery.
+
+.PARAMETER CodebeltReference
+    Resolve the Codebelt reference configuration by discovering current GitHub Copilot CLI models and selecting
+    claude-haiku-4.5 only when it is still available.
+
+.PARAMETER ModelCatalogPath
+    Optional deterministic catalog JSON used by the model discovery helper. Intended for tests and offline validation.
+
+.PARAMETER ReasoningEffort
+    Optional runner-supported reasoning/effort setting written to execution-profile.json. Codex defaults to low
+    when this is omitted.
+
+.PARAMETER ConfigurationProfile
+    Runner configuration profile. Defaults to isolated-default.
+
+.PARAMETER ToolProfile
+    Runner tool profile. Defaults to default.
+
+.PARAMETER TimeoutSeconds
+    Per-arm runner timeout. Defaults to 900 seconds.
+
+.PARAMETER Concurrency
+    Requested concurrency. Defaults to 16 for Codex and GitHub Copilot. OpenCode defaults to 2 when this parameter is
+    omitted; an explicitly bound value is always honored. It does not change paired-arm semantics.
+
 .PARAMETER Changed
     Prepares a package for every repo-managed skill this branch changed, including uncommitted work. This is the form
     the eval completion gate uses after adding or modifying a skill.
@@ -53,16 +88,17 @@
     Path to a prepared iteration directory. Validates the result files in it, invokes the packaged Anthropic
     skill-creator aggregator and static viewer, and writes comparison.md, benchmark.json, benchmark.md, the first-party
     side-by-side report.html, and the exact upstream skill-creator-report.html compatibility artifact.
-    This is the fallback for results that were not finalized by the external evaluator.
+    This is an explicitly authorized forensic recovery path for an existing package, not normal handoff recovery. It
+    cannot repair missing, malformed, or unproven runner-produced execution evidence.
 
 .EXAMPLE
-    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing
+    pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing -Runner github-copilot
 
 .EXAMPLE
-    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
+    pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -CodebeltReference
 
 .EXAMPLE
-    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults $env:TEMP/dotnet-strong-name-signing-workspace/iteration-1
+    pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -CollectResults $env:TEMP/dotnet-strong-name-signing-workspace/iteration-1
 #>
 [CmdletBinding(DefaultParameterSetName = 'Prepare')]
 param(
@@ -93,6 +129,44 @@ param(
     [Parameter(ParameterSetName = 'Changed')]
     [switch]$Force,
 
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$Runner,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$Model,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [switch]$CodebeltReference,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$ModelCatalogPath,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$ReasoningEffort,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$ConfigurationProfile = 'isolated-default',
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$ToolProfile = 'default',
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [ValidateRange(1, 86400)]
+    [int]$TimeoutSeconds = 900,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [ValidateRange(1, 128)]
+    [int]$Concurrency = 16,
+
     [Parameter(ParameterSetName = 'Collect', Mandatory = $true)]
     [string]$CollectResults
 )
@@ -108,16 +182,23 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
 
+. (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
+. (Join-Path $PSScriptRoot 'eval-runners/package-integrity.ps1')
+
 $packageSchema = 'codebeltnet/agentic/eval-package/2'
 $metadataSchema = 'codebeltnet/agentic/eval-metadata/2'
 $resultSchema = 'codebeltnet/agentic/eval-result/2'
 $runSchema = 'codebeltnet/agentic/eval-run/1'
+$executionProfileSchema = 'codebeltnet/agentic/eval-execution-profile/1'
+$executionResultSchema = 'codebeltnet/agentic/eval-execution-result/1'
+$runnerProtocolSchema = 'codebeltnet/agentic/eval-runner-protocol/1'
 $maxFixtureInlineBytes = 32768
 
-# A materialized run is hermetic: the harness treats the run directory as the worker's sandbox root, mounts repo/ as
+# A materialized run is self-contained: the runner treats the run directory as the worker's staged root, uses repo/ as
 # the working directory and home/ as the isolated user profile, and exposes skill/ only for a with_skill run. Nothing
-# else in the package - the grading key, the paired run, other evals, or results - lives inside a run directory, so a
-# worker confined to its run directory cannot reach any of it.
+# else in the package - the grading key, the paired run, other evals, or results - is staged inside a run directory, so a
+# worker that stays within its run directory is never handed any of it. Hard filesystem confinement is an optional
+# confidence signal a runner may add on top; it is not required for this staging boundary.
 $runDirectoryNames = [ordered]@{
     Working = 'repo'
     Home = 'home'
@@ -127,6 +208,7 @@ $runDirectoryNames = [ordered]@{
 }
 $reportToolRelativePath = 'tools/generate-eval-report.ps1'
 $skillCreatorToolRelativePath = 'tools/skill-creator'
+$evalRunnerToolRelativePath = 'tools/eval-runners'
 $skillCreatorEvalFiles = @(
     'LICENSE.txt',
     'agents/grader.md',
@@ -202,7 +284,7 @@ function ConvertTo-JsonFile {
         [object]$Value
     )
 
-    Write-Utf8File -Path $Path -Content (($Value | ConvertTo-Json -Depth 12) + [Environment]::NewLine)
+    Write-Utf8File -Path $Path -Content ((ConvertTo-RunnerJson -Value $Value -Depth 12) + [Environment]::NewLine)
 }
 
 function Test-IsBinaryFile {
@@ -312,6 +394,127 @@ function Assert-WorkspaceLocation {
     [void](git -C $RepoRoot check-ignore -q -- $WorkspaceRoot 2>$null)
     if ($LASTEXITCODE -eq 1) {
         throw "'$WorkspaceRoot' is inside the repository but git does not ignore it. Restore the .bot/ ignore rule before writing eval packages there."
+    }
+}
+
+function Get-HarnessName {
+    param([Parameter(Mandatory = $true)][string]$RunnerName)
+
+    switch ($RunnerName) {
+        'github-copilot' { return 'GitHub Copilot CLI' }
+        'codex' { return 'Codex CLI' }
+        'opencode' { return 'OpenCode' }
+        'fake' { return 'Deterministic fake runner' }
+        default { return $RunnerName }
+    }
+}
+
+function Confirm-HarnessModel {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$RunnerName,
+        [Parameter(Mandatory = $true)][string]$ModelName
+    )
+
+    $discoveryScript = Join-Path $RepoRoot 'scripts/Get-HarnessModels.ps1'
+    if (-not (Test-Path -LiteralPath $discoveryScript -PathType Leaf)) {
+        throw "Cannot verify model '$ModelName' because '$discoveryScript' is missing."
+    }
+
+    $arguments = @('-Runner', $RunnerName, '-RequireModel', $ModelName)
+    if (-not [string]::IsNullOrWhiteSpace($ModelCatalogPath)) {
+        $arguments += @('-CatalogPath', $ModelCatalogPath)
+    }
+    $discoveryOutput = & pwsh -NoProfile -NonInteractive -File $discoveryScript @arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Runner '$RunnerName' model '$ModelName' could not be verified against current harness discovery. $($discoveryOutput -join [Environment]::NewLine)"
+    }
+
+    return $true
+}
+
+function Get-SupportedRunnerIds {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $runnerRoot = Join-Path $RepoRoot 'scripts/eval-runners'
+    if (-not (Test-Path -LiteralPath $runnerRoot -PathType Container)) {
+        return @()
+    }
+
+    return @(Get-ChildItem -LiteralPath $runnerRoot -Directory -Force |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'runner.ps1') -PathType Leaf } |
+        Sort-Object Name |
+        ForEach-Object { $_.Name })
+}
+
+function Resolve-ExecutionSelection {
+    param([Parameter(Mandatory = $true)][string]$RepoRoot)
+
+    $referenceRunner = 'github-copilot'
+    $referenceModel = 'claude-haiku-4.5'
+    $codexDefaultModel = 'gpt-5.6-luna'
+    $supportedRunners = @(Get-SupportedRunnerIds -RepoRoot $RepoRoot)
+    $supportedText = if ($supportedRunners.Count -gt 0) { $supportedRunners -join ', ' } else { '(none found)' }
+
+    if ($CodebeltReference -and (-not [string]::IsNullOrWhiteSpace($Runner) -or -not [string]::IsNullOrWhiteSpace($Model))) {
+        throw 'Choose either -CodebeltReference or an explicit -Runner/-Model pair, not both.'
+    }
+
+    if ($CodebeltReference) {
+        if ($supportedRunners -notcontains $referenceRunner) {
+            throw "Codebelt Reference requires runner '$referenceRunner', but it is unavailable. Supported runner IDs: $supportedText."
+        }
+        [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $referenceRunner -ModelName $referenceModel)
+
+        return [pscustomobject]@{
+            Runner = $referenceRunner
+            Model = $referenceModel
+            Harness = Get-HarnessName -RunnerName $referenceRunner
+            Preset = 'Codebelt Reference'
+        }
+    }
+
+    $hasRunner = -not [string]::IsNullOrWhiteSpace($Runner)
+    $hasModel = -not [string]::IsNullOrWhiteSpace($Model)
+    if (-not $hasRunner -and -not $hasModel) {
+        throw "Evaluation preparation requires a resolved Harness + Model before RUN-THIS.prompt.md can be generated. Pass -Runner with an explicit model or a runner that has a repository-defined default, or use -CodebeltReference. Supported runner IDs: $supportedText."
+    }
+    if (-not $hasRunner -and $hasModel) {
+        throw 'Runner/model selection requires -Runner when -Model is supplied.'
+    }
+    $resolvedRunnerMatch = @($supportedRunners | Where-Object { [string]::Equals($_, $Runner, [StringComparison]::OrdinalIgnoreCase) })
+    if ($resolvedRunnerMatch.Count -ne 1) {
+        throw "Unsupported runner '$Runner'. Supported runner IDs: $supportedText."
+    }
+    $resolvedRunner = [string]$resolvedRunnerMatch[0]
+    $resolvedModel = if ($hasModel) { $Model } else { $null }
+    $preset = 'Custom'
+    if (-not $hasModel) {
+        switch ($resolvedRunner) {
+            'codex' {
+                $resolvedModel = $codexDefaultModel
+                $preset = 'Codex default'
+            }
+            'github-copilot' {
+                $resolvedModel = $referenceModel
+                $preset = 'Codebelt Reference'
+            }
+            'opencode' {
+                throw 'OpenCode requires an explicit -Model selector from the discovered provider/model catalog.'
+            }
+            default {
+                throw "Runner '$resolvedRunner' has no repository-defined default model. Pass -Model."
+            }
+        }
+    }
+
+    [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $resolvedRunner -ModelName $resolvedModel)
+
+    return [pscustomobject]@{
+        Runner = $resolvedRunner
+        Model = $resolvedModel
+        Harness = Get-HarnessName -RunnerName $resolvedRunner
+        Preset = $preset
     }
 }
 
@@ -506,7 +709,6 @@ function New-ResultStub {
         eval_name = $EvalName
         configuration = $Configuration
         model = ''
-        provider = ''
         harness = ''
         executed_utc = ''
         output = ''
@@ -518,6 +720,9 @@ function New-ResultStub {
         stdout = ''
         stderr = ''
         exit_status = $null
+        execution_status = 'unrun'
+        execution_run_id = ''
+        execution_result_file = ''
         duration_seconds = $null
         total_tokens = $null
         tool_calls = $null
@@ -542,12 +747,54 @@ function New-ResultStub {
     }
 }
 
+function New-ExecutionProfile {
+    param(
+        [Parameter(Mandatory = $true)][object]$ExecutionSelection,
+        [Parameter(Mandatory = $true)][int]$EffectiveConcurrency
+    )
+
+    return [ordered]@{
+        schema = $executionProfileSchema
+        runner = $ExecutionSelection.Runner
+        model = $ExecutionSelection.Model
+        reasoning_effort = if (-not [string]::IsNullOrWhiteSpace($ReasoningEffort)) { $ReasoningEffort } elseif ($ExecutionSelection.Runner -eq 'codex') { 'low' } else { $null }
+        configuration_profile = $ConfigurationProfile
+        tool_profile = $ToolProfile
+        timeout_seconds = $TimeoutSeconds
+        concurrency = $EffectiveConcurrency
+    }
+}
+
+function Resolve-EffectiveConcurrency {
+    param(
+        [Parameter(Mandatory = $true)][string]$RunnerName,
+        [Parameter(Mandatory = $true)][int]$RequestedConcurrency,
+        [Parameter(Mandatory = $true)][bool]$ConcurrencyWasExplicit
+    )
+
+    if ($RunnerName -eq 'opencode' -and -not $ConcurrencyWasExplicit) {
+        return [pscustomobject]@{ Value = 2; Source = 'OpenCode safe default'; Explicit = $false }
+    }
+    return [pscustomobject]@{
+        Value = $RequestedConcurrency
+        Source = if ($ConcurrencyWasExplicit) { 'explicit -Concurrency' } else { 'repository default' }
+        Explicit = $ConcurrencyWasExplicit
+    }
+}
+
 function Get-JsonProperty {
     param(
         [object]$Object,
         [string]$Name,
         [object]$Default = $null
     )
+
+    if ($null -ne $Object -and $Object -is [System.Collections.IDictionary] -and $Object.Contains($Name)) {
+        if ($null -ne $Object[$Name]) {
+            return $Object[$Name]
+        }
+        return $Default
+    }
 
     if ($null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name -and $null -ne $Object.$Name) {
         return $Object.$Name
@@ -590,6 +837,40 @@ function Get-Assertions {
     }
 
     return @()
+}
+
+function New-InteractionDocument {
+    param([Parameter(Mandatory = $true)][object]$EvalEntry)
+
+    $declared = Get-JsonProperty -Object $EvalEntry -Name 'interaction' -Default $null
+    if ($null -eq $declared) { return $null }
+    if ([string](Get-JsonProperty -Object $declared -Name 'mode' -Default 'scripted') -ne 'scripted') {
+        throw "Eval $($EvalEntry.id) interaction mode must be 'scripted'."
+    }
+    $turns = @(Get-JsonProperty -Object $declared -Name 'turns' -Default @())
+    if ($turns.Count -lt 2) { throw "Eval $($EvalEntry.id) scripted interaction must contain at least two turns." }
+    $normalizedTurns = [System.Collections.Generic.List[object]]::new()
+    foreach ($turn in $turns) {
+        $role = [string](Get-JsonProperty -Object $turn -Name 'role' -Default 'user')
+        if ($role -ne 'user') { throw "Eval $($EvalEntry.id) interaction turns must all be user turns." }
+        $source = [string](Get-JsonProperty -Object $turn -Name 'source' -Default '')
+        $content = [string](Get-JsonProperty -Object $turn -Name 'content' -Default '')
+        if (($source -and $content) -or (-not $source -and -not $content)) {
+            throw "Eval $($EvalEntry.id) interaction turns must declare exactly one source or content."
+        }
+        $normalizedTurn = [ordered]@{ role = 'user' }
+        if ($source) {
+            $normalizedTurn.source = $source
+        } else {
+            $normalizedTurn.content = $content
+        }
+        $normalizedTurns.Add($normalizedTurn)
+    }
+    return [ordered]@{
+        schema = 'codebeltnet/agentic/eval-interaction/1'
+        mode = 'scripted'
+        turns = @($normalizedTurns.ToArray())
+    }
 }
 
 function Get-Sha256Hex {
@@ -879,6 +1160,32 @@ function Copy-SkillCreatorEvalTools {
     return $destinationRoot
 }
 
+function Copy-EvalRunnerTools {
+    param(
+        [string]$RepoRoot,
+        [string]$IterationDirectory
+    )
+
+    $sourceRoot = Join-Path (Join-Path $RepoRoot 'scripts') 'eval-runners'
+    if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
+        throw "Missing Eval Runner protocol source '$sourceRoot'."
+    }
+
+    $destinationRoot = Join-Path $IterationDirectory $evalRunnerToolRelativePath
+    $files = Get-ChildItem -LiteralPath $sourceRoot -Recurse -File -Force |
+        Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' } |
+        ForEach-Object { Get-RelativePath -BasePath $sourceRoot -FullPath $_.FullName } |
+        Sort-Object
+    foreach ($relative in $files) {
+        $source = Join-Path $sourceRoot ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        $destination = Join-Path $destinationRoot ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath $source -Destination $destination -Force
+    }
+
+    return $destinationRoot
+}
+
 # The candidate skill's fingerprint, computed from the source over exactly the files Copy-SkillTree stages. The staged
 # copy in each with_skill run must reproduce this value, which is how preparation proves the worker received the
 # revision under development rather than a globally installed one.
@@ -903,9 +1210,40 @@ function Get-CandidateSkillHash {
     return Get-Sha256Hex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($joined))
 }
 
+function Get-CandidateSkillName {
+    param(
+        [Parameter(Mandatory = $true)][string]$SkillDirectory,
+        [Parameter(Mandatory = $true)][string]$FolderName,
+        [Parameter(Mandatory = $true)][string]$SkillText
+    )
+
+    $declaredName = ''
+    if ($SkillText -match '(?ms)\A---\r?\n(?<frontmatter>.*?)\r?\n---\r?\n') {
+        foreach ($line in @($Matches['frontmatter'] -split '\r?\n')) {
+            if ($line -match '^\s*name\s*:\s*(?<value>.+?)\s*$') {
+                $declaredName = $Matches['value'].Trim().Trim('"', "'")
+                break
+            }
+        }
+    }
+
+    $candidateName = if ([string]::IsNullOrWhiteSpace($declaredName)) { $FolderName } else { $declaredName }
+    if ($candidateName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+        throw "Skill '$FolderName' declares unsupported Codex-visible candidate skill name '$candidateName'."
+    }
+
+    $skillMarkdownPath = Join-Path $SkillDirectory 'SKILL.md'
+    if (-not (Test-Path -LiteralPath $skillMarkdownPath -PathType Leaf)) {
+        throw "Candidate skill '$FolderName' is missing SKILL.md."
+    }
+
+    return $candidateName
+}
+
 function New-RunManifest {
     param(
         [string]$SkillName,
+        [string]$CandidateSkillName,
         [int]$IterationNumber,
         [object]$EvalEntry,
         [string]$EvalName,
@@ -913,16 +1251,20 @@ function New-RunManifest {
         [string[]]$RepoFiles,
         [string]$FixtureHash,
         [string]$SkillHash,
-        [bool]$GitWorkspace
+        [bool]$GitWorkspace,
+        [string]$InteractionFile = '',
+        [string]$InteractionHash = ''
     )
 
     $skillDirectory = if ($Configuration -eq 'with_skill') { "$($runDirectoryNames.Skill)/$SkillName" } else { $null }
+    $effectiveCandidateSkillName = if ([string]::IsNullOrWhiteSpace($CandidateSkillName)) { $SkillName } else { $CandidateSkillName }
 
-    return [ordered]@{
+    $manifest = [ordered]@{
         schema = $runSchema
         evalId = [int]$EvalEntry.id
         evalName = $EvalName
-        skillName = if ($Configuration -eq 'with_skill') { $SkillName } else { $null }
+        candidateSkillName = $effectiveCandidateSkillName
+        skillName = if ($Configuration -eq 'with_skill') { $effectiveCandidateSkillName } else { $null }
         iteration = $IterationNumber
         mode = $Configuration
         promptFile = $runDirectoryNames.Prompt
@@ -944,10 +1286,16 @@ function New-RunManifest {
             mustNotExposeGlobalSkillsOrConfig = $true
         }
     }
+    if (-not [string]::IsNullOrWhiteSpace($InteractionFile)) {
+        $manifest.interactionFile = $InteractionFile
+        $manifest.interactionHash = $InteractionHash
+    }
+    return $manifest
 }
 
-# Fail package generation the moment a run violates an isolation invariant, so a contaminated package never reaches a
-# harness. These checks operate on the materialized run directories, not on prose.
+# Fail package generation the moment a run violates an experimental isolation invariant, so a contaminated package never
+# reaches a harness. The filesystemIsolationRequired field declares the staged workspace boundary; hard OS confinement is
+# evaluated separately by the selected runner and reported as strict or pragmatic confidence.
 function Assert-RunIsolation {
     param(
         [string]$EvalName,
@@ -1000,7 +1348,7 @@ function Assert-RunIsolation {
             throw "$EvalName/$configuration run.json must require fresh context."
         }
         if (-not [bool]$runManifest.filesystemIsolationRequired -or -not [bool]$runManifest.isolatedHomeRequired) {
-            throw "$EvalName/$configuration run.json must require filesystem and home isolation."
+            throw "$EvalName/$configuration run.json must require the staged workspace boundary and isolated home."
         }
 
         # 6. No run manifest references the source repository, and 7. none references a global skill install.
@@ -1075,6 +1423,9 @@ function Invoke-PrepareMode {
         throw "No evals selected for '$Skill'."
     }
 
+    $executionSelection = Resolve-ExecutionSelection -RepoRoot $repoRoot
+    $effectiveConcurrency = Resolve-EffectiveConcurrency -RunnerName ([string]$executionSelection.Runner) -RequestedConcurrency $Concurrency -ConcurrencyWasExplicit ($scriptBoundParameters.ContainsKey('Concurrency'))
+
     $workspaceRoot = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
         Join-Path (Join-Path $repoRoot '.bot') "$Skill-workspace"
     } else {
@@ -1108,9 +1459,18 @@ function Invoke-PrepareMode {
     [void](Copy-ReportTool -RepoRoot $repoRoot -IterationDirectory $iterationDirectory)
     $skillCreatorSourcePath = Resolve-SkillCreatorSourcePath -RequestedPath $null
     [void](Copy-SkillCreatorEvalTools -IterationDirectory $iterationDirectory -SourcePath $skillCreatorSourcePath)
+    $copiedRunnerTools = Copy-EvalRunnerTools -RepoRoot $repoRoot -IterationDirectory $iterationDirectory
+    $runnerToolsIntegrity = [ordered]@{
+        schema = 'codebeltnet/agentic/package-tree-integrity/1'
+        path = $evalRunnerToolRelativePath
+        sha256 = Get-TreeHash -Root $copiedRunnerTools
+        file_count = @(Get-ChildItem -LiteralPath $copiedRunnerTools -Recurse -File -Force).Count
+    }
+    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'execution-profile.json') -Value (New-ExecutionProfile -ExecutionSelection $executionSelection -EffectiveConcurrency ([int]$effectiveConcurrency.Value))
 
     $skillText = [System.IO.File]::ReadAllText($skillMarkdownPath, $utf8NoBom)
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
+    $candidateSkillName = Get-CandidateSkillName -SkillDirectory $skillDirectory -FolderName $Skill -SkillText $skillText
 
     $inventory = Get-SkillFileInventory -SkillDirectory $skillDirectory -SkillBody $skillBody -Budget $MaxInlineBytes
     $skillHash = Get-CandidateSkillHash -SkillDirectory $skillDirectory
@@ -1157,9 +1517,9 @@ function Invoke-PrepareMode {
 
         $repoFiles = @($fixtures | ForEach-Object { $_.RepoRelative } | Sort-Object)
 
-        # Materialize both runs. Each run directory is the worker's sandbox root: repo/ is the working tree, home/ is an
+        # Materialize both runs. Each run directory is the worker's staged root: repo/ is the working tree, home/ is an
         # isolated profile, and skill/ (with_skill only) holds the candidate. The grading key and results live one level
-        # up, outside every run directory, so a worker confined to its run directory can never reach them.
+        # up, outside every run directory, so a worker that stays within its run directory is never handed them.
         foreach ($configuration in @('with_skill', 'without_skill')) {
             $runDir = Join-Path $evalDirectory $configuration
             New-Item -ItemType Directory -Path $runDir -Force | Out-Null
@@ -1190,6 +1550,7 @@ function Invoke-PrepareMode {
 
         $inputFilesSection = New-InputFilesSection -Fixtures @($fixtures)
         $assertions = Get-Assertions -EvalEntry $evalEntry
+        $interactionDocument = New-InteractionDocument -EvalEntry $evalEntry
 
         $withSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withSkillInstructions -InputFilesSection $inputFilesSection
         $withoutSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withoutSkillPreamble -InputFilesSection $inputFilesSection
@@ -1197,12 +1558,23 @@ function Invoke-PrepareMode {
         Write-Utf8File -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Prompt) -Content $withSkillPrompt
         Write-Utf8File -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Prompt) -Content $withoutSkillPrompt
 
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git)
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git)
+        $interactionFile = ''
+        $interactionHash = ''
+        if ($null -ne $interactionDocument) {
+            $interactionFile = 'interaction.json'
+            foreach ($configuration in @('with_skill', 'without_skill')) {
+                $interactionPath = Join-Path (Join-Path $evalDirectory $configuration) $interactionFile
+                ConvertTo-JsonFile -Path $interactionPath -Value $interactionDocument
+                if ([string]::IsNullOrWhiteSpace($interactionHash)) { $interactionHash = Get-FileSha256 -Path $interactionPath }
+                if ((Get-FileSha256 -Path $interactionPath) -ne $interactionHash) { throw "Scripted interaction sidecar diverged between configurations for '$evalName'." }
+            }
+        }
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
 
         $assumptions = [System.Collections.Generic.List[string]]::new()
         $assumptions.Add('Run with_skill and without_skill on the same model, same version, and same configuration. Different models measure the model, not the skill.')
-        $assumptions.Add('Each run is hermetic: launch a fresh worker with its run directory as the sandbox root, its repo/ as the working directory, and its home/ as the isolated profile.')
+        $assumptions.Add('Each run is isolated: launch a fresh worker with its run directory as the staged root, its repo/ as the working directory, and its home/ as the isolated profile. The runner reports strict confidence when it also proves hard filesystem confinement and pragmatic confidence when it does not.')
         $assumptions.Add("Both runs share an identical materialized repository. Only the with_skill run exposes the candidate skill under skill/$Skill/.")
         $notInlinedFixtures = @($fixtures | Where-Object { -not $_.Inlined })
         if ($notInlinedFixtures.Count -gt 0) {
@@ -1212,6 +1584,9 @@ function Invoke-PrepareMode {
             $assumptions.Add('This eval stages a real .git in repo/ so repository-root detection and version-deriving tools behave as on a developer machine.')
         }
         $assumptions.Add('The expected output and assertions in this file are the grading key. They live outside every run directory and must never reach a worker.')
+        if ($null -ne $interactionDocument) {
+            $assumptions.Add('This eval uses a deterministic scripted same-session interaction sidecar. Every configuration receives the same ordered user turns; the runner must continue the same session and capture every user/assistant turn.')
+        }
 
         $metadata = [ordered]@{
             schema = $metadataSchema
@@ -1239,16 +1614,19 @@ function Invoke-PrepareMode {
                     prompt_file = "with_skill/$($runDirectoryNames.Prompt)"
                     run_manifest = "with_skill/$($runDirectoryNames.Run)"
                     result_file = 'results/with-skill.result.json'
+                    execution_result_file = 'results/with-skill.execution-result.json'
                 }
                 without_skill = [ordered]@{
                     run_directory = 'without_skill'
                     prompt_file = "without_skill/$($runDirectoryNames.Prompt)"
                     run_manifest = "without_skill/$($runDirectoryNames.Run)"
                     result_file = 'results/without-skill.result.json'
+                    execution_result_file = 'results/without-skill.execution-result.json'
                 }
             }
             assumptions = @($assumptions)
         }
+        if ($null -ne $interactionDocument) { $metadata.interaction = $interactionDocument }
 
         ConvertTo-JsonFile -Path (Join-Path $evalDirectory 'eval-metadata.json') -Value $metadata
         ConvertTo-JsonFile -Path (Join-Path $evalDirectory 'results/with-skill.result.json') -Value (New-ResultStub -SkillName $Skill -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -Assertions $assertions)
@@ -1275,6 +1653,7 @@ function Invoke-PrepareMode {
                     home_directory = "$evalName/with_skill/$($runDirectoryNames.Home)"
                     skill_directory = "$evalName/with_skill/$($runDirectoryNames.Skill)/$Skill"
                     result = "$evalName/results/with-skill.result.json"
+                    execution_result = "$evalName/results/with-skill.execution-result.json"
                 }
                 without_skill = [ordered]@{
                     mode = 'without_skill'
@@ -1285,6 +1664,7 @@ function Invoke-PrepareMode {
                     home_directory = "$evalName/without_skill/$($runDirectoryNames.Home)"
                     skill_directory = $null
                     result = "$evalName/results/without-skill.result.json"
+                    execution_result = "$evalName/results/without-skill.execution-result.json"
                 }
             }
         })
@@ -1297,8 +1677,24 @@ function Invoke-PrepareMode {
         iteration = $iterationNumber
         generated_utc = $generatedUtc
         configurations = @('with_skill', 'without_skill')
-        execution = 'external_handoff'
+        execution = 'runner_handoff'
+        execution_selection = [ordered]@{
+            harness = $executionSelection.Harness
+            runner = $executionSelection.Runner
+            model = $executionSelection.Model
+            preset = $executionSelection.Preset
+        }
         runner_prompt = 'RUN-THIS.prompt.md'
+        execution_profile = 'execution-profile.json'
+        runner_protocol = $runnerProtocolSchema
+        runner_tools = $evalRunnerToolRelativePath
+        runner_tools_integrity = $runnerToolsIntegrity
+        execution_result_schema = $executionResultSchema
+        execution_freeze = 'execution-freeze.json'
+        grading = 'grading.json'
+        grading_validator = "$evalRunnerToolRelativePath/validate-eval-grading.ps1"
+        grading_contract = "$evalRunnerToolRelativePath/contracts/grading.schema.json"
+        finalizer = "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
         report = [ordered]@{
             tool = $reportToolRelativePath
             template = 'tools/eval-report-template.html'
@@ -1328,7 +1724,7 @@ function Invoke-PrepareMode {
             'fresh context',
             'isolated HOME/config',
             'isolated CWD',
-            'filesystem sandbox',
+            'staged filesystem/workspace boundary',
             'candidate skill exposure',
             'transcript capture'
         )
@@ -1341,11 +1737,28 @@ function Invoke-PrepareMode {
     }
     ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'manifest.json') -Value $manifest
 
-    Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals))
+    Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -EffectiveConcurrency $effectiveConcurrency)
     $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
-    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals))
+    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -RequestedConcurrency ([int]$effectiveConcurrency.Value) -PerArmTimeoutSeconds $TimeoutSeconds)
+    [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iterationDirectory -Manifest $manifest)
+    [void](Assert-PackageRunnerIdentity -IterationDirectory $iterationDirectory -Manifest $manifest -ExpectedRunner ([string]$executionSelection.Runner))
 
-    Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber) as $($manifestEvals.Count * 2) hermetic run package(s)."
+    Write-Host 'Evaluation package prepared.'
+    Write-Host ''
+    Write-Host 'Execution:'
+    Write-Host "  Harness: $($executionSelection.Harness)"
+    Write-Host "  Runner:  $($executionSelection.Runner)"
+    Write-Host "  Model:   $($executionSelection.Model)"
+    Write-Host "  Timeout: $TimeoutSeconds seconds"
+    Write-Host "  Concurrency: $($effectiveConcurrency.Value) ($($effectiveConcurrency.Source))"
+    if (-not [string]::IsNullOrWhiteSpace([string]$executionSelection.Preset)) {
+        Write-Host "  Preset:  $($executionSelection.Preset)"
+    }
+    Write-Host ''
+    Write-Host "Cases: $($manifestEvals.Count)"
+    Write-Host "Arms:  $($manifestEvals.Count * 2)"
+    Write-Host ''
+    Write-Host "Prepared $($manifestEvals.Count) eval case(s) for '$Skill' (iteration $iterationNumber) as $($manifestEvals.Count * 2) isolated run package(s)."
     Write-Host "Package: $iterationDirectory"
     Write-Host ''
     Write-Host 'Every run is a self-contained directory: repo/ is the working tree, home/ is an isolated'
@@ -1358,139 +1771,94 @@ function Invoke-PrepareMode {
     Write-Host 'Point the harness at that path. Do not reproduce its contents in chat: a pasted copy'
     Write-Host 'loses the absolute paths it depends on, and the harness then cannot find the package.'
     Write-Host ''
-    Write-Host 'The runner makes the selected agent the evaluator, grader, and report producer. It must create'
-    Write-Host 'one isolated fresh worker per run, then grade the collected results and generate both report artifacts.'
+    Write-Host 'The runner-aware handoff uses execution-profile.json, the package-local Eval Runner protocol,'
+    Write-Host 'and its deterministic native-worker orchestration plan.'
+    Write-Host 'The selected external orchestrator must honor each runner descriptor''s dispatch_owner: orchestrator-owned native workers stay delegated, while runner-owned transports are owned by one foreground Phase 1 fan-out command.'
+    Write-Host 'The orchestrator coordinates; it must not execute an eval arm in its own model context or nest a runner-owned model execution inside another worker.'
+    Write-Host 'Independent workers run concurrently up to execution-profile.json.concurrency; harness capacity remains authoritative.'
     Write-Host ''
     Write-Host 'This script prepared prompts only. It did not run them, and nothing here will.'
-    Write-Host 'The selected evaluator should finish the package in one run. If it cannot write back to this package,'
-    Write-Host 'bring back the result objects and use the repository collector as a fallback:'
-    Write-Host ("  pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults `"$iterationDirectory`"")
+    Write-Host 'The selected evaluator must write valid runner-produced execution results back into this package.'
+    Write-Host 'If it cannot, the evaluation is incomplete and must fail closed; only persisted runner-produced evidence at'
+    Write-Host 'the manifest-declared paths may proceed.'
 }
 
 function New-RunnerPrompt {
     param(
         [string]$IterationDirectory,
         [int]$IterationNumber,
-        [object[]]$ManifestEvals
+        [object[]]$ManifestEvals,
+        [Parameter(Mandatory = $true)][object]$ExecutionSelection,
+        [Parameter(Mandatory = $true)][int]$RequestedConcurrency,
+        [int]$PerArmTimeoutSeconds = 900,
+        [int]$RunnerGraceSeconds = 30
     )
 
     $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.AppendLine('# Run, grade, and report this evaluation package')
+    $profilePath = Join-Path $IterationDirectory 'execution-profile.json'
+    $runnerOwnedFanoutPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1"
+    $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
+    $gradingValidatorPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/validate-eval-grading.ps1"
+    $finalizerPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
+    $maxScriptedUserTurns = 1
+    foreach ($manifestEval in @($ManifestEvals)) {
+        $metadataPath = Join-Path $IterationDirectory ([string](Get-JsonProperty -Object $manifestEval -Name 'metadata' -Default ''))
+        if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
+            try {
+                $metadata = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                $turns = @(Get-JsonProperty -Object (Get-JsonProperty -Object $metadata -Name 'interaction' -Default $null) -Name 'turns' -Default @())
+                if ($turns.Count -gt $maxScriptedUserTurns) { $maxScriptedUserTurns = $turns.Count }
+            } catch {
+                # Prompt generation remains usable for the unit-test helper,
+                # while real packages already validate metadata before this
+                # function is called.
+            }
+        }
+    }
+    $armCount = [Math]::Max(1, @($ManifestEvals).Count * 2)
+    $effectiveConcurrency = [Math]::Max(1, $RequestedConcurrency)
+    $executionBatches = [Math]::Max(1, [int][Math]::Ceiling($armCount / [double]$effectiveConcurrency))
+    $preflightTimeoutSeconds = Get-RunnerPreflightTimeoutSeconds
+    $serialPreflightAllowanceSeconds = $armCount * $preflightTimeoutSeconds
+    $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $PerArmTimeoutSeconds)) + [Math]::Max(0, $RunnerGraceSeconds)
+    $executionAllowanceSeconds = $executionBatches * $longestChildAllowanceSeconds
+    $orchestrationGraceSeconds = [Math]::Max(1, $RunnerGraceSeconds)
+    $phaseOneAllowanceSeconds = $serialPreflightAllowanceSeconds + $executionAllowanceSeconds + $orchestrationGraceSeconds
+    [void]$builder.AppendLine('# Execute, grade, and report this evaluation package')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('START NOW. You are the evaluator, grader, and report producer for this package. Do not ask me which role to perform, whether to run the workers, or whether to continue to grading. Execute the complete workflow in this one handoff and return the finished report.')
+    [void]$builder.AppendLine('START NOW. You are the external Eval Orchestrator for this user-directed handoff. Do not execute an eval prompt in your own context. The repository preparation and validation flow remain model-free.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Do not execute evaluation prompts in the current agent context. Create an isolated fresh-context worker for every run, then continue in this coordinator context with grading and report generation after all workers finish.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Everything you need is in this directory:')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine("    $IterationDirectory")
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine("This file is `"$(Join-Path $IterationDirectory 'RUN-THIS.prompt.md')`". Use that package path as authoritative. If the package is inaccessible, report the concrete access failure; do not ask the user to choose another workflow.")
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine("It holds $(@($ManifestEvals).Count) eval case(s), each with a `with_skill` and `without_skill` run. Every run is a self-contained directory that holds a `prompt.md`, a `run.json` contract, a `repo/` working tree, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate. The runs differ only in whether that candidate skill is present. You run the experiment, grade the completed results, and generate the report.")
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('A person selected this harness and handed you this package. That authorizes these runs, grading, aggregation, and report generation. The repository prohibition on automated model evaluation binds repository scripts and the agent that prepared the package; it does not bind the user-directed external executor completing this specific handoff.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Execute now')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('This package assumes the harness can give each run a fresh context, an isolated HOME/config root, an isolated working directory, and a filesystem sandbox scoped to the run directory. A harness that cannot provide fresh, independent sessions is incompatible with these evals. Continue without asking for role clarification, and report per run which guarantees you satisfied - fresh context, isolated HOME/config, isolated CWD, filesystem sandbox, candidate skill exposure, and transcript capture.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Orchestration contract')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. For every eval case, create one isolated fresh-context worker for `with_skill` and a second isolated fresh-context worker for `without_skill`. Never reuse a worker or session between runs, between cases, or between iterations.')
-    [void]$builder.AppendLine('2. Launch each worker from its own run directory, which is the worker''s sandbox root. Set the working directory to that run''s `repo/`, set HOME and the platform-equivalent profile and config roots to its `home/`, and confine filesystem access to the run directory. Read the run''s `run.json` for the exact contract: `workingDirectory`, `homeDirectory`, `skillDirectory`, and the fresh-context, filesystem, and home isolation flags.')
-    [void]$builder.AppendLine('3. Give each worker only its `prompt.md` and the files already staged in its run directory. Do not expose this runner, `manifest.json`, any `eval-metadata.json`, `comparison.md`, result files, grading criteria, expectations, the paired run, another case''s output, or any note that an experiment is underway. All of those live outside the run directory, so keeping the worker inside it keeps them hidden.')
-    [void]$builder.AppendLine('4. The candidate skill is already inlined in the with_skill run''s `prompt.md` and staged under its `skill/` directory. Do not load, summarize, or add it yourself. The without_skill run carries no skill instructions and no `skill/` directory; do not expose the candidate skill to that worker by any route, including a globally installed copy.')
-    [void]$builder.AppendLine('5. Send each `prompt.md` unchanged as the worker''s first message. The input files are already real files in the worker''s `repo/`; the worker reads and edits them there rather than from attachments.')
-    [void]$builder.AppendLine('6. Use the same model, version, configuration, tools, and limits for every worker. Disable persistent memory or cross-session recall. Independent runs may execute concurrently when the selected harness and token budget allow it.')
-    [void]$builder.AppendLine('7. Record the worker''s complete response, transcript when available, token usage, elapsed time, and tool-call count. When the harness exposes them, also record the shell commands, files read and written, stdout and stderr, and exit status, and which isolation guarantees you satisfied. Record refusals, questions, and failures as results. Do not retry to improve an answer.')
-    [void]$builder.AppendLine('8. Work only inside this package. Do not read or modify the source repository around it. Do not begin grading until every available worker has completed or failed and its result is recorded.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('For each case in `manifest.json`, the `runs.with_skill` and `runs.without_skill` entries give each run''s directory, its `prompt`, its `run_manifest` (`run.json`), and the `result` file to write. Run the two prompts in separate workers, then overwrite the matching result file without reading its existing contents. A partial package is valid: record every completed run, continue to grading/reporting, and mark missing arms honestly instead of asking what to do next.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Result shape')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('```json')
-    [void]$builder.AppendLine('{')
-    [void]$builder.AppendLine('  "schema": "codebeltnet/agentic/eval-result/2",')
-    [void]$builder.AppendLine("  `"iteration`": $IterationNumber,")
-    [void]$builder.AppendLine('  "eval_id": 1,')
-    [void]$builder.AppendLine('  "eval_name": "the directory name",')
-    [void]$builder.AppendLine('  "configuration": "with_skill",')
-    [void]$builder.AppendLine('  "model": "the exact model id you used",')
-    [void]$builder.AppendLine('  "provider": "who served it",')
-    [void]$builder.AppendLine('  "harness": "what you are",')
-    [void]$builder.AppendLine('  "executed_utc": "2026-01-01T00:00:00Z",')
-    [void]$builder.AppendLine('  "output": "the complete response the run produced",')
-    [void]$builder.AppendLine('  "output_files": ["paths of any files the run wrote"],')
-    [void]$builder.AppendLine('  "transcript": "the complete worker transcript when the harness exposes it",')
-    [void]$builder.AppendLine('  "shell_commands": ["commands the run executed, when exposed"],')
-    [void]$builder.AppendLine('  "files_read": ["paths the run read, when exposed"],')
-    [void]$builder.AppendLine('  "files_written": ["paths the run wrote, when exposed"],')
-    [void]$builder.AppendLine('  "exit_status": 0,')
-    [void]$builder.AppendLine('  "duration_seconds": 12.5,')
-    [void]$builder.AppendLine('  "total_tokens": 1234,')
-    [void]$builder.AppendLine('  "tool_calls": 6,')
-    [void]$builder.AppendLine('  "turns": 12,')
-    [void]$builder.AppendLine('  "base_input_tokens": 27,')
-    [void]$builder.AppendLine('  "output_tokens": 3800,')
-    [void]$builder.AppendLine('  "cache_read_tokens": 515605,')
-    [void]$builder.AppendLine('  "cache_write_1h_tokens": 129582,')
-    [void]$builder.AppendLine('  "estimated_cost_usd": 2.27,')
-    [void]$builder.AppendLine('  "model_effort": "high",')
-    [void]$builder.AppendLine('  "isolation": {')
-    [void]$builder.AppendLine('    "fresh_context": true,')
-    [void]$builder.AppendLine('    "isolated_home": true,')
-    [void]$builder.AppendLine('    "isolated_cwd": true,')
-    [void]$builder.AppendLine('    "filesystem_sandbox": true,')
-    [void]$builder.AppendLine('    "candidate_skill_exposed": true,')
-    [void]$builder.AppendLine('    "transcript_captured": true')
-    [void]$builder.AppendLine('  },')
-    [void]$builder.AppendLine('  "grading": [],')
-    [void]$builder.AppendLine('  "notes": "anything that would change how this result reads"')
-    [void]$builder.AppendLine('}')
-    [void]$builder.AppendLine('```')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls`, the optional efficiency telemetry fields, and every `isolation` flag are optional. Include each when the harness exposes it and omit it otherwise. Never estimate a missing value. For `with_skill`, set `isolation.candidate_skill_exposed` to how the skill actually reached the worker.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`configuration` is `with_skill` or `without_skill` and must match the prompt you ran. Read `eval_id` and `eval_name` from `manifest.json`; do not send them to the worker. Put the full model response in `output`. If it is very long, write it beside the result file and list that path in `output_files` with a summary in `output`.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`output` is the model''s message in full, including questions, caveats, explanations, or a refusal. Tool output is evidence from the run, not a replacement for the model response. Put the full worker event history in `transcript` when the harness exposes it.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Grade and report immediately')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('After all available workers finish, read each eval''s `eval-metadata.json`. Only now may you read `expected_output` and `assertions`; they are the grading key and were intentionally hidden from the workers.')
-    [void]$builder.AppendLine('1. Grade every completed result against every assertion. Use deterministic checks for mechanical assertions and concrete output, transcript, and file evidence for process assertions. Use judgement only where the assertion is genuinely qualitative, and say so in the evidence. Never infer a tool or file action from the model''s self-report when process evidence is absent.')
-    [void]$builder.AppendLine('2. Write grading back into the matching result file using exactly `grading[].text`, `grading[].passed`, and `grading[].evidence`. Use `passed: null` when an assertion cannot be judged from captured evidence. Do not grade a missing run as passed.')
-    [void]$builder.AppendLine('The package carries Anthropic skill-creator under `tools/skill-creator`. Use `tools/skill-creator/agents/grader.md` for grading guidance, and use `tools/skill-creator/scripts/aggregate_benchmark.py` plus `tools/skill-creator/eval-viewer/generate_review.py` as the source-of-truth aggregation and review tools.')
-    $reportCommand = 'pwsh -NoProfile -File "' + (Join-Path $IterationDirectory $reportToolRelativePath) + '" -IterationDirectory "' + $IterationDirectory + '"'
-    [void]$builder.AppendLine(('3. Run the package report adapter now; do not ask the user to run a second command: ' + $reportCommand + '. It stages the recorded results into the upstream skill-creator workspace contract, invokes the exact upstream aggregator and static viewer, then writes the first-party side-by-side `report.html`, the exact upstream `skill-creator-report.html`, `benchmark.json`, and `benchmark.md` at the package root.'))
-    [void]$builder.AppendLine('4. If the harness can open local files, open `report.html` after it is written. Otherwise return its absolute path as the primary artifact. Do not wait for browser feedback before finishing the handoff.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The report is the completion artifact. Do not stop after worker execution, do not return a prose-only recap, and do not ask whether grading or HTML generation is wanted.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('## Final handoff')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The finished artifacts are the first-party paired review and the exact upstream skill-creator viewer report, not a request for another command. If you can write to the package machine, leave every result, grading field, `benchmark.json`, `benchmark.md`, `report.html`, and `skill-creator-report.html` in place. Return the absolute first-party report path, the completed/expected run count, any missing arms, the model/provider, and a concise quality summary.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('If you cannot write to the package machine, return one fenced JSON block containing every completed result object, including its `grading` array, plus the generated report as an artifact when the harness supports file handoff. Do not return separate blocks or a human summary in place of the result objects. State any missing arms and the concrete artifact-transfer limitation.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('If you cannot write to that machine - a different product, a browser, a sandbox that shares no disk with it - the results have to travel as text. End with one fenced block, and say plainly that it is meant to be pasted into the repository session as-is:')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('```')
-    [void]$builder.AppendLine('Eval results, grading, and report artifact.')
     [void]$builder.AppendLine("Package: $IterationDirectory")
-    [void]$builder.AppendLine('Model: <exact id> via <provider>, harness <what you are>')
+    [void]$builder.AppendLine("Profile: $profilePath")
+    [void]$builder.AppendLine("Selected runner: $($ExecutionSelection.Runner)")
+    [void]$builder.AppendLine("Selected model: $($ExecutionSelection.Model)")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('<a JSON array of the result objects described above, one per run you completed>')
+    [void]$builder.AppendLine('## Phase 1 — blind execution')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Still unfilled: <the cases and configurations nobody has run yet>')
-    [void]$builder.AppendLine('```')
+    [void]$builder.AppendLine(("Phase 1 is one long-running foreground command. Set the caller shell/tool timeout to at least the package-computed Phase 1 allowance of {0} seconds ({1} arm(s) × {2}-second fixed model-free runner preflight timeout = {3}-second serial preflight allowance + {4}-second execution allowance across {5} batch(es) at concurrency {6}; each child allows {7} scripted user turn(s) × profile.timeout_seconds {8} + {9} seconds runner grace; + {10} seconds orchestration grace), not a default short timeout. For OpenCode, pass this allowance to the shell tool's explicit timeout setting before invoking the command." -f $phaseOneAllowanceSeconds, $armCount, $preflightTimeoutSeconds, $serialPreflightAllowanceSeconds, $executionAllowanceSeconds, $executionBatches, $effectiveConcurrency, $maxScriptedUserTurns, $PerArmTimeoutSeconds, [Math]::Max(0, $RunnerGraceSeconds), $orchestrationGraceSeconds))
+    [void]$builder.AppendLine('A caller-side shell timeout is not permission to invoke Phase 1 again. `invoke-runner-owned-arms.ps1` must be started exactly once for this iteration. If execution is interrupted and no valid `execution-freeze.json` exists, the package is incomplete and requires a fresh iteration.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('One block covering everything you ran, not one per case, and the outputs go in it verbatim - a summary written for a human to skim cannot be graded against assertions.')
+    [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke:')
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$runnerOwnedFanoutPath`" -IterationDirectory `"$IterationDirectory`"")
+    [void]$builder.AppendLine('It performs every preflight before any execute process, preserves exact manifest paths, owns concurrency/backpressure, timeout/watchdog handling, terminal registration, orchestration evidence, and immutable `execution-freeze.json` before Phase 2. Consume its terminal JSON summary. If Phase 1 reports incompatible or fails, stop: the evaluation is incomplete and must fail closed. The evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check. Do not create outer workers, execute an arm yourself, write orchestration state, or edit raw result/evidence files. If dispatch ownership is orchestrator-owned, use only the descriptor-declared native worker transport, the exact manifest paths, and then run the shared freeze boundary; do not synthesize or repair transport evidence. Only persisted runner-produced evidence at the manifest-declared paths may proceed.')
+    [void]$builder.AppendLine('Workers receive only their isolated run directory. Keep the paired arm, metadata, expected output, assertions, grading, reports, and orchestration files out of Phase 1. Preserve runner-owned terminal results and all referenced raw transcript/event artifacts exactly as written.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The repository collector is only a fallback when result files were transferred without the report artifacts: `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>`. It validates the returned files and invokes the same packaged skill-creator aggregator and viewer; it is not the normal next step after this prompt.')
-
+    [void]$builder.AppendLine('## Phase 2 — grading and finalization')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('Only after Phase 1 returns a successful terminal JSON summary, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
+    [void]$builder.AppendLine('Only if that bridge succeeds, reveal the grading key in `eval-metadata.json` to the Grader. The Grader may author exactly one package-root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`; each entry contains only `eval_id`, `eval_name`, `configuration`, `assertion_index`, `assertion`, `passed`, and `evidence`. It must not edit raw execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.')
+    [void]$builder.AppendLine('To display the authoritative top-level grading skeleton, run:')
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$gradingValidatorPath`" -ShowSkeleton")
+    [void]$builder.AppendLine('Write `grading.json`, then validate it before finalization:')
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$gradingValidatorPath`" -IterationDirectory `"$IterationDirectory`" -GradingPath `"grading.json`"")
+    [void]$builder.AppendLine('Grading validation is retryable; finalization is not. If validation fails, correct `grading.json` and rerun the validation command as many times as required. Do not invoke the application helper separately; the finalizer invokes `apply-eval-grading.ps1` deterministically after revalidating grading. Invoke finalization exactly once, and only after grading validation succeeds:')
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$finalizerPath`" -IterationDirectory `"$IterationDirectory`"")
+    [void]$builder.AppendLine('The finalizer revalidates the manifest, profile, terminal orchestration/concurrency evidence, immutable freeze, raw artifacts, bridge, canonical results, and grading; it then generates and verifies all required reports. Return only its machine-readable JSON summary and artifact paths. A non-zero exit, missing artifact, integrity error, or report error means the evaluation is incomplete. Never repair, re-freeze, re-bridge a changed raw result, or report prose success.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('The four required package-root artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`. Same-session scripted evals, when present in a run, are handled by the selected runner only if its descriptor/preflight proves `scripted_multi_turn_same_session`; otherwise preflight fails before execution. The paired configurations receive identical scripted user turns.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine("This package contains $(@($ManifestEvals).Count) eval case(s), each with paired `with_skill` and `without_skill` runs. The human reviewer remains the final evaluator.")
     return $builder.ToString()
 }
 
@@ -1499,13 +1867,38 @@ function New-PackageReadme {
         [string]$SkillName,
         [int]$IterationNumber,
         [string]$IterationDirectory,
-        [object[]]$ManifestEvals
+        [object[]]$ManifestEvals,
+        [Parameter(Mandatory = $true)][object]$ExecutionSelection,
+        [Parameter(Mandatory = $true)][object]$EffectiveConcurrency
     )
 
+    $maxScriptedUserTurns = 1
+    foreach ($manifestEval in @($ManifestEvals)) {
+        $metadataPath = Join-Path $IterationDirectory ([string](Get-JsonProperty -Object $manifestEval -Name 'metadata' -Default ''))
+        if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
+            try {
+                $metadata = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                $turns = @(Get-JsonProperty -Object (Get-JsonProperty -Object $metadata -Name 'interaction' -Default $null) -Name 'turns' -Default @())
+                if ($turns.Count -gt $maxScriptedUserTurns) { $maxScriptedUserTurns = $turns.Count }
+            } catch { }
+        }
+    }
+    $armCount = [Math]::Max(1, @($ManifestEvals).Count * 2)
+    $requestedConcurrency = [Math]::Max(1, [int]$EffectiveConcurrency.Value)
+    $executionBatches = [Math]::Max(1, [int][Math]::Ceiling($armCount / [double]$requestedConcurrency))
+    $runnerGraceSeconds = 30
+    $preflightTimeoutSeconds = Get-RunnerPreflightTimeoutSeconds
+    $serialPreflightAllowanceSeconds = $armCount * $preflightTimeoutSeconds
+    $longestChildAllowanceSeconds = ([Math]::Max(1, $maxScriptedUserTurns) * [Math]::Max(1, $TimeoutSeconds)) + $runnerGraceSeconds
+    $executionAllowanceSeconds = $executionBatches * $longestChildAllowanceSeconds
+    $orchestrationGraceSeconds = $runnerGraceSeconds
+    $phaseOneAllowanceSeconds = $serialPreflightAllowanceSeconds + $executionAllowanceSeconds + $orchestrationGraceSeconds
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine("# Eval package: $SkillName (iteration $IterationNumber)")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. You choose the harness, provider, and model; the selected external evaluator runs both configurations, grades them, and generates the report.')
+    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. `execution-profile.json` selects the user-chosen Eval Runner, runner-native model, and limits; the external Eval Orchestrator follows the selected descriptor''s `delegation.dispatch_owner`, using either orchestrator-owned native workers or runner-owned native transports, then grades and generates the report.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine("Execution selection: runner=$($ExecutionSelection.Runner); model=$($ExecutionSelection.Model); timeout_seconds=$TimeoutSeconds; concurrency=$($EffectiveConcurrency.Value); concurrency_source=$($EffectiveConcurrency.Source).")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## What is here')
     [void]$builder.AppendLine()
@@ -1513,39 +1906,55 @@ function New-PackageReadme {
         [void]$builder.AppendLine("- ``$($entry.eval_name)/`` - eval $($entry.eval_id)")
     }
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Each eval directory holds the grading key (`eval-metadata.json`), result stubs under `results/`, and two hermetic run directories: `with_skill/` and `without_skill/`. A run directory holds `prompt.md`, a `run.json` contract, a `repo/` working tree materialized from the fixtures, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate skill. The grading key and results sit outside both run directories, so a worker confined to its run directory never sees them.')
+    [void]$builder.AppendLine('Each eval directory holds the grading key (`eval-metadata.json`), result stubs under `results/`, and two isolated run directories: `with_skill/` and `without_skill/`. A run directory holds `prompt.md`, a `run.json` contract, a `repo/` working tree materialized from the fixtures, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate skill. The grading key and results sit outside both run directories, so a worker that stays within its run directory is never handed them.')
+    [void]$builder.AppendLine('The package root also holds `execution-profile.json`, the package-local Eval Runner protocol and deterministic native-worker queue under `tools/eval-runners/`, and raw `execution-result.json` paths beside the existing result stubs. `run.json` defines what one blind arm must execute; the profile defines with what runner/model/configuration; the selected runner defines how its native worker is created.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('## Orchestration topology')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('```text')
+    [void]$builder.AppendLine('Eval Orchestrator')
+    [void]$builder.AppendLine('    |')
+    [void]$builder.AppendLine('    +-- Eval Worker -> one eval arm')
+    [void]$builder.AppendLine('    +-- Eval Worker -> one eval arm')
+    [void]$builder.AppendLine('    +-- Eval Worker -> one eval arm')
+    [void]$builder.AppendLine('    +-- ...')
+    [void]$builder.AppendLine('```')
+    [void]$builder.AppendLine('The Eval Orchestrator coordinates and collects; it never executes an eval arm in its own model context. One arm equals one fresh native Eval Worker and one model-backed eval execution. With `dispatch_owner=orchestrator`, the native subagent/task is the worker; with `dispatch_owner=runner`, the runner process/thread is the worker and no outer model subagent is created. Independent workers must run concurrently up to `execution-profile.json.concurrency` when capacity permits; harness capacity is authoritative, so a rejected dispatch stays queued and is not an attempt. A serial result without persisted capacity-limit evidence fails the completion gate.')
     [void]$builder.AppendLine('The package also carries the exact Anthropic skill-creator assets used after execution under `tools/skill-creator`: `tools/skill-creator/agents/grader.md`, `tools/skill-creator/agents/comparator.md`, `tools/skill-creator/agents/analyzer.md`, `tools/skill-creator/references/schemas.md`, `tools/skill-creator/scripts/aggregate_benchmark.py`, and `tools/skill-creator/eval-viewer/generate_review.py` plus `tools/skill-creator/eval-viewer/viewer.html`.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Isolation model')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The package guarantees what a generator can: identical materialized repositories for both runs, the candidate skill staged only under `with_skill/skill/`, an empty isolated `home/` per run, and a `run.json` that names only paths inside the run directory. Fixture and skill hashes are recorded so you can prove what each worker received.')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('The harness must supply the rest at runtime: a fresh context per run, the run directory as the working and config root (working directory `repo/`, HOME `home/`), and a filesystem sandbox that keeps the worker inside its run directory so global skills, global config, the source repository, the paired run, and the grading key stay out of reach. Prompt wording alone does not enforce this; the sandbox does.')
+    [void]$builder.AppendLine('The harness must supply the rest at runtime: a fresh context per run, the run directory as the working and config root (working directory `repo/`, HOME `home/`), controlled candidate-skill exposure, prompt fidelity, and sufficient response capture. Because global skills, global config, the source repository, the paired run, and the grading key are never staged inside a run directory, a worker that stays within its run directory is not handed them. The selected runner enforces these controls - prompt wording alone does not - and reports strict confidence when it also proves hard filesystem confinement or pragmatic confidence when the mandatory controls hold without it. Hard filesystem confinement is an added confidence signal, not a prerequisite, so Windows and other hosts without a hard sandbox run in pragmatic mode.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## How to run')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('1. Pick one model and configuration. Use the same one for every run in this iteration.')
-    [void]$builder.AppendLine('2. For each eval, launch a fresh worker for `with_skill/` with its run directory as the sandbox root, `repo/` as the working directory, and `home/` as HOME. Send `prompt.md` as the first message. Read `run.json` for the contract.')
-    [void]$builder.AppendLine('3. Launch a second fresh worker for `without_skill/` the same way. Never reuse a worker between runs.')
-    [void]$builder.AppendLine('4. Save each response into the matching file under the eval''s `results/` directory, grade every completed result using the packaged `agents/grader.md` guidance, and run `tools/generate-eval-report.ps1`. The resulting `report.html` is the first-party side-by-side review; `skill-creator-report.html` is the exact upstream viewer.')
+    [void]$builder.AppendLine(("Phase 1 allowance: {0} seconds ({1} arm(s) × {2}-second fixed model-free runner preflight timeout = {3}-second serial preflight allowance + {4}-second execution allowance across {5} batch(es) at concurrency {6}; each child allows {7} scripted user turn(s) × profile.timeout_seconds {8} + {9} seconds runner grace; + {10} seconds orchestration grace). For OpenCode, use the shell tool's explicit timeout setting with at least this value." -f $phaseOneAllowanceSeconds, $armCount, $preflightTimeoutSeconds, $serialPreflightAllowanceSeconds, $executionAllowanceSeconds, $executionBatches, $requestedConcurrency, $maxScriptedUserTurns, $TimeoutSeconds, $runnerGraceSeconds, $orchestrationGraceSeconds))
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('`RUN-THIS.prompt.md` turns a harness that can create isolated workers or sessions into the evaluator, grader, and report producer. It reads the package, creates one new worker per run from its run directory, keeps runner instructions and grading data out of every worker, records results, grades after collection, and invokes Anthropic skill-creator''s aggregator and static viewer through the package adapter. It never executes an eval prompt in its own context.')
+    [void]$builder.AppendLine(('1. Read `execution-profile.json` and the selected runner descriptor. If `runner` or `model` is missing or unsupported, fail clearly instead of guessing. For `delegation.dispatch_owner=runner`, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1") + ' exactly once with the caller shell/tool timeout set to at least the package-computed Phase 1 allowance. It performs all preflight, native dispatch, concurrency, terminal registration, timeout handling, and raw-evidence freezing. For `delegation.dispatch_owner=orchestrator`, use only the descriptor-declared native worker mechanism, then invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/freeze-execution-evidence.ps1") + ' after every arm is terminal.'))
+    [void]$builder.AppendLine('2. A caller/tool timeout or interrupted conversation does not authorize rerunning Phase 1. Do not execute an arm in the parent context, create a second worker for a runner-owned arm, expose grading material during execution, or author/repair raw evidence. If Phase 1 reports incompatible or Phase 1/freezing fails, stop: the evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check.')
+    [void]$builder.AppendLine(('3. After the freeze succeeds, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1") + ' with `-RequireComplete -RequireParallelDispatch` and add `-RequireNativeDelegation` when the selected descriptor has `dispatch_owner=runner`. Only after that deterministic bridge succeeds, give the grading key to the Grader. The Grader writes only the package-root `grading.json` grading-only artifact. It must not modify execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.'))
+    [void]$builder.AppendLine(('4. To display the authoritative grading skeleton, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/validate-eval-grading.ps1") + ' with `-ShowSkeleton`. After writing `grading.json`, invoke the same helper with `-IterationDirectory "' + $IterationDirectory + '" -GradingPath "grading.json"` before finalization. Grading validation is retryable; finalization is not. Correct and rerun validation until it succeeds.'))
+    [void]$builder.AppendLine(('5. Invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1") + ' exactly once, only after grading validation succeeds. It invokes the deterministic apply-eval-grading boundary, validates the frozen evidence, idempotent bridge, complete grading, and report outputs. Return only its machine-readable summary.'))
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('A harness that cannot provide fresh, independent sessions with isolated working and config roots is incompatible with these evals. `-CollectResults` accepts a partial iteration and reports unfilled runs as missing.')
+    [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It never executes an eval arm in its own model context. Same-session scripted interactions are allowed only when the selected runner proves that capability; paired runs receive identical deterministic turns. The package is complete only when the finalizer exits successfully.')
+    [void]$builder.AppendLine()
+    [void]$builder.AppendLine('A harness that cannot provide fresh, independent sessions with isolated working and config roots is incompatible with these evals. If the selected external process cannot write valid runner-produced execution results back into the package, the evaluation is incomplete and must fail closed. Only persisted runner-produced evidence at the manifest-declared paths may proceed to Phase 2.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('A with_skill run on one model compared against a baseline on another measures both the model and the skill. That is not a skill-effectiveness result, so do not report it as one. If you do mix models, say so explicitly and treat the comparison as directional only.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Report artifacts')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Fill in each `results/*.result.json`:')
+    [void]$builder.AppendLine('The package bridge writes each `results/*.result.json` from the runner-produced execution result at its exact manifest-declared path. The external Grader authors only the package-root grading artifact; the deterministic application helper projects it onto canonical results without changing any other field:')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('- `model`, `provider`, `harness` - what actually ran it, as specifically as you know')
+    [void]$builder.AppendLine('- `model`, `harness` - what actually ran it, as specifically as you know')
     [void]$builder.AppendLine('- `executed_utc` - when')
     [void]$builder.AppendLine('- `output` - the produced output, or a summary plus paths in `output_files`')
     [void]$builder.AppendLine('- `transcript`, `shell_commands`, `files_read`, `files_written`, `exit_status`, `duration_seconds`, `total_tokens`, `tool_calls` - include the values the harness exposes; omit unavailable values rather than estimating them')
     [void]$builder.AppendLine('- Optional efficiency telemetry: `turns`, `base_input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens` or `cache_write_1h_tokens`, `estimated_cost_usd`, and `model_effort`. These are shown when recorded and never inferred from totals.')
     [void]$builder.AppendLine('- `isolation` - the guarantees the harness satisfied for this run; process-dependent assertions can only be graded from a run that captured the needed evidence')
-    [void]$builder.AppendLine('- `grading[].passed` - `true`, `false`, or `null` per assertion once the external evaluator or a deterministic script has checked it, with `evidence`')
+    [void]$builder.AppendLine('- `grading.json` - schema `codebeltnet/agentic/eval-grading/1`, with exact assertion identities and only `passed` plus `evidence` decisions')
     [void]$builder.AppendLine('- `notes` - anything that would change how the result reads')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The normal handoff finishes with these package-root artifacts:')
@@ -1557,9 +1966,6 @@ function New-PackageReadme {
     [void]$builder.AppendLine('benchmark.md    Anthropic skill-creator human-readable benchmark summary')
     [void]$builder.AppendLine('```')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('If the harness cannot write to the package machine, its final handoff should contain one paste-ready JSON array of completed result objects including grading, plus the report as a file artifact when supported. A prose-only recap is not sufficient.')
-    [void]$builder.AppendLine()
-    [void]$builder.AppendLine('For transferred results without report artifacts, the repository-side fallback is `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>`, which validates the files and invokes the same packaged skill-creator aggregator and viewer.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('This workspace is temporary. Do not commit it to the repository unless someone explicitly asks for a checked-in example.')
 
@@ -1681,39 +2087,87 @@ function Invoke-CollectMode {
     $errors = [System.Collections.Generic.List[string]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
     $rows = [System.Collections.Generic.List[object]]::new()
+    $manifestRecords = @(Get-ManifestRunRecords -IterationDirectory $iterationDirectory -Manifest $manifest)
+    $runnerAware = $manifest.PSObject.Properties.Name -contains 'execution_profile'
+    if ($runnerAware) {
+        $packageBridgePath = Join-Path $iterationDirectory "$($manifest.runner_tools)/bridge-manifest-results.ps1"
+        if (-not (Test-Path -LiteralPath $packageBridgePath -PathType Leaf)) {
+            $packageBridgePath = Join-Path (Join-Path (Get-RepoRoot) 'scripts') 'eval-runners/bridge-manifest-results.ps1'
+        }
+        if (-not (Test-Path -LiteralPath $packageBridgePath -PathType Leaf)) {
+            $errors.Add("Manifest-driven bridge is missing at '$packageBridgePath'.")
+        } else {
+            $requireNativeDelegation = $true
+            $profilePath = Join-Path $iterationDirectory ([string]$manifest.execution_profile)
+            if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
+                $profileForCollection = [System.IO.File]::ReadAllText($profilePath, $utf8NoBom) | ConvertFrom-Json
+                if ([string]$profileForCollection.runner -eq 'fake') {
+                    # The deterministic fake is a compatibility fixture, not a
+                    # harness-native worker. Never treat its execute output as
+                    # native delegation evidence.
+                    $requireNativeDelegation = $false
+                }
+            }
+            $bridgeArguments = @('-NoProfile', '-NonInteractive', '-File', $packageBridgePath, '-IterationDirectory', $iterationDirectory)
+            if ($requireNativeDelegation) { $bridgeArguments += '-RequireNativeDelegation' }
+            $bridgeOutput = & pwsh @bridgeArguments 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                $errors.Add("Manifest-driven execution-result bridge failed: $([string]::Join(' ', @($bridgeOutput)))")
+            } else {
+                foreach ($line in @($bridgeOutput)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+                        Write-Host $line
+                    }
+                }
+            }
+        }
+    }
 
     foreach ($entry in @($manifest.evals)) {
-        $evalDirectory = Join-Path $iterationDirectory $entry.directory
-        $metadata = [System.IO.File]::ReadAllText((Join-Path $evalDirectory 'eval-metadata.json'), $utf8NoBom) | ConvertFrom-Json
+        $entryRecords = @($manifestRecords | Where-Object { [int]$_.EvalId -eq [int]$entry.eval_id })
+        if ($entryRecords.Count -eq 0) {
+            $errors.Add("$($entry.eval_name) has no manifest-declared arm paths.")
+            continue
+        }
+        $evalDirectory = [string]$entryRecords[0].EvalDirectory
+        $metadata = [System.IO.File]::ReadAllText([string]$entryRecords[0].MetadataPath, $utf8NoBom) | ConvertFrom-Json
         $observed = @{}
 
-        foreach ($configuration in @('with_skill', 'without_skill')) {
-            $fileName = if ($configuration -eq 'with_skill') { 'with-skill.result.json' } else { 'without-skill.result.json' }
-            $resultPath = Join-Path (Join-Path $evalDirectory 'results') $fileName
+        foreach ($configuration in @(Get-ManifestConfigurations -Manifest $manifest)) {
+            $runRecords = @($entryRecords | Where-Object { [string]$_.Configuration -eq $configuration })
+            if ($runRecords.Count -ne 1) {
+                $errors.Add("$($entry.eval_name)/$configuration must have exactly one manifest-declared arm path set.")
+                continue
+            }
+            $runRecord = $runRecords[0]
+            $resultPath = [string]$runRecord.ResultPath
+            $resultRelative = [string]$runRecord.ResultRelative
             if (-not (Test-Path -LiteralPath $resultPath)) {
-                $warnings.Add("$($entry.eval_name)/$configuration - no result file at results/$fileName.")
+                $warnings.Add("$($entry.eval_name)/$configuration - no result file at the manifest path '$resultRelative'.")
                 continue
             }
 
             try {
                 $result = [System.IO.File]::ReadAllText($resultPath, $utf8NoBom) | ConvertFrom-Json
             } catch {
-                $errors.Add("$($entry.eval_name)/$configuration - results/$fileName is not valid JSON: $($_.Exception.Message)")
+                $errors.Add("$($entry.eval_name)/$configuration - manifest result '$resultRelative' is not valid JSON: $($_.Exception.Message)")
                 continue
             }
 
             if ([string]$result.configuration -ne $configuration) {
-                $errors.Add("$($entry.eval_name)/$configuration - results/$fileName declares configuration '$($result.configuration)'.")
+                $errors.Add("$($entry.eval_name)/$configuration - manifest result '$resultRelative' declares configuration '$($result.configuration)'.")
                 continue
             }
             if ([int]$result.eval_id -ne [int]$metadata.eval_id) {
-                $errors.Add("$($entry.eval_name)/$configuration - results/$fileName declares eval_id $($result.eval_id) but the package says $($metadata.eval_id).")
+                $errors.Add("$($entry.eval_name)/$configuration - manifest result '$resultRelative' declares eval_id $($result.eval_id) but the package says $($metadata.eval_id).")
                 continue
             }
 
             $outputText = [string](Get-JsonProperty -Object $result -Name 'output' -Default '')
             $outputFiles = @(Get-JsonProperty -Object $result -Name 'output_files' -Default @())
-            $hasOutput = -not [string]::IsNullOrWhiteSpace($outputText) -or $outputFiles.Count -gt 0
+            $executionStatus = [string](Get-JsonProperty -Object $result -Name 'execution_status' -Default '')
+            $hasExecution = -not [string]::IsNullOrWhiteSpace($executionStatus) -and $executionStatus -ne 'unrun'
+            $hasOutput = -not [string]::IsNullOrWhiteSpace($outputText) -or $outputFiles.Count -gt 0 -or $hasExecution
             if (-not $hasOutput) {
                 $warnings.Add("$($entry.eval_name)/$configuration - not run yet (empty output and no output_files).")
                 continue
@@ -1727,7 +2181,12 @@ function Invoke-CollectMode {
             # A transferred or partial result may arrive without grading. Fall back to the assertion count from the
             # package so the row still shows how much is left to check.
             $grading = @(Get-JsonProperty -Object $result -Name 'grading' -Default @())
-            $graded = @($grading | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'passed') })
+            if ($executionStatus -eq 'incompatible') {
+                $warnings.Add("$($entry.eval_name)/$configuration - execution is incompatible; its output is diagnostic only and cannot contribute grading evidence.")
+                $graded = @()
+            } else {
+                $graded = @($grading | Where-Object { $null -ne (Get-JsonProperty -Object $_ -Name 'passed') })
+            }
             $passed = @($graded | Where-Object { [bool]$_.passed }).Count
             $total = if ($grading.Count -gt 0) { $grading.Count } else { @($metadata.assertions).Count }
             if ($graded.Count -eq 0) {
@@ -1748,13 +2207,13 @@ function Invoke-CollectMode {
 
             $observed[$configuration] = [pscustomobject]@{
                 Model = $model
-                Provider = [string](Get-JsonProperty -Object $result -Name 'provider' -Default '')
                 Graded = $graded.Count
                 Passed = $passed
                 Total = $total
                 TranscriptRecorded = -not [string]::IsNullOrWhiteSpace($transcriptText)
                 ProcessEvidence = $hasProcessEvidence
                 IsolationReport = $isolationReport
+                ExecutionStatus = $executionStatus
                 DurationSeconds = Get-JsonProperty -Object $result -Name 'duration_seconds'
                 TotalTokens = Get-JsonProperty -Object $result -Name 'total_tokens'
                 ToolCalls = Get-JsonProperty -Object $result -Name 'tool_calls'
@@ -1780,10 +2239,25 @@ function Invoke-CollectMode {
         })
     }
 
+    $completion = Test-ManifestResults `
+        -IterationDirectory $iterationDirectory `
+        -Manifest $manifest `
+        -Records $manifestRecords `
+        -RequireComplete
+    if (-not $completion.Complete) {
+        foreach ($completionError in @($completion.Errors)) {
+            $errors.Add("Completion gate: $completionError")
+        }
+    }
+
     $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.AppendLine("# Eval comparison: $($manifest.skill_name) (iteration $($manifest.iteration))")
+    $comparisonKind = if ($errors.Count -gt 0) { 'Diagnostic comparison (incomplete)' } else { 'Eval comparison' }
+    [void]$builder.AppendLine("# $comparisonKind`: $($manifest.skill_name) (iteration $($manifest.iteration))")
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('This repository-side comparison validates recorded grading and never invokes a model. Grading may have been performed by the user-directed external evaluator before this report was generated.')
+    if ($errors.Count -gt 0) {
+        [void]$builder.AppendLine('This package did not pass the completion gate. The rows below are diagnostic evidence only and must not be treated as a valid paired benchmark.')
+    }
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('| Eval | Assertions | with_skill model | with_skill graded | without_skill model | without_skill graded |')
     [void]$builder.AppendLine('| --- | --- | --- | --- | --- | --- |')
@@ -1815,7 +2289,7 @@ function Invoke-CollectMode {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Isolation reported')
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Flags each run''s harness confirmed: fresh context, isolated home, isolated cwd, filesystem sandbox, candidate skill exposure, transcript capture (Y/N, ? unknown). Process-dependent assertions are only gradeable from a run with process evidence.')
+    [void]$builder.AppendLine('Flags each run''s harness confirmed: fresh context, isolated home, isolated cwd, filesystem confinement (strict when a hard sandbox is proven, otherwise pragmatic), candidate skill exposure, transcript capture (Y/N, ? unknown). Process-dependent assertions are only gradeable from a run with process evidence.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('| Eval | Configuration | Isolation | Process evidence |')
     [void]$builder.AppendLine('| --- | --- | --- | --- |')
@@ -1844,14 +2318,18 @@ function Invoke-CollectMode {
     Write-Host ''
     Write-Host "Wrote $comparisonPath"
 
-    $reportScript = Join-Path (Join-Path (Get-RepoRoot) 'scripts') 'generate-eval-report.ps1'
-    $reportOutput = & pwsh -NoProfile -File $reportScript -IterationDirectory $iterationDirectory 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $errors.Add("Report generation failed: $($reportOutput -join [Environment]::NewLine)")
-    } else {
-        foreach ($line in @($reportOutput)) {
-            Write-Host $line
+    if ($errors.Count -eq 0) {
+        $reportScript = Join-Path (Join-Path (Get-RepoRoot) 'scripts') 'generate-eval-report.ps1'
+        $reportOutput = & pwsh -NoProfile -NonInteractive -File $reportScript -IterationDirectory $iterationDirectory 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $errors.Add("Report generation failed: $($reportOutput -join [Environment]::NewLine)")
+        } else {
+            foreach ($line in @($reportOutput)) {
+                Write-Host $line
+            }
         }
+    } else {
+        Write-Host 'Skipping report generation because the completion gate failed; comparison.md is diagnostic only.'
     }
 
     if ($errors.Count -gt 0) {

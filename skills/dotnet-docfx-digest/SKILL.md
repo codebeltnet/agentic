@@ -1,7 +1,7 @@
 ---
 name: dotnet-docfx-digest
 description: >
-  Create and maintain developer-friendly DocFX documentation digests for .NET public APIs: repo-wide no-input audits, namespace pages, purpose-first API summaries, extension-member documentation, overwrite files, examples, availability notes, AGENTS.md maintenance, and verification. Use when the user asks to document a .NET API, update DocFX docs, create namespace pages, improve API summaries, add extension-member tables, update XML comments, add examples, maintain DocFX overwrite files, or verify documentation builds. Treat "use dotnet-docfx-digest", "complete missing documentation", and public .NET API changes as automatic triggers.
+  Use when the user wants to create, repair, audit, or complete DocFX docs for .NET public APIs, or has changed public API that needs namespace pages, XML comments, overwrite files, extension-member tables, examples, or build verification. Exclude private/internal APIs.
 ---
 
 # .NET DocFX Digest Steward

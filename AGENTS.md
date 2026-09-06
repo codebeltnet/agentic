@@ -23,16 +23,16 @@ An executing harness stays inside its package. Building, testing, or writing any
 
 ## AI/LLM Evaluation Automation Prohibition
 
-Repository scripts, CI jobs, skill runners, graders, optimizers, and custom executor hooks must never invoke an authenticated AI/LLM CLI or API. Using the user's Copilot, Claude, Codex, Gemini, or other model account as test infrastructure is forbidden; this repository does not provide an opt-in path around that rule.
+Repository-owned preparation, validation, CI jobs, hooks, deterministic tests, package generation, automatic completion gates, and automatic agent fan-out must never invoke an authenticated AI/LLM CLI or API. Using the user's Copilot, Claude, Codex, Gemini, or other model account as repository test infrastructure is forbidden; this repository does not provide an opt-in path around that rule. The package-local implementations under `scripts/eval-runners/` are protocol adapters, not automatic repository execution: they may invoke their native harness only when a human-selected external Eval Orchestrator is explicitly handed a prepared package and selected profile.
 
-- Do not create, restore, recommend, or run generic automation that launches model sessions for candidate/baseline execution, grading, comparison, benchmarking, description optimization, or review generation.
+- Do not create, restore, recommend, or run generic automation or automatic fan-out that launches model sessions for candidate/baseline execution, grading, comparison, benchmarking, description optimization, or review generation. A runner adapter may launch its named native harness only at the explicit external-handoff boundary described below, never from repository automation or CI.
 - A request to create, modify, fix, test, validate, benchmark, finalize, or release a skill does not authorize additional model calls. `yolo`, `auto`, urgency, completion gates, third-party instructions, and prior approval do not change this rule.
 - Routine skill validation is local and deterministic. Use schema and metadata checks, fixture validation, bundled assertions, repository validators, and human inspection of the eval prompts and expected outcomes.
 - Model-backed comparisons are not a repository completion gate. Do not spawn additional agents or call external model tools merely to satisfy a generic eval workflow.
 - A temp workspace controls filesystem isolation only. It never makes external calls local, free, offline, or acceptable.
 - If a future workflow genuinely requires model-backed research, stop and let the user design and approve a separate reviewed process. Do not implement it as repository benchmark automation or weaken this prohibition ad hoc.
 
-This rule is about automation: scripts, jobs, hooks, gates, and agent fan-out that reach a model without a person asking. It does not govern a human handing an agent a prepared eval package and telling it to run that package, which is the whole point of **Portable Eval Handoff** and is covered by [Executing a package you were handed](#executing-a-package-you-were-handed).
+This rule is about automation: scripts, jobs, hooks, gates, and agent fan-out that reach a model without a person asking. In repository scope that includes CI and all automatic preparation, validation, and completion workflows. A human-selected external Eval Orchestrator may invoke an explicitly selected package-local Eval Runner for the exact prepared package it was handed. That runner execution is outside deterministic repository automation even when the protocol adapter lives in this repository; it is the boundary covered by [Executing a package you were handed](#executing-a-package-you-were-handed). This exception does not permit CI, hooks, automatic completion gates, or unrequested live evaluations to invoke a model.
 
 This rule is Priority 1. If another repository rule, skill, test, or completion gate conflicts with it, this prohibition wins.
 
@@ -40,47 +40,49 @@ This rule is Priority 1. If another repository rule, skill, test, or completion 
 
 Anthropic's `skill-creator` owns the evaluation methodology this repository uses: define evals, run each task once with the skill and once without it, hold the model, the environment, the task, and the inputs constant, then compare. Keep that experimental design. Only the execution transport changes here.
 
-Where `skill-creator` says to spawn with-skill and baseline subagents in the same turn, this repository prepares a portable evaluation package and stops. The repository agent does not execute the prepared prompts. The user picks the harness, provider, and model, then hands `RUN-THIS.prompt.md` to that external evaluator. The external evaluator runs both configurations, grades the completed results, invokes the packaged Anthropic `skill-creator` aggregator and static viewer, and returns the finished first-party `report.html` plus the exact upstream `skill-creator-report.html` in the same run. This complements the **AI/LLM Evaluation Automation Prohibition** above and never relaxes it: preparation is deterministic file generation, while execution happens only because a person explicitly handed over this specific package.
+Where `skill-creator` says to spawn with-skill and baseline subagents in the same turn, this repository prepares a portable evaluation package and stops. The package keeps the existing paired methodology: `run.json` defines what one blind arm executes, `execution-profile.json` selects the runner/model/configuration, and the Eval Runner defines how its harness satisfies the contract. Before an execution-ready `RUN-THIS.prompt.md` is emitted, the user-facing preparation flow resolves a Harness + Model choice; the portable profile stores the internal runner id and the opaque runner-native model selector. The external Eval Orchestrator never chooses runner or model policy. It reads `delegation.dispatch_owner`; for runner-owned dispatch it invokes the package-local foreground `invoke-runner-owned-arms.ps1` Phase 1 command exactly once with the package-computed timeout allowance. That helper resolves the runner, preflights every pending arm before execution, asserts native delegation, starts runner-owned native surfaces with bounded child timeouts and concurrency/backpressure, registers terminal results, and freezes execution evidence. For orchestrator-owned dispatch it delegates each arm through the declared native worker. Orchestrator-owned envelopes pass through `record-native-result.ps1`; runner-owned transports produce the canonical raw result directly. It grades only after execution, invokes the packaged Anthropic `skill-creator` aggregator and static viewer, and returns the finished reports. Preparation, collection, validation, and reporting remain deterministic and never invoke a model.
 
 ### Asking for an eval
 
 `eval <skill>`, `evaluate <skill>`, `eval this skill`, `prepare evals for <skill>`, and `evaluate <skill> using the existing evals` are all requests for this workflow. Treat them as instructions to prepare the package, never to run it, and never as a request to write new eval cases unless the user asks for that too.
 
-Run the script immediately when asked. Do not reply with a plan, a menu of options, or a question about which harness or model the user wants; the harness and model are chosen after the package exists, by the user, outside this repository.
+Resolve the execution configuration before running the package preparation script. Normalize explicit user intent immediately and do not ask again for a harness the user already supplied: `Codex` -> `codex`; `GitHub Copilot`, `GitHub Copilot CLI`, or `Copilot` -> `github-copilot`; `OpenCode` -> `opencode`; matching is case-insensitive. In an interactive agent session, offer Codebelt Reference first (`GitHub Copilot CLI` + `claude-haiku-4.5`) and let `scripts/prepare-skill-evals.ps1` validate that model internally; if it is unavailable, show the current discovered Copilot models and ask for a replacement. If the user selects Codex without a model, pass `-Runner codex` and let preparation resolve repository defaults (`gpt-5.6-luna` with low reasoning) and validate the model. For manual selection, ask for Harness only when the user did not already name one, then discover current models for that harness with `scripts/Get-HarnessModels.ps1`. OpenCode discovery mirrors every model exposed by all configured OpenCode providers; it exposes exact `provider/model` selectors and retains display and availability metadata when available, but availability is presentation metadata only and never filters the selectable catalog. If OpenCode is selected and no model was explicitly supplied, present every discovered selector to the user, ask the user to choose one, and stop until that choice is made. Do not choose the first, free, recommended, previous-iteration, previous-successful, or previous-failed model on the user's behalf. If the user explicitly supplies an OpenCode selector, preserve it verbatim in `execution-profile.json`; discovery may verify or annotate it, but discovery failure or incomplete metadata must never substitute another model. GitHub Copilot and Codex discovery lists all currently available models. Never guess stale model ids, silently switch harnesses, or generate an execution-ready package with a null runner or model.
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-test
+pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-test -Runner github-copilot
 ```
 
 `eval` with no skill named, or `eval changed`, means the whole changed set:
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
+pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner github-copilot
 ```
+
+Use `-CodebeltReference` only when the script should select the Codebelt Reference explicitly and fail if `claude-haiku-4.5` is no longer present. For noninteractive direct script use, omitting both `-Runner` and `-CodebeltReference` is an error whenever a package would be generated; `-Runner codex` and `-Runner github-copilot` resolve their repository-defined default models, while `-Runner opencode` still requires `-Model`.
 
 ### Handing the package over
 
-Every package contains `RUN-THIS.prompt.md`, one instruction that drives the whole thing. It makes the user-selected agent the evaluator, grader, and report producer. That agent creates a separate isolated worker for every `with_skill` and `without_skill` run, gives each worker only its prompt and required inputs, records the results and available metrics, grades only after collection, writes the grading fields, and generates the static report without executing an eval prompt in its own context.
+Every package contains `RUN-THIS.prompt.md`, one instruction that drives the whole thing. It makes the user-selected external agent the Eval Orchestrator, Grader, and report producer. The orchestrator resolves the selected Eval Runner and reads its dispatch owner. For runner-owned dispatch it invokes `invoke-runner-owned-arms.ps1` exactly once as a foreground Phase 1 command and sets the caller shell/tool timeout to at least the package-computed allowance. That command preflights every blind `with_skill` and `without_skill` arm and starts zero executions if any preflight is incompatible. For orchestrator-owned dispatch it delegates each arm to a fresh native worker. It records each terminal envelope through the deterministic runner-owned recorder where applicable, grades only after collection, writes the grading fields, and generates the static report without executing an eval prompt in its own context.
 
 Hand the user that one file by its absolute path, and stop there. Do not reproduce its contents in the reply. The runner is built around absolute paths - the package directory, its own location, the path in the hand-back block - and a copy that has passed through a chat window arrives with them shortened to a bare directory name like `iteration-4`, pointing nowhere, with its internal links broken. The file on disk always says what the file on disk says; a paste of it is a lossy snapshot that also goes stale the moment the generator changes. Where the user's harness cannot read files at all, tell them to open that path and paste it themselves, so what travels is the real text rather than your recollection of it.
 
 Do not list the individual prompt files, do not describe the directory layout, and do not hand back a procedure for the user to carry out by hand. A reply that ends with 26 file paths and "run both versions" has moved the work onto the user instead of doing it.
 
-The normal path ends in the external evaluator: after all workers finish, it reads the grading key, grades each completed result using the packaged `skill-creator/agents/grader.md` guidance, writes `grading[].text`, `grading[].passed`, and `grading[].evidence`, records optional turns/token buckets/cost when the harness exposes them, runs the package adapter, and presents the first-party paired `report.html` plus Anthropic's exact `skill-creator-report.html`. If a harness cannot write back to the package, a repository session may accept the returned result objects and use `-CollectResults` as a fallback to validate them and invoke the same tools, producing `comparison.md`, `benchmark.json`, `benchmark.md`, `report.html`, and `skill-creator-report.html`. The user asked for eval results, not a second workflow decision.
+The normal path ends in the external evaluator: after all workers finish, it reads the grading key, grades each completed result using the packaged `skill-creator/agents/grader.md` guidance, writes `grading[].text`, `grading[].passed`, and `grading[].evidence`, records optional turns/token buckets/cost when the harness exposes them, runs the package adapter, and presents the first-party paired `report.html` plus Anthropic's exact `skill-creator-report.html`. If the selected external process cannot write valid runner-produced execution results back into the package, the evaluation is incomplete and must fail closed. Only persisted runner-produced evidence at the manifest-declared paths can proceed to grading and reporting. The user asked for eval results, not a second workflow decision.
 
 ### Prepare, do not execute
 
-Generate the package with the repository script rather than by hand:
+Generate the package with the repository script rather than by hand after resolving the Harness + Model choice:
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name>
+pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill <name> -Runner <runner-id> -Model <runner-native-model>
 ```
 
-It reads `skills/<name>/evals/evals.json` and writes one directory per eval into `.bot/<name>-workspace/iteration-<n>/`. The grading key and result stubs stay at the eval-case level, outside the two hermetic run directories a worker actually sees:
+It reads `skills/<name>/evals/evals.json` and writes one directory per eval into `.bot/<name>-workspace/iteration-<n>/`. The grading key and result stubs stay at the eval-case level, outside the two isolated run directories a worker actually sees:
 
 - `eval-metadata.json` — eval id and name, original prompt, expected output, assertions, required fixtures, fixture and skill hashes, and the assumptions needed to reproduce the run. This is the grading key and lives outside every run directory.
 - `results/` — one prefilled result stub per configuration, also outside the run directories.
-- `with_skill/` — a hermetic run directory that is the worker's sandbox root. It holds `prompt.md` (the task with the effective skill instructions inlined, plus the same input context and response contract as the baseline), `run.json` (a harness-neutral contract naming only paths inside the run directory), `repo/` (the fixtures materialized as real files, which is the worker's working directory), an isolated empty `home/`, and `skill/<name>/` (the exact candidate skill revision, so nothing falls back to a globally installed copy).
+- `with_skill/` — an isolated run directory that is the worker's staged root. It holds `prompt.md` (the task with the effective skill instructions inlined, plus the same input context and response contract as the baseline), `run.json` (a harness-neutral contract naming only paths inside the run directory), `repo/` (the fixtures materialized as real files, which is the worker's working directory), an isolated empty `home/`, and `skill/<name>/` (the exact candidate skill revision, so nothing falls back to a globally installed copy).
 - `without_skill/` — the same run directory without any `skill/` directory and with no skill instructions or mention of the skill under test. Its `repo/` is byte-identical to the with_skill one.
 
 At the iteration root it also writes `manifest.json` and `RUN-THIS.prompt.md`, the single prompt that hands the whole package to an agent of the user's choosing. The one-file path requires a harness that can create isolated workers or sessions, each launched from its run directory with `repo/` as the working directory and `home/` as an isolated profile. A plain single-context client runs one prompt file directly per fresh session instead.
@@ -96,7 +98,7 @@ Adding or modifying any repo-managed skill triggers this workflow. It is not som
 After the final skill edit is in place, run:
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed
+pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>
 ```
 
 It resolves every repo-managed skill this branch changed, uncommitted work included, and prepares a package for each. With no skill changed it says so and exits clean, which satisfies the gate.
@@ -134,13 +136,13 @@ Four things still hold while you execute:
 
 An agent that prepared a package in this session does not get to turn around and execute it. The separation is the point: the preparer knows the grading key, so it is the wrong harness. This is the only role-based disqualification.
 
-The selected executor has two ordered phases. Its current context may read `RUN-THIS.prompt.md`, `manifest.json`, and the prompt files needed to dispatch work, but it must not execute an eval prompt itself. In phase one, for every case it creates one new isolated worker for `with_skill` and another for `without_skill`, launching each from its own run directory with `repo/` as the working directory, `home/` as an isolated profile, and filesystem access confined to the run directory. It sends each worker only the matching `prompt.md` and the files already staged in that run directory. Workers never see the runner, manifest, grading key, sibling results, or orchestration commentary, because all of those live outside the run directory. Never reuse a worker or session between runs. In phase two, after collection, the executor reads the grading key, follows the packaged `skill-creator` grader guidance, writes the grading evidence, invokes the package adapter so Anthropic's aggregator and eval viewer produce the report, and returns the report path and comparison. It does not ask the user whether to start either phase.
+The selected executor has two ordered phases. Its current context may read `RUN-THIS.prompt.md`, `manifest.json`, `execution-profile.json`, and the runner protocol files, but it must not execute an eval prompt itself. In phase one, it follows `delegation.dispatch_owner`: for runner-owned dispatch it invokes the foreground package-local `invoke-runner-owned-arms.ps1` command exactly once and waits for its terminal JSON summary; the helper resolves the runner, validates `describe`, preflights every pending `run.json`, asserts native delegation for every result, and refuses to start any execution until all preflights pass. A caller/tool timeout or interrupted conversation does not authorize rerunning Phase 1. If execution was interrupted and no valid `execution-freeze.json` exists, the package is incomplete and requires a fresh iteration. For orchestrator-owned dispatch it resolves the runner, validates `describe`, preflights each `run.json`, and uses the declared native subagent/task. A runner-owned process/thread is the single Eval Worker and model execution; no outer model worker may contain it. Orchestrator-owned workers must not invoke `runner.ps1 execute`; their transport envelope passes through `record-native-result.ps1`. Runner-owned execution results come directly from the runner and must never be synthesized, repaired, or reconstructed from assistant text. The runner launches each native session from its own run directory with `repo/` as the working directory, `home/` as the isolated profile, and the required isolation controls; hard filesystem confinement, when a runner proves it, raises the reported isolation from pragmatic to strict but is not itself a prerequisite. The runner receives only `run.json` and `execution-profile.json`; workers never see the runner, manifest, grading key, sibling results, or orchestration commentary, because all of those live outside the run directory. Never reuse a worker or session between runs. In phase two, only after Phase 1 returns a successful terminal JSON summary and the immutable freeze validates, the executor bridges results into `eval-result/2`, reads the grading key, follows the packaged `skill-creator` grader guidance, writes the grading evidence, invokes the package adapter so Anthropic's aggregator and eval viewer produce the report, and returns the report path and comparison. It does not ask the user whether to start either phase.
 
 The candidate instructions are already inlined in the with_skill run's `prompt.md` and staged under its `skill/<name>/` directory; the orchestrator does not load or summarize them for the worker. The baseline run has no `skill/` directory and no candidate instructions, and the orchestrator must not expose the candidate skill through another route, including a globally installed copy. The generated prompt files and the baseline `run.json` also omit the skill name, eval identifiers, and configuration labels so workers receive an ordinary task rather than an announcement that they are under evaluation.
 
-Use the same model, model version, configuration, tools, and limits for every worker. Disable persistent memory and cross-session recall. Independent runs may execute concurrently when the selected harness and the user's token budget allow it, but every run still gets a distinct context and no shared mutable workspace.
+Use the same model, model version, configuration, tools, and limits for every worker. Disable persistent memory and cross-session recall. Independent runs must execute concurrently up to `min(execution-profile.json.concurrency, remaining arms)` when harness capacity permits, but every run still gets a distinct context and no shared mutable workspace. For any selected runner whose descriptor says `delegation.dispatch_owner=runner`, the external orchestrator invokes `invoke-runner-owned-arms.ps1` exactly once as the foreground Phase 1 command, with the caller shell/tool timeout set to at least the package-computed allowance. The external orchestrator must not hand-author preflight, fan-out, state, or result bookkeeping. If the foreground command is terminated before a valid final result and freeze exist, Phase 1 fails closed and requires a fresh package; no arm is restarted. Copilot task/general-purpose workers, OpenCode Task/General workers, and Codex native mechanisms remain harness capabilities only; they are not the behavioral transport for runner-owned evaluation.
 
-`RUN-THIS.prompt.md` requires a harness that can create isolated workers or sessions. A plain single-context client can still execute an individual self-contained prompt when the user opens it directly as the first message of a fresh session, but it cannot provide the paired comparison and report contract in that same context. Partial packages still grade and report what exists; missing arms remain visibly missing.
+`RUN-THIS.prompt.md` requires a selected Eval Runner that can create isolated workers or sessions. A plain single-context client can still execute an individual self-contained prompt when the user opens it directly as the first message of a fresh session, but it cannot provide the paired comparison and report contract in that same context. A selected runner that cannot satisfy a required guarantee is `incompatible`; there is no generic fallback or runner substitution. Partial package state may be inspected and reported, but the completion gate must pass before it can be presented as a completed evaluation; missing or unrun arms remain visibly incomplete.
 
 An `output` is the model's own message in full, including questions, caveats, explanations, or a refusal. Where a run invoked a tool, that tool's stdout is evidence rather than a replacement for the response. Record the full worker transcript, duration, token usage, and tool-call count when the harness exposes them; omit unavailable metrics rather than estimating them.
 
@@ -154,17 +156,17 @@ A meaningful A/B result requires both configurations to run on the same model, t
 
 ### Result handoff
 
-An externally produced result comes back identified by eval id, configuration (`with_skill` or `without_skill`), model and provider, and the produced output. It may also carry the transcript, duration, total tokens, tool-call count, output files, and notes. The user can hand it over as filled-in `results/*.result.json` files, or state it in chat and let the agent fill them in.
+An externally produced result is valid only when the selected runner's native transport persists it at the exact manifest-declared execution-result path, identified by eval id, configuration (`with_skill` or `without_skill`), runner-native model, harness, and produced output. It may also carry the transcript, duration, total tokens, tool-call count, output files, and notes. The external evaluator may add grading fields after the bridge; it must not author or repair raw execution evidence.
 
-Which artifact transfer happens depends on where the harness ran, and `RUN-THIS.prompt.md` tells it to close either way. A harness sharing a disk with the package writes the result files, grading, `benchmark.json`, `benchmark.md`, the first-party `report.html`, and the exact upstream `skill-creator-report.html` itself and reports the first-party report path. A harness that does not - a different product, a browser, or a sandbox - ends with one paste-ready block carrying the package path and every completed result object, including grading, plus the reports as file artifacts when supported. A repository session can use `-CollectResults` only as a fallback for transferred results that lack the report artifacts. "Bring the results back" means those artifacts, never a prose recap of how the runs went.
+Which artifact transfer happens depends on where the harness ran, and `RUN-THIS.prompt.md` tells it to close either way. A harness sharing a disk with the package writes the runner-produced result files, grading, `benchmark.json`, `benchmark.md`, the first-party `report.html`, and the exact upstream `skill-creator-report.html` itself and reports the first-party report path. If the selected external process cannot write valid runner-produced execution results back into the package, the evaluation is incomplete and must fail closed; a response-only or reconstructed result cannot substitute for persisted transport evidence.
 
-Validate and compare a collected iteration with:
+An explicitly authorized forensic recovery of an old or broken package may validate an existing iteration with:
 
 ```
-pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>
+pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>
 ```
 
-It checks that each result matches its eval and configuration, warns when an arm is missing, unrun, or ran on a different model, and writes `comparison.md`, the paired `report.html`, the exact upstream `skill-creator-report.html`, and the upstream `benchmark.json`/`benchmark.md`. The external evaluator may grade in its user-directed phase-two context; repository automation remains deterministic and never invokes a model. Use deterministic checks for mechanical assertions and evidence-backed human or evaluator judgement only where the assertion is genuinely qualitative.
+It checks that each result matches its eval and configuration, may inspect and write `comparison.md`, the paired `report.html`, the exact upstream `skill-creator-report.html`, and the upstream `benchmark.json`/`benchmark.md` while warning when an arm is missing, unrun, or ran on a different model. It exits non-zero when the required completion gate is not satisfied, so an incomplete or unrun package is not a completed evaluation. The external evaluator may grade in its user-directed phase-two context; repository automation remains deterministic and never invokes a model. Use deterministic checks for mechanical assertions and evidence-backed human or evaluator judgement only where the assertion is genuinely qualitative.
 
 ### Workspace isolation
 
@@ -185,7 +187,7 @@ Every repo-managed skill must include its own `evals/evals.json` file at `skills
 - To compare a skill against a baseline, prepare a package with **Portable Eval Handoff** and hand `RUN-THIS.prompt.md` to the user; the repository agent never runs the prompts, while the user-directed external executor runs, grades, and reports the paired comparison
 - Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
 
-If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` and run `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` before considering the work complete. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
+If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` and run `pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` before considering the work complete. Use `-CodebeltReference` instead only after its dynamic Copilot model check passes. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
 
 ## Git Identity
 
@@ -193,12 +195,12 @@ Never set or override `git user.name`, `git user.email`, or `alias.bot` in the *
 
 ## Git Operations Safeguards
 
-Agents must never automatically commit code changes or push to remote repositories. Both actions require explicit user approval:
+Agents must never commit code changes or push to remote repositories without explicit user approval. A direct commit request that includes `yolo` or `auto` is explicit approval for the current commit request; it authorizes the agent to complete that commit workflow in the same turn after the required checks pass.
 
-- **Commits**: Always request confirmation from the user before staging and committing code. Present a clear summary of changes and wait for user approval before executing the commit.
+- **Commits**: Request confirmation from the user before staging and committing code unless the same explicit commit request includes `yolo` or `auto`. In that auto-approved case, present the plan as status information and continue directly to staging and committing; do not ask a second confirmation question or end with a pending plan. Required review, scope, identity, message-validation, and post-commit checks still apply.
 - **Remote Operations**: Do not push, pull, fetch, or interact with `origin` or any remote repository without explicit user instruction. These operations modify repository history and can cause data loss if performed unexpectedly.
 
-**Why:** Automatic commits can pollute history with incomplete work, debugging code, or unintended changes. Unexpected remote operations can overwrite or lose commits on shared branches. Always require the user to explicitly approve these operations.
+**Why:** Automatic commits can pollute history with incomplete work, debugging code, or unintended changes. Unexpected remote operations can overwrite or lose commits on shared branches. Never treat silence, urgency, or momentum as approval; `yolo` or `auto` counts as approval only when attached to the same explicit commit request.
 
 ### Commit Skill Routing
 
@@ -315,7 +317,7 @@ Before any completion message, reread the skill instructions and the current con
 
 For script-backed workflows, creating or editing files is not enough on its own. If a skill requires deterministic maintenance or verification commands, run them before completion and report their concrete outcome. For `dotnet-docfx-digest`, `scripts/agents.cs` and `scripts/docfx.cs --build-api-model --validate-samples --verify-docfx-build` are blocking completion gates whenever the skill or task summary says they are required.
 
-Whenever a repo-managed skill was edited, two gates apply in a fixed order. `pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed` runs first and prepares the eval packages for the changed skills, reporting the prompt paths. `scripts/sync-skill-install.ps1` runs last, because every other step can still change a file. Report the actual output of both; an earlier run in the same session satisfies neither. See [Eval preparation is a completion gate](#eval-preparation-is-a-completion-gate) and [Local Install Sync](#local-install-sync).
+Whenever a repo-managed skill was edited, two gates apply in a fixed order. `pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` (or `-CodebeltReference` after dynamic availability verification) runs first and prepares the eval packages for the changed skills, reporting the prompt paths. `scripts/sync-skill-install.ps1` runs last, because every other step can still change a file. Report the actual output of both; an earlier run in the same session satisfies neither. See [Eval preparation is a completion gate](#eval-preparation-is-a-completion-gate) and [Local Install Sync](#local-install-sync).
 
 ## User Input UX
 
@@ -353,126 +355,106 @@ Interim progress updates should describe user-relevant progress, evidence, block
 - Mention tool/runtime failures only when they block progress, require approval, or change the planned validation
 - Prefer concise phrasing such as "The first read attempt failed before returning file content; I'm retrying and will report only if that changes the result"
 
-## Anthropic Skill Authoring Reference
+## Skill Authoring
 
-Essential conventions from [The Complete Guide to Building Skills for Claude](https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf) (Anthropic, Jan 2026). All skills in this repo must follow these rules.
+Skills MUST follow the Agent Skills specification and remain compatible with Anthropic's skill guidance. Repository conventions below may intentionally be stricter than the specification.
 
-### File Structure
+### Structure
 
-```
+```text
 skill-name/
-├── SKILL.md              # Required — exact spelling, case-sensitive
-├── scripts/              # Optional — executable code (Python, Bash, etc.)
-├── references/           # Optional — documentation loaded as needed
-└── assets/               # Optional — templates, fonts, icons used in output
+├── SKILL.md       # Required
+├── scripts/       # Optional executable automation
+├── references/    # Optional supporting documentation
+└── assets/        # Optional templates and output resources
 ```
 
-- **No `README.md`** inside the skill folder — all documentation goes in `SKILL.md` or `references/`
-- Folder name must be **kebab-case** (no spaces, no underscores, no capitals)
-- Folder name must match the `name:` field in YAML frontmatter
+- `SKILL.md` MUST use that exact case-sensitive name.
+- Skill folders MUST use kebab-case.
+- Frontmatter `name` MUST match the folder name.
+- Do NOT place `README.md` inside a skill folder. Put skill documentation in `SKILL.md` or `references/`.
+- Keep `SKILL.md` focused. Move detailed or rarely needed material to `references/`.
+- Keep `SKILL.md` below 5,000 words.
 
-### Progressive Disclosure (Three Levels)
+### Progressive Disclosure
 
-| Level | When loaded | Token cost | Content |
-|-------|------------|------------|---------|
-| **Level 1: Metadata** | Always (at startup) | ~100 tokens | `name` and `description` from YAML frontmatter |
-| **Level 2: Instructions** | When skill is triggered | Under 5k tokens | SKILL.md body — workflows, steps, guidance |
-| **Level 3: Resources** | As needed | Effectively unlimited | Linked files: scripts, references, assets, FORMS.md |
+Design every skill around three levels of context:
 
-Keep SKILL.md under **500 lines / 5,000 words**. Move detailed content to `references/`. Keep references **one level deep** from SKILL.md — nested references cause partial reads.
+1. **Metadata:** `name` and `description` are available before activation.
+2. **Instructions:** the `SKILL.md` body is loaded when the skill is selected.
+3. **Resources:** scripts, references, and assets are loaded or used only when needed.
 
-### YAML Frontmatter
+Minimize content at earlier levels. Do not put instructions into metadata merely to advertise skill capabilities.
 
-Required fields:
+### Frontmatter
 
 ```yaml
 ---
-name: kebab-case-name      # max 64 chars, lowercase + numbers + hyphens only
-description: >              # max 1024 chars, must include WHAT + WHEN + triggers
-  What it does. Use when user asks to [specific phrases].
+name: skill-name
+description: Use when ...
 ---
 ```
 
-Optional fields:
+Required:
+
+- `name`: 1-64 characters, lowercase alphanumeric characters and hyphens only; MUST match the skill directory.
+- `description`: 1-1024 characters and MUST communicate both what the skill is for and when it should activate.
+
+Optional fields such as `license`, `compatibility`, `metadata`, and supported tool restrictions MAY be used when they provide meaningful runtime or distribution information.
+
+### Description Is a Trigger
+
+Treat `description` as **activation metadata, not documentation**.
+
+- SHOULD begin with trigger-oriented language such as `Use when...`.
+- SHOULD describe **user intent**, not the skill's implementation.
+- SHOULD stay at or below a **300-character soft ceiling**.
+- MAY be shorter than 150 characters when that is sufficient. Never pad a description to meet a minimum length.
+- MAY exceed 300 characters only when additional wording materially improves trigger precision or recall.
+- MUST remain within the 1024-character specification limit.
+- SHOULD include distinctive tasks, artifacts, technologies, file types, or domain terms that help discriminate the skill from others.
+- SHOULD cover natural paraphrases conceptually rather than stuffing exact trigger phrases or keywords.
+- SHOULD add exclusions only when needed to prevent realistic near-miss or overlapping skills from triggering.
+- MUST NOT summarize workflows, scripts, implementation details, references, rationale, or every capability of the skill.
+- MUST NOT broaden the description merely to advertise functionality.
+
+Prefer:
 
 ```yaml
-license: MIT                # for open-source skills
-compatibility: >            # max 500 chars — environment requirements
-  Requires network access and Python 3.10+
-metadata:                   # custom key-value pairs
-  author: Company Name
-  version: 1.0.0
-  mcp-server: server-name
+description: Use when creating or refactoring .NET tests that require deterministic remote or containerized execution across supported test harnesses.
 ```
 
-**Forbidden**: XML angle brackets (`< >`), names containing "claude" or "anthropic" (reserved).
-
-### Description Field — The Most Important Part
-
-Structure: `[What it does] + [When to use it] + [Key capabilities]`
+Avoid:
 
 ```yaml
-# ✅ Good — specific, actionable, includes triggers
-description: >
-  Manages Linear project workflows including sprint planning,
-  task creation, and status tracking. Use when user mentions
-  "sprint", "Linear tasks", "project planning", or asks to
-  "create tickets".
-
-# ❌ Bad — too vague, no triggers
-description: Helps with projects.
+description: Provides comprehensive guidance, scripts, configuration options, troubleshooting procedures, and best practices for running .NET tests remotely using containers and multiple supported test harnesses.
 ```
 
-- Include trigger phrases users would actually say
-- Mention file types if relevant
-- Add negative triggers to prevent over-triggering: `Do NOT use for simple data exploration`
+Optimize for **trigger precision and recall per character**, not descriptive completeness.
 
-### Writing Instructions
+### Instructions
 
-- Be **specific and actionable** — `Run scripts/validate.py --input {filename}` not `Validate the data`
-- Include **error handling** — common errors, causes, and solutions
-- Use **feedback loops** — run validator → fix errors → repeat
-- Put **critical instructions at the top** — use `## Critical` or `## Important` headers
-- For critical validations, **use scripts over language instructions** — code is deterministic
-- Prefer **dynamic defaults over hardcoded values** when the source data is available from the repo, environment, or an official machine-readable feed
+Inside `SKILL.md`:
 
-### Skill Categories
+- Make instructions specific, actionable, and ordered where sequencing matters.
+- Put critical constraints near the top.
+- Include error handling where failures are predictable.
+- Use validation and refinement loops where output quality benefits from iteration.
+- Prefer deterministic scripts for repeatable or critical validation rather than lengthy natural-language procedures.
+- Prefer values discoverable from the repository, environment, or authoritative machine-readable sources over hardcoded defaults.
+- Keep detailed reference material out of the main instruction path.
 
-| Category | Purpose | Example |
-|----------|---------|---------|
-| **Document & Asset Creation** | Consistent, high-quality output (docs, code, designs) | `frontend-design`, `docx`, `xlsx` |
-| **Workflow Automation** | Multi-step processes with validation gates | `skill-creator`, scaffolding skills |
-| **MCP Enhancement** | Workflow guidance layered on top of MCP tool access | `sentry-code-review` |
+### Validation
 
-### Common Patterns
+Before shipping or materially changing a skill, verify that it:
 
-1. **Sequential workflow** — explicit step ordering with dependencies and rollback
-2. **Multi-MCP coordination** — phase separation, data passing between services
-3. **Iterative refinement** — draft → validate → fix → repeat until quality threshold
-4. **Context-aware selection** — decision trees for choosing the right tool/approach
-5. **Domain-specific intelligence** — compliance checks, governance, audit trails
+- triggers for obvious relevant requests;
+- triggers for realistic paraphrases and implicit intent;
+- does not trigger for realistic near-miss requests;
+- behaves correctly after activation;
+- improves the intended outcome compared with not using the skill.
 
-### Testing Checklist
-
-Before shipping a skill, verify:
-
-- [ ] Triggers on obvious tasks
-- [ ] Triggers on paraphrased requests
-- [ ] Does **not** trigger on unrelated topics
-- [ ] Functional tests pass (correct outputs, error handling, edge cases)
-- [ ] Performance improves over baseline (fewer messages, fewer errors, fewer tokens)
-
-Debug triggering: ask Claude `"When would you use the [skill name] skill?"` — it will quote the description back.
-
-### Troubleshooting Quick Reference
-
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| Skill won't upload | `SKILL.md` misspelled or YAML invalid | Exact case `SKILL.md`, check `---` delimiters |
-| Skill never triggers | Description too vague | Add trigger phrases, mention file types |
-| Skill triggers too often | Description too broad | Add negative triggers, narrow scope |
-| Instructions not followed | Too verbose or ambiguous | Shorten, use bullets, move detail to `references/` |
-| Slow / degraded responses | Too much content loaded | Keep SKILL.md under 5k words, use progressive disclosure |
+When optimizing a description, test both **should-trigger** and **should-not-trigger** cases. Prefer measured trigger behavior over arbitrary description length, and avoid tailoring descriptions to individual evaluation phrases.
 
 ## Karpathy Rules
 

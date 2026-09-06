@@ -1,0 +1,332 @@
+# Eval Runner protocol
+
+## Native worker orchestration
+
+The external handoff uses this topology:
+
+```text
+Eval Orchestrator
+    |
+    +-- Eval Worker -> one eval arm
+    +-- Eval Worker -> one eval arm
+    +-- Eval Worker -> one eval arm
+    +-- ...
+```
+
+The Eval Orchestrator observes the phase boundary and does not execute an eval
+arm in its own model context. Each descriptor declares
+`delegation.dispatch_owner`: `orchestrator` means the orchestrator creates the
+declared native subagent/task, while `runner` means the orchestrator starts the
+runner-owned native execution surface directly. One arm equals one fresh
+native Eval Worker and one model-backed execution. A runner-owned process or
+thread is that worker; it must not be nested inside an outer model session.
+
+`orchestration.ps1` is the deterministic queue/state helper copied into every
+package. It creates one worker envelope per exact manifest arm, keeps unrelated
+arms dependency-free, exposes at most the requested
+`execution-profile.json.concurrency` active slots, and leaves a capacity
+rejection pending without incrementing the eval attempt count. Independent arms
+must use at least two active slots when the requested concurrency and harness
+capacity permit it. `Assert-OrchestrationConcurrency` rejects a serial run that
+has no explicit capacity-limit evidence; `bridge-manifest-results.ps1
+-RequireParallelDispatch` applies that gate before completion. It contains no
+harness-specific concurrency ceiling. `Assert-NativeWorkerDelegation` is the
+fail-closed handoff gate: an unavailable/unsupported native mechanism cannot
+fall back to parent execution, while a conditional mechanism may dispatch only
+when terminal evidence will be checked. The dispatch owner is part of the
+same descriptor/preflight contract, so generic orchestration does not infer it
+from a runner name.
+
+For `delegation.dispatch_owner=runner`, the external handoff invokes
+`invoke-runner-owned-arms.ps1` exactly once as a foreground Phase 1 command and
+sets the caller shell/tool timeout to at least the package-computed allowance.
+The helper returns one terminal JSON summary. A caller/tool timeout or
+interrupted conversation is not permission to invoke Phase 1 again; if execution
+was interrupted and no valid `execution-freeze.json` exists, the package is
+incomplete and requires a fresh iteration.
+
+The foreground fan-out reads the manifest/profile, resolves the runner and descriptor, requires
+`delegation.dispatch_owner=runner`, preflights every pending manifest run, and
+invokes `Assert-NativeWorkerDelegation` for every preflight result. Any
+incompatible preflight produces a concise machine-readable summary, starts zero
+`execute` processes, and exits non-zero. Preflight has its own deterministic
+120-second model-free capability-probe timeout; it does not inherit the model
+execution timeout. Only after every preflight passes does
+it use the exact orchestration-plan worker IDs and manifest-declared
+execution-result paths, start runner-owned `execute` processes concurrently,
+redirect each process's single JSON stdout directly to its declared path,
+register the runner-produced session/result once, persist
+`orchestration-state.json`, and enforce the parallel-dispatch gate. Child
+processes are headless isolation boundaries: they start through
+`fanout-process.ps1` with `CreateNoWindow` so no per-child console window
+appears on Windows, and a freed slot is refilled as soon as ANY child completes
+(not only the oldest), so a slow eval execution never blocks a faster sibling.
+The foreground helper is not called by preparation, validation, CI, hooks, or
+automatic completion gates.
+Behavioral evaluation for GitHub Copilot, Codex, and OpenCode is runner-owned:
+each declares `delegation.dispatch_owner=runner`, is driven by
+the one foreground Phase 1 fan-out, and produces its own terminal
+`execution-result.json`. The orchestrator-owned envelope and
+`record-native-result.ps1` remain available for any runner that still declares
+`dispatch_owner=orchestrator` (for example the deterministic conformance fake).
+
+Phase 1 closes with `execution-freeze.json`. The shared freeze records the exact
+manifest arm paths, runner/harness/model/session identity, terminal status, and
+SHA-256 hashes for every raw `execution-result.json` and every referenced
+transcript/event artifact. `bridge-manifest-results.ps1`, grading, and reporting
+must validate that ledger; none of them can replace it or bless changed bytes.
+If a raw result or referenced artifact changes, the package is corrupted and
+requires a fresh Phase 1 execution.
+
+The normal post-execution boundary is deterministic: the external Grader writes
+only the package-root `grading.json` artifact (`codebeltnet/agentic/eval-grading/1`)
+with exact assertion identities and `passed`/`evidence` decisions. The shared
+`apply-eval-grading.ps1` helper projects those decisions onto canonical
+`result.json` files and verifies that every non-grading field is unchanged.
+`finalize-eval-package.ps1` then validates the freeze, bridge, canonical results,
+and complete grading, invokes the existing report adapter, and fails unless
+`report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`
+are all non-empty. A prose success message cannot substitute for its JSON
+success summary.
+
+The delegation contract has three distinct evidence levels:
+
+```text
+descriptor        advertised harness capability
+preflight         locally observable readiness
+terminal evidence proof for the actual delegated Eval Worker
+```
+
+Descriptor fields describe a possible native mechanism; they do not prove an
+individual child. Preflight may prove that the installed API, plugin, or CLI
+surface is present, but child-specific model, cwd, HOME/config, fresh-session,
+prompt, exclusion, and result facts remain `conditional` until terminal
+evidence arrives. A worker is accepted only when `evidence.delegation` proves
+the requested model, exact arm identity, exact run working directory, exact
+isolated home/config boundary, prompt hash/fidelity, terminal capture, paired
+arm/grading exclusion, fresh worker/session identity, and exactly one model
+execution. Missing or mismatched evidence makes the arm `incompatible`; it is
+never a reason to invoke the parent or a different transport.
+
+For `dispatch_owner=orchestrator`, the harness-native transport returns a
+terminal envelope with schema `codebeltnet/agentic/eval-native-worker-result/1`.
+The envelope declares `capture.source = harness_native_transport`,
+`capture.terminal = true`, and `capture.worker_authored = false`; the model
+worker's answer is data inside the envelope, never its author. The
+orchestrator preserves that envelope and invokes `record-native-result.ps1`.
+For `dispatch_owner=runner`, the runner's one-arm native execution surface
+produces the canonical `execution-result.json` directly; the orchestrator does
+not invoke the recorder, manufacture an envelope, or copy assistant text into
+transport evidence. In both modes, transport-owned timestamps, identity,
+isolation observations, prompt fidelity, terminal completion, and a hashed raw
+transcript/event artifact are mandatory. A parent-created summary or repaired
+result is incompatible. Native bridging also checks the result's runner
+identity, the descriptor's exact delegation mechanism, and the hashed artifact.
+An `incompatible` arm is diagnostic-only: it is never gradeable and fails the
+completion/benchmark gate.
+
+The descriptor's `delegation` object records the dispatch owner, native mechanism, worker role,
+advertised full-capability/model-lock/working-directory/result-capture
+properties, harness-authoritative capacity, and the invariant
+`nested_model_execution = false`. The direct `execute` process surface is the
+runner-owned native worker surface when `dispatch_owner=runner`; for
+orchestrator-owned runners it remains a compatibility/conformance surface and
+must not be invoked inside the native subagent.
+
+Native delegation mechanisms use full harness operational permission inside each isolated eval boundary. That permission lets the evaluated agent perform ordinary engineering work without interactive prompts. It is separate from eval isolation: fresh session/process identity, isolated harness home/config, exact model lock, correct working directory, baseline skill exclusion, with-skill candidate exposure, prompt fidelity, and terminal evidence remain mandatory.
+
+Operational permission, native skill isolation, and filesystem isolation are distinct. Operational permission is full inside the behavioral eval (`dangerFullAccess`/`danger-full-access`) so normal engineering work can proceed. Native skill isolation suppresses native skill catalogue injection, disables the evaluated candidate in the native registry when the harness exposes such a registry, verifies the effective candidate state before model execution, and fails closed when structured runtime evidence shows ambient native skill access outside the staged eval boundary. Filesystem isolation is `pragmatic` on native Windows unless an outer hard sandbox is actually proven; the runner does not claim that a native Windows worker cannot access the rest of the host filesystem. Hard filesystem confinement is an optional outer capability supplied by `bwrap`, `sandbox-exec`, or another already-supported platform mechanism; it raises isolation confidence to `strict` when proven, and otherwise the run reports `pragmatic` isolation without downgrading valid mandatory controls.
+
+Native delegation mechanisms:
+
+- GitHub Copilot: runner-owned behavioral transport. The runner starts one
+  fresh Copilot CLI session per eval execution (`copilot -C <working-directory>
+  --model <model> --output-format json`, prompt on stdin) and captures that
+  session's own JSONL events as terminal evidence for its model, cwd, isolated
+  `COPILOT_HOME`, fresh session, prompt hash, and transcript. Copilot's native
+  `task` tool with a full-capability `general-purpose` child remains an
+  advertised harness capability but is not the benchmark transport. When an
+  `interaction.json` sidecar is present, the runner first proves from the
+  installed help that an explicit session-id continuation flag is available,
+  captures the first session id from structured events, and adds only that
+  exact id on later turns; it never resumes the most recent session.
+- Codex: the installed CLI's runner-owned app-server child-session surface,
+  `config/read` and `skills/list(forceReload=true)` before `thread/start`,
+  then `thread/start` followed by `turn/start`, with supplemental
+  post-completion `thread/read` when available, and the arm's `cwd`, selected
+  model, and ephemeral/fresh session settings. The schema/feature probe is
+  preflight readiness only; terminal evidence must prove the actual thread.
+  Every Codex eval session passes session-level `-c` controls that set
+  `skills.include_instructions=false` and disable the evaluated
+  `candidateSkillName` through `skills.config`. The app-server path verifies
+  the effective `skills.include_instructions=false` value with `config/read`
+  and accepts `skills/list` only when the candidate is either absent or every
+  matching native entry is disabled. The compatibility `codex exec` path uses
+  the same session controls and additionally verifies model-visible suppression
+  with `debug prompt-input` before it can start `codex exec`. Subscription auth
+  uses a temporary auth-only `CODEX_HOME` containing only `auth.json`; that
+  excludes copied ambient config but is not, by itself, candidate-skill
+  exclusion proof. The runner physically projects only the arm's `repo/`,
+  `home/`, and candidate `skill/` outside the source-repository ancestor chain,
+  does not copy ambient config, skills, agents, sessions, memories, plugins,
+  MCP configuration, or AGENTS.md, and removes the projection/home in
+  `finally`. `model/rerouted`, instruction sources outside that physical arm
+  boundary, an enabled native candidate entry, unproven native catalogue
+  suppression, unavailable runtime path-bearing evidence, or observed access to
+  an ambient native skill path outside the staged with-skill copy is
+  incompatible. `turn/start` requests `approvalPolicy=never` with
+  `sandboxPolicy.type=dangerFullAccess`; the compatibility `codex exec` path
+  uses `--ask-for-approval never --sandbox danger-full-access`. Do not wrap a
+  native Codex app-server worker in another Codex subagent.
+- OpenCode: runner-owned behavioral transport. The runner starts one fresh
+  OpenCode session per eval execution (`opencode run --format json --auto
+  --model <model>`, prompt on stdin) and captures that session's structured
+  events as terminal evidence. Scripted interactions use only help-proven
+  `--session <exact-session-id>` continuation after turn 1; `--continue` is
+  never used. Parallelism comes from the deterministic
+  foreground internal process fan-out (`invoke-runner-owned-arms.ps1`), not from an
+  orchestrator emitting sibling Task calls in one assistant turn. OpenCode's
+  native Task/General subagent (and read-only `Explore`/`Scout`) remain
+  advertised harness capabilities but are not the benchmark transport.
+This directory contains the package-local implementation of the v0.9.1 Eval
+Runner protocol. It is copied into prepared packages so the external Eval
+Orchestrator can use the same runner implementation that was validated with the
+package. It is not a model executor used by repository automation.
+
+The boundary is owner-dependent:
+
+```text
+dispatch_owner=orchestrator: run.json + execution-profile.json -> native worker envelope -> record-native-result.ps1 -> execution-result.json
+dispatch_owner=runner:       run.json + execution-profile.json -> runner-owned native execute -> execution-result.json
+```
+
+`run.json` is the existing portable one-arm contract. It owns the prompt,
+working directory, isolated home, staged candidate skill, and required
+experimental controls. `candidateSkillName` is immutable runner/control-plane
+metadata present in both arms so the runner can disable and verify the evaluated
+native skill without adding candidate instructions to the baseline prompt;
+`skillName` and `skillDirectory` remain populated only for the with-skill arm
+that receives the staged candidate copy. Its `filesystemIsolationRequired` and
+`mustNotReadOutsideSandbox` fields describe the staged worker-facing package
+boundary; they do not claim that the host has a hard OS filesystem sandbox.
+`execution-profile.json` selects the runner, runner-native model selector, and
+execution configuration. The model string is opaque to the portable layer: a
+runner may pass it through unchanged or split it internally when its native CLI
+requires separate provider/model arguments. The profile contains no credentials,
+secrets, or portable provider field.
+`execution-result.json` normalizes one blind execution and keeps grading
+separate from raw evidence. Its `exit.status` is a numeric process exit code or
+`null`, never a textual lifecycle label such as `completed`. Ordinary runs are
+single-turn; an optional package-local `interaction.json` sidecar can request
+scripted user turns, but only a runner that advertises and preflights
+`scripted_multi_turn_same_session` may continue one fresh session. The runner
+captures ordered user/assistant turns, the shared session/thread identity,
+timestamps when available, and the complete final transcript/event artifact.
+
+Every runner exposes the same process surface:
+
+```text
+runner.ps1 describe
+runner.ps1 preflight -Run <run.json> -Profile <execution-profile.json>
+runner.ps1 execute -Run <run.json> -Profile <execution-profile.json>
+```
+
+The native handoff additionally uses:
+
+```text
+record-native-result.ps1 -Runner <runner> -Run <run.json> -Profile <execution-profile.json> -NativeResult <native-worker-result.json> -Output <execution-result.json>
+```
+
+`record-native-result.ps1` is deterministic and never starts a harness or a
+model; it is used only for orchestrator-owned native envelopes. The direct
+`execute` command runs exactly one arm and is the runner-owned native transport
+when the descriptor says `dispatch_owner=runner`. It must not be nested inside
+an outer model worker. A scripted interaction still uses one `execute` process
+and one exact native session identity; later turns are runner-owned
+continuation invocations, never fresh sessions or implicit last-session resumes.
+
+The commands emit one JSON document. `describe` and `preflight` do not consume
+model tokens. `execute` runs exactly one arm, never grades or retries for answer
+quality, and returns a normalized result even for refusals, timeouts, failures,
+and incompatibility. Single-turn execution always starts a fresh session;
+scripted continuation is an explicit capability-gated exception inside that
+same runner-owned execution.
+
+The package resolver selects a named child directory under this directory. It
+does not guess a runner and does not fall back to an improvised worker. A
+selected runner that cannot satisfy the required contract returns
+`incompatible`. Hard OS-level filesystem confinement is a confidence signal,
+not a universal prerequisite: a run with all mandatory experimental controls
+proven reports `strict` isolation when hard confinement is proven and
+`pragmatic` isolation when it is not. A missing fresh context, controlled skill
+boundary, prompt fidelity, result capture, or other mandatory control remains
+incompatible.
+
+The fake runner is deterministic and is the conformance reference. It has no
+harness-native delegation surface and its compatibility output is never proof
+for a real harness. GitHub
+Copilot, Codex, and OpenCode are thin harness-specific adapters. Their
+native CLI flags, environment setup, event parsing, authentication injection,
+and isolation checks stay inside their own directories. Windows is supported in
+pragmatic mode when the native CLI satisfies the mandatory controls.
+
+`github-copilot` with `claude-haiku-4.5` is the Codebelt Reference evaluation
+configuration: a stable, economical pairing for routine skill comparison. It is
+a repository convention, not an Anthropic default, and preparation verifies that
+the model still appears in the current Copilot catalog before selecting it.
+Cross-runner and cross-model numbers are never blended into one score; a paired
+`with_skill` versus `without_skill` comparison is only meaningful within one
+identical runner, model, and configuration stratum.
+
+The following CLI details describe compatibility `execute` behavior where a
+runner owns a different native surface; they are not a second model layer for
+native worker orchestration. The native worker mechanisms above are
+authoritative for the external handoff. A runner-owned runner may use its
+`execute` command as that native surface; an orchestrator-owned runner must
+keep `execute` out of the native subagent.
+
+For a single-turn run, GitHub Copilot uses `copilot -C <working-directory> --model <model>
+--output-format json --allow-all --no-ask-user --disable-builtin-mcps
+--no-color --log-level none --no-auto-update
+--secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN` with the exact
+prepared prompt bytes delivered once through stdin. It passes no `--prompt`/`-p`,
+`--resume`, `--continue`, `--session-id`, or `--connect` on this fresh
+single-turn invocation, and it does not use
+the blanket `--yolo` switch. `--allow-all` is the documented noninteractive
+programmatic grant that approves tools, paths, and URLs inside the isolated eval
+boundary.
+Repository-owned custom instructions remain enabled and are staged identically
+in both paired arms. Personal Copilot configuration is excluded by run-local
+`COPILOT_HOME`, `COPILOT_CACHE_HOME`, `HOME`, `USERPROFILE`, and XDG roots;
+the runner does not copy the normal `.copilot` directory. Authentication prefers
+explicit `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; when none is
+present, the trusted runner may resolve `gh auth token` outside the worker and
+inject only that token as a protected environment variable. Host `GH_CONFIG_DIR`
+is never forwarded into the evaluated worker. `--secret-env-vars` removes every
+listed token variable from shell and MCP child environments. Preflight does not
+make a model request and therefore reports native keychain/service readiness as
+conditional rather than claiming successful remote authentication. Codex's
+compatibility API-key path uses `--ask-for-approval never` with `exec --sandbox
+danger-full-access`; subscription eval arms use the runner-owned app-server path
+described above. It does not combine explicit sandbox selection with
+`--approve-for-me`. OpenCode single-turn execution uses `run --format json --auto --model
+<runner-native-model>` with isolated global/config roots and preserves
+repository-owned project configuration; it does not depend on
+`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. For a scripted interaction,
+turn 1 uses those same arguments and later turns add the exact captured session
+id using the installed-help-proven `--session` form; `--continue` is rejected.
+
+Each captures an exact observable
+CLI version and passes only documented environment credentials when the selected
+runner supports them. None copies a global skill directory, memory store, plugin
+set, or normal agent profile into a run.
+
+Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list or the installed `copilot help config` model list, Codex through `codex debug models`, and OpenCode through `opencode models --verbose`, which lists all configured providers. OpenCode preserves exact `provider/model` selectors and retains free, paid, or unknown availability as metadata without filtering the selectable catalog. Interactive preparation must normalize explicit harness intent before invoking repository scripts: `Codex` maps to `codex`; `GitHub Copilot`, `GitHub Copilot CLI`, and `Copilot` map to `github-copilot`; `OpenCode` maps to `opencode`. Codex defaults to `gpt-5.6-luna` with low reasoning, GitHub Copilot defaults to the Codebelt Reference model `claude-haiku-4.5`, and both defaults are validated by package preparation. OpenCode still requires a discovered `provider/model` selector from the user when none was supplied; an explicit selector is preserved verbatim and is never silently replaced.
+
+## Live observability
+
+Observability is part of the runner contract, so a long, quiet execution is never indistinguishable from a hung one. It is a shared concern owned by `runner-progress.ps1`, `fanout-process.ps1`, and `Invoke-RunnerProcess`; runners never implement their own heartbeat, elapsed-time, lifecycle, relay, or persistence machinery. STDOUT stays reserved for the single machine-readable terminal result, and every progress signal goes to STDERR instead, so the existing one-terminal-JSON protocol and structured result parsing are unchanged.
+
+The shared process primitives tee each child's captured streams: every byte still reaches the exact evidence or result file while a wrapper exposes safe live activity metadata (real stdout/stderr event and byte counts, the age of the most recent real output) and pulls structured child progress out of the captured STDERR for relay. Actual model output is only ever counted, never echoed to the operator console. An actively running arm emits an operator-visible heartbeat at least every ~15 seconds (`AGENTIC_RUNNER_HEARTBEAT_SECONDS` shortens it for fast, deterministic tests) carrying the runner, worker/arm, PID, elapsed runtime, remaining timeout budget, last-activity age, phase, and observed counts. Lifecycle uses a small generic vocabulary (`queued`, `preflight`, `starting`, `running`, `active`, `idle`, `completing`, `completed`, `failed`, `timed-out`, `terminating`, `terminated`). The runner-owned fan-out relays each child's structured progress through its own STDERR, re-stamped with the correct worker identity so concurrent arms never interleave anonymously. When a runner reaches its timeout or fails, a final diagnostic snapshot is emitted before control returns, recording the last-known PID, elapsed, timeout, last-activity age, phase, counts, exit code, whether termination was required and observed, and a bounded, sanitized STDERR tail. Observability never blocks completion and never weakens the authoritative watchdog: a dead child stays killable and Phase 1 still reaches a deterministic terminal state.
+
+Progress is also persisted for post-mortem inspection. The fan-out appends every event as one JSON line to `progress/phase1-progress.jsonl` inside the iteration and advertises that relative path as `progress_log` in the terminal summary, so a caller can always discover where ongoing and recent activity can be inspected. A runner's own model-process lifecycle and heartbeats are opt-in through the orchestration environment: the fan-out sets `AGENTIC_RUNNER_PROGRESS`, every runner's model-CLI call relays its process lifecycle through STDERR, and a runner invoked standalone or under the conformance tests stays byte-identical and silent. Observability never prints authentication tokens, API keys, environment values, credential contents, full prompts, candidate skill contents, or full model responses; it prefers safe activity metadata and redacts secret-looking values in any surfaced tail.

@@ -1,7 +1,7 @@
 ---
 name: dotnet-change-impact
 description: >
-  Classifies .NET library or NuGet package changes and recommends the correct release bump: Major, Minor, or Patch. Applies both Semantic Versioning (MAJOR.MINOR.PATCH) and .NET assembly/file versioning (Major.Minor.Build.Revision), grounded in Microsoft’s official .NET library compatibility rules. Use when evaluating the current branch, breaking changes, API diffs, public API changes, dependency updates, TFM/platform support, interface or enum changes, overloads, analyzers, source generators, or binary/source/behavioral/design-time/backwards compatibility. When no explicit change details or compare range are provided, inspects the current Git branch and compares it against the upstream default branch automatically. Always returns structured compatibility reasoning with the recommendation.
+  Use when the user wants a Major, Minor, or Patch recommendation for .NET library or NuGet package changes, including API diffs, behavior changes, dependencies, target frameworks, analyzers, or source generators, based on compatibility impact.
 ---
 
 # .NET Change Impact
