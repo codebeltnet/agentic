@@ -45,7 +45,7 @@ function Invoke-ForegroundPhaseOne {
     # never contaminate the JSON the controller parses.
     $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('phase1-stderr-' + [Guid]::NewGuid().ToString('N') + '.log')
     try {
-        $output = & pwsh -NoProfile -File $fanout -IterationDirectory $IterationDirectory 2>$stderrPath
+        $output = & pwsh -NoProfile -NonInteractive -File $fanout -IterationDirectory $IterationDirectory 2>$stderrPath
         $exitCode = $LASTEXITCODE
         $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
         $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
@@ -779,12 +779,12 @@ try {
     # Regression (#6): runner-owned child processes are headless on Windows. The
     # start configuration keeps a real isolation boundary but must not create a
     # visible console window, and stdout/stderr stay redirected for capture.
-    $headlessStartInfo = New-RunnerChildProcessStartInfo -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', 'runner.ps1', 'execute') -WorkingDirectory $testRoot
+    $headlessStartInfo = New-RunnerChildProcessStartInfo -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-NonInteractive', '-File', 'runner.ps1', 'execute') -WorkingDirectory $testRoot
     Assert-True (-not $headlessStartInfo.UseShellExecute) 'runner child process does not use ShellExecute'
     Assert-True ($headlessStartInfo.CreateNoWindow) 'runner child process creates no visible console window'
     Assert-True ($headlessStartInfo.RedirectStandardOutput) 'runner child process redirects stdout for exact result capture'
     Assert-True ($headlessStartInfo.RedirectStandardError) 'runner child process redirects stderr for diagnostics'
-    Assert-Equal 'runner.ps1' ([string]$headlessStartInfo.ArgumentList[2]) 'runner child process preserves its exact argument vector without manual quoting'
+    Assert-Equal 'runner.ps1' ([string]$headlessStartInfo.ArgumentList[3]) 'runner child process preserves its exact argument vector without manual quoting'
 
     # Regression (OpenCode hang): both the shared process helper and the
     # runner-owned child watchdog must return after a forced termination even

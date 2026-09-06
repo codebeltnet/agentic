@@ -2,6 +2,7 @@ Usage: copilot [options]
   -C, --directory <directory>             Working directory
   --model <model>                         Model selector
   --output-format <format>                Structured output format
+  --allow-all                             Enable all permissions
   --allow-all-tools                       Allow tools
   --no-ask-user                           Disable prompts
   --disable-builtin-mcps                  Disable built-in MCP servers

@@ -1909,7 +1909,7 @@ function Resolve-ExternalCommand {
         if ($null -eq $pwsh) {
             return $null
         }
-        return [pscustomobject]@{ FileName = [string]$pwsh.Source; Prefix = @('-NoProfile', '-File', $source); Source = $source }
+        return [pscustomobject]@{ FileName = [string]$pwsh.Source; Prefix = @('-NoProfile', '-NonInteractive', '-File', $source); Source = $source }
     }
 
     return [pscustomobject]@{ FileName = $source; Prefix = @(); Source = $source }

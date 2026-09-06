@@ -133,6 +133,8 @@ runner-owned native worker surface when `dispatch_owner=runner`; for
 orchestrator-owned runners it remains a compatibility/conformance surface and
 must not be invoked inside the native subagent.
 
+Native delegation mechanisms use full harness operational permission inside each isolated eval boundary. That permission lets the evaluated agent perform ordinary engineering work without interactive prompts. It is separate from eval isolation: fresh session/process identity, isolated harness home/config, exact model lock, correct working directory, baseline skill exclusion, with-skill candidate exposure, prompt fidelity, and terminal evidence remain mandatory. Hard filesystem confinement is an optional outer capability supplied by `bwrap`, `sandbox-exec`, or another already-supported platform mechanism; it raises isolation confidence to `strict` when proven, and otherwise the run reports `pragmatic` isolation without downgrading valid mandatory controls.
+
 Native delegation mechanisms:
 
 - GitHub Copilot: runner-owned behavioral transport. The runner starts one
@@ -157,7 +159,10 @@ Native delegation mechanisms:
   config, skills, agents, sessions, memories, plugins, MCP configuration, or
   AGENTS.md, and removes the projection/home in `finally`. `model/rerouted`
   and instruction sources outside that physical arm boundary are incompatible.
-  Do not wrap a native Codex app-server worker in another Codex subagent.
+  `turn/start` requests `approvalPolicy=never` with
+  `sandboxPolicy.type=dangerFullAccess`; the compatibility `codex exec` path
+  uses `--ask-for-approval never --sandbox danger-full-access`. Do not wrap a
+  native Codex app-server worker in another Codex subagent.
 - OpenCode: runner-owned behavioral transport. The runner starts one fresh
   OpenCode session per eval execution (`opencode run --format json --auto
   --model <model>`, prompt on stdin) and captures that session's structured
@@ -262,15 +267,15 @@ authoritative for the external handoff. A runner-owned runner may use its
 keep `execute` out of the native subagent.
 
 For a single-turn run, GitHub Copilot uses `copilot -C <working-directory> --model <model>
---output-format json --allow-all-tools --no-ask-user --disable-builtin-mcps
+--output-format json --allow-all --no-ask-user --disable-builtin-mcps
 --no-color --log-level none --no-auto-update
 --secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN` with the exact
 prepared prompt bytes delivered once through stdin. It passes no `--prompt`/`-p`,
 `--resume`, `--continue`, `--session-id`, or `--connect` on this fresh
 single-turn invocation, and it does not use
-the blanket `--yolo`, `--allow-all`, `--allow-all-paths`, or `--allow-all-urls`
-switches. `--allow-all-tools` is a broad tool-approval grant required for
-noninteractive execution; it does not disable path or URL verification.
+the blanket `--yolo` switch. `--allow-all` is the documented noninteractive
+programmatic grant that approves tools, paths, and URLs inside the isolated eval
+boundary.
 Repository-owned custom instructions remain enabled and are staged identically
 in both paired arms. Personal Copilot configuration is excluded by run-local
 `COPILOT_HOME`, `COPILOT_CACHE_HOME`, `HOME`, `USERPROFILE`, and XDG roots;
@@ -283,7 +288,7 @@ listed token variable from shell and MCP child environments. Preflight does not
 make a model request and therefore reports native keychain/service readiness as
 conditional rather than claiming successful remote authentication. Codex's
 compatibility API-key path uses `--ask-for-approval never` with `exec --sandbox
-workspace-write`; subscription eval arms use the runner-owned app-server path
+danger-full-access`; subscription eval arms use the runner-owned app-server path
 described above. It does not combine explicit sandbox selection with
 `--approve-for-me`. OpenCode single-turn execution uses `run --format json --auto --model
 <runner-native-model>` with isolated global/config roots and preserves
@@ -297,7 +302,7 @@ CLI version and passes only documented environment credentials when the selected
 runner supports them. None copies a global skill directory, memory store, plugin
 set, or normal agent profile into a run.
 
-Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list, Codex through `codex debug models`, and OpenCode through `opencode models --verbose`, which lists all configured providers. OpenCode preserves exact `provider/model` selectors and retains free, paid, or unknown availability as metadata without filtering the selectable catalog. Interactive preparation must present the discovered OpenCode selectors and wait for the user's explicit choice when no model was supplied; an explicit selector is preserved verbatim and is never silently replaced.
+Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list or the installed `copilot help config` model list, Codex through `codex debug models`, and OpenCode through `opencode models --verbose`, which lists all configured providers. OpenCode preserves exact `provider/model` selectors and retains free, paid, or unknown availability as metadata without filtering the selectable catalog. Interactive preparation must normalize explicit harness intent before invoking repository scripts: `Codex` maps to `codex`; `GitHub Copilot`, `GitHub Copilot CLI`, and `Copilot` map to `github-copilot`; `OpenCode` maps to `opencode`. Codex defaults to `gpt-5.6-luna` with low reasoning, GitHub Copilot defaults to the Codebelt Reference model `claude-haiku-4.5`, and both defaults are validated by package preparation. OpenCode still requires a discovered `provider/model` selector from the user when none was supplied; an explicit selector is preserved verbatim and is never silently replaced.
 
 ## Live observability
 

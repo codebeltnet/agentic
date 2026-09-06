@@ -31,7 +31,7 @@ function Invoke-FinalizerCommand {
         [Parameter(Mandatory = $true)][string]$Description
     )
 
-    $output = & pwsh -NoProfile -File $ScriptPath @Arguments 2>&1
+    $output = & pwsh -NoProfile -NonInteractive -File $ScriptPath @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         $detail = [string]::Join(' ', @($output | ForEach-Object { [string]$_ }))
         throw "$Description failed: $detail"

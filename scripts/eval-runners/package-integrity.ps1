@@ -118,7 +118,7 @@ function Assert-PackageRunnerIdentity {
     if (-not (Test-Path -LiteralPath $resolverPath -PathType Leaf)) {
         throw "Package-local Eval Runner resolver is missing at '$resolverPath'."
     }
-    $resolutionOutput = & pwsh -NoProfile -File $resolverPath ([string]$profile.Runner) 2>&1
+    $resolutionOutput = & pwsh -NoProfile -NonInteractive -File $resolverPath ([string]$profile.Runner) 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Selected runner '$($profile.Runner)' could not be resolved package-locally: $([string]::Join(' ', @($resolutionOutput)))"
     }

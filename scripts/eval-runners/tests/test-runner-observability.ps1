@@ -80,7 +80,7 @@ function Invoke-SyntheticChild {
     $originalErrorWriter = [Console]::Error
     try {
         [Console]::SetError($operatorErrorWriter)
-        $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-File', $ScriptPath) -WorkingDirectory $workDirectory -StdoutPath $stdoutPath -StderrPath $stderrPath -TimeoutSeconds $TimeoutSeconds -Runner 'synthetic' -WorkerId $WorkerId -EvalId $EvalId -Configuration $Configuration -Phase 'model-cli' -ProgressLogPath $logPath -HeartbeatSeconds $HeartbeatSeconds
+        $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $ScriptPath) -WorkingDirectory $workDirectory -StdoutPath $stdoutPath -StderrPath $stderrPath -TimeoutSeconds $TimeoutSeconds -Runner 'synthetic' -WorkerId $WorkerId -EvalId $EvalId -Configuration $Configuration -Phase 'model-cli' -ProgressLogPath $logPath -HeartbeatSeconds $HeartbeatSeconds
         $running = [System.Collections.Generic.List[object]]::new()
         $running.Add([pscustomobject]@{ worker_id = $WorkerId; child = $child; Process = $child.Process })
         $index = Wait-AnyRunnerChild -Running $running
@@ -228,7 +228,7 @@ function Invoke-ObservabilityFanout {
     $previousHeartbeat = [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_HEARTBEAT_SECONDS')
     [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_HEARTBEAT_SECONDS', '0.3')
     try {
-        $output = & $pwshPath -NoProfile -File $fanout -IterationDirectory $Root 2>$stderrPath
+        $output = & $pwshPath -NoProfile -NonInteractive -File $fanout -IterationDirectory $Root 2>$stderrPath
         $exitCode = $LASTEXITCODE
     } finally {
         [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_HEARTBEAT_SECONDS', $previousHeartbeat)
@@ -439,7 +439,7 @@ if ($arguments -contains '--version') {
     exit 0
 }
 if ($arguments -contains '--help' -and -not ($arguments -contains 'app-server')) {
-    Write-Output '--ask-for-approval never --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox --cd --model --config'
+    Write-Output '--ask-for-approval never --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox danger-full-access --cd --model --config'
     exit 0
 }
 if ($arguments -contains 'features' -and $arguments -contains 'list') {
@@ -668,7 +668,7 @@ function Invoke-CodexAppServerFixture {
         [Environment]::SetEnvironmentVariable('OPENAI_API_KEY', $null)
         [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_PROGRESS', '1')
         [Environment]::SetEnvironmentVariable('AGENTIC_RUNNER_HEARTBEAT_SECONDS', $heartbeatText)
-        $output = & $pwshPath -NoProfile -File $runnerPath execute -Run $fixture.RunPath -Profile $fixture.ProfilePath 2>$fixture.RunnerStderrPath
+        $output = & $pwshPath -NoProfile -NonInteractive -File $runnerPath execute -Run $fixture.RunPath -Profile $fixture.ProfilePath 2>$fixture.RunnerStderrPath
         $exitCode = $LASTEXITCODE
     } finally {
         $clock.Stop()
@@ -906,7 +906,7 @@ $r = Invoke-RunnerProcess -FileName $pwsh -ArgumentList @('-NoProfile', '-Comman
     $previousRoot = [Environment]::GetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT')
     [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $runnerRoot)
     try {
-        $driverOut = & $pwshPath -NoProfile -File $primitiveDriver 2>$driverStderrPath
+        $driverOut = & $pwshPath -NoProfile -NonInteractive -File $primitiveDriver 2>$driverStderrPath
     } finally {
         [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $previousRoot)
     }
@@ -939,7 +939,7 @@ $r = Invoke-RunnerProcess -FileName $pwsh -ArgumentList @('-NoProfile', '-Comman
     $previousRoot2 = [Environment]::GetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT')
     [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $runnerRoot)
     try {
-        $activeInnerOut = & $pwshPath -NoProfile -File $activeInnerDriver 2>$activeInnerStderrPath
+        $activeInnerOut = & $pwshPath -NoProfile -NonInteractive -File $activeInnerDriver 2>$activeInnerStderrPath
     } finally {
         [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $previousRoot2)
     }
@@ -1005,7 +1005,7 @@ foreach ($ev in $events) {
     [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $runnerRoot)
     [Environment]::SetEnvironmentVariable('AGENTIC_OBS_GRANDCHILD', $openCodeGrandchild)
     try {
-        $ocStreamOut = & $pwshPath -NoProfile -File $openCodeStreamDriver 2>$ocStreamStderrPath
+        $ocStreamOut = & $pwshPath -NoProfile -NonInteractive -File $openCodeStreamDriver 2>$ocStreamStderrPath
     } finally {
         [Environment]::SetEnvironmentVariable('AGENTIC_OBS_RUNNER_ROOT', $previousRoot3)
         [Environment]::SetEnvironmentVariable('AGENTIC_OBS_GRANDCHILD', $previousGrandchild)
@@ -1118,7 +1118,7 @@ Start-Sleep -Milliseconds 1500
     $preflightStdoutPath = Join-Path $testRoot 'preflight.stdout'
     $preflightStderrPath = Join-Path $testRoot 'preflight.stderr'
     $preflightLogPath = Join-Path $testRoot 'preflight-progress.jsonl'
-    $preflightChild = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-File', $slowPreflightScript) -WorkingDirectory $testRoot -StdoutPath $preflightStdoutPath -StderrPath $preflightStderrPath -TimeoutSeconds 30 -Runner 'opencode' -WorkerId 'preflight-arm-99' -EvalId 99 -Configuration 'with_skill' -Phase 'preflight' -ProgressLogPath $preflightLogPath -HeartbeatSeconds 0.3
+    $preflightChild = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $slowPreflightScript) -WorkingDirectory $testRoot -StdoutPath $preflightStdoutPath -StderrPath $preflightStderrPath -TimeoutSeconds 30 -Runner 'opencode' -WorkerId 'preflight-arm-99' -EvalId 99 -Configuration 'with_skill' -Phase 'preflight' -ProgressLogPath $preflightLogPath -HeartbeatSeconds 0.3
     # Call Complete-RunnerChildProcess directly (the synchronous preflight path),
     # without using Wait-AnyRunnerChild.
     $preflightExit = Complete-RunnerChildProcess -Child $preflightChild

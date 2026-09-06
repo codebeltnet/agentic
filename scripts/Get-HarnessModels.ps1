@@ -23,8 +23,6 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [ValidateSet('github-copilot', 'codex', 'opencode')]
     [string]$Runner,
 
     [string]$CatalogPath,
@@ -36,6 +34,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$supportedRunnerIds = @('github-copilot', 'codex', 'opencode')
+if ([string]::IsNullOrWhiteSpace($Runner)) {
+    [Console]::Error.WriteLine("Runner is required. Supported runner IDs: $($supportedRunnerIds -join ', ').")
+    exit 2
+}
+$matchedRunner = @($supportedRunnerIds | Where-Object { [string]::Equals($_, $Runner, [StringComparison]::OrdinalIgnoreCase) })
+if ($matchedRunner.Count -ne 1) {
+    [Console]::Error.WriteLine("Unsupported runner '$Runner'. Supported runner IDs: $($supportedRunnerIds -join ', ').")
+    exit 2
+}
+$Runner = [string]$matchedRunner[0]
 
 $runnerCommon = Join-Path $PSScriptRoot 'eval-runners/runner-common.ps1'
 . $runnerCommon
@@ -251,7 +261,7 @@ function Invoke-JsonCommand {
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
         $environment = New-RunnerProbeEnvironment
-        foreach ($name in @('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME')) {
+        foreach ($name in @('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'CODEX_HOME', 'COPILOT_HOME', 'COPILOT_CACHE_HOME', 'GH_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG')) {
             $value = [Environment]::GetEnvironmentVariable($name)
             if (-not [string]::IsNullOrWhiteSpace($value)) {
                 $environment[$name] = $value
@@ -360,7 +370,7 @@ function Get-OpenCodeModels {
     return ConvertFrom-OpenCodeTextCatalog -Text $result.Stdout
 }
 
-function Get-CopilotModels {
+function Get-CopilotModelsFromSdk {
     $sdkPath = Resolve-CopilotSdkPath
     $node = Resolve-ExternalCommand -Name 'node'
     if ($null -eq $node) {
@@ -379,6 +389,67 @@ console.log(JSON.stringify({ models: ids.map((id) => ({ id, name: id, operation:
     $result = Invoke-JsonCommand -CommandInfo $node -Arguments @('--input-type=module', '-e', $script, $sdkPath) -TimeoutSeconds 90
     $catalog = $result.Stdout | ConvertFrom-Json
     return ConvertTo-ModelChoices -Catalog $catalog -RunnerName 'github-copilot' -Source 'GitHub Copilot CLI help-visible model catalog'
+}
+
+function ConvertFrom-CopilotHelpConfigModels {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $models = [System.Collections.Generic.List[object]]::new()
+    $insideModelSetting = $false
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -match '^\s*`model`:\s*') {
+            $insideModelSetting = $true
+            continue
+        }
+        if ($insideModelSetting -and $line -match '^\s*`[^`]+`:\s*') {
+            break
+        }
+        if (-not $insideModelSetting) {
+            continue
+        }
+
+        $match = [regex]::Match($line, '^\s*-\s+"(?<id>[^"]+)"')
+        if (-not $match.Success) {
+            continue
+        }
+        $id = $match.Groups['id'].Value
+        $models.Add([pscustomobject]@{
+            id = $id
+            name = $id
+            operation = 'language'
+        })
+    }
+
+    return ConvertTo-ModelChoices -Catalog ([pscustomobject]@{ models = @($models.ToArray()) }) -RunnerName 'github-copilot' -Source 'GitHub Copilot CLI help config model list'
+}
+
+function Get-CopilotModelsFromHelpConfig {
+    $command = Resolve-ExternalCommand -Name 'copilot'
+    if ($null -eq $command) {
+        throw 'GitHub Copilot CLI executable is not available on PATH.'
+    }
+
+    $result = Invoke-JsonCommand -CommandInfo $command -Arguments @('help', 'config') -TimeoutSeconds 60
+    $models = @(ConvertFrom-CopilotHelpConfigModels -Text ([string]::Join("`n", @($result.Stdout, $result.Stderr))))
+    if ($models.Count -eq 0) {
+        throw 'GitHub Copilot CLI help config did not expose a parseable model list.'
+    }
+    return @($models)
+}
+
+function Get-CopilotModels {
+    $sdkFailure = $null
+    try {
+        return @(Get-CopilotModelsFromSdk)
+    } catch {
+        $sdkFailure = $_.Exception.Message
+    }
+
+    try {
+        return @(Get-CopilotModelsFromHelpConfig)
+    } catch {
+        throw "GitHub Copilot CLI model discovery failed. Package-local SDK discovery failed: $sdkFailure Help-config discovery failed: $($_.Exception.Message)"
+    }
 }
 
 try {

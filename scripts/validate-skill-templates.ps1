@@ -1246,7 +1246,7 @@ Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance r
     if (-not (Test-Path -LiteralPath $conformancePath -PathType Leaf)) {
         throw 'The Eval Runner conformance suite is missing.'
     }
-    $conformanceOutput = & pwsh -NoProfile -File $conformancePath 2>&1
+    $conformanceOutput = & pwsh -NoProfile -NonInteractive -File $conformancePath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Eval Runner conformance failed: $($conformanceOutput -join [Environment]::NewLine)"
     }
@@ -1263,7 +1263,7 @@ Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains
     if (-not (Test-Path -LiteralPath $orchestrationPath -PathType Leaf)) {
         throw 'The native-worker orchestration suite is missing.'
     }
-    $orchestrationOutput = & pwsh -NoProfile -File $orchestrationPath 2>&1
+    $orchestrationOutput = & pwsh -NoProfile -NonInteractive -File $orchestrationPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Native-worker orchestration failed: $($orchestrationOutput -join [Environment]::NewLine)"
     }
@@ -1280,7 +1280,7 @@ Add-ValidationResult -Results $results -Name 'Foreground Phase 1 lifecycle remai
     if (-not (Test-Path -LiteralPath $lifecyclePath -PathType Leaf)) {
         throw 'The foreground Phase 1 lifecycle suite is missing.'
     }
-    $lifecycleOutput = & pwsh -NoProfile -File $lifecyclePath 2>&1
+    $lifecycleOutput = & pwsh -NoProfile -NonInteractive -File $lifecyclePath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Foreground Phase 1 lifecycle regressions failed: $($lifecycleOutput -join [Environment]::NewLine)"
     }
@@ -1297,7 +1297,7 @@ Add-ValidationResult -Results $results -Name 'Phase 1 aggregate fail-closed regr
     if (-not (Test-Path -LiteralPath $aggregatePath -PathType Leaf)) {
         throw 'The Phase 1 aggregate regression suite is missing.'
     }
-    $aggregateOutput = & pwsh -NoProfile -File $aggregatePath 2>&1
+    $aggregateOutput = & pwsh -NoProfile -NonInteractive -File $aggregatePath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Phase 1 aggregate regressions failed: $($aggregateOutput -join [Environment]::NewLine)"
     }
@@ -1314,7 +1314,7 @@ Add-ValidationResult -Results $results -Name 'Frozen evidence, grading isolation
     if (-not (Test-Path -LiteralPath $integrityPath -PathType Leaf)) {
         throw 'The frozen-evidence and finalization regression suite is missing.'
     }
-    $integrityOutput = & pwsh -NoProfile -File $integrityPath 2>&1
+    $integrityOutput = & pwsh -NoProfile -NonInteractive -File $integrityPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Frozen-evidence/finalization regression failed: $($integrityOutput -join [Environment]::NewLine)"
     }
@@ -1331,7 +1331,7 @@ Add-ValidationResult -Results $results -Name 'Windows UTF-8 report generation su
     if (-not (Test-Path -LiteralPath $reportUtf8Path -PathType Leaf)) {
         throw 'The Windows UTF-8 report regression is missing.'
     }
-    $reportUtf8Output = & pwsh -NoProfile -File $reportUtf8Path 2>&1
+    $reportUtf8Output = & pwsh -NoProfile -NonInteractive -File $reportUtf8Path 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Windows UTF-8 report regression failed: $($reportUtf8Output -join [Environment]::NewLine)"
     }
@@ -1348,7 +1348,7 @@ Add-ValidationResult -Results $results -Name 'Model-free harness probes resolve 
     if (-not (Test-Path -LiteralPath $probeEnvironmentPath -PathType Leaf)) {
         throw 'The probe-environment regression is missing.'
     }
-    $probeEnvironmentOutput = & pwsh -NoProfile -File $probeEnvironmentPath 2>&1
+    $probeEnvironmentOutput = & pwsh -NoProfile -NonInteractive -File $probeEnvironmentPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Probe-environment regression failed: $($probeEnvironmentOutput -join [Environment]::NewLine)"
     }
@@ -1365,7 +1365,7 @@ Add-ValidationResult -Results $results -Name 'Runner live observability remains 
     if (-not (Test-Path -LiteralPath $observabilityPath -PathType Leaf)) {
         throw 'The runner observability regression is missing.'
     }
-    $observabilityOutput = & pwsh -NoProfile -File $observabilityPath 2>&1
+    $observabilityOutput = & pwsh -NoProfile -NonInteractive -File $observabilityPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Runner observability regression failed: $($observabilityOutput -join [Environment]::NewLine)"
     }
@@ -1382,7 +1382,7 @@ Add-ValidationResult -Results $results -Name 'Preflight raw-output boundary is c
     if (-not (Test-Path -LiteralPath $preflightPath -PathType Leaf)) {
         throw 'The preflight raw-output boundary test suite is missing.'
     }
-    $preflightOutput = & pwsh -NoProfile -File $preflightPath 2>&1
+    $preflightOutput = & pwsh -NoProfile -NonInteractive -File $preflightPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Preflight raw-output boundary tests failed: $($preflightOutput -join [Environment]::NewLine)"
     }
@@ -1399,7 +1399,7 @@ Add-ValidationResult -Results $results -Name 'Progress coalescing renders select
     if (-not (Test-Path -LiteralPath $coalescingPath -PathType Leaf)) {
         throw 'The progress coalescing test suite is missing.'
     }
-    $coalescingOutput = & pwsh -NoProfile -File $coalescingPath 2>&1
+    $coalescingOutput = & pwsh -NoProfile -NonInteractive -File $coalescingPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Progress coalescing tests failed: $($coalescingOutput -join [Environment]::NewLine)"
     }
@@ -1431,8 +1431,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Do not choose the first, free, recommended, previous-iteration, previous-successful, or previous-failed model'
     $oldOpenCodePolicyPhrase = 'OpenCode discovery is ' + 'free-only'
     Assert-NotContains -Name 'AGENTS.md' -Content $agents -Needle $oldOpenCodePolicyPhrase
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <name> -Runner <runner-id> -Model <runner-native-model>'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill <name> -Runner <runner-id> -Model <runner-native-model>'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -CollectResults <iteration-path>'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Handing the package over'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Executing a package you were handed'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'running it is the task'
@@ -1449,14 +1449,14 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Resolve the execution configuration before running the package preparation script.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Eval preparation is a completion gate'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Adding or modifying any repo-managed skill triggers this workflow.'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Preparing and reporting satisfies this gate. Executing a prompt never does'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`scripts/sync-skill-install.ps1` runs last'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'a completion gate an agent cannot skip'
-    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares the paired candidate and baseline inputs as a portable package and stops'
-    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name> -Runner <runner-id> -Model <runner-native-model>'
-    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'Before running the script, choose a Harness + Model.'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name> -Runner <runner-id> -Model <runner-native-model>'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'choose a Harness + Model when the user did not already do so'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'OpenCode mirrors every model exposed by all configured providers'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'ask the user to choose one, and wait'
     Assert-NotContains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'run-skill-benchmark.ps1'
@@ -1464,6 +1464,13 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'the user must choose from the discovered selectors before package preparation'
     Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'OpenCode through `opencode models --verbose`'
     Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'without filtering the selectable catalog'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'full operational permission inside each isolated behavioral harness configuration'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Hard filesystem confinement is a separate optional outer capability'
+    Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'full harness operational permission inside each isolated eval boundary'
+    Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'sandboxPolicy.type=dangerFullAccess'
+    Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle '`--allow-all` is the documented noninteractive'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'Normalize explicit harness wording immediately'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Normalize explicit user intent immediately'
     foreach ($document in @(
             [pscustomobject]@{ Name = 'AGENTS.md'; Content = $agents },
             [pscustomobject]@{ Name = 'README.md'; Content = $readme },
@@ -1583,7 +1590,12 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             'opencode/muse-spark-1.2-contributor-free'
         )
 
-        $copilotDiscovery = (& pwsh -NoProfile -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath 2>&1)
+        $missingRunnerDiscovery = (& pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath 2>&1)
+        if ($LASTEXITCODE -eq 0 -or ($missingRunnerDiscovery -join ' ') -notmatch 'Runner is required\. Supported runner IDs: github-copilot, codex, opencode' -or ($missingRunnerDiscovery -join ' ') -match 'Cannot process command because of one or more missing mandatory parameters') {
+            throw 'Get-HarnessModels.ps1 without -Runner must fail immediately with the supported runner IDs and no PowerShell mandatory-parameter prompt.'
+        }
+
+        $copilotDiscovery = (& pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath 2>&1)
         if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for Copilot fixture: $($copilotDiscovery -join [Environment]::NewLine)" }
         $copilotModels = ($copilotDiscovery -join [Environment]::NewLine) | ConvertFrom-Json
         $copilotIds = @($copilotModels.models | ForEach-Object { [string]$_.id })
@@ -1591,7 +1603,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw 'Copilot discovery must retain its all-model behavior and return every fixture selector.'
         }
 
-        $codexDiscovery = (& pwsh -NoProfile -File $modelDiscoveryPath -Runner 'codex' -CatalogPath $catalogPath 2>&1)
+        $codexDiscovery = (& pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'codex' -CatalogPath $catalogPath 2>&1)
         if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for Codex fixture: $($codexDiscovery -join [Environment]::NewLine)" }
         $codexModels = ($codexDiscovery -join [Environment]::NewLine) | ConvertFrom-Json
         $codexIds = @($codexModels.models | ForEach-Object { [string]$_.id })
@@ -1599,7 +1611,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw 'Codex discovery must retain its all-model behavior and return every fixture selector.'
         }
 
-        $discoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $catalogPath 2>&1
+        $discoveryOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for OpenCode: $($discoveryOutput -join [Environment]::NewLine)" }
         $discovery = ($discoveryOutput -join [Environment]::NewLine) | ConvertFrom-Json
         $ids = @($discovery.models | ForEach-Object { [string]$_.id })
@@ -1626,7 +1638,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
   ]
 }
 '@), $utf8NoBom)
-        $paidOnlyOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $paidCatalogPath 2>&1
+        $paidOnlyOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $paidCatalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "OpenCode discovery must allow a catalog with no free models: $($paidOnlyOutput -join [Environment]::NewLine)"
         }
@@ -1635,7 +1647,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
             throw 'OpenCode discovery must not require a free model or filter paid/unknown models.'
         }
         foreach ($requiredModel in @('provider-paid/Paid.Model', 'provider-unknown/Unknown_Model')) {
-            $requiredOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $catalogPath -RequireModel $requiredModel 2>&1
+            $requiredOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'opencode' -CatalogPath $catalogPath -RequireModel $requiredModel 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "OpenCode -RequireModel must accept '$requiredModel': $($requiredOutput -join [Environment]::NewLine)"
             }
@@ -1661,7 +1673,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             $pathSeparator = [System.IO.Path]::PathSeparator
             [Environment]::SetEnvironmentVariable('PATH', "$fakeOpenCodeDirectory$pathSeparator$originalPath", 'Process')
 
-            $liveDiscoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' 2>&1
+            $liveDiscoveryOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'opencode' 2>&1
             if ($LASTEXITCODE -ne 0) { throw "OpenCode fake CLI discovery failed: $($liveDiscoveryOutput -join [Environment]::NewLine)" }
             $liveDiscovery = ($liveDiscoveryOutput -join [Environment]::NewLine) | ConvertFrom-Json
             $liveIds = @($liveDiscovery.models | ForEach-Object { [string]$_.id })
@@ -1673,7 +1685,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                 throw "OpenCode discovery must invoke 'opencode models --verbose' without a provider filter or implicit refresh; observed '$([string]::Join(' ', [string[]]$plainArguments))'."
             }
 
-            $refreshDiscoveryOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'opencode' -Refresh 2>&1
+            $refreshDiscoveryOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'opencode' -Refresh 2>&1
             if ($LASTEXITCODE -ne 0) { throw "OpenCode fake CLI refresh discovery failed: $($refreshDiscoveryOutput -join [Environment]::NewLine)" }
             $refreshArguments = [System.IO.File]::ReadAllLines((Join-Path $fakeOpenCodeDirectory 'arguments.txt'))
             if ([string]::Join('|', [string[]]$refreshArguments) -ne 'models|--verbose|--refresh') {
@@ -1683,20 +1695,20 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             [Environment]::SetEnvironmentVariable('PATH', $originalPath, 'Process')
         }
 
-        $missingCatalogOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'codex' -CatalogPath (Join-Path $packageRoot 'missing-catalog.json') 2>&1
+        $missingCatalogOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'codex' -CatalogPath (Join-Path $packageRoot 'missing-catalog.json') 2>&1
         if ($LASTEXITCODE -eq 0 -or ($missingCatalogOutput -join ' ') -notmatch 'does not exist') {
             throw 'Discovery failures must remain local and must not invent fallback models.'
         }
 
-        $referenceOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath -RequireModel 'claude-haiku-4.5' 2>&1
+        $referenceOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath -RequireModel 'claude-haiku-4.5' 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Codebelt Reference fixture should resolve: $($referenceOutput -join [Environment]::NewLine)" }
-        $missingReferenceOutput = & pwsh -NoProfile -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $paidCatalogPath -RequireModel 'claude-haiku-4.5' 2>&1
+        $missingReferenceOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $paidCatalogPath -RequireModel 'claude-haiku-4.5' 2>&1
         if ($LASTEXITCODE -eq 0 -or ($missingReferenceOutput -join ' ') -notmatch 'Required model') {
             throw 'Codebelt Reference discovery must fail instead of silently substituting a model.'
         }
 
         $referencePackageRoot = Join-Path $packageRoot 'reference-package'
-        $referencePrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $referencePackageRoot -CodebeltReference -ModelCatalogPath $catalogPath 2>&1
+        $referencePrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $referencePackageRoot -CodebeltReference -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -CodebeltReference failed against the fake current catalog: $($referencePrepareOutput -join [Environment]::NewLine)"
         }
@@ -1707,7 +1719,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         Assert-PreparedRunnerIdentity -Name 'GitHub Copilot Codebelt Reference package' -IterationDirectory (Join-Path $referencePackageRoot 'iteration-1') -ExpectedRunner 'github-copilot' -ExpectedModel 'claude-haiku-4.5'
 
         $codexPackageRoot = Join-Path $packageRoot 'codex-package'
-        $codexPrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $codexPackageRoot -Runner 'codex' -Model 'gpt-5.6-luna' 2>&1
+        $codexPrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $codexPackageRoot -Runner 'codex' -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed for the Codex default fixture: $($codexPrepareOutput -join [Environment]::NewLine)"
         }
@@ -1718,8 +1730,18 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         if ([int]$codexProfile.concurrency -ne 16) { throw 'Codex omitted -Concurrency must preserve the repository default of 16.' }
         Assert-PreparedRunnerIdentity -Name 'Codex package' -IterationDirectory (Join-Path $codexPackageRoot 'iteration-1') -ExpectedRunner 'codex' -ExpectedModel 'gpt-5.6-luna'
 
+        $missingCodexModelRoot = Join-Path $packageRoot 'missing-codex-model-package'
+        $missingCodexModelOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $missingCodexModelRoot -Runner 'codex' -Model 'gpt-5.6-luna' -ModelCatalogPath $paidCatalogPath 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($missingCodexModelOutput -join ' ') -notmatch "model 'gpt-5\.6-luna' could not be verified") {
+            throw 'prepare-skill-evals.ps1 must validate explicit Codex models through current model discovery before writing a package.'
+        }
+        if (Test-Path -LiteralPath $missingCodexModelRoot) {
+            Remove-Item -LiteralPath $missingCodexModelRoot -Recurse -Force
+            throw 'prepare-skill-evals.ps1 must not create a package when current model validation fails.'
+        }
+
         $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
-        $opencodePrepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' 2>&1
+        $opencodePrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed for the OpenCode fixture: $($opencodePrepareOutput -join [Environment]::NewLine)"
         }
@@ -1731,7 +1753,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         Assert-PreparedRunnerIdentity -Name 'OpenCode package' -IterationDirectory (Join-Path $opencodePackageRoot 'iteration-1') -ExpectedRunner 'opencode' -ExpectedModel 'provider-paid/Paid.Model'
 
         $explicitGithubPackageRoot = Join-Path $packageRoot 'github-explicit-runner-package'
-        $explicitGithubOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitGithubPackageRoot -Runner 'github-copilot' -Model 'gpt-5.6-luna' 2>&1
+        $explicitGithubOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitGithubPackageRoot -Runner 'github-copilot' -Model 'gpt-5.6-luna' -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit GitHub Copilot selection: $($explicitGithubOutput -join [Environment]::NewLine)" }
         $explicitGithubProfile = [System.IO.File]::ReadAllText((Join-Path $explicitGithubPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
         if ([string]$explicitGithubProfile.runner -ne 'github-copilot' -or [string]$explicitGithubProfile.model -ne 'gpt-5.6-luna' -or $null -ne $explicitGithubProfile.reasoning_effort) {
@@ -1750,14 +1772,14 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         Assert-PackageIdentityValidationFails -Name 'mismatched runner package' -IterationDirectory $mismatchIteration -ExpectedRunner 'github-copilot' -ExpectedMessagePattern 'execution-profile\.json runner .+ does not match manifest\.execution_selection\.runner'
 
         $explicitOpenCodePackageRoot = Join-Path $packageRoot 'opencode-explicit-concurrency-package'
-        $explicitOpenCodeOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -Concurrency 16 2>&1
+        $explicitOpenCodeOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -ModelCatalogPath $catalogPath -Concurrency 16 2>&1
         if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit OpenCode concurrency: $($explicitOpenCodeOutput -join [Environment]::NewLine)" }
         $explicitOpenCodeProfile = [System.IO.File]::ReadAllText((Join-Path $explicitOpenCodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
         if ([int]$explicitOpenCodeProfile.concurrency -ne 16) { throw 'Explicit OpenCode -Concurrency 16 must be honored without clamping.' }
         if (($explicitOpenCodeOutput -join [Environment]::NewLine) -notmatch 'Concurrency:\s+16 \(explicit -Concurrency\)') { throw 'Explicit OpenCode preparation output must identify -Concurrency as explicit.' }
 
         $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
-        $missingSelectionOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingSelectionRoot 2>&1
+        $missingSelectionOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingSelectionRoot 2>&1
         if ($LASTEXITCODE -eq 0) {
             throw 'prepare-skill-evals.ps1 must refuse to generate RUN-THIS.prompt.md without a resolved runner/model selection.'
         }
@@ -1770,7 +1792,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
 
         $missingRunnerRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-runner-' + [Guid]::NewGuid().ToString('N'))
-        $missingRunnerOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingRunnerRoot -Runner 'missing-runner' -Model 'fixture-model' 2>&1
+        $missingRunnerOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingRunnerRoot -Runner 'missing-runner' -Model 'fixture-model' 2>&1
         if ($LASTEXITCODE -eq 0 -or ($missingRunnerOutput -join ' ') -notmatch "Unsupported runner 'missing-runner'") {
             throw 'An unresolved explicit runner must fail closed instead of falling back to a supported runner.'
         }
@@ -1780,8 +1802,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
 
         $missingOpenCodeModelRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-opencode-model-' + [Guid]::NewGuid().ToString('N'))
-        $missingOpenCodeModelOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -Runner 'opencode' -OutputRoot $missingOpenCodeModelRoot 2>&1
-        if ($LASTEXITCODE -eq 0 -or ($missingOpenCodeModelOutput -join ' ') -notmatch 'Runner/model selection is atomic') {
+        $missingOpenCodeModelOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Runner 'opencode' -OutputRoot $missingOpenCodeModelRoot 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($missingOpenCodeModelOutput -join ' ') -notmatch 'OpenCode requires an explicit -Model selector') {
             throw 'OpenCode preparation must not choose a model when the user has not supplied one.'
         }
         if (Test-Path -LiteralPath $missingOpenCodeModelRoot) {
@@ -1789,7 +1811,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'OpenCode preparation must not create a package without an explicit model choice.'
         }
 
-        $prepareOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
+        $prepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed: $($prepareOutput -join [Environment]::NewLine)"
         }
@@ -2182,7 +2204,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'Prepared package runner-tool integrity does not match manifest.json.'
         }
 
-        $collectOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
+        $collectOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -CollectResults $iterationDirectory 2>&1
         if ($LASTEXITCODE -eq 0) {
             throw 'prepare-skill-evals.ps1 -CollectResults must fail closed on an unrun package.'
         }
@@ -2239,7 +2261,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             $fanoutStderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('validator-phase1-stderr-' + [Guid]::NewGuid().ToString('N') + '.log')
             $fanoutStderrText = ''
             try {
-                $fanoutOutput = & pwsh -NoProfile -File $fanoutPath -IterationDirectory $iterationDirectory 2>$fanoutStderrPath
+                $fanoutOutput = & pwsh -NoProfile -NonInteractive -File $fanoutPath -IterationDirectory $iterationDirectory 2>$fanoutStderrPath
                 $fanoutExitCode = $LASTEXITCODE
                 if (Test-Path -LiteralPath $fanoutStderrPath -PathType Leaf) { $fanoutStderrText = [System.IO.File]::ReadAllText($fanoutStderrPath, $utf8NoBom) }
             } finally {
@@ -2255,7 +2277,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                 [Environment]::SetEnvironmentVariable($environmentName, $fixtureMetricEnvironmentBefore[$environmentName])
             }
         }
-        $executionCollectOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
+        $executionCollectOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -CollectResults $iterationDirectory 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -CollectResults failed while bridging the complete deterministic fixture: $($executionCollectOutput -join [Environment]::NewLine)"
         }
@@ -2283,21 +2305,21 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         $gradingPath = Join-Path $iterationDirectory ([string]$manifest.grading)
         [System.IO.File]::WriteAllText($gradingPath, (([ordered]@{ schema = 'codebeltnet/agentic/eval-grading/1'; grading = @($gradingEntries.ToArray()) } | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
         $validateGradingPath = Join-Path $iterationDirectory 'tools/eval-runners/validate-eval-grading.ps1'
-        $validateGradingOutput = & pwsh -NoProfile -File $validateGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
+        $validateGradingOutput = & pwsh -NoProfile -NonInteractive -File $validateGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "The deterministic grading validation failed: $($validateGradingOutput -join [Environment]::NewLine)"
         }
         $applyGradingPath = Join-Path $iterationDirectory 'tools/eval-runners/apply-eval-grading.ps1'
-        $applyOutput = & pwsh -NoProfile -File $applyGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
+        $applyOutput = & pwsh -NoProfile -NonInteractive -File $applyGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "The deterministic grading-only application failed: $($applyOutput -join [Environment]::NewLine)"
         }
         $finalizerPath = Join-Path $iterationDirectory 'tools/eval-runners/finalize-eval-package.ps1'
-        $finalizerOutput = & pwsh -NoProfile -File $finalizerPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
+        $finalizerOutput = & pwsh -NoProfile -NonInteractive -File $finalizerPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "The deterministic eval finalizer failed: $($finalizerOutput -join [Environment]::NewLine)"
         }
-        $metricsOutput = & pwsh -NoProfile -File $scriptPath -CollectResults $iterationDirectory 2>&1
+        $metricsOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -CollectResults $iterationDirectory 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -CollectResults failed on recorded metrics: $($metricsOutput -join [Environment]::NewLine)"
         }
@@ -2324,7 +2346,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw "benchmark.json must preserve recorded token metrics through the upstream skill-creator aggregation (with_skill=$($benchmark.run_summary.with_skill.tokens.mean), without_skill=$($benchmark.run_summary.without_skill.tokens.mean))."
         }
 
-        $changedOutput = & pwsh -NoProfile -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
+        $changedOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -Changed failed: $($changedOutput -join [Environment]::NewLine)"
         }
@@ -2333,7 +2355,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
 
         $insideRepo = Join-Path $repoRoot 'agentic-eval-isolation-check'
-        $isolationOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
+        $isolationOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -eq 0) {
             throw 'prepare-skill-evals.ps1 must refuse an output root inside this repository but outside .bot/.'
         }
@@ -2348,7 +2370,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         # .bot/ is the sanctioned in-repository home, and it only works while git ignores it.
         $botRoot = Join-Path (Join-Path $repoRoot '.bot') 'agentic-eval-bot-check'
         try {
-            $botOutput = & pwsh -NoProfile -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' 2>&1
+            $botOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "prepare-skill-evals.ps1 must accept an output root under .bot/: $($botOutput -join [Environment]::NewLine)"
             }
@@ -2486,7 +2508,7 @@ Add-ValidationResult -Results $results -Name 'dotnet-test encodes role-specific 
     }
 
     if ([string]::IsNullOrWhiteSpace($Ref)) {
-        & pwsh -NoProfile -File (Join-Path $repoRoot 'skills/dotnet-test/scripts/validate-skill.ps1')
+        & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'skills/dotnet-test/scripts/validate-skill.ps1')
         if ($LASTEXITCODE -ne 0) {
             throw "dotnet-test skill validation failed with exit code $LASTEXITCODE."
         }
@@ -2599,7 +2621,7 @@ Add-ValidationResult -Results $results -Name 'Agent Smith protects informational
     Assert-Contains -Name 'test-repair-roslyn-multiproject-artifacts.ps1' -Content $repairTests -Needle 'An unsupported localized artifact should fail closed.'
 
     $repairTestPath = Join-Path $repoRoot 'skills/agent-smith/scripts/test-repair-roslyn-multiproject-artifacts.ps1'
-    & pwsh -NoProfile -File $repairTestPath
+    & pwsh -NoProfile -NonInteractive -File $repairTestPath
     if ($LASTEXITCODE -ne 0) {
         throw "Agent Smith Roslyn multi-project artifact repair tests failed with exit code $LASTEXITCODE."
     }

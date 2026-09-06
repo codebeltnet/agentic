@@ -355,21 +355,20 @@ function New-CopilotCliArguments {
     $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $secretList = ($copilotAuthVariables -join ',')
     $arguments = [System.Collections.Generic.List[string]]::new()
-    # Noninteractive one-shot JSONL run. --allow-all-tools is a broad
-    # tool-approval grant required for programmatic execution; it does not
-    # include --allow-all-paths or --allow-all-urls, so normal path and URL
-    # verification remains active. --no-ask-user keeps the agent from pausing
-    # for questions. Repository-owned custom instructions remain enabled so
-    # both paired arms see the staged repository exactly as supplied. Ambient
+    # Noninteractive one-shot JSONL run. --allow-all grants the documented
+    # programmatic permission mode for tools, paths, and URLs inside the
+    # isolated eval boundary. --no-ask-user keeps the agent from pausing for
+    # questions. Repository-owned custom instructions remain enabled so both
+    # paired arms see the staged repository exactly as supplied. Ambient
     # Copilot state is excluded by the run-local COPILOT_HOME and environment
     # roots. --disable-builtin-mcps drops the built-in GitHub MCP server.
-    # --secret-env-vars removes the listed credentials from shell and MCP
-    # child environments.
+    # --secret-env-vars removes the listed credentials from shell and MCP child
+    # environments.
     foreach ($argument in @(
             '-C', $directoryArgument,
             '--model', $Inputs.Profile.Model,
             '--output-format', 'json',
-            '--allow-all-tools',
+            '--allow-all',
             '--no-ask-user',
             '--disable-builtin-mcps',
             '--no-color',
@@ -472,17 +471,17 @@ function Get-CopilotPreflight {
                 }
             } else {
                 $helpText = [string]::Join("`n", @($help.Stdout, $help.Stderr))
-                foreach ($flag in @('--output-format', '--model', '--allow-all-tools', '--no-ask-user', '--disable-builtin-mcps', '--secret-env-vars')) {
+                foreach ($flag in @('--output-format', '--model', '--allow-all', '--no-ask-user', '--disable-builtin-mcps', '--secret-env-vars')) {
                     if ($helpText -notmatch [regex]::Escape($flag)) {
                         $reasons.Add("The installed Copilot CLI does not advertise required flag '$flag'.")
                     }
                 }
                 $visibleForConstruction = if ($platform -eq 'linux' -and $null -ne $sandboxInfo) { 'linux' } else { $platform }
                 $constructed = New-CopilotCliArguments -Inputs $Inputs -VisiblePlatform $visibleForConstruction
-                foreach ($forbidden in @('--resume', '-r', '--continue', '--session-id', '--connect', '--yolo', '--allow-all', '--allow-all-paths', '--allow-all-urls')) {
-                    if (@($constructed) -contains $forbidden) { $reasons.Add("The constructed Copilot invocation must not use session-continuation or over-broad permission option '$forbidden'.") }
+                foreach ($forbidden in @('--resume', '-r', '--continue', '--session-id', '--connect', '--yolo')) {
+                    if (@($constructed) -contains $forbidden) { $reasons.Add("The constructed Copilot invocation must not use session-continuation or shortcut option '$forbidden'.") }
                 }
-                foreach ($required in @('--output-format', '--allow-all-tools', '--no-ask-user', '--disable-builtin-mcps', '--secret-env-vars')) {
+                foreach ($required in @('--output-format', '--allow-all', '--no-ask-user', '--disable-builtin-mcps', '--secret-env-vars')) {
                     $present = @($constructed) -contains $required
                     if ($required -eq '--secret-env-vars') {
                         $present = $present -or (@($constructed | Where-Object { $_ -like '--secret-env-vars=*' }).Count -gt 0)
@@ -492,7 +491,7 @@ function Get-CopilotPreflight {
                 $promptOptionCount = @($constructed | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count
                 if ($promptOptionCount -ne 0) { $reasons.Add('The constructed Copilot invocation must not place the prompt in argv; prompt delivery uses stdin.') }
                 if ($reasons.Count -eq 0) {
-                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Copilot accepts the constructed noninteractive invocation: stdin prompt delivery, --output-format json, --model, broad --allow-all-tools approval, --no-ask-user, --disable-builtin-mcps, --secret-env-vars, and no session continuation.'))
+                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Copilot accepts the constructed noninteractive invocation: stdin prompt delivery, --output-format json, --model, --allow-all, --no-ask-user, --disable-builtin-mcps, --secret-env-vars, and no session continuation.'))
                 }
                 if ($null -ne $run.Interaction) {
                     $continuationCapability = Get-CopilotContinuationCapability -HelpText $helpText
@@ -561,7 +560,7 @@ function Get-CopilotPreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'GitHub Copilot CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('runner-owned fresh Copilot CLI session per eval execution', 'copilot --output-format json terminal event capture', 'native task/general-purpose subagent available as a separate harness capability, not the transport', 'prompt on stdin', '--allow-all-tools broad tool approval', 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('runner-owned fresh Copilot CLI session per eval execution', 'copilot --output-format json terminal event capture', 'native task/general-purpose subagent available as a separate harness capability, not the transport', 'prompt on stdin', '--allow-all full programmatic permission', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker')) { $mechanisms.Add($mechanism) }
     if ($null -ne $run.Interaction -and $continuationCapability.Available) {
         $mechanisms.Add(("explicit Copilot {0} <session-id> continuation selected from installed help" -f $continuationCapability.Flag))
         $mechanisms.Add('no implicit last-session continuation')
@@ -1071,7 +1070,7 @@ function Invoke-CopilotScriptedExecute {
         native_worker_evidence_failures = @($nativeFailures | Select-Object -Unique)
     }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('runner-owned fresh Copilot CLI process for turn 1', 'copilot --output-format json structured terminal event capture', 'prompt on stdin', '--model on every turn', '-C on every turn', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'same isolated environment on every turn', 'no implicit last-session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('runner-owned fresh Copilot CLI process for turn 1', 'copilot --output-format json structured terminal event capture', 'prompt on stdin', '--allow-all full programmatic permission', '--model on every turn', '-C on every turn', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'same isolated environment on every turn', 'no implicit last-session continuation')) { $mechanisms.Add($mechanism) }
     $mechanisms.Add(("explicit Copilot {0} <session-id> continuation selected from installed help" -f $continuationCapability.Flag))
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
@@ -1177,7 +1176,7 @@ function Invoke-CopilotExecute {
 
     $capabilities = Get-CopilotCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('copilot --output-format json', 'prompt on stdin', '--allow-all-tools broad tool approval', 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('copilot --output-format json', 'prompt on stdin', '--allow-all full programmatic permission', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
 

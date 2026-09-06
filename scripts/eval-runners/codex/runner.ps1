@@ -531,9 +531,9 @@ function Invoke-CodexAppServer {
             model = $Inputs.Profile.Model
             cwd = $Inputs.Run.WorkingDirectoryPath
             approvalPolicy = 'never'
-            # thread/start can persist project trust when it begins in a
-            # writable sandbox. Keep the ephemeral thread read-only and
-            # apply the intended workspace-write policy to the turn only.
+            # thread/start can persist project trust when it begins with
+            # elevated permission. Keep the ephemeral thread read-only and
+            # apply full operational permission to the turn only.
             sandbox = 'read-only'
             ephemeral = $true
         }
@@ -565,9 +565,7 @@ function Invoke-CodexAppServer {
             effort = $Inputs.Profile.ReasoningEffort
             approvalPolicy = 'never'
             sandboxPolicy = [ordered]@{
-                type = 'workspaceWrite'
-                writableRoots = @($Inputs.Run.WorkingDirectoryPath)
-                networkAccess = $true
+                type = 'dangerFullAccess'
             }
         }
         $turnStartRequest = [ordered]@{ jsonrpc = '2.0'; id = $turnRequest; method = 'turn/start'; params = $turnStartParams }
@@ -1084,17 +1082,12 @@ function Get-CodexNativeWorkerProbe {
         elseif ((Get-CodexSchemaReference -Schema (Get-CodexSchemaProperty -Schema $turnStartParams -PropertyName $field.Name)) -ne $field.Reference) { [void]$errors.Add("TurnStartParams.$($field.Name) must reference $($field.Reference.Replace('#/definitions/', 'definitions.')).") }
     }
     $sandboxPolicyDefinition = Get-CodexSchemaDefinition -Schema $turnStartParams -DefinitionName 'SandboxPolicy' -Definitions $schemaDefinitions -Errors $errors -SchemaName 'TurnStartParams'
-    $workspaceWritePolicy = @((Get-JsonProperty -Object $sandboxPolicyDefinition -Name 'oneOf' -Default @()) | Where-Object {
+    $dangerFullAccessPolicy = @((Get-JsonProperty -Object $sandboxPolicyDefinition -Name 'oneOf' -Default @()) | Where-Object {
         $typeProperty = Get-JsonProperty -Object (Get-JsonProperty -Object $_ -Name 'properties' -Default $null) -Name 'type' -Default $null
-        @((Get-JsonProperty -Object $typeProperty -Name 'enum' -Default @())) -contains 'workspaceWrite'
+        @((Get-JsonProperty -Object $typeProperty -Name 'enum' -Default @())) -contains 'dangerFullAccess'
     }) | Select-Object -First 1
-    if ($null -eq $workspaceWritePolicy) {
-        [void]$errors.Add('TurnStartParams.definitions.SandboxPolicy must advertise the workspaceWrite policy used by the runner.')
-    } else {
-        $writableRoots = Get-JsonProperty -Object (Get-JsonProperty -Object $workspaceWritePolicy -Name 'properties' -Default $null) -Name 'writableRoots' -Default $null
-        $networkAccess = Get-JsonProperty -Object (Get-JsonProperty -Object $workspaceWritePolicy -Name 'properties' -Default $null) -Name 'networkAccess' -Default $null
-        if ($null -eq $writableRoots -or -not (Test-CodexSchemaType -Schema $writableRoots -TypeName 'array')) { [void]$errors.Add('TurnStartParams.definitions.SandboxPolicy.workspaceWrite.writableRoots must be an array.') }
-        if ($null -eq $networkAccess -or -not (Test-CodexSchemaType -Schema $networkAccess -TypeName 'boolean')) { [void]$errors.Add('TurnStartParams.definitions.SandboxPolicy.workspaceWrite.networkAccess must be boolean.') }
+    if ($null -eq $dangerFullAccessPolicy) {
+        [void]$errors.Add('TurnStartParams.definitions.SandboxPolicy must advertise the dangerFullAccess policy used by the runner.')
     }
     $turnProperty = Test-CodexSchemaRequiredProperty -Schema $turnStartResponse -PropertyName 'turn' -Errors $errors -SchemaName 'TurnStartResponse'
     $turnReference = Get-CodexSchemaReference -Schema $turnProperty
@@ -1182,7 +1175,7 @@ function New-CodexCliArguments {
     $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $outputArgument = Get-SandboxVisiblePath -HostPath $LastResponsePath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $arguments = [System.Collections.Generic.List[string]]::new()
-    foreach ($argument in @('--ask-for-approval', 'never', 'exec', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--json', '--color', 'never', '--cd', $directoryArgument, '--model', $Inputs.Profile.Model, '--sandbox', 'workspace-write', '--config', 'shell_environment_policy.inherit=none', '--output-last-message', $outputArgument)) {
+    foreach ($argument in @('--ask-for-approval', 'never', 'exec', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--json', '--color', 'never', '--cd', $directoryArgument, '--model', $Inputs.Profile.Model, '--sandbox', 'danger-full-access', '--config', 'shell_environment_policy.inherit=none', '--output-last-message', $outputArgument)) {
         $arguments.Add([string]$argument)
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$Inputs.Profile.ReasoningEffort)) {
@@ -1360,6 +1353,9 @@ function Get-CodexPreflight {
                         $reasons.Add("The installed Codex CLI does not advertise required flag '$flag'.")
                     }
                 }
+                if ($helpText -notmatch [regex]::Escape('danger-full-access')) {
+                    $reasons.Add("The installed Codex CLI does not advertise the required unrestricted sandbox mode 'danger-full-access'.")
+                }
                 $visiblePlatform = if ($platform -eq 'linux' -and $null -ne $sandboxInfo) { 'linux' } else { $platform }
                 $constructed = New-CodexCliArguments -Inputs $Inputs -LastResponsePath (Join-Path $run.RunRoot 'evidence/codex-final.txt') -VisiblePlatform $visiblePlatform
                 if (@($constructed) -contains '--approve-for-me') {
@@ -1368,11 +1364,11 @@ function Get-CodexPreflight {
                 $sandboxIndex = [Array]::IndexOf([string[]]$constructed, '--sandbox')
                 $approvalIndex = [Array]::IndexOf([string[]]$constructed, '--ask-for-approval')
                 $execIndex = [Array]::IndexOf([string[]]$constructed, 'exec')
-                if ($approvalIndex -lt 0 -or $execIndex -lt 0 -or $approvalIndex -gt $execIndex -or $sandboxIndex -lt 0) {
-                    $reasons.Add('The constructed Codex invocation must set --ask-for-approval never before exec and retain --sandbox workspace-write.')
+                if ($approvalIndex -lt 0 -or $execIndex -lt 0 -or $approvalIndex -gt $execIndex -or $sandboxIndex -lt 0 -or $sandboxIndex + 1 -ge $constructed.Count -or $constructed[$sandboxIndex + 1] -ne 'danger-full-access') {
+                    $reasons.Add('The constructed Codex invocation must set --ask-for-approval never before exec and retain --sandbox danger-full-access.')
                 }
                 if ($reasons.Count -eq 0) {
-                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Codex accepts the constructed noninteractive invocation: --ask-for-approval never, exec, --sandbox workspace-write, ephemeral JSON output, and isolated configuration controls.'))
+                    $checks.Add((New-PreflightCheck -Name 'harness_contract' -Status passed -Detail 'Codex accepts the constructed noninteractive invocation: --ask-for-approval never, exec, --sandbox danger-full-access, ephemeral JSON output, and isolated configuration controls.'))
                 }
             }
             $nativeWorkerObservation = Get-CodexNativeWorkerProbe -CommandInfo $commandInfo -Inputs $Inputs
@@ -1410,7 +1406,7 @@ function Get-CodexPreflight {
     }
 
     if ($auth.Kind -eq 'subscription_file') {
-        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail 'The subscription app-server transport uses a temporary auth-only home but is not wrapped by the external run-only sandbox. Codex workspace-write remains enabled for the turn.'))
+        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail 'The subscription app-server transport uses a temporary auth-only home but is not wrapped by an external run-only sandbox. Codex receives full operational permission inside the eval boundary.'))
         $warnings.Add('Subscription execution uses pragmatic isolation. The adapter does not claim that an external filesystem sandbox protects the app-server transport.')
     } elseif ($null -eq $sandboxName) {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status not_applicable -Detail "Platform '$platform' has no configured external hard-confinement mechanism; pragmatic isolation remains available."))
@@ -1419,7 +1415,7 @@ function Get-CodexPreflight {
         $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status unavailable -Detail "External '$sandboxName' is unavailable; pragmatic isolation remains available."))
         $warnings.Add("External '$sandboxName' was unavailable; execution will report pragmatic isolation.")
     } else {
-        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status passed -Detail "External $sandboxName confines Codex to the staged run and required system runtime paths; Codex sandbox=workspace-write remains enabled inside it."))
+        $checks.Add((New-PreflightCheck -Name 'filesystem_confinement' -Status passed -Detail "External $sandboxName confines Codex to the staged run and required system runtime paths; Codex sandbox=danger-full-access remains enabled inside it."))
     }
 
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The selected transport starts an ephemeral thread and never supplies a resume, continue, or existing session identifier.'))
@@ -1441,10 +1437,10 @@ function Get-CodexPreflight {
     $descriptorCopy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
         if ($null -ne $run.Interaction) { $mechanisms.Add('same-thread repeated turn/start for scripted interaction') } else { $mechanisms.Add('no session continuation') }
     } else {
-        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
     if ($hardConfinement) { $mechanisms.Add("external $sandboxName filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     $document = New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
@@ -1751,6 +1747,7 @@ function Invoke-CodexExecute {
     $terminalTurnProven = $true
     $modelRerouteObserved = $false
     $threadReadMetadataFailure = $false
+    $ambientCandidateSkillExclusionUnverified = $false
     if ($auth.Kind -eq 'subscription_file') {
         # instructionSources is an optional response observation. A missing
         # array is acceptable here because the physical projection is outside
@@ -1811,28 +1808,26 @@ function Invoke-CodexExecute {
     # Positive evidence that the execution substrate is usable.
     $successfulWorkspaceOps = @($commands | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'completed' }).Count +
                               @($files   | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'status' -Default '') -eq 'completed' }).Count
-    # Detect Codex runtime STDERR policy rejections (iteration-12 shape).  The
+    # Detect Codex runtime STDERR policy rejections (iteration-12 shape). The
     # app-server turn may complete while the runtime tool-router rejects every
     # execution attempt before it reaches the protocol layer, emitting no
-    # structured commandExecution items.  Classify as a global workspace failure
-    # only when no successful workspace operation was observed; an outside-workspace
-    # isolation denial in an otherwise working environment must not be misclassified.
+    # structured commandExecution items. Classify as an operational-permission
+    # incompatibility only when no successful workspace operation was observed;
+    # an outside-workspace isolation denial in an otherwise working environment
+    # must not be misclassified.
     $stderrPolicyRejections = @(Get-CodexStderrPolicyRejections -StderrText $process.Stderr)
-    $stderrIndicatesGlobalWorkspaceFailure = $stderrPolicyRejections.Count -gt 0 -and $successfulWorkspaceOps -eq 0
+    $stderrIndicatesOperationalPermissionFailure = $stderrPolicyRejections.Count -gt 0 -and $successfulWorkspaceOps -eq 0
     $behavioralCapabilityFailureNames = [System.Collections.Generic.List[string]]::new()
-    if (($behavioralCapabilityFailures.Count -gt 0 -or $stderrIndicatesGlobalWorkspaceFailure) -and -not $process.TimedOut) {
+    if (($behavioralCapabilityFailures.Count -gt 0 -or $stderrIndicatesOperationalPermissionFailure) -and -not $process.TimedOut) {
         $status = 'incompatible'
-        $reason = 'codex_behavioral_capability_incompatible'
+        $reason = 'codex_operational_permission_incompatible'
         $failure = if ($behavioralCapabilityFailures.Count -gt 0) {
-            New-ExecutionFailure -Code 'behavioral_capability_incompatible' -Message ("Codex structured tool results show required workspace execution was rejected by the effective runtime policy: {0}." -f ([string]::Join(', ', @($behavioralCapabilityFailures | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'code' -Default 'workspace_operation_blocked_by_policy') } | Select-Object -Unique))))
+            New-ExecutionFailure -Code 'harness_operational_permission_incompatible' -Message ("Codex structured tool results show ordinary engineering operations were rejected even though unrestricted operational permission was requested: {0}." -f ([string]::Join(', ', @($behavioralCapabilityFailures | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'code' -Default 'workspace_operation_blocked_by_policy') } | Select-Object -Unique))))
         } else {
-            New-ExecutionFailure -Code 'behavioral_capability_incompatible' -Message ("Codex runtime indicates required workspace execution was rejected by the effective runtime policy: {0} rejection(s) observed." -f $stderrPolicyRejections.Count)
+            New-ExecutionFailure -Code 'harness_operational_permission_incompatible' -Message ("Codex runtime indicates ordinary engineering operations were rejected even though unrestricted operational permission was requested: {0} rejection(s) observed." -f $stderrPolicyRejections.Count)
         }
         $exitStatus = $null
         $behavioralCapabilityFailureNames.Add('workspace_operation_blocked_by_policy')
-        if (-not [bool]$Inputs.Run.CandidateSkillExposed) {
-            $behavioralCapabilityFailureNames.Add('ambient_candidate_skill_exclusion_unverified')
-        }
     }
     $tokenMetric = if ($null -eq $usage) {
         New-UnavailableMetric -Reason 'codex_did_not_expose_turn_usage'
@@ -1855,17 +1850,14 @@ function Invoke-CodexExecute {
     $capabilities = Get-CodexCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem -NativeWorkerAvailable ($auth.Kind -eq 'subscription_file') -AuthKind $auth.Kind
     if ($behavioralCapabilityFailureNames.Count -gt 0) {
         $capabilities['delegated_worker_full_capability'] = 'unsupported'
-        if (-not [bool]$Inputs.Run.CandidateSkillExposed) {
-            $capabilities['ambient_candidate_skill_exclusion'] = 'unsupported'
-        }
     }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=workspaceWrite', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + thread/start + turn/start', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
         $continuationMechanism = if ($null -ne $Inputs.Run.Interaction) { 'same-thread repeated turn/start for scripted interaction' } else { 'no session continuation' }
         $mechanisms.Add($continuationMechanism)
     } else {
-        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox workspace-write', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
@@ -1897,11 +1889,12 @@ function Invoke-CodexExecute {
         credential = $credentialEvidence
     }
     $evidence.behavioral_capability = [ordered]@{
-        requested_workspace_write  = $true
-        requested_policy_source    = if ($auth.Kind -eq 'subscription_file') { 'turn/start.sandboxPolicy' } else { 'codex exec --sandbox workspace-write' }
-        status                     = if ($behavioralCapabilityFailures.Count -gt 0 -or $stderrIndicatesGlobalWorkspaceFailure) { 'rejected_by_effective_runtime_policy' } else { 'no_structured_policy_rejection_observed' }
-        authoritative_signal       = if ($behavioralCapabilityFailures.Count -gt 0) { 'structured item.completed tool result' } elseif ($stderrIndicatesGlobalWorkspaceFailure) { 'codex_runtime_stderr' } else { 'structured item.completed tool result' }
-        failures                   = @(@($behavioralCapabilityFailures.ToArray()) + @(if ($stderrIndicatesGlobalWorkspaceFailure) { $stderrPolicyRejections } else { @() }))
+        requested_operational_permission = 'full'
+        requested_codex_sandbox          = if ($auth.Kind -eq 'subscription_file') { 'dangerFullAccess' } else { 'danger-full-access' }
+        requested_policy_source          = if ($auth.Kind -eq 'subscription_file') { 'turn/start.sandboxPolicy' } else { 'codex exec --sandbox danger-full-access' }
+        status                           = if ($behavioralCapabilityFailures.Count -gt 0 -or $stderrIndicatesOperationalPermissionFailure) { 'rejected_by_effective_runtime_policy' } else { 'no_structured_policy_rejection_observed' }
+        authoritative_signal             = if ($behavioralCapabilityFailures.Count -gt 0) { 'structured item.completed tool result' } elseif ($stderrIndicatesOperationalPermissionFailure) { 'codex_runtime_stderr' } else { 'structured item.completed tool result' }
+        failures                         = @(@($behavioralCapabilityFailures.ToArray()) + @(if ($stderrIndicatesOperationalPermissionFailure) { $stderrPolicyRejections } else { @() }))
     }
     if ($behavioralCapabilityFailureNames.Count -gt 0) {
         $evidence.native_worker_evidence_failures = @($behavioralCapabilityFailureNames.ToArray())
@@ -2026,26 +2019,30 @@ function Invoke-CodexExecute {
         # These checks are genuinely Codex-specific. The portable validator
         # above owns model/cwd/home/freshness/prompt/terminal acceptance; this
         # layer contributes only app-server protocol and transport invariants.
-        if ($instructionSourcesUnobserved) { $nativeEvidenceFailures.Add('instruction_sources_unobserved') }
-        if ($invalidInstructionSources.Count -gt 0) { $nativeEvidenceFailures.Add('invalid_instruction_sources') }
-        if ($unexpectedInstructionSources.Count -gt 0) { $nativeEvidenceFailures.Add('unexpected_instruction_sources') }
-        if (-not $authHomeProven) { $nativeEvidenceFailures.Add('isolated_auth_home') }
+        if ($instructionSourcesUnobserved) { $nativeEvidenceFailures.Add('instruction_sources_unobserved'); $ambientCandidateSkillExclusionUnverified = $true }
+        if ($invalidInstructionSources.Count -gt 0) { $nativeEvidenceFailures.Add('invalid_instruction_sources'); $ambientCandidateSkillExclusionUnverified = $true }
+        if ($unexpectedInstructionSources.Count -gt 0) { $nativeEvidenceFailures.Add('unexpected_instruction_sources'); $ambientCandidateSkillExclusionUnverified = $true }
+        if (-not $authHomeProven) { $nativeEvidenceFailures.Add('isolated_auth_home'); $ambientCandidateSkillExclusionUnverified = $true }
         if (-not $terminalTurnProven) { $nativeEvidenceFailures.Add('terminal_turn_status') }
         if ($modelRerouteObserved) { $nativeEvidenceFailures.Add('model_rerouted') }
         if ($threadReadMetadataFailure) { $nativeEvidenceFailures.Add('thread_read_metadata') }
+        if ($ambientCandidateSkillExclusionUnverified) { $nativeEvidenceFailures.Add('ambient_candidate_skill_exclusion_unverified') }
         $uniqueNativeEvidenceFailures = @($nativeEvidenceFailures | Select-Object -Unique)
         $nativeEvidenceFailures = [System.Collections.Generic.List[string]]::new()
         foreach ($failureName in $uniqueNativeEvidenceFailures) { $nativeEvidenceFailures.Add([string]$failureName) }
         if ($nativeEvidenceFailures.Count -gt 0) {
             $status = 'incompatible'
             $isBehavioralCapabilityFailure = $behavioralCapabilityFailureNames.Count -gt 0
-            $reason = if ($isBehavioralCapabilityFailure) { 'codex_behavioral_capability_incompatible' } else { 'codex_native_evidence_incompatible' }
+            $reason = if ($isBehavioralCapabilityFailure) { 'codex_operational_permission_incompatible' } else { 'codex_native_evidence_incompatible' }
             $baseFailureMessage = if ($null -ne $failure) { [string]$failure.message } elseif (-not [string]::IsNullOrWhiteSpace([string]$process.TransportFailure)) { [string]$process.TransportFailure } else { 'Codex app-server terminal evidence was not accepted.' }
-            $failureCode = if ($isBehavioralCapabilityFailure) { 'behavioral_capability_incompatible' } else { 'native_evidence_incompatible' }
+            $failureCode = if ($isBehavioralCapabilityFailure) { 'harness_operational_permission_incompatible' } else { 'native_evidence_incompatible' }
             $failure = New-ExecutionFailure -Code $failureCode -Message ("Codex app-server evidence failed closed: {0}. Transport detail: {1}" -f ([string]::Join(', ', @($nativeEvidenceFailures)), $baseFailureMessage))
             $exitStatus = $null
         }
         $evidence.native_worker_evidence_failures = @($nativeEvidenceFailures.ToArray())
+    }
+    if ($ambientCandidateSkillExclusionUnverified) {
+        $capabilities['ambient_candidate_skill_exclusion'] = 'unsupported'
     }
     return New-ExecutionResult -Descriptor $executionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $finalText -FinalResponseReason $reason -StartedUtc $process.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $process.DurationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionResultId -IsolationCapabilities $capabilities -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Codex accepted the requested model and configuration but did not expose concrete backend resolution.'; observations = [ordered]@{ model = $Inputs.Profile.Model; reasoning_effort = $Inputs.Profile.ReasoningEffort } }) -Telemetry $telemetry -Artifacts @($artifacts) -Warnings @($warnings) -Evidence $evidence -AttemptCount 1
 }

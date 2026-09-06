@@ -60,7 +60,7 @@ function Invoke-TestTool {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $output = & pwsh -NoProfile -File $Path @Arguments 2>&1
+    $output = & pwsh -NoProfile -NonInteractive -File $Path @Arguments 2>&1
     $exitCode = $LASTEXITCODE
     return [pscustomobject]@{
         ExitCode = $exitCode
@@ -75,7 +75,7 @@ function Invoke-ForegroundPhaseOne {
     # separately so relayed heartbeats never contaminate the terminal JSON.
     $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('phase1-stderr-' + [Guid]::NewGuid().ToString('N') + '.log')
     try {
-        $output = & pwsh -NoProfile -File $Path -IterationDirectory $IterationDirectory 2>$stderrPath
+        $output = & pwsh -NoProfile -NonInteractive -File $Path -IterationDirectory $IterationDirectory 2>$stderrPath
         $exitCode = $LASTEXITCODE
         $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
         $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }
@@ -303,7 +303,7 @@ Write-RunnerJson -Value $result -AsOutput
 '@
     [System.IO.File]::WriteAllText($childScript, $childScriptText, [System.Text.UTF8Encoding]::new($false))
     $pwshPath = [string]((Get-Command pwsh -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source)
-    $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-File', $childScript, '-CommonPath', (Join-Path $runnerRoot 'runner-common.ps1'), '-RunRoot', $executionRoot, '-RunPath', $runJson, '-PromptHash', (Get-Sha256HexFromFile -Path $promptPath)) -WorkingDirectory $executionRoot -StdoutPath $executionResultPath -StderrPath $stderrPath -TimeoutSeconds 30
+    $child = Start-RunnerChildProcess -FilePath $pwshPath -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $childScript, '-CommonPath', (Join-Path $runnerRoot 'runner-common.ps1'), '-RunRoot', $executionRoot, '-RunPath', $runJson, '-PromptHash', (Get-Sha256HexFromFile -Path $promptPath)) -WorkingDirectory $executionRoot -StdoutPath $executionResultPath -StderrPath $stderrPath -TimeoutSeconds 30
     $exitCode = Complete-RunnerChildProcess -Child $child
     Assert-Equal 0 $exitCode 'execution-result child writer exits successfully'
     Assert-StrictJsonRoundTrip -Path $executionResultPath -PropertyPath @('final_response', 'text') -Expected $problematic -Message 'execution-result final response with control characters'

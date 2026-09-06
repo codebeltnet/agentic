@@ -88,7 +88,7 @@ try {
         # terminal evidence; a status/path match alone cannot prove that the
         # canonical result reflects the current raw file. The one-arm bridge
         # preserves existing grading while revalidating hashes and provenance.
-        $bridgeOutput = & pwsh -NoProfile -File $oneArmBridge `
+        $bridgeOutput = & pwsh -NoProfile -NonInteractive -File $oneArmBridge `
             -Run $record.RunManifestPath `
             -ExecutionResult $record.ExecutionResultPath `
             -Result $record.ResultPath `

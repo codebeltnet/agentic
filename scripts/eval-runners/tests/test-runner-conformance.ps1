@@ -103,7 +103,7 @@ function Invoke-AdapterJson {
         [Parameter(Mandatory = $true)][string]$ProfilePath
     )
 
-    $output = & pwsh -NoProfile -File $RunnerPath $Command -Run $RunPath -Profile $ProfilePath
+    $output = & pwsh -NoProfile -NonInteractive -File $RunnerPath $Command -Run $RunPath -Profile $ProfilePath
     if ($LASTEXITCODE -ne 0) { throw "Recorded runner '$Command' failed for '$RunnerPath': $([string]::Join(' ', @($output)))" }
     $json = [string]::Join([Environment]::NewLine, @($output))
     if ([string]::IsNullOrWhiteSpace($json)) { throw "Recorded runner '$Command' returned no JSON for '$RunnerPath'." }
@@ -192,7 +192,7 @@ if ($arguments -contains '--version') {
 }
 if ($arguments -contains '--help' -and -not ($harness -eq 'codex' -and $arguments -contains 'app-server') -and -not ($harness -eq 'opencode' -and $arguments -contains 'debug')) {
     $help = switch ($harness) {
-        'codex' { '--ask-for-approval never --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox --cd --model --config --approve-for-me' }
+        'codex' { '--ask-for-approval never --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox danger-full-access --cd --model --config --approve-for-me' }
         'opencode' {
             if ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { "--format json`n--dir <dir>`n--model <model>`n--auto`n--variant <variant>`n--continue" }
             else { "--format json`n--dir <dir>`n--model <model>`n--auto`n--variant <variant>`n--session <session-id> continue by session id" }
@@ -200,7 +200,7 @@ if ($arguments -contains '--help' -and -not ($harness -eq 'codex' -and $argument
         'copilot' {
             if ($exactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
             elseif ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-no-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
-            else { '--prompt --output-format --model --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all --allow-all-paths --allow-all-urls' }
+            else { '--prompt --output-format --model --allow-all --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all-paths --allow-all-urls' }
         }
         default { '--json --auto-approve --cwd --config --data-dir --hooks-dir --provider --model --thinking --timeout --retries --id' }
     }
@@ -686,7 +686,7 @@ if ($arguments -contains '--version') {
 }
 if ($arguments -contains '--help') {
     $help = switch ($harness) {
-        'codex' { '--ask-for-approval never --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox --cd --model --config --approve-for-me' }
+        'codex' { '--ask-for-approval never --ephemeral --ignore-user-config --ignore-rules --json --output-last-message --sandbox danger-full-access --cd --model --config --approve-for-me' }
         'opencode' {
             if ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { "--format json`n--dir <dir>`n--model <model>`n--auto`n--variant <variant>`n--continue" }
             else { "--format json`n--dir <dir>`n--model <model>`n--auto`n--variant <variant>`n--session <session-id> continue by session id" }
@@ -694,7 +694,7 @@ if ($arguments -contains '--help') {
         'copilot' {
             if ($exactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
             elseif ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-no-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
-            else { '--prompt --output-format --model --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all --allow-all-paths --allow-all-urls' }
+            else { '--prompt --output-format --model --allow-all --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all-paths --allow-all-urls' }
         }
         default { '--json --auto-approve --cwd --config --data-dir --hooks-dir --provider --model --thinking --timeout --retries --id' }
     }
@@ -828,7 +828,7 @@ if ($harness -eq 'codex') {
 '@
     foreach ($harness in @('codex', 'opencode', 'copilot')) {
         [System.IO.File]::WriteAllText((Join-Path $fakeBin "$harness.ps1"), $fakeCli, [System.Text.UTF8Encoding]::new($false))
-        [System.IO.File]::WriteAllText((Join-Path $fakeBin "$harness.cmd"), "@echo off`r`npwsh -NoProfile -File ""%~dp0$harness.ps1"" %*`r`n", [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText((Join-Path $fakeBin "$harness.cmd"), "@echo off`r`npwsh -NoProfile -NonInteractive -File ""%~dp0$harness.ps1"" %*`r`n", [System.Text.UTF8Encoding]::new($false))
     }
     $fakeGh = @'
 [CmdletBinding()]
@@ -938,8 +938,7 @@ exit 2
         }
         if ($runnerName -eq 'copilot') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
-            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq '--allow-all-tools broad tool approval' }).Count -eq 1) 'Copilot preflight describes --allow-all-tools as broad tool approval'
-            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'path and URL verification preserved (no --allow-all-paths/--allow-all-urls)' }).Count -eq 1) 'Copilot preflight records preserved path and URL verification'
+            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq '--allow-all full programmatic permission' }).Count -eq 1) 'Copilot preflight describes --allow-all as full programmatic permission'
         }
         if ($runnerName -eq 'opencode') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'parallel_dispatch' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight requires bounded concurrent dispatch'
@@ -1071,7 +1070,7 @@ exit 2
         if ($runnerName -eq 'codex') {
             Assert-True ($args -contains '--ask-for-approval') 'Codex uses explicit approval policy'
             Assert-True ($args -contains 'never') 'Codex approval policy is never'
-            Assert-True ($args -contains '--sandbox' -and $args -contains 'workspace-write') 'Codex retains workspace-write sandbox'
+            Assert-True ($args -contains '--sandbox' -and $args -contains 'danger-full-access') 'Codex grants full operational sandbox permission'
             Assert-True ($args -notcontains '--approve-for-me') 'Codex avoids the conflicting approve-for-me flag'
             $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
             Assert-Equal 'gpt-5.6-luna' $args[$modelIndex + 1] 'Codex opaque model selector propagates to the CLI invocation'
@@ -1143,11 +1142,12 @@ exit 2
             Assert-True ($args -contains '--output-format' -and $args -contains 'json') 'Copilot uses structured JSONL output'
             $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
             Assert-Equal 'claude-haiku-4.5' $args[$modelIndex + 1] 'Copilot reference model claude-haiku-4.5 propagates to the CLI invocation'
-            Assert-True ($args -contains '--allow-all-tools') 'Copilot grants broad tool approval for noninteractive execution'
+            Assert-True ($args -contains '--allow-all') 'Copilot grants full programmatic permission for noninteractive execution'
+            Assert-True ($args -notcontains '--allow-all-tools') 'Copilot does not leave path and URL prompts active by using only --allow-all-tools'
             Assert-True ($args -contains '--no-ask-user') 'Copilot does not pause for interactive questions'
             Assert-True ($args -notcontains '--no-custom-instructions') 'Copilot preserves repository-owned custom instructions'
             Assert-True ($args -contains '--disable-builtin-mcps') 'Copilot disables ambient built-in MCP servers'
-            foreach ($broad in @('--yolo', '--allow-all', '--allow-all-paths', '--allow-all-urls', '--session-id', '--connect', '-r')) { Assert-True ($args -notcontains $broad) "Copilot avoids the over-broad or session option '$broad'" }
+            foreach ($broad in @('--yolo', '--allow-all-paths', '--allow-all-urls', '--session-id', '--connect', '-r')) { Assert-True ($args -notcontains $broad) "Copilot avoids the redundant permission or session option '$broad'" }
             Assert-Equal 1 (@($args | Where-Object { $_ -like '--secret-env-vars=*' }).Count) 'Copilot filters protected variables with --secret-env-vars'
             Assert-Equal 'COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN' ([string]($args | Where-Object { $_ -like '--secret-env-vars=*' }) -replace '^--secret-env-vars=', '') 'Copilot protects every forwarded token variable'
             Assert-True (-not $execution.custom_instructions_disabled -and $execution.builtin_mcps_disabled) 'Copilot preserves repository instructions while disabling built-in MCPs'
@@ -1555,13 +1555,15 @@ exit 2
     [System.IO.File]::WriteAllText($policyBlockedMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
     $policyBlockedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
     Assert-Equal 'incompatible' $policyBlockedResult.status 'Codex structured policy-blocked tool results fail closed'
-    Assert-Equal 'behavioral_capability_incompatible' $policyBlockedResult.exit.failure.code 'Codex policy-blocked execution uses a capability failure code'
+    Assert-Equal 'harness_operational_permission_incompatible' $policyBlockedResult.exit.failure.code 'Codex policy-blocked execution uses an operational permission failure code'
     Assert-Equal 'rejected_by_effective_runtime_policy' $policyBlockedResult.evidence.behavioral_capability.status 'Codex records effective runtime policy rejection separately from app-server startup'
     Assert-Equal 'structured item.completed tool result' $policyBlockedResult.evidence.behavioral_capability.authoritative_signal 'Codex records the structured transport signal used for behavior capability'
     Assert-Equal 'readOnly' $policyBlockedResult.evidence.app_server.thread_start.observed_sandbox.type 'Codex app-server evidence records the read-only thread state'
-    Assert-Equal 'workspaceWrite' $policyBlockedResult.evidence.app_server.turn_start.requested_sandbox_policy.type 'Codex app-server evidence records the requested workspace-write turn policy'
+    Assert-Equal 'dangerFullAccess' $policyBlockedResult.evidence.app_server.turn_start.requested_sandbox_policy.type 'Codex app-server evidence records the requested full-permission turn policy'
+    Assert-Equal 'full' $policyBlockedResult.evidence.behavioral_capability.requested_operational_permission 'Codex records that full operational permission was requested'
     Assert-True (@($policyBlockedResult.evidence.behavioral_capability.failures | Where-Object { $_.code -eq 'workspace_operation_blocked_by_policy' }).Count -ge 1) 'Codex captures the structured blocked-by-policy tool failure'
     Assert-True (@($policyBlockedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'workspace_operation_blocked_by_policy' }).Count -eq 1) 'Codex surfaces policy-blocked workspace execution as native evidence failure'
+    Assert-Equal 0 @($policyBlockedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'ambient_candidate_skill_exclusion_unverified' }).Count 'Codex policy-blocked execution does not manufacture ambient skill exclusion failure evidence'
     Assert-Equal 'unsupported' $policyBlockedResult.isolation.level 'Codex policy-blocked execution cannot report verified isolation'
     Assert-Equal 'unsupported' $policyBlockedResult.isolation.capabilities.delegated_worker_full_capability 'Codex policy-blocked execution cannot claim full delegated-worker capability'
     Remove-Item -LiteralPath $policyBlockedMarker -Force
@@ -1570,8 +1572,8 @@ exit 2
     [System.IO.File]::WriteAllText($baselinePolicyBlockedMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
     $baselinePolicyBlockedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $without.Path -ProfilePath $recordedProfiles['codex']
     Assert-Equal 'incompatible' $baselinePolicyBlockedResult.status 'Codex baseline policy-blocked execution fails closed'
-    Assert-True (@($baselinePolicyBlockedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'ambient_candidate_skill_exclusion_unverified' }).Count -eq 1) 'Codex baseline exclusion is not proven by a globally policy-blocked filesystem'
-    Assert-Equal 'unsupported' $baselinePolicyBlockedResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex baseline candidate-skill exclusion claim is unverified when general filesystem access is policy-blocked'
+    Assert-Equal 0 @($baselinePolicyBlockedResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'ambient_candidate_skill_exclusion_unverified' }).Count 'Codex baseline policy-blocked execution does not treat operational failure as ambient skill exclusion evidence'
+    Assert-Equal 'supported' $baselinePolicyBlockedResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex baseline keeps ambient candidate-skill exclusion evidence independent from operational policy failure'
     Assert-Equal 'rejected_by_effective_runtime_policy' $baselinePolicyBlockedResult.evidence.behavioral_capability.status 'Codex baseline records the effective policy rejection'
     Remove-Item -LiteralPath $baselinePolicyBlockedMarker -Force
 
@@ -1581,7 +1583,7 @@ exit 2
     [System.IO.File]::WriteAllText($stderrPolicyRejectedMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
     $stderrPolicyRejectedResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
     Assert-Equal 'incompatible' $stderrPolicyRejectedResult.status 'Codex STDERR-only runtime rejection fails closed'
-    Assert-Equal 'behavioral_capability_incompatible' $stderrPolicyRejectedResult.exit.failure.code 'Codex STDERR runtime rejection uses behavioral_capability_incompatible failure code'
+    Assert-Equal 'harness_operational_permission_incompatible' $stderrPolicyRejectedResult.exit.failure.code 'Codex STDERR runtime rejection uses harness_operational_permission_incompatible failure code'
     Assert-Equal 'rejected_by_effective_runtime_policy' $stderrPolicyRejectedResult.evidence.behavioral_capability.status 'Codex STDERR runtime rejection records effective runtime policy rejection'
     Assert-Equal 'codex_runtime_stderr' $stderrPolicyRejectedResult.evidence.behavioral_capability.authoritative_signal 'Codex STDERR-only rejection identifies runtime STDERR as the authoritative signal'
     Assert-True (@($stderrPolicyRejectedResult.evidence.behavioral_capability.failures | Where-Object { $_.signal -eq 'runtime_stderr' }).Count -ge 1) 'Codex STDERR runtime rejection records runtime_stderr signal in evidence failures'
@@ -1595,8 +1597,8 @@ exit 2
     [System.IO.File]::WriteAllText($stderrPolicyRejectedBaselineMarker, 'fixture', [System.Text.UTF8Encoding]::new($false))
     $stderrPolicyRejectedBaselineResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $without.Path -ProfilePath $recordedProfiles['codex']
     Assert-Equal 'incompatible' $stderrPolicyRejectedBaselineResult.status 'Codex baseline STDERR runtime rejection fails closed'
-    Assert-True (@($stderrPolicyRejectedBaselineResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'ambient_candidate_skill_exclusion_unverified' }).Count -eq 1) 'Codex baseline STDERR rejection does not claim exclusion when workspace execution is globally broken'
-    Assert-Equal 'unsupported' $stderrPolicyRejectedBaselineResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex baseline STDERR rejection marks ambient_candidate_skill_exclusion unsupported when execution is globally blocked'
+    Assert-Equal 0 @($stderrPolicyRejectedBaselineResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'ambient_candidate_skill_exclusion_unverified' }).Count 'Codex baseline STDERR rejection does not attach ambient skill exclusion to operational failure'
+    Assert-Equal 'supported' $stderrPolicyRejectedBaselineResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex baseline STDERR rejection keeps ambient exclusion evidence independent'
     Remove-Item -LiteralPath $stderrPolicyRejectedBaselineMarker -Force
 
     # Fixture B: legitimate outside-workspace isolation denial with a usable workspace.
@@ -1637,6 +1639,8 @@ exit 2
     $ambientInstructionResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['codex']
     Assert-Equal 'incompatible' $ambientInstructionResult.status 'Codex unexpected instruction source fails closed'
     Assert-True (@($ambientInstructionResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'unexpected_instruction_sources' }).Count -eq 1) 'Codex ambient instruction rejection is recorded as transport evidence'
+    Assert-True (@($ambientInstructionResult.evidence.native_worker_evidence_failures | Where-Object { $_ -eq 'ambient_candidate_skill_exclusion_unverified' }).Count -eq 1) 'Codex marks ambient candidate-skill exclusion unverified when instruction-source evidence contradicts the isolation boundary'
+    Assert-Equal 'unsupported' $ambientInstructionResult.isolation.capabilities.ambient_candidate_skill_exclusion 'Codex downgrades ambient candidate-skill exclusion only for relevant instruction/configuration evidence'
     Assert-True ([string]$ambientInstructionResult.exit.failure.message -match 'unexpected_instruction_sources') 'Codex instruction-source reason survives in normalized exit failure'
     Remove-Item -LiteralPath $ambientInstructionMarker -Force
     Assert-Equal 'initialize,initialized,thread/start,turn/start,thread/read' ([string]::Join(',', @($subscriptionRecord.rpc_methods))) 'Codex app-server follows the required handshake and post-completion read order'
@@ -1647,7 +1651,7 @@ exit 2
     Assert-Equal 'medium' $subscriptionRecord.turn_params.effort 'Codex app-server turn receives the requested reasoning effort'
     Assert-Equal $fileAuthResult.evidence.execution_paths.physical_working_directory $subscriptionRecord.turn_params.cwd 'Codex app-server turn receives the physical working directory'
     Assert-Equal 'never' $subscriptionRecord.turn_params.approvalPolicy 'Codex app-server turn rejects interactive approvals'
-    Assert-Equal 'workspaceWrite' $subscriptionRecord.turn_params.sandboxPolicy.type 'Codex app-server turn receives workspace-write sandbox policy'
+    Assert-Equal 'dangerFullAccess' $subscriptionRecord.turn_params.sandboxPolicy.type 'Codex app-server turn receives full operational permission inside the eval boundary'
     Assert-True ($subscriptionRecord.parent_codex_home -ne $fileAuthHome) 'Codex app-server does not expose the ambient subscription CODEX_HOME'
     Assert-True ([bool]$subscriptionRecord.parent_auth_file_visible) 'Codex app-server parent can read the subscription auth file'
     Assert-True ([bool]$subscriptionRecord.auth_only_home) 'Codex app-server temporary CODEX_HOME contains auth.json only'
@@ -1761,7 +1765,7 @@ function Invoke-Fake {
         [string]$Scenario = ''
     )
 
-    $arguments = @('-NoProfile', '-File', $FakePath, $Command, '-Run', $RunPath, '-Profile', $ProfilePath)
+    $arguments = @('-NoProfile', '-NonInteractive', '-File', $FakePath, $Command, '-Run', $RunPath, '-Profile', $ProfilePath)
     if (-not [string]::IsNullOrWhiteSpace($Scenario)) { $arguments += @('-Scenario', $Scenario) }
     $output = & pwsh @arguments
     if ($LASTEXITCODE -ne 0) { throw "Fake runner '$Command' failed: $([string]::Join(' ', @($output)))" }
@@ -2284,7 +2288,7 @@ try {
     }
     Write-TestJson -Path $nativeInputPath -Value $nativeEnvelope
     $recordPath = Join-Path $runnerRoot 'record-native-result.ps1'
-    $recordOutput = & pwsh -NoProfile -File $recordPath -Runner codex -Run $with.Path -Profile $codexProfilePath -NativeResult $nativeInputPath -Output $nativeOutputPath 2>&1
+    $recordOutput = & pwsh -NoProfile -NonInteractive -File $recordPath -Runner codex -Run $with.Path -Profile $codexProfilePath -NativeResult $nativeInputPath -Output $nativeOutputPath 2>&1
     if ($LASTEXITCODE -ne 0) { throw "native terminal recording failed: $([string]::Join(' ', @($recordOutput)))" }
     $recordedResult = Read-RunnerJson -Path $nativeOutputPath
     [void](Assert-ExecutionResult -Result $recordedResult)
@@ -2299,7 +2303,7 @@ try {
 
     $legacyNativeInputPath = Join-Path $iteration 'conformance\results\legacy-summary.json'
     Write-TestJson -Path $legacyNativeInputPath -Value $bridgeResult
-    $legacyOutput = & pwsh -NoProfile -File $recordPath -Runner codex -Run $with.Path -Profile $codexProfilePath -NativeResult $legacyNativeInputPath -Output $nativeOutputPath 2>&1
+    $legacyOutput = & pwsh -NoProfile -NonInteractive -File $recordPath -Runner codex -Run $with.Path -Profile $codexProfilePath -NativeResult $legacyNativeInputPath -Output $nativeOutputPath 2>&1
     Assert-True ($LASTEXITCODE -ne 0) 'legacy summary-shaped worker output is rejected by the native recording boundary'
     Assert-True (([string]::Join(' ', @($legacyOutput))) -match 'eval-native-worker-result/1') 'legacy summary rejection identifies the required native envelope'
 
@@ -2310,7 +2314,7 @@ try {
 
     Write-TestJson -Path $rawPath -Value $bridgeResult
     $bridgePath = Join-Path $runnerRoot 'bridge-execution-result.ps1'
-    $bridgeOutput = & pwsh -NoProfile -File $bridgePath -Run $with.Path -ExecutionResult $rawPath -Result $resultPath
+    $bridgeOutput = & pwsh -NoProfile -NonInteractive -File $bridgePath -Run $with.Path -ExecutionResult $rawPath -Result $resultPath
     if ($LASTEXITCODE -ne 0) { throw "execution-result bridge failed: $([string]::Join(' ', @($bridgeOutput)))" }
     $portable = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
     Assert-Equal 'codebeltnet/agentic/eval-result/2' $portable.schema 'bridge preserves existing result schema'
@@ -2460,7 +2464,7 @@ try {
         grading = @()
     })
     $manifestBridgePath = Join-Path $manifestPackageTools 'bridge-manifest-results.ps1'
-    $shadowOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete 2>&1
+    $shadowOutput = & pwsh -NoProfile -NonInteractive -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete 2>&1
     $shadowExitCode = $LASTEXITCODE
     Assert-True ($shadowExitCode -ne 0) 'manifest bridge rejects an unreferenced underscore shadow result'
     Assert-True (([string]::Join(' ', @($shadowOutput))) -match 'unreferenced result-like sibling') 'shadow rejection explains the manifest collision'
@@ -2470,12 +2474,12 @@ try {
 
     $manifestState.max_observed_active = 1
     Write-TestJson -Path $manifestStatePath -Value $manifestState
-    $serialBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
+    $serialBridgeOutput = & pwsh -NoProfile -NonInteractive -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
     Assert-True ($LASTEXITCODE -ne 0) 'manifest bridge rejects post-freeze orchestration mutation'
     Assert-True (([string]::Join(' ', @($serialBridgeOutput))) -match 'orchestration-state.json changed') 'state mutation rejection preserves the immutable concurrency ledger'
     $manifestState.max_observed_active = 2
     Write-TestJson -Path $manifestStatePath -Value $manifestState
-    $manifestBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
+    $manifestBridgeOutput = & pwsh -NoProfile -NonInteractive -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
     if ($LASTEXITCODE -ne 0) { throw "manifest path bridge failed: $([string]::Join(' ', @($manifestBridgeOutput)))" }
     $canonicalWith = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
     Assert-Equal 'completed' $canonicalWith.execution_status 'manifest bridge populates the canonical hyphen result'
@@ -2489,7 +2493,7 @@ try {
     $canonicalWith.grading[0].passed = $true
     $canonicalWith.grading[0].evidence = 'graded after the first bridge'
     Write-TestJson -Path $manifestWithResult -Value $canonicalWith
-    $repeatBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
+    $repeatBridgeOutput = & pwsh -NoProfile -NonInteractive -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
     if ($LASTEXITCODE -ne 0) { throw "repeat manifest path bridge failed: $([string]::Join(' ', @($repeatBridgeOutput)))" }
     $canonicalAfterRepeat = Get-Content -LiteralPath $manifestWithResult -Raw | ConvertFrom-Json
     Assert-True ([bool]$canonicalAfterRepeat.grading[0].passed) 'repeat manifest bridge preserves completed grading'
@@ -2501,12 +2505,12 @@ try {
     $staleReplacement.run_id = 'replacement-terminal-result'
     $staleReplacement.final_response.text = 'replacement terminal output'
     Write-TestJson -Path $manifestWithExecution -Value $staleReplacement
-    $replacementBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
+    $replacementBridgeOutput = & pwsh -NoProfile -NonInteractive -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
     Assert-True ($LASTEXITCODE -ne 0) 'manifest bridge rejects a raw execution result changed after the freeze'
     Assert-True (([string]::Join(' ', @($replacementBridgeOutput))) -match 'Execution integrity failure|requires fresh Phase 1 execution') 'raw mutation rejection identifies frozen evidence integrity'
     Assert-True ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($manifestWithResult)) -eq [Convert]::ToBase64String($canonicalBeforeIntegrityFailure)) 'raw integrity failure does not rewrite the canonical result'
     [System.IO.File]::WriteAllBytes($manifestWithExecution, $frozenManifestRawBytes)
-    $restoredBridgeOutput = & pwsh -NoProfile -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
+    $restoredBridgeOutput = & pwsh -NoProfile -NonInteractive -File $manifestBridgePath -IterationDirectory $manifestPackage -RequireComplete -RequireParallelDispatch 2>&1
     if ($LASTEXITCODE -ne 0) { throw "restored manifest path bridge failed: $([string]::Join(' ', @($restoredBridgeOutput)))" }
 
     $invalidExitPath = Join-Path $manifestEval 'results\invalid-exit.execution-result.json'

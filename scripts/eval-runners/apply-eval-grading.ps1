@@ -40,7 +40,7 @@ try {
     if (-not (Test-Path -LiteralPath $bridgeScript -PathType Leaf)) {
         throw "Package-local manifest bridge is missing at '$bridgeScript'."
     }
-    $bridgeOutput = & pwsh -NoProfile -File $bridgeScript -IterationDirectory $iteration -RequireComplete 2>&1
+    $bridgeOutput = & pwsh -NoProfile -NonInteractive -File $bridgeScript -IterationDirectory $iteration -RequireComplete 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Canonical result validation failed before grading application: $([string]::Join(' ', @($bridgeOutput | ForEach-Object { [string]$_ })))"
     }

@@ -56,7 +56,7 @@ function Invoke-TestTool {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $output = & pwsh -NoProfile -File $Path @Arguments 2>&1
+    $output = & pwsh -NoProfile -NonInteractive -File $Path @Arguments 2>&1
     return [pscustomobject]@{
         ExitCode = $LASTEXITCODE
         Text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
@@ -70,7 +70,7 @@ function Invoke-ForegroundPhaseOne {
     # separately so relayed heartbeats never contaminate the terminal JSON.
     $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('phase1-stderr-' + [Guid]::NewGuid().ToString('N') + '.log')
     try {
-        $output = & pwsh -NoProfile -File $Path -IterationDirectory $IterationDirectory 2>$stderrPath
+        $output = & pwsh -NoProfile -NonInteractive -File $Path -IterationDirectory $IterationDirectory 2>$stderrPath
         $exitCode = $LASTEXITCODE
         $text = [string]::Join([Environment]::NewLine, @($output | ForEach-Object { [string]$_ }))
         $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { [System.IO.File]::ReadAllText($stderrPath, [System.Text.UTF8Encoding]::new($false)) } else { '' }

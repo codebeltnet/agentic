@@ -45,10 +45,13 @@
     Overwrite an existing iteration directory.
 
 .PARAMETER Runner
-    Required package-local Eval Runner id written to execution-profile.json when -CodebeltReference is not used.
+    Package-local Eval Runner id written to execution-profile.json when -CodebeltReference is not used. GitHub Copilot
+    and Codex can resolve repository-defined default models; OpenCode requires an explicit model selector.
 
 .PARAMETER Model
-    Required runner-native model selector written to execution-profile.json when -CodebeltReference is not used.
+    Runner-native model selector written to execution-profile.json when -CodebeltReference is not used. When omitted for
+    Codex, preparation selects gpt-5.6-luna with low reasoning. When omitted for GitHub Copilot, preparation selects the
+    Codebelt Reference model claude-haiku-4.5. Preparation validates the resolved model against current harness discovery.
 
 .PARAMETER CodebeltReference
     Resolve the Codebelt reference configuration by discovering current GitHub Copilot CLI models and selecting
@@ -89,13 +92,13 @@
     cannot repair missing, malformed, or unproven runner-produced execution evidence.
 
 .EXAMPLE
-    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing -Runner github-copilot -Model claude-haiku-4.5
+    pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing -Runner github-copilot
 
 .EXAMPLE
-    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -Changed -CodebeltReference
+    pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -CodebeltReference
 
 .EXAMPLE
-    pwsh -NoProfile -File ./scripts/prepare-skill-evals.ps1 -CollectResults $env:TEMP/dotnet-strong-name-signing-workspace/iteration-1
+    pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -CollectResults $env:TEMP/dotnet-strong-name-signing-workspace/iteration-1
 #>
 [CmdletBinding(DefaultParameterSetName = 'Prepare')]
 param(
@@ -406,6 +409,30 @@ function Get-HarnessName {
     }
 }
 
+function Confirm-HarnessModel {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$RunnerName,
+        [Parameter(Mandatory = $true)][string]$ModelName
+    )
+
+    $discoveryScript = Join-Path $RepoRoot 'scripts/Get-HarnessModels.ps1'
+    if (-not (Test-Path -LiteralPath $discoveryScript -PathType Leaf)) {
+        throw "Cannot verify model '$ModelName' because '$discoveryScript' is missing."
+    }
+
+    $arguments = @('-Runner', $RunnerName, '-RequireModel', $ModelName)
+    if (-not [string]::IsNullOrWhiteSpace($ModelCatalogPath)) {
+        $arguments += @('-CatalogPath', $ModelCatalogPath)
+    }
+    $discoveryOutput = & pwsh -NoProfile -NonInteractive -File $discoveryScript @arguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Runner '$RunnerName' model '$ModelName' could not be verified against current harness discovery. $($discoveryOutput -join [Environment]::NewLine)"
+    }
+
+    return $true
+}
+
 function Get-SupportedRunnerIds {
     param([Parameter(Mandatory = $true)][string]$RepoRoot)
 
@@ -425,6 +452,7 @@ function Resolve-ExecutionSelection {
 
     $referenceRunner = 'github-copilot'
     $referenceModel = 'claude-haiku-4.5'
+    $codexDefaultModel = 'gpt-5.6-luna'
     $supportedRunners = @(Get-SupportedRunnerIds -RepoRoot $RepoRoot)
     $supportedText = if ($supportedRunners.Count -gt 0) { $supportedRunners -join ', ' } else { '(none found)' }
 
@@ -436,19 +464,7 @@ function Resolve-ExecutionSelection {
         if ($supportedRunners -notcontains $referenceRunner) {
             throw "Codebelt Reference requires runner '$referenceRunner', but it is unavailable. Supported runner IDs: $supportedText."
         }
-        $discoveryScript = Join-Path $RepoRoot 'scripts/Get-HarnessModels.ps1'
-        if (-not (Test-Path -LiteralPath $discoveryScript -PathType Leaf)) {
-            throw "Cannot resolve Codebelt Reference because '$discoveryScript' is missing."
-        }
-
-        $arguments = @('-Runner', $referenceRunner, '-RequireModel', $referenceModel)
-        if (-not [string]::IsNullOrWhiteSpace($ModelCatalogPath)) {
-            $arguments += @('-CatalogPath', $ModelCatalogPath)
-        }
-        $discoveryOutput = & pwsh -NoProfile -File $discoveryScript @arguments 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "Codebelt Reference requires $referenceRunner + $referenceModel, but current model discovery could not verify it. $($discoveryOutput -join [Environment]::NewLine)"
-        }
+        [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $referenceRunner -ModelName $referenceModel)
 
         return [pscustomobject]@{
             Runner = $referenceRunner
@@ -461,20 +477,44 @@ function Resolve-ExecutionSelection {
     $hasRunner = -not [string]::IsNullOrWhiteSpace($Runner)
     $hasModel = -not [string]::IsNullOrWhiteSpace($Model)
     if (-not $hasRunner -and -not $hasModel) {
-        throw "Evaluation preparation requires a resolved Harness + Model before RUN-THIS.prompt.md can be generated. Pass -Runner and -Model, or use -CodebeltReference after verifying the current catalog. Supported runner IDs: $supportedText."
+        throw "Evaluation preparation requires a resolved Harness + Model before RUN-THIS.prompt.md can be generated. Pass -Runner with an explicit model or a runner that has a repository-defined default, or use -CodebeltReference. Supported runner IDs: $supportedText."
     }
-    if ($hasRunner -ne $hasModel) {
-        throw 'Runner/model selection is atomic: pass both -Runner and -Model, or neither when no package will be generated.'
+    if (-not $hasRunner -and $hasModel) {
+        throw 'Runner/model selection requires -Runner when -Model is supplied.'
     }
-    if ($supportedRunners -notcontains $Runner) {
+    $resolvedRunnerMatch = @($supportedRunners | Where-Object { [string]::Equals($_, $Runner, [StringComparison]::OrdinalIgnoreCase) })
+    if ($resolvedRunnerMatch.Count -ne 1) {
         throw "Unsupported runner '$Runner'. Supported runner IDs: $supportedText."
     }
+    $resolvedRunner = [string]$resolvedRunnerMatch[0]
+    $resolvedModel = if ($hasModel) { $Model } else { $null }
+    $preset = 'Custom'
+    if (-not $hasModel) {
+        switch ($resolvedRunner) {
+            'codex' {
+                $resolvedModel = $codexDefaultModel
+                $preset = 'Codex default'
+            }
+            'github-copilot' {
+                $resolvedModel = $referenceModel
+                $preset = 'Codebelt Reference'
+            }
+            'opencode' {
+                throw 'OpenCode requires an explicit -Model selector from the discovered provider/model catalog.'
+            }
+            default {
+                throw "Runner '$resolvedRunner' has no repository-defined default model. Pass -Model."
+            }
+        }
+    }
+
+    [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $resolvedRunner -ModelName $resolvedModel)
 
     return [pscustomobject]@{
-        Runner = $Runner
-        Model = $Model
-        Harness = Get-HarnessName -RunnerName $Runner
-        Preset = 'Custom'
+        Runner = $resolvedRunner
+        Model = $resolvedModel
+        Harness = Get-HarnessName -RunnerName $resolvedRunner
+        Preset = $preset
     }
 }
 
@@ -1765,21 +1805,21 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('A caller-side shell timeout is not permission to invoke Phase 1 again. `invoke-runner-owned-arms.ps1` must be started exactly once for this iteration. If execution is interrupted and no valid `execution-freeze.json` exists, the package is incomplete and requires a fresh iteration.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Read the selected runner descriptor and its `delegation.dispatch_owner`. For runner-owned behavioral transport, invoke:')
-    [void]$builder.AppendLine("pwsh -NoProfile -File `"$runnerOwnedFanoutPath`" -IterationDirectory `"$IterationDirectory`"")
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$runnerOwnedFanoutPath`" -IterationDirectory `"$IterationDirectory`"")
     [void]$builder.AppendLine('It performs every preflight before any execute process, preserves exact manifest paths, owns concurrency/backpressure, timeout/watchdog handling, terminal registration, orchestration evidence, and immutable `execution-freeze.json` before Phase 2. Consume its terminal JSON summary. If Phase 1 reports incompatible or fails, stop: the evaluation is incomplete and must fail closed. The evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check. Do not create outer workers, execute an arm yourself, write orchestration state, or edit raw result/evidence files. If dispatch ownership is orchestrator-owned, use only the descriptor-declared native worker transport, the exact manifest paths, and then run the shared freeze boundary; do not synthesize or repair transport evidence. Only persisted runner-produced evidence at the manifest-declared paths may proceed.')
     [void]$builder.AppendLine('Workers receive only their isolated run directory. Keep the paired arm, metadata, expected output, assertions, grading, reports, and orchestration files out of Phase 1. Preserve runner-owned terminal results and all referenced raw transcript/event artifacts exactly as written.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Phase 2 — grading and finalization')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Only after Phase 1 returns a successful terminal JSON summary, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
-    [void]$builder.AppendLine("pwsh -NoProfile -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
     [void]$builder.AppendLine('Only if that bridge succeeds, reveal the grading key in `eval-metadata.json` to the Grader. The Grader may author exactly one package-root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`; each entry contains only `eval_id`, `eval_name`, `configuration`, `assertion_index`, `assertion`, `passed`, and `evidence`. It must not edit raw execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.')
     [void]$builder.AppendLine('To display the authoritative top-level grading skeleton, run:')
-    [void]$builder.AppendLine("pwsh -NoProfile -File `"$gradingValidatorPath`" -ShowSkeleton")
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$gradingValidatorPath`" -ShowSkeleton")
     [void]$builder.AppendLine('Write `grading.json`, then validate it before finalization:')
-    [void]$builder.AppendLine("pwsh -NoProfile -File `"$gradingValidatorPath`" -IterationDirectory `"$IterationDirectory`" -GradingPath `"grading.json`"")
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$gradingValidatorPath`" -IterationDirectory `"$IterationDirectory`" -GradingPath `"grading.json`"")
     [void]$builder.AppendLine('Grading validation is retryable; finalization is not. If validation fails, correct `grading.json` and rerun the validation command as many times as required. Do not invoke the application helper separately; the finalizer invokes `apply-eval-grading.ps1` deterministically after revalidating grading. Invoke finalization exactly once, and only after grading validation succeeds:')
-    [void]$builder.AppendLine("pwsh -NoProfile -File `"$finalizerPath`" -IterationDirectory `"$IterationDirectory`"")
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$finalizerPath`" -IterationDirectory `"$IterationDirectory`"")
     [void]$builder.AppendLine('The finalizer revalidates the manifest, profile, terminal orchestration/concurrency evidence, immutable freeze, raw artifacts, bridge, canonical results, and grading; it then generates and verifies all required reports. Return only its machine-readable JSON summary and artifact paths. A non-zero exit, missing artifact, integrity error, or report error means the evaluation is incomplete. Never repair, re-freeze, re-bridge a changed raw result, or report prose success.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The four required package-root artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`. Same-session scripted evals, when present in a run, are handled by the selected runner only if its descriptor/preflight proves `scripted_multi_turn_same_session`; otherwise preflight fails before execution. The paired configurations receive identical scripted user turns.')
@@ -2034,7 +2074,7 @@ function Invoke-CollectMode {
                     $requireNativeDelegation = $false
                 }
             }
-            $bridgeArguments = @('-NoProfile', '-File', $packageBridgePath, '-IterationDirectory', $iterationDirectory)
+            $bridgeArguments = @('-NoProfile', '-NonInteractive', '-File', $packageBridgePath, '-IterationDirectory', $iterationDirectory)
             if ($requireNativeDelegation) { $bridgeArguments += '-RequireNativeDelegation' }
             $bridgeOutput = & pwsh @bridgeArguments 2>&1
             if ($LASTEXITCODE -ne 0) {
@@ -2246,7 +2286,7 @@ function Invoke-CollectMode {
 
     if ($errors.Count -eq 0) {
         $reportScript = Join-Path (Join-Path (Get-RepoRoot) 'scripts') 'generate-eval-report.ps1'
-        $reportOutput = & pwsh -NoProfile -File $reportScript -IterationDirectory $iterationDirectory 2>&1
+        $reportOutput = & pwsh -NoProfile -NonInteractive -File $reportScript -IterationDirectory $iterationDirectory 2>&1
         if ($LASTEXITCODE -ne 0) {
             $errors.Add("Report generation failed: $($reportOutput -join [Environment]::NewLine)")
         } else {
