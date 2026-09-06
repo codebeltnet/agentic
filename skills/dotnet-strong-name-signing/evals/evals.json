@@ -30,7 +30,7 @@
     },
     {
       "id": 2,
-      "prompt": "Create a 4096-bit strong name key called signing-key in C:\\temp\\keys.",
+      "prompt": "Create a 4096-bit strong name key called signing-key in the relative directory keys under this repository.",
       "expected_output": "Turn 1 summarizes the requested 4096-bit key, signing-key filename, and output directory, then waits for confirmation without generating it. After the deterministic confirmation turn, turn 2 performs the generation and reports the final file details.",
       "expectations": [
         "Allows overriding individual values after the summary",
