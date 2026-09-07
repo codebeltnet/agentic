@@ -108,6 +108,13 @@ function Replace-VersionInBlock {
     return $null
 }
 
+function ConvertFrom-XmlText {
+    param([string]$Value)
+
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    return [System.Net.WebUtility]::HtmlDecode($Value)
+}
+
 function Update-DeclarationLine {
     param(
         [Parameter(Mandatory)][string]$Text,
@@ -195,8 +202,8 @@ function Update-DeclarationLine {
         }
 
         $nodeConditionMatch = [regex]::Match($tagText, 'Condition\s*=\s*([''"])(.*?)\1')
-        $nodeCondition = if ($nodeConditionMatch.Success) { $nodeConditionMatch.Groups[2].Value } else { $null }
-        $effective = if ($nodeCondition) { $nodeCondition } else { $groupCondition }
+        $nodeCondition = if ($nodeConditionMatch.Success) { ConvertFrom-XmlText $nodeConditionMatch.Groups[2].Value } else { $null }
+        $effective = if ($nodeCondition) { $nodeCondition } else { ConvertFrom-XmlText $groupCondition }
         if ((($Condition ?? '') -ne ($effective ?? ''))) {
             $index = $blockEnd
             continue
