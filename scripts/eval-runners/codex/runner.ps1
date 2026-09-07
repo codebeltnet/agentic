@@ -288,16 +288,16 @@ function ConvertTo-CodexComparablePath {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
     $value = [string]$Path
     try { $value = [System.IO.Path]::GetFullPath($value) } catch { }
-    $value = $value.Replace('/', '\')
+    $value = $value.Replace('\', '/')
     if ($IsWindows) { $value = $value.ToLowerInvariant() }
-    return $value.TrimEnd('\')
+    return $value.TrimEnd('/')
 }
 
 function ConvertTo-CodexComparableText {
     param([AllowNull()][string]$Text)
 
     if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
-    $value = ([string]$Text).Replace('/', '\')
+    $value = ([string]$Text).Replace('\', '/')
     if ($IsWindows) { return $value.ToLowerInvariant() }
     return $value
 }
@@ -337,7 +337,7 @@ function Test-CodexPathInsideComparableRoot {
     $rootComparable = ConvertTo-CodexComparablePath -Path $Root
     $candidateComparable = ConvertTo-CodexComparablePath -Path $Candidate
     if ([string]::IsNullOrWhiteSpace($rootComparable) -or [string]::IsNullOrWhiteSpace($candidateComparable)) { return $false }
-    return $candidateComparable -eq $rootComparable -or $candidateComparable.StartsWith($rootComparable + '\', [StringComparison]::Ordinal)
+    return $candidateComparable -eq $rootComparable -or $candidateComparable.StartsWith($rootComparable + '/', [StringComparison]::Ordinal)
 }
 
 function Test-CodexPromptInputSuppressesNativeSkills {
