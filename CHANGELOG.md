@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-09-08
+
+This patch release adds optional one-shot external handoff for explicit eval requests, complete with deterministic workflow helpers and test coverage. Agents can now accept `yolo` or `auto` modifiers on explicit evaluation requests to authorize a single fresh external Eval Orchestrator handoff; preparation remains deterministic and repository-local, while only an explicit, authorized harness receives the sealed package. Skill eval preparation gains a PassThru parameter for returning prompt paths, runner names are normalized for user-facing consistency, and validation tooling gains comprehensive eval-request-workflow checks.
+
+### Added
+
+- `scripts/eval-request.ps1` with deterministic helpers for optional one-shot external handoff: `Get-EvalHandoff` reserves and transitions between manual and external handoff states, while `Invoke-EvalRequest` normalizes harness names, discovers available models, returns preparation decisions, and never launches a model itself,
+- Full test coverage for eval-request workflow in `scripts/eval-runners/tests/test-eval-request.ps1` exercising all runner/model normalization paths, handoff state transitions, already-started detection, unavailable-host fallback, and case-insensitive normalization,
+- Runner normalization in eval-request helpers converting user-facing harness names (`GitHub Copilot`, `Copilot CLI`) to internal canonical runner ids (`github-copilot`) before model discovery and profile generation,
+- PassThru parameter in `scripts/prepare-skill-evals.ps1` for returning the prepared prompt paths without file output, enabling downstream helpers to collect decisions and route handoffs,
+- `-Yolo` flag in `scripts/eval-request.ps1` Invoke-EvalRequest authorizing one-shot external handoff after explicit user eval request, while keeping preparation and validation deterministic,
+- Optional-one-shot-external-handoff section in `AGENTS.md` documenting the explicit user authorization, harness selection, model discovery flow (including OpenCode's explicit-model requirement), and the deterministic one-handoff boundary,
+- External evaluation authorization guidance in `AGENTS.md` clarifying that `yolo`/`auto` modifiers on explicit eval requests enable handoff without widening repository automation, CI, completion gates, or model-backed execution,
+- Eval-request-workflow validation checks in `scripts/validate-skill-templates.ps1` ensuring eval-request.ps1 presence, test coverage, runner normalization completeness, and handoff-state-reservation correctness.
+
+### Changed
+
+- `AGENTS.md` eval preparation guidance now distinguishes between manual handoff (normal path that prepares and returns `RUN-THIS.prompt.md`) and external handoff (when user explicitly requests eval with yolo/auto), clarifying that only the latter authorizes orchestrator delegation,
+- Runner-model discovery and selection in `scripts/Get-HarnessModels.ps1` now fully documents the -Runner requirement and exposes current available models without auto-selecting a previous or default model,
+- `README.md` eval section expanded with documentation of optional one-shot handoff feature, explicit authorization scoping, and reference to `AGENTS.md` for the complete workflow,
+- `CONTRIBUTING.md` now references the optional one-shot eval handoff capability and directs users to full preparation and handoff guidance in `AGENTS.md`.
+
+### Fixed
+
+- Eval request workflow now clearly separates deterministic preparation (always model-free, always stops for manual handoff) from explicit external handoff (only with user-supplied yolo/auto, never retried if already launched),
+- Model discovery no longer accepts harness names as ambiguous shortcuts; runner normalization explicitly converts `Copilot` and `GitHub Copilot CLI` to the canonical `github-copilot` runner before passing to model-discovery logic.
+
 ## [0.9.1] - 2026-09-07
 
 This patch release adds harness-agnostic Eval Runner execution boundary infrastructure without changing the paired evaluation methodology or existing report schemas, while optimizing skill descriptions and refactoring repository-level authoring guidance. Prepared packages now carry `execution-profile.json`, package-local runner protocol tools, and normalized `execution-result.json` evidence. The deterministic fake runner is the conformance reference, with Codex, GitHub Copilot CLI, and OpenCode as supported real adapters. Repository automation remains model-free; only a human-directed external Eval Orchestrator may invoke the selected runner, and unsupported isolation fails closed.
@@ -638,6 +665,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.9.2]: https://github.com/codebeltnet/agentic/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/codebeltnet/agentic/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/codebeltnet/agentic/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/codebeltnet/agentic/compare/v0.8.1...v0.8.2
