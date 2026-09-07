@@ -1,0 +1,108 @@
+{
+  "skill_name": "dotnet-nuget-update",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Audit the attached repository and update NuGet packages without breaking its TFM-specific package strategy. The repo targets net9.0 and net10.0, and the same Microsoft package is pinned separately for each band. Resolve every declaration first, then update each band to the newest version that still fits that band instead of proposing the overall newest major.",
+      "expected_output": "The agent performs a complete dependency audit before editing, updates Microsoft.Extensions.Logging separately within 9.x and 10.x, leaves Newtonsoft.Json as already current, and does not propose an 11.x jump for the band-tracked package.",
+      "expectations": [
+        "Runs the complete dependency audit before changing any package",
+        "Treats the net9 declaration and the net10 declaration as separate rows",
+        "Updates the net9 package only within 9.x and the net10 package only within 10.x",
+        "Does not flatten the conditional graph into one shared package version",
+        "Reports the full audit summary with declared/current/auto/approval/unresolved counts"
+      ],
+      "files": [
+        "evals/files/multi-tfm-bands/Directory.Packages.props",
+        "evals/files/multi-tfm-bands/Directory.Build.props"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Update the attached central package graph. The latest overall Microsoft.Extensions.Logging release is a newer major, but the repository intentionally pins separate versions under net9 and net10 conditions. Finish the full audit and apply only the in-band updates that remain patch or minor steps.",
+      "expected_output": "The agent completes the audit without interruption, applies only in-band patch or minor updates, and reports any out-of-band latest major as held by the TFM-band rule instead of proposing it as the target.",
+      "expectations": [
+        "Completes the audit before asking anything",
+        "Uses the TFM-band rule rather than the overall latest package version",
+        "Finishes without interruption when all in-band updates are auto classes",
+        "Explains when a newer overall version exists outside the allowed band"
+      ],
+      "files": [
+        "evals/files/multi-tfm-bands/Directory.Packages.props",
+        "evals/files/multi-tfm-bands/Directory.Build.props"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Review the attached mixed stable and prerelease package graph. Keep stable dependencies on stable releases, allow prerelease movement for the dependency that is already pinned to a prerelease, and avoid asking for approval when that prerelease update stays inside the same major.",
+      "expected_output": "Stable pins stay on stable candidates, the prerelease pin advances only within the intended prerelease line, and the same-major prerelease step is treated as an auto update instead of an approval candidate.",
+      "expectations": [
+        "Infers stable intent from stable pins",
+        "Infers prerelease intent from the prerelease pin",
+        "Treats same-major prerelease movement as auto rather than approval",
+        "Still reports the complete audit summary"
+      ],
+      "files": [
+        "evals/files/mixed-stable-prerelease/Directory.Packages.props",
+        "evals/files/mixed-stable-prerelease/Directory.Build.props"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Use dotnet-nuget-update on the attached repository and apply all patch and minor NuGet updates. There are no majors that need approval, so the normal-mode run should complete without interrupting me.",
+      "expected_output": "The agent audits the repository, applies the safe updates, preserves the XML structure, and finishes without asking a question because only auto classes are present.",
+      "expectations": [
+        "Normal mode does not interrupt the user when only auto updates are present",
+        "Applies patch and minor updates structurally rather than rewriting the file",
+        "Reports what changed and what remained current"
+      ],
+      "files": [
+        "evals/files/flat-stable-only/Directory.Packages.props",
+        "evals/files/flat-stable-only/Directory.Build.props"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Run dotnet-nuget-update in normal mode on the attached repository. Some dependencies have major upgrades available. Complete the full audit first, then ask only one batched approval question for the held majors instead of stopping package by package.",
+      "expected_output": "The agent finishes the full dependency audit before any approval prompt, batches the major candidates into one decision point, and separates those approval items from the auto-updatable packages.",
+      "expectations": [
+        "Performs the complete audit before any approval question",
+        "Batches major candidates into one approval decision",
+        "Keeps auto candidates separate from approval candidates",
+        "Reports unresolved or note-bearing rows alongside the rest of the audit"
+      ],
+      "files": [
+        "evals/files/with-xml-comment-pin/Directory.Packages.props",
+        "evals/files/with-xml-comment-pin/Directory.Build.props"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Run dotnet-nuget-update yolo on the attached repository. Apply patch and minor updates silently, hold major upgrades without asking, and show the held majors in the final report.",
+      "expected_output": "The agent applies only the auto classes, leaves majors untouched, asks no follow-up question, and reports the held majors explicitly at the end.",
+      "expectations": [
+        "Yolo mode never applies majors silently",
+        "Yolo mode asks no approval question",
+        "The final report lists held major candidates separately from applied updates"
+      ],
+      "files": [
+        "evals/files/with-xml-comment-pin/Directory.Packages.props",
+        "evals/files/with-xml-comment-pin/Directory.Build.props"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Update the attached repository, but pay attention to any inline notes explaining why a package is pinned. Preserve the comment, surface its warning in the audit, and avoid bulldozing through a deliberate hold just because the version step looks safe.",
+      "expected_output": "The agent preserves the XML comment, surfaces the note in the audit, and treats the note-bearing declaration as a deliberate human decision that must be read before applying any update.",
+      "expectations": [
+        "Carries the adjacent XML comment into the audit note field",
+        "Preserves the comment and surrounding formatting during any edit",
+        "Marks a note-bearing auto candidate as needing the note to be read first"
+      ],
+      "files": [
+        "evals/files/with-xml-comment-pin/Directory.Packages.props",
+        "evals/files/with-xml-comment-pin/Directory.Build.props"
+      ]
+    }
+  ]
+}
