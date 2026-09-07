@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.1] - 2026-08-22
+## [0.9.1] - 2026-09-07
 
 This patch release adds harness-agnostic Eval Runner execution boundary infrastructure without changing the paired evaluation methodology or existing report schemas, while optimizing skill descriptions and refactoring repository-level authoring guidance. Prepared packages now carry `execution-profile.json`, package-local runner protocol tools, and normalized `execution-result.json` evidence. The deterministic fake runner is the conformance reference, with Codex, GitHub Copilot CLI, and OpenCode as supported real adapters. Repository automation remains model-free; only a human-directed external Eval Orchestrator may invoke the selected runner, and unsupported isolation fails closed.
 
