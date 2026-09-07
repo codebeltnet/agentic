@@ -1430,6 +1430,12 @@ Add-ValidationResult -Results $results -Name 'Progress coalescing renders select
     }
 }
 
+Add-ValidationResult -Results $results -Name 'Explicit eval requests preserve preparation and reserve one external handoff' -Group 'Preparation' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-eval-request.ps1') 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Eval request regressions failed: $($output -join [Environment]::NewLine)" }
+}
+
 Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Group 'Preparation' -Action {
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref

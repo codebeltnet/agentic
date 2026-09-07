@@ -44,6 +44,9 @@
 .PARAMETER Force
     Overwrite an existing iteration directory.
 
+.PARAMETER PassThru
+    Also return each successfully prepared absolute RUN-THIS.prompt.md path on the success stream.
+
 .PARAMETER Runner
     Package-local Eval Runner id written to execution-profile.json when -CodebeltReference is not used. GitHub Copilot
     and Codex can resolve repository-defined default models; OpenCode requires an explicit model selector.
@@ -128,6 +131,10 @@ param(
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
     [switch]$Force,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [switch]$PassThru,
 
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
@@ -481,6 +488,11 @@ function Resolve-ExecutionSelection {
     }
     if (-not $hasRunner -and $hasModel) {
         throw 'Runner/model selection requires -Runner when -Model is supplied.'
+    }
+    # Normalize the user-facing names before discovery; model policy remains runner-owned here.
+    $Runner = switch ($Runner.Trim().ToLowerInvariant()) {
+        { $_ -in @('github copilot', 'github copilot cli', 'copilot') } { 'github-copilot' }
+        default { $_ }
     }
     $resolvedRunnerMatch = @($supportedRunners | Where-Object { [string]::Equals($_, $Runner, [StringComparison]::OrdinalIgnoreCase) })
     if ($resolvedRunnerMatch.Count -ne 1) {
@@ -1781,6 +1793,7 @@ function Invoke-PrepareMode {
     Write-Host 'The selected evaluator must write valid runner-produced execution results back into this package.'
     Write-Host 'If it cannot, the evaluation is incomplete and must fail closed; only persisted runner-produced evidence at'
     Write-Host 'the manifest-declared paths may proceed.'
+    if ($PassThru) { Write-Output $runnerPath }
 }
 
 function New-RunnerPrompt {
