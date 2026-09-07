@@ -1441,6 +1441,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
     $contributing = Get-FileText -RepoRoot $repoRoot -RelativePath 'CONTRIBUTING.md' -GitRef $Ref
     $runnerReadme = Get-FileText -RepoRoot $repoRoot -RelativePath 'scripts/eval-runners/README.md' -GitRef $Ref
+    $evalRequest = Get-FileText -RepoRoot $repoRoot -RelativePath 'scripts/eval-request.ps1' -GitRef $Ref
     $prepare = Get-FileText -RepoRoot $repoRoot -RelativePath 'scripts/prepare-skill-evals.ps1' -GitRef $Ref
 
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '## Portable Eval Handoff'
@@ -1453,6 +1454,9 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'repository automation remains deterministic and never invokes a model.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Resolve the execution configuration before running the package preparation script.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'scripts/Get-HarnessModels.ps1'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'GitHub Copilot CLI, `task` + fresh `general-purpose` agent availability is this capability; treat it as available'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '-CanDelegateFreshOrchestrator'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'If the resolved runner is `github-copilot` and no explicit model was supplied, do not pick a discovered model'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'OpenCode discovery mirrors every model exposed by all configured OpenCode providers'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'availability is presentation metadata only and never filters the selectable catalog'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'If OpenCode is selected and no model was explicitly supplied, present every discovered selector to the user, ask the user to choose one, and stop until that choice is made.'
@@ -1483,6 +1487,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'a completion gate an agent cannot skip'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares the paired candidate and baseline inputs as a portable package and stops'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'In GitHub Copilot CLI, `task` + fresh `general-purpose` agent availability is that capability'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Discovery is an availability check, not model ranking'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name> -Runner <runner-id> -Model <runner-native-model>'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'choose a Harness + Model when the user did not already do so'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'OpenCode mirrors every model exposed by all configured providers'
@@ -1492,6 +1498,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'the user must choose from the discovered selectors before package preparation'
     Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'OpenCode through `opencode models --verbose`'
     Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'without filtering the selectable catalog'
+    Assert-Contains -Name 'scripts/eval-request.ps1' -Content $evalRequest -Needle "[Alias('ExternalOrchestratorAvailable')][switch]`$CanDelegateFreshOrchestrator"
+    Assert-NotContains -Name 'scripts/eval-request.ps1' -Content $evalRequest -Needle 'claude-opus-4.7'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'full operational permission inside each isolated behavioral harness configuration'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'Hard filesystem confinement is a separate optional outer capability'
     Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'full harness operational permission inside each isolated eval boundary'

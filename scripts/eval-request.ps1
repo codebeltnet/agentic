@@ -5,6 +5,8 @@
     These helpers never launch a model. The interactive host consumes an external_handoff decision
     with its fresh-context delegation tool, passing only the canonical prompt path. Do not wire
     this decision to CI, hooks, preparation, validation, or completion-gate execution.
+    For GitHub Copilot CLI, task + general-purpose delegation is a valid external-orchestrator
+    capability for this one-shot handoff.
 #>
 Set-StrictMode -Version Latest
 
@@ -13,7 +15,7 @@ function Get-EvalHandoff {
     param(
         [Parameter(Mandatory)][string]$PromptPath,
         [switch]$Yolo,
-        [switch]$ExternalOrchestratorAvailable
+        [Alias('ExternalOrchestratorAvailable')][switch]$CanDelegateFreshOrchestrator
     )
 
     $path = (Resolve-Path -LiteralPath $PromptPath -ErrorAction Stop).Path
@@ -33,8 +35,8 @@ function Get-EvalHandoff {
         $decision.reason = 'Do not dispatch again or invoke Phase 1 again. Observe the existing Orchestrator; interrupted execution remains incomplete.'
         return [pscustomobject]$decision
     }
-    if (-not $ExternalOrchestratorAvailable) {
-        $decision.reason = 'This host cannot hand off to a fresh external Eval Orchestrator. Use the intact manual handoff; never execute an arm in this context.'
+    if (-not $CanDelegateFreshOrchestrator) {
+        $decision.reason = 'This host cannot delegate one fresh external Eval Orchestrator context. Keep the intact manual handoff and never execute an arm in this context.'
         return [pscustomobject]$decision
     }
     try {
@@ -56,7 +58,7 @@ function Invoke-EvalRequest {
     param(
         [Parameter(Mandatory)][hashtable]$Preparation,
         [switch]$Yolo,
-        [switch]$ExternalOrchestratorAvailable
+        [Alias('ExternalOrchestratorAvailable')][switch]$CanDelegateFreshOrchestrator
     )
 
     $ErrorActionPreference = 'Stop'
@@ -67,6 +69,6 @@ function Invoke-EvalRequest {
     $arguments.PassThru = $true
     $paths = @(& (Join-Path $PSScriptRoot 'prepare-skill-evals.ps1') @arguments)
     foreach ($path in $paths) {
-        Get-EvalHandoff -PromptPath $path -Yolo:$Yolo -ExternalOrchestratorAvailable:$ExternalOrchestratorAvailable
+        Get-EvalHandoff -PromptPath $path -Yolo:$Yolo -CanDelegateFreshOrchestrator:$CanDelegateFreshOrchestrator
     }
 }

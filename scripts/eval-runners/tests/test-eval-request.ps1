@@ -30,7 +30,7 @@ function Assert-Failure([hashtable]$Options, [string]$Pattern) {
     $before = $script:dispatches.Count
     $failed = $false
     try {
-        Invoke-EvalRequest -Preparation $Options -Yolo -ExternalOrchestratorAvailable |
+        Invoke-EvalRequest -Preparation $Options -Yolo -CanDelegateFreshOrchestrator |
             ForEach-Object { Invoke-FakeHost $_ }
     } catch {
         $failed = $true
@@ -42,11 +42,11 @@ function Assert-Failure([hashtable]$Options, [string]$Pattern) {
 
 try {
     $catalog = Join-Path $workspace 'models.json'
-    @{ models = @(@{ id = 'gpt-5.6-luna' }, @{ id = 'claude-haiku-4.5' }, @{ id = 'provider/Exact.Model' }) } |
+    @{ models = @(@{ id = 'gpt-5.6-luna' }, @{ id = 'claude-haiku-4.5' }, @{ id = 'claude-opus-4.7' }, @{ id = 'provider/Exact.Model' }) } |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $catalog -Encoding utf8
 
     $normalOptions = New-Preparation 'Codex' 'normal'
-    $normal = Invoke-EvalRequest -Preparation $normalOptions -ExternalOrchestratorAvailable
+    $normal = Invoke-EvalRequest -Preparation $normalOptions -CanDelegateFreshOrchestrator
     Invoke-FakeHost $normal
     Assert-True ($normal.action -eq 'manual_handoff' -and $script:dispatches.Count -eq 0) 'Normal eval must stop at manual handoff.'
     Assert-True (-not (Test-Path (Join-Path (Split-Path $normal.prompt_path) '.external-handoff-started'))) 'Normal preparation reserved execution.'
@@ -61,7 +61,7 @@ try {
         $options.Iteration = 1
         $options.Force = $true
         if ($marker -eq '.external-handoff-started') {
-            $reserved = Invoke-EvalRequest -Preparation $options -Yolo -ExternalOrchestratorAvailable
+            $reserved = Invoke-EvalRequest -Preparation $options -Yolo -CanDelegateFreshOrchestrator
             Invoke-FakeHost $reserved
         } else {
             $reserved = Invoke-EvalRequest -Preparation $options
@@ -74,28 +74,36 @@ try {
         $afterFiles = @(Get-ChildItem -LiteralPath $package -Recurse -File -Force | Sort-Object FullName |
             ForEach-Object { $_.FullName + ':' + (Get-FileHash -LiteralPath $_.FullName).Hash })
         Assert-True (($beforeFiles -join "`n") -ceq ($afterFiles -join "`n")) "Forced retry changed package protected by $marker."
-        $again = Get-EvalHandoff -PromptPath $reserved.prompt_path -Yolo -ExternalOrchestratorAvailable
+        $again = Get-EvalHandoff -PromptPath $reserved.prompt_path -Yolo -CanDelegateFreshOrchestrator
         Assert-True ($again.action -eq 'already_started') "Forced retry erased $marker."
     }
 
     foreach ($case in @(
-        @{ Runner = 'CoDeX'; Expected = 'codex'; Model = 'gpt-5.6-luna' },
-        @{ Runner = 'GitHub Copilot CLI'; Expected = 'github-copilot'; Model = 'claude-haiku-4.5' },
-        @{ Runner = 'Copilot'; Expected = 'github-copilot'; Model = 'gpt-5.6-luna'; Explicit = $true },
-        @{ Runner = 'OpenCode'; Expected = 'opencode'; Model = 'provider/Exact.Model'; Explicit = $true }
+        @{ Name = 'codex-default'; Runner = 'CoDeX'; Expected = 'codex'; Model = 'gpt-5.6-luna' },
+        @{ Name = 'copilot-default'; Runner = 'Copilot'; Expected = 'github-copilot'; Model = 'claude-haiku-4.5'; StrongerModel = 'claude-opus-4.7'; UseLegacyAvailabilityAlias = $true },
+        @{ Name = 'copilot-explicit-model'; Runner = 'GitHub Copilot CLI'; Expected = 'github-copilot'; Model = 'gpt-5.6-luna'; Explicit = $true },
+        @{ Name = 'opencode-explicit-model'; Runner = 'OpenCode'; Expected = 'opencode'; Model = 'provider/Exact.Model'; Explicit = $true }
     )) {
         $options = New-Preparation $case.Runner ([guid]::NewGuid().ToString('N'))
         if ($case.ContainsKey('Explicit')) { $options.Model = $case.Model }
-        $decision = Invoke-EvalRequest -Preparation $options -Yolo -ExternalOrchestratorAvailable
+        $decision = if ($case.ContainsKey('UseLegacyAvailabilityAlias')) {
+            Invoke-EvalRequest -Preparation $options -Yolo -ExternalOrchestratorAvailable
+        } else {
+            Invoke-EvalRequest -Preparation $options -Yolo -CanDelegateFreshOrchestrator
+        }
         $profile = Get-Content -LiteralPath (Join-Path (Split-Path $decision.prompt_path) 'execution-profile.json') -Raw | ConvertFrom-Json
         Assert-True ($profile.runner -ceq $case.Expected -and $profile.model -ceq $case.Model) 'Wrong runner/model policy.'
+        if ($case.ContainsKey('StrongerModel')) {
+            Assert-True ($profile.model -cne $case.StrongerModel) 'Copilot replaced repository model policy with a subjective stronger-model choice.'
+        }
         if ($case.Expected -eq 'codex') {
             Assert-True ($profile.reasoning_effort -eq 'low') 'Codex default reasoning changed.'
         }
         Assert-True ($decision.action -eq 'external_handoff') 'Yolo did not request external handoff.'
         $before = $script:dispatches.Count
         Invoke-FakeHost $decision
-        $again = Get-EvalHandoff -PromptPath $decision.prompt_path -Yolo -ExternalOrchestratorAvailable
+        Assert-True ($script:dispatches[$before] -ceq $decision.prompt_path) 'Host did not receive the exact generated RUN-THIS.prompt.md path.'
+        $again = Get-EvalHandoff -PromptPath $decision.prompt_path -Yolo -CanDelegateFreshOrchestrator
         Invoke-FakeHost $again
         Assert-True ($again.action -eq 'already_started' -and $script:dispatches.Count -eq $before + 1) 'Duplicate handoff could invoke Phase 1 twice.'
         $unavailableAfterStart = Get-EvalHandoff -PromptPath $decision.prompt_path -Yolo
@@ -110,19 +118,19 @@ try {
     $reference.ToolProfile = 'fixture-tools'
     $reference.TimeoutSeconds = 123
     $reference.Concurrency = 3
-    $referenceDecision = Invoke-EvalRequest -Preparation $reference -Yolo -ExternalOrchestratorAvailable
+    $referenceDecision = Invoke-EvalRequest -Preparation $reference -Yolo -CanDelegateFreshOrchestrator
     $profile = Get-Content (Join-Path (Split-Path $referenceDecision.prompt_path) 'execution-profile.json') -Raw | ConvertFrom-Json
     Assert-True ($profile.runner -eq 'github-copilot' -and $profile.model -eq 'claude-haiku-4.5') 'CodebeltReference changed.'
     Assert-True ($profile.reasoning_effort -eq 'high' -and $profile.configuration_profile -eq 'fixture-profile' -and $profile.tool_profile -eq 'fixture-tools' -and $profile.timeout_seconds -eq 123 -and $profile.concurrency -eq 3) 'Preparation options were not forwarded unchanged.'
 
-    $unavailable = Invoke-EvalRequest -Preparation (New-Preparation 'Codex' 'unavailable') -Yolo
+    $unavailable = Invoke-EvalRequest -Preparation (New-Preparation 'Copilot' 'unavailable') -Yolo
     $before = $script:dispatches.Count
     Invoke-FakeHost $unavailable
     Assert-True ($unavailable.action -eq 'manual_handoff' -and $script:dispatches.Count -eq $before) 'Unavailable host executed a fallback.'
     Assert-True (Test-Path -LiteralPath $unavailable.prompt_path) 'Unavailable host lost the package.'
     # Existing execution state also blocks automatic handoff, even without a handoff receipt.
     '{}' | Set-Content (Join-Path (Split-Path $unavailable.prompt_path) 'orchestration-state.json')
-    $started = Get-EvalHandoff -PromptPath $unavailable.prompt_path -Yolo -ExternalOrchestratorAvailable
+    $started = Get-EvalHandoff -PromptPath $unavailable.prompt_path -Yolo -CanDelegateFreshOrchestrator
     Assert-True ($started.action -eq 'already_started') 'Existing Phase 1 could be invoked twice.'
 
     Assert-Failure (New-Preparation 'OpenCode' 'missing-model') 'explicit -Model'
@@ -142,8 +150,10 @@ try {
     $source = Get-Content (Join-Path $scripts 'prepare-skill-evals.ps1') -Raw
     Assert-True ($source.Contains("`$arguments = @('-Runner', `$RunnerName, '-RequireModel', `$ModelName)")) 'Model discovery must explicitly receive normalized runner and exact model.'
     $helper = Get-Content (Join-Path $scripts 'eval-request.ps1') -Raw
+    Assert-True ($helper.Contains("[Alias('ExternalOrchestratorAvailable')][switch]`$CanDelegateFreshOrchestrator")) 'External orchestrator capability alias changed unexpectedly.'
+    Assert-True (-not $helper.Contains('claude-haiku-4.5') -and -not $helper.Contains('gpt-5.6-luna') -and -not $helper.Contains('claude-opus-4.7')) 'Eval request helper must not embed model-selection policy.'
     Assert-True ($helper -notmatch 'invoke-runner-owned-arms|runner.ps1 execute|Start-Process|spawn_agent') 'Request helper must not implement execution.'
-    Write-Host 'PASS: normal/yolo requests, runner/model policy, failures, unavailable host, canonical handoff, and duplicate dispatch guards (fake host only).'
+    Write-Host 'PASS: normal/yolo requests, Copilot delegation capability semantics, runner/model policy, failures, canonical handoff pathing, and duplicate dispatch guards (fake host only).'
 } finally {
     # The absolute target is the unique child allocated under the external test workspace above.
     $allowed = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) 'eval-request-workspace')) + [IO.Path]::DirectorySeparatorChar
