@@ -51,6 +51,33 @@ try {
     Assert-True ($normal.action -eq 'manual_handoff' -and $script:dispatches.Count -eq 0) 'Normal eval must stop at manual handoff.'
     Assert-True (-not (Test-Path (Join-Path (Split-Path $normal.prompt_path) '.external-handoff-started'))) 'Normal preparation reserved execution.'
 
+    # Force may replace an unstarted package, but must preserve every started package.
+    $normalOptions.Iteration = 1
+    $normalOptions.Force = $true
+    $replacement = Invoke-EvalRequest -Preparation $normalOptions
+    Assert-True ($replacement.prompt_path -eq $normal.prompt_path) 'Force could not replace an unstarted package.'
+    foreach ($marker in @('.external-handoff-started', 'orchestration-state.json', 'execution-freeze.json')) {
+        $options = New-Preparation 'Codex' ([guid]::NewGuid().ToString('N'))
+        $options.Iteration = 1
+        $options.Force = $true
+        if ($marker -eq '.external-handoff-started') {
+            $reserved = Invoke-EvalRequest -Preparation $options -Yolo -ExternalOrchestratorAvailable
+            Invoke-FakeHost $reserved
+        } else {
+            $reserved = Invoke-EvalRequest -Preparation $options
+            '{}' | Set-Content -LiteralPath (Join-Path (Split-Path $reserved.prompt_path) $marker)
+        }
+        $package = Split-Path $reserved.prompt_path
+        $beforeFiles = @(Get-ChildItem -LiteralPath $package -Recurse -File -Force | Sort-Object FullName |
+            ForEach-Object { $_.FullName + ':' + (Get-FileHash -LiteralPath $_.FullName).Hash })
+        Assert-Failure $options 'handoff or execution has already started'
+        $afterFiles = @(Get-ChildItem -LiteralPath $package -Recurse -File -Force | Sort-Object FullName |
+            ForEach-Object { $_.FullName + ':' + (Get-FileHash -LiteralPath $_.FullName).Hash })
+        Assert-True (($beforeFiles -join "`n") -ceq ($afterFiles -join "`n")) "Forced retry changed package protected by $marker."
+        $again = Get-EvalHandoff -PromptPath $reserved.prompt_path -Yolo -ExternalOrchestratorAvailable
+        Assert-True ($again.action -eq 'already_started') "Forced retry erased $marker."
+    }
+
     foreach ($case in @(
         @{ Runner = 'CoDeX'; Expected = 'codex'; Model = 'gpt-5.6-luna' },
         @{ Runner = 'GitHub Copilot CLI'; Expected = 'github-copilot'; Model = 'claude-haiku-4.5' },

@@ -1465,6 +1465,12 @@ function Invoke-PrepareMode {
         if (-not $Force) {
             throw "'$iterationDirectory' already exists. Pass -Force to replace it, or -Iteration <n> to write a new one."
         }
+        # Force must not erase a one-shot reservation or evidence of an active/completed run.
+        foreach ($marker in @('.external-handoff-started', 'orchestration-state.json', 'execution-freeze.json')) {
+            if (Test-Path -LiteralPath (Join-Path $iterationDirectory $marker)) {
+                throw "Cannot replace '$iterationDirectory': handoff or execution has already started ($marker). Preserve this package and use a fresh iteration."
+            }
+        }
         Remove-Item -LiteralPath $iterationDirectory -Recurse -Force
     }
     New-Item -ItemType Directory -Path $iterationDirectory -Force | Out-Null
