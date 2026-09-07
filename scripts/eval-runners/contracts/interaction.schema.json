@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-interaction/1",
+  "title": "Codebelt Agentic Scripted Eval Interaction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "mode", "turns"],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-interaction/1" },
+    "mode": { "const": "scripted" },
+    "turns": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role"],
+        "properties": {
+          "role": { "const": "user" },
+          "source": { "type": "string", "minLength": 1 },
+          "content": { "type": "string", "minLength": 1 }
+        },
+        "oneOf": [
+          { "required": ["source"], "not": { "required": ["content"] } },
+          { "required": ["content"], "not": { "required": ["source"] } }
+        ]
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 ---
 name: dotnet-benchmark
 description: >
-  Discover, prioritize, and author trustworthy BenchmarkDotNet performance experiments for a .NET type while following codebelt engineering conventions and using the Codebelt.Extensions.BenchmarkDotNet Console runner. Use whenever a user wants to benchmark, micro-benchmark, performance-test, profile, optimize, compare implementations, investigate allocations or contention, or find likely bottlenecks in a .NET type or method. The skill inspects source and usage evidence, ranks high-value operations instead of every public member, selects representative workloads, rejects misleading microbenchmarks, creates or reuses the tuning/ and tooling/ harness, preflights existing-report skips, semantic-preflights workload correctness, validates discovery, and keeps full runs human-initiated. When the user says yolo, it auto-accepts routine defaults and proceeds through safe validation without confirmation churn.
+  Use when the user wants to design, author, review, or diagnose BenchmarkDotNet experiments for .NET code, compare implementations, measure allocations or contention, or benchmark a specific type or method. Also use to judge whether profiling or load testing is the better instrument.
 ---
 
 # Evidence-Driven .NET Benchmarking

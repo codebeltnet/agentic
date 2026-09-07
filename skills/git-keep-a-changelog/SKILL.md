@@ -1,7 +1,7 @@
 ---
 name: git-keep-a-changelog
 description: >
-  Create or update CHANGELOG.md from git history using Keep a Changelog 1.1.0 style. Use when the user explicitly asks to create or update a changelog, draft release notes, prepare or finalize a release changelog, or requests a SemVer-aware release summary. Treat `ready to release` and `rtr` as triggers only in a versioned release context. Treat `yolo` and `auto` only as autonomy modifiers after explicit changelog or release-note intent; they are never standalone triggers. Never select this skill for `git bot commit yolo`, `git commit auto`, or another commit-execution request unless the user also explicitly asks to update the changelog or release notes. Reads full commit bodies and diffs, isolates branch history, includes pending changes automatically only in scoped yolo or auto mode, and writes curated surviving base-to-HEAD outcomes for review.
+  Use when the user wants to create or update `CHANGELOG.md`, follow Keep a Changelog, or finalize a versioned changelog. Treat `ready to release` or `rtr` as triggers only with version context. Do not trigger for GitHub releases, NuGet package notes, commit execution, or bare `yolo`/`auto`.
 compatibility: >
   Requires Git and PowerShell 7+ for deterministic branch-scope resolution.
 ---
@@ -79,6 +79,17 @@ The current contents of the target heading are cached output, not a release base
 Reduce first. Interpret second. Summarize last.
 
 Establish the classification baseline at the user-facing release-entity boundary, not independently for every changed file. For a repo-managed skill, the entity is the skill capability together with its dedicated files and inseparable registration, catalog, documentation, validation, and eval wiring. If that entity is absent at the base and present at `HEAD`, its introduction is `Added`; intermediate commits that refine, fix, document, or validate it cannot create `Changed` or `Fixed` outcomes for that same new entity. A change to a separately pre-existing shared capability remains its own outcome and is classified from its own base state.
+
+### Layered Capability Classification
+
+Do not use a top-level directory or the first framework commit as the only release entity. Classify at the smallest independently selectable user-facing boundary. For layered eval tooling, the protocol/framework and each selectable runner, CLI, TUI, or harness adapter can have different release states.
+
+- A child adapter absent at the resolved base and present at `HEAD` is `Added` even when its parent directory already existed at the base or was introduced earlier in the branch. Run the entity resolver for the parent and each independent child path when the diff supports that decomposition.
+- Keep implementation, fixtures, conformance tests, and wiring with the capability they introduce. Do not repeat an adapter in a parent `Added` bullet and again in `Changed` as “added to the lineup.”
+- Refinements to a pre-existing adapter or framework are `Changed` or `Fixed` from their final delta. A defect repaired before first release of a base-absent capability remains part of that capability's `Added` outcome.
+- A planned, blocked, or unsupported CLI/TUI/harness is not support and must not be listed as an `Added` adapter.
+
+Use the final state, not commit verbs: newly usable execution support belongs under `Added`; changes to existing runner, orchestration, report, telemetry, or package behavior belong under `Changed`; and distinct supported repairs belong under `Fixed`. For example, a new framework followed by GitHub Copilot and OpenCode adapters gets `Added` outcomes for the framework and adapters, while changes to an existing Codex adapter are classified separately.
 
 1. Inspect cumulative manifest and version deltas across `diff_range`.
 2. Inspect the cumulative base-to-`HEAD` diff.

@@ -3,15 +3,40 @@ name: Validate Skill Templates
 on:
   pull_request:
 
+concurrency:
+  group: validate-skill-templates-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  validate-skill-templates:
+  validate:
+    name: Validate (${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 13
+      matrix:
+        include:
+          - { name: templates, script: scripts/validate-skill-templates.ps1, suite: Templates }
+          - { name: preparation, script: scripts/validate-skill-templates.ps1, suite: Preparation }
+          - { name: runners, script: scripts/validate-skill-templates.ps1, suite: Runners }
+          - { name: docfx, script: scripts/validate-skill-templates.ps1, suite: Docfx }
+          - { name: protocol, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: Protocol }
+          - { name: codex-cli, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: CodexCli }
+          - { name: codex-app-server, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: CodexAppServer }
+          - { name: opencode, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: OpenCode }
+          - { name: copilot, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: Copilot }
+          - { name: integrity-bridge, script: scripts/eval-runners/tests/test-integrity-finalization.ps1, suite: Bridge }
+          - { name: integrity-grading, script: scripts/eval-runners/tests/test-integrity-finalization.ps1, suite: Grading }
+          - { name: integrity-application, script: scripts/eval-runners/tests/test-integrity-finalization.ps1, suite: Application }
+          - { name: integrity-finalization, script: scripts/eval-runners/tests/test-integrity-finalization.ps1, suite: Finalization }
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install DocFX CLI
+        if: matrix.name == 'docfx'
         shell: pwsh
         run: |
           if (Get-Command docfx -ErrorAction SilentlyContinue) {
@@ -23,6 +48,7 @@ jobs:
           docfx --version
 
       - name: Install Anthropic skill-creator eval assets
+        if: matrix.name == 'preparation' || matrix.name == 'runners'
         shell: pwsh
         run: |
           $sourceRoot = Join-Path $env:RUNNER_TEMP 'anthropic-skills'
@@ -42,4 +68,29 @@ jobs:
 
       - name: Run validator
         shell: pwsh
-        run: pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Full
+        env:
+          VALIDATION_SCRIPT: ${{ matrix.script }}
+          VALIDATION_SUITE: ${{ matrix.suite }}
+        run: |
+          $arguments = @('-NoProfile', '-NonInteractive', '-File', $env:VALIDATION_SCRIPT, '-Suite', $env:VALIDATION_SUITE)
+          if ($env:VALIDATION_SUITE -eq 'Docfx') { $arguments += '-Full' }
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          & pwsh @arguments
+          $exitCode = $LASTEXITCODE
+          "Validation suite $env:VALIDATION_SUITE completed in $([Math]::Round($watch.Elapsed.TotalSeconds, 1)) seconds (exit $exitCode)." | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY
+          exit $exitCode
+
+  # Preserve the existing required status check; every matrix entry must pass.
+  validate-skill-templates:
+    if: always()
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all validation suites
+        shell: pwsh
+        env:
+          VALIDATION_RESULT: ${{ needs.validate.result }}
+        run: |
+          if ($env:VALIDATION_RESULT -ne 'success') {
+            throw "Validation suites did not all pass: $env:VALIDATION_RESULT"
+          }

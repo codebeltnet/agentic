@@ -1,0 +1,9 @@
+{"type":"session.start","id":"e1","parentId":null,"timestamp":"2026-01-01T00:00:00.000Z","data":{"sessionId":"fixture-session"}}
+{"type":"user.message","id":"e2","parentId":"e1","timestamp":"2026-01-01T00:00:00.100Z","data":{"content":"fixture prompt"}}
+{"type":"assistant.message","id":"e3","parentId":"e2","timestamp":"2026-01-01T00:00:01.000Z","data":{"messageId":"m1","model":"claude-haiku-4.5","content":"fixture progress note"}}
+{"type":"tool.execution_start","id":"e4","parentId":"e3","timestamp":"2026-01-01T00:00:01.200Z","data":{"callId":"t1","toolName":"str_replace_editor"}}
+{"type":"tool.execution_complete","id":"e5","parentId":"e4","timestamp":"2026-01-01T00:00:01.800Z","data":{"callId":"t1","status":"success"}}
+{"type":"assistant.message","id":"e6","parentId":"e5","timestamp":"2026-01-01T00:00:02.000Z","data":{"messageId":"m2","model":"claude-haiku-4.5","content":"fixture final response"}}
+{"type":"assistant.usage","id":"e7","parentId":"e6","ephemeral":true,"timestamp":"2026-01-01T00:00:02.100Z","data":{"model":"claude-haiku-4.5","inputTokens":12,"outputTokens":4,"cacheReadTokens":3,"numToolCalls":1,"cost":0.2,"finishReason":"stop"}}
+{"type":"session.task_complete","id":"e8","parentId":"e7","timestamp":"2026-01-01T00:00:02.200Z","data":{}}
+{"type":"future.event.v99","payload":"unknown"}

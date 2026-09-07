@@ -1,7 +1,7 @@
 ---
 name: git-repo-digest
 description: >
-  Generate source-grounded repository digest markdown from deterministic local evidence bundles. Use when the user asks to create, refresh, or complete repo/package digests, family or project overview pages, .bot/digests output, digest workspace workflows, or result/Index.md plus result/{PackageName}.md files for any repository URL. The skill runs its bundled .NET file-based evidence generator over a git clone, separates authoritative XML evidence from Markdown prompts and reading aids, writes package digests first, then writes the overview from completed package digests, and enforces complete-read grounding and no-invention rules even when file output is capped.
+  Use when the user wants source-grounded repository or package digest Markdown from a repository URL or existing `.bot/digests` workspace, especially `result/Index.md` and per-package pages. Do not use for README, DocFX, changelog, release-note, or one-off prose summaries.
 ---
 
 # Git Repo Digest

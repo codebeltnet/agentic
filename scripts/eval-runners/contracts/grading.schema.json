@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-grading/1",
+  "title": "Codebelt Agentic Eval Grading",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "grading"],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-grading/1" },
+    "grading": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["eval_id", "eval_name", "configuration", "assertion_index", "assertion", "passed", "evidence"],
+        "properties": {
+          "eval_id": { "type": "integer", "minimum": 1 },
+          "eval_name": { "type": "string", "minLength": 1 },
+          "configuration": { "enum": ["with_skill", "without_skill"] },
+          "assertion_index": { "type": "integer", "minimum": 0 },
+          "assertion": { "type": "string", "minLength": 1 },
+          "passed": { "type": "boolean" },
+          "evidence": { "type": "string" }
+        }
+      }
+    }
+  }
+}

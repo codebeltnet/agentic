@@ -1,7 +1,7 @@
 ---
 name: dotnet-test
 description: >
-  Move .NET xUnit test projects onto Codebelt's entrypoint-owned test hosts, replacing Microsoft's WebApplicationFactory and hand-rolled host plumbing with WebApplicationTestFactory, WebApplicationTest, ApplicationTestFactory, and ApplicationTest — for ASP.NET Core, console, and worker applications alike. Invoking this skill IS the request: inspect the repository and refactor immediately, never opening with a menu, a capability list, or a questionnaire. Use for WebApplicationFactory migration, xUnit v2-to-v3 modernization, Microsoft Testing Platform adoption, managed fixtures, reusable functional-test harnesses, in-process console or worker tests, and unit-test bootstrap. Preserve behavior, test names, and package ownership, then validate restore/build/test. Do NOT use for NUnit/MSTest-only work, production refactoring without a test-project goal, or process-launching end-to-end harnesses.
+  Use when the user wants to bootstrap or refactor .NET xUnit tests onto Codebelt entrypoint-owned hosts, migrate `WebApplicationFactory`, modernize xUnit v2 to v3 or Microsoft Testing Platform, or add web, console, or worker fixtures. Exclude NUnit/MSTest and process-based end-to-end harnesses.
 compatibility: >
   Requires .NET SDK, PowerShell 7+, and network access to NuGet for dynamic package resolution.
 ---

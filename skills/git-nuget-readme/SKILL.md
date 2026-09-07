@@ -1,7 +1,7 @@
 ---
 name: git-nuget-readme
 description: >
-  Create or update a NuGet package README.md from git history and real .NET project metadata for repositories that ship a package from `src/`. Use this skill whenever the user asks to write a package README, refresh NuGet-facing docs, improve the repo README for a library, summarize the current branch into README copy, or make a package more compelling to adopt on NuGet. Treat requests like "update the README for this package", "write a NuGet README from git", "refresh the library README", "make this NuGet package easier to pick", or "generate a devex-friendly README for this assembly" as automatic triggers. The skill discovers the advertised packable project, grounds the README in real package and source metadata, preserves honest claims, and writes forthcoming, adoption-friendly copy instead of generic marketing fluff.
+  Use when the user wants to create or refresh a NuGet-facing `README.md` for a .NET package, grounded in the packable `src/` project and current repository changes. Do not use for general repository docs, DocFX API pages, changelogs, or release notes.
 ---
 
 # Git NuGet README

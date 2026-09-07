@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codebelt.net/schemas/agentic/eval-runner-preflight/1",
+  "title": "Codebelt Agentic Eval Runner Preflight Result",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "protocol_version",
+    "status",
+    "runner",
+    "harness",
+    "run",
+    "requested",
+    "checks",
+    "resolved_capabilities",
+    "delegation",
+    "isolation",
+    "mechanisms",
+    "warnings",
+    "reasons"
+  ],
+  "properties": {
+    "schema": { "const": "codebeltnet/agentic/eval-runner-preflight/1" },
+    "protocol_version": { "const": "codebeltnet/agentic/eval-runner-protocol/1" },
+    "status": { "enum": ["compatible", "incompatible"] },
+    "requested": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "reasoning_effort",
+        "configuration_profile",
+        "tool_profile",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "model": { "type": ["string", "null"] },
+        "reasoning_effort": { "type": ["string", "null"] },
+        "configuration_profile": { "type": "string" },
+        "tool_profile": { "type": "string" },
+        "timeout_seconds": { "type": "integer" }
+      }
+    },
+    "checks": { "type": "array" },
+    "resolved_capabilities": { "type": "object" },
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dispatch_owner",
+        "status",
+        "mode",
+        "mechanism",
+        "worker_role",
+        "nested_model_execution",
+        "required_controls",
+        "unproven_controls",
+        "terminal_evidence_required"
+      ],
+      "properties": {
+        "dispatch_owner": { "enum": ["orchestrator", "runner"] },
+        "status": { "enum": ["supported", "conditional", "unsupported"] },
+        "mode": { "enum": ["native_worker", "conditional", "unsupported"] },
+        "mechanism": { "type": "string" },
+        "worker_role": { "type": "string" },
+        "nested_model_execution": { "type": "boolean" },
+        "required_controls": { "type": "array", "items": { "type": "string" } },
+        "unproven_controls": { "type": "array", "items": { "type": "string" } },
+        "terminal_evidence_required": { "type": "boolean" }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "required": ["level", "status", "hard_filesystem_confinement", "unproven_controls"],
+      "properties": {
+        "level": { "enum": ["strict", "pragmatic", "unsupported"] },
+        "status": { "enum": ["verified", "unverified"] },
+        "hard_filesystem_confinement": { "type": "boolean" },
+        "unproven_controls": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "mechanisms": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "reasons": { "type": "array", "items": { "type": "string" } }
+  }
+}

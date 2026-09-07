@@ -1,7 +1,7 @@
 ---
 name: agent-smith
 description: >
-  Use this skill to apply a rigorous, evidence-driven software-craftsmanship standard across an engineering task. Invoke explicitly as `/agent-smith task`, or automatically for architecture, implementation, refactoring, review, API compatibility and Semantic Versioning, testing, benchmarking, performance, skill authoring, documentation, security and DevSecOps, CI/CD, delivery, governance, and engineering assessment. For .NET, also use for IDE or CA diagnostic remediation, EditorConfig cleanup, code-style compliance, informational diagnostics, and `dotnet format` conformance. Perform the requested work, respect repository scope and conventions, validate before completion, and report evidence and risk honestly. Technology-neutral core; specialist guidance loads on demand. Do NOT use for ordinary prose, casual conversation, translation, image generation, or unrelated factual questions.
+  Use when the user wants evidence-driven architecture, implementation, refactoring, review, API compatibility/SemVer, testing, performance, skill authoring, documentation, security/DevSecOps, CI/CD, delivery, governance, or .NET IDE/CA and EditorConfig remediation.
 ---
 
 # Agent Smith
