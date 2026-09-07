@@ -58,6 +58,8 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -MetadataOnly
 
 During iteration, run the changed skill's bundled deterministic validator and focused regression scripts. Before completion, run `pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1`; use `-Full` when the slower DocFX suites are relevant. GitHub Actions supplies the same deterministic safety net. This layered path catches structural and behavioral regressions quickly without hidden model traffic.
 
+CI runs the complete validation set in 13 independent jobs with a five-minute budget per job. Template checks, package preparation, runner regressions, and DocFX have separate jobs; runner conformance is split by transport and integrity tests by phase. Every job uses isolated temporary fixtures, and the existing `validate-skill-templates` required check passes only when every job succeeds. New commits cancel obsolete runs for the same pull request. Each job records its elapsed time in the Actions summary. Local validation still defaults to all checks; `-Suite Templates`, `-Suite Preparation`, or `-Suite Runners` selects a focused group, and `-Full -Suite Docfx` selects DocFX. The conformance and integrity test scripts also accept the `-Suite` values listed in the workflow. This partition changes scheduling, not the model-free validation contract.
+
 ## Install a skill
 
 Install any skill directly from this repository with a single command:
