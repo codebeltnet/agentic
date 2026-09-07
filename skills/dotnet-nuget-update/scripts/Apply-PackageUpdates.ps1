@@ -18,12 +18,32 @@ function Get-NodeVersion {
     if ($Node.Attributes['Version']) {
         return [string]$Node.Attributes['Version'].Value
     }
+    if ($Node.Attributes['VersionOverride']) {
+        return [string]$Node.Attributes['VersionOverride'].Value
+    }
 
     $versionNode = $Node.SelectSingleNode('./Version')
     if ($versionNode) {
         return [string]$versionNode.InnerText
     }
+    $overrideNode = $Node.SelectSingleNode('./VersionOverride')
+    if ($overrideNode) {
+        return [string]$overrideNode.InnerText
+    }
 
+    return $null
+}
+
+function Get-UpdateField {
+    param($Update, [Parameter(Mandatory)][string]$Name)
+
+    if ($null -eq $Update) { return $null }
+    if ($Update -is [System.Collections.IDictionary]) {
+        if ($Update.Contains($Name)) { return $Update[$Name] }
+        return $null
+    }
+    $property = $Update.PSObject.Properties[$Name]
+    if ($null -ne $property) { return $property.Value }
     return $null
 }
 
@@ -55,21 +75,34 @@ function Parse-Updates {
     return @($parsed)
 }
 
-function Replace-VersionInLine {
+function Replace-VersionInBlock {
     param(
-        [Parameter(Mandatory)][string]$Line,
+        [Parameter(Mandatory)][string]$Block,
         [Parameter(Mandatory)][string]$From,
         [Parameter(Mandatory)][string]$To
     )
 
-    $attributePattern = '(Version\s*=\s*")' + [regex]::Escape($From) + '(")'
-    if ($Line -match $attributePattern) {
-        return ($Line -replace $attributePattern, "`${1}$To`${2}")
+    $escaped = [regex]::Escape($From)
+
+    foreach ($attributeName in @('Version', 'VersionOverride')) {
+        $pattern = '(' + $attributeName + '\s*=\s*)([''"])' + $escaped + '\2'
+        $match = [regex]::Match($Block, $pattern)
+        if ($match.Success) {
+            $prefix = $match.Groups[1].Value
+            $quote = $match.Groups[2].Value
+            $start = $match.Index + $prefix.Length + $quote.Length
+            return $Block.Substring(0, $start) + $To + $Block.Substring($start + $From.Length)
+        }
     }
 
-    $elementPattern = '(<Version>\s*)' + [regex]::Escape($From) + '(\s*</Version>)'
-    if ($Line -match $elementPattern) {
-        return ($Line -replace $elementPattern, "`${1}$To`${2}")
+    foreach ($elementName in @('Version', 'VersionOverride')) {
+        $pattern = '(<' + $elementName + '\s*>\s*)' + $escaped + '(\s*</' + $elementName + '\s*>)'
+        $match = [regex]::Match($Block, $pattern)
+        if ($match.Success) {
+            $prefix = $match.Groups[1].Value
+            $start = $match.Index + $prefix.Length
+            return $Block.Substring(0, $start) + $To + $Block.Substring($start + $From.Length)
+        }
     }
 
     return $null
@@ -85,55 +118,144 @@ function Update-DeclarationLine {
         [Parameter(Mandatory)][string]$To
     )
 
-    $lines = $Text -split '\r?\n', -1
-    $currentCondition = $null
+    $lines = [regex]::Split($Text, "`r`n|`n|`r")
+    $groupCondition = $null
 
-    for ($index = 0; $index -lt $lines.Length; $index++) {
+    for ($index = 0; $index -lt $lines.Count; $index++) {
         $line = $lines[$index]
 
         if ($line -match '<ItemGroup\b') {
-            $conditionMatch = [regex]::Match($line, 'Condition\s*=\s*"([^"]*)"')
-            $currentCondition = if ($conditionMatch.Success) { $conditionMatch.Groups[1].Value } else { $null }
+            $tag = $line
+            $tagEnd = $index
+            while ($tag -notmatch '>' -and ($tagEnd + 1) -lt $lines.Count) {
+                $tagEnd++
+                $tag += "`n" + $lines[$tagEnd]
+            }
+            $conditionMatch = [regex]::Match($tag, 'Condition\s*=\s*([''"])(.*?)\1')
+            $groupCondition = if ($conditionMatch.Success) { $conditionMatch.Groups[2].Value } else { $null }
+            if ($tagEnd -gt $index) {
+                $index = $tagEnd
+                $line = $lines[$index]
+            }
         }
 
-        if ($line -match "<$ElementName\b" -and $line -match ('Include\s*=\s*"' + [regex]::Escape($Id) + '"')) {
-            if (($Condition ?? '') -eq ($currentCondition ?? '')) {
-                $updatedLine = Replace-VersionInLine -Line $line -From $From -To $To
-                if ($null -ne $updatedLine) {
-                    $lines[$index] = $updatedLine
-                    return ($lines -join "`n")
+        if ($line -match '</ItemGroup\s*>') {
+            $groupCondition = $null
+        }
+
+        if ($line -notmatch ('<' + $ElementName + '\b')) {
+            continue
+        }
+
+        $blockStart = $index
+        $tagText = $line
+        $tagEnd = $index
+        while ($tagText -notmatch '>' -and ($tagEnd + 1) -lt $lines.Count) {
+            $tagEnd++
+            $tagText += "`n" + $lines[$tagEnd]
+        }
+
+        $blockEnd = $tagEnd
+        $blockLines = @($lines[$blockStart..$blockEnd])
+        if ($tagText -match '/\s*>\s*$' -or $tagText -match '/\s*>') {
+            $afterStart = $tagText.Substring($tagText.IndexOf('>') + 1)
+            if ($afterStart -match ('</' + $ElementName + '\s*>')) {
+                # Self-closing tag text already contains its close; block is complete.
+            }
+        } else {
+            $afterStart = ''
+            $greaterAt = $tagText.IndexOf('>')
+            if ($greaterAt -ge 0 -and $greaterAt + 1 -lt $tagText.Length) {
+                $afterStart = $tagText.Substring($greaterAt + 1)
+            }
+            if ($afterStart -notmatch ('</' + $ElementName + '\s*>')) {
+                $foundClose = $false
+                for ($closeIndex = $tagEnd + 1; $closeIndex -lt $lines.Count; $closeIndex++) {
+                    $blockLines += $lines[$closeIndex]
+                    $blockEnd = $closeIndex
+                    if ($lines[$closeIndex] -match ('</' + $ElementName + '\s*>')) {
+                        $foundClose = $true
+                        break
+                    }
+                    if ($lines[$closeIndex] -match '<ItemGroup\b' -or $lines[$closeIndex] -match ('<' + $ElementName + '\b')) {
+                        break
+                    }
+                }
+                if (-not $foundClose) {
+                    $index = $blockEnd
+                    continue
                 }
             }
         }
 
-        if ($line -match '</ItemGroup>') {
-            $currentCondition = $null
+        $blockText = $blockLines -join "`n"
+        if (-not ([regex]::IsMatch($blockText, 'Include\s*=\s*([''"])' + [regex]::Escape($Id) + '\1'))) {
+            $index = $blockEnd
+            continue
         }
+
+        $nodeConditionMatch = [regex]::Match($tagText, 'Condition\s*=\s*([''"])(.*?)\1')
+        $nodeCondition = if ($nodeConditionMatch.Success) { $nodeConditionMatch.Groups[2].Value } else { $null }
+        $effective = if ($nodeCondition) { $nodeCondition } else { $groupCondition }
+        if ((($Condition ?? '') -ne ($effective ?? ''))) {
+            $index = $blockEnd
+            continue
+        }
+
+        $updatedBlock = Replace-VersionInBlock -Block $blockText -From $From -To $To
+        if ($null -eq $updatedBlock) {
+            $index = $blockEnd
+            continue
+        }
+
+        $updatedLines = [regex]::Split($updatedBlock, "`r`n|`n|`r")
+        $newAll = [System.Collections.Generic.List[string]]::new()
+        for ($before = 0; $before -lt $blockStart; $before++) {
+            $newAll.Add($lines[$before])
+        }
+        foreach ($updatedLine in $updatedLines) {
+            $newAll.Add($updatedLine)
+        }
+        for ($after = $blockEnd + 1; $after -lt $lines.Count; $after++) {
+            $newAll.Add($lines[$after])
+        }
+        return ($newAll -join "`n")
     }
 
     return $null
 }
 
 function Get-CentralDeclarations {
-    param([Parameter(Mandatory)][string]$Path)
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$RepoRoot)
 
-    [xml]$xml = Get-Content -Raw -LiteralPath $Path
+    $raw = Read-TextWithEncoding -Path $Path
+    [xml]$xml = $raw
     $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($itemGroup in @($xml.Project.ItemGroup)) {
-        $condition = Get-ConditionValue -Node $itemGroup
+    foreach ($itemGroup in @($xml.SelectNodes('/Project/ItemGroup'))) {
+        $groupCondition = Get-ConditionValue -Node $itemGroup
         foreach ($node in @($itemGroup.ChildNodes)) {
             if ($node.NodeType -ne 'Element' -or $node.Name -ne 'PackageVersion') { continue }
             $id = if ($node.Attributes['Include']) { [string]$node.Attributes['Include'].Value } else { $null }
             if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            $nodeCondition = Get-ConditionValue -Node $node
             $rows.Add([pscustomobject]@{
-                id        = $id
-                current   = Get-NodeVersion -Node $node
-                condition = $condition
-                element   = 'PackageVersion'
+                id         = $id
+                current    = Get-NodeVersion -Node $node
+                condition  = if ($nodeCondition) { $nodeCondition } else { $groupCondition }
+                element    = 'PackageVersion'
+                sourceFile = [System.IO.Path]::GetRelativePath($RepoRoot, (Resolve-Path -LiteralPath $Path).Path)
             })
         }
     }
     return @($rows)
+}
+
+function Get-CentralPropsFiles {
+    param([Parameter(Mandatory)][string]$Root)
+
+    return @(Get-ChildItem -LiteralPath $Root -Recurse -Filter Directory.Packages.props -File |
+        Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+        Sort-Object FullName)
 }
 
 function Get-ProjectDeclarations {
@@ -144,8 +266,9 @@ function Get-ProjectDeclarations {
         Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' }
 
     foreach ($projectFile in $projectFiles) {
-        [xml]$xml = Get-Content -Raw -LiteralPath $projectFile.FullName
-        foreach ($itemGroup in @($xml.Project.ItemGroup)) {
+        $raw = Read-TextWithEncoding -Path $projectFile.FullName
+        [xml]$xml = $raw
+        foreach ($itemGroup in @($xml.SelectNodes('/Project/ItemGroup'))) {
             $groupCondition = Get-ConditionValue -Node $itemGroup
             foreach ($node in @($itemGroup.ChildNodes)) {
                 if ($node.NodeType -ne 'Element' -or $node.Name -notin @('PackageReference', 'GlobalPackageReference')) { continue }
@@ -169,50 +292,71 @@ function Get-ProjectDeclarations {
 
 $repoPath = (Resolve-Path -LiteralPath $RepoRoot).Path
 $updatesList = Parse-Updates -Json $Updates -JsonFile $UpdatesFile
-$centralPath = Join-Path $repoPath 'Directory.Packages.props'
-$hasCentral = Test-Path -LiteralPath $centralPath
+$centralFiles = @(Get-CentralPropsFiles -Root $repoPath)
+$hasCentral = $centralFiles.Count -gt 0
 $results = [System.Collections.Generic.List[object]]::new()
 
 if ($hasCentral) {
-    $text = Get-Content -Raw -LiteralPath $centralPath
-    $declarations = Get-CentralDeclarations -Path $centralPath
-    $changed = $false
+    $fileTexts = @{}
+    $fileChanged = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $declarations = [System.Collections.Generic.List[object]]::new()
+    foreach ($centralFile in $centralFiles) {
+        $fileTexts[$centralFile.FullName] = Read-TextWithEncoding -Path $centralFile.FullName
+        foreach ($declaration in @(Get-CentralDeclarations -Path $centralFile.FullName -RepoRoot $repoPath)) {
+            $declarations.Add($declaration)
+        }
+    }
 
     foreach ($update in $updatesList) {
-        $matches = @($declarations | Where-Object {
-            $_.id -eq $update.id -and (($_.condition ?? '') -eq (($update.condition ?? '')))
+        $updateId = Get-UpdateField -Update $update -Name 'id'
+        $updateCondition = Get-UpdateField -Update $update -Name 'condition'
+        $updateFrom = Get-UpdateField -Update $update -Name 'from'
+        $updateTo = Get-UpdateField -Update $update -Name 'to'
+        $updateSource = Get-UpdateField -Update $update -Name 'sourceFile'
+        $updateElement = Get-UpdateField -Update $update -Name 'element'
+
+        $candidates = @($declarations | Where-Object {
+            $_.id -eq $updateId -and (($_.condition ?? '') -eq (($updateCondition ?? ''))) -and
+            ([string]::IsNullOrWhiteSpace($updateSource) -or $_.sourceFile -eq $updateSource) -and
+            ([string]::IsNullOrWhiteSpace($updateElement) -or $_.element -eq $updateElement)
         })
 
-        if ($matches.Count -eq 0) {
-            $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; outcome = 'not-found'; from = $update.from; to = $update.to })
+        if ($candidates.Count -eq 0) {
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $updateSource; outcome = 'not-found'; from = $updateFrom; to = $updateTo })
             continue
         }
 
-        $match = $matches[0]
-        if ($match.current -ne $update.from) {
-            $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; outcome = 'conflict'; from = $update.from; to = $update.to })
+        $matchingFrom = @($candidates | Where-Object { $_.current -eq $updateFrom })
+        $match = if ($matchingFrom.Count -gt 0) { $matchingFrom[0] } else { $null }
+        if ($null -eq $match) {
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $updateSource; outcome = 'conflict'; from = $updateFrom; to = $updateTo })
             continue
         }
 
         if ($DryRun) {
-            $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; outcome = 'dry-run'; from = $update.from; to = $update.to })
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'dry-run'; from = $updateFrom; to = $updateTo })
             continue
         }
 
-        $updatedText = Update-DeclarationLine -Text $text -ElementName 'PackageVersion' -Id $update.id -Condition $update.condition -From $update.from -To $update.to
+        $matchFullPath = Join-Path $repoPath $match.sourceFile
+        $matchKeyCandidates = @($fileTexts.Keys | Where-Object { $_ -ieq $matchFullPath })
+        $matchKey = if ($matchKeyCandidates.Count -gt 0) { $matchKeyCandidates[0] } else { $matchFullPath }
+        $updatedText = Update-DeclarationLine -Text $fileTexts[$matchKey] -ElementName 'PackageVersion' -Id $updateId -Condition $updateCondition -From $updateFrom -To $updateTo
         if ($null -eq $updatedText) {
-            $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; outcome = 'not-found'; from = $update.from; to = $update.to })
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'not-found'; from = $updateFrom; to = $updateTo })
             continue
         }
 
-        $text = $updatedText
-        $match.current = $update.to
-        $changed = $true
-        $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; outcome = 'applied'; from = $update.from; to = $update.to })
+        $fileTexts[$matchKey] = $updatedText
+        $match.current = $updateTo
+        $null = $fileChanged.Add($matchKey)
+        $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'applied'; from = $updateFrom; to = $updateTo })
     }
 
-    if ($changed -and -not $DryRun) {
-        Write-TextPreservingEol -Path $centralPath -Text $text | Out-Null
+    if (-not $DryRun) {
+        foreach ($fullPath in $fileChanged) {
+            Write-TextPreservingEol -Path $fullPath -Text $fileTexts[$fullPath] | Out-Null
+        }
     }
 
     $result = [pscustomobject]@{ repoRoot = $repoPath; mode = 'central'; results = @($results) }
@@ -230,20 +374,35 @@ if ($projectDeclarations.Count -eq 0) {
 $fileTexts = @{}
 $fileChanged = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($update in $updatesList) {
+    $updateId = Get-UpdateField -Update $update -Name 'id'
+    $updateCondition = Get-UpdateField -Update $update -Name 'condition'
+    $updateFrom = Get-UpdateField -Update $update -Name 'from'
+    $updateTo = Get-UpdateField -Update $update -Name 'to'
+    $updateSource = Get-UpdateField -Update $update -Name 'sourceFile'
+    $updateElement = Get-UpdateField -Update $update -Name 'element'
+
     $matches = @($projectDeclarations | Where-Object {
-        $_.id -eq $update.id -and $_.current -eq $update.from -and (($_.condition ?? '') -eq (($update.condition ?? '')))
+        $_.id -eq $updateId -and $_.current -eq $updateFrom -and (($_.condition ?? '') -eq (($updateCondition ?? ''))) -and
+        ([string]::IsNullOrWhiteSpace($updateSource) -or $_.sourceFile -eq $updateSource) -and
+        ([string]::IsNullOrWhiteSpace($updateElement) -or $_.element -eq $updateElement)
     })
 
     if ($matches.Count -eq 0) {
         $conflicts = @($projectDeclarations | Where-Object {
-            $_.id -eq $update.id -and (($_.condition ?? '') -eq (($update.condition ?? '')))
+            $_.id -eq $updateId -and (($_.condition ?? '') -eq (($updateCondition ?? ''))) -and
+            ([string]::IsNullOrWhiteSpace($updateSource) -or $_.sourceFile -eq $updateSource) -and
+            ([string]::IsNullOrWhiteSpace($updateElement) -or $_.element -eq $updateElement)
         })
         if ($conflicts.Count -gt 0) {
-            foreach ($conflict in $conflicts) {
-                $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; sourceFile = $conflict.sourceFile; outcome = 'conflict'; from = $update.from; to = $update.to })
+            if ([string]::IsNullOrWhiteSpace($updateSource)) {
+                foreach ($conflict in $conflicts) {
+                    $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $conflict.sourceFile; outcome = 'conflict'; from = $updateFrom; to = $updateTo })
+                }
+            } else {
+                $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $updateSource; outcome = 'conflict'; from = $updateFrom; to = $updateTo })
             }
         } else {
-            $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; outcome = 'not-found'; from = $update.from; to = $update.to })
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $updateSource; outcome = 'not-found'; from = $updateFrom; to = $updateTo })
         }
         continue
     }
@@ -251,24 +410,24 @@ foreach ($update in $updatesList) {
     foreach ($match in $matches) {
         $filePath = Join-Path $repoPath $match.sourceFile
         if (-not $fileTexts.ContainsKey($match.sourceFile)) {
-            $fileTexts[$match.sourceFile] = Get-Content -Raw -LiteralPath $filePath
+            $fileTexts[$match.sourceFile] = Read-TextWithEncoding -Path $filePath
         }
 
         if ($DryRun) {
-            $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; sourceFile = $match.sourceFile; outcome = 'dry-run'; from = $update.from; to = $update.to })
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'dry-run'; from = $updateFrom; to = $updateTo })
             continue
         }
 
-        $updatedText = Update-DeclarationLine -Text $fileTexts[$match.sourceFile] -ElementName $match.element -Id $update.id -Condition $update.condition -From $update.from -To $update.to
+        $updatedText = Update-DeclarationLine -Text $fileTexts[$match.sourceFile] -ElementName $match.element -Id $updateId -Condition $updateCondition -From $updateFrom -To $updateTo
         if ($null -eq $updatedText) {
-            $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; sourceFile = $match.sourceFile; outcome = 'not-found'; from = $update.from; to = $update.to })
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'not-found'; from = $updateFrom; to = $updateTo })
             continue
         }
 
         $fileTexts[$match.sourceFile] = $updatedText
-        $match.current = $update.to
+        $match.current = $updateTo
         $null = $fileChanged.Add($match.sourceFile)
-        $results.Add([pscustomobject]@{ id = $update.id; condition = $update.condition; sourceFile = $match.sourceFile; outcome = 'applied'; from = $update.from; to = $update.to })
+        $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'applied'; from = $updateFrom; to = $updateTo })
     }
 }
 

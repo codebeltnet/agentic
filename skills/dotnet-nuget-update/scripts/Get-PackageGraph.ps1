@@ -16,10 +16,17 @@ function Get-NodeVersion {
     if ($Node.Attributes['Version']) {
         return [string]$Node.Attributes['Version'].Value
     }
+    if ($Node.Attributes['VersionOverride']) {
+        return [string]$Node.Attributes['VersionOverride'].Value
+    }
 
     $versionNode = $Node.SelectSingleNode('./Version')
     if ($versionNode) {
         return [string]$versionNode.InnerText
+    }
+    $overrideNode = $Node.SelectSingleNode('./VersionOverride')
+    if ($overrideNode) {
+        return [string]$overrideNode.InnerText
     }
 
     return $null
@@ -33,12 +40,12 @@ if (-not (Test-Path -LiteralPath $file)) {
     return
 }
 
-[xml]$xml = Get-Content -Raw -LiteralPath $file
+[xml]$xml = Read-TextWithEncoding -Path $file
 $groups = [System.Collections.Generic.List[object]]::new()
 $packages = [System.Collections.Generic.List[object]]::new()
 $centrallyManaged = $null
 
-foreach ($propertyGroup in @($xml.Project.PropertyGroup)) {
+foreach ($propertyGroup in @($xml.SelectNodes('/Project/PropertyGroup'))) {
     foreach ($node in @($propertyGroup.ChildNodes | Where-Object { $_.NodeType -eq 'Element' })) {
         if ($node.Name -eq 'ManagePackageVersionsCentrally') {
             $centrallyManaged = [string]$node.InnerText
@@ -46,8 +53,8 @@ foreach ($propertyGroup in @($xml.Project.PropertyGroup)) {
     }
 }
 
-foreach ($itemGroup in @($xml.Project.ItemGroup)) {
-    $condition = if ($itemGroup.Attributes['Condition']) { [string]$itemGroup.Attributes['Condition'].Value } else { $null }
+foreach ($itemGroup in @($xml.SelectNodes('/Project/ItemGroup'))) {
+    $groupCondition = if ($itemGroup.Attributes['Condition']) { [string]$itemGroup.Attributes['Condition'].Value } else { $null }
     $items = [System.Collections.Generic.List[object]]::new()
 
     foreach ($node in @($itemGroup.ChildNodes)) {
@@ -57,11 +64,12 @@ foreach ($itemGroup in @($xml.Project.ItemGroup)) {
         $id = if ($node.Attributes['Include']) { [string]$node.Attributes['Include'].Value } else { $null }
         if ([string]::IsNullOrWhiteSpace($id)) { continue }
 
+        $nodeCondition = if ($node.Attributes['Condition']) { [string]$node.Attributes['Condition'].Value } else { $null }
         $entry = [pscustomobject]@{
             id        = $id
             version   = Get-NodeVersion -Node $node
             element   = $node.Name
-            condition = $condition
+            condition = if ($nodeCondition) { $nodeCondition } else { $groupCondition }
             note      = Get-AdjacentXmlComment -Node $node
         }
         $items.Add($entry)
@@ -69,7 +77,7 @@ foreach ($itemGroup in @($xml.Project.ItemGroup)) {
     }
 
     $groups.Add([pscustomobject]@{
-        condition = $condition
+        condition = $groupCondition
         count     = $items.Count
         packages  = @($items)
     })

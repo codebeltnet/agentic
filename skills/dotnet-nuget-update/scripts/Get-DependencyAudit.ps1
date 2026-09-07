@@ -4,7 +4,7 @@ param(
     [string]$Package,
     [switch]$IncludePrerelease,
     [switch]$OutdatedOnly,
-    [string]$Source = 'https://api.nuget.org/v3-flatcontainer',
+    [string[]]$Source = @('https://api.nuget.org/v3-flatcontainer'),
     [switch]$AsJson
 )
 
@@ -22,23 +22,62 @@ function Get-NodeVersion {
     if ($Node.Attributes['Version']) {
         return [string]$Node.Attributes['Version'].Value
     }
+    if ($Node.Attributes['VersionOverride']) {
+        return [string]$Node.Attributes['VersionOverride'].Value
+    }
 
     $versionNode = $Node.SelectSingleNode('./Version')
     if ($versionNode) {
         return [string]$versionNode.InnerText
     }
+    $overrideNode = $Node.SelectSingleNode('./VersionOverride')
+    if ($overrideNode) {
+        return [string]$overrideNode.InnerText
+    }
 
     return $null
 }
 
+function Get-CentralPropsFiles {
+    param([Parameter(Mandatory)][string]$Root)
+
+    return @(Get-ChildItem -LiteralPath $Root -Recurse -Filter Directory.Packages.props -File |
+        Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+        Sort-Object FullName)
+}
+
+function Get-CentralManagementEnabled {
+    param([Parameter(Mandatory)][string]$RepoRoot)
+
+    $rootPath = Join-Path $RepoRoot 'Directory.Packages.props'
+    if (-not (Test-Path -LiteralPath $rootPath)) { return $false }
+    try {
+        $raw = Read-TextWithEncoding -Path $rootPath
+        [xml]$xml = $raw
+        foreach ($propertyGroup in @($xml.SelectNodes('/Project/PropertyGroup'))) {
+            foreach ($node in @($propertyGroup.ChildNodes | Where-Object { $_.NodeType -eq 'Element' })) {
+                if ($node.Name -eq 'ManagePackageVersionsCentrally') {
+                    return ([string]$node.InnerText).Trim() -ne 'false'
+                }
+            }
+        }
+    }
+    catch {
+        return $true
+    }
+    return $true
+}
+
 function Get-CentralDeclarations {
-    param([Parameter(Mandatory)][string]$Path, [string]$PackageFilter)
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$RepoRoot, [string]$PackageFilter)
 
-    [xml]$xml = Get-Content -Raw -LiteralPath $Path
+    $raw = Read-TextWithEncoding -Path $Path
+    [xml]$xml = $raw
     $rows = [System.Collections.Generic.List[object]]::new()
+    $relative = [System.IO.Path]::GetRelativePath($RepoRoot, (Resolve-Path -LiteralPath $Path).Path)
 
-    foreach ($itemGroup in @($xml.Project.ItemGroup)) {
-        $condition = if ($itemGroup.Attributes['Condition']) { [string]$itemGroup.Attributes['Condition'].Value } else { $null }
+    foreach ($itemGroup in @($xml.SelectNodes('/Project/ItemGroup'))) {
+        $groupCondition = if ($itemGroup.Attributes['Condition']) { [string]$itemGroup.Attributes['Condition'].Value } else { $null }
         foreach ($node in @($itemGroup.ChildNodes)) {
             if ($node.NodeType -ne 'Element') { continue }
             if ($node.Name -ne 'PackageVersion') { continue }
@@ -46,13 +85,14 @@ function Get-CentralDeclarations {
             if ([string]::IsNullOrWhiteSpace($id)) { continue }
             if ($PackageFilter -and $id -ne $PackageFilter) { continue }
 
+            $nodeCondition = if ($node.Attributes['Condition']) { [string]$node.Attributes['Condition'].Value } else { $null }
             $rows.Add([pscustomobject]@{
                 id         = $id
                 current    = Get-NodeVersion -Node $node
                 element    = $node.Name
-                condition  = $condition
+                condition  = if ($nodeCondition) { $nodeCondition } else { $groupCondition }
                 note       = Get-AdjacentXmlComment -Node $node
-                sourceFile = 'Directory.Packages.props'
+                sourceFile = $relative
             })
         }
     }
@@ -68,8 +108,9 @@ function Get-ProjectDeclarations {
         Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' }
 
     foreach ($projectFile in $projectFiles) {
-        [xml]$xml = Get-Content -Raw -LiteralPath $projectFile.FullName
-        foreach ($itemGroup in @($xml.Project.ItemGroup)) {
+        $raw = Read-TextWithEncoding -Path $projectFile.FullName
+        [xml]$xml = $raw
+        foreach ($itemGroup in @($xml.SelectNodes('/Project/ItemGroup'))) {
             $groupCondition = if ($itemGroup.Attributes['Condition']) { [string]$itemGroup.Attributes['Condition'].Value } else { $null }
             foreach ($node in @($itemGroup.ChildNodes)) {
                 if ($node.NodeType -ne 'Element') { continue }
@@ -127,31 +168,25 @@ function Resolve-Candidate {
 
 $repoPath = (Resolve-Path -LiteralPath $RepoRoot).Path
 $centralPath = Join-Path $repoPath 'Directory.Packages.props'
-$management = if (Test-Path -LiteralPath $centralPath) { 'central' } else { 'project' }
+$centralFiles = @(Get-CentralPropsFiles -Root $repoPath)
+$centralEnabled = Get-CentralManagementEnabled -RepoRoot $repoPath
+$management = if ($centralEnabled) { 'central' } else { 'project' }
+$centralRows = @()
+foreach ($propsFile in $centralFiles) {
+    $centralRows += @(Get-CentralDeclarations -Path $propsFile.FullName -RepoRoot $repoPath -PackageFilter $Package)
+}
+$projectRows = @(Get-ProjectDeclarations -Root $repoPath -PackageFilter $Package)
 $declarations = if ($management -eq 'central') {
-    Get-CentralDeclarations -Path $centralPath -PackageFilter $Package
+    @($centralRows + $projectRows)
 } else {
-    Get-ProjectDeclarations -Root $repoPath -PackageFilter $Package
+    @($projectRows)
 }
 
-if ($management -eq 'project' -and $declarations.Count -eq 0) {
+if ($declarations.Count -eq 0) {
     $missing = [pscustomobject]@{
         repoRoot   = $repoPath
         found      = $false
-        management = 'project'
-        declared   = 0
-        summary    = [pscustomobject]@{ declared = 0; current = 0; auto = 0; approval = 0; unresolved = 0 }
-        rows       = @()
-    }
-    if ($AsJson) { $missing | ConvertTo-Json -Depth 12 } else { $missing }
-    return
-}
-
-if ($management -eq 'central' -and -not (Test-Path -LiteralPath $centralPath)) {
-    $missing = [pscustomobject]@{
-        repoRoot   = $repoPath
-        found      = $false
-        management = 'central'
+        management = $management
         declared   = 0
         summary    = [pscustomobject]@{ declared = 0; current = 0; auto = 0; approval = 0; unresolved = 0 }
         rows       = @()
@@ -161,7 +196,43 @@ if ($management -eq 'central' -and -not (Test-Path -LiteralPath $centralPath)) {
 }
 
 $rows = foreach ($declaration in $declarations) {
-    $feed = Get-NuGetVersionList -Id $declaration.id -Source $Source
+    if ([string]::IsNullOrWhiteSpace($declaration.current)) {
+        [pscustomobject]@{
+            id            = $declaration.id
+            current       = $declaration.current
+            condition     = $declaration.condition
+            sourceFile    = $declaration.sourceFile
+            note          = $declaration.note
+            candidate     = $null
+            latestOverall = $null
+            band          = $null
+            heldByBand    = $false
+            bump          = 'unknown'
+            action        = 'unresolved'
+            reason        = 'declaration has no explicit version'
+        }
+        continue
+    }
+
+    if (-not (Test-NuGetLiteralVersion -Version $declaration.current)) {
+        [pscustomobject]@{
+            id            = $declaration.id
+            current       = $declaration.current
+            condition     = $declaration.condition
+            sourceFile    = $declaration.sourceFile
+            note          = $declaration.note
+            candidate     = $null
+            latestOverall = $null
+            band          = $null
+            heldByBand    = $false
+            bump          = 'unknown'
+            action        = 'unresolved'
+            reason        = "non-literal version expression '$($declaration.current)' requires human review; property indirection, floating versions, and ranges are never auto-updated"
+        }
+        continue
+    }
+
+    $feed = Get-NuGetVersionListMerged -Id $declaration.id -Sources $Source
     if (-not $feed.found) {
         [pscustomobject]@{
             id            = $declaration.id

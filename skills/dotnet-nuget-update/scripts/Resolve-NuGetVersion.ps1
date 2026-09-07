@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory)][string]$Id,
     [switch]$IncludePrerelease,
-    [string]$Source = 'https://api.nuget.org/v3-flatcontainer',
+    [string[]]$Source = @('https://api.nuget.org/v3-flatcontainer'),
     [switch]$AsJson
 )
 
@@ -11,13 +11,13 @@ $ErrorActionPreference = 'Stop'
 
 . "$PSScriptRoot/_common.ps1"
 
-$feed = Get-NuGetVersionList -Id $Id -Source $Source
+$feed = Get-NuGetVersionListMerged -Id $Id -Sources $Source
 if (-not $feed.found) {
     $missing = [pscustomobject]@{
         id       = $Id
         found    = $false
         error    = $feed.error
-        source   = $Source
+        source   = $feed.source
         versions = @()
     }
     if ($AsJson) { $missing | ConvertTo-Json -Depth 8 } else { $missing }
@@ -29,7 +29,7 @@ $stable = @($versions | Where-Object { -not (ConvertTo-NuGetSemVer -Version $_).
 $result = [pscustomobject]@{
     id           = $Id
     found        = $true
-    source       = $Source
+    source       = $feed.source
     count        = $versions.Count
     latest       = if ($IncludePrerelease) { if ($versions.Count) { $versions[-1] } else { $null } } else { if ($stable.Count) { $stable[-1] } else { $null } }
     latestStable = if ($stable.Count) { $stable[-1] } else { $null }

@@ -8,22 +8,16 @@ function Get-FileLineEndingStyle {
 
     if (-not (Test-Path -LiteralPath $Path)) { return 'none' }
 
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
-    $crlf = 0
-    $lf = 0
+    $encoding = Get-FileEncoding -Path $Path
+    $text = [System.IO.File]::ReadAllText($Path, $encoding)
+    $crlf = ([regex]::Matches($text, "`r`n")).Count
+    $lf = ([regex]::Matches($text, "(?<!`r)`n")).Count
+    $cr = ([regex]::Matches($text, "`r(?!`n)")).Count
 
-    for ($index = 0; $index -lt $bytes.Length; $index++) {
-        if ($bytes[$index] -ne 10) { continue }
-        if ($index -gt 0 -and $bytes[$index - 1] -eq 13) {
-            $crlf++
-        } else {
-            $lf++
-        }
-    }
-
-    if ($crlf -gt 0 -and $lf -eq 0) { return 'CRLF' }
-    if ($lf -gt 0 -and $crlf -eq 0) { return 'LF' }
-    if ($lf -eq 0 -and $crlf -eq 0) { return 'none' }
+    if (($crlf + $lf + $cr) -eq 0) { return 'none' }
+    if ($crlf -gt 0 -and $lf -eq 0 -and $cr -eq 0) { return 'CRLF' }
+    if ($lf -gt 0 -and $crlf -eq 0 -and $cr -eq 0) { return 'LF' }
+    if ($cr -gt 0 -and $crlf -eq 0 -and $lf -eq 0) { return 'mixed' }
     return 'mixed'
 }
 
@@ -35,11 +29,62 @@ function Get-FileEncoding {
     }
 
     $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 4 -and $bytes[0] -eq 0x00 -and $bytes[1] -eq 0x00 -and $bytes[2] -eq 0xFE -and $bytes[3] -eq 0xFF) {
+        return [System.Text.UTF32Encoding]::new($true, $true)
+    }
+    if ($bytes.Length -ge 4 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE -and $bytes[2] -eq 0x00 -and $bytes[3] -eq 0x00) {
+        return [System.Text.UTF32Encoding]::new($false, $true)
+    }
     if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
         return [System.Text.UTF8Encoding]::new($true)
     }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+        return [System.Text.UnicodeEncoding]::new($false, $true)
+    }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
+        return [System.Text.UnicodeEncoding]::new($true, $true)
+    }
 
-    return [System.Text.UTF8Encoding]::new($false)
+    $nullCount = 0
+    $evenNulls = 0
+    $oddNulls = 0
+    for ($index = 0; $index -lt $bytes.Length; $index++) {
+        if ($bytes[$index] -eq 0) {
+            $nullCount++
+            if ($index % 2 -eq 0) { $evenNulls++ } else { $oddNulls++ }
+        }
+    }
+    if ($nullCount -gt 0 -and $bytes.Length -ge 2) {
+        $threshold = [Math]::Max(4, [int]($bytes.Length / 20))
+        if ($oddNulls -gt $evenNulls -and $oddNulls -ge $threshold) {
+            return [System.Text.UnicodeEncoding]::new($false, $false)
+        }
+        if ($evenNulls -gt $oddNulls -and $evenNulls -ge $threshold) {
+            return [System.Text.UnicodeEncoding]::new($true, $false)
+        }
+    }
+
+    try {
+        $strict = [System.Text.UTF8Encoding]::new($false, $true)
+        $null = $strict.GetString($bytes)
+        return [System.Text.UTF8Encoding]::new($false)
+    }
+    catch {
+    }
+
+    try {
+        return [System.Text.Encoding]::GetEncoding('windows-1252')
+    }
+    catch {
+        return [System.Text.Encoding]::Latin1
+    }
+}
+
+function Read-TextWithEncoding {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $encoding = Get-FileEncoding -Path $Path
+    return [System.IO.File]::ReadAllText($Path, $encoding)
 }
 
 function Write-TextPreservingEol {
@@ -50,32 +95,69 @@ function Write-TextPreservingEol {
     )
 
     $style = $LineEnding
+    $existing = 'none'
+    if (Test-Path -LiteralPath $Path) {
+        $existing = Get-FileLineEndingStyle -Path $Path
+    }
     if ($style -eq 'preserve') {
-        $style = 'LF'
-        if (Test-Path -LiteralPath $Path) {
-            $existing = Get-FileLineEndingStyle -Path $Path
-            if ($existing -eq 'CRLF') {
-                $style = 'CRLF'
-            } elseif ($existing -eq 'mixed') {
-                $style = 'LF'
-            }
+        if ($existing -eq 'CRLF') {
+            $style = 'CRLF'
+        } elseif ($existing -eq 'mixed') {
+            $style = 'mixed'
+        } else {
+            $style = 'LF'
         }
     }
 
+    $encoding = Get-FileEncoding -Path $Path
     $normalized = $Text -replace "`r`n", "`n" -replace "`r", "`n"
-    $final = if ($style -eq 'CRLF') { $normalized -replace "`n", "`r`n" } else { $normalized }
+    if ($style -eq 'CRLF') {
+        $final = $normalized -replace "`n", "`r`n"
+    } elseif ($style -eq 'mixed' -and (Test-Path -LiteralPath $Path)) {
+        $originalText = [System.IO.File]::ReadAllText($Path, $encoding)
+        $originalEndings = @([regex]::Matches($originalText, "`r`n|`n|`r") | ForEach-Object { $_.Value })
+        $originalLines = [regex]::Split($originalText, "`r`n|`n|`r")
+        $newLines = [regex]::Split($normalized, "`n")
+        if ($originalLines.Count -eq $newLines.Count -and $originalEndings.Count -eq ($originalLines.Count - 1)) {
+            $builder = [System.Text.StringBuilder]::new()
+            for ($index = 0; $index -lt $newLines.Count; $index++) {
+                $null = $builder.Append($newLines[$index])
+                if ($index -lt $originalEndings.Count) {
+                    $null = $builder.Append($originalEndings[$index])
+                }
+            }
+            $final = $builder.ToString()
+        } else {
+            $final = $normalized
+        }
+        $style = 'mixed'
+    } else {
+        $final = $normalized
+    }
 
     $directory = Split-Path -Parent $Path
     if ($directory -and -not (Test-Path -LiteralPath $directory)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
-    [System.IO.File]::WriteAllText($Path, $final, (Get-FileEncoding -Path $Path))
+    [System.IO.File]::WriteAllText($Path, $final, $encoding)
     return $style
+}
+
+function Test-NuGetLiteralVersion {
+    param([string]$Version)
+
+    if ([string]::IsNullOrWhiteSpace($Version)) { return $false }
+    $value = $Version.Trim()
+    return $value -match '^\d+(\.\d+){0,3}(-[0-9A-Za-z\-.]+)?(\+[0-9A-Za-z\-.]+)?$'
 }
 
 function ConvertTo-NuGetSemVer {
     param([Parameter(Mandatory)][string]$Version)
+
+    if (-not (Test-NuGetLiteralVersion -Version $Version)) {
+        throw "Non-literal NuGet version expression: '$Version'. Property expressions, floating versions, and ranges cannot be compared as literals."
+    }
 
     $value = $Version.Trim()
     $value = ($value -split '\+', 2)[0]
@@ -209,11 +291,36 @@ function Get-TfmBand {
     if ([string]::IsNullOrWhiteSpace($Condition)) { return @() }
 
     $bands = [System.Collections.Generic.List[int]]::new()
-    foreach ($match in [regex]::Matches($Condition, "net(\d+)(?:\.\d+)?'")) {
+    foreach ($match in [regex]::Matches($Condition, 'net(\d+)(?:\.\d+)?[^''"]*[''"]')) {
         $bands.Add([int]$match.Groups[1].Value)
     }
 
     return @($bands | Where-Object { $_ -ge 5 } | Sort-Object -Unique)
+}
+
+$script:NuGetServiceIndexCache = @{}
+
+function Resolve-NuGetFlatContainerBase {
+    param([Parameter(Mandatory)][string]$ServiceIndexUrl)
+
+    $key = $ServiceIndexUrl.Trim()
+    if ($script:NuGetServiceIndexCache.ContainsKey($key)) {
+        return $script:NuGetServiceIndexCache[$key]
+    }
+
+    $index = Invoke-RestMethod -Uri $key -Method Get -TimeoutSec 30 -ErrorAction Stop
+    $resources = @($index.resources)
+    $flat = @($resources | Where-Object { $_."@type" -eq 'PackageBaseAddress/3.0.0' })
+    if ($flat.Count -eq 0) {
+        $flat = @($resources | Where-Object { $_."@type" -like 'PackageBaseAddress*' })
+    }
+    if ($flat.Count -eq 0) {
+        throw "Service index '$key' does not expose a PackageBaseAddress resource."
+    }
+
+    $base = [string]$flat[0]."@id"
+    $script:NuGetServiceIndexCache[$key] = $base
+    return $base
 }
 
 function Get-NuGetVersionList {
@@ -225,6 +332,27 @@ function Get-NuGetVersionList {
     $base = $Source.Trim()
     $packageId = $Id.ToLowerInvariant()
     $isHttp = $base -match '^https?://'
+    $effectiveSource = $Source
+    if ($isHttp -and $base -match 'index\.json\s*$') {
+        try {
+            $flatBase = Resolve-NuGetFlatContainerBase -ServiceIndexUrl $base
+            $base = $flatBase.Trim()
+            $effectiveSource = "$Source (flat-container $base)"
+        }
+        catch {
+            $location = "$($base.TrimEnd('/'))/$packageId/index.json"
+            $result = [pscustomobject]@{
+                id       = $Id
+                found    = $false
+                source   = $Source
+                url      = $location
+                error    = "service-index lookup failed for '$Source': $($_.Exception.Message)"
+                versions = @()
+            }
+            $script:NuGetVersionCache["$base|$packageId"] = $result
+            return $result
+        }
+    }
     if ($isHttp) {
         $normalizedBase = $base.TrimEnd('/')
         $location = "$normalizedBase/$packageId/index.json"
@@ -248,7 +376,7 @@ function Get-NuGetVersionList {
         $result = [pscustomobject]@{
             id       = $Id
             found    = $true
-            source   = $Source
+            source   = $effectiveSource
             url      = $location
             error    = $null
             versions = (Sort-NuGetVersion -Version @($response.versions))
@@ -258,7 +386,7 @@ function Get-NuGetVersionList {
         $result = [pscustomobject]@{
             id       = $Id
             found    = $false
-            source   = $Source
+            source   = $effectiveSource
             url      = $location
             error    = $_.Exception.Message
             versions = @()
@@ -269,28 +397,128 @@ function Get-NuGetVersionList {
     return $result
 }
 
+function Get-NuGetVersionListMerged {
+    param(
+        [Parameter(Mandatory)][string]$Id,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Sources
+    )
+
+    $rawSources = @($Sources | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $flatSources = [System.Collections.Generic.List[string]]::new()
+    foreach ($rawEntry in $rawSources) {
+        foreach ($part in ($rawEntry -split ';')) {
+            $trimmed = $part.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+                $flatSources.Add($trimmed)
+            }
+        }
+    }
+    $effectiveSources = @($flatSources.ToArray())
+    if ($effectiveSources.Count -eq 0) {
+        $effectiveSources = @('https://api.nuget.org/v3-flatcontainer')
+    }
+
+    $merged = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $errors = [System.Collections.Generic.List[string]]::new()
+    $usedSources = [System.Collections.Generic.List[string]]::new()
+    $lastUrl = $null
+
+    foreach ($sourceEntry in $effectiveSources) {
+        $feed = Get-NuGetVersionList -Id $Id -Source $sourceEntry
+        $lastUrl = $feed.url
+        if ($feed.found) {
+            $null = $usedSources.Add($sourceEntry)
+            foreach ($version in @($feed.versions)) {
+                if ($seen.Add($version)) {
+                    $merged.Add($version)
+                }
+            }
+        } else {
+            $errors.Add("$sourceEntry : $($feed.error)")
+        }
+    }
+
+    if ($usedSources.Count -gt 0) {
+        return [pscustomobject]@{
+            id       = $Id
+            found    = $true
+            source   = ($usedSources -join '; ')
+            url      = $lastUrl
+            error    = $null
+            versions = (Sort-NuGetVersion -Version @($merged.ToArray()))
+        }
+    }
+
+    return [pscustomobject]@{
+        id       = $Id
+        found    = $false
+        source   = ($effectiveSources -join '; ')
+        url      = $lastUrl
+        error    = ($errors -join ' | ')
+        versions = @()
+    }
+}
+
 function Get-AdjacentXmlComment {
     param([Parameter(Mandatory)][System.Xml.XmlNode]$Node)
 
-    foreach ($direction in @('PreviousSibling', 'NextSibling')) {
-        $cursor = $Node.$direction
-        while ($null -ne $cursor) {
-            if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Whitespace) {
-                $cursor = $cursor.$direction
-                continue
+    # A leading comment on the lines above a declaration documents that
+    # declaration. Only the immediately preceding comment is attached so a
+    # comment between two declarations is not attributed to both packages.
+    $cursor = $Node.PreviousSibling
+    while ($null -ne $cursor) {
+        if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Whitespace) {
+            $cursor = $cursor.PreviousSibling
+            continue
+        }
+
+        if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Text -and [string]::IsNullOrWhiteSpace($cursor.Value)) {
+            $cursor = $cursor.PreviousSibling
+            continue
+        }
+
+        if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Comment) {
+            return ([string]$cursor.Value).Trim()
+        }
+
+        break
+    }
+
+    # A trailing comment after the last package declaration in its parent has
+    # no following declaration to document, so it documents this one. Comments
+    # between two package declarations belong to the following declaration and
+    # are intentionally not attached here.
+    $cursor = $Node.NextSibling
+    while ($null -ne $cursor) {
+        if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Whitespace) {
+            $cursor = $cursor.NextSibling
+            continue
+        }
+
+        if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Text -and [string]::IsNullOrWhiteSpace($cursor.Value)) {
+            $cursor = $cursor.NextSibling
+            continue
+        }
+
+        if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Comment) {
+            $after = $cursor.NextSibling
+            while ($null -ne $after -and (($after.NodeType -eq [System.Xml.XmlNodeType]::Whitespace) -or ($after.NodeType -eq [System.Xml.XmlNodeType]::Text -and [string]::IsNullOrWhiteSpace($after.Value)))) {
+                $after = $after.NextSibling
             }
 
-            if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Text -and [string]::IsNullOrWhiteSpace($cursor.Value)) {
-                $cursor = $cursor.$direction
-                continue
-            }
-
-            if ($cursor.NodeType -eq [System.Xml.XmlNodeType]::Comment) {
+            if ($null -eq $after) {
                 return ([string]$cursor.Value).Trim()
             }
 
-            break
+            if ($after.NodeType -eq [System.Xml.XmlNodeType]::Element -and $after.Name -in @('PackageVersion', 'PackageReference', 'GlobalPackageReference')) {
+                return $null
+            }
+
+            return ([string]$cursor.Value).Trim()
         }
+
+        break
     }
 
     return $null
