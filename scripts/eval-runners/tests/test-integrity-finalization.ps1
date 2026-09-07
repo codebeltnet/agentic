@@ -10,7 +10,10 @@
     verifies that no later bridge or finalizer can bless or repair it.
 #>
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('All', 'Bridge', 'Grading', 'Application', 'Finalization')]
+    [string]$Suite = 'All'
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -516,41 +519,47 @@ for ($index = 0; $index -lt $count; $index++) {
     $bridgeScript = Join-Path $packageTools 'bridge-manifest-results.ps1'
     $bridgeArguments = @('-IterationDirectory', $iteration, '-RequireComplete', '-RequireParallelDispatch')
     Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'initial frozen manifest bridge'
-    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'unchanged idempotent manifest bridge'
-
-    $statePath = Join-Path $iteration 'orchestration-state.json'
-    $stateBytes = [System.IO.File]::ReadAllBytes($statePath)
-    $tamperedState = Read-TestJson -Path $statePath
-    $tamperedState.max_observed_active = 1
-    Write-TestJson -Path $statePath -Value $tamperedState
-    $tamperedStateBridge = Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments
-    Assert-ToolFails -Invocation $tamperedStateBridge -Description 'bridge rejects post-freeze orchestration-state mutation' -ExpectedText 'orchestration-state.json changed'
-    [System.IO.File]::WriteAllBytes($statePath, $stateBytes)
-    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'bridge passes after exact orchestration-state restoration'
-
     $selectedRecord = $records[0]
-    $selectedRawBytes = [System.IO.File]::ReadAllBytes($selectedRecord.ExecutionResultPath)
     $selectedRawHash = Get-Sha256HexFromFile -Path $selectedRecord.ExecutionResultPath
-    $selectedRaw = Read-TestJson -Path $selectedRecord.ExecutionResultPath
-    $selectedRaw | Add-Member -NotePropertyName grading -NotePropertyValue @([ordered]@{ passed = $true })
-    Write-TestJson -Path $selectedRecord.ExecutionResultPath -Value $selectedRaw
-    $corruptedBridge = Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments
-    Assert-ToolFails -Invocation $corruptedBridge -Description 'bridge rejects raw grading mutation' -ExpectedText 'Execution integrity failure'
-    Assert-Contains -Text $corruptedBridge.Text -Expected 'requires fresh Phase 1 execution' -Message 'raw mutation requires fresh Phase 1 execution'
-    $freezeAfterRawMutation = Read-TestJson -Path (Join-Path $iteration 'execution-freeze.json')
-    Assert-Equal $selectedRawHash (Get-JsonProperty -Object $freezeAfterRawMutation.executions[0] -Name 'execution_result_sha256') 'freeze hash is not re-blessed after raw mutation'
-    [System.IO.File]::WriteAllBytes($selectedRecord.ExecutionResultPath, $selectedRawBytes)
-    Assert-Equal $selectedRawHash (Get-Sha256HexFromFile -Path $selectedRecord.ExecutionResultPath) 'exact raw bytes are restored'
-    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'bridge passes after exact raw restoration'
+    $finalizerScript = Join-Path $packageTools 'finalize-eval-package.ps1'
+    $finalizerArguments = @('-IterationDirectory', $iteration, '-GradingPath', 'grading.json')
+    $applyScript = Join-Path $packageTools 'apply-eval-grading.ps1'
+    $applyArguments = @('-IterationDirectory', $iteration, '-GradingPath', 'grading.json')
+    if ($Suite -in @('All', 'Bridge')) {
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'unchanged idempotent manifest bridge'
 
-    $artifactPath = Join-Path (Split-Path -Parent $selectedRecord.RunManifestPath) 'evidence/fixture-events.jsonl'
-    $artifactBytes = [System.IO.File]::ReadAllBytes($artifactPath)
-    [System.IO.File]::WriteAllBytes($artifactPath, $artifactBytes + [byte[]](0x20))
-    $corruptedArtifactBridge = Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments
-    Assert-ToolFails -Invocation $corruptedArtifactBridge -Description 'bridge rejects referenced artifact mutation' -ExpectedText 'Execution integrity failure'
-    [System.IO.File]::WriteAllBytes($artifactPath, $artifactBytes)
-    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'bridge passes after exact artifact restoration'
+        $statePath = Join-Path $iteration 'orchestration-state.json'
+        $stateBytes = [System.IO.File]::ReadAllBytes($statePath)
+        $tamperedState = Read-TestJson -Path $statePath
+        $tamperedState.max_observed_active = 1
+        Write-TestJson -Path $statePath -Value $tamperedState
+        $tamperedStateBridge = Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments
+        Assert-ToolFails -Invocation $tamperedStateBridge -Description 'bridge rejects post-freeze orchestration-state mutation' -ExpectedText 'orchestration-state.json changed'
+        [System.IO.File]::WriteAllBytes($statePath, $stateBytes)
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'bridge passes after exact orchestration-state restoration'
 
+        $selectedRawBytes = [System.IO.File]::ReadAllBytes($selectedRecord.ExecutionResultPath)
+        $selectedRaw = Read-TestJson -Path $selectedRecord.ExecutionResultPath
+        $selectedRaw | Add-Member -NotePropertyName grading -NotePropertyValue @([ordered]@{ passed = $true })
+        Write-TestJson -Path $selectedRecord.ExecutionResultPath -Value $selectedRaw
+        $corruptedBridge = Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments
+        Assert-ToolFails -Invocation $corruptedBridge -Description 'bridge rejects raw grading mutation' -ExpectedText 'Execution integrity failure'
+        Assert-Contains -Text $corruptedBridge.Text -Expected 'requires fresh Phase 1 execution' -Message 'raw mutation requires fresh Phase 1 execution'
+        $freezeAfterRawMutation = Read-TestJson -Path (Join-Path $iteration 'execution-freeze.json')
+        Assert-Equal $selectedRawHash (Get-JsonProperty -Object $freezeAfterRawMutation.executions[0] -Name 'execution_result_sha256') 'freeze hash is not re-blessed after raw mutation'
+        [System.IO.File]::WriteAllBytes($selectedRecord.ExecutionResultPath, $selectedRawBytes)
+        Assert-Equal $selectedRawHash (Get-Sha256HexFromFile -Path $selectedRecord.ExecutionResultPath) 'exact raw bytes are restored'
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'bridge passes after exact raw restoration'
+
+        $artifactPath = Join-Path (Split-Path -Parent $selectedRecord.RunManifestPath) 'evidence/fixture-events.jsonl'
+        $artifactBytes = [System.IO.File]::ReadAllBytes($artifactPath)
+        [System.IO.File]::WriteAllBytes($artifactPath, $artifactBytes + [byte[]](0x20))
+        $corruptedArtifactBridge = Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments
+        Assert-ToolFails -Invocation $corruptedArtifactBridge -Description 'bridge rejects referenced artifact mutation' -ExpectedText 'Execution integrity failure'
+        [System.IO.File]::WriteAllBytes($artifactPath, $artifactBytes)
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $bridgeScript -Arguments $bridgeArguments) -Description 'bridge passes after exact artifact restoration'
+
+    }
     $gradingPath = Join-Path $iteration 'grading.json'
     $validGrading = New-TestGradingDocument -Records $records
     $validationScript = Join-Path $packageTools 'validate-eval-grading.ps1'
@@ -558,139 +567,141 @@ for ($index = 0; $index -lt $count; $index++) {
     $validationSideEffectPaths = Get-GradingValidationSideEffectPaths -IterationDirectory $iteration -Records $records
     $validationSnapshot = Get-TestFileHashSnapshot -Paths $validationSideEffectPaths
 
-    $skeleton = Invoke-TestTool -Path $validationScript -Arguments @('-ShowSkeleton')
-    Assert-ToolPasses -Invocation $skeleton -Description 'grading skeleton emission'
-    $skeletonDocument = $skeleton.Text | ConvertFrom-Json -Depth 100
-    Assert-Equal (Get-RunnerSchemaNames).Grading ([string]$skeletonDocument.schema) 'grading skeleton uses the authoritative grading schema'
-    Assert-Equal 0 @($skeletonDocument.grading).Count 'grading skeleton exposes an empty grading array'
-    Assert-Equal 'schema,grading' ([string]::Join(',', @($skeletonDocument.PSObject.Properties.Name))) 'grading skeleton exposes only the grading envelope'
-    Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'grading skeleton emission'
+    if ($Suite -in @('All', 'Grading')) {
+        $skeleton = Invoke-TestTool -Path $validationScript -Arguments @('-ShowSkeleton')
+        Assert-ToolPasses -Invocation $skeleton -Description 'grading skeleton emission'
+        $skeletonDocument = $skeleton.Text | ConvertFrom-Json -Depth 100
+        Assert-Equal (Get-RunnerSchemaNames).Grading ([string]$skeletonDocument.schema) 'grading skeleton uses the authoritative grading schema'
+        Assert-Equal 0 @($skeletonDocument.grading).Count 'grading skeleton exposes an empty grading array'
+        Assert-Equal 'schema,grading' ([string]::Join(',', @($skeletonDocument.PSObject.Properties.Name))) 'grading skeleton exposes only the grading envelope'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'grading skeleton emission'
 
-    [System.IO.File]::WriteAllText($gradingPath, '{', [System.Text.UTF8Encoding]::new($false))
-    $malformedValidation = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
-    Assert-ToolFails -Invocation $malformedValidation -Description 'malformed grading JSON validation'
-    Assert-True (-not [string]::IsNullOrWhiteSpace($malformedValidation.Text)) 'malformed grading validation emits a diagnostic'
-    $malformedValidationAgain = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
-    Assert-ToolFails -Invocation $malformedValidationAgain -Description 'repeated malformed grading JSON validation'
-    Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'repeated invalid grading validation'
+        [System.IO.File]::WriteAllText($gradingPath, '{', [System.Text.UTF8Encoding]::new($false))
+        $malformedValidation = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
+        Assert-ToolFails -Invocation $malformedValidation -Description 'malformed grading JSON validation'
+        Assert-True (-not [string]::IsNullOrWhiteSpace($malformedValidation.Text)) 'malformed grading validation emits a diagnostic'
+        $malformedValidationAgain = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
+        Assert-ToolFails -Invocation $malformedValidationAgain -Description 'repeated malformed grading JSON validation'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'repeated invalid grading validation'
 
-    Write-TestJson -Path $gradingPath -Value ([ordered]@{ grading = @() })
-    Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'missing grading schema validation' -ExpectedText 'must declare'
-    Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = 'wrong/schema'; grading = @() })
-    Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'wrong grading schema validation' -ExpectedText 'must declare'
-    Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = [ordered]@{} })
-    Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'wrong grading envelope validation' -ExpectedText 'grading must be an array'
-    $invalidEntry = Copy-TestGradingDocument -Document $validGrading
-    $invalidEntry.grading[0].passed = 'yes'
-    Write-TestJson -Path $gradingPath -Value $invalidEntry
-    Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'invalid grading entry validation' -ExpectedText 'passed must be a boolean'
-    Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'invalid grading validation'
+        Write-TestJson -Path $gradingPath -Value ([ordered]@{ grading = @() })
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'missing grading schema validation' -ExpectedText 'must declare'
+        Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = 'wrong/schema'; grading = @() })
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'wrong grading schema validation' -ExpectedText 'must declare'
+        Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = [ordered]@{} })
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'wrong grading envelope validation' -ExpectedText 'grading must be an array'
+        $invalidEntry = Copy-TestGradingDocument -Document $validGrading
+        $invalidEntry.grading[0].passed = 'yes'
+        Write-TestJson -Path $gradingPath -Value $invalidEntry
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'invalid grading entry validation' -ExpectedText 'passed must be a boolean'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'invalid grading validation'
 
-    Write-TestJson -Path $gradingPath -Value $validGrading
-    $validValidation = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
-    Assert-ToolPasses -Invocation $validValidation -Description 'valid grading validation'
-    $validValidationAgain = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
-    Assert-ToolPasses -Invocation $validValidationAgain -Description 'repeated valid grading validation'
-    Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'repeated valid grading validation'
+        Write-TestJson -Path $gradingPath -Value $validGrading
+        $validValidation = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
+        Assert-ToolPasses -Invocation $validValidation -Description 'valid grading validation'
+        $validValidationAgain = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
+        Assert-ToolPasses -Invocation $validValidationAgain -Description 'repeated valid grading validation'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'repeated valid grading validation'
 
-    $invalidDirectFinalizer = Copy-TestGradingDocument -Document $validGrading
-    $invalidDirectFinalizer.grading[0].evidence = 123
-    Write-TestJson -Path $gradingPath -Value $invalidDirectFinalizer
-    $finalizerScript = Join-Path $packageTools 'finalize-eval-package.ps1'
-    $finalizerArguments = @('-IterationDirectory', $iteration, '-GradingPath', 'grading.json')
-    $directInvalidFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
-    Assert-ToolFails -Invocation $directInvalidFinalizer -Description 'finalizer performs its own grading validation' -ExpectedText 'evidence must be a string'
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $iteration 'report.html') -PathType Leaf)) 'invalid direct finalizer produces no report'
-
-    Write-TestJson -Path $gradingPath -Value $validGrading
-    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'valid grading validation before application'
-    $canonicalBeforeGrading = @{}
-    foreach ($record in $records) { $canonicalBeforeGrading[$record.ResultPath] = Get-JsonFingerprint -Object (Get-JsonWithoutProperty -Object (Read-TestJson -Path $record.ResultPath) -PropertyName 'grading') }
-    $applyScript = Join-Path $packageTools 'apply-eval-grading.ps1'
-    $applyArguments = @('-IterationDirectory', $iteration, '-GradingPath', 'grading.json')
-    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $applyScript -Arguments $applyArguments) -Description 'allowed grading-only artifact application'
-    foreach ($record in $records) {
-        $canonical = Read-TestJson -Path $record.ResultPath
-        Assert-Equal $canonicalBeforeGrading[$record.ResultPath] (Get-JsonFingerprint -Object (Get-JsonWithoutProperty -Object $canonical -PropertyName 'grading')) 'grading application leaves canonical non-grading fields unchanged'
-    }
-
-    $invalidGrading = [ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = @($validGrading.grading); output = 'raw output is forbidden here' }
-    Write-TestJson -Path $gradingPath -Value $invalidGrading
-    $invalidApply = Invoke-TestTool -Path $applyScript -Arguments $applyArguments
-    Assert-ToolFails -Invocation $invalidApply -Description 'grading artifact with raw output is rejected' -ExpectedText 'unsupported field'
-
-    $forbiddenGradingFields = @('model', 'harness', 'execution_result_sha256', 'session_id', 'telemetry')
-    foreach ($forbiddenField in $forbiddenGradingFields) {
-        $forbiddenEntries = @($validGrading.grading | ForEach-Object {
-            $copy = [ordered]@{}
-            foreach ($name in @('eval_id', 'eval_name', 'configuration', 'assertion_index', 'assertion', 'passed', 'evidence')) {
-                $copy[$name] = Get-JsonProperty -Object $_ -Name $name
-            }
-            $copy[$forbiddenField] = 'forbidden'
-            $copy
-        })
-        Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = $forbiddenEntries })
-        $forbiddenApply = Invoke-TestTool -Path $applyScript -Arguments $applyArguments
-        Assert-ToolFails -Invocation $forbiddenApply -Description "grading artifact with $forbiddenField is rejected" -ExpectedText 'unsupported field'
     }
     Write-TestJson -Path $gradingPath -Value $validGrading
+    if ($Suite -in @('All', 'Application')) {
+        $invalidDirectFinalizer = Copy-TestGradingDocument -Document $validGrading
+        $invalidDirectFinalizer.grading[0].evidence = 123
+        Write-TestJson -Path $gradingPath -Value $invalidDirectFinalizer
+        $directInvalidFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+        Assert-ToolFails -Invocation $directInvalidFinalizer -Description 'finalizer performs its own grading validation' -ExpectedText 'evidence must be a string'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $iteration 'report.html') -PathType Leaf)) 'invalid direct finalizer produces no report'
 
-    $canonicalPath = $records[0].ResultPath
-    $canonicalBytes = [System.IO.File]::ReadAllBytes($canonicalPath)
-    $tamperedCanonical = Read-TestJson -Path $canonicalPath
-    $tamperedCanonical.output = 'manual canonical tampering'
-    Write-TestJson -Path $canonicalPath -Value $tamperedCanonical
-    $canonicalTamperFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
-    Assert-ToolFails -Invocation $canonicalTamperFinalizer -Description 'finalizer rejects canonical non-grading mutation' -ExpectedText 'Execution integrity failure'
-    Remove-TestReportArtifacts -IterationDirectory $iteration
-    [System.IO.File]::WriteAllBytes($canonicalPath, $canonicalBytes)
+        Write-TestJson -Path $gradingPath -Value $validGrading
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'valid grading validation before application'
+        $canonicalBeforeGrading = @{}
+        foreach ($record in $records) { $canonicalBeforeGrading[$record.ResultPath] = Get-JsonFingerprint -Object (Get-JsonWithoutProperty -Object (Read-TestJson -Path $record.ResultPath) -PropertyName 'grading') }
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $applyScript -Arguments $applyArguments) -Description 'allowed grading-only artifact application'
+        foreach ($record in $records) {
+            $canonical = Read-TestJson -Path $record.ResultPath
+            Assert-Equal $canonicalBeforeGrading[$record.ResultPath] (Get-JsonFingerprint -Object (Get-JsonWithoutProperty -Object $canonical -PropertyName 'grading')) 'grading application leaves canonical non-grading fields unchanged'
+        }
 
-    $canonicalApplyTamperBytes = [System.IO.File]::ReadAllBytes($canonicalPath)
-    $canonicalApplyTamper = Read-TestJson -Path $canonicalPath
-    $canonicalApplyTamper.output = 'direct application tampering'
-    Write-TestJson -Path $canonicalPath -Value $canonicalApplyTamper
-    $canonicalApplyTamperResult = Invoke-TestTool -Path $applyScript -Arguments $applyArguments
-    Assert-ToolFails -Invocation $canonicalApplyTamperResult -Description 'grading application rejects canonical non-grading mutation before applying' -ExpectedText 'Execution integrity failure'
-    [System.IO.File]::WriteAllBytes($canonicalPath, $canonicalApplyTamperBytes)
+        $invalidGrading = [ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = @($validGrading.grading); output = 'raw output is forbidden here' }
+        Write-TestJson -Path $gradingPath -Value $invalidGrading
+        $invalidApply = Invoke-TestTool -Path $applyScript -Arguments $applyArguments
+        Assert-ToolFails -Invocation $invalidApply -Description 'grading artifact with raw output is rejected' -ExpectedText 'unsupported field'
 
-    # Exact reproduction of the latest Copilot mistake: grading is written to
-    # execution-result.json after a valid bridge. The finalizer must fail closed
-    # and must not repair the bytes or create report artifacts.
-    $copilotMistakeBytes = [System.IO.File]::ReadAllBytes($selectedRecord.ExecutionResultPath)
-    $copilotMistakeRaw = Read-TestJson -Path $selectedRecord.ExecutionResultPath
-    $copilotMistakeRaw | Add-Member -NotePropertyName grading -NotePropertyValue @([ordered]@{ text = 'wrong location' })
-    Write-TestJson -Path $selectedRecord.ExecutionResultPath -Value $copilotMistakeRaw
-    Remove-TestReportArtifacts -IterationDirectory $iteration
-    $copilotMistakeFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
-    Assert-ToolFails -Invocation $copilotMistakeFinalizer -Description 'finalizer rejects Copilot raw-result grading mistake' -ExpectedText 'Execution integrity failure'
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $iteration 'report.html') -PathType Leaf)) 'corrupted package produces no report'
-    [System.IO.File]::WriteAllBytes($selectedRecord.ExecutionResultPath, $copilotMistakeBytes)
-    Assert-Equal $selectedRawHash (Get-Sha256HexFromFile -Path $selectedRecord.ExecutionResultPath) 'Copilot mistake restoration returns exact frozen bytes'
-
-    [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', 'missing')
-    Remove-TestReportArtifacts -IterationDirectory $iteration
-    $missingReportFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
-    Assert-ToolFails -Invocation $missingReportFinalizer -Description 'finalizer rejects missing report artifact'
-    [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', 'failure')
-    Remove-TestReportArtifacts -IterationDirectory $iteration
-    $failedReportFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
-    Assert-ToolFails -Invocation $failedReportFinalizer -Description 'finalizer rejects report generator failure' -ExpectedText 'Report generation failed'
-
-    [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', '')
-    Remove-TestReportArtifacts -IterationDirectory $iteration
-    Write-TestJson -Path $gradingPath -Value $validGrading
-    Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'correctly validated grading before finalization'
-    $successfulFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
-    Assert-ToolPasses -Invocation $successfulFinalizer -Description 'deterministic finalizer success'
-    $finalSummary = $successfulFinalizer.Text | ConvertFrom-Json -Depth 100 | Select-Object -Last 1
-    Assert-Equal 'completed' $finalSummary.status 'finalizer returns machine-readable completed status'
-    foreach ($relative in @('report.html', 'skill-creator-report.html', 'benchmark.json', 'benchmark.md')) {
-        $artifact = Join-Path $iteration $relative
-        Assert-True (Test-Path -LiteralPath $artifact -PathType Leaf) "finalizer creates $relative"
-        Assert-True ((Get-Item -LiteralPath $artifact).Length -gt 0) "$relative is non-empty"
+        $forbiddenGradingFields = @('model', 'harness', 'execution_result_sha256', 'session_id', 'telemetry')
+        foreach ($forbiddenField in $forbiddenGradingFields) {
+            $forbiddenEntries = @($validGrading.grading | ForEach-Object {
+                $copy = [ordered]@{}
+                foreach ($name in @('eval_id', 'eval_name', 'configuration', 'assertion_index', 'assertion', 'passed', 'evidence')) {
+                    $copy[$name] = Get-JsonProperty -Object $_ -Name $name
+                }
+                $copy[$forbiddenField] = 'forbidden'
+                $copy
+            })
+            Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = $forbiddenEntries })
+            $forbiddenApply = Invoke-TestTool -Path $applyScript -Arguments $applyArguments
+            Assert-ToolFails -Invocation $forbiddenApply -Description "grading artifact with $forbiddenField is rejected" -ExpectedText 'unsupported field'
+        }
+        Write-TestJson -Path $gradingPath -Value $validGrading
     }
+    if ($Suite -in @('All', 'Finalization')) {
+        $canonicalPath = $records[0].ResultPath
+        $canonicalBytes = [System.IO.File]::ReadAllBytes($canonicalPath)
+        $tamperedCanonical = Read-TestJson -Path $canonicalPath
+        $tamperedCanonical.output = 'manual canonical tampering'
+        Write-TestJson -Path $canonicalPath -Value $tamperedCanonical
+        $canonicalTamperFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+        Assert-ToolFails -Invocation $canonicalTamperFinalizer -Description 'finalizer rejects canonical non-grading mutation' -ExpectedText 'Execution integrity failure'
+        Remove-TestReportArtifacts -IterationDirectory $iteration
+        [System.IO.File]::WriteAllBytes($canonicalPath, $canonicalBytes)
 
-    Write-Output 'Eval package integrity and finalization: PASS'
+        $canonicalApplyTamperBytes = [System.IO.File]::ReadAllBytes($canonicalPath)
+        $canonicalApplyTamper = Read-TestJson -Path $canonicalPath
+        $canonicalApplyTamper.output = 'direct application tampering'
+        Write-TestJson -Path $canonicalPath -Value $canonicalApplyTamper
+        $canonicalApplyTamperResult = Invoke-TestTool -Path $applyScript -Arguments $applyArguments
+        Assert-ToolFails -Invocation $canonicalApplyTamperResult -Description 'grading application rejects canonical non-grading mutation before applying' -ExpectedText 'Execution integrity failure'
+        [System.IO.File]::WriteAllBytes($canonicalPath, $canonicalApplyTamperBytes)
+
+        # Exact reproduction of the latest Copilot mistake: grading is written to
+        # execution-result.json after a valid bridge. The finalizer must fail closed
+        # and must not repair the bytes or create report artifacts.
+        $copilotMistakeBytes = [System.IO.File]::ReadAllBytes($selectedRecord.ExecutionResultPath)
+        $copilotMistakeRaw = Read-TestJson -Path $selectedRecord.ExecutionResultPath
+        $copilotMistakeRaw | Add-Member -NotePropertyName grading -NotePropertyValue @([ordered]@{ text = 'wrong location' })
+        Write-TestJson -Path $selectedRecord.ExecutionResultPath -Value $copilotMistakeRaw
+        Remove-TestReportArtifacts -IterationDirectory $iteration
+        $copilotMistakeFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+        Assert-ToolFails -Invocation $copilotMistakeFinalizer -Description 'finalizer rejects Copilot raw-result grading mistake' -ExpectedText 'Execution integrity failure'
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $iteration 'report.html') -PathType Leaf)) 'corrupted package produces no report'
+        [System.IO.File]::WriteAllBytes($selectedRecord.ExecutionResultPath, $copilotMistakeBytes)
+        Assert-Equal $selectedRawHash (Get-Sha256HexFromFile -Path $selectedRecord.ExecutionResultPath) 'Copilot mistake restoration returns exact frozen bytes'
+
+        [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', 'missing')
+        Remove-TestReportArtifacts -IterationDirectory $iteration
+        $missingReportFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+        Assert-ToolFails -Invocation $missingReportFinalizer -Description 'finalizer rejects missing report artifact'
+        [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', 'failure')
+        Remove-TestReportArtifacts -IterationDirectory $iteration
+        $failedReportFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+        Assert-ToolFails -Invocation $failedReportFinalizer -Description 'finalizer rejects report generator failure' -ExpectedText 'Report generation failed'
+
+        [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', '')
+        Remove-TestReportArtifacts -IterationDirectory $iteration
+        Write-TestJson -Path $gradingPath -Value $validGrading
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'correctly validated grading before finalization'
+        $successfulFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+        Assert-ToolPasses -Invocation $successfulFinalizer -Description 'deterministic finalizer success'
+        $finalSummary = $successfulFinalizer.Text | ConvertFrom-Json -Depth 100 | Select-Object -Last 1
+        Assert-Equal 'completed' $finalSummary.status 'finalizer returns machine-readable completed status'
+        foreach ($relative in @('report.html', 'skill-creator-report.html', 'benchmark.json', 'benchmark.md')) {
+            $artifact = Join-Path $iteration $relative
+            Assert-True (Test-Path -LiteralPath $artifact -PathType Leaf) "finalizer creates $relative"
+            Assert-True ((Get-Item -LiteralPath $artifact).Length -gt 0) "$relative is non-empty"
+        }
+
+    }
+    Write-Output "Eval package integrity and finalization: PASS ($Suite)"
 } finally {
     [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', $oldReportMode)
     if (Test-Path -LiteralPath $testRoot) {

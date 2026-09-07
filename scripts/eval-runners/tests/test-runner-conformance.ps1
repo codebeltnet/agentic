@@ -9,7 +9,10 @@
     a live model.
 #>
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('All', 'Protocol', 'CodexCli', 'CodexAppServer', 'OpenCode', 'Copilot')]
+    [string]$Suite = 'All'
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -1035,6 +1038,7 @@ exit 2
     $debugConfigFixture = [IO.File]::ReadAllText($debugConfigFixturePath, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 50
     Assert-Equal 'deny' ([string]$debugConfigFixture.permission.skill) 'Recorded OpenCode debug config fixture preserves deny-all skill policy syntax'
     foreach ($runnerName in @('codex', 'opencode', 'copilot')) {
+        if ($Suite -ne 'All' -and $Suite -ne @{ codex = 'CodexCli'; opencode = 'OpenCode'; copilot = 'Copilot' }[$runnerName]) { continue }
         $runnerDir = if ($runnerName -eq 'copilot') { 'github-copilot' } else { $runnerName }
         $runnerPath = Join-Path $runnerRoot "$runnerDir\runner.ps1"
         $description = Invoke-AdapterJson -RunnerPath $runnerPath -Command describe -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -1414,6 +1418,7 @@ exit 2
         )
     }
     foreach ($runnerName in @('copilot', 'opencode')) {
+        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode'; copilot = 'Copilot' }[$runnerName]) { continue }
         $scriptedIteration = Join-Path $recordedRoot ("scripted-{0}" -f $runnerName)
         New-Item -ItemType Directory -Path $scriptedIteration -Force | Out-Null
         $scriptedWith = New-TestRun -IterationDirectory $scriptedIteration -Configuration with_skill -EvalName 'scripted-conformance' -Interaction $scriptedInteraction
@@ -1549,22 +1554,20 @@ exit 2
             Assert-Equal 1 @($timingRecords | Where-Object { $_.invocation_kind -eq 'debug_config_probe' }).Count 'OpenCode performs one model-free debug-config probe for the preflight/execute pair'
         }
     }
+    if ($Suite -in @('All', 'OpenCode')) {
     $isolatedHomeFailureIteration = Join-Path $recordedRoot 'opencode-isolation-failure'
     New-Item -ItemType Directory -Path $isolatedHomeFailureIteration -Force | Out-Null
     $isolatedHomeFailureRun = New-TestRun -IterationDirectory $isolatedHomeFailureIteration -Configuration without_skill -EvalName 'opencode-isolation-failure'
     [IO.File]::WriteAllText((Join-Path $isolatedHomeFailureRun.Root 'home\opencode-fake-home'), 'fixture', [Text.UTF8Encoding]::new($false))
-    $failureOldPath = $env:PATH
-    $recordedNodeCommand = Resolve-ExternalCommand -Name 'node'
-    $recordedNodeDirectory = if ($null -eq $recordedNodeCommand) { $null } else { Split-Path -Parent ([string]$recordedNodeCommand.Source) }
-    $failurePathParts = @($failureOldPath -split [regex]::Escape([string][IO.Path]::PathSeparator) | Where-Object {
-            -not [string]::IsNullOrWhiteSpace([string]$_) -and
-            ([string]::IsNullOrWhiteSpace([string]$recordedNodeDirectory) -or -not [string]::Equals(
-                ([IO.Path]::GetFullPath([string]$_)).TrimEnd([char[]]@('\', '/')),
-                ([IO.Path]::GetFullPath([string]$recordedNodeDirectory)).TrimEnd([char[]]@('\', '/')),
-                [StringComparison]::OrdinalIgnoreCase
-            ))
-        })
-    $env:PATH = [string]::Join([IO.Path]::PathSeparator, @($fakeBin) + @($failurePathParts))
+    # Force the fallback through a failing local Node shim. Removing one PATH
+    # directory is insufficient when /bin and /usr/bin resolve to the same Node.
+    $nodeShim = Join-Path $fakeBin $(if ($IsWindows) { 'node.cmd' } else { 'node' })
+    if ($IsWindows) {
+        [IO.File]::WriteAllText($nodeShim, "@exit /b 1`r`n", [Text.UTF8Encoding]::new($false))
+    } else {
+        [IO.File]::WriteAllText($nodeShim, "#!/bin/sh`nexit 1`n", [Text.UTF8Encoding]::new($false))
+        [IO.File]::SetUnixFileMode($nodeShim, [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute)
+    }
     try {
         $failedPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'opencode\runner.ps1') -Command preflight -RunPath $isolatedHomeFailureRun.Path -ProfilePath $recordedProfiles['opencode']
         Assert-Equal 'incompatible' $failedPreflight.status 'OpenCode fails preflight when the model-free runtime-home probe resolves the fake ambient profile'
@@ -1578,9 +1581,11 @@ exit 2
             Assert-Equal 0 @($failedRecords | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) }).Count 'OpenCode effective-home failure starts zero model executions'
         }
     } finally {
-        $env:PATH = $failureOldPath
+        Remove-Item -LiteralPath $nodeShim -Force
+    }
     }
     foreach ($runnerName in @('copilot', 'opencode')) {
+        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode'; copilot = 'Copilot' }[$runnerName]) { continue }
         $unsupportedIteration = Join-Path $recordedRoot ("unsupported-scripted-{0}" -f $runnerName)
         New-Item -ItemType Directory -Path $unsupportedIteration -Force | Out-Null
         $unsupportedRun = New-TestRun -IterationDirectory $unsupportedIteration -Configuration with_skill -EvalName 'unsupported-scripted' -Interaction $scriptedInteraction
@@ -1609,6 +1614,7 @@ exit 2
         }
     }
     foreach ($runnerName in @('copilot', 'opencode')) {
+        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode'; copilot = 'Copilot' }[$runnerName]) { continue }
         foreach ($failureMarker in @('scripted-no-session-first', 'scripted-session-mismatch', 'scripted-no-terminal-first')) {
             $failureIteration = Join-Path $recordedRoot ("scripted-failure-{0}-{1}" -f $runnerName, ($failureMarker -replace '^scripted-', ''))
             New-Item -ItemType Directory -Path $failureIteration -Force | Out-Null
@@ -1631,6 +1637,7 @@ exit 2
             Assert-Equal $expectedFailureExecutions $failureExecutions.Count "$runnerName $failureMarker does not continue after an unproven first turn"
         }
     }
+    if ($Suite -in @('All', 'OpenCode')) {
     $serialOpenCodeProfile = Join-Path $recordedRoot 'opencode-serial-profile.json'
     $serialOpenCodeData = Read-RunnerJson -Path $recordedProfiles['opencode']
     $serialOpenCodeData.concurrency = 1
@@ -1644,6 +1651,8 @@ exit 2
     Assert-Equal 'incompatible' $stalePreflight.status 'stale OpenCode help contract is rejected during preflight'
     Assert-True (@($stalePreflight.reasons | Where-Object { $_ -match '--auto' }).Count -gt 0) 'stale OpenCode option failure identifies the missing flag'
     [System.IO.File]::WriteAllText((Join-Path $fakeBin 'opencode.ps1'), $fakeCli, [System.Text.UTF8Encoding]::new($false))
+    }
+    if ($Suite -in @('All', 'CodexAppServer')) {
     $fileAuthHome = Join-Path $recordedRoot 'codex-file-auth'
     New-Item -ItemType Directory -Path $fileAuthHome -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $fileAuthHome 'auth.json'), '{"canary":"not-logged"}', [System.Text.UTF8Encoding]::new($false))
@@ -1959,6 +1968,8 @@ exit 2
     Assert-True (@($subscriptionRecord.args) -contains 'shell_environment_policy.inherit=none') 'Codex app-server disables child shell environment inheritance'
     $env:OPENAI_API_KEY = 'recorded-canary-not-logged'
     $env:CODEX_HOME = $recordedOldCodexHome
+    }
+    if ($Suite -in @('All', 'Copilot')) {
     # GitHub Copilot authentication: explicit env, OS-keychain, GitHub CLI, and
     # no-auth fixtures are all deterministic and contain no credential values.
     $env:COPILOT_GITHUB_TOKEN = $null
@@ -2012,7 +2023,8 @@ exit 2
     Assert-Equal 'copilot_os_keychain_or_github_cli_unverified' $copilotNoAuthResult.evidence.credential.source 'Copilot no-auth evidence does not claim authentication'
     Assert-True (($copilotNoAuthResult | ConvertTo-Json -Depth 100) -notmatch 'ambient-profile-not-logged|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') 'Copilot authentication fixtures never expose credential values'
     $env:COPILOT_HOME = $recordedOldCopilotHome
-    Write-Output 'Real runner deterministic adapter conformance: PASS'
+    }
+    Write-Output "Real runner deterministic adapter conformance ($Suite): PASS"
 } finally {
     $env:PATH = $recordedOldPath
     $env:OPENAI_API_KEY = $recordedOldOpenAi
@@ -2160,6 +2172,7 @@ function Add-TestInteractionSources {
     }
 }
 
+if ($Suite -in @('All', 'Protocol')) {
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-conformance-' + [Guid]::NewGuid().ToString('N'))
 try {
     $iteration = Join-Path $testRoot 'iteration-1'
@@ -2835,7 +2848,10 @@ try {
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }
 
-Invoke-RecordedRunnerTests
+}
+if ($Suite -ne 'Protocol') { Invoke-RecordedRunnerTests }
 
+if ($Suite -in @('All', 'Copilot')) {
 & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'test-copilot-boundaries.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Copilot boundary regressions failed.' }
+}

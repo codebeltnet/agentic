@@ -1,7 +1,9 @@
 param(
     [string]$Ref,
     [switch]$Full,
-    [switch]$MetadataOnly
+    [switch]$MetadataOnly,
+    [ValidateSet('All', 'Templates', 'Preparation', 'Runners', 'Conformance', 'Integrity', 'Docfx')]
+    [string]$Suite = 'All'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -279,9 +281,11 @@ function Add-ValidationResult {
     param(
         [System.Collections.Generic.List[object]]$Results,
         [string]$Name,
-        [scriptblock]$Action
+        [scriptblock]$Action,
+        [string]$Group = 'Templates'
     )
 
+    if (-not $MetadataOnly -and $Suite -ne 'All' -and $Suite -ne $Group) { return }
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host ("[RUN] {0}" -f $Name)
 
@@ -1238,7 +1242,19 @@ Add-ValidationResult -Results $results -Name 'Repository automation cannot launc
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'validate-skill-templates.ps1 -MetadataOnly'
 }
 
-Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance remains deterministic' -Action {
+Add-ValidationResult -Results $results -Name 'Codex ambient path isolation is platform independent' -Group 'Runners' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-codex-paths.ps1') 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Codex path isolation failed: $($output -join [Environment]::NewLine)" }
+}
+
+Add-ValidationResult -Results $results -Name 'CI schedules every deterministic validation suite' -Group 'Runners' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/test-validation-suites.ps1') 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "CI suite coverage failed: $($output -join [Environment]::NewLine)" }
+}
+
+Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance remains deterministic' -Group 'Conformance' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1255,13 +1271,13 @@ Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance r
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Token normalization and benchmark reporting remain deterministic' -Action {
+Add-ValidationResult -Results $results -Name 'Token normalization and benchmark reporting remain deterministic' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
     $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-token-reporting.ps1') 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Token reporting regression failed: $($output -join [Environment]::NewLine)" }
 }
 
-Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains deterministic' -Action {
+Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains deterministic' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1278,7 +1294,7 @@ Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Foreground Phase 1 lifecycle remains deterministic' -Action {
+Add-ValidationResult -Results $results -Name 'Foreground Phase 1 lifecycle remains deterministic' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1295,7 +1311,7 @@ Add-ValidationResult -Results $results -Name 'Foreground Phase 1 lifecycle remai
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Phase 1 aggregate fail-closed regressions remain deterministic' -Action {
+Add-ValidationResult -Results $results -Name 'Phase 1 aggregate fail-closed regressions remain deterministic' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1312,7 +1328,7 @@ Add-ValidationResult -Results $results -Name 'Phase 1 aggregate fail-closed regr
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Frozen evidence, grading isolation, and finalization remain deterministic' -Action {
+Add-ValidationResult -Results $results -Name 'Frozen evidence, grading isolation, and finalization remain deterministic' -Group 'Integrity' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1329,7 +1345,7 @@ Add-ValidationResult -Results $results -Name 'Frozen evidence, grading isolation
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Windows UTF-8 report generation succeeds without patching upstream skill-creator' -Action {
+Add-ValidationResult -Results $results -Name 'Windows UTF-8 report generation succeeds without patching upstream skill-creator' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1346,7 +1362,7 @@ Add-ValidationResult -Results $results -Name 'Windows UTF-8 report generation su
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Model-free harness probes resolve a writable temp separate from eval isolation' -Action {
+Add-ValidationResult -Results $results -Name 'Model-free harness probes resolve a writable temp separate from eval isolation' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1363,7 +1379,7 @@ Add-ValidationResult -Results $results -Name 'Model-free harness probes resolve 
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Runner live observability remains deterministic and model-free' -Action {
+Add-ValidationResult -Results $results -Name 'Runner live observability remains deterministic and model-free' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1380,7 +1396,7 @@ Add-ValidationResult -Results $results -Name 'Runner live observability remains 
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Preflight raw-output boundary is closed' -Action {
+Add-ValidationResult -Results $results -Name 'Preflight raw-output boundary is closed' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1397,7 +1413,7 @@ Add-ValidationResult -Results $results -Name 'Preflight raw-output boundary is c
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Progress coalescing renders selectively without changing telemetry' -Action {
+Add-ValidationResult -Results $results -Name 'Progress coalescing renders selectively without changing telemetry' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
     }
@@ -1414,7 +1430,7 @@ Add-ValidationResult -Results $results -Name 'Progress coalescing renders select
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Action {
+Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable prompts instead of executing them' -Group 'Preparation' -Action {
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
     $contributing = Get-FileText -RepoRoot $repoRoot -RelativePath 'CONTRIBUTING.md' -GitRef $Ref
@@ -3317,7 +3333,7 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
     }
 }
 
-if ($Full) {
+if ($Full -and $Suite -in @('All', 'Docfx')) {
     $docfxScriptResults = Invoke-ValidationScriptJobs -Scripts @(
         [pscustomobject]@{
             Name = 'DocFX digest rejects metadata scaffolds and accepts scenario-led documentation'
@@ -3351,6 +3367,7 @@ if ($Full) {
 }
 
 $mode = if ($Full) { 'FULL' } else { 'FAST' }
+if ($Suite -ne 'All') { $mode += "/$Suite" }
 $failed = Write-ValidationSummary -Results $results -GitRef $Ref -Mode $mode
 
 if ($failed -gt 0) {

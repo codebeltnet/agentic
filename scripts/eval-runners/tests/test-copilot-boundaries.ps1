@@ -237,7 +237,7 @@ if ($inputText -eq 'failure') { exit 7 }
     Assert-True (@($portable.output_files) -contains 'with_skill/evidence/copilot-events.jsonl') 'canonical output_files retains raw forensic JSONL'
     $utf8NoBom = [Text.UTF8Encoding]::new($false)
     $projection = New-UpstreamWorkspace -IterationPath $iteration -Manifest $manifest -ManifestRecords $manifestRecords -WorkspacePath (Join-Path $iteration '.skill-creator-report')
-    $transcriptFiles = @(Get-ChildItem -LiteralPath $iteration -Recurse -Filter transcript.md | Where-Object FullName -Match 'with_skill')
+    $transcriptFiles = @(Get-ChildItem -LiteralPath $iteration -Recurse -Force -Filter transcript.md | Where-Object FullName -Match 'with_skill')
     Assert-Equal 1 $transcriptFiles.Count 'Skill Creator receives one canonical with-skill transcript.md'
     Assert-Equal (($transcript -replace "`r`n", "`n" -replace "`r", "`n") + [Environment]::NewLine) ([IO.File]::ReadAllText($transcriptFiles[0].FullName)) 'Skill Creator transcript.md preserves the complete conversation using its existing newline convention'
     foreach ($scenario in @('failure', 'timeout')) {
