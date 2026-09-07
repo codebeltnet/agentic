@@ -135,12 +135,9 @@ $propsFiles = @($propsFiles | Sort-Object FullName -Unique)
 $propertyMap = @{}
 foreach ($propsFile in @($propsFiles | Sort-Object { $_.FullName.Length })) {
     foreach ($entry in (Get-PropertyMap -Path $propsFile.FullName).GetEnumerator()) {
-        $propertyMap[$entry.Key] = $entry.Value
-    }
-}
-if (Test-Path -LiteralPath $directoryBuildProps) {
-    foreach ($entry in (Get-PropertyMap -Path $directoryBuildProps).GetEnumerator()) {
-        $propertyMap[$entry.Key] = $entry.Value
+        if (-not $propertyMap.ContainsKey($entry.Key)) {
+            $propertyMap[$entry.Key] = $entry.Value
+        }
     }
 }
 $declaredIn = [System.Collections.Generic.List[object]]::new()

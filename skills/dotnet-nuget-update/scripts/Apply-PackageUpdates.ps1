@@ -299,13 +299,14 @@ $results = [System.Collections.Generic.List[object]]::new()
 if ($hasCentral) {
     $fileTexts = @{}
     $fileChanged = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $declarations = [System.Collections.Generic.List[object]]::new()
+    $centralDeclarations = [System.Collections.Generic.List[object]]::new()
     foreach ($centralFile in $centralFiles) {
         $fileTexts[$centralFile.FullName] = Read-TextWithEncoding -Path $centralFile.FullName
         foreach ($declaration in @(Get-CentralDeclarations -Path $centralFile.FullName -RepoRoot $repoPath)) {
-            $declarations.Add($declaration)
+            $centralDeclarations.Add($declaration)
         }
     }
+    $projectDeclarations = @(Get-ProjectDeclarations -Root $repoPath)
 
     foreach ($update in $updatesList) {
         $updateId = Get-UpdateField -Update $update -Name 'id'
@@ -315,7 +316,12 @@ if ($hasCentral) {
         $updateSource = Get-UpdateField -Update $update -Name 'sourceFile'
         $updateElement = Get-UpdateField -Update $update -Name 'element'
 
-        $candidates = @($declarations | Where-Object {
+        $isProjectSource = (-not [string]::IsNullOrWhiteSpace($updateSource)) -and
+            $updateSource.EndsWith('.csproj', [System.StringComparison]::OrdinalIgnoreCase)
+
+        $targetDeclarations = if ($isProjectSource) { $projectDeclarations } else { $centralDeclarations }
+
+        $candidates = @($targetDeclarations | Where-Object {
             $_.id -eq $updateId -and (($_.condition ?? '') -eq (($updateCondition ?? ''))) -and
             ([string]::IsNullOrWhiteSpace($updateSource) -or $_.sourceFile -eq $updateSource) -and
             ([string]::IsNullOrWhiteSpace($updateElement) -or $_.element -eq $updateElement)
@@ -327,30 +333,60 @@ if ($hasCentral) {
         }
 
         $matchingFrom = @($candidates | Where-Object { $_.current -eq $updateFrom })
-        $match = if ($matchingFrom.Count -gt 0) { $matchingFrom[0] } else { $null }
-        if ($null -eq $match) {
+
+        if ($matchingFrom.Count -gt 1) {
+            if ([string]::IsNullOrWhiteSpace($updateSource)) {
+                foreach ($conflict in $matchingFrom) {
+                    $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $conflict.sourceFile; outcome = 'conflict'; from = $updateFrom; to = $updateTo })
+                }
+            } else {
+                $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $updateSource; outcome = 'conflict'; from = $updateFrom; to = $updateTo })
+            }
+            continue
+        }
+
+        $resolved = if ($matchingFrom.Count -gt 0) { $matchingFrom[0] } else { $null }
+        if ($null -eq $resolved) {
             $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $updateSource; outcome = 'conflict'; from = $updateFrom; to = $updateTo })
             continue
         }
 
         if ($DryRun) {
-            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'dry-run'; from = $updateFrom; to = $updateTo })
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $resolved.sourceFile; outcome = 'dry-run'; from = $updateFrom; to = $updateTo })
             continue
         }
 
-        $matchFullPath = Join-Path $repoPath $match.sourceFile
-        $matchKeyCandidates = @($fileTexts.Keys | Where-Object { $_ -ieq $matchFullPath })
-        $matchKey = if ($matchKeyCandidates.Count -gt 0) { $matchKeyCandidates[0] } else { $matchFullPath }
-        $updatedText = Update-DeclarationLine -Text $fileTexts[$matchKey] -ElementName 'PackageVersion' -Id $updateId -Condition $updateCondition -From $updateFrom -To $updateTo
-        if ($null -eq $updatedText) {
-            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'not-found'; from = $updateFrom; to = $updateTo })
-            continue
-        }
+        if ($isProjectSource) {
+            $projFullPath = Join-Path $repoPath $resolved.sourceFile
+            if (-not $fileTexts.ContainsKey($projFullPath)) {
+                $fileTexts[$projFullPath] = Read-TextWithEncoding -Path $projFullPath
+            }
 
-        $fileTexts[$matchKey] = $updatedText
-        $match.current = $updateTo
-        $null = $fileChanged.Add($matchKey)
-        $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $match.sourceFile; outcome = 'applied'; from = $updateFrom; to = $updateTo })
+            $updatedText = Update-DeclarationLine -Text $fileTexts[$projFullPath] -ElementName $resolved.element -Id $updateId -Condition $updateCondition -From $updateFrom -To $updateTo
+            if ($null -eq $updatedText) {
+                $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $resolved.sourceFile; outcome = 'not-found'; from = $updateFrom; to = $updateTo })
+                continue
+            }
+
+            $fileTexts[$projFullPath] = $updatedText
+            $resolved.current = $updateTo
+            $null = $fileChanged.Add($projFullPath)
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $resolved.sourceFile; outcome = 'applied'; from = $updateFrom; to = $updateTo })
+        } else {
+            $matchFullPath = Join-Path $repoPath $resolved.sourceFile
+            $matchKeyCandidates = @($fileTexts.Keys | Where-Object { $_ -ieq $matchFullPath })
+            $matchKey = if ($matchKeyCandidates.Count -gt 0) { $matchKeyCandidates[0] } else { $matchFullPath }
+            $updatedText = Update-DeclarationLine -Text $fileTexts[$matchKey] -ElementName $resolved.element -Id $updateId -Condition $updateCondition -From $updateFrom -To $updateTo
+            if ($null -eq $updatedText) {
+                $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $resolved.sourceFile; outcome = 'not-found'; from = $updateFrom; to = $updateTo })
+                continue
+            }
+
+            $fileTexts[$matchKey] = $updatedText
+            $resolved.current = $updateTo
+            $null = $fileChanged.Add($matchKey)
+            $results.Add([pscustomobject]@{ id = $updateId; condition = $updateCondition; sourceFile = $resolved.sourceFile; outcome = 'applied'; from = $updateFrom; to = $updateTo })
+        }
     }
 
     if (-not $DryRun) {
