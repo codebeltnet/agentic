@@ -220,6 +220,12 @@ function Add-CopilotGhConfigCandidate {
     } catch { }
 }
 
+function Get-CopilotExplicitGhConfigDirectory {
+    $configured = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
+    if ([string]::IsNullOrWhiteSpace($configured)) { return $null }
+    return [string]$configured
+}
+
 function Get-CopilotGhConfigDirectories {
     # GH_CONFIG_DIR is an authentication-state exception to the isolated
     # Copilot configuration roots. Build documented/default candidates and keep
@@ -281,16 +287,27 @@ function Get-CopilotGitHubCliToken {
         }
     }
 
+    $explicitGhConfigDirectory = Get-CopilotExplicitGhConfigDirectory
     $candidateConfigDirectories = [System.Collections.Generic.List[string]]::new()
-    foreach ($directory in @(Get-CopilotGhConfigDirectories)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$directory) -and -not $candidateConfigDirectories.Contains([string]$directory)) {
-            $candidateConfigDirectories.Add([string]$directory)
+    $useAmbientAttempt = $true
+    if (-not [string]::IsNullOrWhiteSpace([string]$explicitGhConfigDirectory)) {
+        # An explicit GH_CONFIG_DIR selects the GitHub CLI identity. It is
+        # authoritative: do not search other config roots when it fails.
+        $candidateConfigDirectories.Add([string]$explicitGhConfigDirectory)
+        $useAmbientAttempt = $false
+    } else {
+        foreach ($directory in @(Get-CopilotGhConfigDirectories)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$directory) -and -not $candidateConfigDirectories.Contains([string]$directory)) {
+                $candidateConfigDirectories.Add([string]$directory)
+            }
         }
     }
 
-    # Keep one ambient attempt with GH_CONFIG_DIR removed so an existing host
-    # default can still resolve even when no candidate was discovered.
-    $candidateConfigDirectories.Add('')
+    if ($useAmbientAttempt) {
+        # Keep one ambient attempt with GH_CONFIG_DIR removed so an existing
+        # host default can still resolve when no explicit config was supplied.
+        $candidateConfigDirectories.Add('')
+    }
 
     $probeRoot = Resolve-RunnerProbeTempRoot
     $probeDirectory = Join-Path $probeRoot ('agentic-gh-token-probe-' + [Guid]::NewGuid().ToString('N'))
@@ -318,6 +335,7 @@ function Get-CopilotGitHubCliToken {
             return [pscustomobject]@{
                 Token = $token
                 GhConfigDirectory = if ([string]::IsNullOrWhiteSpace([string]$candidateDirectory)) { $null } else { [string]$candidateDirectory }
+                GhConfigExplicit = -not [string]::IsNullOrWhiteSpace([string]$explicitGhConfigDirectory)
             }
         }
         return $null
@@ -329,6 +347,8 @@ function Get-CopilotGitHubCliToken {
 }
 
 function Resolve-CopilotAuthentication {
+    $explicitGhConfigDirectory = Get-CopilotExplicitGhConfigDirectory
+    $explicitGhConfigProvided = -not [string]::IsNullOrWhiteSpace([string]$explicitGhConfigDirectory)
     $tokenVariable = Get-CopilotTokenVariable
     if (-not [string]::IsNullOrWhiteSpace($tokenVariable)) {
         return [pscustomobject]@{
@@ -337,6 +357,8 @@ function Resolve-CopilotAuthentication {
             TokenValue = $null
             GitHubCliTokenResolved = $false
             GitHubCliConfigDirectory = $null
+            GitHubCliConfigExplicit = $false
+            ExplicitGhConfigProvided = [bool]$explicitGhConfigProvided
             NonInteractiveReady = $true
         }
     }
@@ -349,6 +371,8 @@ function Resolve-CopilotAuthentication {
             TokenValue = [string]$githubCliToken.Token
             GitHubCliTokenResolved = $true
             GitHubCliConfigDirectory = [string](Get-JsonProperty -Object $githubCliToken -Name 'GhConfigDirectory' -Default $null)
+            GitHubCliConfigExplicit = [bool](Get-JsonProperty -Object $githubCliToken -Name 'GhConfigExplicit' -Default $false)
+            ExplicitGhConfigProvided = [bool]$explicitGhConfigProvided
             NonInteractiveReady = $true
         }
     }
@@ -360,6 +384,8 @@ function Resolve-CopilotAuthentication {
         TokenValue = $null
         GitHubCliTokenResolved = $false
         GitHubCliConfigDirectory = $null
+        GitHubCliConfigExplicit = $false
+        ExplicitGhConfigProvided = [bool]$explicitGhConfigProvided
         NonInteractiveReady = $false
     }
 }
@@ -677,11 +703,22 @@ function Get-CopilotPreflight {
     if ($authState.Source -eq 'environment') {
         $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through the explicit $($authState.TokenVariable) environment variable; Copilot OS-keychain and GitHub CLI state are not copied into the run."))
     } elseif ($authState.Source -eq 'github_cli_token') {
-        $configDetail = if ([string]::IsNullOrWhiteSpace([string]$authState.GitHubCliConfigDirectory)) { 'ambient/default' } else { 'resolved GH_CONFIG_DIR candidate' }
+        $configDetail = if ([bool]$authState.GitHubCliConfigExplicit) {
+            'explicit GH_CONFIG_DIR'
+        } elseif ([string]::IsNullOrWhiteSpace([string]$authState.GitHubCliConfigDirectory)) {
+            'ambient/default'
+        } else {
+            'platform-discovered GH_CONFIG_DIR candidate'
+        }
         $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail ("GitHub CLI fallback resolved a token in the trusted runner from a {0} source; only a protected token environment variable will be passed to Copilot." -f $configDetail)))
     } else {
-        $checks.Add((New-PreflightCheck -Name 'authentication' -Status failed -Detail 'No supported non-interactive Copilot authentication source was resolved. Required source: explicit COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN or trusted GitHub CLI token fallback.'))
-        $reasons.Add('No supported non-interactive Copilot authentication source was resolved before Phase 1. Provide COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN, or ensure `gh auth token` can resolve in this host context.')
+        if ([bool]$authState.ExplicitGhConfigProvided) {
+            $checks.Add((New-PreflightCheck -Name 'authentication' -Status failed -Detail 'No supported non-interactive Copilot authentication source was resolved. GH_CONFIG_DIR was explicitly provided, but `gh auth token` could not resolve that selected configuration. Required source: explicit COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN or trusted GitHub CLI token fallback.'))
+            $reasons.Add('No supported non-interactive Copilot authentication source was resolved before Phase 1. GH_CONFIG_DIR was explicitly provided, but `gh auth token` could not resolve that selected configuration. Provide COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN, or fix the selected GH_CONFIG_DIR authentication state.')
+        } else {
+            $checks.Add((New-PreflightCheck -Name 'authentication' -Status failed -Detail 'No supported non-interactive Copilot authentication source was resolved. Required source: explicit COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN or trusted GitHub CLI token fallback.'))
+            $reasons.Add('No supported non-interactive Copilot authentication source was resolved before Phase 1. Provide COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN, or ensure `gh auth token` can resolve in this host context.')
+        }
     }
 
     if ($platform -notin @('linux', 'macos')) {
@@ -749,6 +786,8 @@ function Get-CopilotPreflight {
             noninteractive_ready = [bool]$authState.NonInteractiveReady
             github_cli_token_resolved = [bool]$authState.GitHubCliTokenResolved
             github_cli_config_candidate_used = -not [string]::IsNullOrWhiteSpace([string]$authState.GitHubCliConfigDirectory)
+            github_cli_config_explicit = [bool]$authState.GitHubCliConfigExplicit
+            explicit_gh_config_dir_provided = [bool]$authState.ExplicitGhConfigProvided
             token_value_observed = $false
         }
     }

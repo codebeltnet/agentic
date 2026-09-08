@@ -969,6 +969,12 @@ if ($harness -eq 'codex') {
     $fakeGh = @'
 [CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArguments)
+$logPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'gh-auth-token-probe.jsonl'
+$record = [ordered]@{
+    args = @($RemainingArguments | ForEach-Object { [string]$_ })
+    gh_config_dir = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
+}
+[System.IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
 if ($RemainingArguments.Count -eq 2 -and $RemainingArguments[0] -eq 'auth' -and $RemainingArguments[1] -eq 'token') {
     $config = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
     if (-not [string]::IsNullOrWhiteSpace($config) -and (Test-Path -LiteralPath (Join-Path $config 'auth-marker.txt') -PathType Leaf)) {
@@ -993,6 +999,7 @@ exit 2
     New-Item -ItemType Directory -Path $recordedGhConfig -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $recordedGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [System.Text.UTF8Encoding]::new($false))
     $env:GH_CONFIG_DIR = $recordedGhConfig
+    $ghAuthProbeLogPath = Join-Path $fakeBin 'gh-auth-token-probe.jsonl'
     $ambientCopilotHome = Join-Path $recordedRoot 'ambient-copilot-home'
     New-Item -ItemType Directory -Path $ambientCopilotHome -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $ambientCopilotHome 'copilot-instructions.md'), '# ambient-personal-instruction-not-logged', [System.Text.UTF8Encoding]::new($false))
@@ -2075,6 +2082,53 @@ exit 2
     Assert-True (-not $copilotGhResult.evidence.credential.github_cli_config_forwarded) 'Copilot GitHub CLI fallback does not forward host GH_CONFIG_DIR'
     $ghRecords = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) -and @($_.copilot_auth_names_present).Count -eq 1 -and @($_.copilot_auth_names_present) -contains 'GH_TOKEN' -and [string]::IsNullOrWhiteSpace([string]$_.gh_config_dir) })
     Assert-Equal ($ghFallbackMatchesBefore + 1) $ghRecords.Count 'Copilot fake observes one additional protected GH_TOKEN execution produced by trusted GitHub CLI fallback'
+    Assert-True (($copilotGhResult | ConvertTo-Json -Depth 100) -notmatch 'recorded-gh-fallback-token-not-logged') 'Copilot GitHub CLI fallback result never exposes token values'
+
+    # Explicit GH_CONFIG_DIR is authoritative. If it cannot resolve auth, do not
+    # consult discovered/ambient configurations even when they are valid.
+    $copilotExplicitMissingConfig = Join-Path $recordedRoot 'copilot-explicit-missing-gh-config'
+    if (Test-Path -LiteralPath $copilotExplicitMissingConfig) {
+        Remove-Item -LiteralPath $copilotExplicitMissingConfig -Recurse -Force
+    }
+    $copilotExplicitMissingRoot = Join-Path $recordedRoot 'copilot-explicit-missing'
+    $copilotExplicitMissingHome = Join-Path $copilotExplicitMissingRoot 'home'
+    $copilotExplicitMissingXdg = Join-Path $copilotExplicitMissingRoot 'xdg'
+    $copilotExplicitMissingAppData = Join-Path $copilotExplicitMissingRoot 'host-appdata'
+    $copilotExplicitMissingLocalAppData = Join-Path $copilotExplicitMissingRoot 'localappdata'
+    $copilotExplicitMissingFallbackConfig = if ($IsWindows) { Join-Path $copilotExplicitMissingAppData 'GitHub CLI' } else { Join-Path $copilotExplicitMissingXdg 'gh' }
+    New-Item -ItemType Directory -Path $copilotExplicitMissingHome, $copilotExplicitMissingXdg, $copilotExplicitMissingAppData, $copilotExplicitMissingLocalAppData, $copilotExplicitMissingFallbackConfig -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $copilotExplicitMissingFallbackConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [Text.UTF8Encoding]::new($false))
+    $env:HOME = $copilotExplicitMissingHome
+    $env:USERPROFILE = $copilotExplicitMissingHome
+    $env:APPDATA = $copilotExplicitMissingAppData
+    $env:LOCALAPPDATA = $copilotExplicitMissingLocalAppData
+    $env:XDG_CONFIG_HOME = $copilotExplicitMissingXdg
+    $env:COPILOT_HOME = (Join-Path $copilotExplicitMissingRoot 'copilot-home')
+    New-Item -ItemType Directory -Path $env:COPILOT_HOME -Force | Out-Null
+    $env:GH_CONFIG_DIR = $copilotExplicitMissingConfig
+    if (Test-Path -LiteralPath $ghAuthProbeLogPath -PathType Leaf) { Remove-Item -LiteralPath $ghAuthProbeLogPath -Force }
+    $nativeExecutionsBeforeExplicitMissing = @(Get-Content -LiteralPath $copilotLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) })
+    $copilotExplicitMissingPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'incompatible' $copilotExplicitMissingPreflight.status 'Copilot explicit GH_CONFIG_DIR without a valid token fails closed'
+    Assert-True (@($copilotExplicitMissingPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'failed' }).Count -eq 1) 'Copilot explicit GH_CONFIG_DIR failure is detected in preflight'
+    Assert-True ([bool]$copilotExplicitMissingPreflight.protocol_observations.authentication.explicit_gh_config_dir_provided) 'Copilot preflight records that GH_CONFIG_DIR was explicitly provided'
+    Assert-True (-not [bool]$copilotExplicitMissingPreflight.protocol_observations.authentication.noninteractive_ready) 'Copilot explicit GH_CONFIG_DIR failure does not report non-interactive readiness'
+    Assert-True (@($copilotExplicitMissingPreflight.reasons | Where-Object { $_ -match 'GH_CONFIG_DIR was explicitly provided' }).Count -eq 1) 'Copilot explicit GH_CONFIG_DIR failure reports selected-identity resolution failure'
+    $copilotExplicitMissingResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'incompatible' $copilotExplicitMissingResult.status 'Copilot explicit GH_CONFIG_DIR failure remains terminal in execute'
+    Assert-Equal 'incompatible' ([string]$copilotExplicitMissingResult.evidence.preflight.status) 'Copilot explicit GH_CONFIG_DIR execute result preserves incompatible preflight evidence'
+    $nativeExecutionsAfterExplicitMissing = @(Get-Content -LiteralPath $copilotLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) })
+    Assert-Equal $nativeExecutionsBeforeExplicitMissing.Count $nativeExecutionsAfterExplicitMissing.Count 'Copilot explicit GH_CONFIG_DIR rejection occurs before model execution'
+    $ghAuthProbeRecords = @()
+    if (Test-Path -LiteralPath $ghAuthProbeLogPath -PathType Leaf) {
+        $ghAuthProbeRecords = @(Get-Content -LiteralPath $ghAuthProbeLogPath | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { $_ | ConvertFrom-Json })
+    }
+    $ghAuthTokenProbes = @($ghAuthProbeRecords | Where-Object { @($_.args).Count -eq 2 -and $_.args[0] -eq 'auth' -and $_.args[1] -eq 'token' })
+    Assert-Equal 2 $ghAuthTokenProbes.Count 'Copilot explicit GH_CONFIG_DIR executes exactly one GitHub CLI token probe per preflight invocation'
+    Assert-True (@($ghAuthTokenProbes | Where-Object { [string]$_.gh_config_dir -ne $copilotExplicitMissingConfig }).Count -eq 0) 'Copilot explicit GH_CONFIG_DIR failure never probes another GitHub CLI configuration'
+    Assert-True (@($ghAuthTokenProbes | Where-Object { [string]$_.gh_config_dir -eq $copilotExplicitMissingFallbackConfig }).Count -eq 0) 'Copilot explicit GH_CONFIG_DIR failure does not consult a valid discovered fallback configuration'
+    $explicitFailureEvidenceText = ($copilotExplicitMissingPreflight | ConvertTo-Json -Depth 100) + ($copilotExplicitMissingResult | ConvertTo-Json -Depth 100)
+    Assert-True ($explicitFailureEvidenceText -notmatch 'recorded-gh-fallback-token-not-logged|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') 'Copilot explicit GH_CONFIG_DIR failure never exposes token values'
 
     $copilotNoAuthHome = Join-Path $recordedRoot 'copilot-no-auth-home'
     New-Item -ItemType Directory -Path $copilotNoAuthHome -Force | Out-Null
@@ -2098,7 +2152,7 @@ exit 2
     Assert-Equal 'incompatible' ([string]$copilotNoAuthResult.evidence.preflight.status) 'Copilot no-auth execute result preserves the incompatible preflight evidence'
     $nativeExecutionsAfterNoAuth = @(Get-Content -LiteralPath $copilotLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) })
     Assert-Equal $nativeExecutionsBeforeNoAuth.Count $nativeExecutionsAfterNoAuth.Count 'Copilot no-auth rejection does not start a model execution process'
-    Assert-True (($copilotNoAuthResult | ConvertTo-Json -Depth 100) -notmatch 'ambient-profile-not-logged|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') 'Copilot authentication fixtures never expose credential values'
+    Assert-True (($copilotNoAuthResult | ConvertTo-Json -Depth 100) -notmatch 'ambient-profile-not-logged|recorded-gh-fallback-token-not-logged|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') 'Copilot authentication fixtures never expose credential values'
     $env:HOME = $recordedOldHome
     $env:USERPROFILE = $recordedOldUserProfile
     $env:APPDATA = $recordedOldAppData
