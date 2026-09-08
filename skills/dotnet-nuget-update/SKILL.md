@@ -168,6 +168,7 @@ A conflict is evidence that the file changed after the audit. Respect that evide
 Prefer the smallest deterministic validation that proves the update is safe.
 
 1. Discover target frameworks with `scripts/Get-TargetFrameworks.ps1 -RepoRoot <path>`.
+   The static scanner resolves project properties through the nearest Directory.Build.props/targets and recursive explicit imports. It inventories declarations without evaluating MSBuild conditions or SDK imports; verify conditional results and unresolved tokens with project-specific MSBuild evaluation before selecting validation commands.
 2. If source selection matters, inspect feeds with `scripts/Get-NuGetSources.ps1`.
 3. Run the narrowest restore, build, or test command that covers the affected projects and target frameworks.
 4. If the repository already has a targeted test or validation command, use it rather than inventing one.
