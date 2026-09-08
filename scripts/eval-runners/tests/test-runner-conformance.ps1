@@ -125,6 +125,11 @@ $recordedOldGhToken = $env:GH_TOKEN
 $recordedOldGithubToken = $env:GITHUB_TOKEN
 $recordedOldCopilotHome = $env:COPILOT_HOME
 $recordedOldGhConfigDir = $env:GH_CONFIG_DIR
+$recordedOldHome = $env:HOME
+$recordedOldUserProfile = $env:USERPROFILE
+$recordedOldAppData = $env:APPDATA
+$recordedOldLocalAppData = $env:LOCALAPPDATA
+$recordedOldXdgConfigHome = $env:XDG_CONFIG_HOME
 $recordedOldFixtures = $env:AGENTIC_RECORDED_FIXTURES
 try {
     $fakeBin = Join-Path $recordedRoot 'bin'
@@ -1970,58 +1975,134 @@ exit 2
     $env:CODEX_HOME = $recordedOldCodexHome
     }
     if ($Suite -in @('All', 'Copilot')) {
-    # GitHub Copilot authentication: explicit env, OS-keychain, GitHub CLI, and
-    # no-auth fixtures are all deterministic and contain no credential values.
+    # GitHub Copilot authentication continuity and failure semantics:
+    # deterministic fixtures only, no live credentials.
     $env:COPILOT_GITHUB_TOKEN = $null
     $env:GH_TOKEN = $null
     $env:GITHUB_TOKEN = $null
     $missingGhConfig = Join-Path $recordedRoot 'missing-github-cli-auth'
+    New-Item -ItemType Directory -Path $missingGhConfig -Force | Out-Null
+    $copilotLogPath = Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl'
 
-    # The fixture marker is fake-CLI input only; it models a positive OS
-    # keychain lookup without naming or reading a real credential-store file.
-    $copilotKeychainHome = Join-Path $recordedRoot 'copilot-keychain-home'
-    New-Item -ItemType Directory -Path $copilotKeychainHome -Force | Out-Null
+    # Fixture marker only: models a keychain-only host with no resolvable
+    # non-interactive token source.
+    $copilotKeychainHost = Join-Path $recordedRoot 'copilot-keychain-host'
+    New-Item -ItemType Directory -Path $copilotKeychainHost -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $with.Root 'home\.copilot') -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $with.Root 'home\.copilot\fixture-os-keychain-available'), 'fixture marker only', [Text.UTF8Encoding]::new($false))
-    $env:COPILOT_HOME = $copilotKeychainHome
+    $env:COPILOT_HOME = $copilotKeychainHost
     $env:GH_CONFIG_DIR = $missingGhConfig
+    $nativeExecutionsBeforeKeychain = @()
+    if (Test-Path -LiteralPath $copilotLogPath -PathType Leaf) {
+        $nativeExecutionsBeforeKeychain = @(Get-Content -LiteralPath $copilotLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) })
+    }
     $copilotKeychainPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'compatible' $copilotKeychainPreflight.status 'Copilot tokenless OS-keychain authentication remains compatible'
-    Assert-True (@($copilotKeychainPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'unavailable' }).Count -eq 1) 'Copilot preflight leaves native keychain readiness conditional'
-    Assert-True (@($copilotKeychainPreflight.warnings | Where-Object { $_ -match 'cannot be proven' }).Count -gt 0) 'Copilot preflight explains the unverified keychain/service boundary'
+    Assert-Equal 'incompatible' $copilotKeychainPreflight.status 'Copilot keychain-only auth is rejected before Phase 1 execution'
+    Assert-True (@($copilotKeychainPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'failed' }).Count -eq 1) 'Copilot keychain-only preflight fails authentication deterministically'
+    Assert-Equal 'copilot_os_keychain_unverified' $copilotKeychainPreflight.protocol_observations.authentication.source 'Copilot keychain-only source is diagnostic only'
+    Assert-True (-not [bool]$copilotKeychainPreflight.protocol_observations.authentication.noninteractive_ready) 'Copilot keychain-only source is not accepted as non-interactive readiness'
+    Assert-True (@($copilotKeychainPreflight.reasons | Where-Object { $_ -match 'supported non-interactive Copilot authentication source' }).Count -eq 1) 'Copilot keychain-only preflight reports the missing non-interactive source'
     $copilotKeychainResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'completed' $copilotKeychainResult.status 'Copilot keychain fixture executes without an exported token'
-    $keychainRecords = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'copilot_authentication_source' -Default '') -eq 'os_keychain' })
-    Assert-Equal 1 $keychainRecords.Count 'Copilot fake observes the simulated OS-keychain path'
+    Assert-Equal 'incompatible' $copilotKeychainResult.status 'Copilot execute fails closed when preflight cannot resolve non-interactive auth'
+    Assert-Equal 'incompatible' ([string]$copilotKeychainResult.evidence.preflight.status) 'Copilot execute returns preflight evidence for keychain-only rejection'
+    $nativeExecutionsAfterKeychain = @()
+    if (Test-Path -LiteralPath $copilotLogPath -PathType Leaf) {
+        $nativeExecutionsAfterKeychain = @(Get-Content -LiteralPath $copilotLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) })
+    }
+    Assert-Equal $nativeExecutionsBeforeKeychain.Count $nativeExecutionsAfterKeychain.Count 'Copilot keychain-only rejection occurs before model execution'
     Remove-Item -LiteralPath (Join-Path $with.Root 'home\.copilot\fixture-os-keychain-available') -Force
+
+    # Fresh-context continuity regression: the first GH config candidate exists
+    # but is not authenticated; fallback resolves a second supported host
+    # candidate without exposing auth files or token values to the run.
+    $copilotFreshBoundaryRoot = Join-Path $recordedRoot 'copilot-fresh-boundary'
+    $copilotFreshHome = Join-Path $copilotFreshBoundaryRoot 'home'
+    $copilotFreshXdg = Join-Path $copilotFreshBoundaryRoot 'xdg'
+    $copilotFreshAppData = Join-Path $copilotFreshBoundaryRoot 'appdata'
+    $copilotFreshLocalAppData = Join-Path $copilotFreshBoundaryRoot 'localappdata'
+    $copilotFreshHostAppData = Join-Path $copilotFreshBoundaryRoot 'host-appdata'
+    $copilotFreshHostGhConfig = Join-Path $copilotFreshHostAppData 'GitHub CLI'
+    New-Item -ItemType Directory -Path $copilotFreshHome, $copilotFreshXdg, $copilotFreshAppData, $copilotFreshLocalAppData, (Join-Path $copilotFreshXdg 'gh'), $copilotFreshHostGhConfig -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $copilotFreshHostGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [Text.UTF8Encoding]::new($false))
+    $env:HOME = $copilotFreshHome
+    $env:USERPROFILE = $copilotFreshHome
+    $env:APPDATA = $copilotFreshHostAppData
+    $env:LOCALAPPDATA = $copilotFreshLocalAppData
+    $env:XDG_CONFIG_HOME = $copilotFreshXdg
+    $env:COPILOT_HOME = (Join-Path $copilotFreshBoundaryRoot 'copilot-home')
+    New-Item -ItemType Directory -Path $env:COPILOT_HOME -Force | Out-Null
+    $env:GH_CONFIG_DIR = $null
+    $copilotFreshBoundaryPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'compatible' $copilotFreshBoundaryPreflight.status 'Copilot preflight resolves non-interactive auth across fresh-context candidate fallback'
+    Assert-True (@($copilotFreshBoundaryPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot fresh-context preflight proves authentication readiness'
+    Assert-Equal 'github_cli_token' $copilotFreshBoundaryPreflight.protocol_observations.authentication.source 'Copilot fresh-context source resolves through GitHub CLI fallback'
+    Assert-True ([bool]$copilotFreshBoundaryPreflight.protocol_observations.authentication.noninteractive_ready) 'Copilot fresh-context source is accepted as non-interactive readiness'
+    Assert-True ([bool]$copilotFreshBoundaryPreflight.protocol_observations.authentication.github_cli_config_candidate_used) 'Copilot fresh-context preflight records GH config candidate fallback usage'
+    $copilotFreshBoundaryResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
+    Assert-Equal 'completed' $copilotFreshBoundaryResult.status 'Copilot fresh-context fallback executes after preflight authentication continuity'
+    Assert-Equal 'github_cli_token' $copilotFreshBoundaryResult.evidence.credential.source 'Copilot fresh-context execution records GitHub CLI fallback source'
+    Assert-True ([bool]$copilotFreshBoundaryResult.evidence.credential.noninteractive_ready) 'Copilot fresh-context execution records non-interactive readiness'
+    Assert-True ([bool]$copilotFreshBoundaryResult.evidence.credential.github_cli_token_resolved) 'Copilot fresh-context execution resolves a trusted GitHub CLI token'
+    $freshBoundaryExecutionRecords = @(Get-Content -LiteralPath $copilotLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) })
+    $freshBoundaryExecution = $freshBoundaryExecutionRecords[$freshBoundaryExecutionRecords.Count - 1]
+    Assert-Equal 'explicit_environment' $freshBoundaryExecution.copilot_authentication_source 'Copilot fresh-context worker receives only protected env-token auth'
+    Assert-Equal 1 @($freshBoundaryExecution.copilot_auth_names_present).Count 'Copilot fresh-context worker receives one token variable'
+    Assert-True (@($freshBoundaryExecution.copilot_auth_names_present) -contains 'GH_TOKEN') 'Copilot fresh-context worker receives only GH_TOKEN from trusted fallback'
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$freshBoundaryExecution.gh_config_dir)) 'Copilot fresh-context worker does not receive GH_CONFIG_DIR'
 
     $copilotGhFallbackHome = Join-Path $recordedRoot 'copilot-gh-fallback-home'
     New-Item -ItemType Directory -Path $copilotGhFallbackHome -Force | Out-Null
     $copilotGhConfig = Join-Path $recordedRoot 'copilot-gh-config'
     New-Item -ItemType Directory -Path $copilotGhConfig -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $copilotGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [Text.UTF8Encoding]::new($false))
+    $env:HOME = $recordedOldHome
+    $env:USERPROFILE = $recordedOldUserProfile
+    $env:APPDATA = $recordedOldAppData
+    $env:LOCALAPPDATA = $recordedOldLocalAppData
+    $env:XDG_CONFIG_HOME = $recordedOldXdgConfigHome
     $env:COPILOT_HOME = $copilotGhFallbackHome
     $env:GH_CONFIG_DIR = $copilotGhConfig
+    $ghFallbackMatchesBefore = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) -and @($_.copilot_auth_names_present).Count -eq 1 -and @($_.copilot_auth_names_present) -contains 'GH_TOKEN' -and [string]::IsNullOrWhiteSpace([string]$_.gh_config_dir) }).Count
     $copilotGhPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
     Assert-Equal 'compatible' $copilotGhPreflight.status 'Copilot GitHub CLI fallback remains compatible'
+    Assert-Equal 'github_cli_token' $copilotGhPreflight.protocol_observations.authentication.source 'Copilot preflight classifies explicit GH config fallback source'
+    Assert-True ([bool]$copilotGhPreflight.protocol_observations.authentication.noninteractive_ready) 'Copilot preflight classifies GH config fallback as non-interactive readiness'
     $copilotGhResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
     Assert-Equal 'completed' $copilotGhResult.status 'Copilot GitHub CLI fallback fixture executes without an exported token'
+    Assert-True ([bool]$copilotGhResult.evidence.credential.noninteractive_ready) 'Copilot GitHub CLI fallback result records non-interactive readiness'
     Assert-True $copilotGhResult.evidence.credential.github_cli_token_resolved 'Copilot records GitHub CLI token fallback without storing the token value'
     Assert-True (-not $copilotGhResult.evidence.credential.github_cli_config_forwarded) 'Copilot GitHub CLI fallback does not forward host GH_CONFIG_DIR'
     $ghRecords = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) -and @($_.copilot_auth_names_present).Count -eq 1 -and @($_.copilot_auth_names_present) -contains 'GH_TOKEN' -and [string]::IsNullOrWhiteSpace([string]$_.gh_config_dir) })
-    Assert-Equal 1 $ghRecords.Count 'Copilot fake observes only the protected GH_TOKEN produced by trusted GitHub CLI fallback'
+    Assert-Equal ($ghFallbackMatchesBefore + 1) $ghRecords.Count 'Copilot fake observes one additional protected GH_TOKEN execution produced by trusted GitHub CLI fallback'
 
     $copilotNoAuthHome = Join-Path $recordedRoot 'copilot-no-auth-home'
     New-Item -ItemType Directory -Path $copilotNoAuthHome -Force | Out-Null
+    $copilotNoAuthRoot = Join-Path $recordedRoot 'copilot-no-auth-roots'
+    New-Item -ItemType Directory -Path (Join-Path $copilotNoAuthRoot 'home'), (Join-Path $copilotNoAuthRoot 'appdata'), (Join-Path $copilotNoAuthRoot 'localappdata'), (Join-Path $copilotNoAuthRoot 'xdg') -Force | Out-Null
+    $env:HOME = Join-Path $copilotNoAuthRoot 'home'
+    $env:USERPROFILE = Join-Path $copilotNoAuthRoot 'home'
+    $env:APPDATA = Join-Path $copilotNoAuthRoot 'appdata'
+    $env:LOCALAPPDATA = Join-Path $copilotNoAuthRoot 'localappdata'
+    $env:XDG_CONFIG_HOME = Join-Path $copilotNoAuthRoot 'xdg'
+    $nativeExecutionsBeforeNoAuth = @(Get-Content -LiteralPath $copilotLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) })
     $env:COPILOT_HOME = $copilotNoAuthHome
     $env:GH_CONFIG_DIR = $missingGhConfig
     $copilotNoAuthPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'compatible' $copilotNoAuthPreflight.status 'Copilot preflight does not require an exported token when native auth is not observable'
-    Assert-True (@($copilotNoAuthPreflight.warnings | Where-Object { $_ -match 'conditional' }).Count -gt 0) 'Copilot no-auth preflight is explicitly conditional'
+    Assert-Equal 'incompatible' $copilotNoAuthPreflight.status 'Copilot preflight fails closed when no supported non-interactive auth source is available'
+    Assert-True (@($copilotNoAuthPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'failed' }).Count -eq 1) 'Copilot no-auth preflight records an authentication failure check'
+    Assert-Equal 'copilot_os_keychain_unverified' $copilotNoAuthPreflight.protocol_observations.authentication.source 'Copilot no-auth preflight reports diagnostic auth source identity'
+    Assert-True (-not [bool]$copilotNoAuthPreflight.protocol_observations.authentication.noninteractive_ready) 'Copilot no-auth preflight reports non-interactive auth readiness as false'
     $copilotNoAuthResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'failed' $copilotNoAuthResult.status 'Copilot no-auth execution failure is captured without a model request'
-    Assert-Equal 'copilot_os_keychain_or_github_cli_unverified' $copilotNoAuthResult.evidence.credential.source 'Copilot no-auth evidence does not claim authentication'
+    Assert-Equal 'incompatible' $copilotNoAuthResult.status 'Copilot no-auth execution fails before Phase 1 model execution'
+    Assert-Equal 'incompatible' ([string]$copilotNoAuthResult.evidence.preflight.status) 'Copilot no-auth execute result preserves the incompatible preflight evidence'
+    $nativeExecutionsAfterNoAuth = @(Get-Content -LiteralPath $copilotLogPath | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) })
+    Assert-Equal $nativeExecutionsBeforeNoAuth.Count $nativeExecutionsAfterNoAuth.Count 'Copilot no-auth rejection does not start a model execution process'
     Assert-True (($copilotNoAuthResult | ConvertTo-Json -Depth 100) -notmatch 'ambient-profile-not-logged|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') 'Copilot authentication fixtures never expose credential values'
+    $env:HOME = $recordedOldHome
+    $env:USERPROFILE = $recordedOldUserProfile
+    $env:APPDATA = $recordedOldAppData
+    $env:LOCALAPPDATA = $recordedOldLocalAppData
+    $env:XDG_CONFIG_HOME = $recordedOldXdgConfigHome
     $env:COPILOT_HOME = $recordedOldCopilotHome
     }
     Write-Output "Real runner deterministic adapter conformance ($Suite): PASS"
@@ -2036,6 +2117,11 @@ exit 2
     $env:GITHUB_TOKEN = $recordedOldGithubToken
     $env:COPILOT_HOME = $recordedOldCopilotHome
     $env:GH_CONFIG_DIR = $recordedOldGhConfigDir
+    $env:HOME = $recordedOldHome
+    $env:USERPROFILE = $recordedOldUserProfile
+    $env:APPDATA = $recordedOldAppData
+    $env:LOCALAPPDATA = $recordedOldLocalAppData
+    $env:XDG_CONFIG_HOME = $recordedOldXdgConfigHome
     $env:AGENTIC_RECORDED_FIXTURES = $recordedOldFixtures
     if (Test-Path -LiteralPath $recordedRoot) { Remove-Item -LiteralPath $recordedRoot -Recurse -Force }
 }
@@ -2401,6 +2487,7 @@ try {
     Assert-True ($prepareText.Contains('execution-freeze.json') -and $prepareText.Contains('grading.json') -and $prepareText.Contains('validate-eval-grading.ps1') -and $prepareText.Contains('apply-eval-grading.ps1') -and $prepareText.Contains('finalize-eval-package.ps1')) 'handoff preparation must expose the shared freeze, grading validation, grading application, and finalization boundaries'
     Assert-True ($prepareText.Contains('Read the selected runner descriptor and its `delegation.dispatch_owner`.') -and $prepareText.Contains('invoke-runner-owned-arms.ps1') -and $prepareText.Contains('package-computed Phase 1 allowance') -and $prepareText.Contains('must be started exactly once')) 'handoff preparation must expose one foreground Phase 1 invocation with a computed caller timeout'
     Assert-True ($prepareText.Contains('Do not create outer workers') -and $prepareText.Contains('edit raw result/evidence files')) 'handoff preparation must forbid outer runner-owned workers and raw evidence edits'
+    Assert-True ($prepareText.Contains('authentication incompatibility is terminal for this package iteration') -and $prepareText.Contains('Do not suggest switching to another runner') -and $prepareText.Contains('do not suggest starting another Orchestrator') -and $prepareText.Contains('do not rerun Phase 1')) 'handoff preparation must fail closed on Copilot authentication incompatibility without alternate-runner/orchestrator suggestions'
     Assert-True ($prepareText.Contains('The Grader may author exactly one package-root `grading.json`') -and $prepareText.Contains('It must not edit raw execution results')) 'handoff preparation must isolate the Grader to the grading-only artifact'
     Assert-True ($prepareText.Contains('Write `grading.json`, then validate it before finalization') -and $prepareText.Contains('Grading validation is retryable; finalization is not') -and $prepareText.Contains('only after grading validation succeeds')) 'handoff preparation must place retryable grading validation before exactly-once finalization'
     Assert-True ($prepareText.Contains('Return only its machine-readable JSON summary') -and $prepareText.Contains('Never repair, re-freeze, re-bridge a changed raw result')) 'handoff preparation must make finalizer success and fail-closed recovery explicit'
@@ -2409,6 +2496,7 @@ try {
     $generatedHandoff = Invoke-GeneratedRunnerPrompt
     $generatedConcurrencyThreeHandoff = Invoke-GeneratedRunnerPrompt -RequestedConcurrency 3
     Assert-True ($generatedHandoff.Contains('evaluation is incomplete and a fresh package/code fix is required') -and $generatedHandoff.Contains('Never patch package-local runner code') -and $generatedHandoff.Contains('delete orchestration state') -and $generatedHandoff.Contains('delete execution results') -and $generatedHandoff.Contains('delete or replace `execution-freeze.json`') -and $generatedHandoff.Contains('rerun Phase 1') -and $generatedHandoff.Contains('manually broaden a capability check')) 'generated handoff output forbids package-local repair, state deletion, retry, and manual capability broadening'
+    Assert-True ($generatedHandoff.Contains('authentication incompatibility is terminal for this package iteration') -and $generatedHandoff.Contains('Do not suggest switching to another runner') -and $generatedHandoff.Contains('do not suggest starting another Orchestrator') -and $generatedHandoff.Contains('do not rerun Phase 1')) 'generated handoff output must keep Copilot authentication failures fail-closed without fallback orchestration suggestions'
     Assert-True ($generatedHandoff.Contains('invoke-runner-owned-arms.ps1') -and $generatedHandoff.Contains('package-computed Phase 1 allowance') -and $generatedHandoff.Contains('must be started exactly once') -and $generatedHandoff.Contains('If execution is interrupted and no valid `execution-freeze.json` exists')) 'generated handoff exposes one foreground Phase 1 invocation with fail-closed interruption handling'
     Assert-True ($generatedHandoff.Contains('validate-eval-grading.ps1') -and $generatedHandoff.Contains('-ShowSkeleton') -and $generatedHandoff.Contains('Write `grading.json`, then validate it before finalization') -and $generatedHandoff.Contains('Grading validation is retryable; finalization is not') -and $generatedHandoff.Contains('only after grading validation succeeds')) 'generated handoff requires author -> validate/retry -> finalize exactly once'
     Assert-True ($generatedHandoff.Contains('allowance of 6240 seconds') -and $generatedHandoff.Contains('6 arm(s) × 120-second fixed model-free runner preflight timeout = 720-second serial preflight allowance') -and $generatedHandoff.Contains('5490-second execution allowance across 3 batch(es) at concurrency 2') -and $generatedHandoff.Contains('2 scripted user turn(s) × profile.timeout_seconds 900 + 30 seconds runner grace') -and $generatedHandoff.Contains('+ 30 seconds orchestration grace')) 'generated handoff uses the fixed preflight timeout, scripted-turn model timeout, execution batches, and separate orchestration grace'

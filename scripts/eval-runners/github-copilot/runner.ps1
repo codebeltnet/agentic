@@ -203,35 +203,64 @@ function Get-CopilotTokenVariable {
     return $null
 }
 
-function Get-CopilotGhConfigDirectory {
+function Add-CopilotGhConfigCandidate {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Candidates,
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    try {
+        $normalized = [System.IO.Path]::GetFullPath($Path)
+        if (-not $Candidates.Contains($normalized)) { $Candidates.Add($normalized) }
+    } catch { }
+}
+
+function Get-CopilotGhConfigDirectories {
     # GH_CONFIG_DIR is an authentication-state exception to the isolated
-    # Copilot configuration roots. Resolve it from GitHub CLI's documented
-    # precedence without reading or logging any credential file.
-    $configured = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
-    if ([string]::IsNullOrWhiteSpace($configured)) {
-        $xdgConfig = [Environment]::GetEnvironmentVariable('XDG_CONFIG_HOME')
-        if (-not [string]::IsNullOrWhiteSpace($xdgConfig)) {
-            $configured = Join-Path $xdgConfig 'gh'
-        } elseif ((Get-PlatformName) -eq 'windows') {
-            $applicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
-            if (-not [string]::IsNullOrWhiteSpace($applicationData)) {
-                $configured = Join-Path $applicationData 'GitHub CLI'
-            }
-        } else {
-            $userHome = [Environment]::GetEnvironmentVariable('HOME')
-            if ([string]::IsNullOrWhiteSpace($userHome)) {
-                $userHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
-            }
+    # Copilot configuration roots. Build documented/default candidates and keep
+    # only existing directories; token resolution tries each candidate in order.
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    Add-CopilotGhConfigCandidate -Candidates $candidates -Path ([Environment]::GetEnvironmentVariable('GH_CONFIG_DIR'))
+    $xdgConfig = [Environment]::GetEnvironmentVariable('XDG_CONFIG_HOME')
+    if (-not [string]::IsNullOrWhiteSpace($xdgConfig)) {
+        Add-CopilotGhConfigCandidate -Candidates $candidates -Path (Join-Path $xdgConfig 'gh')
+    }
+
+    if ((Get-PlatformName) -eq 'windows') {
+        $applicationDataFromEnvironment = [Environment]::GetEnvironmentVariable('APPDATA')
+        if (-not [string]::IsNullOrWhiteSpace($applicationDataFromEnvironment)) {
+            Add-CopilotGhConfigCandidate -Candidates $candidates -Path (Join-Path $applicationDataFromEnvironment 'GitHub CLI')
+        }
+
+        $applicationDataFromProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+        if (-not [string]::IsNullOrWhiteSpace($applicationDataFromProfile)) {
+            Add-CopilotGhConfigCandidate -Candidates $candidates -Path (Join-Path $applicationDataFromProfile 'GitHub CLI')
+        }
+    } else {
+        foreach ($userHome in @(
+                [Environment]::GetEnvironmentVariable('HOME'),
+                [Environment]::GetEnvironmentVariable('USERPROFILE'),
+                [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+            )) {
             if (-not [string]::IsNullOrWhiteSpace($userHome)) {
-                $configured = Join-Path (Join-Path $userHome '.config') 'gh'
+                Add-CopilotGhConfigCandidate -Candidates $candidates -Path (Join-Path (Join-Path $userHome '.config') 'gh')
             }
         }
     }
 
-    if ([string]::IsNullOrWhiteSpace($configured) -or -not (Test-Path -LiteralPath $configured -PathType Container)) {
-        return $null
+    $resolved = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in @($candidates)) {
+        if (Test-Path -LiteralPath $candidate -PathType Container) { $resolved.Add($candidate) }
     }
-    return [System.IO.Path]::GetFullPath($configured)
+    return @($resolved.ToArray())
+}
+
+function Get-CopilotGhConfigDirectory {
+    $directories = @(Get-CopilotGhConfigDirectories)
+    if ($directories.Count -eq 0) { return $null }
+    return [string]$directories[0]
 }
 
 function Get-CopilotGitHubCliToken {
@@ -240,26 +269,54 @@ function Get-CopilotGitHubCliToken {
         return $null
     }
 
-    $environment = New-RunnerProbeEnvironment
+    $baseEnvironment = New-RunnerProbeEnvironment
     foreach ($name in @('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'GH_CONFIG_DIR')) {
         $value = [Environment]::GetEnvironmentVariable($name)
         if (-not [string]::IsNullOrWhiteSpace($value)) {
-            $environment[$name] = $value
+            $baseEnvironment[$name] = $value
         }
     }
 
-    $probeDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-gh-token-probe-' + [Guid]::NewGuid().ToString('N'))
+    $candidateConfigDirectories = [System.Collections.Generic.List[string]]::new()
+    foreach ($directory in @(Get-CopilotGhConfigDirectories)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$directory) -and -not $candidateConfigDirectories.Contains([string]$directory)) {
+            $candidateConfigDirectories.Add([string]$directory)
+        }
+    }
+
+    # Keep one ambient attempt with GH_CONFIG_DIR removed so an existing host
+    # default can still resolve even when no candidate was discovered.
+    $candidateConfigDirectories.Add('')
+
+    $probeRoot = Resolve-RunnerProbeTempRoot
+    $probeDirectory = Join-Path $probeRoot ('agentic-gh-token-probe-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
     try {
-        $process = Invoke-RunnerProcess -FileName $gh.FileName -ArgumentList (@($gh.Prefix) + @('auth', 'token')) -WorkingDirectory $probeDirectory -Environment $environment -TimeoutSeconds 30
-        if ($process.TimedOut -or $process.ExitCode -ne 0) {
-            return $null
+        foreach ($candidateDirectory in @($candidateConfigDirectories.ToArray())) {
+            $environment = [ordered]@{}
+            foreach ($key in @($baseEnvironment.Keys)) {
+                $environment[[string]$key] = [string]$baseEnvironment[$key]
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$candidateDirectory)) {
+                [void]$environment.Remove('GH_CONFIG_DIR')
+            } else {
+                $environment['GH_CONFIG_DIR'] = [string]$candidateDirectory
+            }
+
+            $process = Invoke-RunnerProcess -FileName $gh.FileName -ArgumentList (@($gh.Prefix) + @('auth', 'token')) -WorkingDirectory $probeDirectory -Environment $environment -TimeoutSeconds 30
+            if ($process.TimedOut -or $process.ExitCode -ne 0) {
+                continue
+            }
+            $token = ([string]$process.Stdout).Trim()
+            if ([string]::IsNullOrWhiteSpace($token)) {
+                continue
+            }
+            return [pscustomobject]@{
+                Token = $token
+                GhConfigDirectory = if ([string]::IsNullOrWhiteSpace([string]$candidateDirectory)) { $null } else { [string]$candidateDirectory }
+            }
         }
-        $token = ([string]$process.Stdout).Trim()
-        if ([string]::IsNullOrWhiteSpace($token)) {
-            return $null
-        }
-        return $token
+        return $null
     } finally {
         if (Test-Path -LiteralPath $probeDirectory) {
             Remove-Item -LiteralPath $probeDirectory -Recurse -Force -ErrorAction SilentlyContinue
@@ -275,24 +332,31 @@ function Resolve-CopilotAuthentication {
             TokenVariable = $tokenVariable
             TokenValue = $null
             GitHubCliTokenResolved = $false
+            GitHubCliConfigDirectory = $null
+            NonInteractiveReady = $true
         }
     }
 
     $githubCliToken = Get-CopilotGitHubCliToken
-    if (-not [string]::IsNullOrWhiteSpace($githubCliToken)) {
+    if ($null -ne $githubCliToken -and -not [string]::IsNullOrWhiteSpace([string]$githubCliToken.Token)) {
         return [pscustomobject]@{
             Source = 'github_cli_token'
             TokenVariable = 'GH_TOKEN'
-            TokenValue = $githubCliToken
+            TokenValue = [string]$githubCliToken.Token
             GitHubCliTokenResolved = $true
+            GitHubCliConfigDirectory = [string](Get-JsonProperty -Object $githubCliToken -Name 'GhConfigDirectory' -Default $null)
+            NonInteractiveReady = $true
         }
     }
 
+    $fallbackSource = if ($null -ne (Resolve-ExternalCommand -Name 'copilot')) { 'copilot_os_keychain_unverified' } else { 'none' }
     return [pscustomobject]@{
-        Source = 'copilot_os_keychain_or_github_cli_unverified'
+        Source = $fallbackSource
         TokenVariable = $null
         TokenValue = $null
         GitHubCliTokenResolved = $false
+        GitHubCliConfigDirectory = $null
+        NonInteractiveReady = $false
     }
 }
 
@@ -602,10 +666,11 @@ function Get-CopilotPreflight {
     if ($authState.Source -eq 'environment') {
         $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail "Authentication is available through the explicit $($authState.TokenVariable) environment variable; Copilot OS-keychain and GitHub CLI state are not copied into the run."))
     } elseif ($authState.Source -eq 'github_cli_token') {
-        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail 'GitHub CLI fallback resolved a token in the trusted runner; only a protected token environment variable will be passed to Copilot.'))
+        $configDetail = if ([string]::IsNullOrWhiteSpace([string]$authState.GitHubCliConfigDirectory)) { 'ambient/default' } else { 'resolved GH_CONFIG_DIR candidate' }
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status passed -Detail ("GitHub CLI fallback resolved a token in the trusted runner from a {0} source; only a protected token environment variable will be passed to Copilot." -f $configDetail)))
     } else {
-        $checks.Add((New-PreflightCheck -Name 'authentication' -Status unavailable -Detail 'No explicit token is present and GitHub CLI fallback did not yield a token; native Copilot OS-keychain lookup is delegated to the installed CLI. This preflight does not contact the Copilot service.'))
-        $warnings.Add('Authentication readiness beyond explicit environment tokens and the observable GitHub CLI fallback cannot be proven without a live Copilot request; preflight remains conditional and does not reject a tokenless native OAuth/keychain configuration.')
+        $checks.Add((New-PreflightCheck -Name 'authentication' -Status failed -Detail 'No supported non-interactive Copilot authentication source was resolved. Required source: explicit COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN or trusted GitHub CLI token fallback.'))
+        $reasons.Add('No supported non-interactive Copilot authentication source was resolved before Phase 1. Provide COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN, or ensure `gh auth token` can resolve in this host context.')
     }
 
     if ($platform -notin @('linux', 'macos')) {
@@ -646,7 +711,7 @@ function Get-CopilotPreflight {
     foreach ($key in $descriptor.Keys) { $descriptorCopy[$key] = $descriptor[$key] }
     $descriptorCopy.harness = [ordered]@{ name = 'GitHub Copilot CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('runner-owned fresh Copilot CLI session per eval execution', 'copilot --output-format json terminal event capture', 'native task/general-purpose subagent available as a separate harness capability, not the transport', 'prompt on stdin', '--allow-all full programmatic permission', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('runner-owned fresh Copilot CLI session per eval execution', 'copilot --output-format json terminal event capture', 'native task/general-purpose subagent available as a separate harness capability, not the transport', 'prompt on stdin', '--allow-all full programmatic permission', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'non-interactive authentication source required before Phase 1 (explicit token env or trusted GitHub CLI fallback)', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker')) { $mechanisms.Add($mechanism) }
     if ($null -ne $run.Interaction -and $continuationCapability.Available) {
         $mechanisms.Add(("explicit Copilot {0} <session-id> continuation selected from installed help" -f $continuationCapability.Flag))
         $mechanisms.Add('no implicit last-session continuation')
@@ -667,6 +732,13 @@ function Get-CopilotPreflight {
             session_identity_source = 'runtime structured session event'
             exact_session_required = $true
             implicit_continuation = $false
+        }
+        authentication = [ordered]@{
+            source = [string]$authState.Source
+            noninteractive_ready = [bool]$authState.NonInteractiveReady
+            github_cli_token_resolved = [bool]$authState.GitHubCliTokenResolved
+            github_cli_config_candidate_used = -not [string]::IsNullOrWhiteSpace([string]$authState.GitHubCliConfigDirectory)
+            token_value_observed = $false
         }
     }
     return $document
@@ -692,7 +764,6 @@ function New-CopilotEnvironment {
     }
     # Model-free help/version bootstrap must use the same cache roots too.
     if ($WithoutAuthentication) { return New-RunnerEnvironment -Run $Inputs.Run -Additional $additional }
-    $tokenVariable = Get-CopilotTokenVariable
     $authState = Resolve-CopilotAuthentication
     if ($authState.Source -eq 'github_cli_token') {
         $additional[$authState.TokenVariable] = $authState.TokenValue
@@ -1091,6 +1162,7 @@ function Invoke-CopilotScriptedExecute {
     $authState = Resolve-CopilotAuthentication
     $credentialEvidence = [ordered]@{
         source = $authState.Source
+        noninteractive_ready = [bool]$authState.NonInteractiveReady
         github_token_variable = $authState.TokenVariable
         secret_env_vars = @($copilotAuthVariables)
         secret_env_var_scope = @('shell', 'mcp')
@@ -1286,13 +1358,14 @@ function Invoke-CopilotExecute {
 
     $capabilities = Get-CopilotCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem
     $mechanisms = [System.Collections.Generic.List[string]]::new()
-    foreach ($mechanism in @('copilot --output-format json', 'prompt on stdin', '--allow-all full programmatic permission', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'OS-keychain authentication delegated to Copilot', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker', 'no session continuation')) { $mechanisms.Add($mechanism) }
+    foreach ($mechanism in @('copilot --output-format json', 'prompt on stdin', '--allow-all full programmatic permission', '--no-ask-user', 'repository-owned custom instructions preserved', '--disable-builtin-mcps', '--secret-env-vars shell/MCP child filtering', 'isolated COPILOT_HOME and COPILOT_CACHE_HOME', 'isolated HOME/XDG roots', 'non-interactive authentication source required before Phase 1 (explicit token env or trusted GitHub CLI fallback)', 'GitHub CLI fallback token resolved by the trusted runner when needed', 'no host GH_CONFIG_DIR exposed to the worker', 'no session continuation')) { $mechanisms.Add($mechanism) }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }
 
     $authState = Resolve-CopilotAuthentication
     $credentialEvidence = [ordered]@{
         source = $authState.Source
+        noninteractive_ready = [bool]$authState.NonInteractiveReady
         github_token_variable = $authState.TokenVariable
         secret_env_vars = @($copilotAuthVariables)
         secret_env_var_scope = @('shell', 'mcp')

@@ -24,7 +24,7 @@ foreach ($file in @('github-copilot/runner.ps1', 'bridge-execution-result.ps1', 
     }
 }
 $copilotAuthVariables = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
-function Resolve-CopilotAuthentication { return [pscustomobject]@{ Source = 'fixture'; TokenVariable = $null; TokenValue = $null; GitHubCliTokenResolved = $false } }
+function Resolve-CopilotAuthentication { return [pscustomobject]@{ Source = 'fixture'; TokenVariable = $null; TokenValue = $null; GitHubCliTokenResolved = $false; GitHubCliConfigDirectory = $null; NonInteractiveReady = $true } }
 function Resolve-SandboxCommand { param($Name) return $null }
 function Resolve-ExternalCommand { param($Name) if ($Name -ne 'copilot') { throw "Unexpected executable lookup: $Name" }; return $fakeCommand }
 function Get-CopilotPreflight {
