@@ -10,22 +10,41 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/_common.ps1"
 
 function Get-PropertyMap {
-    param([string]$Path)
+    param([string]$Path, [string]$ProjectDirectory = (Split-Path -Parent $Path), [hashtable]$Map = @{}, $Active = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase))
 
-    $map = @{}
     if (-not (Test-Path -LiteralPath $Path)) { return $map }
+    if (-not $Active.Add($Path)) { return $map }
 
     $raw = Read-TextWithEncoding -Path $Path
     [xml]$xml = $raw
-    foreach ($propertyGroup in @($xml.SelectNodes('/Project/PropertyGroup'))) {
-        foreach ($node in @($propertyGroup.ChildNodes | Where-Object { $_.NodeType -eq 'Element' })) {
-            if (-not [string]::IsNullOrWhiteSpace($node.InnerText)) {
-                $map[$node.Name] = [string]$node.InnerText
+    foreach ($element in @($xml.SelectNodes('/Project/PropertyGroup | /Project/Import | /Project/ImportGroup/Import'))) {
+        if ($element.Name -eq 'Import') {
+            $importProject = [string]$element.GetAttribute('Project')
+            $importProject = $importProject.Replace('$(MSBuildProjectDirectory)', $ProjectDirectory)
+            $importProject = Resolve-PropertyTokens -Value $importProject -Map $map
+            if ($importProject) {
+                $importPath = Resolve-ImportPath -FromFile $Path -ImportProject $importProject -RepoRoot $repoPath
+                if ($importPath) { $null = Get-PropertyMap -Path $importPath -ProjectDirectory $ProjectDirectory -Map $map -Active $Active }
+            }
+        } else {
+            foreach ($node in @($element.ChildNodes | Where-Object { $_.NodeType -eq 'Element' })) {
+                if (-not [string]::IsNullOrWhiteSpace($node.InnerText)) {
+                    $map[$node.Name] = Resolve-PropertyTokens -Value ([string]$node.InnerText) -Map $map
+                }
             }
         }
     }
-
+    $null = $Active.Remove($Path)
     return $map
+}
+
+function Get-DirectoryBuildFile {
+    param([string]$Directory, [string]$Name)
+    while ($Directory -and ($Directory -eq $repoPath -or $Directory.StartsWith($repoPath + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase))) {
+        $candidate = Join-Path $Directory $Name
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        $Directory = Split-Path -Parent $Directory
+    }
 }
 
 function Get-ImportPaths {
@@ -52,7 +71,6 @@ function Resolve-ImportPath {
 
     $candidate = $ImportProject.Trim()
     if ([string]::IsNullOrWhiteSpace($candidate)) { return $null }
-    if ($candidate -match '^\$\(') { return $null }
     $candidate = $candidate -replace '\$\(MSBuildThisFileDirectory\)', ((Split-Path -Parent $FromFile) + [System.IO.Path]::DirectorySeparatorChar)
     $candidate = $candidate -replace '\$\(MSBuildProjectDirectory\)', ((Split-Path -Parent $FromFile) + [System.IO.Path]::DirectorySeparatorChar)
     try {
@@ -132,14 +150,6 @@ foreach ($importedPath in @($importedFiles)) {
 }
 $propsFiles = @($propsFiles | Sort-Object FullName -Unique)
 
-$propertyMap = @{}
-foreach ($propsFile in @($propsFiles | Sort-Object { $_.FullName.Length })) {
-    foreach ($entry in (Get-PropertyMap -Path $propsFile.FullName).GetEnumerator()) {
-        if (-not $propertyMap.ContainsKey($entry.Key)) {
-            $propertyMap[$entry.Key] = $entry.Value
-        }
-    }
-}
 $declaredIn = [System.Collections.Generic.List[object]]::new()
 $allTfms = [System.Collections.Generic.List[string]]::new()
 $unresolved = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -181,15 +191,18 @@ foreach ($propsFile in $propsFiles) {
     $scope = if ($propsFile.Name -ieq 'Directory.Build.props') { 'Directory.Build.props' }
         elseif ($propsFile.Extension -ieq '.props') { 'Props' }
         else { 'Targets' }
-    Add-TfmDeclarations -FilePath $propsFile.FullName -Scope $scope -RelativePath $relative -Map $propertyMap
+    Add-TfmDeclarations -FilePath $propsFile.FullName -Scope $scope -RelativePath $relative -Map (Get-PropertyMap -Path $propsFile.FullName)
 }
 
 $projects = [System.Collections.Generic.List[object]]::new()
 
 foreach ($projectFile in $projectFiles) {
     $localMap = @{}
-    foreach ($entry in $propertyMap.GetEnumerator()) { $localMap[$entry.Key] = $entry.Value }
-    foreach ($entry in (Get-PropertyMap -Path $projectFile.FullName).GetEnumerator()) { $localMap[$entry.Key] = $entry.Value }
+    $propsPath = Get-DirectoryBuildFile -Directory $projectFile.DirectoryName -Name 'Directory.Build.props'
+    if ($propsPath) { $null = Get-PropertyMap -Path $propsPath -ProjectDirectory $projectFile.DirectoryName -Map $localMap }
+    $null = Get-PropertyMap -Path $projectFile.FullName -ProjectDirectory $projectFile.DirectoryName -Map $localMap
+    $targetsPath = Get-DirectoryBuildFile -Directory $projectFile.DirectoryName -Name 'Directory.Build.targets'
+    if ($targetsPath) { $null = Get-PropertyMap -Path $targetsPath -ProjectDirectory $projectFile.DirectoryName -Map $localMap }
     $rawProject = Read-TextWithEncoding -Path $projectFile.FullName
     [xml]$projectXml = $rawProject
     $projectTfms = [System.Collections.Generic.List[string]]::new()
@@ -199,7 +212,9 @@ foreach ($projectFile in $projectFiles) {
         $condition = if ($propertyGroup.Attributes['Condition']) { [string]$propertyGroup.Attributes['Condition'].Value } else { $null }
         foreach ($node in @($propertyGroup.ChildNodes | Where-Object { $_.NodeType -eq 'Element' -and $_.Name -in @('TargetFramework', 'TargetFrameworks') })) {
             $raw = [string]$node.InnerText
-            $resolved = Resolve-PropertyTokens -Value $raw -Map $localMap
+            # Preserve expansion at declaration time for unconditional project properties.
+            $value = if (-not $condition -and -not $node.Attributes['Condition'] -and $localMap.ContainsKey($node.Name)) { [string]$localMap[$node.Name] } else { $raw }
+            $resolved = Resolve-PropertyTokens -Value $value -Map $localMap
             $tfms = Split-Tfms -Value $resolved
             foreach ($tfm in $tfms) {
                 if ($tfm -match '\$\(') {
