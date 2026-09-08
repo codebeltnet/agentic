@@ -130,6 +130,7 @@ $recordedOldUserProfile = $env:USERPROFILE
 $recordedOldAppData = $env:APPDATA
 $recordedOldLocalAppData = $env:LOCALAPPDATA
 $recordedOldXdgConfigHome = $env:XDG_CONFIG_HOME
+$recordedOldTmpDir = $env:TMPDIR
 $recordedOldFixtures = $env:AGENTIC_RECORDED_FIXTURES
 try {
     $fakeBin = Join-Path $recordedRoot 'bin'
@@ -2021,8 +2022,8 @@ exit 2
     $copilotFreshAppData = Join-Path $copilotFreshBoundaryRoot 'appdata'
     $copilotFreshLocalAppData = Join-Path $copilotFreshBoundaryRoot 'localappdata'
     $copilotFreshHostAppData = Join-Path $copilotFreshBoundaryRoot 'host-appdata'
-    $copilotFreshHostGhConfig = Join-Path $copilotFreshHostAppData 'GitHub CLI'
-    New-Item -ItemType Directory -Path $copilotFreshHome, $copilotFreshXdg, $copilotFreshAppData, $copilotFreshLocalAppData, (Join-Path $copilotFreshXdg 'gh'), $copilotFreshHostGhConfig -Force | Out-Null
+    $copilotFreshHostGhConfig = if ($IsWindows) { Join-Path $copilotFreshHostAppData 'GitHub CLI' } else { Join-Path $copilotFreshXdg 'gh' }
+    New-Item -ItemType Directory -Path $copilotFreshHome, $copilotFreshXdg, $copilotFreshAppData, $copilotFreshLocalAppData, $copilotFreshHostGhConfig -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $copilotFreshHostGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [Text.UTF8Encoding]::new($false))
     $env:HOME = $copilotFreshHome
     $env:USERPROFILE = $copilotFreshHome
@@ -2122,6 +2123,7 @@ exit 2
     $env:APPDATA = $recordedOldAppData
     $env:LOCALAPPDATA = $recordedOldLocalAppData
     $env:XDG_CONFIG_HOME = $recordedOldXdgConfigHome
+    $env:TMPDIR = $recordedOldTmpDir
     $env:AGENTIC_RECORDED_FIXTURES = $recordedOldFixtures
     if (Test-Path -LiteralPath $recordedRoot) { Remove-Item -LiteralPath $recordedRoot -Recurse -Force }
 }

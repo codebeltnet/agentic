@@ -215,11 +215,11 @@ if ($inputText -eq 'failure') { exit 7 }
     $usage = Read-CopilotEvents -Parsed @{ Events = @($checkpoint, @{ type = 'assistant.usage'; data = @{ inputTokens = 7; outputTokens = 3 } }); Errors = @() } -Warnings $warnings
     Assert-Equal 7 $usage.UsageInput 'native assistant usage takes precedence over cache snapshots'
     Assert-Equal 3 $usage.UsageOutput 'actual exposed output count retained'
-    $savedTemp = $env:TEMP; $savedTmp = $env:TMP
+    $savedTemp = $env:TEMP; $savedTmp = $env:TMP; $savedTmpDir = $env:TMPDIR
     try {
-        $env:TEMP = $testRoot; $env:TMP = $testRoot
+        $env:TEMP = $testRoot; $env:TMP = $testRoot; $env:TMPDIR = $testRoot
         Assert-Rejected { Get-CopilotProjectionPlan -Inputs $singleInputs } 'temp inside source ancestry fails closed'
-    } finally { $env:TEMP = $savedTemp; $env:TMP = $savedTmp }
+    } finally { $env:TEMP = $savedTemp; $env:TMP = $savedTmp; $env:TMPDIR = $savedTmpDir }
     $runtimeLink = Join-Path $singleInputs.Run.WorkingDirectoryPath 'forbidden-link'
     New-Item -ItemType $linkType -Path $runtimeLink -Target $testRoot | Out-Null
     try { Assert-Rejected { Get-CopilotProjectionPlan -Inputs $singleInputs } 'linked projection input fails closed' }

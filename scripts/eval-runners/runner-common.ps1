@@ -1470,8 +1470,19 @@ function Assert-PhaseOneEvidenceWritable {
     # package-level freeze exists, refusing to build another result prevents a
     # direct runner invocation (or the orchestrator-owned recorder) from
     # truncating or replacing frozen raw evidence.
-    $runRoot = [System.IO.Path]::GetFullPath([string]$Run.RunRoot)
-    $iterationDirectory = Split-Path -Parent (Split-Path -Parent $runRoot)
+    # Projected runner inputs may replace RunRoot with a physical directory
+    # directly under /tmp. Derive the package location from the original
+    # manifest path so freeze checks remain valid on every platform.
+    $runPath = [string](Get-JsonProperty -Object $Run -Name 'RunPath' -Default '')
+    $runRoot = if ([string]::IsNullOrWhiteSpace($runPath)) {
+        [System.IO.Path]::GetFullPath([string]$Run.RunRoot)
+    } else {
+        [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($runPath))
+    }
+    $iterationDirectory = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetDirectoryName($runRoot))
+    if ([string]::IsNullOrWhiteSpace($iterationDirectory)) {
+        throw 'Cannot derive the eval package directory from the run contract.'
+    }
     $freezeRelativePath = 'execution-freeze.json'
     $manifestPath = Join-Path $iterationDirectory 'manifest.json'
     if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
