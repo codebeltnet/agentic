@@ -2,6 +2,24 @@
   "skill_name": "dotnet-nuget-update",
   "evals": [
     {
+      "id": 8,
+      "prompt": "Inspect the target framework matrix in the attached multi-project repository before planning NuGet validation. Report each project's frameworks and any unresolved property references. Do not change package versions.",
+      "expected_output": "A resolves to net9.0, B resolves to net10.0, and C keeps $(PrivateFramework) unresolved because unused.props is not imported. Validation never borrows a sibling project's framework property.",
+      "expectations": [
+        "Reports net9.0 for A and net10.0 for B",
+        "Reports C's PrivateFramework token as unresolved",
+        "Does not resolve C to net7.0 from the unimported props file"
+      ],
+      "files": [
+        "evals/files/scoped-frameworks/a/Directory.Build.props",
+        "evals/files/scoped-frameworks/a/A.csproj",
+        "evals/files/scoped-frameworks/b/Directory.Build.props",
+        "evals/files/scoped-frameworks/b/B.csproj",
+        "evals/files/scoped-frameworks/c/C.csproj",
+        "evals/files/scoped-frameworks/unused.props"
+      ]
+    },
+    {
       "id": 1,
       "prompt": "Audit the attached repository and update NuGet packages without breaking its TFM-specific package strategy. The repo targets net9.0 and net10.0, and the same Microsoft package is pinned separately for each band. Resolve every declaration first, then update each band to the newest version that still fits that band instead of proposing the overall newest major.",
       "expected_output": "The agent performs a complete dependency audit before editing, updates Microsoft.Extensions.Logging separately within 9.x and 10.x, leaves Newtonsoft.Json as already current, and does not propose an 11.x jump for the band-tracked package.",

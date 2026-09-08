@@ -1,0 +1,1 @@
+<Project><PropertyGroup><TargetFramework>$(Framework)</TargetFramework></PropertyGroup></Project>
