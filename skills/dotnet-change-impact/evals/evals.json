@@ -91,6 +91,19 @@
     },
     {
       "id": 9,
+      "files": ["evals/files/default-resolution/src/Widget.cs", "evals/files/default-resolution/src/Example.csproj"],
+      "workspace": {
+        "git": {
+          "base_branch": "trunk",
+          "feature_branch": "feature/remove-legacy-api",
+          "commits": [
+            {
+              "message": "Remove the legacy public Parse overload",
+              "files": { "src/Widget.cs": "namespace Example;\n\npublic class Widget\n{\n    public string Name { get; set; } = string.Empty;\n}\n" }
+            }
+          ]
+        }
+      },
       "prompt": "Use dotnet-change-impact to classify the version bump for this branch.",
       "expected_output": "Current-branch default-resolution behavior: inspect the local Git repository, resolve the current branch against the upstream/default base branch, collect commits and net diff, then classify those changes with structured reasoning. Must not ask the user to provide change details first.",
       "expectations": [
