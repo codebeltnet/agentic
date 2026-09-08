@@ -13,7 +13,9 @@ Eval workspaces and test repositories must **never** become part of this reposit
 - `.bot/<skill-name>-workspace/` — the default. `.gitignore` covers `.bot/*`, so git never sees what lands there, and harnesses that refuse to work outside the repository folder still have somewhere to go.
 - `$env:TEMP/<skill-name>-workspace/` on Windows, `/tmp/<skill-name>-workspace/` on Unix — for anything that has no reason to sit next to the source.
 
-Anywhere else inside the repository is forbidden, including a `<skill-name>-workspace/` at the root. So are temporary git repos, test branches, throwaway commits, and local config overrides such as git aliases.
+Anywhere else inside the repository is forbidden, including a `<skill-name>-workspace/` at the root. In the real `codebeltnet/agentic` source working tree, temporary git repos, test branches, throwaway commits, and local config overrides such as git aliases are forbidden.
+
+Deterministic synthetic Git history is allowed only when it is the fixture being tested inside an explicitly permitted isolated eval/test repository under `.bot/<skill-name>-workspace/` or the approved OS temp workspace. Those fixture repositories must stay isolated, disposable, and uncommitted to this source repository.
 
 `scripts/prepare-skill-evals.ps1` enforces this: it writes to `.bot/` by default, refuses an `-OutputRoot` that is inside the repository but outside `.bot/`, and refuses `.bot/` itself if git has stopped ignoring it.
 

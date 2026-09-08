@@ -1533,6 +1533,8 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'git does not ignore it'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`.bot/<skill-name>-workspace/` — the default.'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Anywhere else inside the repository is forbidden'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Deterministic synthetic Git history is allowed only when it is the fixture being tested'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'throwaway Git history is still forbidden in the real source working tree'
     Assert-Contains -Name 'scripts/prepare-skill-evals.ps1' -Content $prepare -Needle 'It did not run them, and nothing here will.'
 
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
