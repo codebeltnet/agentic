@@ -81,7 +81,7 @@ If the user did **not** say `yolo` or `auto`, and session-level auto mode is not
 
 If the user says `git bot commit`, `git commit`, or `git our commit` without narrowing language, treat the request as covering the full current worktree.
 
-- The default scope is **all current changes visible in git status**.
+- The default scope is **all current changes visible in git status**: staged, unstaged, deleted, renamed, and non-ignored untracked files, including files inside new directories.
 - Your job is to group that full worktree into the right number of commits by semantic intent.
 - Never silently narrow the scope to "just the files from the last thing I worked on", "just the files I touched", or "just the newest skill" unless the user explicitly said to do that.
 - `yolo` keeps this same full-worktree default. It removes the approval wait; it does not narrow scope.
@@ -93,6 +93,8 @@ Narrow scope only when the user explicitly does one of these:
 - asks for a review/plan for a subset before committing
 
 If the user did not narrow scope, do not invent a narrower scope on their behalf.
+
+Use the expanded status inventory in Step 1 as the scope of record. `git diff`, `git diff --stat`, and `git diff --name-only` omit untracked files; none can replace that inventory. Untracked status alone is neither an exclusion nor a reason to ask permission. Respect Git's ignore rules for untracked files; do not force-add ignored files. Already tracked files remain in scope even if an ignore pattern now matches them.
 
 ### Recovery Safety Rule
 
@@ -238,7 +240,9 @@ Commits include a body by default. `no-body` or `tmi` suppresses it for one requ
 
 ### Step 1: Review changes
 
-Run `git status` and `git diff` (and `git diff --staged` if there are staged changes) to understand what has changed.
+From the repository root, run `git status --short --untracked-files=all` to enumerate individual paths even when Git configuration hides untracked files. Keep this inventory through final verification. For programmatic parsing, use `git status --porcelain=v1 --untracked-files=all -z` and parse NUL-delimited records, including rename pairs; do not split filenames on whitespace.
+
+Review `git diff` and `git diff --staged` for tracked changes and inspect every untracked file directly with an appropriate text or binary viewer. An empty diff does not mean a clean worktree. Do not stage files just to make them appear in a diff.
 
 Unless the user explicitly narrowed scope, inspect the **entire current worktree** and build the commit plan from that full set of changes. Do not default to the last task only.
 
@@ -250,7 +254,7 @@ When resolving that reference, prefer the bundled skill path first instead of tr
 
 ### Step 2: Classify changes
 
-Before composing any commit message, bucket every changed file by its **semantic intent** — not just its file type. Read the actual diff for each file and ask: *"What is this change trying to accomplish?"* Two files of the same type (e.g. two test files) may have completely different intents and belong in separate commits.
+Before composing any commit message, bucket every path in the Step 1 inventory by its **semantic intent** — not its tracking status or file type. Read the actual diff for tracked files and contents of untracked files and ask: *"What is this change trying to accomplish?"* Two files of the same type (e.g. two test files) may have completely different intents and belong in separate commits.
 
 Use the inspected commit-language reference as the meaning source, not your gut. For example, restructuring an existing skill's `SKILL.md`, `FORMS.md`, `references/`, or `evals/` is normally refactor intent and should map to `♻️`; configuration-file changes map to `🔧`; truly new repo or application capabilities map to `✨`.
 
@@ -298,36 +302,9 @@ When more than one file is changed and your first classification puts every chan
 
 Ask yourself explicitly: **“Did I actually read the whole `git-visual-commits` skill through EOF in this session before classifying this change?”** A metadata preview, remembered rule, or partial read is a failed answer. If the answer is no or uncertain, read `SKILL.md` from its first line through EOF and restart Step 1 and Step 2.
 
-Then re-check the complete `git status`, `git diff`, and applicable staged diff; enumerate every changed path; explain each path's rationale, audience, and lifecycle; and consider whether any path belongs to a different category such as documentation, configuration, tooling, validation, tests, or release communication. Re-read `references/commit-language.md` before confirming the category and emoji.
+Then refresh the Step 1 inventory and review tracked diffs and untracked contents; explain each path's rationale, audience, and lifecycle; and consider whether any path belongs to a different category such as documentation, configuration, tooling, validation, tests, or release communication. Re-read `references/commit-language.md` before confirming the category and emoji.
 
 Only keep one category after this audit if every path still has one rationale. Put a visible line in the commit plan such as `Quality gate: 3 files, one category retained; full skill read, full diff review, per-file rationale check, and alternative-category check confirmed.` If any check fails or any file has a materially different intent, split the groups and rerun the normal validation. `yolo` and `auto` do not bypass this gate.
-
-#### Commit body guidance
-
-Unless **no-body mode** is active, every commit includes a body explaining the *why*:
-
-- **Config/environment commits** → explain the operational intent (e.g. "Switch to shared-runner testing strategy with multi-image matrix")
-- **Test assertion changes** → explain why the expectation changed (e.g. "net11 changed the default precision for DateTime, updating expected value")
-- **Refactors** → explain what motivated the restructuring
-- **New features** → explain the purpose and scope
-- **Bug fixes** → explain what was broken and how this fixes it
-
-Common groupings:
-- New repo-managed skill or workflow introduction together
-- Existing skill refactor or extraction together
-- Dependency/version baseline updates together
-- Package/publish metadata together
-- Config/setup files together (app host, bootstrapping)
-- Environment and infrastructure config together (test runners, CI matrix, container settings)
-- Documentation publishing fixes together
-- Community health or release communication docs together
-- New feature or module code together
-- Data contracts, types, and interfaces together
-- Database models, migrations, and schema changes together
-- Test logic and assertions together (when they share the same rationale)
-- Documentation and inline comments together
-
-When in doubt, one commit per "thing that changes" is better than one big commit.
 
 #### Mixed-scope guard
 
@@ -339,40 +316,9 @@ This guard runs unconditionally — including in auto-approval mode.
 
 Documentation files (`CHANGELOG.md`, `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, release notes) are **separate-by-default**. They only belong in the same commit as non-doc files when the commit is explicitly documentation-focused (e.g. `📝 add api usage guide` where the docs are the point, not a side effect).
 
-#### Release-adjacent splitting rule
+#### Detailed grouping rules
 
-Do not treat "all of this supports the release" as one commit. Release-adjacent work often spans different audiences and lifecycle roles that deserve separate history:
-
-- **Dependency/version baselines** — version alignment or runner baseline changes
-- **Community health/release communication** — changelogs and human-facing repo health docs
-- **Package/publish metadata** — package release-note definitions, `.nuget/*/PackageReleaseNotes.txt`, and publish targets; this bucket normally maps to `📦`
-- **Documentation publishing** — DocFX navigation, branding, or publishing assets
-- **CI/automation** — workflows and helper scripts used only by automation
-
-These buckets are examples, not a fixed file map. The rule is the abstraction: split by purpose and audience, not by the fact that the changes landed together.
-
-Concrete example: if one diff updates `Directory.Build.targets`, `Directory.Packages.props`, or `testenvironments.json`, another diff updates CI scripts or workflow files such as `bump-nuget.py` or `.github/workflows/*.yml`, and another diff updates `CHANGELOG.md` plus `.nuget/*/PackageReleaseNotes.txt`, that is at least three intents:
-
-- **Build system / dependency baseline**
-- **CI or automation**
-- **Release communication plus package metadata**
-
-Do not collapse those into one commit, even if they were edited in the same round and all support the same release. Keep `.nuget/*/PackageReleaseNotes.txt` with the `📦` package/publish commit, not with the `💬` community-health commit.
-
-#### Repo-aligned grouping example
-
-When a repo like this one mixes skill changes, scaffold assets, validators, and repo docs, split them by intent:
-
-- **New repo-managed skill** — a newly introduced `skills/<name>/` folder and its local `evals/` or `references/`
-- **Existing skill refactor** — extracting shared rules, renaming sections, or reorganizing an existing skill
-- **Skill contract files** — `SKILL.md`, `FORMS.md`, `references/`, `evals/`
-- **Template/runtime files** — `assets/`, scaffold helper scripts
-- **Validation/tooling** — validator scripts, repo checks
-- **Repo docs/rules** — `README.md`, `AGENTS.md`, `CONTRIBUTING.md`
-
-Do not merge these into one commit unless the diff is truly single-purpose and the explanation still fits one sentence without using "and".
-
-If a commit both introduces a brand-new skill and refactors an existing skill to support it, prefer separate commits. "Related" is not enough — the repo history should make it obvious which commit added the capability and which commit reorganized existing behavior around it.
+Read [grouping-examples.md](references/grouping-examples.md) before finalizing groups. Apply its release-adjacent splitting rule and repository examples alongside the guards above.
 
 #### Rename vs removal distinction
 
@@ -409,7 +355,7 @@ Even in auto-approval mode, surface the commit buckets explicitly before committ
 
 The summary is status output, not a review request. Step 5 is mandatory in the same turn once its preconditions pass: never ask "Proceed with committing these groups?" (or an equivalent question), wait for a reply, or finish with a pending commit plan.
 
-If the user did not narrow scope, the plan you surface must account for the full worktree rather than an arbitrarily chosen subset.
+Reconcile the plan's exact path lists against a fresh Step 1 inventory before presenting it. Every in-scope path must belong to a commit group; splitting a file across groups must account for all its changes. Resolve missing paths before proceeding. Show a coverage line such as `Scope: 7 changed paths (3 untracked), 7 planned, 0 omitted.` Counts supplement the path comparison; equal counts alone do not prove coverage. Record explicit user exclusions separately. Apply this check in every mode, including single-file and auto-approved requests.
 
 **Otherwise**, wait for the user to confirm or adjust. They may say things like:
 - "Looks good" → proceed to stage and commit
@@ -432,7 +378,8 @@ Before committing, validate each message against its file list:
 ### Step 5: Stage and commit each group
 
 For each group:
-1. `git add <specific files>` — be precise, don't use `git add .` unless everything belongs in one commit
+1. Refresh the inventory after approval and reconcile any changes with the plan. Stage each group's exact paths, including new files and deletions, with `git add -A -- <specific paths>`. Use literal pathspecs for names containing Git wildcard syntax. Do not use tracked-only staging such as `git add -u` or `git commit -a` as a substitute.
+   Compare `git diff --staged --name-status` and the full staged diff against the group's planned changes before committing. Account for pre-existing staged changes too; resolve missing or extra staged paths without discarding their contents. Keep staging and commits sequential because they share the index.
 2. Compose the commit message (see format above)
 3. Run `scripts/validate-commit-subject.ps1` again against the exact subject that will be passed to Git. Add `-PrefixMode Required` only for an explicitly requested combo. Do not run Git unless the validator exits successfully.
 4. Run the appropriate commit command:
@@ -449,34 +396,13 @@ When the body is just one short explanatory paragraph, prefer a single natural p
 
 ### Step 6: Verify
 
+After each commit, compare its recorded paths (`git diff-tree --root --no-commit-id --name-status -r HEAD`) with the group, accounting for both sides of renames. After the last group, rerun `git status --short --untracked-files=all` and reconcile remaining paths with the original inventory and explicit exclusions. A full-worktree request is complete only when no in-scope changes remain, including untracked files. If a path was missed, review and include it through the same workflow under the existing authorization; do not silently leave it behind or claim completion. Report any concrete blocker or newly arriving change that prevents completion.
+
 After committing, run `git log --oneline -5` to confirm the commit looks right. Read the stored subject with `git log -1 --format=%s` and run `scripts/validate-commit-subject.ps1` against that exact value. Then always run `git log -1 --format="%an <%ae>"` and verify that the author matches the requested identity mode before reporting success. Also run `git log -1 --format=%B` and verify the stored body contains readable prose with real line breaks, not literal escape sequences such as `\n`, and is not hard-wrapped mid-sentence just to satisfy a column limit. If any verification fails, amend the commit immediately instead of merely warning about it.
 
 If verification fails because the commit path used the wrong author or ignored the requested alias, stop treating it as a message-tweaking problem. Correct the tool path first, preserve the worktree safely, and only then repair the commit.
 
 ---
-
-## Good Examples
-
-```
-🎉 begin api project
-✨ add submission endpoint module
-🐛 handle null optional fields in dto
-➕ add validation library
-🐛 fix: handle null optional fields in dto   ← only when combo mode was requested
-```
-
-## Bad Examples (and why)
-
-```
-feat: add submission endpoint            ← "feat:" is not an allowed prefix
-✨ Feat: Add Submission Module            ← uppercase, "Feat:" not allowed
-💬 Update CHANGELOG for v10.0.10          ← uppercase description beginning
-💬  update changelog for v10.0.10         ← more than one separator space
-📋 update changelog for v10.0.10          ← emoji is absent from the approved reference table
-🎉 initial commit with all files         ← vague, bundles everything
-⚙️ config: setup api                     ← "config:" is not an allowed prefix
-♻️ refactor: reorganize skill wording    ← bad default if the user did not ask for the combo
-```
 
 ## Branching (for reference)
 
