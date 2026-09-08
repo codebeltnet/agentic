@@ -300,12 +300,13 @@ in both paired arms. Personal Copilot configuration is excluded by run-local
 `COPILOT_HOME`, `COPILOT_CACHE_HOME`, `HOME`, `USERPROFILE`, and XDG roots;
 the runner does not copy the normal `.copilot` directory. Authentication prefers
 explicit `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; when none is
-present, the trusted runner may resolve `gh auth token` outside the worker and
-inject only that token as a protected environment variable. Host `GH_CONFIG_DIR`
-is never forwarded into the evaluated worker. `--secret-env-vars` removes every
-listed token variable from shell and MCP child environments. Preflight does not
-make a model request and therefore reports native keychain/service readiness as
-conditional rather than claiming successful remote authentication. Codex's
+present, the trusted runner resolves `gh auth token` outside the worker across
+documented/default config candidates and injects only that token as a protected
+environment variable. Host `GH_CONFIG_DIR` is never forwarded into the evaluated
+worker. `--secret-env-vars` removes every listed token variable from shell and
+MCP child environments. If neither explicit token variables nor trusted GitHub
+CLI token fallback is resolvable, preflight fails closed before Phase 1 model
+execution starts. Codex's
 compatibility API-key path uses `--ask-for-approval never` with `exec --sandbox
 danger-full-access`; subscription eval arms use the runner-owned app-server path
 described above. It does not combine explicit sandbox selection with
