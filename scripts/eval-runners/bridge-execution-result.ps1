@@ -259,6 +259,9 @@ try {
         $artifactPaths.Add((Get-ResultRelativeArtifactPath -EvalDirectory $evalDirectory -FullPath $full))
     }
 
+    . (Join-Path $PSScriptRoot 'github-copilot/isolation.ps1')
+    Assert-CopilotCapturedBoundary -Raw $raw -RunData $runData
+
     if ($RequireNativeDelegation) {
         if ([string]$raw.status -eq 'incompatible') {
             throw 'An incompatible native-worker arm is diagnostic only and cannot be bridged into a gradeable canonical result.'

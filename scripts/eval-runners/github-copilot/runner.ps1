@@ -27,12 +27,16 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '..\runner-common.ps1')
+. (Join-Path $PSScriptRoot 'isolation.ps1')
 
 # GitHub Copilot checks these token variables before its OS credential store and
 # GitHub CLI fallback. The values are forwarded only to the Copilot process;
 # --secret-env-vars removes them from shell and MCP child environments.
 $copilotAuthVariables = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
 $script:copilotHomeCleanupSafe = $true
+$script:copilotLogicalInputs = $null
+$script:copilotProjection = $null
+$script:copilotBoundaryViolations = [System.Collections.Generic.List[string]]::new()
 
 function Invoke-CopilotProcess {
     param(
@@ -566,6 +570,13 @@ function Get-CopilotPreflight {
     $warnings = [System.Collections.Generic.List[string]]::new()
     $profile = $Inputs.Profile
     $run = $Inputs.Run
+    try {
+        if ($null -eq $script:copilotProjection) { [void](Get-CopilotProjectionPlan -Inputs $Inputs) }
+        $checks.Add((New-PreflightCheck -Name 'physical_projection' -Status passed -Detail 'Allowlisted physical workspace outside package/source ancestry is required.'))
+    } catch {
+        $reasons.Add($_.Exception.Message)
+        $checks.Add((New-PreflightCheck -Name 'physical_projection' -Status failed -Detail $_.Exception.Message))
+    }
     $commandInfo = Resolve-ExternalCommand -Name 'copilot'
     $platform = Get-PlatformName
     $sandboxInfo = if ($platform -eq 'linux') { Resolve-SandboxCommand -Name 'bwrap' } elseif ($platform -eq 'macos') { Resolve-SandboxCommand -Name 'sandbox-exec' } else { $null }
@@ -808,6 +819,7 @@ function Write-CopilotCapture {
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text
     )
 
+    if ($null -ne $script:copilotLogicalInputs) { $RunData = $script:copilotLogicalInputs }
     $path = Join-Path $RunData.Run.RunRoot ($RelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
     New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
     [System.IO.File]::WriteAllText($path, $Text, [System.Text.UTF8Encoding]::new($false))
@@ -839,6 +851,8 @@ function Read-CopilotEvents {
     $usageNumToolCalls = 0
     $usageSeen = $false
     $toolStarts = 0
+    $lastCheckpoint = $null
+    $checkpointCalls = [ordered]@{}
     $sessionError = $null
     $eventCounts = @{}
     $sessionIds = [System.Collections.Generic.List[string]]::new()
@@ -855,6 +869,10 @@ function Read-CopilotEvents {
         }
         if ($eventCounts.ContainsKey($eventType)) { $eventCounts[$eventType]++ } else { $eventCounts[$eventType] = 1 }
         $data = Get-JsonProperty -Object $event -Name 'data' -Default $null
+        if ($eventType -match '^(tool\.|command\.)' -and $null -ne $script:copilotProjection) {
+            $violations = @(Find-CopilotBoundaryContradictions -Data $data -Projection $script:copilotProjection)
+            foreach ($violation in $violations) { $script:copilotBoundaryViolations.Add($violation) }
+        }
         foreach ($eventSessionId in @(Get-CopilotEventSessionIds -Event $event)) {
             if ($sessionIds -notcontains $eventSessionId) { $sessionIds.Add($eventSessionId) }
         }
@@ -865,6 +883,19 @@ function Read-CopilotEvents {
             if (-not [string]::IsNullOrWhiteSpace([string]$timestamp) -and $eventTimestamps -notcontains [string]$timestamp) { $eventTimestamps.Add([string]$timestamp) }
         }
         switch ($eventType) {
+            'session.usage_checkpoint' {
+                # Billing is session-cumulative. Cache-break entries are last
+                # call snapshots, deduplicated by native call identity.
+                $lastCheckpoint = $data
+                foreach ($conversation in @(Get-JsonProperty -Object $data -Name 'promptCacheBreakState' -Default @())) {
+                    $models = Get-JsonProperty -Object $conversation -Name 'models' -Default @{}
+                    foreach ($name in @(Get-JsonPropertyNames -Object $models)) {
+                        $call = Get-JsonProperty -Object $models -Name $name
+                        $id = [string](Get-JsonProperty -Object $call -Name 'model_call_id' -Default '')
+                        if ($id) { $checkpointCalls[$id] = $call }
+                    }
+                }
+            }
             'assistant.message' {
                 $assistantMessageObserved = $true
                 $content = [string](Get-JsonProperty -Object $data -Name 'content' -Default '')
@@ -907,6 +938,14 @@ function Read-CopilotEvents {
         $finalText = [string]::Join("`n", $assistantContents)
     }
     $toolCalls = if ($toolStarts -gt 0) { $toolStarts } else { $usageNumToolCalls }
+    if (-not $usageSeen -and $checkpointCalls.Count -gt 0) {
+        foreach ($call in $checkpointCalls.Values) {
+            $usageInput = Add-NullableInt64 -Current $usageInput -Value (Get-JsonProperty -Object $call -Name 'prompt_tokens' -Default $null)
+            $usageCacheRead = Add-NullableInt64 -Current $usageCacheRead -Value (Get-JsonProperty -Object $call -Name 'cache_read' -Default $null)
+            $usageCacheWrite = Add-NullableInt64 -Current $usageCacheWrite -Value (Get-JsonProperty -Object $call -Name 'cache_write' -Default $null)
+        }
+        $usageSeen = $true
+    }
 
     return [pscustomobject]@{
         FinalText = $finalText
@@ -916,6 +955,8 @@ function Read-CopilotEvents {
         UsageOutput = $usageOutput
         UsageCacheRead = $usageCacheRead
         UsageCacheWrite = $usageCacheWrite
+        UsageCheckpoint = $lastCheckpoint
+        CheckpointCalls = @($checkpointCalls.Values)
         ToolCalls = $toolCalls
         SessionError = $sessionError
         EventCounts = $eventCounts
@@ -1018,7 +1059,8 @@ function Invoke-CopilotScriptedExecute {
     $failureMessage = $null
 
     for ($turnIndex = 0; $turnIndex -lt $requestedTurns.Count; $turnIndex++) {
-        $turnText = Get-InteractionTurnText -Turn $requestedTurns[$turnIndex] -RunData $Inputs.Run
+        $turnSourceRun = if ($null -ne $script:copilotLogicalInputs) { $script:copilotLogicalInputs.Run } else { $Inputs.Run }
+        $turnText = Get-InteractionTurnText -Turn $requestedTurns[$turnIndex] -RunData $turnSourceRun
         $arguments = @($baseArguments)
         $targetSessionId = $null
         if ($turnIndex -gt 0) {
@@ -1239,8 +1281,8 @@ function Invoke-CopilotScriptedExecute {
             prompt_fidelity = $true
             prompt_sha256 = [string]$Inputs.Run.PromptHash
             terminal_result_capture = [bool]$terminalCapture
-            paired_arm_visible = $false
-            grading_material_visible = $false
+            paired_arm_visible = ($null -eq $script:copilotProjection -or $script:copilotBoundaryViolations.Count -gt 0)
+            grading_material_visible = ($null -eq $script:copilotProjection -or $script:copilotBoundaryViolations.Count -gt 0)
             nested_model_execution = $false
             model_execution_count = 1
             same_session_continuation = [bool]$terminalCapture
@@ -1261,11 +1303,165 @@ function Invoke-CopilotScriptedExecute {
     $resultFinalResponse = if ($status -eq 'completed') { $finalText } else { $null }
     $resultFinalResponseReason = if ($status -eq 'completed') { $null } else { 'native_interaction_incompatible' }
     $result = New-ExecutionResult -Descriptor $ExecutionDescriptor -Profile $Inputs.Profile -Run $Inputs.Run -Status $status -FinalResponse $resultFinalResponse -FinalResponseReason $resultFinalResponseReason -StartedUtc $firstProcess.StartedUtc.ToString('o') -FinishedUtc $finished.ToString('o') -DurationSeconds $durationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $capturedSessionId -IsolationCapabilities (Get-CopilotCapabilityMap -Inputs $Inputs -HardFilesystemConfinement $hardFilesystem -ContinuationCapability $continuationCapability) -IsolationMechanisms @($mechanisms) -ResolvedConfiguration ([ordered]@{ status = 'accepted_request'; reason = 'Copilot accepted the requested model alias and configuration; scripted turns retained the exact requested model on every invocation.'; observations = [ordered]@{ model = $Inputs.Profile.Model; observed_models = @($observedModels.ToArray()); continuation_flag = $continuationCapability.Flag } }) -Telemetry $telemetry -Artifacts @($artifacts.ToArray()) -Warnings @($warnings.ToArray()) -Evidence $evidence -AttemptCount 1
-    if ($status -eq 'completed') { [void](Assert-InteractionResultEvidence -ExecutionResult $result -RunData $Inputs.Run) }
+    if ($status -eq 'completed') {
+        $validationRun = if ($null -ne $script:copilotLogicalInputs) { $script:copilotLogicalInputs.Run } else { $Inputs.Run }
+        [void](Assert-InteractionResultEvidence -ExecutionResult $result -RunData $validationRun)
+    }
     return $result
 }
 
 function Invoke-CopilotExecute {
+    param([Parameter(Mandatory = $true)][object]$Inputs)
+
+    # Keep all orchestration data in the parent process. Only repo, prepared
+    # home, prompt bytes and this arm's candidate cross the projection boundary.
+    $plan = Get-CopilotProjectionPlan -Inputs $Inputs
+    $logicalInputs = $Inputs
+    $script:copilotLogicalInputs = $Inputs
+    $script:copilotProjection = $plan
+    $script:copilotBoundaryViolations = [System.Collections.Generic.List[string]]::new()
+    [void](New-Item -ItemType Directory -Path $plan.Root -ErrorAction Stop)
+    try {
+        $physicalRun = $Inputs.Run.PSObject.Copy()
+        $physicalRun.RunRoot = $plan.Root
+        foreach ($field in @('WorkingDirectoryPath', 'HomeDirectoryPath', 'SkillDirectoryPath')) {
+            $source = [string]$Inputs.Run.$field
+            if ([string]::IsNullOrWhiteSpace($source)) { continue }
+            $relative = [IO.Path]::GetRelativePath($Inputs.Run.RunRoot, $source)
+            $destination = Join-Path $plan.Root $relative
+            Copy-CopilotProjectionTree -Source $source -Destination $destination
+            $physicalRun.$field = $destination
+        }
+        # Future scripted inputs stay parent-owned even when staged in repo/home.
+        if ($null -ne $Inputs.Run.Interaction) {
+            foreach ($turn in $Inputs.Run.Interaction.turns) {
+                $source = [string](Get-JsonProperty -Object $turn -Name source -Default '')
+                if ($source) {
+                    Assert-SafeRelativePath -RelativePath $source -FieldName 'interaction source'
+                    $path = Join-Path $plan.Root $source
+                    if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force }
+                }
+            }
+        }
+        $physicalRun.PromptPath = Join-Path $plan.Root 'prompt.md'
+        [IO.File]::WriteAllBytes($physicalRun.PromptPath, $Inputs.Run.PromptBytes)
+        $projectedFiles = @(Get-ChildItem -LiteralPath $physicalRun.WorkingDirectoryPath -Recurse -Force -File | ForEach-Object { [IO.Path]::GetRelativePath($physicalRun.WorkingDirectoryPath, $_.FullName) })
+        $physicalInputs = [pscustomobject]@{ Run = $physicalRun; Profile = $Inputs.Profile }
+        $result = Invoke-CopilotWithPreparedHome -Inputs $physicalInputs -Action { Invoke-CopilotProjectedExecute -Inputs $physicalInputs }
+        $result.evidence.execution_paths = [ordered]@{
+            projection = 'physical_temp_outside_logical_package'
+            logical_run_root = $logicalInputs.Run.RunRoot
+            logical_working_directory = $logicalInputs.Run.WorkingDirectoryPath
+            logical_home_directory = $logicalInputs.Run.HomeDirectoryPath
+            physical_run_root = $plan.Root
+            physical_working_directory = $physicalRun.WorkingDirectoryPath
+            physical_home_directory = $physicalRun.HomeDirectoryPath
+            source_repository_root = $plan.SourceRepositoryRoot
+            projection_proven = $true
+            hard_filesystem_confinement = [bool]$result.isolation.hard_filesystem_confinement
+        }
+        $result.evidence.boundary = [ordered]@{ proof = 'allowlisted_physical_projection'; contradictions = @($script:copilotBoundaryViolations.ToArray()); event_inspection = 'contradiction_detector_not_confinement' }
+        $capturePath = Join-Path $logicalInputs.Run.RunRoot 'evidence/copilot-events.jsonl'
+        if (Test-Path -LiteralPath $capturePath) {
+            $usageWarnings = [System.Collections.Generic.List[string]]::new()
+            # Reparse the combined native stream once, so resumed cumulative
+            # checkpoints and repeated call snapshots are never summed twice.
+            $usage = Read-CopilotEvents -Parsed (ConvertFrom-JsonLines -Text ([IO.File]::ReadAllText($capturePath))) -Warnings $usageWarnings
+            if ($usage.ParseErrorCount -gt 0) { $script:copilotBoundaryViolations.Add('Unparseable native events prevent complete boundary inspection.') }
+            $result.evidence.usage_checkpoint = $usage.UsageCheckpoint
+            $result.evidence.usage_checkpoint_calls = $usage.CheckpointCalls
+            if ($usage.UsageSeen) {
+                $buckets = [ordered]@{}
+                foreach ($mapping in @(@('input_tokens', 'UsageInput'), @('output_tokens', 'UsageOutput'), @('cache_read_tokens', 'UsageCacheRead'), @('cache_write_tokens', 'UsageCacheWrite'))) {
+                    if ($null -ne $usage.($mapping[1])) { $buckets[$mapping[0]] = [int64]$usage.($mapping[1]) }
+                }
+                if ($buckets.Count) { $result.telemetry.tokens = New-AvailableMetric -Value $buckets }
+            }
+        }
+        if ($script:copilotBoundaryViolations.Count -gt 0) {
+            $result.status = 'incompatible'
+            $result.isolation.status = 'unverified'
+            $result.isolation.level = 'unsupported'
+            $result.isolation.hard_filesystem_confinement = $false
+            $result.exit.failure = New-ExecutionFailure -Code 'isolation_violation' -Message ([string]::Join('; ', $script:copilotBoundaryViolations))
+            if ($result.evidence.Contains('delegation')) {
+                $result.evidence.delegation.paired_arm_visible = $true
+                $result.evidence.delegation.grading_material_visible = $true
+            }
+        }
+        $result.evidence.boundary.contradictions = @($script:copilotBoundaryViolations | Select-Object -Unique)
+        # Do not copy runtime links back into the logical package.
+        Assert-CopilotProjectionTree -Path $physicalRun.WorkingDirectoryPath
+        Assert-CopilotProjectionTree -Path $logicalInputs.Run.WorkingDirectoryPath
+        foreach ($file in @(Get-ChildItem -LiteralPath $logicalInputs.Run.WorkingDirectoryPath -Recurse -Force -File)) {
+            $relative = [IO.Path]::GetRelativePath($logicalInputs.Run.WorkingDirectoryPath, $file.FullName)
+            if ($projectedFiles -contains $relative -and -not (Test-Path -LiteralPath (Join-Path $physicalRun.WorkingDirectoryPath $relative))) {
+                if (-not (Test-PathInside -BasePath $logicalInputs.Run.WorkingDirectoryPath -CandidatePath $file.FullName)) { throw 'Unsafe projected output deletion.' }
+                Remove-Item -LiteralPath $file.FullName -Force
+            }
+        }
+        Copy-CopilotProjectionTree -Source $physicalRun.WorkingDirectoryPath -Destination $logicalInputs.Run.WorkingDirectoryPath
+        return $result
+    } finally {
+        if (-not $script:copilotHomeCleanupSafe) { throw 'Copilot process termination is unproven; projection retained and execution fails closed.' }
+        if (-not (Test-PathInside -BasePath $plan.Parent -CandidatePath $plan.Root) -or [IO.Path]::GetFileName($plan.Root) -notmatch '^agentic-copilot-projection-[0-9a-f]{32}$') { throw 'Unsafe Copilot projection cleanup path.' }
+        Remove-Item -LiteralPath $plan.Root -Recurse -Force
+        $script:copilotLogicalInputs = $null
+        $script:copilotProjection = $null
+    }
+}
+
+function Assert-CopilotProjectionTree {
+    param([string]$Path)
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Copilot projection refuses filesystem link '$Path'." }
+    if ($item.PSIsContainer) {
+        foreach ($child in Get-ChildItem -LiteralPath $Path -Force) { Assert-CopilotProjectionTree -Path $child.FullName }
+    }
+}
+
+function Copy-CopilotProjectionTree {
+    param([string]$Source, [string]$Destination)
+    Assert-CopilotProjectionTree -Path $Source
+    [void][IO.Directory]::CreateDirectory($Destination)
+    foreach ($child in Get-ChildItem -LiteralPath $Source -Force) { Copy-Item -LiteralPath $child.FullName -Destination $Destination -Recurse -Force }
+}
+
+function Get-CopilotProjectionPlan {
+    param([object]$Inputs)
+    $sourceRoot = $null
+    $packageRoot = Split-Path -Parent (Split-Path -Parent $Inputs.Run.RunRoot)
+    foreach ($start in @($Inputs.Run.RunRoot, $PSScriptRoot)) {
+        $cursor = $start
+        while ($cursor) {
+            if (Test-Path -LiteralPath (Join-Path $cursor '.git')) { $sourceRoot = $cursor; break }
+            $cursor = Split-Path -Parent $cursor
+        }
+        if ($sourceRoot) { break }
+    }
+    $parent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    foreach ($forbidden in @($packageRoot, $sourceRoot) | Where-Object { $_ }) {
+        if (Test-PathInside -BasePath $forbidden -CandidatePath $parent) { throw 'Copilot cannot establish a physical projection outside package/source ancestry.' }
+    }
+    # A linked temp parent or ambient instruction file would invalidate ancestry
+    # isolation. Fail closed rather than disable legitimate repo instructions.
+    $cursor = $parent
+    while ($cursor) {
+        $item = Get-Item -LiteralPath $cursor -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Copilot projection parent contains a filesystem link.' }
+        foreach ($instruction in @('AGENTS.md', '.github/copilot-instructions.md', '.github/instructions', '.git')) {
+            if (Test-Path -LiteralPath (Join-Path $cursor $instruction)) { throw "Copilot projection would inherit ambient '$instruction'." }
+        }
+        $cursor = Split-Path -Parent $cursor
+    }
+    foreach ($path in @($Inputs.Run.WorkingDirectoryPath, $Inputs.Run.HomeDirectoryPath, $Inputs.Run.SkillDirectoryPath) | Where-Object { $_ }) { Assert-CopilotProjectionTree -Path $path }
+    foreach ($indirection in @('.git', '.git/objects/info/alternates', '.git/commondir')) {
+        if (Test-Path -LiteralPath (Join-Path $Inputs.Run.WorkingDirectoryPath $indirection) -PathType Leaf) { throw "Copilot projection refuses external Git indirection '$indirection'." }
+    }
+    return [pscustomobject]@{ Root = Join-Path $parent ('agentic-copilot-projection-' + [Guid]::NewGuid().ToString('N')); Parent = $parent; PackageRoot = $packageRoot; SourceRepositoryRoot = $sourceRoot }
+}
+
+function Invoke-CopilotProjectedExecute {
     param([Parameter(Mandatory = $true)][object]$Inputs)
 
     $preflight = Get-CopilotPreflight -Inputs $Inputs
@@ -1424,8 +1620,8 @@ function Invoke-CopilotExecute {
             prompt_fidelity = $true
             prompt_sha256 = [string]$Inputs.Run.PromptHash
             terminal_result_capture = [bool]$terminalCapture
-            paired_arm_visible = $false
-            grading_material_visible = $false
+            paired_arm_visible = ($null -eq $script:copilotProjection -or $script:copilotBoundaryViolations.Count -gt 0)
+            grading_material_visible = ($null -eq $script:copilotProjection -or $script:copilotBoundaryViolations.Count -gt 0)
             nested_model_execution = $false
             model_execution_count = 1
         }

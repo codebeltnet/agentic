@@ -191,7 +191,7 @@ function New-TestGradingDocument {
                 assertion_index = $index
                 assertion = [string]$assertions[$index]
                 passed = $true
-                evidence = 'deterministic grading-isolation fixture evidence'
+                evidence = "Source: output`nQuote: $((Read-TestJson -Path $record.ResultPath).output)`nReason: The captured fixture response establishes assertion $index for this deterministic transport case."
             })
         }
     }
@@ -417,7 +417,7 @@ for ($index = 0; $index -lt $count; $index++) {
             eval_name = $evalName
             prompt = "fixture prompt $evalId"
             expected_output = 'fixture output'
-            assertions = @($assertion)
+            assertions = @($assertion, 'the response contains the fixture completion content')
         })
         $runs = [ordered]@{}
         foreach ($configuration in @('with_skill', 'without_skill')) {
@@ -431,7 +431,7 @@ for ($index = 0; $index -lt $count; $index++) {
                 eval_name = $evalName
                 configuration = $configuration
                 execution_status = 'unrun'
-                grading = @([ordered]@{ text = $assertion; passed = $null; evidence = '' })
+                grading = @([ordered]@{ text = $assertion; passed = $null; evidence = '' }, [ordered]@{ text = 'the response contains the fixture completion content'; passed = $null; evidence = '' })
             })
             $runs[$configuration] = [ordered]@{
                 mode = $configuration
@@ -595,6 +595,25 @@ for ($index = 0; $index -lt $count; $index++) {
         Write-TestJson -Path $gradingPath -Value $invalidEntry
         Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'invalid grading entry validation' -ExpectedText 'passed must be a boolean'
         Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'invalid grading validation'
+
+        foreach ($badEvidence in @('', " `t`n", 'Evaluation completed with output', "Source: output`nQuote: fabricated unavailable observation`nReason: This establishes the assertion.", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: Evaluation completed with output")) {
+            $bad = Copy-TestGradingDocument -Document $validGrading
+            $bad.grading[0].evidence = $badEvidence
+            Write-TestJson -Path $gradingPath -Value $bad
+            Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'non-evidentiary PASS rejected'
+            Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'evidence rejection preserves frozen execution'
+        }
+        $repeated = Copy-TestGradingDocument -Document $validGrading
+        $repeated.grading[1].evidence = $repeated.grading[0].evidence
+        Write-TestJson -Path $gradingPath -Value $repeated
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'repeated PASS evidence rejected' -ExpectedText 'Repeated PASS evidence'
+
+        $artifactEvidence = Copy-TestGradingDocument -Document $validGrading
+        $firstRecord = @($records | Sort-Object EvalId, Configuration)[0]
+        $eventLine = @(Get-Content (Join-Path (Split-Path -Parent $firstRecord.RunManifestPath) 'evidence/fixture-events.jsonl'))[0]
+        $artifactEvidence.grading[0].evidence = "Source: evidence/fixture-events.jsonl`nQuote: $eventLine`nReason: The native event records the fixture response for this assertion."
+        Write-TestJson -Path $gradingPath -Value $artifactEvidence
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'frozen native artifact citation accepted'
 
         Write-TestJson -Path $gradingPath -Value $validGrading
         $validValidation = Invoke-TestTool -Path $validationScript -Arguments $validationArguments

@@ -185,8 +185,8 @@
             "prompt_fidelity": { "const": true },
             "prompt_sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
             "terminal_result_capture": { "const": true },
-            "paired_arm_visible": { "const": false },
-            "grading_material_visible": { "const": false },
+            "paired_arm_visible": { "type": "boolean" },
+            "grading_material_visible": { "type": "boolean" },
             "nested_model_execution": { "const": false },
             "model_execution_count": { "const": 1 }
           }
@@ -197,5 +197,12 @@
     "warnings": { "type": "array", "items": { "type": "string" } },
     "compatibility_deviations": { "type": "array", "items": { "type": "string" } },
     "attempt_count": { "const": 1 }
-  }
+  },
+  "allOf": [{
+    "if": { "properties": { "status": { "const": "completed" } } },
+    "then": { "properties": { "evidence": { "properties": { "delegation": { "properties": {
+      "paired_arm_visible": { "const": false },
+      "grading_material_visible": { "const": false }
+    } } } } } }
+  }]
 }

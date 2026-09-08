@@ -935,6 +935,8 @@ function Get-EvalWorkspaceOption {
     if ($EvalEntry.PSObject.Properties.Name -contains 'workspace' -and $null -ne $EvalEntry.workspace) {
         $workspace = $EvalEntry.workspace
         if ($workspace.PSObject.Properties.Name -contains 'git' -and $null -ne $workspace.git) {
+            . (Join-Path $PSScriptRoot 'eval-git-workspace.ps1')
+            Assert-EvalGitScenario -Scenario $workspace.git
             $wantsGit = [bool]$workspace.git
         }
     }
@@ -1043,8 +1045,12 @@ function Initialize-GitWorkspace {
         '-c', 'user.name=Eval Harness',
         '-c', 'user.email=eval-harness@localhost',
         '-c', 'commit.gpgsign=false',
+        '-c', 'core.hooksPath=',
+        '-c', 'init.templateDir=',
         '-c', 'core.autocrlf=false'
     )
+    $previousAuthorDate = $env:GIT_AUTHOR_DATE
+    $previousCommitterDate = $env:GIT_COMMITTER_DATE
     $env:GIT_AUTHOR_DATE = '2020-01-01T00:00:00Z'
     $env:GIT_COMMITTER_DATE = '2020-01-01T00:00:00Z'
     try {
@@ -1062,8 +1068,8 @@ function Initialize-GitWorkspace {
         }
         & git @identity -C $RepoDirectory tag 'v1.0.0' 2>$null | Out-Null
     } finally {
-        Remove-Item Env:GIT_AUTHOR_DATE -ErrorAction SilentlyContinue
-        Remove-Item Env:GIT_COMMITTER_DATE -ErrorAction SilentlyContinue
+        $env:GIT_AUTHOR_DATE = $previousAuthorDate
+        $env:GIT_COMMITTER_DATE = $previousCommitterDate
     }
 }
 
@@ -1550,6 +1556,8 @@ function Invoke-PrepareMode {
             }
             if ($workspaceOption.Git) {
                 Initialize-GitWorkspace -RepoDirectory $repoDir
+                . (Join-Path $PSScriptRoot 'eval-git-workspace.ps1')
+                Add-EvalGitScenario -RepoDirectory $repoDir -Scenario $evalEntry.workspace.git
             }
 
             $homeDir = Join-Path $runDir $runDirectoryNames.Home
@@ -1868,6 +1876,7 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('Only after Phase 1 returns a successful terminal JSON summary, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
     [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
     [void]$builder.AppendLine('Only if that bridge succeeds, reveal the grading key in `eval-metadata.json` to the Grader. The Grader may author exactly one package-root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`; each entry contains only `eval_id`, `eval_name`, `configuration`, `assertion_index`, `assertion`, `passed`, and `evidence`. It must not edit raw execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.')
+    [void]$builder.AppendLine('Before creating grading.json, the Grader MUST read and follow the exact packaged `tools/skill-creator/agents/grader.md`; that guidance is authoritative during Phase 2. Uncertain or unverified expectations FAIL. Every assertion requires specific evidence. For PASS, evidence must use three newline-separated fields: `Source: output` (or a manifest-recorded run artifact path), `Quote: <verbatim observation from that frozen source>`, and `Reason: <why this observation establishes this particular assertion>`. Do not reuse generic completion statements or identical evidence across assertions. FAIL evidence must explain what is missing or contradicted. Deterministic validation checks provenance and shape; it does not replace the Grader judgment required by grader.md.')
     [void]$builder.AppendLine('To display the authoritative top-level grading skeleton, run:')
     [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$gradingValidatorPath`" -ShowSkeleton")
     [void]$builder.AppendLine('Write `grading.json`, then validate it before finalization:')

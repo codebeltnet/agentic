@@ -648,8 +648,9 @@ Add-ValidationResult -Results $results -Name 'All repo-managed skills include va
                 if ($eval.workspace -isnot [System.Management.Automation.PSCustomObject]) {
                     throw "$relativeEvalPath eval $($eval.id) has a non-object 'workspace'"
                 }
-                if ($eval.workspace.PSObject.Properties.Name -contains 'git' -and $eval.workspace.git -isnot [bool]) {
-                    throw "$relativeEvalPath eval $($eval.id) must declare 'workspace.git' as a boolean"
+                if ($eval.workspace.PSObject.Properties.Name -contains 'git') {
+                    . (Join-Path $PSScriptRoot 'eval-git-workspace.ps1')
+                    Assert-EvalGitScenario -Scenario $eval.workspace.git
                 }
             }
         }
@@ -1275,6 +1276,18 @@ Add-ValidationResult -Results $results -Name 'Token normalization and benchmark 
     if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
     $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-token-reporting.ps1') 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Token reporting regression failed: $($output -join [Environment]::NewLine)" }
+}
+
+Add-ValidationResult -Results $results -Name 'Copilot physical boundaries and checkpoint telemetry remain deterministic' -Group 'Runners' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-copilot-boundaries.ps1') 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Copilot boundary regression failed: $($output -join [Environment]::NewLine)" }
+}
+
+Add-ValidationResult -Results $results -Name 'Change-impact default resolution has paired deterministic Git history' -Group 'Preparation' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-change-impact-workspace.ps1') 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Git scenario regression failed: $($output -join [Environment]::NewLine)" }
 }
 
 Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains deterministic' -Group 'Runners' -Action {
@@ -2359,7 +2372,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                         assertion_index = $assertionIndex
                         assertion = [string]$metadataForGrade.assertions[$assertionIndex]
                         passed = $true
-                        evidence = 'validator evidence'
+                        evidence = "Source: output`nQuote: $(([IO.File]::ReadAllText((Join-Path $iterationDirectory $entryToGrade.runs.$configuration.result)) | ConvertFrom-Json).output)`nReason: The fixture response supplies the observed content for assertion $assertionIndex in this deterministic transport test."
                     })
                 }
             }

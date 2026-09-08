@@ -9,6 +9,7 @@ Set-StrictMode -Version Latest
 $runnerRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $runnerRoot 'runner-common.ps1')
 . (Join-Path $runnerRoot 'execution-freeze.ps1')
+. (Join-Path $runnerRoot 'github-copilot/isolation.ps1')
 
 # Import definitions only: neither adapter dispatch nor a real CLI is invoked.
 foreach ($file in @('github-copilot/runner.ps1', 'bridge-execution-result.ps1', 'tests/test-runner-conformance.ps1', '../generate-eval-report.ps1')) {
@@ -73,6 +74,14 @@ $gitExit = $LASTEXITCODE
 $record = [ordered]@{ turn = $turn; arguments = $arguments; cwd = (Get-Location).Path; ceiling = $env:GIT_CEILING_DIRECTORIES; cache = $env:COPILOT_CACHE_HOME; xdg = $env:XDG_CACHE_HOME; localappdata = $env:LOCALAPPDATA; appdata = $env:APPDATA; git_exit = $gitExit; git_root = [string]$gitResult; old_cache_exists = Test-Path -LiteralPath (Join-Path $runHome '.copilot-cache'); double_suffix_exists = Test-Path -LiteralPath (Join-Path $env:COPILOT_CACHE_HOME 'copilot') }
 [IO.File]::AppendAllText((Join-Path (Get-Location).Path 'fake-log.jsonl'), (($record | ConvertTo-Json -Compress) + "`n"))
 [IO.File]::WriteAllText((Join-Path (Get-Location).Path 'task-output.txt'), 'keep repo output')
+$probe = [ordered]@{ metadata = Test-Path ../../eval-metadata.json; paired = (Test-Path ../../with_skill) -or (Test-Path ../../without_skill); candidate = Test-Path ../skill; staged_agents = Get-Content AGENTS.md -Raw; staged_copilot = Get-Content .github/copilot-instructions.md -Raw; ambient = @() }
+$cursor = Split-Path -Parent (Get-Location).Path
+while ($cursor) {
+    foreach ($name in @('AGENTS.md', '.github/copilot-instructions.md')) { if (Test-Path -LiteralPath (Join-Path $cursor $name)) { $probe.ambient += [IO.File]::ReadAllText((Join-Path $cursor $name)) } }
+    $cursor = Split-Path -Parent $cursor
+}
+[IO.File]::WriteAllText((Join-Path (Get-Location).Path 'projection-probe.json'), ($probe | ConvertTo-Json))
+if ($inputText -eq 'violation') { '{"type":"tool.execution_start","data":{"toolName":"view","arguments":{"path":"../../eval-metadata.json"}}}' }
 if ($inputText -eq 'timeout') { [Console]::Out.WriteLine('{"type":"session.start","data":{"sessionId":"fixture-session"}}'); [Console]::Out.Flush(); Start-Sleep -Seconds 30 }
 $text = if ($turn -eq 1) { 'Confirm before generation. Δ' } else { "Generated successfully.`nExact terminal text." }
 @{ type = 'session.start'; data = @{ sessionId = 'fixture-session' } } | ConvertTo-Json -Compress
@@ -90,12 +99,19 @@ if ($inputText -eq 'failure') { exit 7 }
     $profilePath = Join-Path $iteration 'execution-profile.json'
     Write-TestJson -Path $profilePath -Value @{ schema = (Get-RunnerSchemaNames).Profile; runner = 'github-copilot'; model = 'fixture-model'; reasoning_effort = $null; configuration_profile = 'isolated-default'; tool_profile = 'default'; timeout_seconds = 15; concurrency = 1 }
     foreach ($run in @($with, $without)) {
+        [void][IO.Directory]::CreateDirectory((Join-Path $run.Root 'repo/.github'))
+        [IO.File]::WriteAllText((Join-Path $run.Root 'repo/AGENTS.md'), 'STAGED_INSTRUCTIONS_CANARY')
+        [IO.File]::WriteAllText((Join-Path $run.Root 'repo/.github/copilot-instructions.md'), 'STAGED_COPILOT_CANARY')
         [void][IO.Directory]::CreateDirectory((Join-Path $run.Root 'home/baseline/empty'))
         [IO.File]::WriteAllBytes((Join-Path $run.Root 'home/baseline/nested.bin'), [byte[]]@(0, 255, 10, 13, 42))
         [IO.File]::WriteAllBytes((Join-Path $run.Root 'home/baseline/empty.bin'), [byte[]]@())
         [void][IO.Directory]::CreateDirectory((Join-Path $run.Root 'evidence'))
         [IO.File]::WriteAllText((Join-Path $run.Root 'evidence/prepared.txt'), 'keep evidence')
     }
+    [IO.File]::WriteAllText((Join-Path $testRoot 'AGENTS.md'), 'FORBIDDEN_SOURCE_INSTRUCTIONS_CANARY')
+    [void][IO.Directory]::CreateDirectory((Join-Path $testRoot '.github'))
+    [IO.File]::WriteAllText((Join-Path $testRoot '.github/copilot-instructions.md'), 'FORBIDDEN_COPILOT_CANARY')
+    [IO.File]::WriteAllText((Join-Path (Split-Path -Parent $with.Root) 'eval-metadata.json'), 'FORBIDDEN_GRADING_CANARY')
     $inputs = [pscustomobject]@{ Run = Resolve-RunContract -RunPath $with.Path; Profile = Resolve-ExecutionProfile -ProfilePath $profilePath }
     $baseline = Get-CopilotHomeBaseline -HomePath $inputs.Run.HomeDirectoryPath
     $baselineHash = Get-TestTreeHash -Root $inputs.Run.HomeDirectoryPath
@@ -117,18 +133,19 @@ if ($inputText -eq 'failure') { exit 7 }
     $records = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo/fake-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
     Assert-Equal 2 $records.Count 'both turns execute with shared runtime state'
     foreach ($record in $records) {
-        Assert-Equal $with.Root $record.ceiling 'exact child environment ceiling is the manifest RunRoot'
+        Assert-Equal $result.evidence.execution_paths.physical_run_root $record.ceiling 'child ceiling is the physical run root'
+        Assert-True (-not (Test-PathInside -BasePath $testRoot -CandidatePath $record.cwd)) 'physical cwd excludes source and package ancestry'
         Assert-True ($record.git_exit -ne 0) 'child git cannot discover outer/.git from non-Git staged repo'
-        Assert-Equal $inputs.Run.WorkingDirectoryPath $record.cwd 'child working directory retained'
+        Assert-Equal $result.evidence.execution_paths.physical_working_directory $record.cwd 'child uses projected working directory'
         $argsList = [string[]]$record.arguments
-        Assert-Equal $inputs.Run.WorkingDirectoryPath $argsList[[Array]::IndexOf($argsList, '-C') + 1] '-C retained'
+        Assert-Equal $record.cwd $argsList[[Array]::IndexOf($argsList, '-C') + 1] '-C agrees with process cwd'
         Assert-Equal 'fixture-model' $argsList[[Array]::IndexOf($argsList, '--model') + 1] 'model lock retained on every turn'
-        Assert-Equal (Join-Path $inputs.Run.HomeDirectoryPath '.cache/copilot') $record.cache 'complete Copilot cache override, no duplicate suffix'
-        Assert-Equal (Join-Path $inputs.Run.HomeDirectoryPath '.cache') $record.xdg 'XDG cache root'
+        Assert-Equal (Join-Path $result.evidence.execution_paths.physical_home_directory '.cache/copilot') $record.cache 'complete Copilot cache override, no duplicate suffix'
+        Assert-Equal (Join-Path $result.evidence.execution_paths.physical_home_directory '.cache') $record.xdg 'XDG cache root'
         Assert-True (-not $record.old_cache_exists -and -not $record.double_suffix_exists) 'no old or double-suffixed cache is created during execution'
         if ($IsWindows) {
             Assert-Equal $record.xdg $record.localappdata 'Windows cache fallback converges'
-            Assert-Equal (Join-Path $inputs.Run.HomeDirectoryPath '.config') $record.appdata 'Windows config root isolated'
+            Assert-Equal (Join-Path $result.evidence.execution_paths.physical_home_directory '.config') $record.appdata 'Windows config root isolated'
         }
     }
     Assert-True (@($records[1].arguments) -contains '--resume=fixture-session') 'exact session continuation retained'
@@ -148,12 +165,13 @@ if ($inputText -eq 'failure') { exit 7 }
     if ($LASTEXITCODE -ne 0) { throw 'Could not initialize staged fixture Git repository.' }
     $singleInputs = [pscustomobject]@{ Run = Resolve-RunContract -RunPath $without.Path; Profile = $inputs.Profile }
     $singleBaselineHash = Get-TestTreeHash -Root $singleInputs.Run.HomeDirectoryPath
-    foreach ($scenario in @('completed', 'failure', 'timeout')) {
+    foreach ($scenario in @('completed', 'failure', 'timeout', 'violation')) {
         $singleInputs.Run.PromptBytes = [Text.Encoding]::UTF8.GetBytes($scenario)
         $singleInputs.Profile.TimeoutSeconds = if ($scenario -eq 'timeout') { 2 } else { 15 }
         $singleResult = Invoke-CopilotWithPreparedHome -Inputs $singleInputs -Action { Invoke-CopilotExecute -Inputs $singleInputs }
-        $expectedStatus = if ($scenario -eq 'failure') { 'failed' } elseif ($scenario -eq 'timeout') { 'timed_out' } else { 'completed' }
+        $expectedStatus = if ($scenario -eq 'violation') { 'incompatible' } elseif ($scenario -eq 'failure') { 'failed' } elseif ($scenario -eq 'timeout') { 'timed_out' } else { 'completed' }
         Assert-Equal $expectedStatus $singleResult.status "$scenario terminal status"
+        [void](Assert-ExecutionResult -Result $singleResult)
         Assert-Equal $singleBaselineHash (Get-TestTreeHash -Root $singleInputs.Run.HomeDirectoryPath) "$scenario restores prepared baseline"
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $without.Root 'home/.cache'))) "$scenario removes generated cache"
         Assert-Equal 'keep repo output' ([IO.File]::ReadAllText((Join-Path $without.Root 'repo/task-output.txt'))) "$scenario preserves repo output"
@@ -162,8 +180,57 @@ if ($inputText -eq 'failure') { exit 7 }
     $singleRecords = @(Get-Content -LiteralPath (Join-Path $without.Root 'repo/fake-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
     foreach ($record in $singleRecords) {
         Assert-Equal 0 $record.git_exit 'Git still discovers staged repo/.git'
-        Assert-Equal ((Join-Path $without.Root 'repo').Replace('\', '/')) ($record.git_root.Replace('\', '/')) 'Git returns staged root'
+        Assert-Equal ($record.cwd.Replace('\', '/')) ($record.git_root.Replace('\', '/')) 'Git returns projected staged root'
         Assert-True ($record.cache -ne $records[0].cache) 'paired arms never share cache'
+    }
+    Assert-True $singleResult.evidence.delegation.grading_material_visible 'contradiction prevents false invisibility claim'
+    $forged = $singleResult | ConvertTo-Json -Depth 100 | ConvertFrom-Json
+    $forged.status = 'completed'
+    $forged.evidence.delegation.paired_arm_visible = $false
+    $forged.evidence.delegation.grading_material_visible = $false
+    Assert-Rejected { Assert-CopilotCapturedBoundary -Raw $forged -RunData $singleInputs.Run } 'bridge rejects transcript contradiction despite false invisibility flags'
+    $proof = [pscustomobject]@{ Root = 'C:/temp/projection'; PackageRoot = 'C:/source/.bot/package'; SourceRepositoryRoot = 'C:/source' }
+    foreach ($path in @('../../eval-metadata.json', '../../with_skill/repo', '../../without_skill/repo', '../../results/arm.json', '../../grading.json', '../../execution-freeze.json', '../../orchestration-state.json', '../../report.html', 'C:\source\AGENTS.md')) {
+        Assert-True (@(Find-CopilotBoundaryContradictions -Data @{ arguments = @{ path = $path } } -Projection $proof).Count -gt 0) "captured forbidden access rejected: $path"
+    }
+    Assert-Equal 0 @(Find-CopilotBoundaryContradictions -Data @{ arguments = @{ path = 'src/Widget.cs' } } -Projection $proof).Count 'ordinary staged source is allowed'
+    $warnings = [Collections.Generic.List[string]]::new()
+    $checkpoint = @{ type = 'session.usage_checkpoint'; data = @{ totalPremiumRequests = 0.33; totalNanoAiu = 10; promptCacheBreakState = @(@{ models = @{ model = @{ model_call_id = 'call-1'; prompt_tokens = 100; cache_read = 70; cache_write = 20; tool_tokens = 15 } } }) } }
+    $last = $checkpoint | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $last.data.totalPremiumRequests = 0.66
+    $last.data.totalNanoAiu = 20
+    $usage = Read-CopilotEvents -Parsed @{ Events = @($checkpoint, $last, $last); Errors = @() } -Warnings $warnings
+    Assert-Equal 100 $usage.UsageInput 'repeated call snapshots are not summed'
+    Assert-Equal 70 $usage.UsageCacheRead 'cache read bucket retained without duplication'
+    Assert-Equal 20 $usage.UsageCacheWrite 'cache write bucket retained without duplication'
+    Assert-Equal 0.66 $usage.UsageCheckpoint.totalPremiumRequests 'final cumulative premium request counter is authoritative'
+    Assert-Equal 20 $usage.UsageCheckpoint.totalNanoAiu 'final cumulative nano AI units retained without currency conversion'
+    Assert-True ($null -eq $usage.UsageOutput) 'unexposed output tokens remain unavailable'
+    Assert-Equal 15 $usage.CheckpointCalls[0].tool_tokens 'tool schema tokens retained in native evidence only'
+    $secondCall = $last | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $secondCall.data.promptCacheBreakState[0].models.model.model_call_id = 'call-2'
+    $secondCall.data.promptCacheBreakState[0].models.model.prompt_tokens = 120
+    $usage = Read-CopilotEvents -Parsed @{ Events = @($checkpoint, $last, $secondCall, $secondCall); Errors = @() } -Warnings $warnings
+    Assert-Equal 220 $usage.UsageInput 'distinct native calls count once each'
+    $usage = Read-CopilotEvents -Parsed @{ Events = @($checkpoint, @{ type = 'assistant.usage'; data = @{ inputTokens = 7; outputTokens = 3 } }); Errors = @() } -Warnings $warnings
+    Assert-Equal 7 $usage.UsageInput 'native assistant usage takes precedence over cache snapshots'
+    Assert-Equal 3 $usage.UsageOutput 'actual exposed output count retained'
+    $savedTemp = $env:TEMP; $savedTmp = $env:TMP
+    try {
+        $env:TEMP = $testRoot; $env:TMP = $testRoot
+        Assert-Rejected { Get-CopilotProjectionPlan -Inputs $singleInputs } 'temp inside source ancestry fails closed'
+    } finally { $env:TEMP = $savedTemp; $env:TMP = $savedTmp }
+    $runtimeLink = Join-Path $singleInputs.Run.WorkingDirectoryPath 'forbidden-link'
+    New-Item -ItemType $linkType -Path $runtimeLink -Target $testRoot | Out-Null
+    try { Assert-Rejected { Get-CopilotProjectionPlan -Inputs $singleInputs } 'linked projection input fails closed' }
+    finally { (Get-Item -LiteralPath $runtimeLink -Force).Delete() }
+    foreach ($arm in @($with, $without)) {
+        $probe = Get-Content (Join-Path $arm.Root 'repo/projection-probe.json') -Raw | ConvertFrom-Json
+        Assert-True (-not $probe.metadata -and -not $probe.paired) 'parent metadata and sibling arms are unreachable through projected ancestry'
+        Assert-Equal 0 @($probe.ambient).Count 'source AGENTS and Copilot instructions are excluded'
+        Assert-Equal 'STAGED_INSTRUCTIONS_CANARY' $probe.staged_agents 'staged AGENTS preserved identically'
+        Assert-Equal 'STAGED_COPILOT_CANARY' $probe.staged_copilot 'staged Copilot instructions preserved identically'
+        Assert-Equal ($arm.Root -eq $with.Root) $probe.candidate 'candidate material is only projected for with_skill'
     }
 
     $transcript = Get-PortableTranscript -Raw $result -RunData $inputs.Run

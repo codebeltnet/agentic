@@ -20,7 +20,7 @@
           "assertion_index": { "type": "integer", "minimum": 0 },
           "assertion": { "type": "string", "minLength": 1 },
           "passed": { "type": "boolean" },
-          "evidence": { "type": "string" }
+          "evidence": { "type": "string", "minLength": 1, "pattern": "\\S" }
         }
       }
     }

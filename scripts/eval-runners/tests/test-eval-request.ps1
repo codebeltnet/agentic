@@ -17,6 +17,7 @@ function Invoke-FakeHost($Decision) {
         # The host's only input is the actual canonical handoff file, never an arm prompt.
         Assert-True (Test-Path -LiteralPath $Decision.prompt_path -PathType Leaf) 'Host received a missing handoff.'
         Assert-True ([IO.Path]::GetFileName($Decision.prompt_path) -ceq 'RUN-THIS.prompt.md') 'Host received an arm.'
+        Assert-True (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Decision.prompt_path) '.external-handoff-started')) 'External handoff must be reserved before the host launch, for every runner.'
         $script:dispatches.Add($Decision.prompt_path)
     }
 }

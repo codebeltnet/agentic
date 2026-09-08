@@ -53,6 +53,31 @@ function Assert-EvalGradingEntryShape {
     if ([string]::IsNullOrWhiteSpace([string]$Entry.eval_name) -or [string]::IsNullOrWhiteSpace([string]$Entry.assertion)) { throw 'grading.json eval_name and assertion must be non-empty strings.' }
     if ($Entry.passed -isnot [bool]) { throw 'grading.json passed must be a boolean; incomplete grading is not finalizable.' }
     if ($Entry.evidence -isnot [string]) { throw 'grading.json evidence must be a string.' }
+    if ([string]::IsNullOrWhiteSpace($Entry.evidence)) { throw 'grading.json evidence must be non-empty.' }
+    if ($Entry.passed -and $Entry.evidence -notmatch '(?s)^Source: ([^\r\n]+)\r?\nQuote: (.+?)\r?\nReason: (\S.*)$') {
+        throw 'PASS evidence requires Source, a verbatim Quote, and an assertion-specific Reason on separate lines.'
+    }
+}
+
+function Assert-EvalPassEvidence {
+    param([object]$Entry, [object]$Canonical, [object]$Record)
+    if (-not $Entry.passed) { return }
+    [void]($Entry.evidence -match '(?s)^Source: ([^\r\n]+)\r?\nQuote: (.+?)\r?\nReason: (\S.*)$')
+    $source = $Matches[1].Trim(); $quote = $Matches[2].Trim(); $reason = $Matches[3].Trim()
+    if ($source -eq 'output') { $content = [string]$Canonical.output }
+    else {
+        # Only native captured artifacts are admissible, never grading keys or
+        # grader-created files. Freeze validation already pins their bytes.
+        $raw = Read-RunnerJson -Path $Record.ExecutionResultPath
+        $artifacts = @($raw.artifacts | Where-Object { $_.scope -eq 'run' -and $_.path -ceq $source })
+        if ($artifacts.Count -ne 1) { throw "PASS evidence source '$source' is not a captured run artifact." }
+        $path = Resolve-ContainedPath -BasePath (Split-Path -Parent $Record.RunManifestPath) -RelativePath $source -FieldName 'PASS evidence source' -Kind File
+        $content = [IO.File]::ReadAllText($path)
+    }
+    if ([string]::IsNullOrWhiteSpace($quote) -or -not $content.Contains($quote, [StringComparison]::Ordinal)) { throw 'PASS evidence quote is absent from its frozen source.' }
+    if ($reason -eq $quote -or $reason -eq $Entry.assertion -or $reason -match '^(?i:eval(?:uation)? completed(?: with output)?|passed|verified|as expected|done|looks good)[.!]?$') {
+        throw 'PASS evidence must explain how the cited observation establishes this assertion.'
+    }
 }
 
 function Assert-EvalGradingContract {
@@ -125,6 +150,7 @@ function Assert-EvalGradingContract {
     }
 
     $validated = @{}
+    $passEvidence = @{}
     foreach ($entry in $submitted) {
         Assert-EvalGradingEntryShape -Entry $entry
         $key = Get-EvalGradingEntryKey -Entry $entry
@@ -133,6 +159,14 @@ function Assert-EvalGradingContract {
         $target = $expected[$key]
         if ([string]$entry.eval_name -ne [string]$target.eval_name -or [string]$entry.assertion -ne [string]$target.assertion) {
             throw "grading.json assertion identity '$key' does not match eval-metadata.json exactly."
+        }
+        $armKey = "$($entry.eval_id)|$($entry.configuration)"
+        $record = @($records | Where-Object { $_.EvalId -eq $entry.eval_id -and $_.Configuration -eq $entry.configuration })[0]
+        Assert-EvalPassEvidence -Entry $entry -Canonical $canonicalByKey[$armKey] -Record $record
+        if ($entry.passed) {
+            $evidenceKey = $armKey + '|' + ([regex]::Replace($entry.evidence.Trim(), '\s+', ' ')).ToLowerInvariant()
+            if ($passEvidence.ContainsKey($evidenceKey)) { throw 'Repeated PASS evidence across assertions is not assertion-specific.' }
+            $passEvidence[$evidenceKey] = $true
         }
         $validated[$key] = $entry
     }
