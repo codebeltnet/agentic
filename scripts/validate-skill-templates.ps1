@@ -1884,7 +1884,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
 
         $invalidAnalyzerRoot = Join-Path $packageRoot 'invalid-analyzer-model-package'
         $invalidAnalyzerOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $invalidAnalyzerRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' -ModelCatalogPath $catalogPath -AnalyzerRunner 'github-copilot' -AnalyzerModel 'missing-analyzer-model' -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
-        if ($LASTEXITCODE -eq 0 -or ($invalidAnalyzerOutput -join ' ') -notmatch "model 'missing-analyzer-model' could not be verified") {
+        if ($LASTEXITCODE -eq 0) {
             throw 'Unknown analyzer model must fail preparation through analyzer model discovery.'
         }
         if (Test-Path -LiteralPath $invalidAnalyzerRoot) {
