@@ -78,16 +78,7 @@ must validate that ledger; none of them can replace it or bless changed bytes.
 If a raw result or referenced artifact changes, the package is corrupted and
 requires a fresh Phase 1 execution.
 
-The normal post-execution boundary is deterministic: the external Grader writes
-only the package-root `grading.json` artifact (`codebeltnet/agentic/eval-grading/1`)
-with exact assertion identities and `passed`/`evidence` decisions. The shared
-`apply-eval-grading.ps1` helper projects those decisions onto canonical
-`result.json` files and verifies that every non-grading field is unchanged.
-`finalize-eval-package.ps1` then validates the freeze, bridge, canonical results,
-and complete grading, invokes the existing report adapter, and fails unless
-`report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`
-are all non-empty. A prose success message cannot substitute for its JSON
-success summary.
+The normal post-execution boundary is deterministic: `invoke-phase2-analyzer.ps1` resolves validator-domain assertions first, dispatches one fresh analyzer worker per remaining semantic arm with the persisted `analyzer-profile.json`, validates the returned runner/model/session evidence, writes `phase2-state.json`, freezes `grading-freeze.json`, and derives package-root `grading.json` (`codebeltnet/agentic/eval-grading/1`) with exact assertion identities, structured evidence domains and evidence refs. The shared `apply-eval-grading.ps1` helper projects those frozen decisions onto canonical `result.json` files and verifies that every non-grading field is unchanged. `finalize-eval-package.ps1` then validates Phase 1, the bridge, Phase 2 state/freeze, deterministic grading hash/cardinality, canonical results, and complete grading, invokes the existing report adapter, and fails unless `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md` are all non-empty. A prose success message or handcrafted `grading.json` cannot substitute for its JSON success summary.
 
 The delegation contract has three distinct evidence levels:
 
@@ -143,7 +134,7 @@ Copilot execution requires an allowlisted physical temporary projection outside 
 
 Copilot `session.usage_checkpoint` billing counters are cumulative: the last checkpoint wins, including across resumed turns. `promptCacheBreakState` entries are per-call cache snapshots, deduplicated by native `model_call_id`; exposed prompt/cache buckets are used only when `assistant.usage` is absent. Tool schema tokens and native snapshots remain in evidence, not generated-token buckets. Missing output tokens stay unavailable, and premium requests/nano-AI units are never converted to currency. See [GitHub's event contract](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/streaming-events).
 
-Phase 2 must read and follow the exact packaged `tools/skill-creator/agents/grader.md` after the execution freeze and bridge. PASS evidence requires `Source: output` (or a captured run artifact path), `Quote: <verbatim observation>`, and `Reason: <assertion-specific justification>` on separate lines. The deterministic validator checks source membership, verbatim quote presence, nonempty evidence and rejects reused or generic PASS evidence. It cannot establish semantic truth; the Grader must fail uncertain/unverified expectations. Execution evidence remains immutable and finalization remains exactly once.
+Phase 2 workers receive only the exact packaged `tools/skill-creator/agents/grader.md`, the one arm's expected output, unresolved semantic assertions, frozen output lines and any explicitly required frozen transcript/artifact evidence. They do not receive the paired arm, sibling evals, benchmark summary, previous grades, user-global skills, candidate skill content, or an ambient repository checkout. Deterministic validation still checks provenance, source membership, verbatim quote presence, nonempty evidence, repeated/generic PASS reasons, analyzer profile hash, raw analyzer transcript hash, grading fragment hash, and worker/session uniqueness; it does not replace semantic analyzer judgement for unresolved semantic assertions. Execution evidence remains immutable and finalization remains exactly once.
 
 Historical integrity note: `dotnet-change-impact` Copilot iteration 4 is contaminated and must not be used as effectiveness evidence. Its missing `.external-handoff-started` is consistent with manual handoff, but the package records do not establish the original user request. The current helper reserves the marker before every external handoff and contains no removal path; no reservation-policy change is justified from absence alone. Codex iteration 2 and OpenCode iteration 3 have reservations. New protocol code applies only to newly prepared iterations.
 
