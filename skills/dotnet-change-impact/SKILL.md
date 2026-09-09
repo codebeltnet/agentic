@@ -328,11 +328,21 @@ there is truly no concrete change to list.>
 
 ## Compatibility impact
 
-- Behavioral change: <yes/no/possible> — <reason>
-- Binary compatibility: <yes/no/possible> — <reason>
-- Source compatibility: <yes/no/possible> — <reason>
-- Design-time compatibility: <yes/no/possible> — <reason>
-- Backwards compatibility: <yes/no/possible> — <reason>
+State each category with one unambiguous categorical value — `Compatible`, `Breaking`, or
+`Potentially breaking` — followed by the reason. Never answer these with `yes`/`no`: "yes" is
+ambiguous about whether it means "yes, compatible" or "yes, it breaks", which has produced
+self-contradictory answers such as "Binary compatibility: yes — compiled consumers may fail".
+
+- Behavioral compatibility: <Compatible|Breaking|Potentially breaking> — <reason>
+- Binary compatibility: <Compatible|Breaking|Potentially breaking> — <reason>
+- Source compatibility: <Compatible|Breaking|Potentially breaking> — <reason>
+- Design-time compatibility: <Compatible|Breaking|Potentially breaking> — <reason>
+- Backwards compatibility: <Compatible|Breaking|Potentially breaking> — <reason>
+
+Read the values consistently: `Compatible` means existing consumers are unaffected in that
+category, `Breaking` means they are broken, and `Potentially breaking` means the outcome depends
+on a stated condition (for example, whether an API is public or whether consumers rely on the old
+behavior).
 
 ## Reasoning
 

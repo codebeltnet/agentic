@@ -104,7 +104,7 @@
           ]
         }
       },
-      "prompt": "Use dotnet-change-impact to classify the version bump for this branch.",
+      "prompt": "Classify the version bump for this branch.",
       "expected_output": "Current-branch default-resolution behavior: inspect the local Git repository, resolve the current branch against the upstream/default base branch, collect commits and net diff, then classify those changes with structured reasoning. Must not ask the user to provide change details first.",
       "expectations": [
         "Follows Default Resolution Behavior when no explicit change details or compare range are provided",
