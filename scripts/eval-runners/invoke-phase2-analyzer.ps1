@@ -166,6 +166,59 @@ function New-AnalyzerRunBundle {
         $lineRecords.Add([ordered]@{ line = $index + 1; text = [string]$outputLines[$index] })
     }
     $metadata = Read-RunnerJson -Path $Worker.record.MetadataPath
+
+    # Stage transcript artifacts when any assertion requires transcript-domain evidence.
+    $transcriptAssertions = @($Worker.assertions | Where-Object { [string]$_.evidence_domain -eq 'transcript' })
+    $stagedTranscripts = [System.Collections.Generic.List[object]]::new()
+    if ($transcriptAssertions.Count -gt 0) {
+        $evidenceDir = Join-Path $repoRoot 'evidence'
+        New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
+        $transcriptSources = [System.Collections.Generic.List[string]]::new()
+        foreach ($af in @(Get-JsonProperty -Object $canonical -Name 'output_files' -Default @())) {
+            [void]$transcriptSources.Add([string]$af)
+        }
+        $execResultFile = [string](Get-JsonProperty -Object $canonical -Name 'execution_result_file' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($execResultFile) -and $transcriptSources -notcontains $execResultFile) {
+            [void]$transcriptSources.Add($execResultFile)
+        }
+        foreach ($artifact in $transcriptSources) {
+            $sourcePath = Join-Path $Worker.record.EvalDirectory ($artifact -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) { continue }
+            $sourceHash = Get-Sha256HexFromFile -Path $sourcePath
+            $fileName = [System.IO.Path]::GetFileName($sourcePath)
+            $stagedPath = Join-Path $evidenceDir $fileName
+            [System.IO.File]::Copy($sourcePath, $stagedPath, $true)
+            $stagedHash = Get-Sha256HexFromFile -Path $stagedPath
+            $entry = [ordered]@{ artifact = $artifact; source_sha256 = $sourceHash; staged_sha256 = $stagedHash }
+            if ($artifact -match '\.jsonl$') {
+                $events = [System.Collections.Generic.List[object]]::new()
+                $fileLines = [System.IO.File]::ReadAllLines($sourcePath, [System.Text.UTF8Encoding]::new($false))
+                foreach ($fileLine in $fileLines) {
+                    if ([string]::IsNullOrWhiteSpace($fileLine)) { continue }
+                    try {
+                        $parsed = $fileLine | ConvertFrom-Json -Depth 100
+                        $eventType = [string](Get-JsonProperty -Object $parsed -Name 'type' -Default '')
+                        $content = Get-JsonProperty -Object $parsed -Name 'content' -Default $null
+                        if ($null -eq $content) { $content = Get-JsonProperty -Object $parsed -Name 'data' -Default $null }
+                        $contentStr = if ($null -ne $content) { [string]$content } else { ConvertTo-Json $parsed -Compress -Depth 10 }
+                        $events.Add([ordered]@{ event_index = $events.Count; type = $eventType; content = $contentStr })
+                    } catch {
+                        $events.Add([ordered]@{ event_index = $events.Count; type = ''; content = $fileLine })
+                    }
+                }
+                $entry['events'] = @($events.ToArray())
+            } else {
+                $fileLines = [System.IO.File]::ReadAllLines($sourcePath, [System.Text.UTF8Encoding]::new($false))
+                $textLines = [System.Collections.Generic.List[object]]::new()
+                for ($li = 0; $li -lt $fileLines.Count; $li++) {
+                    $textLines.Add([ordered]@{ line = $li + 1; text = [string]$fileLines[$li] })
+                }
+                $entry['lines'] = @($textLines.ToArray())
+            }
+            $stagedTranscripts.Add($entry)
+        }
+    }
+
     $bundle = [ordered]@{
         schema = 'codebeltnet/agentic/eval-analyzer-input/1'
         worker_id = $workerId
@@ -188,6 +241,9 @@ function New-AnalyzerRunBundle {
                 evidence_domain = [string]$_.evidence_domain
             }
         })
+    }
+    if ($stagedTranscripts.Count -gt 0) {
+        $bundle['frozen_transcripts'] = @($stagedTranscripts.ToArray())
     }
     $bundlePath = Join-Path $repoRoot 'input-bundle.json'
     Write-RunnerJsonFile -Path $bundlePath -Value $bundle
@@ -234,6 +290,7 @@ function New-AnalyzerRunBundle {
         BundleHash = $bundleHash
         PromptPath = Join-Path $runRoot 'prompt.md'
         AnalyzerExecutionProfilePath = $AnalyzerExecutionProfilePath
+        StagedTranscripts = @($stagedTranscripts.ToArray())
     }
 }
 
@@ -276,7 +333,8 @@ function Confirm-AnalyzerFragment {
     param(
         [Parameter(Mandatory = $true)][object]$Fragment,
         [Parameter(Mandatory = $true)][object]$Worker,
-        [Parameter(Mandatory = $true)][object]$Canonical
+        [Parameter(Mandatory = $true)][object]$Canonical,
+        [AllowNull()][object[]]$StagedTranscripts = $null
     )
 
     if ([string](Get-JsonProperty -Object $Fragment -Name 'schema' -Default '') -ne 'codebeltnet/agentic/eval-analyzer-fragment/1') { throw 'Analyzer fragment has an unsupported schema.' }
@@ -297,7 +355,7 @@ function Confirm-AnalyzerFragment {
         if ([string]::IsNullOrWhiteSpace($reason)) { throw 'Analyzer fragment reason must be non-empty.' }
         $refs = @(Get-JsonProperty -Object $grade -Name 'evidence_refs' -Default @())
         $entry = ConvertTo-GradingEntry -Expected $expected -Passed ([bool]$grade.passed) -Reason $reason -EvidenceRefs $refs -Source 'analyzer' -Evidence $reason
-        [void](Test-GradeEvidenceReference -Grade $entry -Expected $expected -Canonical $Canonical)
+        [void](Test-GradeEvidenceReference -Grade $entry -Expected $expected -Canonical $Canonical -StagedTranscripts $StagedTranscripts)
         $entries.Add($entry)
     }
     return @($entries.ToArray())
@@ -413,6 +471,7 @@ try {
             grading_freeze = 'grading-freeze.json'
             grading = [string](Get-JsonProperty -Object $manifest -Name 'grading' -Default 'grading.json')
         })
+        exit 0
     }
     if (Test-Path -LiteralPath $statePath -PathType Leaf) {
         throw 'Phase 2 state already exists without a valid grading freeze; refusing to duplicate analyzer work. Use a fresh package iteration.'
@@ -577,7 +636,7 @@ try {
             $responseText = [string](Get-JsonProperty -Object $raw.final_response -Name 'text' -Default '')
             $fragment = ConvertFrom-AnalyzerResponse -Text $responseText
             $canonical = Read-RunnerJson -Path $worker.record.ResultPath
-            $workerGrades = @(Confirm-AnalyzerFragment -Fragment $fragment -Worker $worker -Canonical $canonical)
+            $workerGrades = @(Confirm-AnalyzerFragment -Fragment $fragment -Worker $worker -Canonical $canonical -StagedTranscripts $item.bundle.StagedTranscripts)
             $fragmentRelative = "phase2/fragments/$workerId.grading-fragment.json"
             $fragmentPath = Join-Path $iteration ($fragmentRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
             Write-RunnerJsonFile -Path $fragmentPath -Value $fragment
@@ -622,7 +681,23 @@ try {
     $state.analyzer_results = @($completedAnalyzerEntries.ToArray())
     $state.status = 'completed'
     Save-Phase2State -Path $statePath -State $state
-    $freeze = New-GradingFreezeDocument -IterationDirectory $iteration -Manifest $manifest -State $state -Grades @($grades.ToArray()) -Metadata $rootMetadata
+    # Collect unique transcript artifact hashes across all semantic workers for the freeze.
+    $transcriptArtifacts = [System.Collections.Generic.List[object]]::new()
+    $seenTranscriptKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($worker in @($semanticWorkers)) {
+        foreach ($st in @($bundles[$worker.worker_id].StagedTranscripts)) {
+            $artifact = [string]$st.artifact
+            $sourceHash = [string]$st.source_sha256
+            $evalDir = $worker.record.EvalDirectory
+            $sourcePath = Join-Path $evalDir ($artifact -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+            $iterRelative = [System.IO.Path]::GetRelativePath($iteration, $sourcePath).Replace('\', '/')
+            $key = "$iterRelative`:$sourceHash"
+            if ($seenTranscriptKeys.Add($key)) {
+                $transcriptArtifacts.Add([ordered]@{ artifact = $iterRelative; sha256 = $sourceHash })
+            }
+        }
+    }
+    $freeze = New-GradingFreezeDocument -IterationDirectory $iteration -Manifest $manifest -State $state -Grades @($grades.ToArray()) -Metadata $rootMetadata -TranscriptArtifacts @($transcriptArtifacts.ToArray())
     Write-RunnerJsonFile -Path $freezePath -Value $freeze
     $state.grading_freeze = [ordered]@{ path = 'grading-freeze.json'; sha256 = Get-Sha256HexFromFile -Path $freezePath }
     Write-RunnerJsonFile -Path $statePath -Value $state

@@ -1102,8 +1102,11 @@ function Resolve-RunContract {
     # wrapper edits never invalidate the candidate identity. The baseline must not carry it: no candidate is injected.
     $candidateInstructionHash = [string](Get-JsonProperty -Object $run -Name 'candidateInstructionHash' -Default '')
     if ($mode -eq 'with_skill') {
-        if (-not [string]::IsNullOrWhiteSpace($candidateInstructionHash) -and -not (Test-Sha256 -Value $candidateInstructionHash)) {
-            throw 'with_skill run.json candidateInstructionHash, when declared, must be a SHA-256 value covering the exact frozen candidate instruction bytes injected into the prompt.'
+        if ([string]::IsNullOrWhiteSpace($candidateInstructionHash)) {
+            throw 'with_skill run.json candidateInstructionHash is required; it must be a SHA-256 hash covering the exact frozen candidate instruction bytes injected into the prompt.'
+        }
+        if (-not (Test-Sha256 -Value $candidateInstructionHash)) {
+            throw 'with_skill run.json candidateInstructionHash must be a valid SHA-256 value covering the exact frozen candidate instruction bytes injected into the prompt.'
         }
     } elseif (-not [string]::IsNullOrWhiteSpace($candidateInstructionHash)) {
         throw 'without_skill run.json must not declare candidateInstructionHash; the baseline receives no candidate instructions.'

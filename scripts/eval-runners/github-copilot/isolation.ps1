@@ -43,7 +43,7 @@ function Assert-CopilotCandidateInstructionBoundary {
     $markerIndex = $promptText.IndexOf($boundary, [StringComparison]::Ordinal)
     if ($RunData.Mode -eq 'with_skill') {
         $expected = [string]$RunData.CandidateInstructionHash
-        if ([string]::IsNullOrWhiteSpace($expected)) { return }
+        if ([string]::IsNullOrWhiteSpace($expected)) { throw 'with_skill run must carry candidateInstructionHash; candidate identity is unproven.' }
         if ($markerIndex -lt 0) { throw 'with_skill prompt has no working-environment boundary; the injected candidate instructions cannot be isolated for hashing.' }
         $instruction = $promptText.Substring(0, $markerIndex)
         $actual = ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($instruction)))).ToLowerInvariant()

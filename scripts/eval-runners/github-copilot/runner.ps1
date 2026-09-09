@@ -1175,8 +1175,7 @@ function Get-CopilotCandidateInstructionEvidence {
     if ($Inputs.Run.Mode -eq 'with_skill') {
         $result.expected = $expected
         if ([string]::IsNullOrWhiteSpace($expected)) {
-            # Nothing was frozen to verify (a synthetic or non-prepared run). Real prepared packages always declare the
-            # hash, and the bridge independently enforces it there.
+            $violations.Add('with_skill candidateInstructionHash is required; candidate identity is unproven without it.')
             $result.verified = $false
         } elseif ($markerIndex -lt 0) {
             $violations.Add('with_skill prompt has no working-environment boundary; candidate instruction bytes cannot be isolated for hashing.')

@@ -350,7 +350,8 @@ function Test-GradeEvidenceReference {
     param(
         [Parameter(Mandatory = $true)][object]$Grade,
         [Parameter(Mandatory = $true)][object]$Expected,
-        [Parameter(Mandatory = $true)][object]$Canonical
+        [Parameter(Mandatory = $true)][object]$Canonical,
+        [AllowNull()][object[]]$StagedTranscripts = $null
     )
 
     $domain = [string](Get-JsonProperty -Object $Grade -Name 'evidence_domain' -Default '')
@@ -379,7 +380,49 @@ function Test-GradeEvidenceReference {
         } elseif ($domain -eq 'transcript') {
             if ($artifact -eq [string]$Expected.record.ResultRelative) { throw 'transcript evidence must not cite final output prose.' }
             $allowed = @(Get-JsonProperty -Object $Canonical -Name 'output_files' -Default @())
-            if ($allowed -notcontains $artifact -and $artifact -ne [string]$Canonical.execution_result_file) { throw 'transcript evidence must cite a frozen transcript/artifact for the same arm.' }
+            $execResultFile = [string](Get-JsonProperty -Object $Canonical -Name 'execution_result_file' -Default '')
+            if ($allowed -notcontains $artifact -and $artifact -ne $execResultFile) { throw 'transcript evidence must cite a frozen transcript/artifact for the same arm.' }
+            if ($null -ne $StagedTranscripts) {
+                $staged = @($StagedTranscripts | Where-Object { [string]$_.artifact -eq $artifact })
+                if ($staged.Count -eq 0) { throw 'transcript evidence artifact was not staged to the analyzer input bundle; grounding cannot be verified.' }
+                $stagedEntry = $staged[0]
+                $eventIndexRaw = Get-JsonProperty -Object $ref -Name 'event_index' -Default $null
+                $startLine = [int](Get-JsonProperty -Object $ref -Name 'start_line' -Default 0)
+                $endLine = [int](Get-JsonProperty -Object $ref -Name 'end_line' -Default $startLine)
+                $quote = [string](Get-JsonProperty -Object $ref -Name 'quote' -Default '')
+                $hasEvents = Test-JsonProperty -Object $stagedEntry -Name 'events'
+                $hasLines = Test-JsonProperty -Object $stagedEntry -Name 'lines'
+                if ($null -ne $eventIndexRaw -and $hasEvents) {
+                    $events = @(Get-JsonProperty -Object $stagedEntry -Name 'events' -Default @())
+                    $eventIndex = [int]$eventIndexRaw
+                    if ($eventIndex -lt 0 -or $eventIndex -ge $events.Count) {
+                        throw "transcript evidence event_index $eventIndex is outside the frozen artifact ($($events.Count) events)."
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($quote)) {
+                        $eventContent = [string](Get-JsonProperty -Object $events[$eventIndex] -Name 'content' -Default '')
+                        if (-not $eventContent.Contains($quote, [StringComparison]::Ordinal)) {
+                            throw 'transcript evidence quote is absent from the referenced frozen event.'
+                        }
+                    }
+                } elseif ($startLine -gt 0 -and $hasLines) {
+                    $lines = @(Get-JsonProperty -Object $stagedEntry -Name 'lines' -Default @())
+                    if ($startLine -lt 1 -or $endLine -lt $startLine -or $endLine -gt $lines.Count) {
+                        throw 'transcript evidence line range is outside the frozen artifact.'
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($quote)) {
+                        $span = [string]::Join("`n", @($lines[($startLine - 1)..($endLine - 1)] | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'text' -Default '') }))
+                        if (-not $span.Contains($quote, [StringComparison]::Ordinal)) {
+                            throw 'transcript evidence quote is absent from the referenced frozen transcript lines.'
+                        }
+                    }
+                } elseif ($null -ne $eventIndexRaw -and $hasLines) {
+                    throw 'transcript evidence uses event_index but the staged artifact has line-based content.'
+                } elseif ($startLine -gt 0 -and $hasEvents) {
+                    throw 'transcript evidence uses start_line/end_line but the staged artifact has event-based content.'
+                } elseif (-not [string]::IsNullOrWhiteSpace($quote)) {
+                    throw 'transcript evidence must declare event_index or start_line/end_line to ground the cited location.'
+                }
+            }
         }
     }
     return $true
@@ -418,7 +461,8 @@ function New-GradingFreezeDocument {
         [Parameter(Mandatory = $true)][object]$Manifest,
         [Parameter(Mandatory = $true)][object]$State,
         [Parameter(Mandatory = $true)][object[]]$Grades,
-        [object]$Metadata = $null
+        [object]$Metadata = $null,
+        [object[]]$TranscriptArtifacts = @()
     )
 
     $analyzer = Resolve-AnalyzerProfile -IterationDirectory $IterationDirectory -Manifest $Manifest
@@ -428,7 +472,7 @@ function New-GradingFreezeDocument {
     $validatorPaths = @(Get-JsonProperty -Object $State -Name 'validator_results' -Default @())
     $analyzerResults = @(Get-JsonProperty -Object $State -Name 'analyzer_results' -Default @())
 
-    return [ordered]@{
+    $freeze = [ordered]@{
         schema = $script:GradingFreezeSchema
         analyzer_profile = [ordered]@{ path = [string]$analyzer.RelativePath; sha256 = [string]$analyzer.Hash }
         analyzer_profile_sha256 = [string]$analyzer.Hash
@@ -446,11 +490,13 @@ function New-GradingFreezeDocument {
         })
         validator_results = @($validatorPaths)
         analyzer_results = @($analyzerResults)
+        transcript_artifacts = @($TranscriptArtifacts)
         phase2_state_sha256 = Get-Phase2StateHashForFreeze -State $State
         expected_grade_count = $expected.Count
         grading_sha256 = Get-GradingMergeHash -Document $root
         generated_utc = (Format-UtcTimestamp -Value ([DateTime]::UtcNow))
     }
+    return $freeze
 }
 
 function Assert-GradingFreeze {
@@ -509,6 +555,13 @@ function Assert-GradingFreeze {
         $fragmentPathValue = [string](Get-JsonProperty -Object $result -Name 'grading_fragment' -Default '')
         $fragmentPath = Resolve-ManifestDeclaredPath -IterationDirectory $iteration -RelativePath $fragmentPathValue -FieldName 'analyzer grading fragment' -Kind File -RequireExists
         if ([string](Get-JsonProperty -Object $result -Name 'grading_fragment_sha256' -Default '') -ne (Get-Sha256HexFromFile -Path $fragmentPath)) { throw "Analyzer grading fragment '$fragmentPathValue' changed after Phase 2 freeze." }
+    }
+    foreach ($ta in @(Get-JsonProperty -Object $freeze -Name 'transcript_artifacts' -Default @())) {
+        $taPath = [string](Get-JsonProperty -Object $ta -Name 'artifact' -Default '')
+        $taHash = [string](Get-JsonProperty -Object $ta -Name 'sha256' -Default '')
+        if ([string]::IsNullOrWhiteSpace($taPath) -or [string]::IsNullOrWhiteSpace($taHash)) { throw 'grading-freeze.json transcript_artifacts entry is missing artifact or sha256.' }
+        $taFullPath = Resolve-ManifestDeclaredPath -IterationDirectory $iteration -RelativePath $taPath -FieldName 'transcript artifact' -Kind File -RequireExists
+        if ((Get-Sha256HexFromFile -Path $taFullPath) -ne $taHash) { throw "Transcript artifact '$taPath' changed after Phase 2 freeze." }
     }
 
     return [pscustomobject]@{ Path = $freezePath; Freeze = $freeze; State = $state; Manifest = $manifest; Analyzer = $analyzer; Grading = $grading }
