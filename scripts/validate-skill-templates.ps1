@@ -1887,6 +1887,16 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         if ($LASTEXITCODE -eq 0) {
             throw 'Unknown analyzer model must fail preparation through analyzer model discovery.'
         }
+        $invalidAnalyzerDiagnostic = $invalidAnalyzerOutput -join [Environment]::NewLine
+        if ($invalidAnalyzerDiagnostic -notmatch 'missing-analyzer-model') {
+            throw "Invalid analyzer rejection must name the missing analyzer model in the diagnostic; got: $invalidAnalyzerDiagnostic"
+        }
+        if ($invalidAnalyzerDiagnostic -notmatch '(?i)analyzer') {
+            throw "Invalid analyzer rejection must identify the failure as an analyzer model validation/discovery error; got: $invalidAnalyzerDiagnostic"
+        }
+        if ($invalidAnalyzerDiagnostic -notmatch '(?i)(github-copilot|analyzer.*runner|runner.*analyzer)') {
+            throw "Invalid analyzer rejection must identify the analyzer runner; got: $invalidAnalyzerDiagnostic"
+        }
         if (Test-Path -LiteralPath $invalidAnalyzerRoot) {
             Remove-Item -LiteralPath $invalidAnalyzerRoot -Recurse -Force
             throw 'prepare-skill-evals.ps1 must not create a package when analyzer model validation fails.'

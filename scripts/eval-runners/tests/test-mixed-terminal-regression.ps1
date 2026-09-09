@@ -87,9 +87,11 @@ for ($evalId = 1; $evalId -le 4; $evalId++) {
             freshContextRequired = $true
             filesystemIsolationRequired = $true
             isolatedHomeRequired = $true
+            gitWorkspace = $false
             mustNotReadOutsideSandbox = $true
             fixtureHash = ('a' * 64)
             skillHash = if ($configuration -eq 'with_skill') { ('b' * 64) } else { $null }
+            candidateInstructionHash = if ($configuration -eq 'with_skill') { ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes("terminal test prompt for $evalName/$configuration")))).ToLowerInvariant() } else { $null }
         }
         [System.IO.File]::WriteAllText((Join-Path $runPath 'run.json'), ($runJson | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
         $resultsDir = Join-Path $evalDirectory 'results'

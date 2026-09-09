@@ -28,7 +28,7 @@ $runPath = Join-Path $evalDirectory 'with_skill'
 $skillPath = Join-Path $runPath 'skill\test-skill'
 New-Item -ItemType Directory -Path $skillPath -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $skillPath 'SKILL.md'), '# deterministic fixture skill', [System.Text.UTF8Encoding]::new($false))
-$runJson = [ordered]@{ schema = (Get-RunnerSchemaNames).Run; evalId = 1; evalName = $evalName; candidateSkillName = 'test-skill'; skillName = 'test-skill'; mode = 'with_skill'; promptFile = 'prompt.md'; workingDirectory = 'repo'; homeDirectory = 'home'; skillDirectory = 'skill/test-skill'; freshContextRequired = $true; filesystemIsolationRequired = $true; isolatedHomeRequired = $true; fixtureHash = ('a' * 64); skillHash = ('b' * 64) }
+$runJson = [ordered]@{ schema = (Get-RunnerSchemaNames).Run; evalId = 1; evalName = $evalName; candidateSkillName = 'test-skill'; skillName = 'test-skill'; mode = 'with_skill'; promptFile = 'prompt.md'; workingDirectory = 'repo'; homeDirectory = 'home'; skillDirectory = 'skill/test-skill'; freshContextRequired = $true; filesystemIsolationRequired = $true; isolatedHomeRequired = $true; gitWorkspace = $false; fixtureHash = ('a' * 64); skillHash = ('b' * 64); candidateInstructionHash = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes("opencode timedout fixture prompt")))).ToLowerInvariant() }
 [System.IO.File]::WriteAllText((Join-Path $runPath 'run.json'), ($runJson | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
 New-Item -ItemType Directory -Path (Join-Path $runPath 'repo') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $runPath 'home') -Force | Out-Null

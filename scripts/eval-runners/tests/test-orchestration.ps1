@@ -146,9 +146,11 @@ try {
                 freshContextRequired = $true
                 filesystemIsolationRequired = $true
                 isolatedHomeRequired = $true
+                gitWorkspace = $false
                 mustNotReadOutsideSandbox = $true
                 fixtureHash = ('a' * 64)
                 skillHash = if ($configuration -eq 'with_skill') { ('b' * 64) } else { $null }
+                candidateInstructionHash = if ($configuration -eq 'with_skill') { ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes("terminal test prompt for $evalName/$configuration")))).ToLowerInvariant() } else { $null }
             })
             $resultFileName = if ($configuration -eq 'with_skill') { 'with-skill.result.json' } else { 'without-skill.result.json' }
             Write-TestJson -Path (Join-Path $evalDirectory (Join-Path 'results' $resultFileName)) -Value ([ordered]@{
@@ -586,11 +588,14 @@ try {
             [System.IO.File]::WriteAllText((Join-Path $runDirectory 'prompt.md'), "fixture prompt $evalName/$configuration", [System.Text.UTF8Encoding]::new($false))
             $skillDirectory = $null
             $skillHash = $null
+            $candidateInstructionHash = $null
             if ($configuration -eq 'with_skill') {
                 $skillDirectory = 'skill/candidate'
                 New-Item -ItemType Directory -Path (Join-Path $runDirectory 'skill\candidate') -Force | Out-Null
                 [System.IO.File]::WriteAllText((Join-Path $runDirectory 'skill\candidate\SKILL.md'), '# fixture', [System.Text.UTF8Encoding]::new($false))
                 $skillHash = ('b' * 64)
+                $promptContent = "fixture prompt $evalName/$configuration"
+                $candidateInstructionHash = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($promptContent)))).ToLowerInvariant()
             }
             Write-TestJson -Path (Join-Path $runDirectory 'run.json') -Value ([ordered]@{
                 schema = (Get-RunnerSchemaNames).Run
@@ -607,8 +612,10 @@ try {
                 freshContextRequired = $true
                 filesystemIsolationRequired = $true
                 isolatedHomeRequired = $true
+                gitWorkspace = $false
                 fixtureHash = ('a' * 64)
                 skillHash = $skillHash
+                candidateInstructionHash = $candidateInstructionHash
             })
             $resultDirectory = Join-Path $runDirectory 'results'
             New-Item -ItemType Directory -Path $resultDirectory -Force | Out-Null

@@ -2305,19 +2305,27 @@ function New-TestRun {
     [System.IO.File]::WriteAllText((Join-Path $repo 'AGENTS.md'), '# repo-owned-agent-instruction', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $repo '.github\copilot-instructions.md'), '# repo-owned-copilot-instruction', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $repo 'opencode.json'), '{"fixture_project_config":true}', [System.Text.UTF8Encoding]::new($false))
-    $prompt = "# task`r`n`r`nByte fidelity: Δ and emoji 🚀. I’m testing Microsoft’s guidance. ÆØÅ`r`n" + ("large-prompt-line-0123456789`r`n" * 4096)
-    [System.IO.File]::WriteAllBytes((Join-Path $runRoot 'prompt.md'), [System.Text.UTF8Encoding]::new($false).GetBytes($prompt))
-    [System.IO.File]::WriteAllText((Join-Path $homeDirectory 'expected-prompt-sha256.txt'), (Get-Sha256HexFromFile -Path (Join-Path $runRoot 'prompt.md')), [System.Text.UTF8Encoding]::new($false))
+    # For with_skill the prompt must have the candidate instructions before the
+    # working-environment boundary so the Copilot runner can verify the hash.
+    $taskBody = "# task`r`n`r`nByte fidelity: Δ and emoji 🚀. I'm testing Microsoft's guidance. ÆØÅ`r`n" + ("large-prompt-line-0123456789`r`n" * 4096)
+    $candidateInstructionHash = $null
     if ($Configuration -eq 'with_skill') {
         $skill = Join-Path $runRoot 'skill\candidate'
         New-Item -ItemType Directory -Path $skill -Force | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $skill 'SKILL.md'), '# candidate', [System.Text.UTF8Encoding]::new($false))
         $skillDirectory = 'skill/candidate'
         $skillHash = Get-TestTreeHash -Root $skill
+        $candidateInstructions = "## Skill: candidate`r`n`r`nConformance fixture candidate instructions for testing."
+        $candidateInstructionsNormalized = $candidateInstructions -replace "`r`n", "`n" -replace "`r", "`n"
+        $candidateInstructionHash = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.UTF8Encoding]::new($false).GetBytes($candidateInstructionsNormalized)))).ToLowerInvariant()
+        $prompt = $candidateInstructions + "`r`n`r`n# Working environment`r`n`r`n" + $taskBody
     } else {
         $skillDirectory = $null
         $skillHash = $null
+        $prompt = $taskBody
     }
+    [System.IO.File]::WriteAllBytes((Join-Path $runRoot 'prompt.md'), [System.Text.UTF8Encoding]::new($false).GetBytes($prompt))
+    [System.IO.File]::WriteAllText((Join-Path $homeDirectory 'expected-prompt-sha256.txt'), (Get-Sha256HexFromFile -Path (Join-Path $runRoot 'prompt.md')), [System.Text.UTF8Encoding]::new($false))
     $run = [ordered]@{
         schema = (Get-RunnerSchemaNames).Run
         evalId = 1
@@ -2337,6 +2345,7 @@ function New-TestRun {
         inputFiles = @()
         fixtureHash = Get-TestTreeHash -Root $repo
         skillHash = $skillHash
+        candidateInstructionHash = $candidateInstructionHash
         contract = [ordered]@{
             sandboxRoot = '.'
             workingDirectory = 'repo'
@@ -2429,6 +2438,24 @@ try {
     Assert-Equal 'candidate' $withRunContract.skillName 'with_skill run.json names the exposed candidate'
     Assert-True ($null -eq $withoutRunContract.skillName) 'without_skill run.json keeps skillName null'
     Assert-True ($null -eq $withoutRunContract.skillDirectory) 'without_skill run.json keeps skillDirectory null'
+    # Fix 1: candidate instruction hash invariant - with_skill requires hash, without_skill forbids it.
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$withRunContract.candidateInstructionHash)) 'prepared with_skill run.json declares candidateInstructionHash'
+    Assert-True ($withRunContract.candidateInstructionHash -match '^[0-9a-f]{64}$') 'with_skill candidateInstructionHash is a valid SHA-256'
+    Assert-True ($null -eq $withoutRunContract.candidateInstructionHash -or [string]::IsNullOrWhiteSpace([string]$withoutRunContract.candidateInstructionHash)) 'without_skill run.json must not carry candidateInstructionHash'
+    $missingHashDir = Join-Path $iteration 'missing-hash'; New-Item -ItemType Directory -Path (Join-Path $missingHashDir 'repo'), (Join-Path $missingHashDir 'home'), (Join-Path $missingHashDir 'skill/c') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $missingHashDir 'prompt.md'), 'test', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $missingHashDir 'skill/c/SKILL.md'), '# c', [System.Text.UTF8Encoding]::new($false))
+    Write-TestJson -Path (Join-Path $missingHashDir 'run.json') -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Run; evalId = 1; evalName = 'h'; candidateSkillName = 'c'; skillName = 'c'; mode = 'with_skill'; promptFile = 'prompt.md'; workingDirectory = 'repo'; homeDirectory = 'home'; skillDirectory = 'skill/c'; freshContextRequired = $true; filesystemIsolationRequired = $true; isolatedHomeRequired = $true; gitWorkspace = $false; fixtureHash = ('a' * 64); skillHash = ('b' * 64) })
+    Assert-Throws { Resolve-RunContract -RunPath (Join-Path $missingHashDir 'run.json') } 'missing with_skill candidateInstructionHash must fail Resolve-RunContract'
+    $badHashDir = Join-Path $iteration 'bad-hash'; New-Item -ItemType Directory -Path (Join-Path $badHashDir 'repo'), (Join-Path $badHashDir 'home'), (Join-Path $badHashDir 'skill/c') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $badHashDir 'prompt.md'), 'test', [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $badHashDir 'skill/c/SKILL.md'), '# c', [System.Text.UTF8Encoding]::new($false))
+    Write-TestJson -Path (Join-Path $badHashDir 'run.json') -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Run; evalId = 1; evalName = 'h'; candidateSkillName = 'c'; skillName = 'c'; mode = 'with_skill'; promptFile = 'prompt.md'; workingDirectory = 'repo'; homeDirectory = 'home'; skillDirectory = 'skill/c'; freshContextRequired = $true; filesystemIsolationRequired = $true; isolatedHomeRequired = $true; gitWorkspace = $false; fixtureHash = ('a' * 64); skillHash = ('b' * 64); candidateInstructionHash = 'not-a-sha256' })
+    Assert-Throws { Resolve-RunContract -RunPath (Join-Path $badHashDir 'run.json') } 'malformed with_skill candidateInstructionHash must fail Resolve-RunContract'
+    $baselineHashDir = Join-Path $iteration 'baseline-with-hash'; New-Item -ItemType Directory -Path (Join-Path $baselineHashDir 'repo'), (Join-Path $baselineHashDir 'home') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $baselineHashDir 'prompt.md'), 'test', [System.Text.UTF8Encoding]::new($false))
+    Write-TestJson -Path (Join-Path $baselineHashDir 'run.json') -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Run; evalId = 1; evalName = 'h'; candidateSkillName = 'c'; skillName = $null; mode = 'without_skill'; promptFile = 'prompt.md'; workingDirectory = 'repo'; homeDirectory = 'home'; skillDirectory = $null; freshContextRequired = $true; filesystemIsolationRequired = $true; isolatedHomeRequired = $true; gitWorkspace = $false; fixtureHash = ('a' * 64); skillHash = $null; candidateInstructionHash = ('a' * 64) })
+    Assert-Throws { Resolve-RunContract -RunPath (Join-Path $baselineHashDir 'run.json') } 'without_skill with candidateInstructionHash must fail Resolve-RunContract'
     $withoutPromptText = [System.IO.File]::ReadAllText((Join-Path $without.Root 'prompt.md'), [System.Text.UTF8Encoding]::new($false))
     Assert-True (-not $withoutPromptText.Contains('candidate')) 'candidate control-plane identity is not added to the baseline prompt'
     $fakePath = Join-Path $runnerRoot 'fake\runner.ps1'

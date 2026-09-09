@@ -136,6 +136,12 @@ function New-TestRun {
         $interactionHash = Get-Sha256HexFromFile -Path $interactionFile
     }
 
+    $candidateInstructionHash = $null
+    if ($Configuration -eq 'with_skill') {
+        $promptContent = "deterministic fixture prompt for $EvalName/$Configuration`n"
+        $candidateInstructionHash = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($promptContent)))).ToLowerInvariant()
+    }
+
     $run = [ordered]@{
         schema = (Get-RunnerSchemaNames).Run
         evalId = $EvalId
@@ -155,6 +161,7 @@ function New-TestRun {
         inputFiles = @()
         fixtureHash = ('a' * 64)
         skillHash = if ($Configuration -eq 'with_skill') { ('b' * 64) } else { $null }
+        candidateInstructionHash = $candidateInstructionHash
         contract = [ordered]@{
             sandboxRoot = '.'
             workingDirectory = 'repo'
@@ -729,6 +736,40 @@ for ($index = 0; $index -lt $count; $index++) {
         Assert-Equal 22 @($rootGradingAfterPhase2.grading).Count 'root grading cardinality derives from normalized assertions'
         Assert-True (@($rootGradingAfterPhase2.grading | Where-Object { [string]$_.evidence_domain -eq 'validator' -and [string]$_.source -eq 'validator' }).Count -eq 14) 'validator assertions are resolved by deterministic validator results, not analyzer prose'
         $validGrading = Read-TestJson -Path $gradingPath
+        # Fix 2: second invocation must return already_frozen, exit 0, perform zero new analyzer work.
+        $freezeBytes = [System.IO.File]::ReadAllBytes((Join-Path $iteration 'grading-freeze.json'))
+        $stateBytes = [System.IO.File]::ReadAllBytes((Join-Path $iteration 'phase2-state.json'))
+        $gradingBytes = [System.IO.File]::ReadAllBytes($gradingPath)
+        $phase2AnalyzerWorkerDirCountBefore = @(Get-ChildItem -LiteralPath (Join-Path $iteration 'phase2\work') -Directory -ErrorAction SilentlyContinue).Count
+        $phase2Again = Invoke-TestTool -Path $phase2Script -Arguments @('-IterationDirectory', $iteration, '-Concurrency', '3', '-TimeoutSeconds', '60')
+        Assert-ToolPasses -Invocation $phase2Again -Description 'second Phase 2 invocation succeeds (already_frozen)'
+        $phase2AgainOutput = $phase2Again.Text | ConvertFrom-Json -ErrorAction SilentlyContinue
+        Assert-Equal 'already_frozen' ([string]$phase2AgainOutput.status) 'second Phase 2 invocation must report already_frozen status'
+        $freezeBytesAfter = [System.IO.File]::ReadAllBytes((Join-Path $iteration 'grading-freeze.json'))
+        $stateBytesAfter = [System.IO.File]::ReadAllBytes((Join-Path $iteration 'phase2-state.json'))
+        $gradingBytesAfter = [System.IO.File]::ReadAllBytes($gradingPath)
+        Assert-True ([System.Linq.Enumerable]::SequenceEqual($freezeBytes, $freezeBytesAfter)) 'grading-freeze.json must be byte-identical after second Phase 2 invocation'
+        Assert-True ([System.Linq.Enumerable]::SequenceEqual($stateBytesAfter, $stateBytes)) 'phase2-state.json must be byte-identical after second Phase 2 invocation'
+        Assert-True ([System.Linq.Enumerable]::SequenceEqual($gradingBytesAfter, $gradingBytes)) 'grading.json must be byte-identical after second Phase 2 invocation'
+        $phase2AnalyzerWorkerDirCountAfter = @(Get-ChildItem -LiteralPath (Join-Path $iteration 'phase2\work') -Directory -ErrorAction SilentlyContinue).Count
+        Assert-Equal $phase2AnalyzerWorkerDirCountBefore $phase2AnalyzerWorkerDirCountAfter 'second Phase 2 invocation must create zero new analyzer worker directories'
+        # Tampered grading-freeze.json must fail rather than rerun.
+        $freezePath = Join-Path $iteration 'grading-freeze.json'
+        $originalFreezeBytes = [System.IO.File]::ReadAllBytes($freezePath)
+        $tamperedFreeze = Read-TestJson -Path $freezePath
+        $tamperedFreeze.grading_sha256 = ('0' * 64)
+        Write-TestJson -Path $freezePath -Value $tamperedFreeze
+        $phase2Tampered = Invoke-TestTool -Path $phase2Script -Arguments @('-IterationDirectory', $iteration, '-Concurrency', '3', '-TimeoutSeconds', '60')
+        Assert-ToolFails -Invocation $phase2Tampered -Description 'tampered grading-freeze.json fails Phase 2 instead of rerunning'
+        [System.IO.File]::WriteAllBytes($freezePath, $originalFreezeBytes)
+        # Orphaned phase2-state.json without a valid freeze must fail closed.
+        $statePath = Join-Path $iteration 'phase2-state.json'
+        $originalStateBytes = [System.IO.File]::ReadAllBytes($statePath)
+        Remove-Item -LiteralPath $freezePath -Force
+        $phase2Orphaned = Invoke-TestTool -Path $phase2Script -Arguments @('-IterationDirectory', $iteration, '-Concurrency', '3', '-TimeoutSeconds', '60')
+        Assert-ToolFails -Invocation $phase2Orphaned -Description 'orphaned phase2-state.json without freeze fails closed'
+        Assert-True ([string]$phase2Orphaned.Text -match 'duplicate|fresh package|grading freeze') 'orphaned state must explain the retry is forbidden'
+        [System.IO.File]::WriteAllBytes($freezePath, $originalFreezeBytes)
     }
     if ($Suite -in @('All', 'Application')) {
         $invalidDirectFinalizer = Copy-TestGradingDocument -Document $validGrading

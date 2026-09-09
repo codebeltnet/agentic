@@ -106,11 +106,14 @@ function New-ForegroundPackage {
             [System.IO.File]::WriteAllText((Join-Path $runDirectory 'prompt.md'), "foreground prompt $evalName/$configuration", [System.Text.UTF8Encoding]::new($false))
             $skillDirectory = $null
             $skillHash = $null
+            $candidateInstructionHash = $null
             if ($configuration -eq 'with_skill') {
                 $skillDirectory = 'skill/candidate'
                 New-Item -ItemType Directory -Path (Join-Path $runDirectory 'skill\candidate') -Force | Out-Null
                 [System.IO.File]::WriteAllText((Join-Path $runDirectory 'skill\candidate\SKILL.md'), '# fixture', [System.Text.UTF8Encoding]::new($false))
                 $skillHash = ('b' * 64)
+                $promptContent = "foreground prompt $evalName/$configuration"
+                $candidateInstructionHash = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($promptContent)))).ToLowerInvariant()
             }
             Write-TestJson -Path (Join-Path $runDirectory 'run.json') -Value ([ordered]@{
                 schema = (Get-RunnerSchemaNames).Run
@@ -127,8 +130,10 @@ function New-ForegroundPackage {
                 freshContextRequired = $true
                 filesystemIsolationRequired = $true
                 isolatedHomeRequired = $true
+                gitWorkspace = $false
                 fixtureHash = ('a' * 64)
                 skillHash = $skillHash
+                candidateInstructionHash = $candidateInstructionHash
             })
             $resultName = if ($configuration -eq 'with_skill') { 'with-skill.result.json' } else { 'without-skill.result.json' }
             $executionName = if ($configuration -eq 'with_skill') { 'with-skill.execution-result.json' } else { 'without-skill.execution-result.json' }

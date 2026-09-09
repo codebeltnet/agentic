@@ -158,11 +158,14 @@ function New-ObservabilityFanoutPackage {
             [System.IO.File]::WriteAllText((Join-Path $homeDirectory 'execute-delay-ms'), [string]$DelayMs, [System.Text.UTF8Encoding]::new($false))
             $skillDirectory = $null
             $skillHash = $null
+            $candidateInstructionHash = $null
             if ($configuration -eq 'with_skill') {
                 $skillDirectory = 'skill/candidate'
                 New-Item -ItemType Directory -Path (Join-Path $runDirectory 'skill\candidate') -Force | Out-Null
                 [System.IO.File]::WriteAllText((Join-Path $runDirectory 'skill\candidate\SKILL.md'), '# fixture', [System.Text.UTF8Encoding]::new($false))
                 $skillHash = ('b' * 64)
+                $promptContent = "observability prompt $evalName/$configuration"
+                $candidateInstructionHash = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($promptContent)))).ToLowerInvariant()
             }
             [System.IO.File]::WriteAllText((Join-Path $runDirectory 'run.json'), (([ordered]@{
                 schema = (Get-RunnerSchemaNames).Run
@@ -179,8 +182,10 @@ function New-ObservabilityFanoutPackage {
                 freshContextRequired = $true
                 filesystemIsolationRequired = $true
                 isolatedHomeRequired = $true
+                gitWorkspace = $false
                 fixtureHash = ('a' * 64)
                 skillHash = $skillHash
+                candidateInstructionHash = $candidateInstructionHash
             } | ConvertTo-Json -Depth 100) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
             $resultName = if ($configuration -eq 'with_skill') { 'with-skill.result.json' } else { 'without-skill.result.json' }
             $executionName = if ($configuration -eq 'with_skill') { 'with-skill.execution-result.json' } else { 'without-skill.execution-result.json' }

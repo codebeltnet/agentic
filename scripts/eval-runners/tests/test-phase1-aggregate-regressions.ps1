@@ -112,6 +112,9 @@ function New-TestRun {
     [System.IO.File]::WriteAllText((Join-Path $skillDirectory 'SKILL.md'), '# deterministic fixture skill`n', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $runDirectory 'prompt.md'), "phase1 aggregate prompt for $EvalName/with_skill`n", [System.Text.UTF8Encoding]::new($false))
 
+    $promptBytes = [System.Text.Encoding]::UTF8.GetBytes("phase1 aggregate prompt for $EvalName/with_skill`n")
+    $candidateInstructionHash = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($promptBytes))).ToLowerInvariant()
+
     $run = [ordered]@{
         schema = (Get-RunnerSchemaNames).Run
         evalId = $EvalId
@@ -131,6 +134,7 @@ function New-TestRun {
         inputFiles = @()
         fixtureHash = ('a' * 64)
         skillHash = ('b' * 64)
+        candidateInstructionHash = $candidateInstructionHash
         contract = [ordered]@{
             sandboxRoot = '.'
             workingDirectory = 'repo'
