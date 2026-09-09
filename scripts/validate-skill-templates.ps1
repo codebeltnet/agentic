@@ -1290,6 +1290,39 @@ Add-ValidationResult -Results $results -Name 'Change-impact default resolution h
     if ($LASTEXITCODE -ne 0) { throw "Git scenario regression failed: $($output -join [Environment]::NewLine)" }
 }
 
+Add-ValidationResult -Results $results -Name 'Git-workspace evals omit stale inline source and prove candidate-instruction identity' -Group 'Preparation' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $scriptPath = Join-Path $repoRoot 'scripts/prepare-skill-evals.ps1'
+    $packageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-change-impact-9-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        $output = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-change-impact' -Runner 'github-copilot' -Eval 9 -OutputRoot $packageRoot 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for change-impact eval 9: $($output -join [Environment]::NewLine)" }
+        $evalDir = @(Get-ChildItem -Path $packageRoot -Recurse -Directory | Where-Object { $_.Name -like 'eval-09*' } | Select-Object -First 1)
+        if ($evalDir.Count -ne 1) { throw 'Prepared change-impact eval 9 directory was not found.' }
+        $withRun = [System.IO.File]::ReadAllText((Join-Path $evalDir[0].FullName 'with_skill/run.json'), $utf8NoBom) | ConvertFrom-Json
+        $withoutRun = [System.IO.File]::ReadAllText((Join-Path $evalDir[0].FullName 'without_skill/run.json'), $utf8NoBom) | ConvertFrom-Json
+        if ([string]$withRun.candidateInstructionHash -notmatch '^[0-9a-f]{64}$') { throw 'with_skill run.json must declare a SHA-256 candidateInstructionHash.' }
+        if (-not [string]::IsNullOrWhiteSpace([string]$withoutRun.candidateInstructionHash)) { throw 'without_skill run.json must not declare a candidateInstructionHash.' }
+        $withPrompt = ([System.IO.File]::ReadAllText((Join-Path $evalDir[0].FullName 'with_skill/prompt.md'), $utf8NoBom)) -replace "`r`n", "`n" -replace "`r", "`n"
+        $withoutPrompt = ([System.IO.File]::ReadAllText((Join-Path $evalDir[0].FullName 'without_skill/prompt.md'), $utf8NoBom)) -replace "`r`n", "`n" -replace "`r", "`n"
+        foreach ($pair in @(@('with_skill', $withPrompt), @('without_skill', $withoutPrompt))) {
+            if ($pair[1] -match '(?m)^# Input files') { throw "$($pair[0]) Git-workspace prompt must omit inline fixture source that could disagree with the final working tree." }
+            if ($pair[1] -match 'public static Widget Parse') { throw "$($pair[0]) prompt inlines the stale pre-removal Widget.Parse source." }
+            if ($pair[1] -match 'Use dotnet-change-impact') { throw "$($pair[0]) task must be skill-neutral and must not name the candidate skill." }
+        }
+        $marker = "`n`n# Working environment"
+        $idx = $withPrompt.IndexOf($marker, [System.StringComparison]::Ordinal)
+        if ($idx -lt 0) { throw 'with_skill prompt is missing the working-environment boundary.' }
+        $instruction = $withPrompt.Substring(0, $idx)
+        $injected = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($instruction)))).ToLowerInvariant()
+        if ($injected -ne [string]$withRun.candidateInstructionHash) { throw 'with_skill injected candidate instructions must hash to the frozen candidateInstructionHash.' }
+        $finalWidget = [System.IO.File]::ReadAllText((Join-Path $evalDir[0].FullName 'with_skill/repo/src/Widget.cs'), $utf8NoBom)
+        if ($finalWidget -match 'Parse') { throw 'The final staged working tree must reflect the feature commit that removed Widget.Parse.' }
+    } finally {
+        if (Test-Path -LiteralPath $packageRoot) { Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains deterministic' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) {
         return
@@ -1893,6 +1926,19 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             [string]$manifest.report.benchmark -ne 'benchmark.json' -or
             [string]$manifest.report.benchmark_markdown -ne 'benchmark.md') {
             throw 'The prepared package manifest must declare the first-party report, upstream skill-creator tools, and output artifacts.'
+        }
+        if ([string]$manifest.analyzer_profile -ne 'analyzer-profile.json') {
+            throw 'The prepared package manifest must declare the analyzer_profile artifact.'
+        }
+        $analyzerProfile = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'analyzer-profile.json'), $utf8NoBom) | ConvertFrom-Json
+        if ([string]$analyzerProfile.schema -ne 'codebeltnet/agentic/eval-analyzer-profile/1') {
+            throw "analyzer-profile.json must declare the analyzer profile schema; got '$($analyzerProfile.schema)'."
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$analyzerProfile.runner) -or [string]::IsNullOrWhiteSpace([string]$analyzerProfile.model) -or [string]::IsNullOrWhiteSpace([string]$analyzerProfile.contract_version)) {
+            throw 'analyzer-profile.json must persist a validated grader runner, model, and contract version distinct from the executor.'
+        }
+        if ([string]$manifest.analyzer_selection.model -ne [string]$analyzerProfile.model -or [string]$manifest.analyzer_selection.runner -ne [string]$analyzerProfile.runner) {
+            throw 'manifest.analyzer_selection must match the persisted analyzer-profile.json for independent executor/analyzer attribution.'
         }
         if (-not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'tools/generate-eval-report.ps1')) -or
             -not (Test-Path -LiteralPath (Join-Path $iterationDirectory 'tools/eval-report-template.html')) -or

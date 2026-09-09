@@ -792,7 +792,24 @@ foreach ($entry in @($manifest.evals)) {
 
 $benchmark.metadata.runs_per_configuration = 1
 $benchmark.metadata.executor_model = if ($models.Count -eq 0) { 'model not recorded' } else { $models -join ', ' }
-$benchmark.metadata.analyzer_model = 'external skill-creator evaluator'
+# Name the actual, validated analyzer/grader from the persisted analyzer profile rather than a generic label. Executor
+# identity and analyzer identity remain independently attributable in the report.
+$analyzerProfilePath = Join-Path $iterationPath 'analyzer-profile.json'
+if (Test-Path -LiteralPath $analyzerProfilePath -PathType Leaf) {
+    $analyzerProfile = Read-JsonFile -Path $analyzerProfilePath
+    $analyzerRunner = [string](Get-Property -Object $analyzerProfile -Name 'runner' -Default '')
+    $analyzerModelName = [string](Get-Property -Object $analyzerProfile -Name 'model' -Default '')
+    $analyzerReasoning = [string](Get-Property -Object $analyzerProfile -Name 'reasoning_effort' -Default '')
+    $analyzerIdentity = ((@($analyzerRunner, $analyzerModelName) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' / ')
+    if ([string]::IsNullOrWhiteSpace($analyzerIdentity)) { $analyzerIdentity = 'analyzer profile incomplete' }
+    if (-not [string]::IsNullOrWhiteSpace($analyzerReasoning)) { $analyzerIdentity += " (reasoning: $analyzerReasoning)" }
+    $benchmark.metadata.analyzer_model = $analyzerIdentity
+    $benchmark.metadata | Add-Member -NotePropertyName analyzer_runner -NotePropertyValue $analyzerRunner -Force
+    $benchmark.metadata | Add-Member -NotePropertyName analyzer_reasoning_effort -NotePropertyValue $analyzerReasoning -Force
+    $benchmark.metadata | Add-Member -NotePropertyName analyzer_contract_version -NotePropertyValue ([string](Get-Property -Object $analyzerProfile -Name 'contract_version' -Default '')) -Force
+} else {
+    $benchmark.metadata.analyzer_model = 'analyzer profile not recorded'
+}
 $benchmark.metadata.evals_run = @($workspaceEntries | ForEach-Object { $_.EvalId })
 foreach ($run in @($benchmark.runs)) {
     $match = @($workspaceEntries | Where-Object { $_.EvalId -eq [int]$run.eval_id }) | Select-Object -First 1

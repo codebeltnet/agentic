@@ -184,6 +184,86 @@ function Get-CodexBaseSkillSessionConfigValues {
     )
 }
 
+function Get-CodexSanitizedShellPath {
+    param(
+        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$Platform = (Get-PlatformName),
+        [AllowNull()][string]$GitDirectory = $null,
+        [AllowNull()][string]$WindowsRoot = $null
+    )
+
+    $separator = if ($Platform -eq 'windows') { ';' } else { ':' }
+    $entries = [System.Collections.Generic.List[string]]::new()
+    if ($Platform -eq 'windows') {
+        $root = if ([string]::IsNullOrWhiteSpace($WindowsRoot)) { [Environment]::GetEnvironmentVariable('SystemRoot') } else { $WindowsRoot }
+        if ([string]::IsNullOrWhiteSpace($root)) { $root = 'C:\Windows' }
+        $entries.Add((Join-Path $root 'System32'))
+    } else {
+        foreach ($path in @('/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin')) {
+            $entries.Add($path)
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($GitDirectory)) { $entries.Add([string]$GitDirectory) }
+
+    $deduplicated = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @($entries)) {
+        $value = [string]$entry
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        $normalized = $value.Trim().TrimEnd('\', '/')
+        if ([string]::IsNullOrWhiteSpace($normalized)) { continue }
+        if ($seen.Add($normalized)) { $deduplicated.Add($normalized) }
+    }
+    return [string]::Join($separator, [string[]]@($deduplicated.ToArray()))
+}
+
+function Get-CodexShellEnvironmentPolicySet {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [AllowNull()][object]$GitCommandInfo = $null,
+        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$Platform = (Get-PlatformName)
+    )
+
+    $gitDirectory = $null
+    if ($null -ne $GitCommandInfo) {
+        $gitSource = [string](Get-JsonProperty -Object $GitCommandInfo -Name 'Source' -Default '')
+        if (-not [string]::IsNullOrWhiteSpace($gitSource)) { $gitDirectory = Split-Path -Parent $gitSource }
+    }
+    $windowsRoot = [Environment]::GetEnvironmentVariable('SystemRoot')
+    $values = [ordered]@{
+        PATH = Get-CodexSanitizedShellPath -Platform $Platform -GitDirectory $gitDirectory -WindowsRoot $windowsRoot
+    }
+    if ($Platform -eq 'windows') {
+        if ([string]::IsNullOrWhiteSpace($windowsRoot)) { $windowsRoot = 'C:\Windows' }
+        $values.SystemRoot = $windowsRoot
+        $values.ComSpec = Join-Path (Join-Path $windowsRoot 'System32') 'cmd.exe'
+        $values.PATHEXT = '.COM;.EXE;.BAT;.CMD'
+    }
+    return $values
+}
+
+function Test-CodexRunUsesGitWorkspace {
+    param([Parameter(Mandatory = $true)][object]$Run)
+
+    return [bool](Get-JsonProperty -Object $Run -Name 'GitWorkspace' -Default $false)
+}
+
+function Add-CodexShellEnvironmentPolicyConfigArguments {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$Arguments,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$ShellEnvironmentSet,
+        [string]$SwitchName = '-c'
+    )
+
+    $Arguments.Add($SwitchName)
+    $Arguments.Add('shell_environment_policy.inherit=none')
+    foreach ($key in @($ShellEnvironmentSet.Keys)) {
+        $name = [string]$key
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { throw "Unsupported Codex shell environment key '$name'." }
+        $Arguments.Add($SwitchName)
+        $Arguments.Add(('shell_environment_policy.set.{0}={1}' -f $name, (ConvertTo-CodexConfigStringLiteral -Value ([string]$ShellEnvironmentSet[$key]))))
+    }
+}
+
 function New-CodexSkillSuppressionSelector {
     param(
         [Parameter(Mandatory = $true)][object]$SkillEntry,
@@ -268,12 +348,13 @@ function Add-CodexSessionConfigArguments {
         [AllowEmptyCollection()][object[]]$AmbientSkillEntries = @(),
         [string]$SwitchName = '-c',
         [switch]$IncludeShellEnvironmentPolicy,
+        [System.Collections.IDictionary]$ShellEnvironmentSet = $null,
         [bool]$IncludeNativeSkillSuppression = $true
     )
 
     if ($IncludeShellEnvironmentPolicy) {
-        $Arguments.Add($SwitchName)
-        $Arguments.Add('shell_environment_policy.inherit=none')
+        if ($null -eq $ShellEnvironmentSet) { $ShellEnvironmentSet = [ordered]@{} }
+        Add-CodexShellEnvironmentPolicyConfigArguments -Arguments $Arguments -ShellEnvironmentSet $ShellEnvironmentSet -SwitchName $SwitchName
     }
     if (-not $IncludeNativeSkillSuppression) { return }
     foreach ($value in @(Get-CodexSkillSessionConfigValues -CandidateSkillName $CandidateSkillName -AmbientSkillEntries $AmbientSkillEntries)) {
@@ -587,6 +668,7 @@ function New-CodexNativeSkillProbeContext {
     )
 
     $environmentKeys = @($Environment.Keys | ForEach-Object { [string]$_ } | Sort-Object)
+    $gitCommandInfo = if (Test-CodexRunUsesGitWorkspace -Run $Inputs.Run) { Resolve-ExternalCommand -Name 'git' } else { $null }
     return [ordered]@{
         purpose = $Purpose
         codex_executable = [string]$CommandInfo.Source
@@ -602,6 +684,7 @@ function New-CodexNativeSkillProbeContext {
         tmp = if ($Environment.Contains('TMP')) { [string]$Environment['TMP'] } else { $null }
         filtered_environment_keys = @($environmentKeys)
         shell_environment_policy = 'inherit=none'
+        shell_environment_policy_set_path = (Get-CodexShellEnvironmentPolicySet -Inputs $Inputs -GitCommandInfo $gitCommandInfo)['PATH']
         app_server_arguments = @($Arguments)
         per_skill_suppression_selector_count = @($AmbientSkillEntries).Count
         native_skill_suppression_enabled = @($Arguments | Where-Object { [string]$_ -like 'skills.*' }).Count -gt 0
@@ -623,7 +706,9 @@ function Invoke-CodexAppServerSkillsListProbe {
     $deadline = $start.AddSeconds([Math]::Max(1, $TimeoutSeconds))
     $arguments = [System.Collections.Generic.List[string]]::new()
     foreach ($argument in @($CommandInfo.Prefix) + @('app-server', '--strict-config', '--stdio')) { $arguments.Add([string]$argument) }
-    Add-CodexSessionConfigArguments -Arguments $arguments -CandidateSkillName $Inputs.Run.CandidateSkillName -AmbientSkillEntries $AmbientSkillEntries -IncludeShellEnvironmentPolicy -IncludeNativeSkillSuppression:$IncludeNativeSkillSuppression
+    $gitCommandInfo = if (Test-CodexRunUsesGitWorkspace -Run $Inputs.Run) { Resolve-ExternalCommand -Name 'git' } else { $null }
+    $shellEnvironmentSet = Get-CodexShellEnvironmentPolicySet -Inputs $Inputs -GitCommandInfo $gitCommandInfo
+    Add-CodexSessionConfigArguments -Arguments $arguments -CandidateSkillName $Inputs.Run.CandidateSkillName -AmbientSkillEntries $AmbientSkillEntries -IncludeShellEnvironmentPolicy -ShellEnvironmentSet $shellEnvironmentSet -IncludeNativeSkillSuppression:$IncludeNativeSkillSuppression
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $CommandInfo.FileName
@@ -1113,7 +1198,9 @@ function Invoke-CodexAppServer {
     $suppressionSelectors = @(New-CodexNativeSkillSuppressionSelectors -AmbientSkillEntries $ambientSkillEntries)
     $appServerArguments = [System.Collections.Generic.List[string]]::new()
     foreach ($argument in @($CommandInfo.Prefix) + @('app-server', '--strict-config', '--stdio')) { $appServerArguments.Add([string]$argument) }
-    Add-CodexSessionConfigArguments -Arguments $appServerArguments -CandidateSkillName $Inputs.Run.CandidateSkillName -AmbientSkillEntries $ambientSkillEntries -IncludeShellEnvironmentPolicy
+    $gitCommandInfo = if (Test-CodexRunUsesGitWorkspace -Run $Inputs.Run) { Resolve-ExternalCommand -Name 'git' } else { $null }
+    $shellEnvironmentSet = Get-CodexShellEnvironmentPolicySet -Inputs $Inputs -GitCommandInfo $gitCommandInfo
+    Add-CodexSessionConfigArguments -Arguments $appServerArguments -CandidateSkillName $Inputs.Run.CandidateSkillName -AmbientSkillEntries $ambientSkillEntries -IncludeShellEnvironmentPolicy -ShellEnvironmentSet $shellEnvironmentSet
     foreach ($argument in @($appServerArguments)) { [void]$psi.ArgumentList.Add([string]$argument) }
 
     # Shared progress context for the app-server protocol exchange. When the
@@ -2087,11 +2174,13 @@ function New-CodexCliArguments {
 
     $directoryArgument = Get-SandboxVisiblePath -HostPath $Inputs.Run.WorkingDirectoryPath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
     $outputArgument = Get-SandboxVisiblePath -HostPath $LastResponsePath -RunRoot $Inputs.Run.RunRoot -Platform $VisiblePlatform
+    $gitCommandInfo = if (Test-CodexRunUsesGitWorkspace -Run $Inputs.Run) { Resolve-ExternalCommand -Name 'git' } else { $null }
+    $shellEnvironmentSet = Get-CodexShellEnvironmentPolicySet -Inputs $Inputs -GitCommandInfo $gitCommandInfo -Platform $VisiblePlatform
     $arguments = [System.Collections.Generic.List[string]]::new()
-    foreach ($argument in @('--ask-for-approval', 'never', 'exec', '--strict-config', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--json', '--color', 'never', '--cd', $directoryArgument, '--model', $Inputs.Profile.Model, '--sandbox', 'danger-full-access', '--config', 'shell_environment_policy.inherit=none')) {
+    foreach ($argument in @('--ask-for-approval', 'never', 'exec', '--strict-config', '--ephemeral', '--ignore-user-config', '--ignore-rules', '--skip-git-repo-check', '--json', '--color', 'never', '--cd', $directoryArgument, '--model', $Inputs.Profile.Model, '--sandbox', 'danger-full-access')) {
         $arguments.Add([string]$argument)
     }
-    Add-CodexSessionConfigArguments -Arguments $arguments -CandidateSkillName $Inputs.Run.CandidateSkillName -AmbientSkillEntries $AmbientSkillEntries -SwitchName '--config'
+    Add-CodexSessionConfigArguments -Arguments $arguments -CandidateSkillName $Inputs.Run.CandidateSkillName -AmbientSkillEntries $AmbientSkillEntries -SwitchName '--config' -IncludeShellEnvironmentPolicy -ShellEnvironmentSet $shellEnvironmentSet
     foreach ($argument in @('--output-last-message', $outputArgument)) {
         $arguments.Add([string]$argument)
     }
@@ -2207,6 +2296,40 @@ function Get-CodexCapabilityMap {
     return $capabilities
 }
 
+function Invoke-CodexGitWorkspaceProbe {
+    param(
+        [Parameter(Mandatory = $true)][object]$Inputs,
+        [Parameter(Mandatory = $true)][object]$GitCommandInfo,
+        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$Platform = (Get-PlatformName),
+        [int]$TimeoutSeconds = 30
+    )
+
+    $shellEnvironmentSet = Get-CodexShellEnvironmentPolicySet -Inputs $Inputs -GitCommandInfo $GitCommandInfo -Platform $Platform
+    $sanitizedPath = [string]$shellEnvironmentSet['PATH']
+    $environment = [ordered]@{}
+    foreach ($key in @($shellEnvironmentSet.Keys)) { $environment[$key] = [string]$shellEnvironmentSet[$key] }
+    $gitFileName = [IO.Path]::GetFileName([string]$GitCommandInfo.Source)
+    if ([string]::IsNullOrWhiteSpace($gitFileName)) { $gitFileName = 'git' }
+    try {
+        $process = Invoke-RunnerProcess -FileName $gitFileName -ArgumentList @('--version') -WorkingDirectory $Inputs.Run.WorkingDirectoryPath -Environment $environment -TimeoutSeconds $TimeoutSeconds
+    } catch {
+        return [pscustomobject]@{
+            Available = $false
+            Detail = "git --version could not start with the sanitized Codex shell PATH: $($_.Exception.Message)"
+            SanitizedPath = $sanitizedPath
+            Process = $null
+        }
+    }
+    $stdout = [string]$process.Stdout
+    $available = -not $process.TimedOut -and $process.ExitCode -eq 0 -and $stdout -match '(?im)\bgit version\b'
+    return [pscustomobject]@{
+        Available = $available
+        Detail = if ($available) { "git --version succeeded with the sanitized Codex shell PATH: $sanitizedPath" } else { "git --version failed with the sanitized Codex shell PATH (exit=$($process.ExitCode), timed_out=$($process.TimedOut))." }
+        SanitizedPath = $sanitizedPath
+        Process = $process
+    }
+}
+
 function Get-CodexPreflight {
     param([Parameter(Mandatory = $true)][object]$Inputs)
 
@@ -2227,6 +2350,8 @@ function Get-CodexPreflight {
     $nativeWorkerObservation = $null
     $nativeSkillConfigObservation = $null
     $auth = Get-CodexAuthSource
+    $gitCommandInfo = $null
+    $gitWorkspaceProbe = $null
 
     if ($profile.Runner -ne 'codex') {
         $reasons.Add("execution-profile.json selects '$($profile.Runner)' rather than codex.")
@@ -2243,6 +2368,21 @@ function Get-CodexPreflight {
     }
     if ($profile.ToolProfile -ne 'default') {
         $reasons.Add("tool_profile '$($profile.ToolProfile)' is unsupported by codex.")
+    }
+    if (Test-CodexRunUsesGitWorkspace -Run $run) {
+        $gitCommandInfo = Resolve-ExternalCommand -Name 'git'
+        if ($null -eq $gitCommandInfo) {
+            $checks.Add((New-PreflightCheck -Name 'git_workspace_tool_path' -Status failed -Detail 'gitWorkspace=true requires git, but Resolve-ExternalCommand could not locate git.'))
+            $reasons.Add('gitWorkspace=true requires git to be resolvable before Codex execution.')
+        } else {
+            $gitWorkspaceProbe = Invoke-CodexGitWorkspaceProbe -Inputs $Inputs -GitCommandInfo $gitCommandInfo -Platform $platform -TimeoutSeconds 30
+            if ($gitWorkspaceProbe.Available) {
+                $checks.Add((New-PreflightCheck -Name 'git_workspace_tool_path' -Status passed -Detail $gitWorkspaceProbe.Detail))
+            } else {
+                $checks.Add((New-PreflightCheck -Name 'git_workspace_tool_path' -Status failed -Detail $gitWorkspaceProbe.Detail))
+                $reasons.Add('gitWorkspace=true requires git --version to succeed with the exact sanitized Codex child shell PATH.')
+            }
+        }
     }
 
     if ($null -eq $commandInfo) {
@@ -2365,11 +2505,11 @@ function Get-CodexPreflight {
 
     $checks.Add((New-PreflightCheck -Name 'fresh_session' -Status passed -Detail 'The selected transport starts an ephemeral thread and never supplies a resume, continue, or existing session identifier.'))
     if ($auth.Kind -eq 'subscription_file') {
-        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The app-server parent receives a filtered environment plus a temporary auth-only CODEX_HOME. Child shell inheritance is disabled with shell_environment_policy.inherit=none. Native skill isolation is proven separately through skills/list discovery, ambient path suppression, behavioral skills/list verification, and runtime access evidence.'))
+        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The app-server parent receives a filtered environment plus a temporary auth-only CODEX_HOME. Child shell inheritance is disabled with shell_environment_policy.inherit=none and shell_environment_policy.set.PATH supplies only the sanitized runner tool path. Native skill isolation is proven separately through skills/list discovery, ambient path suppression, behavioral skills/list verification, and runtime access evidence.'))
         $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "thread/start and turn/start set cwd to $($run.WorkingDirectoryPath); HOME and USERPROFILE remain staged under $($run.HomeDirectoryPath)."))
         $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only auth.json is copied into a temporary auth-only CODEX_HOME and it is removed in finally; config.toml, skills, agents, sessions, memories, plugins, MCP configuration, and AGENTS.md are not copied. This does not claim hard filesystem confinement where none is available.'))
     } else {
-        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The compatibility transport uses an isolated CODEX_HOME plus --ignore-user-config and --ignore-rules; unrelated inherited environment variables are removed.'))
+        $checks.Add((New-PreflightCheck -Name 'ambient_configuration' -Status passed -Detail 'The compatibility transport uses an isolated CODEX_HOME plus --ignore-user-config and --ignore-rules; unrelated inherited environment variables are removed. Child shell inheritance is disabled with shell_environment_policy.inherit=none and shell_environment_policy.set.PATH supplies only the sanitized runner tool path.'))
         $checks.Add((New-PreflightCheck -Name 'run_paths' -Status passed -Detail "--cd $($run.WorkingDirectoryPath); CODEX_HOME under $($run.HomeDirectoryPath)"))
         $checks.Add((New-PreflightCheck -Name 'credential_boundary' -Status passed -Detail 'Only the selected provider API-key variable is passed to Codex; auth files are not copied into the worker HOME.'))
     }
@@ -2382,10 +2522,10 @@ function Get-CodexPreflight {
     $descriptorCopy.harness = [ordered]@{ name = 'OpenAI Codex CLI'; version = $harnessVersion }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + skills/list + thread/start + turn/start', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn skills/list ambient-state verification', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + skills/list + thread/start + turn/start', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn skills/list ambient-state verification', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'shell_environment_policy.set.PATH sanitized runner tool path', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
         if ($null -ne $run.Interaction) { $mechanisms.Add('same-thread repeated turn/start for scripted interaction') } else { $mechanisms.Add('no session continuation') }
     } else {
-        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--strict-config', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn debug prompt-input native-skill suppression proof', 'pre-turn skills/list ambient-state verification', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral compatibility transport', '--strict-config', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'shell_environment_policy.set.PATH sanitized runner tool path', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn debug prompt-input native-skill suppression proof', 'pre-turn skills/list ambient-state verification', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
     if ($hardConfinement) { $mechanisms.Add("external $sandboxName filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     $document = New-PreflightDocument -Descriptor $descriptorCopy -Profile $profile -Run $run -Compatible ($reasons.Count -eq 0) -Checks @($checks) -Mechanisms @($mechanisms) -ResolvedCapabilities $capabilities -Warnings @($warnings) -Reasons @($reasons)
@@ -2888,11 +3028,11 @@ function Invoke-CodexExecute {
     }
     $mechanisms = [System.Collections.Generic.List[string]]::new()
     if ($auth.Kind -eq 'subscription_file') {
-        foreach ($mechanism in @('native app-server initialize + skills/list + thread/start + turn/start', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn skills/list ambient-state verification', 'runtime ambient skill access validation', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('native app-server initialize + skills/list + thread/start + turn/start', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn skills/list ambient-state verification', 'runtime ambient skill access validation', 'temporary auth-only subscription CODEX_HOME', 'ephemeral thread', 'thread/read after turn completion', 'instructionSources validation', 'model/rerouted fail-closed', 'approvalPolicy=never', 'sandboxPolicy=dangerFullAccess', 'shell_environment_policy.inherit=none', 'shell_environment_policy.set.PATH sanitized runner tool path', 'filtered parent process environment', 'prompt in turn/start input')) { $mechanisms.Add($mechanism) }
         $continuationMechanism = if ($null -ne $Inputs.Run.Interaction) { 'same-thread repeated turn/start for scripted interaction' } else { 'no session continuation' }
         $mechanisms.Add($continuationMechanism)
     } else {
-        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--strict-config', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn debug prompt-input native-skill suppression proof', 'pre-turn skills/list ambient-state verification', 'runtime ambient skill access validation', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
+        foreach ($mechanism in @('--ask-for-approval never', 'codex exec --ephemeral', '--strict-config', '--ignore-user-config', '--ignore-rules', '--sandbox danger-full-access', 'shell_environment_policy.inherit=none', 'shell_environment_policy.set.PATH sanitized runner tool path', 'session skills.include_instructions=false', 'session skills.bundled.enabled=false', 'session skills.config ambient path disables', 'pre-turn debug prompt-input native-skill suppression proof', 'pre-turn skills/list ambient-state verification', 'runtime ambient skill access validation', 'isolated CODEX_HOME', 'prompt on stdin', 'no session continuation')) { $mechanisms.Add($mechanism) }
     }
     if ($hardFilesystem) { $mechanisms.Add("external $($sandboxInfo.Source) filesystem sandbox") } else { $mechanisms.Add('pragmatic process/environment isolation without hard filesystem confinement') }
     if (-not $hardFilesystem) { $warnings.Add('Hard filesystem confinement was unavailable; the completed arm is reported as pragmatic isolation.') }

@@ -33,10 +33,22 @@ Set-StrictMode -Version Latest
 # GitHub CLI fallback. The values are forwarded only to the Copilot process;
 # --secret-env-vars removes them from shell and MCP child environments.
 $copilotAuthVariables = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
+# The native skill tool ('skill') is the mechanism iteration 9 used to load an ambient candidate in the baseline. It is
+# removed from the model's tool set in both arms; the candidate is delivered only through the frozen prompt instructions.
+$copilotExcludedTools = @('skill')
+# The single installed-help-proven boundary between the injected candidate instructions and the rest of the prompt
+# wrapper. Preparation guarantees the candidate instruction section is the exact prompt prefix before this marker, so the
+# runner and bridge can hash only the canonical candidate instruction bytes without re-deriving the skill body.
+$copilotCandidateInstructionBoundary = "`n`n# Working environment"
 $script:copilotHomeCleanupSafe = $true
 $script:copilotLogicalInputs = $null
 $script:copilotProjection = $null
 $script:copilotBoundaryViolations = [System.Collections.Generic.List[string]]::new()
+# The evaluated candidate skill name (both arms) and any observed native-skill activation of it. A non-empty violation
+# list at the end of execute is a fail-closed isolation breach: the candidate must never reach the worker natively.
+$script:copilotCandidateSkillName = $null
+$script:copilotNativeSkillViolations = [System.Collections.Generic.List[string]]::new()
+$script:copilotNativeSkillCatalog = $null
 
 function Invoke-CopilotProcess {
     param(
@@ -139,6 +151,9 @@ $descriptor = [ordered]@{
         filesystem_confinement = 'conditional'
         ambient_candidate_skill_exclusion = 'supported'
         candidate_skill_exposure = 'supported'
+        native_skill_tool_exclusion = 'supported'
+        native_skill_catalog_probe = 'supported'
+        candidate_instruction_hash = 'supported'
         prompt_fidelity = 'supported'
         model_configuration_lock = 'supported'
         response_capture = 'supported'
@@ -150,7 +165,7 @@ $descriptor = [ordered]@{
         file_evidence = 'conditional'
         cost_telemetry = 'unsupported'
         credential_child_filtering = 'supported'
-        native_skill_activation_evidence = 'unsupported'
+        native_skill_activation_evidence = 'supported'
         # Behavioral evaluation transport is runner-owned: the runner starts one
         # fresh Copilot CLI session per eval execution and captures the session's
         # own terminal evidence. Copilot's native task/general-purpose subagent
@@ -551,6 +566,11 @@ function New-CopilotCliArguments {
             '--allow-all',
             '--no-ask-user',
             '--disable-builtin-mcps',
+            # The eval never needs native skill lookup: with_skill already embeds the exact frozen candidate
+            # instructions in the prompt, and without_skill intentionally has none. Removing the native skill tool from
+            # the model's tool set closes the native-skill activation path for BOTH arms (installed-version-supported
+            # --excluded-tools; the candidate 'skill' tool is what iteration 9 used to load an ambient candidate).
+            ('--excluded-tools=' + ($copilotExcludedTools -join ',')),
             '--no-color',
             '--log-level', 'none',
             '--no-auto-update',
@@ -578,6 +598,10 @@ function Get-CopilotCapabilityMap {
     }
     $capabilities['filesystem_confinement'] = if ($HardFilesystemConfinement) { 'supported' } else { 'unsupported' }
     $capabilities['candidate_skill_exposure'] = if ($Inputs.Run.CandidateSkillExposed) { 'supported' } else { 'excluded' }
+    $capabilities['native_skill_tool_exclusion'] = 'supported'
+    $capabilities['native_skill_activation_evidence'] = 'supported'
+    $capabilities['candidate_instruction_hash'] = if ($Inputs.Run.Mode -eq 'with_skill') { 'supported' } else { 'excluded' }
+    $capabilities['native_skill_catalog_probe'] = if ($null -ne $script:copilotNativeSkillCatalog -and [bool]$script:copilotNativeSkillCatalog.available) { 'supported' } else { 'conditional' }
     $capabilities['scripted_multi_turn_same_session'] = if ($null -eq $Inputs.Run.Interaction) {
         'conditional'
     } elseif ($null -ne $ContinuationCapability -and [bool]$ContinuationCapability.Available) {
@@ -658,7 +682,7 @@ function Get-CopilotPreflight {
                 }
             } else {
                 $helpText = [string]::Join("`n", @($help.Stdout, $help.Stderr))
-                foreach ($flag in @('--output-format', '--model', '--allow-all', '--no-ask-user', '--disable-builtin-mcps', '--secret-env-vars')) {
+                foreach ($flag in @('--output-format', '--model', '--allow-all', '--no-ask-user', '--disable-builtin-mcps', '--excluded-tools', '--secret-env-vars')) {
                     if ($helpText -notmatch [regex]::Escape($flag)) {
                         $reasons.Add("The installed Copilot CLI does not advertise required flag '$flag'.")
                     }
@@ -668,12 +692,17 @@ function Get-CopilotPreflight {
                 foreach ($forbidden in @('--resume', '-r', '--continue', '--session-id', '--connect', '--yolo')) {
                     if (@($constructed) -contains $forbidden) { $reasons.Add("The constructed Copilot invocation must not use session-continuation or shortcut option '$forbidden'.") }
                 }
-                foreach ($required in @('--output-format', '--allow-all', '--no-ask-user', '--disable-builtin-mcps', '--secret-env-vars')) {
+                foreach ($required in @('--output-format', '--allow-all', '--no-ask-user', '--disable-builtin-mcps', '--excluded-tools', '--secret-env-vars')) {
                     $present = @($constructed) -contains $required
-                    if ($required -eq '--secret-env-vars') {
-                        $present = $present -or (@($constructed | Where-Object { $_ -like '--secret-env-vars=*' }).Count -gt 0)
+                    if ($required -in @('--secret-env-vars', '--excluded-tools')) {
+                        $present = $present -or (@($constructed | Where-Object { $_ -like "$required=*" }).Count -gt 0)
                     }
                     if (-not $present) { $reasons.Add("The constructed Copilot invocation must include '$required'.") }
+                }
+                $excludedToolsArgument = @($constructed | Where-Object { $_ -like '--excluded-tools=*' })
+                if ($excludedToolsArgument.Count -eq 1) {
+                    $excludedList = ($excludedToolsArgument[0] -replace '^--excluded-tools=', '') -split ','
+                    if ('skill' -notin @($excludedList)) { $reasons.Add('The constructed Copilot invocation must exclude the native skill tool for both arms.') }
                 }
                 $promptOptionCount = @($constructed | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count
                 if ($promptOptionCount -ne 0) { $reasons.Add('The constructed Copilot invocation must not place the prompt in argv; prompt delivery uses stdin.') }
@@ -696,6 +725,23 @@ function Get-CopilotPreflight {
                 $continuationCapability.Reason = 'Copilot capability inspection failed before exact-session continuation could be proven.'
                 $checks.Add((New-PreflightCheck -Name 'scripted_multi_turn_same_session' -Status failed -Detail $continuationCapability.Reason))
             }
+        }
+    }
+
+    $nativeSkillCatalog = [ordered]@{ available = $false; candidate = [string]$run.CandidateSkillName; candidate_present = $false; candidate_enabled = $false; proven_absent = $false; entry_count = 0; entries = @(); error = 'not probed' }
+    if ($null -ne $commandInfo) {
+        try {
+            $nativeSkillCatalog = Invoke-CopilotNativeSkillCatalogProbe -CommandInfo $commandInfo -Environment (New-CopilotEnvironment -Inputs $Inputs -WithoutAuthentication) -WorkingDirectory $run.WorkingDirectoryPath -CandidateSkillName ([string]$run.CandidateSkillName)
+        } catch { $nativeSkillCatalog.error = $_.Exception.Message }
+        $script:copilotNativeSkillCatalog = $nativeSkillCatalog
+        if ($nativeSkillCatalog.available -and $nativeSkillCatalog.candidate_enabled) {
+            $reasons.Add("The candidate skill '$($run.CandidateSkillName)' is resolvable and enabled in the isolated native Copilot skill catalog; native discovery would contaminate the eval.")
+            $checks.Add((New-PreflightCheck -Name 'native_skill_catalog' -Status failed -Detail "copilot skill list --json resolved the candidate '$($run.CandidateSkillName)' as an enabled native skill inside the isolated environment."))
+        } elseif ($nativeSkillCatalog.available) {
+            $checks.Add((New-PreflightCheck -Name 'native_skill_catalog' -Status passed -Detail "copilot skill list --json proves the candidate '$($run.CandidateSkillName)' is not an enabled native skill in the isolated environment ($($nativeSkillCatalog.entry_count) skills visible)."))
+        } else {
+            $checks.Add((New-PreflightCheck -Name 'native_skill_catalog' -Status unavailable -Detail "copilot skill list --json was not usable ($($nativeSkillCatalog.error)); the native skill tool exclusion and isolated discovery roots still enforce candidate exclusion."))
+            $warnings.Add('The native-skill-catalog probe was unavailable; candidate native-skill exclusion still holds through --excluded-tools=skill, isolated discovery roots, and runtime/bridge detection.')
         }
     }
 
@@ -789,6 +835,17 @@ function Get-CopilotPreflight {
             github_cli_config_explicit = [bool]$authState.GitHubCliConfigExplicit
             explicit_gh_config_dir_provided = [bool]$authState.ExplicitGhConfigProvided
             token_value_observed = $false
+        }
+        native_skill_isolation = [ordered]@{
+            excluded_tools = @($copilotExcludedTools)
+            native_skill_tool_disabled = $true
+            native_skill_dynamic_retrieval_disabled = $true
+            native_skill_catalog_probe_available = [bool]$nativeSkillCatalog.available
+            native_skill_catalog_proven_absent = [bool]$nativeSkillCatalog.proven_absent
+            candidate = [string]$run.CandidateSkillName
+            candidate_present = [bool]$nativeSkillCatalog.candidate_present
+            candidate_enabled = [bool]$nativeSkillCatalog.candidate_enabled
+            catalog = $nativeSkillCatalog
         }
     }
     return $document
@@ -911,6 +968,11 @@ function Read-CopilotEvents {
         if ($eventType -match '^(tool\.|command\.)' -and $null -ne $script:copilotProjection) {
             $violations = @(Find-CopilotBoundaryContradictions -Data $data -Projection $script:copilotProjection)
             foreach ($violation in $violations) { $script:copilotBoundaryViolations.Add($violation) }
+        }
+        if ($eventType -match '^(tool\.|command\.)' -and -not [string]::IsNullOrWhiteSpace($script:copilotCandidateSkillName)) {
+            foreach ($activation in @(Find-CopilotNativeSkillActivation -Data $data -CandidateSkillName $script:copilotCandidateSkillName -EventType $eventType)) {
+                $script:copilotNativeSkillViolations.Add($activation)
+            }
         }
         foreach ($eventSessionId in @(Get-CopilotEventSessionIds -Event $event)) {
             if ($sessionIds -notcontains $eventSessionId) { $sessionIds.Add($eventSessionId) }
@@ -1042,13 +1104,106 @@ function Invoke-CopilotTurnProcess {
     return Invoke-CopilotCli -CommandInfo $CommandInfo -Arguments $Arguments -Inputs $Inputs -Environment $Environment -InputBytes $InputBytes -TimeoutSeconds $TimeoutSeconds
 }
 
+# Model-free native-skill-catalog probe. The installed Copilot CLI exposes `copilot skill list --json`, a machine-readable
+# enumeration of every skill grouped by source with an `enabled` flag. Run inside the isolated eval environment, it proves
+# the candidate is not resolvable from any native discovery source (inherited/personal ~/.agents|~/.copilot skills,
+# project .github/skills, plugins, custom). It never consumes model tokens. A candidate that is present AND enabled is an
+# isolation breach; probe unavailability is a warning only, because --excluded-tools=skill plus isolated discovery roots
+# plus runtime/bridge detection still enforce the invariant.
+function Invoke-CopilotNativeSkillCatalogProbe {
+    param(
+        [object]$CommandInfo,
+        [System.Collections.IDictionary]$Environment,
+        [string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)][string]$CandidateSkillName
+    )
+
+    $probe = [ordered]@{
+        available = $false
+        candidate = $CandidateSkillName
+        candidate_present = $false
+        candidate_enabled = $false
+        proven_absent = $false
+        entry_count = 0
+        entries = @()
+        error = $null
+    }
+    if ($null -eq $CommandInfo) { $probe.error = 'copilot executable unavailable'; return $probe }
+    try {
+        $process = Invoke-RunnerProcess -FileName $CommandInfo.FileName -ArgumentList (@($CommandInfo.Prefix) + @('skill', 'list', '--json')) -WorkingDirectory $WorkingDirectory -Environment $Environment -TimeoutSeconds 30
+        if ($process.TimedOut -or $process.ExitCode -ne 0) { $probe.error = "copilot skill list exited $($process.ExitCode)"; return $probe }
+        $parsed = $null
+        try { $parsed = [string]$process.Stdout | ConvertFrom-Json -ErrorAction Stop } catch { $probe.error = 'copilot skill list output was not JSON'; return $probe }
+        $entries = @($parsed)
+        $summary = [System.Collections.Generic.List[object]]::new()
+        $present = $false
+        $enabled = $false
+        foreach ($entry in $entries) {
+            $name = [string](Get-JsonProperty -Object $entry -Name 'name' -Default '')
+            $source = [string](Get-JsonProperty -Object $entry -Name 'source' -Default '')
+            $entryEnabled = [bool](Get-JsonProperty -Object $entry -Name 'enabled' -Default $true)
+            $summary.Add([ordered]@{ name = $name; source = $source; enabled = $entryEnabled })
+            if ($name -eq $CandidateSkillName) { $present = $true; if ($entryEnabled) { $enabled = $true } }
+        }
+        $probe.available = $true
+        $probe.entry_count = $entries.Count
+        $probe.entries = @($summary)
+        $probe.candidate_present = $present
+        $probe.candidate_enabled = $enabled
+        # The candidate cannot activate natively when it is either absent or present-but-disabled.
+        $probe.proven_absent = -not $enabled
+        return $probe
+    } catch {
+        $probe.error = $_.Exception.Message
+        return $probe
+    }
+}
+
+# Positive candidate-identity proof. The canonical candidate instruction bytes are the prompt prefix before the
+# working-environment marker; preparation guarantees that prefix is exactly the frozen candidate instruction section. The
+# hash of those bytes must equal the frozen candidateInstructionHash (with_skill); the baseline must carry neither a hash
+# nor an embedded candidate section. Only the candidate instruction content is hashed, so unrelated wrapper edits do not
+# invalidate the proof.
+function Get-CopilotCandidateInstructionEvidence {
+    param([Parameter(Mandatory = $true)][object]$Inputs)
+
+    $promptText = ([System.Text.Encoding]::UTF8.GetString([byte[]]$Inputs.Run.PromptBytes)) -replace "`r`n", "`n" -replace "`r", "`n"
+    $markerIndex = $promptText.IndexOf($copilotCandidateInstructionBoundary, [System.StringComparison]::Ordinal)
+    $expected = [string]$Inputs.Run.CandidateInstructionHash
+    $result = [ordered]@{ expected = $null; injected = $null; verified = $false; violations = @() }
+    $violations = [System.Collections.Generic.List[string]]::new()
+    if ($Inputs.Run.Mode -eq 'with_skill') {
+        $result.expected = $expected
+        if ([string]::IsNullOrWhiteSpace($expected)) {
+            # Nothing was frozen to verify (a synthetic or non-prepared run). Real prepared packages always declare the
+            # hash, and the bridge independently enforces it there.
+            $result.verified = $false
+        } elseif ($markerIndex -lt 0) {
+            $violations.Add('with_skill prompt has no working-environment boundary; candidate instruction bytes cannot be isolated for hashing.')
+        } else {
+            $instruction = $promptText.Substring(0, $markerIndex)
+            $injected = ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([System.Text.Encoding]::UTF8.GetBytes($instruction)))).ToLowerInvariant()
+            $result.injected = $injected
+            $result.verified = ($injected -eq $expected)
+            if (-not $result.verified) { $violations.Add('with_skill injected candidate instructions do not hash to the frozen candidateInstructionHash; candidate identity is unproven.') }
+            if ($instruction -notmatch '(?im)^##\s*Skill:') { $violations.Add('with_skill prompt prefix does not contain the candidate instruction section.') }
+        }
+    } else {
+        $result.verified = $true
+        $prefix = if ($markerIndex -lt 0) { $promptText } else { $promptText.Substring(0, $markerIndex) }
+        if ($prefix -match '(?im)^##\s*Skill:') { $violations.Add('without_skill prompt embeds a candidate instruction section; the baseline must receive no candidate instructions.') }
+        if (-not [string]::IsNullOrWhiteSpace($expected)) { $violations.Add('without_skill declares a candidateInstructionHash; the baseline must have none.') }
+    }
+    $result.violations = @($violations)
+    return $result
+}
+
 function Invoke-CopilotScriptedExecute {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
         [Parameter(Mandatory = $true)][object]$Preflight,
         [Parameter(Mandatory = $true)][object]$ExecutionDescriptor
     )
-
     $started = [DateTime]::UtcNow
     $commandInfo = Resolve-ExternalCommand -Name 'copilot'
     $environment = New-CopilotEnvironment -Inputs $Inputs
@@ -1359,6 +1514,9 @@ function Invoke-CopilotExecute {
     $script:copilotLogicalInputs = $Inputs
     $script:copilotProjection = $plan
     $script:copilotBoundaryViolations = [System.Collections.Generic.List[string]]::new()
+    $script:copilotCandidateSkillName = [string]$Inputs.Run.CandidateSkillName
+    $script:copilotNativeSkillViolations = [System.Collections.Generic.List[string]]::new()
+    $script:copilotNativeSkillCatalog = $null
     [void](New-Item -ItemType Directory -Path $plan.Root -ErrorAction Stop)
     try {
         $physicalRun = $Inputs.Run.PSObject.Copy()
@@ -1400,6 +1558,25 @@ function Invoke-CopilotExecute {
             hard_filesystem_confinement = [bool]$result.isolation.hard_filesystem_confinement
         }
         $result.evidence.boundary = [ordered]@{ proof = 'allowlisted_physical_projection'; contradictions = @($script:copilotBoundaryViolations.ToArray()); event_inspection = 'contradiction_detector_not_confinement' }
+        # Runtime native-skill activations observed during the model turn(s), captured before the candidate-instruction
+        # identity proof is folded in, so the resolution flag reflects only actual native activation.
+        $runtimeNativeSkillActivations = @($script:copilotNativeSkillViolations | Select-Object -Unique)
+        $candidateInstruction = Get-CopilotCandidateInstructionEvidence -Inputs $logicalInputs
+        $result.evidence.candidate_instruction_hash_expected = $candidateInstruction.expected
+        $result.evidence.candidate_instruction_hash_injected = $candidateInstruction.injected
+        $result.evidence.candidate_instruction_hash_verified = [bool]$candidateInstruction.verified
+        foreach ($violation in @($candidateInstruction.violations)) { $script:copilotNativeSkillViolations.Add($violation) }
+        $catalog = $script:copilotNativeSkillCatalog
+        $result.evidence.native_skill = [ordered]@{
+            native_skill_tool_disabled = $true
+            native_skill_dynamic_retrieval_disabled = $true
+            excluded_tools = @($copilotExcludedTools)
+            native_skill_catalog_probe_available = [bool]($null -ne $catalog -and $catalog.available)
+            native_skill_catalog_proven_absent = [bool]($null -ne $catalog -and $catalog.proven_absent)
+            candidate_native_skill_resolution = ($runtimeNativeSkillActivations.Count -gt 0)
+            candidate_native_skill_activations = $runtimeNativeSkillActivations
+            catalog = $catalog
+        }
         $capturePath = Join-Path $logicalInputs.Run.RunRoot 'evidence/copilot-events.jsonl'
         if (Test-Path -LiteralPath $capturePath) {
             $usageWarnings = [System.Collections.Generic.List[string]]::new()
@@ -1417,18 +1594,22 @@ function Invoke-CopilotExecute {
                 if ($buckets.Count) { $result.telemetry.tokens = New-AvailableMetric -Value $buckets }
             }
         }
-        if ($script:copilotBoundaryViolations.Count -gt 0) {
+        $isolationViolations = @(@($script:copilotBoundaryViolations) + @($script:copilotNativeSkillViolations) | Where-Object { $_ } | Select-Object -Unique)
+        if ($isolationViolations.Count -gt 0) {
             $result.status = 'incompatible'
             $result.isolation.status = 'unverified'
             $result.isolation.level = 'unsupported'
             $result.isolation.hard_filesystem_confinement = $false
-            $result.exit.failure = New-ExecutionFailure -Code 'isolation_violation' -Message ([string]::Join('; ', $script:copilotBoundaryViolations))
+            $result.exit.failure = New-ExecutionFailure -Code 'isolation_violation' -Message ([string]::Join('; ', $isolationViolations))
             if ($result.evidence.Contains('delegation')) {
                 $result.evidence.delegation.paired_arm_visible = $true
                 $result.evidence.delegation.grading_material_visible = $true
             }
         }
         $result.evidence.boundary.contradictions = @($script:copilotBoundaryViolations | Select-Object -Unique)
+        if ($result.evidence.Contains('native_skill')) {
+            $result.evidence.native_skill.candidate_native_skill_resolution = ($result.evidence.native_skill.candidate_native_skill_resolution -or (@($script:copilotNativeSkillViolations).Count -gt 0))
+        }
         # Do not copy runtime links back into the logical package.
         Assert-CopilotProjectionTree -Path $physicalRun.WorkingDirectoryPath
         Assert-CopilotProjectionTree -Path $logicalInputs.Run.WorkingDirectoryPath

@@ -1092,6 +1092,17 @@ function Resolve-RunContract {
     if ($mode -eq 'with_skill' -and -not (Test-Sha256 -Value ([string]$run.skillHash))) {
         throw 'with_skill run.json skillHash must be a SHA-256 value.'
     }
+    # The candidate-instruction hash is the positive identity proof for the injected candidate. It covers only the exact
+    # canonical candidate instruction bytes the with_skill prompt embeds, not the whole prompt wrapper, so unrelated
+    # wrapper edits never invalidate the candidate identity. The baseline must not carry it: no candidate is injected.
+    $candidateInstructionHash = [string](Get-JsonProperty -Object $run -Name 'candidateInstructionHash' -Default '')
+    if ($mode -eq 'with_skill') {
+        if (-not [string]::IsNullOrWhiteSpace($candidateInstructionHash) -and -not (Test-Sha256 -Value $candidateInstructionHash)) {
+            throw 'with_skill run.json candidateInstructionHash, when declared, must be a SHA-256 value covering the exact frozen candidate instruction bytes injected into the prompt.'
+        }
+    } elseif (-not [string]::IsNullOrWhiteSpace($candidateInstructionHash)) {
+        throw 'without_skill run.json must not declare candidateInstructionHash; the baseline receives no candidate instructions.'
+    }
 
     return [pscustomobject]@{
         RunPath = $resolvedRunPath
@@ -1110,6 +1121,8 @@ function Resolve-RunContract {
         CandidateSkillName = $candidateSkillName
         FixtureHash = $fixtureHash
         SkillHash = if ($mode -eq 'with_skill') { [string]$run.skillHash } else { $null }
+        CandidateInstructionHash = if ($mode -eq 'with_skill') { $candidateInstructionHash } else { $null }
+        GitWorkspace = [bool](Get-JsonProperty -Object $run -Name 'gitWorkspace' -Default $false)
         InteractionPath = $interactionPath
         InteractionHash = $interactionHash
         Interaction = $interaction

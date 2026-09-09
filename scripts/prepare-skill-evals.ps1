@@ -158,6 +158,18 @@ param(
 
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
+    [string]$AnalyzerRunner,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$AnalyzerModel,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
+    [string]$AnalyzerReasoningEffort,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
     [string]$ConfigurationProfile = 'isolated-default',
 
     [Parameter(ParameterSetName = 'Prepare')]
@@ -198,6 +210,8 @@ $resultSchema = 'codebeltnet/agentic/eval-result/2'
 $runSchema = 'codebeltnet/agentic/eval-run/1'
 $executionProfileSchema = 'codebeltnet/agentic/eval-execution-profile/1'
 $executionResultSchema = 'codebeltnet/agentic/eval-execution-result/1'
+$analyzerProfileSchema = 'codebeltnet/agentic/eval-analyzer-profile/1'
+$analyzerContractVersion = 'codebeltnet/agentic/eval-grading/1'
 $runnerProtocolSchema = 'codebeltnet/agentic/eval-runner-protocol/1'
 $maxFixtureInlineBytes = 32768
 
@@ -777,6 +791,65 @@ function New-ExecutionProfile {
     }
 }
 
+function Resolve-AnalyzerSelection {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][object]$ExecutionSelection,
+        [string]$ExecutionReasoningEffort
+    )
+
+    # The analyzer/grader is a distinct, persisted, reproducible profile - never "whichever model happens to host the
+    # outer orchestrator". By repository policy it defaults to the validated executor selection so cross-provider
+    # preparation never requires a second runner's catalog, and it is overridable to a stable reference analyzer via
+    # -AnalyzerRunner/-AnalyzerModel so the same validated analyzer can grade Copilot, Codex, and OpenCode executions.
+    $hasRunner = -not [string]::IsNullOrWhiteSpace($AnalyzerRunner)
+    $hasModel = -not [string]::IsNullOrWhiteSpace($AnalyzerModel)
+    if ($hasModel -and -not $hasRunner) { throw 'Analyzer selection requires -AnalyzerRunner when -AnalyzerModel is supplied.' }
+
+    if (-not $hasRunner -and -not $hasModel) {
+        return [pscustomobject]@{
+            Runner = $ExecutionSelection.Runner
+            Model = $ExecutionSelection.Model
+            ReasoningEffort = $ExecutionReasoningEffort
+            Harness = $ExecutionSelection.Harness
+            Source = 'executor-matched'
+        }
+    }
+
+    if (-not $hasModel) { throw 'Analyzer selection requires -AnalyzerModel when -AnalyzerRunner is supplied.' }
+    $resolvedRunner = switch ($AnalyzerRunner.Trim().ToLowerInvariant()) {
+        { $_ -in @('github copilot', 'github copilot cli', 'copilot') } { 'github-copilot' }
+        default { $_ }
+    }
+    $supportedRunners = @(Get-SupportedRunnerIds -RepoRoot $RepoRoot)
+    if ($supportedRunners -notcontains $resolvedRunner) {
+        throw "Analyzer runner '$resolvedRunner' is not a supported runner id ($($supportedRunners -join ', '))."
+    }
+    [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $resolvedRunner -ModelName $AnalyzerModel)
+    $reasoning = if (-not [string]::IsNullOrWhiteSpace($AnalyzerReasoningEffort)) { $AnalyzerReasoningEffort } elseif ($resolvedRunner -eq 'codex') { 'low' } else { $null }
+    return [pscustomobject]@{
+        Runner = $resolvedRunner
+        Model = $AnalyzerModel
+        ReasoningEffort = $reasoning
+        Harness = Get-HarnessName -RunnerName $resolvedRunner
+        Source = 'explicit'
+    }
+}
+
+function New-AnalyzerProfile {
+    param([Parameter(Mandatory = $true)][object]$AnalyzerSelection)
+
+    return [ordered]@{
+        schema = $analyzerProfileSchema
+        contract_version = $analyzerContractVersion
+        runner = $AnalyzerSelection.Runner
+        harness = $AnalyzerSelection.Harness
+        model = $AnalyzerSelection.Model
+        reasoning_effort = $AnalyzerSelection.ReasoningEffort
+        selection_source = $AnalyzerSelection.Source
+    }
+}
+
 function Resolve-EffectiveConcurrency {
     param(
         [Parameter(Mandatory = $true)][string]$RunnerName,
@@ -1269,6 +1342,7 @@ function New-RunManifest {
         [string[]]$RepoFiles,
         [string]$FixtureHash,
         [string]$SkillHash,
+        [string]$CandidateInstructionHash = $null,
         [bool]$GitWorkspace,
         [string]$InteractionFile = '',
         [string]$InteractionHash = ''
@@ -1296,6 +1370,7 @@ function New-RunManifest {
         inputFiles = @($RepoFiles)
         fixtureHash = $FixtureHash
         skillHash = if ($Configuration -eq 'with_skill') { $SkillHash } else { $null }
+        candidateInstructionHash = if ($Configuration -eq 'with_skill') { $CandidateInstructionHash } else { $null }
         contract = [ordered]@{
             sandboxRoot = '.'
             workingDirectory = $runDirectoryNames.Working
@@ -1490,7 +1565,13 @@ function Invoke-PrepareMode {
         sha256 = Get-TreeHash -Root $copiedRunnerTools
         file_count = @(Get-ChildItem -LiteralPath $copiedRunnerTools -Recurse -File -Force).Count
     }
-    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'execution-profile.json') -Value (New-ExecutionProfile -ExecutionSelection $executionSelection -EffectiveConcurrency ([int]$effectiveConcurrency.Value))
+    $executionProfile = New-ExecutionProfile -ExecutionSelection $executionSelection -EffectiveConcurrency ([int]$effectiveConcurrency.Value)
+    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'execution-profile.json') -Value $executionProfile
+    # The analyzer/grader profile is validated during preparation exactly like the execution profile and persisted
+    # separately so executor identity and analyzer identity stay independently attributable in evidence and reports.
+    $analyzerSelection = Resolve-AnalyzerSelection -RepoRoot $repoRoot -ExecutionSelection $executionSelection -ExecutionReasoningEffort ([string]$executionProfile.reasoning_effort)
+    $analyzerProfile = New-AnalyzerProfile -AnalyzerSelection $analyzerSelection
+    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'analyzer-profile.json') -Value $analyzerProfile
 
     $skillText = [System.IO.File]::ReadAllText($skillMarkdownPath, $utf8NoBom)
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
@@ -1501,6 +1582,14 @@ function Invoke-PrepareMode {
 
     $generatedUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     $withSkillInstructions = New-SkillInstructionSection -SkillName $Skill -SkillBody $skillBody -Inventory $inventory
+    # The candidate-instruction identity proof hashes exactly these canonical bytes (LF-normalized to match the written
+    # prompt). The runner and bridge isolate them as the prompt prefix before the working-environment marker, so the
+    # candidate instructions must never themselves contain that marker, or the proof boundary would be ambiguous.
+    $candidateInstructionCanonical = $withSkillInstructions -replace "`r`n", "`n" -replace "`r", "`n"
+    if ($candidateInstructionCanonical.Contains("`n`n# Working environment")) {
+        throw 'Candidate instructions must not contain the working-environment boundary marker; the candidate-instruction identity proof would be ambiguous.'
+    }
+    $candidateInstructionHash = Get-Sha256Hex -Bytes ([System.Text.Encoding]::UTF8.GetBytes($candidateInstructionCanonical))
     $manifestEvals = [System.Collections.Generic.List[object]]::new()
 
     foreach ($evalEntry in $selectedEvals) {
@@ -1574,12 +1663,33 @@ function Invoke-PrepareMode {
         # runs would otherwise differ, while the tracked fixture content is the same.
         $fixtureHash = Get-TreeHash -Root (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Working) -ExcludeSegments @('.git')
 
-        $inputFilesSection = New-InputFilesSection -Fixtures @($fixtures)
+        # Git-workspace evals must never inline fixture source into the prompt: the Git scenario mutates the working tree
+        # after fixtures are materialized (for example a feature commit that removes an API), so an inlined base copy would
+        # disagree with the final staged tree the worker actually reads. Omit inline source for these evals so the worker
+        # inspects the repository; the working-environment section already tells it to treat the repo as the source of
+        # truth. For non-Git evals, materialized fixtures still match their inline copies, so inlining is safe.
+        $inputFilesSection = if ($workspaceOption.Git) { $null } else { New-InputFilesSection -Fixtures @($fixtures) }
         $assertions = Get-Assertions -EvalEntry $evalEntry
         $interactionDocument = New-InteractionDocument -EvalEntry $evalEntry
 
         $withSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withSkillInstructions -InputFilesSection $inputFilesSection
         $withoutSkillPrompt = New-PromptDocument -EvalEntry $evalEntry -InstructionSection $withoutSkillPreamble -InputFilesSection $inputFilesSection
+
+        # Deterministic guard: a Git-workspace prompt must not carry inlined fixture content that could disagree with the
+        # final working tree. It holds by omission above (no inline section is emitted for Git evals); this guard also
+        # protects against future regressions and, if inline source is ever re-enabled for a Git eval, requires
+        # byte-equality with the materialized working-tree file rendered after the Git scenario ran.
+        if ($workspaceOption.Git -and -not [string]::IsNullOrWhiteSpace($inputFilesSection)) {
+            $finalWorkingTree = Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Working
+            foreach ($fixture in @($fixtures)) {
+                if (-not $fixture.Inlined) { continue }
+                $materializedPath = Join-Path $finalWorkingTree ($fixture.RepoRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+                $materialized = if (Test-Path -LiteralPath $materializedPath -PathType Leaf) { [System.IO.File]::ReadAllText($materializedPath, $utf8NoBom) } else { $null }
+                if ($null -eq $materialized -or ($materialized.TrimEnd() -ne ([string]$fixture.Content).TrimEnd())) {
+                    throw "Git-workspace eval '$evalName' inlines fixture '$($fixture.RepoRelative)', but the inline content disagrees with the final staged working tree. Omit inline source for Git-workspace evals so the prompt cannot contradict the repository."
+                }
+            }
+        }
 
         Write-Utf8File -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Prompt) -Content $withSkillPrompt
         Write-Utf8File -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Prompt) -Content $withoutSkillPrompt
@@ -1595,8 +1705,8 @@ function Invoke-PrepareMode {
                 if ((Get-FileSha256 -Path $interactionPath) -ne $interactionHash) { throw "Scripted interaction sidecar diverged between configurations for '$evalName'." }
             }
         }
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
-        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'with_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'with_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $skillHash -CandidateInstructionHash $candidateInstructionHash -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
+        ConvertTo-JsonFile -Path (Join-Path (Join-Path $evalDirectory 'without_skill') $runDirectoryNames.Run) -Value (New-RunManifest -SkillName $Skill -CandidateSkillName $candidateSkillName -IterationNumber $iterationNumber -EvalEntry $evalEntry -EvalName $evalName -Configuration 'without_skill' -RepoFiles $repoFiles -FixtureHash $fixtureHash -SkillHash $null -CandidateInstructionHash $null -GitWorkspace $workspaceOption.Git -InteractionFile $interactionFile -InteractionHash $interactionHash)
 
         $assumptions = [System.Collections.Generic.List[string]]::new()
         $assumptions.Add('Run with_skill and without_skill on the same model, same version, and same configuration. Different models measure the model, not the skill.')
@@ -1608,6 +1718,7 @@ function Invoke-PrepareMode {
         }
         if ($workspaceOption.Git) {
             $assumptions.Add('This eval stages a real .git in repo/ so repository-root detection and version-deriving tools behave as on a developer machine.')
+            $assumptions.Add('Input files are intentionally not inlined for this Git-workspace eval; the worker must inspect the staged repository (branches, commits, and diff) rather than rely on any prompt copy, which could disagree with the final working tree.')
         }
         $assumptions.Add('The expected output and assertions in this file are the grading key. They live outside every run directory and must never reach a worker.')
         if ($null -ne $interactionDocument) {
@@ -1712,6 +1823,15 @@ function Invoke-PrepareMode {
         }
         runner_prompt = 'RUN-THIS.prompt.md'
         execution_profile = 'execution-profile.json'
+        analyzer_profile = 'analyzer-profile.json'
+        analyzer_selection = [ordered]@{
+            runner = $analyzerSelection.Runner
+            harness = $analyzerSelection.Harness
+            model = $analyzerSelection.Model
+            reasoning_effort = $analyzerSelection.ReasoningEffort
+            selection_source = $analyzerSelection.Source
+            contract_version = $analyzerContractVersion
+        }
         runner_protocol = $runnerProtocolSchema
         runner_tools = $evalRunnerToolRelativePath
         runner_tools_integrity = $runnerToolsIntegrity
@@ -1876,7 +1996,8 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine('Only after Phase 1 returns a successful terminal JSON summary, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
     [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
     [void]$builder.AppendLine('Only if that bridge succeeds, reveal the grading key in `eval-metadata.json` to the Grader. The Grader may author exactly one package-root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`; each entry contains only `eval_id`, `eval_name`, `configuration`, `assertion_index`, `assertion`, `passed`, and `evidence`. It must not edit raw execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.')
-    [void]$builder.AppendLine('Before creating grading.json, the Grader MUST read and follow the exact packaged `tools/skill-creator/agents/grader.md`; that guidance is authoritative during Phase 2. Uncertain or unverified expectations FAIL. Every assertion requires specific evidence. For PASS, evidence must use three newline-separated fields: `Source: output` (or a manifest-recorded run artifact path), `Quote: <verbatim observation from that frozen source>`, and `Reason: <why this observation establishes this particular assertion>`. Do not reuse generic completion statements or identical evidence across assertions. FAIL evidence must explain what is missing or contradicted. Deterministic validation checks provenance and shape; it does not replace the Grader judgment required by grader.md.')
+    [void]$builder.AppendLine('Before creating grading.json, the Grader MUST read and follow the exact packaged `tools/skill-creator/agents/grader.md`; that guidance is authoritative during Phase 2. Uncertain or unverified expectations FAIL. Every assertion requires specific evidence. For PASS, evidence must use three newline-separated fields: `Source: output` (or a manifest-recorded run artifact path), `Quote: <verbatim observation from that frozen source>`, and `Reason: <why this observation establishes this particular assertion>`. Do not reuse generic completion statements or identical evidence across assertions; reasons that merely restate that the assertion passed or was "evaluated against output" are rejected. FAIL evidence must explain what is missing or contradicted. Deterministic validation checks provenance and shape; it does not replace the Grader judgment required by grader.md.')
+    [void]$builder.AppendLine('Grade every arm with the single validated analyzer/grader profile persisted at `analyzer-profile.json` (also recorded in `manifest.analyzer_selection`), not with whichever model happens to host the orchestrator. The analyzer is an independent boundary: it must not inherit an executor arm''s HOME, provider configuration, session, native tools, skill catalogs, or plugins, and executor identity and analyzer identity stay independently attributable in the report metadata (`executor_model` vs `analyzer_model`/`analyzer_runner`). Use the same analyzer profile for every eval and every configuration so comparisons stay within one analyzer stratum.')
     [void]$builder.AppendLine('To display the authoritative top-level grading skeleton, run:')
     [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$gradingValidatorPath`" -ShowSkeleton")
     [void]$builder.AppendLine('Write `grading.json`, then validate it before finalization:')

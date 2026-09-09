@@ -59,6 +59,26 @@ function Assert-EvalGradingEntryShape {
     }
 }
 
+# Reject generic, templated, or tautological PASS reasons. A reason must explain HOW the cited observation establishes
+# the specific assertion, not restate that the assertion passed or that the output was "evaluated". Iteration 9 passed
+# 76 assertions with reasons equivalent to "Assertion evaluated against output"; that class must fail closed.
+function Test-GenericGradingReason {
+    param([string]$Reason, [string]$Assertion)
+    $normalized = ([regex]::Replace([string]$Reason, '\s+', ' ')).Trim().TrimEnd('.', '!').Trim()
+    if ([string]::IsNullOrWhiteSpace($normalized)) { return $true }
+    if ($normalized -eq (([regex]::Replace([string]$Assertion, '\s+', ' ')).Trim().TrimEnd('.', '!').Trim())) { return $true }
+    $genericPatterns = @(
+        '^(?i)eval(?:uation)? completed(?: with output)?$',
+        '^(?i)(?:the )?(?:assertion|requirement|expectation|condition|criteri(?:on|a))(?: is| was| has been)?(?: fully| clearly)? (?:met|satisfied|passed|verified|confirmed|evaluated|true|correct|valid|present|fulfilled|checked|held|holds|passes)$',
+        '(?i)evaluated against (?:the )?(?:output|transcript|response|result|evidence|assertion)',
+        '(?i)(?:output|response|transcript|result) (?:was |is )?(?:evaluated|matches|meets|satisfies|supports|confirms|contains) (?:the )?(?:assertion|requirement|expectation)',
+        '^(?i)(?:passed|verified|confirmed|as expected|done|looks good|correct|ok|success(?:ful)?|valid|complete)$',
+        '^(?i)(?:this )?(?:matches|meets|satisfies|establishes|proves|confirms)(?: the)?(?: assertion| requirement| expectation)?$'
+    )
+    foreach ($pattern in $genericPatterns) { if ($normalized -match $pattern) { return $true } }
+    return $false
+}
+
 function Assert-EvalPassEvidence {
     param([object]$Entry, [object]$Canonical, [object]$Record)
     if (-not $Entry.passed) { return }
@@ -75,8 +95,8 @@ function Assert-EvalPassEvidence {
         $content = [IO.File]::ReadAllText($path)
     }
     if ([string]::IsNullOrWhiteSpace($quote) -or -not $content.Contains($quote, [StringComparison]::Ordinal)) { throw 'PASS evidence quote is absent from its frozen source.' }
-    if ($reason -eq $quote -or $reason -eq $Entry.assertion -or $reason -match '^(?i:eval(?:uation)? completed(?: with output)?|passed|verified|as expected|done|looks good)[.!]?$') {
-        throw 'PASS evidence must explain how the cited observation establishes this assertion.'
+    if ($reason -eq $quote -or (Test-GenericGradingReason -Reason $reason -Assertion ([string]$Entry.assertion))) {
+        throw 'PASS evidence must explain how the cited observation establishes this assertion, not restate that it passed or was evaluated.'
     }
 }
 
