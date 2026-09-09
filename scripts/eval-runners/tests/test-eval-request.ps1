@@ -23,7 +23,7 @@ function Invoke-FakeHost($Decision) {
 }
 function New-Preparation([string]$Runner, [string]$Name) {
     return @{ Skill = 'dotnet-strong-name-signing'; Eval = @(1); Runner = $Runner
-        OutputRoot = (Join-Path $workspace $Name); ModelCatalogPath = $catalog }
+        OutputRoot = (Join-Path $workspace $Name); ModelCatalogPath = $catalog; AnalyzerModelCatalogPath = $catalog }
 }
 function Assert-Failure([hashtable]$Options, [string]$Pattern) {
     # The request must fail closed even in an ordinary interactive PowerShell caller.
