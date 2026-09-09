@@ -107,12 +107,45 @@
       "prompt": "Classify the version bump for this branch.",
       "expected_output": "Current-branch default-resolution behavior: inspect the local Git repository, resolve the current branch against the upstream/default base branch, collect commits and net diff, then classify those changes with structured reasoning. Must not ask the user to provide change details first.",
       "expectations": [
-        "Follows Default Resolution Behavior when no explicit change details or compare range are provided",
-        "Detects the current branch and resolves a base branch using local Git state, following the documented fallback order",
-        "Collects both branch commits and net diff before classifying compatibility impact",
-        "Returns structured reasoning with the recommendation instead of a bare Major, Minor, or Patch",
-        "Does not respond with a generic request for release notes, diffs, PR summaries, or bug descriptions when the current repository can be inspected",
-        "Asks only for the missing base branch or compare range if local default resolution cannot identify one"
+        {
+          "assertion": "Current Git branch was resolved before classifying",
+          "evidence_domain": "validator",
+          "validator": "git.current_branch_observed"
+        },
+        {
+          "assertion": "Base/default branch was resolved using allowed local Git state",
+          "evidence_domain": "validator",
+          "validator": "git.default_branch_resolved"
+        },
+        {
+          "assertion": "Branch-only commits were collected before classifying",
+          "evidence_domain": "validator",
+          "validator": "git.branch_commits_collected"
+        },
+        {
+          "assertion": "Three-dot net diff was collected before classifying",
+          "evidence_domain": "validator",
+          "validator": "git.three_dot_diff_observed"
+        },
+        {
+          "assertion": "No search was performed for a package or tool named dotnet-change-impact",
+          "evidence_domain": "validator",
+          "validator": "skill.no_candidate_package_search"
+        },
+        {
+          "assertion": "No installation attempt was made for dotnet-change-impact",
+          "evidence_domain": "validator",
+          "validator": "skill.no_candidate_install_attempt"
+        },
+        {
+          "assertion": "No unnecessary project, package, or tool mutation was performed for this read-only classification task",
+          "evidence_domain": "validator",
+          "validator": "workspace.no_unnecessary_mutation"
+        },
+        {
+          "assertion": "Returns structured reasoning with the recommendation instead of a bare Major, Minor, or Patch",
+          "evidence_domain": "output"
+        }
       ]
     }
   ]

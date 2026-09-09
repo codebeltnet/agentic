@@ -24,6 +24,11 @@ function Get-RunnerSchemaNames {
         Interaction = 'codebeltnet/agentic/eval-interaction/1'
         ExecutionFreeze = 'codebeltnet/agentic/eval-execution-freeze/1'
         Grading = 'codebeltnet/agentic/eval-grading/1'
+        AnalyzerProfile = 'codebeltnet/agentic/eval-analyzer-profile/1'
+        Phase2State = 'codebeltnet/agentic/eval-phase2-state/1'
+        GradingFreeze = 'codebeltnet/agentic/eval-grading-freeze/1'
+        AnalyzerResult = 'codebeltnet/agentic/eval-analyzer-result/1'
+        ValidatorResult = 'codebeltnet/agentic/eval-validator-result/1'
     }
 }
 

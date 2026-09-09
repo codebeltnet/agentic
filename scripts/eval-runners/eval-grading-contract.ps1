@@ -10,6 +10,9 @@ if (-not (Get-Command Get-ManifestRunRecords -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command Assert-ExecutionFreeze -ErrorAction SilentlyContinue)) {
     . (Join-Path $PSScriptRoot 'execution-freeze.ps1')
 }
+if (-not (Get-Command Normalize-EvalAssertion -ErrorAction SilentlyContinue)) {
+    . (Join-Path $PSScriptRoot 'phase2-grading.ps1')
+}
 
 function Get-EvalGradingSkeleton {
     return [ordered]@{
@@ -27,20 +30,17 @@ function Get-EvalGradingEntryKey {
 function Get-EvalMetadataAssertions {
     param([Parameter(Mandatory = $true)][object]$Record)
 
-    $metadata = Read-RunnerJson -Path $Record.MetadataPath
-    $assertions = @(Get-JsonProperty -Object $metadata -Name 'assertions' -Default @())
-    if ($assertions.Count -eq 0) { throw "Metadata for '$($Record.EvalName)' declares no assertions." }
-    return @($assertions | ForEach-Object { [string]$_ })
+    return @(Get-EvalMetadataAssertionObjects -Record $Record)
 }
 
 function Assert-EvalGradingEntryShape {
     param([Parameter(Mandatory = $true)][object]$Entry)
 
-    $allowed = @('eval_id', 'eval_name', 'configuration', 'assertion_index', 'assertion', 'passed', 'evidence')
+    $allowed = @('eval_id', 'eval_name', 'configuration', 'assertion_index', 'assertion', 'passed', 'evidence', 'evidence_domain', 'evidence_refs', 'reason', 'source')
     foreach ($name in @(Get-JsonPropertyNames -Object $Entry)) {
         if ($allowed -notcontains $name) { throw "grading.json entry contains unsupported field '$name'." }
     }
-    foreach ($name in $allowed) {
+    foreach ($name in @('eval_id', 'eval_name', 'configuration', 'assertion_index', 'assertion', 'passed', 'evidence', 'evidence_domain', 'evidence_refs', 'reason')) {
         if (-not (Test-JsonProperty -Object $Entry -Name $name)) { throw "grading.json entry is missing '$name'." }
     }
     $evalId = 0
@@ -54,8 +54,12 @@ function Assert-EvalGradingEntryShape {
     if ($Entry.passed -isnot [bool]) { throw 'grading.json passed must be a boolean; incomplete grading is not finalizable.' }
     if ($Entry.evidence -isnot [string]) { throw 'grading.json evidence must be a string.' }
     if ([string]::IsNullOrWhiteSpace($Entry.evidence)) { throw 'grading.json evidence must be non-empty.' }
-    if ($Entry.passed -and $Entry.evidence -notmatch '(?s)^Source: ([^\r\n]+)\r?\nQuote: (.+?)\r?\nReason: (\S.*)$') {
-        throw 'PASS evidence requires Source, a verbatim Quote, and an assertion-specific Reason on separate lines.'
+    if ([string]$Entry.evidence_domain -notin @('output', 'transcript', 'validator')) { throw "grading.json evidence_domain '$($Entry.evidence_domain)' is unsupported." }
+    $refs = @(Get-JsonProperty -Object $Entry -Name 'evidence_refs' -Default @())
+    if ($refs.Count -eq 0) { throw 'grading.json evidence_refs must be a non-empty array.' }
+    if ([string]::IsNullOrWhiteSpace([string]$Entry.reason)) { throw 'grading.json reason must be non-empty.' }
+    if ((Test-JsonProperty -Object $Entry -Name 'source') -and [string]$Entry.source -notin @('analyzer', 'validator')) {
+        throw "grading.json source '$($Entry.source)' is unsupported."
     }
 }
 
@@ -80,22 +84,11 @@ function Test-GenericGradingReason {
 }
 
 function Assert-EvalPassEvidence {
-    param([object]$Entry, [object]$Canonical, [object]$Record)
+    param([object]$Entry, [object]$Canonical, [object]$Expected)
+    [void](Test-GradeEvidenceReference -Grade $Entry -Expected $Expected -Canonical $Canonical)
     if (-not $Entry.passed) { return }
-    [void]($Entry.evidence -match '(?s)^Source: ([^\r\n]+)\r?\nQuote: (.+?)\r?\nReason: (\S.*)$')
-    $source = $Matches[1].Trim(); $quote = $Matches[2].Trim(); $reason = $Matches[3].Trim()
-    if ($source -eq 'output') { $content = [string]$Canonical.output }
-    else {
-        # Only native captured artifacts are admissible, never grading keys or
-        # grader-created files. Freeze validation already pins their bytes.
-        $raw = Read-RunnerJson -Path $Record.ExecutionResultPath
-        $artifacts = @($raw.artifacts | Where-Object { $_.scope -eq 'run' -and $_.path -ceq $source })
-        if ($artifacts.Count -ne 1) { throw "PASS evidence source '$source' is not a captured run artifact." }
-        $path = Resolve-ContainedPath -BasePath (Split-Path -Parent $Record.RunManifestPath) -RelativePath $source -FieldName 'PASS evidence source' -Kind File
-        $content = [IO.File]::ReadAllText($path)
-    }
-    if ([string]::IsNullOrWhiteSpace($quote) -or -not $content.Contains($quote, [StringComparison]::Ordinal)) { throw 'PASS evidence quote is absent from its frozen source.' }
-    if ($reason -eq $quote -or (Test-GenericGradingReason -Reason $reason -Assertion ([string]$Entry.assertion))) {
+    $reason = [string](Get-JsonProperty -Object $Entry -Name 'reason' -Default '')
+    if (Test-GenericGradingReason -Reason $reason -Assertion ([string]$Entry.assertion)) {
         throw 'PASS evidence must explain how the cited observation establishes this assertion, not restate that it passed or was evaluated.'
     }
 }
@@ -118,7 +111,7 @@ function Assert-EvalGradingContract {
     if ([string](Get-JsonProperty -Object $gradingDocument -Name 'schema' -Default '') -ne $schemas.Grading) {
         throw "grading.json must declare '$($schemas.Grading)'."
     }
-    $topLevelAllowed = @('schema', 'grading')
+    $topLevelAllowed = @('schema', 'grading', 'metadata')
     foreach ($name in @(Get-JsonPropertyNames -Object $gradingDocument)) {
         if ($topLevelAllowed -notcontains $name) { throw "grading.json contains unsupported field '$name'; the Grader may author only grading entries." }
     }
@@ -155,13 +148,17 @@ function Assert-EvalGradingContract {
         }
         $canonicalByKey["$($record.EvalId)|$($record.Configuration)"] = $canonical
         for ($index = 0; $index -lt $assertions.Count; $index++) {
+            $assertion = $assertions[$index]
             $key = "$($record.EvalId)|$($record.Configuration)|$index"
             $expected[$key] = [ordered]@{
                 eval_id = [int]$record.EvalId
                 eval_name = [string]$record.EvalName
                 configuration = [string]$record.Configuration
                 assertion_index = $index
-                assertion = [string]$assertions[$index]
+                assertion = [string]$assertion.assertion
+                evidence_domain = [string]$assertion.evidence_domain
+                validator = Get-JsonProperty -Object $assertion -Name 'validator' -Default $null
+                record = $record
             }
         }
     }
@@ -177,12 +174,12 @@ function Assert-EvalGradingContract {
         if (-not $expected.ContainsKey($key)) { throw "grading.json identifies an unknown eval/configuration/assertion '$key'." }
         if ($validated.ContainsKey($key)) { throw "grading.json contains duplicate grading entry '$key'." }
         $target = $expected[$key]
-        if ([string]$entry.eval_name -ne [string]$target.eval_name -or [string]$entry.assertion -ne [string]$target.assertion) {
+        if ([string]$entry.eval_name -ne [string]$target.eval_name -or [string]$entry.assertion -ne [string]$target.assertion -or [string]$entry.evidence_domain -ne [string]$target.evidence_domain) {
             throw "grading.json assertion identity '$key' does not match eval-metadata.json exactly."
         }
         $armKey = "$($entry.eval_id)|$($entry.configuration)"
         $record = @($records | Where-Object { $_.EvalId -eq $entry.eval_id -and $_.Configuration -eq $entry.configuration })[0]
-        Assert-EvalPassEvidence -Entry $entry -Canonical $canonicalByKey[$armKey] -Record $record
+        Assert-EvalPassEvidence -Entry $entry -Canonical $canonicalByKey[$armKey] -Expected $target
         if ($entry.passed) {
             $evidenceKey = $armKey + '|' + ([regex]::Replace($entry.evidence.Trim(), '\s+', ' ')).ToLowerInvariant()
             if ($passEvidence.ContainsKey($evidenceKey)) { throw 'Repeated PASS evidence across assertions is not assertion-specific.' }

@@ -7,12 +7,26 @@
   "required": ["schema", "grading"],
   "properties": {
     "schema": { "const": "codebeltnet/agentic/eval-grading/1" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "type": "string" },
+        "generated_by": { "type": "string" },
+        "analyzer_runner": { "type": "string" },
+        "analyzer_model": { "type": "string" },
+        "analyzer_reasoning_effort": { "type": ["string", "null"] },
+        "analyzer_profile_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "phase2_state": { "type": "string" },
+        "grading_freeze": { "type": "string" }
+      }
+    },
     "grading": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["eval_id", "eval_name", "configuration", "assertion_index", "assertion", "passed", "evidence"],
+        "required": ["eval_id", "eval_name", "configuration", "assertion_index", "assertion", "passed", "evidence", "evidence_domain", "evidence_refs", "reason"],
         "properties": {
           "eval_id": { "type": "integer", "minimum": 1 },
           "eval_name": { "type": "string", "minLength": 1 },
@@ -20,7 +34,30 @@
           "assertion_index": { "type": "integer", "minimum": 0 },
           "assertion": { "type": "string", "minLength": 1 },
           "passed": { "type": "boolean" },
-          "evidence": { "type": "string", "minLength": 1, "pattern": "\\S" }
+          "evidence": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "evidence_domain": { "enum": ["output", "transcript", "validator"] },
+          "evidence_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["artifact"],
+              "properties": {
+                "artifact": { "type": "string", "minLength": 1 },
+                "domain": { "enum": ["output", "transcript", "validator"] },
+                "start_line": { "type": "integer", "minimum": 1 },
+                "end_line": { "type": "integer", "minimum": 1 },
+                "quote": { "type": "string" },
+                "rule": { "type": "string" },
+                "version": { "type": "integer", "minimum": 1 },
+                "event": { "type": ["string", "null"] },
+                "passed": { "type": "boolean" }
+              }
+            }
+          },
+          "reason": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "source": { "enum": ["analyzer", "validator"] }
         }
       }
     }

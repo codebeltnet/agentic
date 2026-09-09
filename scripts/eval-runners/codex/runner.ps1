@@ -196,7 +196,7 @@ function Get-CodexSanitizedShellPath {
     if ($Platform -eq 'windows') {
         $root = if ([string]::IsNullOrWhiteSpace($WindowsRoot)) { [Environment]::GetEnvironmentVariable('SystemRoot') } else { $WindowsRoot }
         if ([string]::IsNullOrWhiteSpace($root)) { $root = 'C:\Windows' }
-        $entries.Add((Join-Path $root 'System32'))
+        $entries.Add((Join-CodexTargetPath -Root $root -Segments @('System32') -Platform windows))
     } else {
         foreach ($path in @('/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin')) {
             $entries.Add($path)
@@ -216,11 +216,33 @@ function Get-CodexSanitizedShellPath {
     return [string]::Join($separator, [string[]]@($deduplicated.ToArray()))
 }
 
+function Join-CodexTargetPath {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Root,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Segments,
+        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$Platform = (Get-PlatformName)
+    )
+
+    $separator = if ($Platform -eq 'windows') { '\' } else { '/' }
+    $result = ([string]$Root).TrimEnd('\', '/')
+    foreach ($segment in @($Segments)) {
+        $value = ([string]$segment).Trim('\', '/')
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        if ([string]::IsNullOrWhiteSpace($result)) {
+            $result = $value
+        } else {
+            $result = $result + $separator + $value
+        }
+    }
+    return $result
+}
+
 function Get-CodexShellEnvironmentPolicySet {
     param(
         [Parameter(Mandatory = $true)][object]$Inputs,
         [AllowNull()][object]$GitCommandInfo = $null,
-        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$Platform = (Get-PlatformName)
+        [ValidateSet('windows', 'linux', 'macos', 'unknown')][string]$Platform = (Get-PlatformName),
+        [AllowNull()][string]$WindowsRoot = $null
     )
 
     $gitDirectory = $null
@@ -228,14 +250,14 @@ function Get-CodexShellEnvironmentPolicySet {
         $gitSource = [string](Get-JsonProperty -Object $GitCommandInfo -Name 'Source' -Default '')
         if (-not [string]::IsNullOrWhiteSpace($gitSource)) { $gitDirectory = Split-Path -Parent $gitSource }
     }
-    $windowsRoot = [Environment]::GetEnvironmentVariable('SystemRoot')
+    $windowsRoot = if ([string]::IsNullOrWhiteSpace($WindowsRoot)) { [Environment]::GetEnvironmentVariable('SystemRoot') } else { $WindowsRoot }
     $values = [ordered]@{
         PATH = Get-CodexSanitizedShellPath -Platform $Platform -GitDirectory $gitDirectory -WindowsRoot $windowsRoot
     }
     if ($Platform -eq 'windows') {
         if ([string]::IsNullOrWhiteSpace($windowsRoot)) { $windowsRoot = 'C:\Windows' }
         $values.SystemRoot = $windowsRoot
-        $values.ComSpec = Join-Path (Join-Path $windowsRoot 'System32') 'cmd.exe'
+        $values.ComSpec = Join-CodexTargetPath -Root $windowsRoot -Segments @('System32', 'cmd.exe') -Platform windows
         $values.PATHEXT = '.COM;.EXE;.BAT;.CMD'
     }
     return $values

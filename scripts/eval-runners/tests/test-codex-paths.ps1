@@ -10,7 +10,7 @@ $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../codex/runner.ps1'), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw 'Codex runner did not parse.' }
-$names = @('ConvertTo-CodexConfigStringLiteral', 'Get-CodexSanitizedShellPath', 'Get-CodexShellEnvironmentPolicySet', 'Add-CodexShellEnvironmentPolicyConfigArguments', 'ConvertTo-CodexComparablePath', 'ConvertTo-CodexComparableText', 'Get-CodexAmbientSkillRoot', 'Test-CodexTextReferencesRoot', 'Test-CodexPathInsideComparableRoot', 'Update-CodexNativeSkillRuntimeAccessEvidence')
+$names = @('ConvertTo-CodexConfigStringLiteral', 'Get-CodexSanitizedShellPath', 'Join-CodexTargetPath', 'Get-CodexShellEnvironmentPolicySet', 'Add-CodexShellEnvironmentPolicyConfigArguments', 'ConvertTo-CodexComparablePath', 'ConvertTo-CodexComparableText', 'Get-CodexAmbientSkillRoot', 'Test-CodexTextReferencesRoot', 'Test-CodexPathInsideComparableRoot', 'Update-CodexNativeSkillRuntimeAccessEvidence')
 foreach ($name in $names) {
     $definition = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true))
     if ($definition.Count -ne 1) { throw "Missing unique function '$name'." }
@@ -27,11 +27,15 @@ if (Test-CodexPathInsideComparableRoot $staged ($staged + '-other/FORMS.md')) { 
 $windowsGit = 'C:\Program Files\Git\cmd'
 $windowsPath = Get-CodexSanitizedShellPath -Platform windows -GitDirectory $windowsGit -WindowsRoot 'C:\Windows'
 if ($windowsPath -cne "C:\Windows\System32;$windowsGit") { throw "Windows sanitized PATH was '$windowsPath'." }
+if ((Join-CodexTargetPath -Root 'C:\Program Files' -Segments @('Git', 'cmd') -Platform windows) -cne 'C:\Program Files\Git\cmd') { throw 'Windows target path construction must not require a host Windows drive.' }
 if ($windowsPath -match [regex]::Escape('C:\host-only\bin')) { throw 'Windows sanitized PATH exposed an arbitrary host-only directory.' }
 $linuxPath = Get-CodexSanitizedShellPath -Platform linux -GitDirectory '/opt/git/bin'
 if ($linuxPath -cne '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/git/bin') { throw "Linux sanitized PATH was '$linuxPath'." }
+if ((Join-CodexTargetPath -Root '/usr/local' -Segments @('bin') -Platform linux) -cne '/usr/local/bin') { throw 'POSIX target path construction must not depend on the host filesystem provider.' }
 $macPath = Get-CodexSanitizedShellPath -Platform macos -GitDirectory '/usr/bin'
 if ($macPath -cne '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin') { throw "macOS sanitized PATH should deduplicate /usr/bin but was '$macPath'." }
+$shellEnvironment = Get-CodexShellEnvironmentPolicySet -Inputs ([ordered]@{}) -Platform windows -WindowsRoot 'C:\Windows'
+if ([string]$shellEnvironment.ComSpec -cne 'C:\Windows\System32\cmd.exe') { throw "Windows ComSpec was '$($shellEnvironment.ComSpec)'." }
 $configArgs = [System.Collections.Generic.List[string]]::new()
 Add-CodexShellEnvironmentPolicyConfigArguments -Arguments $configArgs -ShellEnvironmentSet ([ordered]@{ PATH = $windowsPath; SystemRoot = 'C:\Windows'; ComSpec = 'C:\Windows\System32\cmd.exe'; PATHEXT = '.COM;.EXE;.BAT;.CMD' }) -SwitchName '--config'
 if (@($configArgs | Where-Object { $_ -eq 'shell_environment_policy.inherit=none' }).Count -ne 1) { throw 'Codex config args must keep shell environment inheritance disabled.' }

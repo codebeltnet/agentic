@@ -463,17 +463,24 @@ function Invoke-ValidationScriptJobs {
             $dotnetHome = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-dotnet-home-' + [Guid]::NewGuid().ToString('N'))
             $oldDotNetCliHome = $env:DOTNET_CLI_HOME
             $oldXdgDataHome = $env:XDG_DATA_HOME
+            $oldTemp = $env:TEMP
+            $oldTmp = $env:TMP
 
             try {
                 New-Item -ItemType Directory -Path $dotnetHome -Force | Out-Null
                 $env:DOTNET_CLI_HOME = $dotnetHome
                 $env:XDG_DATA_HOME = Join-Path $dotnetHome 'share'
+                $env:TEMP = Join-Path $dotnetHome 'tmp'
+                $env:TMP = $env:TEMP
+                New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
 
                 $output = & $Script.Path 2>&1
                 $exitCode = $LASTEXITCODE
             } finally {
                 $env:DOTNET_CLI_HOME = $oldDotNetCliHome
                 $env:XDG_DATA_HOME = $oldXdgDataHome
+                $env:TEMP = $oldTemp
+                $env:TMP = $oldTmp
                 if (Test-Path $dotnetHome) {
                     Remove-Item -Path $dotnetHome -Recurse -Force -ErrorAction SilentlyContinue
                 }
@@ -1295,7 +1302,10 @@ Add-ValidationResult -Results $results -Name 'Git-workspace evals omit stale inl
     $scriptPath = Join-Path $repoRoot 'scripts/prepare-skill-evals.ps1'
     $packageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-change-impact-9-' + [Guid]::NewGuid().ToString('N'))
     try {
-        $output = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-change-impact' -Runner 'github-copilot' -Eval 9 -OutputRoot $packageRoot 2>&1
+        New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+        $catalogPath = Join-Path $packageRoot 'models.json'
+        [System.IO.File]::WriteAllText($catalogPath, '{"models":[{"id":"claude-haiku-4.5","operation":"language"}]}', $utf8NoBom)
+        $output = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-change-impact' -Runner 'github-copilot' -Eval 9 -OutputRoot $packageRoot -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for change-impact eval 9: $($output -join [Environment]::NewLine)" }
         $evalDir = @(Get-ChildItem -Path $packageRoot -Recurse -Directory | Where-Object { $_.Name -like 'eval-09*' } | Select-Object -First 1)
         if ($evalDir.Count -ne 1) { throw 'Prepared change-impact eval 9 directory was not found.' }
@@ -1649,6 +1659,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     }
     try {
         $catalogPath = Join-Path $packageRoot 'fake-model-catalog.json'
+        $analyzerCatalogPath = Join-Path $packageRoot 'fake-analyzer-model-catalog.json'
         New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
         [System.IO.File]::WriteAllText($catalogPath, (@'
 {
@@ -1663,6 +1674,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
   ]
 }
 '@), $utf8NoBom)
+        Copy-Item -LiteralPath $catalogPath -Destination $analyzerCatalogPath -Force
 
         $expectedSelectors = @(
             'claude-haiku-4.5',
@@ -1792,7 +1804,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
 
         $referencePackageRoot = Join-Path $packageRoot 'reference-package'
-        $referencePrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $referencePackageRoot -CodebeltReference -ModelCatalogPath $catalogPath 2>&1
+        $referencePrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $referencePackageRoot -CodebeltReference -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -CodebeltReference failed against the fake current catalog: $($referencePrepareOutput -join [Environment]::NewLine)"
         }
@@ -1803,7 +1815,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         Assert-PreparedRunnerIdentity -Name 'GitHub Copilot Codebelt Reference package' -IterationDirectory (Join-Path $referencePackageRoot 'iteration-1') -ExpectedRunner 'github-copilot' -ExpectedModel 'claude-haiku-4.5'
 
         $codexPackageRoot = Join-Path $packageRoot 'codex-package'
-        $codexPrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $codexPackageRoot -Runner 'codex' -ModelCatalogPath $catalogPath 2>&1
+        $codexPrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $codexPackageRoot -Runner 'codex' -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed for the Codex default fixture: $($codexPrepareOutput -join [Environment]::NewLine)"
         }
@@ -1825,7 +1837,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
 
         $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
-        $opencodePrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -ModelCatalogPath $catalogPath 2>&1
+        $opencodePrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed for the OpenCode fixture: $($opencodePrepareOutput -join [Environment]::NewLine)"
         }
@@ -1837,13 +1849,48 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         Assert-PreparedRunnerIdentity -Name 'OpenCode package' -IterationDirectory (Join-Path $opencodePackageRoot 'iteration-1') -ExpectedRunner 'opencode' -ExpectedModel 'provider-paid/Paid.Model'
 
         $explicitGithubPackageRoot = Join-Path $packageRoot 'github-explicit-runner-package'
-        $explicitGithubOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitGithubPackageRoot -Runner 'github-copilot' -Model 'gpt-5.6-luna' -ModelCatalogPath $catalogPath 2>&1
+        $explicitGithubOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitGithubPackageRoot -Runner 'github-copilot' -Model 'gpt-5.6-luna' -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
         if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit GitHub Copilot selection: $($explicitGithubOutput -join [Environment]::NewLine)" }
         $explicitGithubProfile = [System.IO.File]::ReadAllText((Join-Path $explicitGithubPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
         if ([string]$explicitGithubProfile.runner -ne 'github-copilot' -or [string]$explicitGithubProfile.model -ne 'gpt-5.6-luna' -or $null -ne $explicitGithubProfile.reasoning_effort) {
             throw 'An explicit GitHub Copilot runner selection must not be overwritten by Codex defaults.'
         }
         Assert-PreparedRunnerIdentity -Name 'Explicit GitHub Copilot package' -IterationDirectory (Join-Path $explicitGithubPackageRoot 'iteration-1') -ExpectedRunner 'github-copilot' -ExpectedModel 'gpt-5.6-luna'
+
+        $referenceAnalyzerHash = [string](([System.IO.File]::ReadAllText((Join-Path $referencePackageRoot 'iteration-1\manifest.json'), $utf8NoBom) | ConvertFrom-Json).analyzer_profile_sha256)
+        $codexAnalyzerHash = [string](([System.IO.File]::ReadAllText((Join-Path $codexPackageRoot 'iteration-1\manifest.json'), $utf8NoBom) | ConvertFrom-Json).analyzer_profile_sha256)
+        $opencodeAnalyzerHash = [string](([System.IO.File]::ReadAllText((Join-Path $opencodePackageRoot 'iteration-1\manifest.json'), $utf8NoBom) | ConvertFrom-Json).analyzer_profile_sha256)
+        $explicitGithubAnalyzerHash = [string](([System.IO.File]::ReadAllText((Join-Path $explicitGithubPackageRoot 'iteration-1\manifest.json'), $utf8NoBom) | ConvertFrom-Json).analyzer_profile_sha256)
+        if ($referenceAnalyzerHash -notmatch '^[0-9a-f]{64}$' -or $referenceAnalyzerHash -ne $codexAnalyzerHash -or $referenceAnalyzerHash -ne $opencodeAnalyzerHash) {
+            throw 'The same repository analyzer policy must produce the same analyzer_profile_sha256 across GitHub Copilot, Codex, and OpenCode executor packages.'
+        }
+        if ($referenceAnalyzerHash -ne $explicitGithubAnalyzerHash) {
+            throw 'Changing the executor model must not change the analyzer_profile_sha256.'
+        }
+        foreach ($iterationToInspect in @((Join-Path $referencePackageRoot 'iteration-1'), (Join-Path $codexPackageRoot 'iteration-1'), (Join-Path $opencodePackageRoot 'iteration-1'), (Join-Path $explicitGithubPackageRoot 'iteration-1'))) {
+            $profileToInspect = [System.IO.File]::ReadAllText((Join-Path $iterationToInspect 'analyzer-profile.json'), $utf8NoBom) | ConvertFrom-Json
+            if ([string]$profileToInspect.selection_source -eq 'executor-matched') {
+                throw 'Analyzer selection must not silently fall back to executor-matched.'
+            }
+        }
+
+        $alternateAnalyzerPackageRoot = Join-Path $packageRoot 'alternate-analyzer-package'
+        $alternateAnalyzerOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $alternateAnalyzerPackageRoot -Runner 'github-copilot' -Model 'gpt-5.6-luna' -ModelCatalogPath $catalogPath -AnalyzerRunner 'github-copilot' -AnalyzerModel 'gpt-5.6-luna' -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for alternate analyzer selection: $($alternateAnalyzerOutput -join [Environment]::NewLine)" }
+        $alternateAnalyzerHash = [string](([System.IO.File]::ReadAllText((Join-Path $alternateAnalyzerPackageRoot 'iteration-1\manifest.json'), $utf8NoBom) | ConvertFrom-Json).analyzer_profile_sha256)
+        if ($alternateAnalyzerHash -eq $referenceAnalyzerHash) {
+            throw 'Changing the analyzer model must change analyzer_profile_sha256.'
+        }
+
+        $invalidAnalyzerRoot = Join-Path $packageRoot 'invalid-analyzer-model-package'
+        $invalidAnalyzerOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $invalidAnalyzerRoot -Runner 'github-copilot' -Model 'claude-haiku-4.5' -ModelCatalogPath $catalogPath -AnalyzerRunner 'github-copilot' -AnalyzerModel 'missing-analyzer-model' -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
+        if ($LASTEXITCODE -eq 0 -or ($invalidAnalyzerOutput -join ' ') -notmatch "model 'missing-analyzer-model' could not be verified") {
+            throw 'Unknown analyzer model must fail preparation through analyzer model discovery.'
+        }
+        if (Test-Path -LiteralPath $invalidAnalyzerRoot) {
+            Remove-Item -LiteralPath $invalidAnalyzerRoot -Recurse -Force
+            throw 'prepare-skill-evals.ps1 must not create a package when analyzer model validation fails.'
+        }
 
         $mismatchIteration = Join-Path $packageRoot 'mismatched-profile-package'
         Copy-Item -LiteralPath (Join-Path $referencePackageRoot 'iteration-1') -Destination $mismatchIteration -Recurse
@@ -1856,7 +1903,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         Assert-PackageIdentityValidationFails -Name 'mismatched runner package' -IterationDirectory $mismatchIteration -ExpectedRunner 'github-copilot' -ExpectedMessagePattern 'execution-profile\.json runner .+ does not match manifest\.execution_selection\.runner'
 
         $explicitOpenCodePackageRoot = Join-Path $packageRoot 'opencode-explicit-concurrency-package'
-        $explicitOpenCodeOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -ModelCatalogPath $catalogPath -Concurrency 16 2>&1
+        $explicitOpenCodeOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath -Concurrency 16 2>&1
         if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit OpenCode concurrency: $($explicitOpenCodeOutput -join [Environment]::NewLine)" }
         $explicitOpenCodeProfile = [System.IO.File]::ReadAllText((Join-Path $explicitOpenCodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
         if ([int]$explicitOpenCodeProfile.concurrency -ne 16) { throw 'Explicit OpenCode -Concurrency 16 must be honored without clamping.' }
@@ -1895,7 +1942,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'OpenCode preparation must not create a package without an explicit model choice.'
         }
 
-        $prepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
+        $prepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed: $($prepareOutput -join [Environment]::NewLine)"
         }
@@ -1974,11 +2021,13 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             'assertion_index',
             'passed',
             'evidence',
-            'validate-eval-grading.ps1',
-            'Write `grading.json`, then validate it before finalization',
-            'Grading validation is retryable; finalization is not',
-            'only after grading validation succeeds',
-            'apply-eval-grading.ps1',
+            'evidence_domain',
+            'evidence_refs',
+            'invoke-phase2-analyzer.ps1',
+            'phase2-state.json',
+            'grading-freeze.json',
+            'The Phase 2 controller, not this outer orchestrator',
+            'After Phase 2 succeeds, invoke finalization exactly once',
             'finalize-eval-package.ps1',
             'machine-readable JSON summary',
             'report.html',
@@ -2034,10 +2083,11 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                 'Do not create outer workers',
                 'execution-freeze.json',
                 'grading.json',
-                'validate-eval-grading.ps1',
-                'Grading validation is retryable; finalization is not',
-                'only after grading validation succeeds',
-                'apply-eval-grading.ps1',
+                'invoke-phase2-analyzer.ps1',
+                'phase2-state.json',
+                'grading-freeze.json',
+                'evidence_refs',
+                'After Phase 2 succeeds, invoke finalization exactly once',
                 'finalize-eval-package.ps1',
                 'evaluation is incomplete and must fail closed',
                 'Only persisted runner-produced evidence at the manifest-declared paths may proceed'
@@ -2232,8 +2282,9 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                     throw "$($entry.eval_name) prompts must not carry the expected output; that is the grading key."
                 }
                 foreach ($assertion in @($metadata.assertions)) {
-                    if ($prompt.Contains([string]$assertion)) {
-                        throw "$($entry.eval_name) prompts must not carry assertion '$assertion'; that is the grading key."
+                    $assertionText = if ($assertion -is [string]) { [string]$assertion } elseif ($assertion.PSObject.Properties.Name -contains 'assertion') { [string]$assertion.assertion } else { '' }
+                    if (-not [string]::IsNullOrWhiteSpace($assertionText) -and $prompt.Contains($assertionText)) {
+                        throw "$($entry.eval_name) prompts must not carry assertion '$assertionText'; that is the grading key."
                     }
                 }
             }
@@ -2365,6 +2416,22 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         $manifest.execution_selection.model = 'fixture-model'
         $manifest.execution_selection.harness = 'Deterministic runner-owned fixture'
         $manifest.execution_selection.preset = 'Deterministic validator'
+        $analyzerProfilePath = Join-Path $iterationDirectory ([string]$manifest.analyzer_profile)
+        $deterministicAnalyzerProfile = [System.IO.File]::ReadAllText($analyzerProfilePath, $utf8NoBom) | ConvertFrom-Json
+        $deterministicAnalyzerProfile.runner = 'fixture'
+        $deterministicAnalyzerProfile.model = 'fixture-model'
+        $deterministicAnalyzerProfile.harness = 'deterministic runner-owned fixture'
+        $deterministicAnalyzerProfile.reasoning_effort = $null
+        $deterministicAnalyzerProfile.selection_source = 'explicit'
+        [System.IO.File]::WriteAllText($analyzerProfilePath, (($deterministicAnalyzerProfile | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
+        $analyzerProfileHash = Get-FileHash -Algorithm SHA256 -LiteralPath $analyzerProfilePath
+        $manifest.analyzer_profile_sha256 = $analyzerProfileHash.Hash.ToLowerInvariant()
+        $manifest.analyzer_selection.runner = 'fixture'
+        $manifest.analyzer_selection.model = 'fixture-model'
+        $manifest.analyzer_selection.harness = 'deterministic runner-owned fixture'
+        $manifest.analyzer_selection.reasoning_effort = $null
+        $manifest.analyzer_selection.selection_source = 'explicit'
+        $manifest.analyzer_selection.analyzer_profile_sha256 = $manifest.analyzer_profile_sha256
         [System.IO.File]::WriteAllText((Join-Path $iterationDirectory 'manifest.json'), (($manifest | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
         $fixtureMetricEnvironment = [ordered]@{
             AGENTIC_RUNNER_FIXTURE_FINAL_RESPONSE = 'validator output'
@@ -2400,42 +2467,20 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
                 [Environment]::SetEnvironmentVariable($environmentName, $fixtureMetricEnvironmentBefore[$environmentName])
             }
         }
-        $executionCollectOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -CollectResults $iterationDirectory 2>&1
+        $bridgePath = Join-Path $iterationDirectory 'tools/eval-runners/bridge-manifest-results.ps1'
+        $bridgeOutput = & pwsh -NoProfile -NonInteractive -File $bridgePath -IterationDirectory $iterationDirectory -RequireComplete -RequireParallelDispatch -RequireNativeDelegation 2>&1
         if ($LASTEXITCODE -ne 0) {
-            throw "prepare-skill-evals.ps1 -CollectResults failed while bridging the complete deterministic fixture: $($executionCollectOutput -join [Environment]::NewLine)"
+            throw "The deterministic manifest bridge failed: $($bridgeOutput -join [Environment]::NewLine)"
         }
-        # The only post-execution artifact authored by this validator is a
-        # grading-only document with exact metadata identities. Canonical
-        # result grading is projected by the deterministic application helper.
-        $gradingEntries = [System.Collections.Generic.List[object]]::new()
-        foreach ($entryToGrade in @($manifest.evals)) {
-            $metadataPath = Join-Path $iterationDirectory ([string]$entryToGrade.metadata)
-            $metadataForGrade = [System.IO.File]::ReadAllText($metadataPath, $utf8NoBom) | ConvertFrom-Json
-            foreach ($configuration in @('with_skill', 'without_skill')) {
-                for ($assertionIndex = 0; $assertionIndex -lt @($metadataForGrade.assertions).Count; $assertionIndex++) {
-                    $gradingEntries.Add([ordered]@{
-                        eval_id = [int]$entryToGrade.eval_id
-                        eval_name = [string]$entryToGrade.eval_name
-                        configuration = $configuration
-                        assertion_index = $assertionIndex
-                        assertion = [string]$metadataForGrade.assertions[$assertionIndex]
-                        passed = $true
-                        evidence = "Source: output`nQuote: $(([IO.File]::ReadAllText((Join-Path $iterationDirectory $entryToGrade.runs.$configuration.result)) | ConvertFrom-Json).output)`nReason: The fixture response supplies the observed content for assertion $assertionIndex in this deterministic transport test."
-                    })
-                }
-            }
+        $phase2Path = Join-Path $iterationDirectory 'tools/eval-runners/invoke-phase2-analyzer.ps1'
+        $phase2Output = & pwsh -NoProfile -NonInteractive -File $phase2Path -IterationDirectory $iterationDirectory -Concurrency 4 -TimeoutSeconds 60 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "The deterministic Phase 2 analyzer controller failed: $($phase2Output -join [Environment]::NewLine)"
         }
-        $gradingPath = Join-Path $iterationDirectory ([string]$manifest.grading)
-        [System.IO.File]::WriteAllText($gradingPath, (([ordered]@{ schema = 'codebeltnet/agentic/eval-grading/1'; grading = @($gradingEntries.ToArray()) } | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
         $validateGradingPath = Join-Path $iterationDirectory 'tools/eval-runners/validate-eval-grading.ps1'
         $validateGradingOutput = & pwsh -NoProfile -NonInteractive -File $validateGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "The deterministic grading validation failed: $($validateGradingOutput -join [Environment]::NewLine)"
-        }
-        $applyGradingPath = Join-Path $iterationDirectory 'tools/eval-runners/apply-eval-grading.ps1'
-        $applyOutput = & pwsh -NoProfile -NonInteractive -File $applyGradingPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "The deterministic grading-only application failed: $($applyOutput -join [Environment]::NewLine)"
         }
         $finalizerPath = Join-Path $iterationDirectory 'tools/eval-runners/finalize-eval-package.ps1'
         $finalizerOutput = & pwsh -NoProfile -NonInteractive -File $finalizerPath -IterationDirectory $iterationDirectory -GradingPath ([string]$manifest.grading) 2>&1
@@ -2469,7 +2514,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw "benchmark.json must preserve recorded token metrics through the upstream skill-creator aggregation (with_skill=$($benchmark.run_summary.with_skill.tokens.mean), without_skill=$($benchmark.run_summary.without_skill.tokens.mean))."
         }
 
-        $changedOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
+        $changedOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -Changed failed: $($changedOutput -join [Environment]::NewLine)"
         }
@@ -2478,7 +2523,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
 
         $insideRepo = Join-Path $repoRoot 'agentic-eval-isolation-check'
-        $isolationOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
+        $isolationOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo -Runner 'github-copilot' -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
         if ($LASTEXITCODE -eq 0) {
             throw 'prepare-skill-evals.ps1 must refuse an output root inside this repository but outside .bot/.'
         }
@@ -2493,7 +2538,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         # .bot/ is the sanctioned in-repository home, and it only works while git ignores it.
         $botRoot = Join-Path (Join-Path $repoRoot '.bot') 'agentic-eval-bot-check'
         try {
-            $botOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
+            $botOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath -AnalyzerModelCatalogPath $analyzerCatalogPath 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "prepare-skill-evals.ps1 must accept an output root under .bot/: $($botOutput -join [Environment]::NewLine)"
             }

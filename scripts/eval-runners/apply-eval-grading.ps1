@@ -20,6 +20,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'execution-freeze.ps1')
 . (Join-Path $PSScriptRoot 'eval-grading-contract.ps1')
+. (Join-Path $PSScriptRoot 'phase2-grading.ps1')
 
 function Write-GradingResultJson {
     param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][object]$Value)
@@ -45,6 +46,7 @@ try {
         throw "Canonical result validation failed before grading application: $([string]::Join(' ', @($bridgeOutput | ForEach-Object { [string]$_ })))"
     }
 
+    [void](Assert-GradingFreeze -IterationDirectory $iteration -GradingPath $GradingPath)
     $gradingValidation = Assert-EvalGradingContract -IterationDirectory $iteration -GradingPath $GradingPath
     $records = @($gradingValidation.Records)
     $expected = $gradingValidation.Expected
@@ -59,7 +61,15 @@ try {
         $assertions = @(Get-EvalMetadataAssertions -Record $record)
         for ($index = 0; $index -lt $assertions.Count; $index++) {
             $entry = $validated["$($record.EvalId)|$($record.Configuration)|$index"]
-            $newGrading.Add([ordered]@{ text = [string]$entry.assertion; passed = [bool]$entry.passed; evidence = [string]$entry.evidence })
+            $newGrading.Add([ordered]@{
+                text = [string]$entry.assertion
+                passed = [bool]$entry.passed
+                evidence = [string]$entry.evidence
+                evidence_domain = [string]$entry.evidence_domain
+                evidence_refs = @($entry.evidence_refs)
+                reason = [string]$entry.reason
+                source = [string](Get-JsonProperty -Object $entry -Name 'source' -Default '')
+            })
         }
         $beforeNonGrading = Get-JsonFingerprint -Object (Get-JsonWithoutProperty -Object $canonical -PropertyName 'grading')
         # Keep the parsed canonical values as-is. ConvertFrom-Json reparses

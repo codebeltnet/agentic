@@ -23,6 +23,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'orchestration.ps1')
 . (Join-Path $PSScriptRoot 'execution-freeze.ps1')
 . (Join-Path $PSScriptRoot 'package-integrity.ps1')
+. (Join-Path $PSScriptRoot 'phase2-grading.ps1')
 
 function Invoke-FinalizerCommand {
     param(
@@ -132,9 +133,11 @@ try {
     }
     [void](Invoke-FinalizerCommand -ScriptPath $manifestBridge -Arguments $bridgeArgs -Description 'Manifest bridge')
     [void](Assert-ExecutionFreeze -IterationDirectory $iteration -RequireOrchestrationState)
+    $gradingFreeze = Assert-GradingFreeze -IterationDirectory $iteration -GradingPath $GradingPath
 
     $gradingScript = Resolve-ManifestDeclaredPath -IterationDirectory $iteration -RelativePath ([string]$manifest.runner_tools + '/apply-eval-grading.ps1') -FieldName 'grading application helper' -Kind File -RequireExists
     [void](Invoke-FinalizerCommand -ScriptPath $gradingScript -Arguments @('-IterationDirectory', $iteration, '-GradingPath', $GradingPath) -Description 'Grading application')
+    [void](Assert-GradingFreeze -IterationDirectory $iteration -GradingPath $GradingPath)
     $gradedAssertions = Assert-FinalizerGrading -Records $records -IterationDirectory $iteration
 
     $reportRelative = [string](Get-JsonProperty -Object $manifest.report -Name 'tool' -Default 'tools/generate-eval-report.ps1')
@@ -155,6 +158,9 @@ try {
         iteration = $iteration
         runner = $profile.Runner
         model = $profile.Model
+        analyzer_runner = [string]$gradingFreeze.Analyzer.Runner
+        analyzer_model = [string]$gradingFreeze.Analyzer.Model
+        analyzer_profile_sha256 = [string]$gradingFreeze.Analyzer.Hash
         expected_arms = $records.Count
         completed_arms = $records.Count
         graded_assertions = $gradedAssertions

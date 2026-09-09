@@ -184,14 +184,40 @@ function New-TestGradingDocument {
         $metadata = Read-TestJson -Path $record.MetadataPath
         $assertions = @($metadata.assertions)
         for ($index = 0; $index -lt $assertions.Count; $index++) {
+            $assertionText = if ($assertions[$index] -is [string]) { [string]$assertions[$index] } elseif ($assertions[$index].PSObject.Properties.Name -contains 'assertion') { [string]$assertions[$index].assertion } else { [string]$assertions[$index] }
+            $domain = if ($assertions[$index] -isnot [string] -and $assertions[$index].PSObject.Properties.Name -contains 'evidence_domain') { [string]$assertions[$index].evidence_domain } else { 'output' }
+            $validator = if ($assertions[$index] -isnot [string] -and $assertions[$index].PSObject.Properties.Name -contains 'validator') { [string]$assertions[$index].validator } else { $null }
+            $output = [string](Read-TestJson -Path $record.ResultPath).output
+            $refs = if ($domain -eq 'validator') {
+                @([ordered]@{
+                    artifact = [string]$record.ResultRelative
+                    domain = 'validator'
+                    rule = $validator
+                    version = 1
+                    passed = $true
+                    event = 'deterministic fixture validator evidence'
+                })
+            } else {
+                @([ordered]@{
+                    artifact = [string]$record.ResultRelative
+                    domain = 'output'
+                    start_line = 1
+                    end_line = 1
+                    quote = $output
+                })
+            }
             $entries.Add([ordered]@{
                 eval_id = [int]$record.EvalId
                 eval_name = [string]$record.EvalName
                 configuration = [string]$record.Configuration
                 assertion_index = $index
-                assertion = [string]$assertions[$index]
+                assertion = $assertionText
                 passed = $true
-                evidence = "Source: output`nQuote: $((Read-TestJson -Path $record.ResultPath).output)`nReason: The captured fixture response establishes assertion $index for this deterministic transport case."
+                evidence_domain = $domain
+                evidence_refs = @($refs)
+                reason = "The captured fixture response establishes assertion $index for this deterministic transport case."
+                evidence = "The captured fixture response establishes assertion $index for this deterministic transport case."
+                source = 'analyzer'
             })
         }
     }
@@ -378,6 +404,9 @@ try {
     $fixtureDirectory = Join-Path $packageTools 'fixture'
     New-Item -ItemType Directory -Path $fixtureDirectory -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $runnerRoot 'tests/fixtures/runner-owned-fixture.ps1') -Destination (Join-Path $fixtureDirectory 'runner.ps1') -Force
+    $graderContractDirectory = Join-Path $iteration 'tools/skill-creator/agents'
+    New-Item -ItemType Directory -Path $graderContractDirectory -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $graderContractDirectory 'grader.md'), "# Deterministic grader contract`nGrade against frozen evidence only.`n", [System.Text.UTF8Encoding]::new($false))
 
     $reportScript = Join-Path $iteration 'tools/test-report.ps1'
     $reportScriptText = @'
@@ -410,14 +439,28 @@ for ($index = 0; $index -lt $count; $index++) {
         $evalName = if ($evalId -eq 2) { 'dotnet-strong-name-signing-confirmation' } else { 'integrity-eval-{0:d2}' -f $evalId }
         $evalDirectory = Join-Path $iteration $evalName
         New-Item -ItemType Directory -Path $evalDirectory -Force | Out-Null
-        $assertion = if ($evalId -eq 2) { 'the protected operation is absent before confirmation and occurs only after the same-session confirmation turn' } else { 'the deterministic terminal response is captured' }
+        $assertions = if ($evalId -eq 2) {
+            @('the protected operation is absent before confirmation and occurs only after the same-session confirmation turn', 'the response contains the fixture completion content')
+        } elseif ($evalId -eq 3) {
+            @(
+                [ordered]@{ assertion = 'current Git branch was resolved'; evidence_domain = 'validator'; validator = 'git.current_branch_observed' }
+                [ordered]@{ assertion = 'base/default branch was resolved using local Git state'; evidence_domain = 'validator'; validator = 'git.default_branch_resolved' }
+                [ordered]@{ assertion = 'branch-only commits were collected'; evidence_domain = 'validator'; validator = 'git.branch_commits_collected' }
+                [ordered]@{ assertion = 'three-dot net diff was collected'; evidence_domain = 'validator'; validator = 'git.three_dot_diff_observed' }
+                [ordered]@{ assertion = 'no candidate package search was performed'; evidence_domain = 'validator'; validator = 'skill.no_candidate_package_search' }
+                [ordered]@{ assertion = 'no candidate install attempt was performed'; evidence_domain = 'validator'; validator = 'skill.no_candidate_install_attempt' }
+                [ordered]@{ assertion = 'no unnecessary project package or tool mutation was performed'; evidence_domain = 'validator'; validator = 'workspace.no_unnecessary_mutation' }
+            )
+        } else {
+            @('the deterministic terminal response is captured', 'the response contains the fixture completion content')
+        }
         Write-TestJson -Path (Join-Path $evalDirectory 'eval-metadata.json') -Value ([ordered]@{
             schema = 'codebeltnet/agentic/eval-metadata/1'
             eval_id = $evalId
             eval_name = $evalName
             prompt = "fixture prompt $evalId"
             expected_output = 'fixture output'
-            assertions = @($assertion, 'the response contains the fixture completion content')
+            assertions = @($assertions)
         })
         $runs = [ordered]@{}
         foreach ($configuration in @('with_skill', 'without_skill')) {
@@ -425,13 +468,23 @@ for ($index = 0; $index -lt $count; $index++) {
             $run = New-TestRun -IterationDirectory $iteration -EvalId $evalId -EvalName $evalName -Configuration $configuration -Interaction $interactionForRun
             $resultName = "$configuration.result.json"
             $executionName = "$configuration.execution-result.json"
+            $stubGrading = @($assertions | ForEach-Object {
+                [ordered]@{
+                    text = if ($_ -is [string]) { [string]$_ } elseif ($_.PSObject.Properties.Name -contains 'assertion') { [string]$_.assertion } else { [string]$_ }
+                    passed = $null
+                    evidence = ''
+                    evidence_domain = if ($_ -isnot [string] -and $_.PSObject.Properties.Name -contains 'evidence_domain') { [string]$_.evidence_domain } else { 'output' }
+                    evidence_refs = @()
+                    reason = ''
+                }
+            })
             Write-TestJson -Path (Join-Path $evalDirectory "results/$resultName") -Value ([ordered]@{
                 schema = (Get-RunnerSchemaNames).PortableResult
                 eval_id = $evalId
                 eval_name = $evalName
                 configuration = $configuration
                 execution_status = 'unrun'
-                grading = @([ordered]@{ text = $assertion; passed = $null; evidence = '' }, [ordered]@{ text = 'the response contains the fixture completion content'; passed = $null; evidence = '' })
+                grading = @($stubGrading)
             })
             $runs[$configuration] = [ordered]@{
                 mode = $configuration
@@ -472,8 +525,33 @@ for ($index = 0; $index -lt $count; $index++) {
         timeout_seconds = 60
         concurrency = 3
     }
+    $analyzerProfile = [ordered]@{
+        schema = (Get-RunnerSchemaNames).AnalyzerProfile
+        contract_version = (Get-RunnerSchemaNames).Grading
+        runner = 'fixture'
+        harness = 'deterministic runner-owned fixture'
+        model = 'fixture-model'
+        reasoning_effort = $null
+        selection_source = 'explicit'
+    }
     Write-TestJson -Path (Join-Path $iteration 'manifest.json') -Value $manifest
     Write-TestJson -Path (Join-Path $iteration 'execution-profile.json') -Value $profile
+    Write-TestJson -Path (Join-Path $iteration 'analyzer-profile.json') -Value $analyzerProfile
+    $manifest.analyzer_profile = 'analyzer-profile.json'
+    $manifest.analyzer_profile_sha256 = Get-Sha256HexFromFile -Path (Join-Path $iteration 'analyzer-profile.json')
+    $manifest.analyzer_selection = [ordered]@{
+        runner = 'fixture'
+        harness = 'deterministic runner-owned fixture'
+        model = 'fixture-model'
+        reasoning_effort = $null
+        selection_source = 'explicit'
+        contract_version = (Get-RunnerSchemaNames).Grading
+        analyzer_profile_sha256 = [string]$manifest.analyzer_profile_sha256
+    }
+    $manifest.phase2_controller = 'tools/eval-runners/invoke-phase2-analyzer.ps1'
+    $manifest.phase2_state = 'phase2-state.json'
+    $manifest.grading_freeze = 'grading-freeze.json'
+    Write-TestJson -Path (Join-Path $iteration 'manifest.json') -Value $manifest
 
     $fanoutScript = Join-Path $packageTools 'invoke-runner-owned-arms.ps1'
     $fanout = Invoke-ForegroundPhaseOne -Path $fanoutScript -IterationDirectory $iteration
@@ -596,24 +674,35 @@ for ($index = 0; $index -lt $count; $index++) {
         Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'invalid grading entry validation' -ExpectedText 'passed must be a boolean'
         Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'invalid grading validation'
 
-        foreach ($badEvidence in @('', " `t`n", 'Evaluation completed with output', "Source: output`nQuote: fabricated unavailable observation`nReason: This establishes the assertion.", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: Evaluation completed with output", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: Assertion evaluated against output", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: The assertion is met", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: Output matches the assertion")) {
+        foreach ($badEvidence in @('', " `t`n")) {
             $bad = Copy-TestGradingDocument -Document $validGrading
             $bad.grading[0].evidence = $badEvidence
             Write-TestJson -Path $gradingPath -Value $bad
             Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'non-evidentiary PASS rejected'
             Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'evidence rejection preserves frozen execution'
         }
+        foreach ($badReason in @('Evaluation completed with output', 'Assertion evaluated against output', 'The assertion is met', 'Output matches the assertion')) {
+            $bad = Copy-TestGradingDocument -Document $validGrading
+            $bad.grading[0].reason = $badReason
+            $bad.grading[0].evidence = $badReason
+            Write-TestJson -Path $gradingPath -Value $bad
+            Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'generic PASS reason rejected'
+            Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'reason rejection preserves frozen execution'
+        }
+        $badQuote = Copy-TestGradingDocument -Document $validGrading
+        $badQuote.grading[0].evidence_refs[0].quote = 'fabricated unavailable observation'
+        Write-TestJson -Path $gradingPath -Value $badQuote
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'missing output quote rejected' -ExpectedText 'quote is absent'
+
+        $badDomain = Copy-TestGradingDocument -Document $validGrading
+        $badDomain.grading[0].evidence_domain = 'transcript'
+        Write-TestJson -Path $gradingPath -Value $badDomain
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'wrong evidence domain rejected' -ExpectedText 'assertion identity'
+
         $repeated = Copy-TestGradingDocument -Document $validGrading
         $repeated.grading[1].evidence = $repeated.grading[0].evidence
         Write-TestJson -Path $gradingPath -Value $repeated
         Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'repeated PASS evidence rejected' -ExpectedText 'Repeated PASS evidence'
-
-        $artifactEvidence = Copy-TestGradingDocument -Document $validGrading
-        $firstRecord = @($records | Sort-Object EvalId, Configuration)[0]
-        $eventLine = @(Get-Content (Join-Path (Split-Path -Parent $firstRecord.RunManifestPath) 'evidence/fixture-events.jsonl'))[0]
-        $artifactEvidence.grading[0].evidence = "Source: evidence/fixture-events.jsonl`nQuote: $eventLine`nReason: The native event records the fixture response for this assertion."
-        Write-TestJson -Path $gradingPath -Value $artifactEvidence
-        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'frozen native artifact citation accepted'
 
         Write-TestJson -Path $gradingPath -Value $validGrading
         $validValidation = Invoke-TestTool -Path $validationScript -Arguments $validationArguments
@@ -624,12 +713,29 @@ for ($index = 0; $index -lt $count; $index++) {
 
     }
     Write-TestJson -Path $gradingPath -Value $validGrading
+    if ($Suite -in @('All', 'Application', 'Finalization')) {
+        $manualNoFreezeFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+        Assert-ToolFails -Invocation $manualNoFreezeFinalizer -Description 'finalizer rejects handcrafted grading without Phase 2 freeze' -ExpectedText 'grading-freeze.json is missing'
+        $phase2Script = Join-Path $packageTools 'invoke-phase2-analyzer.ps1'
+        $phase2 = Invoke-TestTool -Path $phase2Script -Arguments @('-IterationDirectory', $iteration, '-Concurrency', '3', '-TimeoutSeconds', '60')
+        Assert-ToolPasses -Invocation $phase2 -Description 'fixture Phase 2 analyzer controller'
+        Assert-True (Test-Path -LiteralPath (Join-Path $iteration 'phase2-state.json') -PathType Leaf) 'Phase 2 writes phase2-state.json'
+        Assert-True (Test-Path -LiteralPath (Join-Path $iteration 'grading-freeze.json') -PathType Leaf) 'Phase 2 writes grading-freeze.json'
+        $phase2State = Read-TestJson -Path (Join-Path $iteration 'phase2-state.json')
+        Assert-True (@($phase2State.expected_worker_ids | Where-Object { [string]$_ -like 'arm-3-*' }).Count -eq 0) 'validator-only eval arms must require zero analyzer workers'
+        Assert-Equal 14 @($phase2State.validator_results).Count 'validator-only paired arms resolve process assertions deterministically'
+        Assert-Equal 4 @($phase2State.expected_worker_ids).Count 'semantic worker cardinality derives from unresolved assertions, not manifest arm count'
+        $rootGradingAfterPhase2 = Read-TestJson -Path $gradingPath
+        Assert-Equal 22 @($rootGradingAfterPhase2.grading).Count 'root grading cardinality derives from normalized assertions'
+        Assert-True (@($rootGradingAfterPhase2.grading | Where-Object { [string]$_.evidence_domain -eq 'validator' -and [string]$_.source -eq 'validator' }).Count -eq 14) 'validator assertions are resolved by deterministic validator results, not analyzer prose'
+        $validGrading = Read-TestJson -Path $gradingPath
+    }
     if ($Suite -in @('All', 'Application')) {
         $invalidDirectFinalizer = Copy-TestGradingDocument -Document $validGrading
         $invalidDirectFinalizer.grading[0].evidence = 123
         Write-TestJson -Path $gradingPath -Value $invalidDirectFinalizer
         $directInvalidFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
-        Assert-ToolFails -Invocation $directInvalidFinalizer -Description 'finalizer performs its own grading validation' -ExpectedText 'evidence must be a string'
+        Assert-ToolFails -Invocation $directInvalidFinalizer -Description 'finalizer rejects post-freeze grading mutation' -ExpectedText 'Root grading.json was changed'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $iteration 'report.html') -PathType Leaf)) 'invalid direct finalizer produces no report'
 
         Write-TestJson -Path $gradingPath -Value $validGrading
@@ -645,13 +751,13 @@ for ($index = 0; $index -lt $count; $index++) {
         $invalidGrading = [ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = @($validGrading.grading); output = 'raw output is forbidden here' }
         Write-TestJson -Path $gradingPath -Value $invalidGrading
         $invalidApply = Invoke-TestTool -Path $applyScript -Arguments $applyArguments
-        Assert-ToolFails -Invocation $invalidApply -Description 'grading artifact with raw output is rejected' -ExpectedText 'unsupported field'
+        Assert-ToolFails -Invocation $invalidApply -Description 'grading artifact with raw output is rejected' -ExpectedText 'Root grading.json was changed'
 
         $forbiddenGradingFields = @('model', 'harness', 'execution_result_sha256', 'session_id', 'telemetry')
         foreach ($forbiddenField in $forbiddenGradingFields) {
             $forbiddenEntries = @($validGrading.grading | ForEach-Object {
                 $copy = [ordered]@{}
-                foreach ($name in @('eval_id', 'eval_name', 'configuration', 'assertion_index', 'assertion', 'passed', 'evidence')) {
+                foreach ($name in @('eval_id', 'eval_name', 'configuration', 'assertion_index', 'assertion', 'passed', 'evidence', 'evidence_domain', 'evidence_refs', 'reason', 'source')) {
                     $copy[$name] = Get-JsonProperty -Object $_ -Name $name
                 }
                 $copy[$forbiddenField] = 'forbidden'
@@ -659,7 +765,7 @@ for ($index = 0; $index -lt $count; $index++) {
             })
             Write-TestJson -Path $gradingPath -Value ([ordered]@{ schema = (Get-RunnerSchemaNames).Grading; grading = $forbiddenEntries })
             $forbiddenApply = Invoke-TestTool -Path $applyScript -Arguments $applyArguments
-            Assert-ToolFails -Invocation $forbiddenApply -Description "grading artifact with $forbiddenField is rejected" -ExpectedText 'unsupported field'
+            Assert-ToolFails -Invocation $forbiddenApply -Description "grading artifact with $forbiddenField is rejected" -ExpectedText 'Root grading.json was changed'
         }
         Write-TestJson -Path $gradingPath -Value $validGrading
     }

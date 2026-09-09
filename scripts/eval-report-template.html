@@ -266,6 +266,16 @@
     function renderBenchmark() {
       const evals = DATA.evals || [];
       let html = '<h2 class="eval-title">Benchmark</h2><p class="summary-note">Paired results are shown side by side. A missing metric means the harness did not record it; no value is estimated.</p>';
+      const usage = DATA.metadata && DATA.metadata.usage ? DATA.metadata.usage : {};
+      const executionUsage = usage.execution || {};
+      const analyzerUsage = usage.analyzer || {};
+      const display = (value, formatter = num) => value == null || value === '' ? 'unavailable' : formatter(value);
+      html += '<section class="panel"><div class="panel-title">Execution cost / usage</div><div class="table-wrap"><table><thead><tr><th>Runner</th><th>Model</th><th>Workers</th><th>Duration</th><th>Total tokens</th><th>Input tokens</th><th>Output tokens</th><th>Cost</th></tr></thead><tbody>';
+      html += '<tr><td>' + esc(executionUsage.runner || 'unavailable') + '</td><td>' + esc(executionUsage.model || 'unavailable') + '</td><td>' + display(executionUsage.worker_count) + '</td><td>' + display(executionUsage.duration_seconds, seconds) + '</td><td>' + display(executionUsage.total_tokens) + '</td><td>' + display(executionUsage.input_tokens) + '</td><td>' + display(executionUsage.output_tokens) + '</td><td>' + display(executionUsage.cost, money) + '</td></tr>';
+      html += '</tbody></table></div></section>';
+      html += '<section class="panel"><div class="panel-title">Analyzer cost / usage</div><p class="summary-note">Analyzer usage is a separate Phase 2 stratum; it is not added to execution tokens or cost.</p><div class="table-wrap"><table><thead><tr><th>Runner</th><th>Model</th><th>Profile hash</th><th>Workers</th><th>Failed</th><th>Duration</th><th>Total tokens</th><th>Input tokens</th><th>Output tokens</th><th>Cost</th></tr></thead><tbody>';
+      html += '<tr><td>' + esc(analyzerUsage.runner || 'unavailable') + '</td><td>' + esc(analyzerUsage.model || 'unavailable') + '</td><td><code>' + esc(analyzerUsage.profile_sha256 || 'unavailable') + '</code></td><td>' + display(analyzerUsage.worker_count) + '</td><td>' + display(analyzerUsage.failed_worker_count) + '</td><td>' + display(analyzerUsage.duration_seconds, seconds) + '</td><td>' + display(analyzerUsage.total_tokens) + '</td><td>' + display(analyzerUsage.input_tokens) + '</td><td>' + display(analyzerUsage.output_tokens) + '</td><td>' + display(analyzerUsage.cost, money) + '</td></tr>';
+      html += '</tbody></table></div></section>';
       html += '<section class="panel"><div class="panel-title">Aggregate comparison</div><div class="table-wrap"><table><thead><tr><th>Metric</th><th>With skill</th><th>Without skill</th><th>Delta</th></tr></thead><tbody>';
       html += summaryRow('Pass rate', summaryMetric(evals, 'with_skill', passRate), summaryMetric(evals, 'without_skill', passRate), v => num(v, 2), true);
       html += summaryRow('Turns', summaryMetric(evals, 'with_skill', r => r && r.metrics.turns), summaryMetric(evals, 'without_skill', r => r && r.metrics.turns), v => num(v, 1));

@@ -59,6 +59,7 @@ $OutputEncoding = $utf8NoBom
 
 . (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'eval-runners/execution-freeze.ps1')
+. (Join-Path $PSScriptRoot 'eval-runners/phase2-grading.ps1')
 
 function Set-BenchmarkTokenMetrics {
     param([object]$Benchmark, [object[]]$ManifestRecords)
@@ -153,6 +154,21 @@ function Get-Property {
     }
 
     return $Default
+}
+
+function Get-AssertionDisplayText {
+    param([object]$Assertion)
+
+    if ($Assertion -is [string]) { return [string]$Assertion }
+    $text = [string](Get-Property -Object $Assertion -Name 'assertion' -Default (Get-Property -Object $Assertion -Name 'text' -Default ''))
+    if ([string]::IsNullOrWhiteSpace($text)) { return [string]$Assertion }
+    return $text
+}
+
+function Get-AssertionDisplayTexts {
+    param([object[]]$Assertions)
+
+    return @($Assertions | ForEach-Object { Get-AssertionDisplayText -Assertion $_ })
 }
 
 function Get-SafeSegment {
@@ -376,18 +392,19 @@ function Get-ReportOutputFiles {
 function Get-ReportGrades {
     param(
         [object]$Result,
-        [string[]]$Assertions
+        [object[]]$Assertions
     )
 
+    $assertionTexts = @(Get-AssertionDisplayTexts -Assertions $Assertions)
     $grading = @(Get-Property -Object $Result -Name 'grading' -Default @())
-    $count = [Math]::Max($grading.Count, $Assertions.Count)
+    $count = [Math]::Max($grading.Count, $assertionTexts.Count)
     $grades = [System.Collections.Generic.List[object]]::new()
     for ($index = 0; $index -lt $count; $index++) {
         $grade = if ($index -lt $grading.Count) { $grading[$index] } else { $null }
         $text = [string](Get-Property -Object $grade -Name 'text' -Default '')
         $generic = [string]::IsNullOrWhiteSpace($text) -or $text -match '^(Passed|Failed|Assertion\s+\d+)$'
-        if ($generic -and $index -lt $Assertions.Count) {
-            $text = [string]$Assertions[$index]
+        if ($generic -and $index -lt $assertionTexts.Count) {
+            $text = [string]$assertionTexts[$index]
         }
         if ([string]::IsNullOrWhiteSpace($text)) {
             $text = 'Assertion'
@@ -419,9 +436,87 @@ function Get-ReportMetric {
         if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
             return $value
         }
+
     }
 
     return $null
+}
+
+function Get-MetricTotalOrNull {
+    param([object[]]$Items, [string]$Name)
+
+    if (@($Items).Count -eq 0) { return $null }
+    $total = 0.0
+    foreach ($item in @($Items)) {
+        $value = Get-Property -Object $item -Name $Name -Default $null
+        if ($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)) { return $null }
+        $total += [double]$value
+    }
+    return $total
+}
+
+function Get-ExecutionUsageSummary {
+    param([object[]]$ManifestRecords)
+
+    $results = @($ManifestRecords | ForEach-Object { Read-JsonFile -Path $_.ResultPath })
+    return [ordered]@{
+        runner = $null
+        model = if ($results.Count -eq 0) { $null } else { ([string]::Join(', ', @($results | ForEach-Object { [string](Get-Property -Object $_ -Name 'model' -Default '') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique))) }
+        duration_seconds = Get-MetricTotalOrNull -Items $results -Name 'duration_seconds'
+        input_tokens = Get-MetricTotalOrNull -Items $results -Name 'base_input_tokens'
+        output_tokens = Get-MetricTotalOrNull -Items $results -Name 'output_tokens'
+        cache_read_tokens = Get-MetricTotalOrNull -Items $results -Name 'cache_read_tokens'
+        cache_write_tokens = Get-MetricTotalOrNull -Items $results -Name 'cache_write_tokens'
+        total_tokens = Get-MetricTotalOrNull -Items $results -Name 'total_tokens'
+        cost = Get-MetricTotalOrNull -Items $results -Name 'estimated_cost_usd'
+        worker_count = $results.Count
+    }
+}
+
+function Get-AnalyzerUsageSummary {
+    param([string]$IterationPath, [object]$AnalyzerProfile)
+
+    $statePath = Join-Path $IterationPath 'phase2-state.json'
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        return [ordered]@{
+            runner = [string]$AnalyzerProfile.Runner
+            model = [string]$AnalyzerProfile.Model
+            duration_seconds = $null
+            input_tokens = $null
+            output_tokens = $null
+            cache_read_tokens = $null
+            cache_write_tokens = $null
+            total_tokens = $null
+            cost = $null
+            worker_count = $null
+            failed_worker_count = $null
+        }
+    }
+    $state = Read-JsonFile -Path $statePath
+    $entries = @(Get-Property -Object $state -Name 'analyzer_results' -Default @())
+    $results = @($entries | ForEach-Object {
+        $relative = [string](Get-Property -Object $_ -Name 'path' -Default '')
+        if ([string]::IsNullOrWhiteSpace($relative)) { return }
+        Read-JsonFile -Path (Join-Path $IterationPath ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar))
+    })
+    $durationMs = Get-MetricTotalOrNull -Items $results -Name 'duration_ms'
+    return [ordered]@{
+        runner = [string]$AnalyzerProfile.Runner
+        model = [string]$AnalyzerProfile.Model
+        profile_sha256 = [string]$AnalyzerProfile.Hash
+        duration_seconds = if ($results.Count -eq 0) { 0.0 } elseif ($null -eq $durationMs) { $null } else { [Math]::Round(($durationMs / 1000.0), 4) }
+        input_tokens = Get-MetricTotalOrNull -Items $results -Name 'input_tokens'
+        output_tokens = Get-MetricTotalOrNull -Items $results -Name 'output_tokens'
+        cache_read_tokens = Get-MetricTotalOrNull -Items $results -Name 'cache_read_tokens'
+        cache_write_tokens = Get-MetricTotalOrNull -Items $results -Name 'cache_write_tokens'
+        total_tokens = Get-MetricTotalOrNull -Items $results -Name 'total_tokens'
+        cost = Get-MetricTotalOrNull -Items $results -Name 'cost'
+        worker_count = @($state.expected_worker_ids).Count
+        failed_worker_count = @((Get-JsonPropertyNames -Object (Get-Property -Object $state -Name 'completed' -Default ([ordered]@{}))) | Where-Object {
+                $completed = Get-Property -Object $state -Name 'completed' -Default ([ordered]@{})
+                [string](Get-JsonProperty -Object (Get-JsonProperty -Object $completed -Name ([string]$_) -Default $null) -Name 'status' -Default '') -ne 'completed'
+            }).Count
+    }
 }
 
 function Get-ReportRun {
@@ -521,7 +616,8 @@ function Write-FirstPartyReport {
         [object]$Validation,
         [string]$IterationPath,
         [string]$OutputPath,
-        [object]$Benchmark
+        [object]$Benchmark,
+        [object]$Usage = $null
     )
 
     $evals = [System.Collections.Generic.List[object]]::new()
@@ -535,7 +631,7 @@ function Write-FirstPartyReport {
         $evalDirectory = [string]$entryRecords[0].EvalDirectory
         $metadata = Read-JsonFile -Path ([string]$entryRecords[0].MetadataPath)
         $runMap = [ordered]@{}
-        $assertions = @($metadata.assertions | ForEach-Object { [string]$_ })
+        $assertions = @(Get-AssertionDisplayTexts -Assertions @($metadata.assertions))
         foreach ($configuration in @('with_skill', 'without_skill')) {
             $records = @($ManifestRecords | Where-Object {
                     [int]$_.EvalId -eq [int]$entry.eval_id -and [string]$_.Configuration -eq $configuration
@@ -572,6 +668,7 @@ function Write-FirstPartyReport {
         completed_runs = $completedRuns
         expected_runs = @($Manifest.evals).Count * 2
         generated_utc = [string](Get-Property -Object $Manifest -Name 'generated_utc' -Default '')
+        usage = $Usage
     }
     $reportData = [ordered]@{
         skill_name = [string]$Manifest.skill_name
@@ -685,7 +782,7 @@ function New-UpstreamWorkspace {
             eval_name = [string]$metadata.eval_name
             prompt = [string]$metadata.prompt
             expected_output = [string](Get-Property -Object $metadata -Name 'expected_output' -Default '')
-            expectations = @($metadata.assertions)
+            expectations = @(Get-AssertionDisplayTexts -Assertions @($metadata.assertions))
         }
         Write-JsonFile -Path (Join-Path $evalFolder 'eval_metadata.json') -Value $upstreamMetadata
         $workspaceEntries.Add([pscustomobject]@{ EvalId = [int]$entry.eval_id; EvalName = [string]$entry.eval_name })
@@ -727,7 +824,7 @@ function New-UpstreamWorkspace {
 
             $runPackageDirectory = Split-Path -Parent ([string]$runRecord.RunManifestPath)
             Copy-RecordedOutputFiles -Result $result -RunPackageDirectory $runPackageDirectory -EvalDirectory $evalDirectory -IterationPath $IterationPath -OutputDirectory $outputsDirectory
-            Write-UpstreamGrading -Result $result -RunDirectory $runDirectory -Assertions @($metadata.assertions | ForEach-Object { [string]$_ })
+            Write-UpstreamGrading -Result $result -RunDirectory $runDirectory -Assertions @(Get-AssertionDisplayTexts -Assertions @($metadata.assertions))
         }
     }
 
@@ -749,6 +846,7 @@ foreach ($warning in @($validation.Warnings)) {
 if (-not $validation.Complete) {
     throw "Evaluation completion gate failed: expected $($validation.ExpectedArmCount) bridged terminal arms, found $($validation.BridgedResults)."
 }
+$gradingFreeze = Assert-GradingFreeze -IterationDirectory $iterationPath
 $skillCreatorPathResolved = Resolve-SkillCreatorPath -RequestedPath $SkillCreatorPath
 $pythonCommand = Resolve-PythonCommand
 $workspacePath = Join-Path $iterationPath '.skill-creator-report'
@@ -796,10 +894,10 @@ $benchmark.metadata.executor_model = if ($models.Count -eq 0) { 'model not recor
 # identity and analyzer identity remain independently attributable in the report.
 $analyzerProfilePath = Join-Path $iterationPath 'analyzer-profile.json'
 if (Test-Path -LiteralPath $analyzerProfilePath -PathType Leaf) {
-    $analyzerProfile = Read-JsonFile -Path $analyzerProfilePath
-    $analyzerRunner = [string](Get-Property -Object $analyzerProfile -Name 'runner' -Default '')
-    $analyzerModelName = [string](Get-Property -Object $analyzerProfile -Name 'model' -Default '')
-    $analyzerReasoning = [string](Get-Property -Object $analyzerProfile -Name 'reasoning_effort' -Default '')
+    $analyzerProfile = $gradingFreeze.Analyzer.Profile
+    $analyzerRunner = [string]$gradingFreeze.Analyzer.Runner
+    $analyzerModelName = [string]$gradingFreeze.Analyzer.Model
+    $analyzerReasoning = [string]$gradingFreeze.Analyzer.ReasoningEffort
     $analyzerIdentity = ((@($analyzerRunner, $analyzerModelName) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ' / ')
     if ([string]::IsNullOrWhiteSpace($analyzerIdentity)) { $analyzerIdentity = 'analyzer profile incomplete' }
     if (-not [string]::IsNullOrWhiteSpace($analyzerReasoning)) { $analyzerIdentity += " (reasoning: $analyzerReasoning)" }
@@ -807,9 +905,18 @@ if (Test-Path -LiteralPath $analyzerProfilePath -PathType Leaf) {
     $benchmark.metadata | Add-Member -NotePropertyName analyzer_runner -NotePropertyValue $analyzerRunner -Force
     $benchmark.metadata | Add-Member -NotePropertyName analyzer_reasoning_effort -NotePropertyValue $analyzerReasoning -Force
     $benchmark.metadata | Add-Member -NotePropertyName analyzer_contract_version -NotePropertyValue ([string](Get-Property -Object $analyzerProfile -Name 'contract_version' -Default '')) -Force
+    $benchmark.metadata | Add-Member -NotePropertyName analyzer_profile_sha256 -NotePropertyValue ([string]$gradingFreeze.Analyzer.Hash) -Force
 } else {
     $benchmark.metadata.analyzer_model = 'analyzer profile not recorded'
 }
+$usageSummary = [ordered]@{
+    execution = Get-ExecutionUsageSummary -ManifestRecords $manifestRecords
+    analyzer = Get-AnalyzerUsageSummary -IterationPath $iterationPath -AnalyzerProfile $gradingFreeze.Analyzer
+}
+$usageSummary.execution.runner = [string](Get-Property -Object $manifest.execution_selection -Name 'runner' -Default '')
+$usageSummary.execution.model = [string](Get-Property -Object $manifest.execution_selection -Name 'model' -Default $usageSummary.execution.model)
+$benchmark.metadata | Add-Member -NotePropertyName execution_usage -NotePropertyValue $usageSummary.execution -Force
+$benchmark.metadata | Add-Member -NotePropertyName analyzer_usage -NotePropertyValue $usageSummary.analyzer -Force
 $benchmark.metadata.evals_run = @($workspaceEntries | ForEach-Object { $_.EvalId })
 foreach ($run in @($benchmark.runs)) {
     $match = @($workspaceEntries | Where-Object { $_.EvalId -eq [int]$run.eval_id }) | Select-Object -First 1
@@ -841,7 +948,7 @@ $viewerArguments = @(
 )
 Invoke-PythonScript -PythonCommand $pythonCommand -ScriptPath $viewerPath -Arguments $viewerArguments
 
-Write-FirstPartyReport -Manifest $manifest -ManifestRecords $manifestRecords -Validation $validation -IterationPath $iterationPath -OutputPath $htmlOutputPath -Benchmark $benchmark
+Write-FirstPartyReport -Manifest $manifest -ManifestRecords $manifestRecords -Validation $validation -IterationPath $iterationPath -OutputPath $htmlOutputPath -Benchmark $benchmark -Usage $usageSummary
 
 if ($RequireComplete) {
     foreach ($output in @($benchmarkOutputPath, $benchmarkMarkdownOutputPath, $upstreamHtmlOutputPath, $htmlOutputPath)) {

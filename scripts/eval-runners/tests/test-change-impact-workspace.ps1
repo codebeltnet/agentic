@@ -12,9 +12,11 @@ $tokens = $null
 $parseErrors = $null
 $codexAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $scriptsRoot 'eval-runners\codex\runner.ps1'), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw 'Codex runner did not parse for sanitized PATH projection.' }
-$pathBuilder = @($codexAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-CodexSanitizedShellPath' }, $true))
-if ($pathBuilder.Count -ne 1) { throw 'Codex sanitized PATH builder was not found.' }
-Invoke-Expression $pathBuilder[0].Extent.Text
+foreach ($functionName in @('Join-CodexTargetPath', 'Get-CodexSanitizedShellPath')) {
+    $definition = @($codexAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName }, $true))
+    if ($definition.Count -ne 1) { throw "Codex function '$functionName' was not found." }
+    Invoke-Expression $definition[0].Extent.Text
+}
 function New-SanitizedGitEnvironment {
     param([Parameter(Mandatory = $true)][object]$GitCommand)
     $gitDirectory = Split-Path -Parent ([string]$GitCommand.Source)
@@ -43,10 +45,12 @@ function Invoke-SanitizedGit {
 try {
     $catalog = Join-Path $workspace 'models.json'
     [IO.File]::WriteAllText($catalog, '{"models":[{"id":"fixture-model"}]}')
-    $prompt = & (Join-Path $scriptsRoot 'prepare-skill-evals.ps1') -Skill dotnet-change-impact -Eval 9 -Runner github-copilot -Model fixture-model -ModelCatalogPath $catalog -OutputRoot $workspace -PassThru
+    $analyzerCatalog = Join-Path $workspace 'analyzer-models.json'
+    [IO.File]::WriteAllText($analyzerCatalog, '{"models":[{"id":"claude-haiku-4.5"}]}')
+    $prompt = & (Join-Path $scriptsRoot 'prepare-skill-evals.ps1') -Skill dotnet-change-impact -Eval 9 -Runner github-copilot -Model fixture-model -ModelCatalogPath $catalog -AnalyzerModelCatalogPath $analyzerCatalog -OutputRoot $workspace -PassThru
     $package = Split-Path -Parent $prompt
     $handoff = [IO.File]::ReadAllText($prompt)
-    Assert-True ($handoff.Contains('MUST read and follow the exact packaged `tools/skill-creator/agents/grader.md`')) 'Handoff must require the exact packaged grader before grading.'
+    Assert-True ($handoff.Contains('invoke-phase2-analyzer.ps1') -and $handoff.Contains('The Phase 2 controller, not this outer orchestrator')) 'Handoff must delegate grading to the package-local Phase 2 controller.'
     $manifest = Get-Content (Join-Path $package 'manifest.json') -Raw | ConvertFrom-Json
     $heads = @(); $diffs = @(); $refs = @()
     $gitCommand = Resolve-ExternalCommand -Name 'git'

@@ -63,6 +63,10 @@
 .PARAMETER ModelCatalogPath
     Optional deterministic catalog JSON used by the model discovery helper. Intended for tests and offline validation.
 
+.PARAMETER AnalyzerModelCatalogPath
+    Optional deterministic analyzer catalog JSON used by the model discovery helper. Intended for tests and offline
+    validation of the analyzer profile independently from executor model validation.
+
 .PARAMETER ReasoningEffort
     Optional runner-supported reasoning/effort setting written to execution-profile.json. Codex defaults to low
     when this is omitted.
@@ -154,6 +158,10 @@ param(
 
     [Parameter(ParameterSetName = 'Prepare')]
     [Parameter(ParameterSetName = 'Changed')]
+    [string]$AnalyzerModelCatalogPath,
+
+    [Parameter(ParameterSetName = 'Prepare')]
+    [Parameter(ParameterSetName = 'Changed')]
     [string]$ReasoningEffort,
 
     [Parameter(ParameterSetName = 'Prepare')]
@@ -203,6 +211,7 @@ $OutputEncoding = $utf8NoBom
 
 . (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
 . (Join-Path $PSScriptRoot 'eval-runners/package-integrity.ps1')
+. (Join-Path $PSScriptRoot 'eval-runners/phase2-grading.ps1')
 
 $packageSchema = 'codebeltnet/agentic/eval-package/2'
 $metadataSchema = 'codebeltnet/agentic/eval-metadata/2'
@@ -434,7 +443,8 @@ function Confirm-HarnessModel {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$RunnerName,
-        [Parameter(Mandatory = $true)][string]$ModelName
+        [Parameter(Mandatory = $true)][string]$ModelName,
+        [AllowNull()][string]$CatalogPath = $null
     )
 
     $discoveryScript = Join-Path $RepoRoot 'scripts/Get-HarnessModels.ps1'
@@ -443,8 +453,8 @@ function Confirm-HarnessModel {
     }
 
     $arguments = @('-Runner', $RunnerName, '-RequireModel', $ModelName)
-    if (-not [string]::IsNullOrWhiteSpace($ModelCatalogPath)) {
-        $arguments += @('-CatalogPath', $ModelCatalogPath)
+    if (-not [string]::IsNullOrWhiteSpace($CatalogPath)) {
+        $arguments += @('-CatalogPath', $CatalogPath)
     }
     $discoveryOutput = & pwsh -NoProfile -NonInteractive -File $discoveryScript @arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -485,7 +495,7 @@ function Resolve-ExecutionSelection {
         if ($supportedRunners -notcontains $referenceRunner) {
             throw "Codebelt Reference requires runner '$referenceRunner', but it is unavailable. Supported runner IDs: $supportedText."
         }
-        [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $referenceRunner -ModelName $referenceModel)
+        [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $referenceRunner -ModelName $referenceModel -CatalogPath $ModelCatalogPath)
 
         return [pscustomobject]@{
             Runner = $referenceRunner
@@ -534,7 +544,7 @@ function Resolve-ExecutionSelection {
         }
     }
 
-    [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $resolvedRunner -ModelName $resolvedModel)
+    [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $resolvedRunner -ModelName $resolvedModel -CatalogPath $ModelCatalogPath)
 
     return [pscustomobject]@{
         Runner = $resolvedRunner
@@ -716,14 +726,17 @@ function New-ResultStub {
         [object]$EvalEntry,
         [string]$EvalName,
         [string]$Configuration,
-        [string[]]$Assertions
+        [object[]]$Assertions
     )
 
     $grading = foreach ($assertion in $Assertions) {
         [ordered]@{
-            text = $assertion
+            text = Get-AssertionText -Assertion $assertion
             passed = $null
             evidence = ''
+            evidence_domain = [string](Get-JsonProperty -Object $assertion -Name 'evidence_domain' -Default 'output')
+            evidence_refs = @()
+            reason = ''
         }
     }
 
@@ -799,20 +812,22 @@ function Resolve-AnalyzerSelection {
     )
 
     # The analyzer/grader is a distinct, persisted, reproducible profile - never "whichever model happens to host the
-    # outer orchestrator". By repository policy it defaults to the validated executor selection so cross-provider
-    # preparation never requires a second runner's catalog, and it is overridable to a stable reference analyzer via
-    # -AnalyzerRunner/-AnalyzerModel so the same validated analyzer can grade Copilot, Codex, and OpenCode executions.
+    # outer orchestrator" and never silently matched to the executor. The repository-owned default reuses the existing
+    # Codebelt Reference policy as a stable analyzer stratum across executor providers.
+    $referenceRunner = 'github-copilot'
+    $referenceModel = 'claude-haiku-4.5'
     $hasRunner = -not [string]::IsNullOrWhiteSpace($AnalyzerRunner)
     $hasModel = -not [string]::IsNullOrWhiteSpace($AnalyzerModel)
     if ($hasModel -and -not $hasRunner) { throw 'Analyzer selection requires -AnalyzerRunner when -AnalyzerModel is supplied.' }
 
     if (-not $hasRunner -and -not $hasModel) {
+        [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $referenceRunner -ModelName $referenceModel -CatalogPath $AnalyzerModelCatalogPath)
         return [pscustomobject]@{
-            Runner = $ExecutionSelection.Runner
-            Model = $ExecutionSelection.Model
-            ReasoningEffort = $ExecutionReasoningEffort
-            Harness = $ExecutionSelection.Harness
-            Source = 'executor-matched'
+            Runner = $referenceRunner
+            Model = $referenceModel
+            ReasoningEffort = $null
+            Harness = Get-HarnessName -RunnerName $referenceRunner
+            Source = 'codebelt-reference'
         }
     }
 
@@ -825,7 +840,7 @@ function Resolve-AnalyzerSelection {
     if ($supportedRunners -notcontains $resolvedRunner) {
         throw "Analyzer runner '$resolvedRunner' is not a supported runner id ($($supportedRunners -join ', '))."
     }
-    [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $resolvedRunner -ModelName $AnalyzerModel)
+    [void](Confirm-HarnessModel -RepoRoot $RepoRoot -RunnerName $resolvedRunner -ModelName $AnalyzerModel -CatalogPath $AnalyzerModelCatalogPath)
     $reasoning = if (-not [string]::IsNullOrWhiteSpace($AnalyzerReasoningEffort)) { $AnalyzerReasoningEffort } elseif ($resolvedRunner -eq 'codex') { 'low' } else { $null }
     return [pscustomobject]@{
         Runner = $resolvedRunner
@@ -918,7 +933,7 @@ function Get-Assertions {
     param([object]$EvalEntry)
 
     if ($EvalEntry.PSObject.Properties.Name -contains 'expectations' -and $null -ne $EvalEntry.expectations) {
-        return @($EvalEntry.expectations | ForEach-Object { [string]$_ })
+        return @(Get-NormalizedAssertions -Assertions @($EvalEntry.expectations))
     }
 
     return @()
@@ -1518,6 +1533,10 @@ function Invoke-PrepareMode {
 
     $executionSelection = Resolve-ExecutionSelection -RepoRoot $repoRoot
     $effectiveConcurrency = Resolve-EffectiveConcurrency -RunnerName ([string]$executionSelection.Runner) -RequestedConcurrency $Concurrency -ConcurrencyWasExplicit ($scriptBoundParameters.ContainsKey('Concurrency'))
+    $executionProfile = New-ExecutionProfile -ExecutionSelection $executionSelection -EffectiveConcurrency ([int]$effectiveConcurrency.Value)
+    # Validate the analyzer/grader profile before any output directory is created so an unknown analyzer model leaves no
+    # partial package behind. The profile is persisted later once the iteration root exists.
+    $analyzerSelection = Resolve-AnalyzerSelection -RepoRoot $repoRoot -ExecutionSelection $executionSelection -ExecutionReasoningEffort ([string]$executionProfile.reasoning_effort)
 
     $workspaceRoot = if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
         Join-Path (Join-Path $repoRoot '.bot') "$Skill-workspace"
@@ -1565,13 +1584,13 @@ function Invoke-PrepareMode {
         sha256 = Get-TreeHash -Root $copiedRunnerTools
         file_count = @(Get-ChildItem -LiteralPath $copiedRunnerTools -Recurse -File -Force).Count
     }
-    $executionProfile = New-ExecutionProfile -ExecutionSelection $executionSelection -EffectiveConcurrency ([int]$effectiveConcurrency.Value)
     ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'execution-profile.json') -Value $executionProfile
     # The analyzer/grader profile is validated during preparation exactly like the execution profile and persisted
     # separately so executor identity and analyzer identity stay independently attributable in evidence and reports.
-    $analyzerSelection = Resolve-AnalyzerSelection -RepoRoot $repoRoot -ExecutionSelection $executionSelection -ExecutionReasoningEffort ([string]$executionProfile.reasoning_effort)
     $analyzerProfile = New-AnalyzerProfile -AnalyzerSelection $analyzerSelection
-    ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'analyzer-profile.json') -Value $analyzerProfile
+    $analyzerProfilePath = Join-Path $iterationDirectory 'analyzer-profile.json'
+    ConvertTo-JsonFile -Path $analyzerProfilePath -Value $analyzerProfile
+    $analyzerProfileHash = Get-FileSha256 -Path $analyzerProfilePath
 
     $skillText = [System.IO.File]::ReadAllText($skillMarkdownPath, $utf8NoBom)
     $skillBody = if ($skillText -match '(?ms)\A---\r?\n.*?\r?\n---\r?\n(?<body>.*)\z') { $Matches['body'] } else { $skillText }
@@ -1824,6 +1843,7 @@ function Invoke-PrepareMode {
         runner_prompt = 'RUN-THIS.prompt.md'
         execution_profile = 'execution-profile.json'
         analyzer_profile = 'analyzer-profile.json'
+        analyzer_profile_sha256 = $analyzerProfileHash
         analyzer_selection = [ordered]@{
             runner = $analyzerSelection.Runner
             harness = $analyzerSelection.Harness
@@ -1831,13 +1851,17 @@ function Invoke-PrepareMode {
             reasoning_effort = $analyzerSelection.ReasoningEffort
             selection_source = $analyzerSelection.Source
             contract_version = $analyzerContractVersion
+            analyzer_profile_sha256 = $analyzerProfileHash
         }
         runner_protocol = $runnerProtocolSchema
         runner_tools = $evalRunnerToolRelativePath
         runner_tools_integrity = $runnerToolsIntegrity
         execution_result_schema = $executionResultSchema
         execution_freeze = 'execution-freeze.json'
+        phase2_controller = "$evalRunnerToolRelativePath/invoke-phase2-analyzer.ps1"
+        phase2_state = 'phase2-state.json'
         grading = 'grading.json'
+        grading_freeze = 'grading-freeze.json'
         grading_validator = "$evalRunnerToolRelativePath/validate-eval-grading.ps1"
         grading_contract = "$evalRunnerToolRelativePath/contracts/grading.schema.json"
         finalizer = "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
@@ -1901,6 +1925,13 @@ function Invoke-PrepareMode {
         Write-Host "  Preset:  $($executionSelection.Preset)"
     }
     Write-Host ''
+    Write-Host 'Analyzer:'
+    Write-Host "  Harness: $($analyzerSelection.Harness)"
+    Write-Host "  Runner:  $($analyzerSelection.Runner)"
+    Write-Host "  Model:   $($analyzerSelection.Model)"
+    Write-Host "  Source:  $($analyzerSelection.Source)"
+    Write-Host "  Profile: analyzer-profile.json ($analyzerProfileHash)"
+    Write-Host ''
     Write-Host "Cases: $($manifestEvals.Count)"
     Write-Host "Arms:  $($manifestEvals.Count * 2)"
     Write-Host ''
@@ -1945,7 +1976,7 @@ function New-RunnerPrompt {
     $profilePath = Join-Path $IterationDirectory 'execution-profile.json'
     $runnerOwnedFanoutPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1"
     $manifestBridgePath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1"
-    $gradingValidatorPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/validate-eval-grading.ps1"
+    $phase2AnalyzerPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-phase2-analyzer.ps1"
     $finalizerPath = Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1"
     $maxScriptedUserTurns = 1
     foreach ($manifestEval in @($ManifestEvals)) {
@@ -1995,16 +2026,13 @@ function New-RunnerPrompt {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Only after Phase 1 returns a successful terminal JSON summary, invoke the deterministic manifest bridge to validate the freeze and populate the canonical result paths before grading:')
     [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$manifestBridgePath`" -IterationDirectory `"$IterationDirectory`" -RequireComplete -RequireParallelDispatch")
-    [void]$builder.AppendLine('Only if that bridge succeeds, reveal the grading key in `eval-metadata.json` to the Grader. The Grader may author exactly one package-root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`; each entry contains only `eval_id`, `eval_name`, `configuration`, `assertion_index`, `assertion`, `passed`, and `evidence`. It must not edit raw execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.')
-    [void]$builder.AppendLine('Before creating grading.json, the Grader MUST read and follow the exact packaged `tools/skill-creator/agents/grader.md`; that guidance is authoritative during Phase 2. Uncertain or unverified expectations FAIL. Every assertion requires specific evidence. For PASS, evidence must use three newline-separated fields: `Source: output` (or a manifest-recorded run artifact path), `Quote: <verbatim observation from that frozen source>`, and `Reason: <why this observation establishes this particular assertion>`. Do not reuse generic completion statements or identical evidence across assertions; reasons that merely restate that the assertion passed or was "evaluated against output" are rejected. FAIL evidence must explain what is missing or contradicted. Deterministic validation checks provenance and shape; it does not replace the Grader judgment required by grader.md.')
-    [void]$builder.AppendLine('Grade every arm with the single validated analyzer/grader profile persisted at `analyzer-profile.json` (also recorded in `manifest.analyzer_selection`), not with whichever model happens to host the orchestrator. The analyzer is an independent boundary: it must not inherit an executor arm''s HOME, provider configuration, session, native tools, skill catalogs, or plugins, and executor identity and analyzer identity stay independently attributable in the report metadata (`executor_model` vs `analyzer_model`/`analyzer_runner`). Use the same analyzer profile for every eval and every configuration so comparisons stay within one analyzer stratum.')
-    [void]$builder.AppendLine('To display the authoritative top-level grading skeleton, run:')
-    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$gradingValidatorPath`" -ShowSkeleton")
-    [void]$builder.AppendLine('Write `grading.json`, then validate it before finalization:')
-    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$gradingValidatorPath`" -IterationDirectory `"$IterationDirectory`" -GradingPath `"grading.json`"")
-    [void]$builder.AppendLine('Grading validation is retryable; finalization is not. If validation fails, correct `grading.json` and rerun the validation command as many times as required. Do not invoke the application helper separately; the finalizer invokes `apply-eval-grading.ps1` deterministically after revalidating grading. Invoke finalization exactly once, and only after grading validation succeeds:')
+    [void]$builder.AppendLine('Only if that bridge succeeds, invoke the package-local Phase 2 analyzer controller:')
+    [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$phase2AnalyzerPath`" -IterationDirectory `"$IterationDirectory`"")
+    [void]$builder.AppendLine('The Phase 2 controller, not this outer orchestrator, reads the grading key, resolves validator-domain assertions deterministically, creates one isolated analyzer run per semantic arm, dispatches those analyzer runs with bounded concurrency, validates observed analyzer runner/model/session identity, writes `phase2-state.json`, freezes `grading-freeze.json`, and deterministically merges root `grading.json` with schema `codebeltnet/agentic/eval-grading/1`. Each grade is keyed by eval/configuration/assertion_index and carries passed, evidence_domain, evidence_refs, reason, and upstream-compatible evidence. If it fails, stop: do not author or repair grading.json, do not retry an analyzer worker, do not change analyzer-profile.json, do not switch providers, and do not grade in this context.')
+    [void]$builder.AppendLine('The analyzer profile persisted at `analyzer-profile.json` is the only grading stratum. The analyzer is independent from the executor and must not inherit executor HOME, provider configuration, session, native tools, skill catalogs, plugins, paired-arm output, sibling evals, source checkout, or candidate skill content. The controller supplies only one arm''s allowed evidence bundle and the packaged `tools/skill-creator/agents/grader.md` contract to each analyzer worker.')
+    [void]$builder.AppendLine('After Phase 2 succeeds, invoke finalization exactly once:')
     [void]$builder.AppendLine("pwsh -NoProfile -NonInteractive -File `"$finalizerPath`" -IterationDirectory `"$IterationDirectory`"")
-    [void]$builder.AppendLine('The finalizer revalidates the manifest, profile, terminal orchestration/concurrency evidence, immutable freeze, raw artifacts, bridge, canonical results, and grading; it then generates and verifies all required reports. Return only its machine-readable JSON summary and artifact paths. A non-zero exit, missing artifact, integrity error, or report error means the evaluation is incomplete. Never repair, re-freeze, re-bridge a changed raw result, or report prose success.')
+    [void]$builder.AppendLine('The finalizer revalidates the manifest, profile, terminal orchestration/concurrency evidence, immutable Phase 1 freeze, bridge, Phase 2 state, analyzer evidence, grading freeze, deterministic grading hash/cardinality, canonical results, and reports. Return only its machine-readable JSON summary and artifact paths. A non-zero exit, missing artifact, integrity error, or report error means the evaluation is incomplete. Never repair, re-freeze, re-bridge a changed raw result, or report prose success.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('The four required package-root artifacts are `report.html`, `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`. Same-session scripted evals, when present in a run, are handled by the selected runner only if its descriptor/preflight proves `scripted_multi_turn_same_session`; otherwise preflight fails before execution. The paired configurations receive identical scripted user turns.')
     [void]$builder.AppendLine()
@@ -2046,7 +2074,7 @@ function New-PackageReadme {
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.AppendLine("# Eval package: $SkillName (iteration $IterationNumber)")
     [void]$builder.AppendLine()
-    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. `execution-profile.json` selects the user-chosen Eval Runner, runner-native model, and limits; the external Eval Orchestrator follows the selected descriptor''s `delegation.dispatch_owner`, using either orchestrator-owned native workers or runner-owned native transports, then grades and generates the report.')
+    [void]$builder.AppendLine('Prepared by `scripts/prepare-skill-evals.ps1` in `codebeltnet/agentic`. Nothing in this package was executed. `execution-profile.json` selects the user-chosen Eval Runner, runner-native model, and limits; the external Eval Orchestrator follows the selected descriptor''s `delegation.dispatch_owner`, using either orchestrator-owned native workers or runner-owned native transports. Phase 2 grading is owned by the package-local analyzer controller, not by the outer orchestrator.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine("Execution selection: runner=$($ExecutionSelection.Runner); model=$($ExecutionSelection.Model); timeout_seconds=$TimeoutSeconds; concurrency=$($EffectiveConcurrency.Value); concurrency_source=$($EffectiveConcurrency.Source).")
     [void]$builder.AppendLine()
@@ -2057,7 +2085,7 @@ function New-PackageReadme {
     }
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('Each eval directory holds the grading key (`eval-metadata.json`), result stubs under `results/`, and two isolated run directories: `with_skill/` and `without_skill/`. A run directory holds `prompt.md`, a `run.json` contract, a `repo/` working tree materialized from the fixtures, an isolated `home/`, and - for `with_skill` only - a `skill/` directory with the candidate skill. The grading key and results sit outside both run directories, so a worker that stays within its run directory is never handed them.')
-    [void]$builder.AppendLine('The package root also holds `execution-profile.json`, the package-local Eval Runner protocol and deterministic native-worker queue under `tools/eval-runners/`, and raw `execution-result.json` paths beside the existing result stubs. `run.json` defines what one blind arm must execute; the profile defines with what runner/model/configuration; the selected runner defines how its native worker is created.')
+    [void]$builder.AppendLine('The package root also holds `execution-profile.json`, `analyzer-profile.json`, the package-local Eval Runner protocol and deterministic native-worker queue under `tools/eval-runners/`, and raw `execution-result.json` paths beside the existing result stubs. `run.json` defines what one blind arm must execute; the profile defines with what runner/model/configuration; the selected runner defines how its native worker is created.')
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('## Orchestration topology')
     [void]$builder.AppendLine()
@@ -2084,9 +2112,9 @@ function New-PackageReadme {
     [void]$builder.AppendLine()
     [void]$builder.AppendLine(('1. Read `execution-profile.json` and the selected runner descriptor. If `runner` or `model` is missing or unsupported, fail clearly instead of guessing. For `delegation.dispatch_owner=runner`, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-runner-owned-arms.ps1") + ' exactly once with the caller shell/tool timeout set to at least the package-computed Phase 1 allowance. It performs all preflight, native dispatch, concurrency, terminal registration, timeout handling, and raw-evidence freezing. For `delegation.dispatch_owner=orchestrator`, use only the descriptor-declared native worker mechanism, then invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/freeze-execution-evidence.ps1") + ' after every arm is terminal.'))
     [void]$builder.AppendLine('2. A caller/tool timeout or interrupted conversation does not authorize rerunning Phase 1. Do not execute an arm in the parent context, create a second worker for a runner-owned arm, expose grading material during execution, or author/repair raw evidence. If Phase 1 reports incompatible or Phase 1/freezing fails, stop: the evaluation is incomplete and a fresh package/code fix is required. Never patch package-local runner code, delete orchestration state, delete execution results, delete or replace `execution-freeze.json`, rerun Phase 1, or manually broaden a capability check.')
-    [void]$builder.AppendLine(('3. After the freeze succeeds, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1") + ' with `-RequireComplete -RequireParallelDispatch` and add `-RequireNativeDelegation` when the selected descriptor has `dispatch_owner=runner`. Only after that deterministic bridge succeeds, give the grading key to the Grader. The Grader writes only the package-root `grading.json` grading-only artifact. It must not modify execution results, canonical non-grading fields, hashes, paths, telemetry, or orchestration state.'))
-    [void]$builder.AppendLine(('4. To display the authoritative grading skeleton, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/validate-eval-grading.ps1") + ' with `-ShowSkeleton`. After writing `grading.json`, invoke the same helper with `-IterationDirectory "' + $IterationDirectory + '" -GradingPath "grading.json"` before finalization. Grading validation is retryable; finalization is not. Correct and rerun validation until it succeeds.'))
-    [void]$builder.AppendLine(('5. Invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1") + ' exactly once, only after grading validation succeeds. It invokes the deterministic apply-eval-grading boundary, validates the frozen evidence, idempotent bridge, complete grading, and report outputs. Return only its machine-readable summary.'))
+    [void]$builder.AppendLine(('3. After the freeze succeeds, invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/bridge-manifest-results.ps1") + ' with `-RequireComplete -RequireParallelDispatch` and add `-RequireNativeDelegation` when the selected descriptor has `dispatch_owner=runner`. This deterministic bridge validates the frozen execution evidence and canonical result paths before any grading begins.'))
+    [void]$builder.AppendLine(('4. Invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/invoke-phase2-analyzer.ps1") + ' once. It resolves validator assertions, starts one fresh analyzer worker per remaining semantic arm using `analyzer-profile.json`, persists `phase2-state.json`, freezes `grading-freeze.json`, and deterministically merges package-root `grading.json`. Do not grade in the outer orchestrator, retry failed analyzer workers, edit analyzer-profile.json, or manually repair grading.json.'))
+    [void]$builder.AppendLine(('5. Invoke ' + (Join-Path $IterationDirectory "$evalRunnerToolRelativePath/finalize-eval-package.ps1") + ' exactly once, only after Phase 2 succeeds. It validates the frozen Phase 1 evidence, bridge, Phase 2 state/freeze, deterministic grading hash/cardinality, canonical grading application, and report outputs. Return only its machine-readable summary.'))
     [void]$builder.AppendLine()
     [void]$builder.AppendLine('`RUN-THIS.prompt.md` is the external Eval Orchestrator handoff. It never executes an eval arm in its own model context. Same-session scripted interactions are allowed only when the selected runner proves that capability; paired runs receive identical deterministic turns. The package is complete only when the finalizer exits successfully.')
     [void]$builder.AppendLine()

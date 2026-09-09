@@ -159,6 +159,37 @@ try {
             }
         }
     }
+    $phase2BundlePath = Join-Path $inputs.Run.WorkingDirectoryPath 'input-bundle.json'
+    if (Test-Path -LiteralPath $phase2BundlePath -PathType Leaf) {
+        $bundle = Read-RunnerJson -Path $phase2BundlePath
+        $fragmentGrades = [System.Collections.Generic.List[object]]::new()
+        foreach ($assertion in @(Get-JsonProperty -Object $bundle -Name 'assertions' -Default @())) {
+            $assertionIndex = [int](Get-JsonProperty -Object $assertion -Name 'assertion_index' -Default 0)
+            $domain = [string](Get-JsonProperty -Object $assertion -Name 'evidence_domain' -Default 'output')
+            $artifact = [string](Get-JsonProperty -Object $bundle -Name 'canonical_result' -Default '')
+            $line = @(Get-JsonProperty -Object (Get-JsonProperty -Object $bundle -Name 'frozen_output' -Default $null) -Name 'lines' -Default @() | Select-Object -First 1)
+            $lineNumber = if ($line.Count -eq 1) { [int](Get-JsonProperty -Object $line[0] -Name 'line' -Default 1) } else { 1 }
+            $quote = if ($line.Count -eq 1) { [string](Get-JsonProperty -Object $line[0] -Name 'text' -Default 'deterministic fixture response') } else { 'deterministic fixture response' }
+            $fragmentGrades.Add([ordered]@{
+                assertion_index = $assertionIndex
+                passed = $true
+                reason = "The deterministic analyzer fixture cites frozen one-arm output for assertion $assertionIndex."
+                evidence_refs = @([ordered]@{
+                    artifact = $artifact
+                    domain = $domain
+                    start_line = $lineNumber
+                    end_line = $lineNumber
+                    quote = $quote
+                })
+            })
+        }
+        $fixtureFinalResponse = ConvertTo-RunnerJson -Value ([ordered]@{
+            schema = 'codebeltnet/agentic/eval-analyzer-fragment/1'
+            eval_id = [int](Get-JsonProperty -Object $bundle -Name 'eval_id' -Default 0)
+            configuration = [string](Get-JsonProperty -Object $bundle -Name 'configuration' -Default '')
+            grading = @($fragmentGrades.ToArray())
+        }) -Compress
+    }
     $durationSeconds = [Math]::Round(($executeFinishUtc - $executeStartUtc).TotalSeconds, 3)
     $durationOverride = [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_DURATION_SECONDS')
     $parsedDuration = 0.0
@@ -213,11 +244,18 @@ try {
     $eventsArtifact = New-ArtifactReference -Run $inputs.Run -Path 'evidence/fixture-events.jsonl' -Scope run -MediaType 'application/x-ndjson; charset=utf-8'
     $evidence = [ordered]@{
         capture = [ordered]@{ source = 'harness_native_transport'; terminal = $true; worker_authored = $false }
+        commands = @(
+            [ordered]@{ type = 'command_execution'; command = 'git branch --show-current'; status = 'completed'; exit_code = 0 }
+            [ordered]@{ type = 'command_execution'; command = 'git symbolic-ref refs/remotes/origin/HEAD --short'; status = 'completed'; exit_code = 0 }
+            [ordered]@{ type = 'command_execution'; command = 'git log origin/HEAD..HEAD --oneline'; status = 'completed'; exit_code = 0 }
+            [ordered]@{ type = 'command_execution'; command = 'git diff origin/HEAD...HEAD'; status = 'completed'; exit_code = 0 }
+        )
+        files_written = @()
         delegation = [ordered]@{
             dispatch_owner = 'runner'
             mechanism = 'deterministic-runner-owned-fixture'
             worker_session_id = $sessionId
-            observed_model = [string]$inputs.Profile.Model
+            observed_model = if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_OBSERVED_MODEL'))) { [string]$inputs.Profile.Model } else { [Environment]::GetEnvironmentVariable('AGENTIC_RUNNER_FIXTURE_OBSERVED_MODEL') }
             observed_working_directory = [string]$inputs.Run.WorkingDirectoryPath
             observed_home = [string]$inputs.Run.HomeDirectoryPath
             fresh_worker = $true
