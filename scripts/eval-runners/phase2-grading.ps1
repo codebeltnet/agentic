@@ -100,6 +100,121 @@ function Get-ArmOutputLines {
     return @($lines)
 }
 
+function Get-CanonicalTranscriptArtifactPaths {
+    param([Parameter(Mandatory = $true)][object]$Canonical)
+
+    $artifacts = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($value in @(Get-JsonProperty -Object $Canonical -Name 'output_files' -Default @())) {
+        $artifact = [string]$value
+        if ([string]::IsNullOrWhiteSpace($artifact)) { continue }
+        if ($seen.Add($artifact)) { $artifacts.Add($artifact) }
+    }
+    $executionResultFile = [string](Get-JsonProperty -Object $Canonical -Name 'execution_result_file' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($executionResultFile) -and $seen.Add($executionResultFile)) {
+        $artifacts.Add($executionResultFile)
+    }
+    return @($artifacts.ToArray())
+}
+
+function Resolve-TranscriptArtifactSourcePath {
+    param(
+        [Parameter(Mandatory = $true)][object]$Record,
+        [Parameter(Mandatory = $true)][string]$Artifact,
+        [switch]$AllowMissing
+    )
+
+    Assert-SafeRelativePath -RelativePath $Artifact -FieldName 'transcript evidence artifact'
+    $basePath = (Resolve-Path -LiteralPath $Record.EvalDirectory -ErrorAction Stop).Path
+    $candidate = [System.IO.Path]::GetFullPath((Join-Path $basePath ($Artifact -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+    if (-not (Test-PathInside -BasePath $basePath -CandidatePath $candidate)) {
+        throw "transcript evidence artifact '$Artifact' resolves outside the frozen eval directory."
+    }
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        if ($AllowMissing) { return $null }
+        throw "transcript evidence artifact '$Artifact' does not exist in the frozen eval directory."
+    }
+    $resolved = (Resolve-Path -LiteralPath $candidate -ErrorAction Stop).Path
+    if (-not (Test-PathInside -BasePath $basePath -CandidatePath $resolved)) {
+        throw "transcript evidence artifact '$Artifact' resolves through a link outside the frozen eval directory."
+    }
+    return $resolved
+}
+
+function Get-TranscriptArtifactSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][object]$Record,
+        [Parameter(Mandatory = $true)][string]$Artifact,
+        [string]$SourcePath = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SourcePath)) {
+        $SourcePath = Resolve-TranscriptArtifactSourcePath -Record $Record -Artifact $Artifact
+    }
+
+    $entry = [ordered]@{
+        artifact = [string]$Artifact
+        source_sha256 = Get-Sha256HexFromFile -Path $SourcePath
+    }
+    if ($Artifact -match '\.jsonl$') {
+        $events = [System.Collections.Generic.List[object]]::new()
+        $fileLines = [System.IO.File]::ReadAllLines($SourcePath, [System.Text.UTF8Encoding]::new($false))
+        foreach ($fileLine in $fileLines) {
+            if ([string]::IsNullOrWhiteSpace($fileLine)) { continue }
+            $sourceText = [string]$fileLine
+            try {
+                $parsed = $fileLine | ConvertFrom-Json -Depth 100
+                $eventType = [string](Get-JsonProperty -Object $parsed -Name 'type' -Default '')
+                $content = Get-JsonProperty -Object $parsed -Name 'content' -Default $null
+                if ($null -eq $content) { $content = Get-JsonProperty -Object $parsed -Name 'data' -Default $null }
+                $contentStr = if ($null -ne $content) { [string]$content } else { ConvertTo-Json $parsed -Compress -Depth 10 }
+                $events.Add([ordered]@{
+                    event_index = $events.Count
+                    type = $eventType
+                    content = $contentStr
+                    source_text = $sourceText
+                })
+            } catch {
+                $events.Add([ordered]@{
+                    event_index = $events.Count
+                    type = ''
+                    content = $sourceText
+                    source_text = $sourceText
+                })
+            }
+        }
+        $entry['events'] = @($events.ToArray())
+    } else {
+        $fileLines = [System.IO.File]::ReadAllLines($SourcePath, [System.Text.UTF8Encoding]::new($false))
+        $textLines = [System.Collections.Generic.List[object]]::new()
+        for ($lineIndex = 0; $lineIndex -lt $fileLines.Count; $lineIndex++) {
+            $textLines.Add([ordered]@{ line = $lineIndex + 1; text = [string]$fileLines[$lineIndex] })
+        }
+        $entry['lines'] = @($textLines.ToArray())
+    }
+
+    return [pscustomobject]@{
+        Artifact = [string]$Artifact
+        SourcePath = $SourcePath
+        Entry = $entry
+    }
+}
+
+function Get-CanonicalTranscriptArtifacts {
+    param(
+        [Parameter(Mandatory = $true)][object]$Record,
+        [Parameter(Mandatory = $true)][object]$Canonical
+    )
+
+    $entries = [System.Collections.Generic.List[object]]::new()
+    foreach ($artifact in @(Get-CanonicalTranscriptArtifactPaths -Canonical $Canonical)) {
+        $sourcePath = Resolve-TranscriptArtifactSourcePath -Record $Record -Artifact $artifact -AllowMissing
+        if ($null -eq $sourcePath) { continue }
+        $entries.Add((Get-TranscriptArtifactSnapshot -Record $Record -Artifact $artifact -SourcePath $sourcePath).Entry)
+    }
+    return @($entries.ToArray())
+}
+
 function New-OutputEvidenceRef {
     param(
         [Parameter(Mandatory = $true)][object]$Record,
@@ -351,7 +466,7 @@ function Test-GradeEvidenceReference {
         [Parameter(Mandatory = $true)][object]$Grade,
         [Parameter(Mandatory = $true)][object]$Expected,
         [Parameter(Mandatory = $true)][object]$Canonical,
-        [AllowNull()][object[]]$StagedTranscripts = $null
+        [AllowNull()][object[]]$TranscriptArtifacts = $null
     )
 
     $domain = [string](Get-JsonProperty -Object $Grade -Name 'evidence_domain' -Default '')
@@ -382,45 +497,66 @@ function Test-GradeEvidenceReference {
             $allowed = @(Get-JsonProperty -Object $Canonical -Name 'output_files' -Default @())
             $execResultFile = [string](Get-JsonProperty -Object $Canonical -Name 'execution_result_file' -Default '')
             if ($allowed -notcontains $artifact -and $artifact -ne $execResultFile) { throw 'transcript evidence must cite a frozen transcript/artifact for the same arm.' }
-            if ($null -ne $StagedTranscripts) {
-                $staged = @($StagedTranscripts | Where-Object { [string]$_.artifact -eq $artifact })
-                if ($staged.Count -eq 0) { throw 'transcript evidence artifact was not staged to the analyzer input bundle; grounding cannot be verified.' }
-                $stagedEntry = $staged[0]
-                $eventIndexRaw = Get-JsonProperty -Object $ref -Name 'event_index' -Default $null
+            if ($null -eq $TranscriptArtifacts) {
+                throw 'transcript evidence requires the frozen transcript evidence set so the cited location can be grounded.'
+            }
+            $matchingArtifacts = @($TranscriptArtifacts | Where-Object { [string]$_.artifact -eq $artifact })
+            if ($matchingArtifacts.Count -eq 0) {
+                throw 'transcript evidence artifact is not present in the frozen transcript evidence set; grounding cannot be verified.'
+            }
+            $transcriptEntry = $matchingArtifacts[0]
+            $hasEventLocator = Test-JsonProperty -Object $ref -Name 'event_index'
+            $hasStartLine = Test-JsonProperty -Object $ref -Name 'start_line'
+            $hasEndLine = Test-JsonProperty -Object $ref -Name 'end_line'
+            $hasLineLocator = $hasStartLine -or $hasEndLine
+            $quote = [string](Get-JsonProperty -Object $ref -Name 'quote' -Default '')
+            $hasEvents = Test-JsonProperty -Object $transcriptEntry -Name 'events'
+            $hasLines = Test-JsonProperty -Object $transcriptEntry -Name 'lines'
+            if ($hasEventLocator -and $hasLineLocator) {
+                throw 'transcript evidence must declare exactly one locator form.'
+            }
+            if (-not $hasEventLocator -and -not $hasLineLocator) {
+                throw 'transcript evidence must declare event_index or start_line/end_line to ground the cited location.'
+            }
+            if ($hasEventLocator) {
+                if ($hasLines) {
+                    throw 'transcript evidence uses event_index but the frozen artifact has line-based content.'
+                }
+                if (-not $hasEvents) {
+                    throw 'transcript evidence event_index cannot be applied because the frozen artifact has no event-based content.'
+                }
+                $events = @(Get-JsonProperty -Object $transcriptEntry -Name 'events' -Default @())
+                $eventIndex = [int](Get-JsonProperty -Object $ref -Name 'event_index' -Default -1)
+                if ($eventIndex -lt 0 -or $eventIndex -ge $events.Count) {
+                    throw "transcript evidence event_index $eventIndex is outside the frozen artifact ($($events.Count) events)."
+                }
+                if (-not [string]::IsNullOrWhiteSpace($quote)) {
+                    $eventText = [string](Get-JsonProperty -Object $events[$eventIndex] -Name 'source_text' -Default (Get-JsonProperty -Object $events[$eventIndex] -Name 'content' -Default ''))
+                    if (-not $eventText.Contains($quote, [StringComparison]::Ordinal)) {
+                        throw 'transcript evidence quote is absent from the referenced frozen event.'
+                    }
+                }
+            } else {
+                if (-not $hasStartLine -or -not $hasEndLine) {
+                    throw 'transcript evidence line locator must declare both start_line and end_line.'
+                }
+                if ($hasEvents) {
+                    throw 'transcript evidence uses start_line/end_line but the frozen artifact has event-based content.'
+                }
+                if (-not $hasLines) {
+                    throw 'transcript evidence line locator cannot be applied because the frozen artifact has no line-based content.'
+                }
                 $startLine = [int](Get-JsonProperty -Object $ref -Name 'start_line' -Default 0)
                 $endLine = [int](Get-JsonProperty -Object $ref -Name 'end_line' -Default $startLine)
-                $quote = [string](Get-JsonProperty -Object $ref -Name 'quote' -Default '')
-                $hasEvents = Test-JsonProperty -Object $stagedEntry -Name 'events'
-                $hasLines = Test-JsonProperty -Object $stagedEntry -Name 'lines'
-                if ($null -ne $eventIndexRaw -and $hasEvents) {
-                    $events = @(Get-JsonProperty -Object $stagedEntry -Name 'events' -Default @())
-                    $eventIndex = [int]$eventIndexRaw
-                    if ($eventIndex -lt 0 -or $eventIndex -ge $events.Count) {
-                        throw "transcript evidence event_index $eventIndex is outside the frozen artifact ($($events.Count) events)."
+                $lines = @(Get-JsonProperty -Object $transcriptEntry -Name 'lines' -Default @())
+                if ($startLine -lt 1 -or $endLine -lt $startLine -or $endLine -gt $lines.Count) {
+                    throw 'transcript evidence line range is outside the frozen artifact.'
+                }
+                if (-not [string]::IsNullOrWhiteSpace($quote)) {
+                    $span = [string]::Join("`n", @($lines[($startLine - 1)..($endLine - 1)] | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'text' -Default '') }))
+                    if (-not $span.Contains($quote, [StringComparison]::Ordinal)) {
+                        throw 'transcript evidence quote is absent from the referenced frozen transcript lines.'
                     }
-                    if (-not [string]::IsNullOrWhiteSpace($quote)) {
-                        $eventContent = [string](Get-JsonProperty -Object $events[$eventIndex] -Name 'content' -Default '')
-                        if (-not $eventContent.Contains($quote, [StringComparison]::Ordinal)) {
-                            throw 'transcript evidence quote is absent from the referenced frozen event.'
-                        }
-                    }
-                } elseif ($startLine -gt 0 -and $hasLines) {
-                    $lines = @(Get-JsonProperty -Object $stagedEntry -Name 'lines' -Default @())
-                    if ($startLine -lt 1 -or $endLine -lt $startLine -or $endLine -gt $lines.Count) {
-                        throw 'transcript evidence line range is outside the frozen artifact.'
-                    }
-                    if (-not [string]::IsNullOrWhiteSpace($quote)) {
-                        $span = [string]::Join("`n", @($lines[($startLine - 1)..($endLine - 1)] | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'text' -Default '') }))
-                        if (-not $span.Contains($quote, [StringComparison]::Ordinal)) {
-                            throw 'transcript evidence quote is absent from the referenced frozen transcript lines.'
-                        }
-                    }
-                } elseif ($null -ne $eventIndexRaw -and $hasLines) {
-                    throw 'transcript evidence uses event_index but the staged artifact has line-based content.'
-                } elseif ($startLine -gt 0 -and $hasEvents) {
-                    throw 'transcript evidence uses start_line/end_line but the staged artifact has event-based content.'
-                } elseif (-not [string]::IsNullOrWhiteSpace($quote)) {
-                    throw 'transcript evidence must declare event_index or start_line/end_line to ground the cited location.'
                 }
             }
         }

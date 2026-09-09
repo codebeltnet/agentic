@@ -24,6 +24,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $runnerRoot '..')).Path
 . (Join-Path $runnerRoot 'manifest-paths.ps1')
 . (Join-Path $runnerRoot 'orchestration.ps1')
 . (Join-Path $runnerRoot 'execution-freeze.ps1')
+. (Join-Path $runnerRoot 'phase2-grading.ps1')
 . (Join-Path $runnerRoot 'package-integrity.ps1')
 . (Join-Path $runnerRoot 'fanout-process.ps1')
 
@@ -55,6 +56,19 @@ function Write-TestJson {
 function Read-TestJson {
     param([Parameter(Mandatory = $true)][string]$Path)
     return [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 100
+}
+
+function Remove-TestProperty {
+    param(
+        [Parameter(Mandatory = $true)][object]$Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        [void]$Object.Remove($Name)
+    } else {
+        [void]$Object.PSObject.Properties.Remove($Name)
+    }
 }
 
 function Invoke-TestTool {
@@ -176,10 +190,85 @@ function New-TestRun {
     }
     Write-TestJson -Path (Join-Path $runDirectory 'run.json') -Value $run
 
+    if ($EvalId -eq 2) {
+        [System.IO.File]::WriteAllText((Join-Path $homeDirectory 'extra-transcript-artifacts'), "1`n", [System.Text.UTF8Encoding]::new($false))
+    }
+
     return [pscustomobject]@{
         Directory = $runDirectory
         RunPath = Join-Path $runDirectory 'run.json'
         InteractionPath = $interactionFile
+    }
+}
+
+function Get-GradingEntry {
+    param(
+        [Parameter(Mandatory = $true)][object]$Document,
+        [Parameter(Mandatory = $true)][int]$EvalId,
+        [Parameter(Mandatory = $true)][string]$Configuration,
+        [Parameter(Mandatory = $true)][int]$AssertionIndex
+    )
+
+    return @($Document.grading | Where-Object {
+            [int]$_.eval_id -eq $EvalId -and
+            [string]$_.configuration -eq $Configuration -and
+            [int]$_.assertion_index -eq $AssertionIndex
+        } | Select-Object -First 1)[0]
+}
+
+function New-TestTranscriptEvidenceRef {
+    param(
+        [Parameter(Mandatory = $true)][object]$Record,
+        [Parameter(Mandatory = $true)][object]$Canonical,
+        [ValidateSet('Events', 'Lines')][string]$Kind = 'Events',
+        [string]$Artifact = ''
+    )
+
+    $transcripts = @(Get-CanonicalTranscriptArtifacts -Record $Record -Canonical $Canonical)
+    if ([string]::IsNullOrWhiteSpace($Artifact)) {
+        $entry = if ($Kind -eq 'Events') {
+            @($transcripts | Where-Object { Test-JsonProperty -Object $_ -Name 'events' } | Select-Object -First 1)
+        } else {
+            @($transcripts | Where-Object { Test-JsonProperty -Object $_ -Name 'lines' } | Select-Object -First 1)
+        }
+    } else {
+        $entry = @($transcripts | Where-Object { [string]$_.artifact -eq $Artifact } | Select-Object -First 1)
+    }
+    if ($entry.Count -ne 1 -and [string]::IsNullOrWhiteSpace($Artifact) -and $Kind -eq 'Events') {
+        $entry = @((Get-TranscriptArtifactSnapshot -Record $Record -Artifact ("$([string]$Record.Configuration)/evidence/fixture-events.jsonl")).Entry)
+    }
+    if ($entry.Count -ne 1) {
+        throw "Missing $Kind transcript artifact '$Artifact' for deterministic grading coverage."
+    }
+    if ($Kind -eq 'Events') {
+        if (-not (Test-JsonProperty -Object $entry[0] -Name 'events')) {
+            throw "Transcript artifact '$([string]$entry[0].artifact)' does not expose events."
+        }
+        $event = @(Get-JsonProperty -Object $entry[0] -Name 'events' -Default @() | Select-Object -First 1)
+        if ($event.Count -ne 1) {
+            throw "Transcript artifact '$([string]$entry[0].artifact)' has no event content."
+        }
+        return [ordered]@{
+            artifact = [string](Get-JsonProperty -Object $entry[0] -Name 'artifact' -Default '')
+            domain = 'transcript'
+            event_index = [int](Get-JsonProperty -Object $event[0] -Name 'event_index' -Default 0)
+            quote = [string](Get-JsonProperty -Object $event[0] -Name 'source_text' -Default (Get-JsonProperty -Object $event[0] -Name 'content' -Default ''))
+        }
+    }
+
+    if (-not (Test-JsonProperty -Object $entry[0] -Name 'lines')) {
+        throw "Transcript artifact '$([string]$entry[0].artifact)' does not expose line content."
+    }
+    $lines = @(Get-JsonProperty -Object $entry[0] -Name 'lines' -Default @() | Select-Object -First 2)
+    if ($lines.Count -lt 1) {
+        throw "Transcript artifact '$([string]$entry[0].artifact)' has no line content."
+    }
+    return [ordered]@{
+        artifact = [string](Get-JsonProperty -Object $entry[0] -Name 'artifact' -Default '')
+        domain = 'transcript'
+        start_line = [int](Get-JsonProperty -Object $lines[0] -Name 'line' -Default 1)
+        end_line = [int](Get-JsonProperty -Object $lines[$lines.Count - 1] -Name 'line' -Default 1)
+        quote = [string]::Join("`n", @($lines | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'text' -Default '') }))
     }
 }
 
@@ -190,11 +279,12 @@ function New-TestGradingDocument {
     foreach ($record in @($Records | Sort-Object EvalId, Configuration)) {
         $metadata = Read-TestJson -Path $record.MetadataPath
         $assertions = @($metadata.assertions)
+        $canonical = Read-TestJson -Path $record.ResultPath
         for ($index = 0; $index -lt $assertions.Count; $index++) {
             $assertionText = if ($assertions[$index] -is [string]) { [string]$assertions[$index] } elseif ($assertions[$index].PSObject.Properties.Name -contains 'assertion') { [string]$assertions[$index].assertion } else { [string]$assertions[$index] }
             $domain = if ($assertions[$index] -isnot [string] -and $assertions[$index].PSObject.Properties.Name -contains 'evidence_domain') { [string]$assertions[$index].evidence_domain } else { 'output' }
             $validator = if ($assertions[$index] -isnot [string] -and $assertions[$index].PSObject.Properties.Name -contains 'validator') { [string]$assertions[$index].validator } else { $null }
-            $output = [string](Read-TestJson -Path $record.ResultPath).output
+            $output = [string]$canonical.output
             $refs = if ($domain -eq 'validator') {
                 @([ordered]@{
                     artifact = [string]$record.ResultRelative
@@ -204,6 +294,8 @@ function New-TestGradingDocument {
                     passed = $true
                     event = 'deterministic fixture validator evidence'
                 })
+            } elseif ($domain -eq 'transcript') {
+                @((New-TestTranscriptEvidenceRef -Record $record -Canonical $canonical -Kind Events))
             } else {
                 @([ordered]@{
                     artifact = [string]$record.ResultRelative
@@ -447,7 +539,13 @@ for ($index = 0; $index -lt $count; $index++) {
         $evalDirectory = Join-Path $iteration $evalName
         New-Item -ItemType Directory -Path $evalDirectory -Force | Out-Null
         $assertions = if ($evalId -eq 2) {
-            @('the protected operation is absent before confirmation and occurs only after the same-session confirmation turn', 'the response contains the fixture completion content')
+            @(
+                [ordered]@{
+                    assertion = 'the protected operation is absent before confirmation and occurs only after the same-session confirmation turn'
+                    evidence_domain = 'transcript'
+                }
+                'the response contains the fixture completion content'
+            )
         } elseif ($evalId -eq 3) {
             @(
                 [ordered]@{ assertion = 'current Git branch was resolved'; evidence_domain = 'validator'; validator = 'git.current_branch_observed' }
@@ -647,6 +745,15 @@ for ($index = 0; $index -lt $count; $index++) {
     }
     $gradingPath = Join-Path $iteration 'grading.json'
     $validGrading = New-TestGradingDocument -Records $records
+    $transcriptEvalId = 2
+    $transcriptAssertionIndex = 0
+    $transcriptRecord = @($records | Where-Object { $_.EvalId -eq $transcriptEvalId -and $_.Configuration -eq 'with_skill' } | Select-Object -First 1)[0]
+    $transcriptCanonical = Read-TestJson -Path $transcriptRecord.ResultPath
+    $transcriptArtifacts = @(Get-CanonicalTranscriptArtifacts -Record $transcriptRecord -Canonical $transcriptCanonical)
+    $collisionEventArtifacts = @($transcriptArtifacts | Where-Object { [string]$_.artifact -like 'with_skill/evidence/*/events.jsonl' } | Sort-Object artifact)
+    $lineTranscriptArtifact = @($transcriptArtifacts | Where-Object { [string]$_.artifact -eq 'with_skill/evidence/logs/transcript.txt' } | Select-Object -First 1)[0]
+    Assert-Equal 2 $collisionEventArtifacts.Count 'fixture exposes two same-basename transcript artifacts'
+    Assert-True ($null -ne $lineTranscriptArtifact) 'fixture exposes a line-based transcript artifact'
     $validationScript = Join-Path $packageTools 'validate-eval-grading.ps1'
     $validationArguments = @('-IterationDirectory', $iteration, '-GradingPath', 'grading.json')
     $validationSideEffectPaths = Get-GradingValidationSideEffectPaths -IterationDirectory $iteration -Records $records
@@ -706,6 +813,109 @@ for ($index = 0; $index -lt $count; $index++) {
         Write-TestJson -Path $gradingPath -Value $badDomain
         Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'wrong evidence domain rejected' -ExpectedText 'assertion identity'
 
+        $validTranscriptEvent = Copy-TestGradingDocument -Document $validGrading
+        $validTranscriptEventEntry = Get-GradingEntry -Document $validTranscriptEvent -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        $validTranscriptEventEntry.evidence_refs = @((New-TestTranscriptEvidenceRef -Record $transcriptRecord -Canonical $transcriptCanonical -Kind Events -Artifact ([string]$collisionEventArtifacts[0].artifact)))
+        Write-TestJson -Path $gradingPath -Value $validTranscriptEvent
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'valid transcript event_index grading validation'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'valid transcript event-index grading validation'
+
+        $missingTranscriptLocator = Copy-TestGradingDocument -Document $validGrading
+        $missingTranscriptLocatorEntry = Get-GradingEntry -Document $missingTranscriptLocator -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        Remove-TestProperty -Object $missingTranscriptLocatorEntry.evidence_refs[0] -Name 'event_index'
+        Remove-TestProperty -Object $missingTranscriptLocatorEntry.evidence_refs[0] -Name 'quote'
+        Write-TestJson -Path $gradingPath -Value $missingTranscriptLocator
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'artifact-only transcript evidence rejected' -ExpectedText 'must declare event_index or start_line/end_line'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'artifact-only transcript evidence rejection'
+
+        $quotedWithoutTranscriptLocator = Copy-TestGradingDocument -Document $validGrading
+        $quotedWithoutTranscriptLocatorEntry = Get-GradingEntry -Document $quotedWithoutTranscriptLocator -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        Remove-TestProperty -Object $quotedWithoutTranscriptLocatorEntry.evidence_refs[0] -Name 'event_index'
+        $quotedWithoutTranscriptLocatorEntry.evidence_refs[0].quote = 'some text'
+        Write-TestJson -Path $gradingPath -Value $quotedWithoutTranscriptLocator
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'quoted transcript evidence without locator rejected' -ExpectedText 'must declare event_index or start_line/end_line'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'quoted transcript evidence without locator rejection'
+
+        $invalidEventIndex = Copy-TestGradingDocument -Document $validGrading
+        $invalidEventIndexEntry = Get-GradingEntry -Document $invalidEventIndex -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        $invalidEventIndexEntry.evidence_refs = @([ordered]@{
+                artifact = [string]$collisionEventArtifacts[0].artifact
+                domain = 'transcript'
+                event_index = 9
+            })
+        Write-TestJson -Path $gradingPath -Value $invalidEventIndex
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'out-of-range transcript event_index rejected' -ExpectedText 'event_index 9 is outside'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'transcript event-index bounds rejection'
+
+        $validTranscriptLines = Copy-TestGradingDocument -Document $validGrading
+        $validTranscriptLinesEntry = Get-GradingEntry -Document $validTranscriptLines -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        $validTranscriptLinesEntry.evidence_refs = @((New-TestTranscriptEvidenceRef -Record $transcriptRecord -Canonical $transcriptCanonical -Kind Lines -Artifact ([string]$lineTranscriptArtifact.artifact)))
+        Write-TestJson -Path $gradingPath -Value $validTranscriptLines
+        Assert-ToolPasses -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'valid transcript line-range grading validation'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'valid transcript line-range grading validation'
+
+        $invalidTranscriptLines = Copy-TestGradingDocument -Document $validGrading
+        $invalidTranscriptLinesEntry = Get-GradingEntry -Document $invalidTranscriptLines -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        $invalidTranscriptLinesEntry.evidence_refs = @([ordered]@{
+                artifact = [string]$lineTranscriptArtifact.artifact
+                domain = 'transcript'
+                start_line = 9
+                end_line = 9
+                quote = 'alpha frozen transcript line'
+            })
+        Write-TestJson -Path $gradingPath -Value $invalidTranscriptLines
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'out-of-range transcript line range rejected' -ExpectedText 'line range is outside'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'transcript line-range bounds rejection'
+
+        $missingTranscriptEndLine = Copy-TestGradingDocument -Document $validGrading
+        $missingTranscriptEndLineEntry = Get-GradingEntry -Document $missingTranscriptEndLine -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        $missingTranscriptEndLineEntry.evidence_refs = @([ordered]@{
+                artifact = [string]$lineTranscriptArtifact.artifact
+                domain = 'transcript'
+                start_line = 1
+                quote = 'alpha frozen transcript line'
+            })
+        Write-TestJson -Path $gradingPath -Value $missingTranscriptEndLine
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'partial transcript line locator rejected' -ExpectedText 'line locator must declare both start_line and end_line'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'partial transcript line locator rejection'
+
+        $lineArtifactEventLocator = Copy-TestGradingDocument -Document $validGrading
+        $lineArtifactEventLocatorEntry = Get-GradingEntry -Document $lineArtifactEventLocator -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        $lineArtifactEventLocatorEntry.evidence_refs = @([ordered]@{
+                artifact = [string]$lineTranscriptArtifact.artifact
+                domain = 'transcript'
+                event_index = 0
+                quote = 'alpha frozen transcript line'
+            })
+        Write-TestJson -Path $gradingPath -Value $lineArtifactEventLocator
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'event locator on line-based transcript rejected' -ExpectedText 'uses event_index but the frozen artifact has line-based content'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'line-based transcript event locator rejection'
+
+        $eventArtifactLineLocator = Copy-TestGradingDocument -Document $validGrading
+        $eventArtifactLineLocatorEntry = Get-GradingEntry -Document $eventArtifactLineLocator -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        $eventArtifactLineLocatorEntry.evidence_refs = @([ordered]@{
+                artifact = [string]$collisionEventArtifacts[0].artifact
+                domain = 'transcript'
+                start_line = 1
+                end_line = 1
+                quote = 'artifact-a exact frozen quote'
+            })
+        Write-TestJson -Path $gradingPath -Value $eventArtifactLineLocator
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'line locator on event-based transcript rejected' -ExpectedText 'uses start_line/end_line but the frozen artifact has event-based content'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'event-based transcript line locator rejection'
+
+        $crossArtifactQuote = Copy-TestGradingDocument -Document $validGrading
+        $crossArtifactQuoteEntry = Get-GradingEntry -Document $crossArtifactQuote -EvalId $transcriptEvalId -Configuration 'with_skill' -AssertionIndex $transcriptAssertionIndex
+        $crossArtifactQuoteEntry.evidence_refs = @([ordered]@{
+                artifact = [string]$collisionEventArtifacts[0].artifact
+                domain = 'transcript'
+                event_index = 0
+                quote = 'artifact-b exact frozen quote'
+            })
+        Write-TestJson -Path $gradingPath -Value $crossArtifactQuote
+        Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'cross-artifact transcript quote rejected' -ExpectedText 'quote is absent from the referenced frozen event'
+        Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'cross-artifact transcript quote rejection'
+
         $repeated = Copy-TestGradingDocument -Document $validGrading
         $repeated.grading[1].evidence = $repeated.grading[0].evidence
         Write-TestJson -Path $gradingPath -Value $repeated
@@ -732,6 +942,24 @@ for ($index = 0; $index -lt $count; $index++) {
         Assert-True (@($phase2State.expected_worker_ids | Where-Object { [string]$_ -like 'arm-3-*' }).Count -eq 0) 'validator-only eval arms must require zero analyzer workers'
         Assert-Equal 14 @($phase2State.validator_results).Count 'validator-only paired arms resolve process assertions deterministically'
         Assert-Equal 4 @($phase2State.expected_worker_ids).Count 'semantic worker cardinality derives from unresolved assertions, not manifest arm count'
+        $phase2BundlePath = Join-Path $iteration 'phase2\work\arm-2-with_skill\repo\input-bundle.json'
+        $phase2Bundle = Read-TestJson -Path $phase2BundlePath
+        $stagedCollisionEntries = @($phase2Bundle.frozen_transcripts | Where-Object { [string]$_.artifact -like 'with_skill/evidence/*/events.jsonl' } | Sort-Object artifact)
+        Assert-Equal 2 $stagedCollisionEntries.Count 'Phase 2 stages both same-basename transcript artifacts'
+        Assert-True ([string]$stagedCollisionEntries[0].staged_artifact -cne [string]$stagedCollisionEntries[1].staged_artifact) 'same-basename transcript artifacts must stage to unique paths'
+        $phase2BundleRepo = Join-Path $iteration 'phase2\work\arm-2-with_skill\repo'
+        $stagedCollisionContents = [System.Collections.Generic.List[string]]::new()
+        foreach ($entry in $stagedCollisionEntries) {
+            $sourcePath = Resolve-TranscriptArtifactSourcePath -Record $transcriptRecord -Artifact ([string]$entry.artifact)
+            $stagedPath = Resolve-ContainedPath -BasePath $phase2BundleRepo -RelativePath ([string]$entry.staged_artifact) -FieldName 'staged transcript artifact' -Kind File
+            Assert-Equal ([string]$entry.source_sha256) (Get-Sha256HexFromFile -Path $sourcePath) "bundle preserves the source hash for $([string]$entry.artifact)"
+            Assert-Equal ([string]$entry.staged_sha256) (Get-Sha256HexFromFile -Path $stagedPath) "bundle preserves the staged hash for $([string]$entry.artifact)"
+            $sourceContent = [System.IO.File]::ReadAllText($sourcePath, [System.Text.UTF8Encoding]::new($false))
+            $stagedContent = [System.IO.File]::ReadAllText($stagedPath, [System.Text.UTF8Encoding]::new($false))
+            Assert-Equal $sourceContent $stagedContent "staged transcript preserves the frozen content for $([string]$entry.artifact)"
+            $stagedCollisionContents.Add($stagedContent)
+        }
+        Assert-True ([string]$stagedCollisionContents[0] -cne [string]$stagedCollisionContents[1]) 'same-basename transcript artifacts keep distinct staged content'
         $rootGradingAfterPhase2 = Read-TestJson -Path $gradingPath
         Assert-Equal 22 @($rootGradingAfterPhase2.grading).Count 'root grading cardinality derives from normalized assertions'
         Assert-True (@($rootGradingAfterPhase2.grading | Where-Object { [string]$_.evidence_domain -eq 'validator' -and [string]$_.source -eq 'validator' }).Count -eq 14) 'validator assertions are resolved by deterministic validator results, not analyzer prose'

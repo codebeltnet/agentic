@@ -41,6 +41,22 @@ function Assert-Failure([hashtable]$Options, [string]$Pattern) {
     Assert-True ($script:dispatches.Count -eq $before) 'Failed preparation dispatched an Orchestrator.'
 }
 
+function Assert-HandoffFailure([string]$PromptPath, [string]$Pattern, [string]$Description) {
+    $before = $script:dispatches.Count
+    $failed = $false
+    $claim = Join-Path (Split-Path -Parent $PromptPath) '.external-handoff-started'
+    try {
+        $decision = Get-EvalHandoff -PromptPath $PromptPath -Yolo -CanDelegateFreshOrchestrator
+        Invoke-FakeHost $decision
+    } catch {
+        $failed = $true
+        Assert-True ($_.Exception.Message -match $Pattern) "Unexpected handoff failure for ${Description}: $($_.Exception.Message)"
+    }
+    Assert-True $failed "$Description unexpectedly passed handoff validation."
+    Assert-True ($script:dispatches.Count -eq $before) "$Description dispatched an Orchestrator."
+    Assert-True (-not (Test-Path -LiteralPath $claim)) "$Description created .external-handoff-started before rejection."
+}
+
 try {
     $catalog = Join-Path $workspace 'models.json'
     @{ models = @(@{ id = 'gpt-5.6-luna' }, @{ id = 'claude-haiku-4.5' }, @{ id = 'claude-opus-4.7' }, @{ id = 'provider/Exact.Model' }) } |
@@ -146,6 +162,17 @@ try {
     $invalid = New-Preparation 'Codex' 'missing-skill'
     $invalid.Skill = 'no-such-skill'
     Assert-Failure $invalid 'skill|directory|path'
+
+    $standaloneRoot = Join-Path $workspace 'standalone'
+    [void](New-Item -ItemType Directory -Path $standaloneRoot -Force)
+    $standalonePrompt = Join-Path $standaloneRoot 'RUN-THIS.prompt.md'
+    [System.IO.File]::WriteAllText($standalonePrompt, '# forged handoff', [System.Text.UTF8Encoding]::new($false))
+    Assert-HandoffFailure -PromptPath $standalonePrompt -Pattern 'valid prepared eval package' -Description 'standalone RUN-THIS.prompt.md'
+
+    $tampered = Invoke-EvalRequest -Preparation (New-Preparation 'Codex' 'tampered')
+    $tamperedPackage = Split-Path -Parent $tampered.prompt_path
+    [System.IO.File]::AppendAllText((Join-Path $tamperedPackage 'tools/eval-runners/resolve-runner.ps1'), "`n# tampered`n", [System.Text.UTF8Encoding]::new($false))
+    Assert-HandoffFailure -PromptPath $tampered.prompt_path -Pattern 'valid prepared eval package|Requires a fresh package|changed after preparation' -Description 'tampered prepared package'
 
     # Check the real discovery call contract, not a mocked model resolver.
     $source = Get-Content (Join-Path $scripts 'prepare-skill-evals.ps1') -Raw

@@ -10,6 +10,53 @@
 #>
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot 'eval-runners/runner-common.ps1')
+. (Join-Path $PSScriptRoot 'eval-runners/manifest-paths.ps1')
+. (Join-Path $PSScriptRoot 'eval-runners/package-integrity.ps1')
+
+function Assert-PreparedEvalHandoffPackage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$PromptPath
+    )
+
+    $path = (Resolve-Path -LiteralPath $PromptPath -ErrorAction Stop).Path
+    if ([IO.Path]::GetFileName($path) -cne 'RUN-THIS.prompt.md') {
+        throw 'Handoff requires the prepared RUN-THIS.prompt.md file.'
+    }
+
+    $package = Split-Path -Parent $path
+    try {
+        $manifestPath = Resolve-ManifestDeclaredPath -IterationDirectory $package -RelativePath 'manifest.json' -FieldName 'manifest.json' -Kind File -RequireExists
+        $manifest = Read-RunnerJson -Path $manifestPath
+        if ([string](Get-JsonProperty -Object $manifest -Name 'schema' -Default '') -ne 'codebeltnet/agentic/eval-package/2') {
+            throw "manifest.json must declare 'codebeltnet/agentic/eval-package/2'."
+        }
+        if ([string](Get-JsonProperty -Object $manifest -Name 'execution' -Default '') -ne 'runner_handoff') {
+            throw "manifest.execution must be 'runner_handoff'."
+        }
+        $runnerPrompt = [string](Get-JsonProperty -Object $manifest -Name 'runner_prompt' -Default '')
+        if ([string]::IsNullOrWhiteSpace($runnerPrompt)) {
+            throw 'manifest.json must declare runner_prompt.'
+        }
+        $resolvedPrompt = Resolve-ManifestDeclaredPath -IterationDirectory $package -RelativePath $runnerPrompt -FieldName 'runner_prompt' -Kind File -RequireExists
+        $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+        if (-not [string]::Equals([System.IO.Path]::GetFullPath($resolvedPrompt), [System.IO.Path]::GetFullPath($path), $comparison)) {
+            throw 'The supplied RUN-THIS.prompt.md is not the manifest-declared runner_prompt.'
+        }
+        [void](Get-ManifestRunRecords -IterationDirectory $package -Manifest $manifest)
+        [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $package -Manifest $manifest)
+        [void](Assert-PackageRunnerIdentity -IterationDirectory $package -Manifest $manifest)
+    } catch {
+        throw "Handoff requires a valid prepared eval package produced by this repository: $($_.Exception.Message)"
+    }
+
+    return [pscustomobject]@{
+        PromptPath = $path
+        Package = $package
+    }
+}
+
 function Get-EvalHandoff {
     [CmdletBinding()]
     param(
@@ -18,11 +65,9 @@ function Get-EvalHandoff {
         [Alias('ExternalOrchestratorAvailable')][switch]$CanDelegateFreshOrchestrator
     )
 
-    $path = (Resolve-Path -LiteralPath $PromptPath -ErrorAction Stop).Path
-    if ([IO.Path]::GetFileName($path) -cne 'RUN-THIS.prompt.md') {
-        throw 'Handoff requires the prepared RUN-THIS.prompt.md file.'
-    }
-    $package = Split-Path -Parent $path
+    $validated = Assert-PreparedEvalHandoffPackage -PromptPath $PromptPath
+    $path = [string]$validated.PromptPath
+    $package = [string]$validated.Package
     $decision = [ordered]@{ action = 'manual_handoff'; prompt_path = $path; reason = 'Preparation complete; hand this file to an external Eval Orchestrator.' }
     if (-not $Yolo) { return [pscustomobject]$decision }
 

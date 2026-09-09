@@ -95,6 +95,30 @@ try {
         return (Test-Path -LiteralPath (Join-Path $inputs.Run.HomeDirectoryPath 'evidence-validation-failed') -PathType Leaf)
     }
 
+    function Get-ExtraTranscriptArtifacts {
+        $markerPath = Join-Path $inputs.Run.HomeDirectoryPath 'extra-transcript-artifacts'
+        if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+            return @()
+        }
+        return @(
+            [ordered]@{
+                Path = 'evidence/a/events.jsonl'
+                Content = @('{"type":"assistant.terminal","content":"artifact-a exact frozen quote"}')
+                MediaType = 'application/x-ndjson; charset=utf-8'
+            }
+            [ordered]@{
+                Path = 'evidence/b/events.jsonl'
+                Content = @('{"type":"assistant.terminal","content":"artifact-b exact frozen quote"}')
+                MediaType = 'application/x-ndjson; charset=utf-8'
+            }
+            [ordered]@{
+                Path = 'evidence/logs/transcript.txt'
+                Content = @('alpha frozen transcript line', 'beta frozen transcript line')
+                MediaType = 'text/plain; charset=utf-8'
+            }
+        )
+    }
+
     if ($Command -eq 'preflight') {
         Write-FixtureEvent -Kind 'preflight'
         if (Test-Path -LiteralPath (Join-Path $inputs.Run.HomeDirectoryPath 'preflight-incompatible') -PathType Leaf) {
@@ -167,20 +191,50 @@ try {
             $assertionIndex = [int](Get-JsonProperty -Object $assertion -Name 'assertion_index' -Default 0)
             $domain = [string](Get-JsonProperty -Object $assertion -Name 'evidence_domain' -Default 'output')
             $artifact = [string](Get-JsonProperty -Object $bundle -Name 'canonical_result' -Default '')
-            $line = @(Get-JsonProperty -Object (Get-JsonProperty -Object $bundle -Name 'frozen_output' -Default $null) -Name 'lines' -Default @() | Select-Object -First 1)
-            $lineNumber = if ($line.Count -eq 1) { [int](Get-JsonProperty -Object $line[0] -Name 'line' -Default 1) } else { 1 }
-            $quote = if ($line.Count -eq 1) { [string](Get-JsonProperty -Object $line[0] -Name 'text' -Default 'deterministic fixture response') } else { 'deterministic fixture response' }
-            $fragmentGrades.Add([ordered]@{
-                assertion_index = $assertionIndex
-                passed = $true
-                reason = "The deterministic analyzer fixture cites frozen one-arm output for assertion $assertionIndex."
-                evidence_refs = @([ordered]@{
+            $evidenceRef = $null
+            if ($domain -eq 'transcript') {
+                $transcripts = @(Get-JsonProperty -Object $bundle -Name 'frozen_transcripts' -Default @())
+                $eventTranscript = @($transcripts | Where-Object { Test-JsonProperty -Object $_ -Name 'events' } | Select-Object -First 1)
+                if ($eventTranscript.Count -eq 1) {
+                    $event = @(Get-JsonProperty -Object $eventTranscript[0] -Name 'events' -Default @() | Select-Object -First 1)
+                    if ($event.Count -ne 1) { throw 'Phase 2 fixture expected one frozen transcript event.' }
+                    $evidenceRef = [ordered]@{
+                        artifact = [string](Get-JsonProperty -Object $eventTranscript[0] -Name 'artifact' -Default '')
+                        domain = 'transcript'
+                        event_index = [int](Get-JsonProperty -Object $event[0] -Name 'event_index' -Default 0)
+                        quote = [string](Get-JsonProperty -Object $event[0] -Name 'source_text' -Default (Get-JsonProperty -Object $event[0] -Name 'content' -Default ''))
+                    }
+                } else {
+                    $lineTranscript = @($transcripts | Where-Object { Test-JsonProperty -Object $_ -Name 'lines' } | Select-Object -First 1)
+                    if ($lineTranscript.Count -ne 1) { throw 'Phase 2 fixture expected frozen transcript evidence for transcript-domain grading.' }
+                    $lines = @(Get-JsonProperty -Object $lineTranscript[0] -Name 'lines' -Default @() | Select-Object -First 2)
+                    if ($lines.Count -lt 1) { throw 'Phase 2 fixture expected at least one frozen transcript line.' }
+                    $quote = [string]::Join("`n", @($lines | ForEach-Object { [string](Get-JsonProperty -Object $_ -Name 'text' -Default '') }))
+                    $evidenceRef = [ordered]@{
+                        artifact = [string](Get-JsonProperty -Object $lineTranscript[0] -Name 'artifact' -Default '')
+                        domain = 'transcript'
+                        start_line = [int](Get-JsonProperty -Object $lines[0] -Name 'line' -Default 1)
+                        end_line = [int](Get-JsonProperty -Object $lines[$lines.Count - 1] -Name 'line' -Default 1)
+                        quote = $quote
+                    }
+                }
+            } else {
+                $line = @(Get-JsonProperty -Object (Get-JsonProperty -Object $bundle -Name 'frozen_output' -Default $null) -Name 'lines' -Default @() | Select-Object -First 1)
+                $lineNumber = if ($line.Count -eq 1) { [int](Get-JsonProperty -Object $line[0] -Name 'line' -Default 1) } else { 1 }
+                $quote = if ($line.Count -eq 1) { [string](Get-JsonProperty -Object $line[0] -Name 'text' -Default 'deterministic fixture response') } else { 'deterministic fixture response' }
+                $evidenceRef = [ordered]@{
                     artifact = $artifact
                     domain = $domain
                     start_line = $lineNumber
                     end_line = $lineNumber
                     quote = $quote
-                })
+                }
+            }
+            $fragmentGrades.Add([ordered]@{
+                assertion_index = $assertionIndex
+                passed = $true
+                reason = "The deterministic analyzer fixture cites frozen one-arm output for assertion $assertionIndex."
+                evidence_refs = @($evidenceRef)
             })
         }
         $fixtureFinalResponse = ConvertTo-RunnerJson -Value ([ordered]@{
@@ -242,6 +296,14 @@ try {
     }
     [IO.File]::WriteAllText($eventsPath, ([string]::Join("`n", $eventLines) + "`n"), [Text.UTF8Encoding]::new($false))
     $eventsArtifact = New-ArtifactReference -Run $inputs.Run -Path 'evidence/fixture-events.jsonl' -Scope run -MediaType 'application/x-ndjson; charset=utf-8'
+    $artifactReferences = [System.Collections.Generic.List[object]]::new()
+    $artifactReferences.Add($eventsArtifact)
+    foreach ($extra in @(Get-ExtraTranscriptArtifacts)) {
+        $artifactPath = Join-Path $inputs.Run.RunRoot (([string]$extra.Path) -replace '/', [IO.Path]::DirectorySeparatorChar)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $artifactPath) -Force | Out-Null
+        [IO.File]::WriteAllText($artifactPath, ([string]::Join("`n", @($extra.Content)) + "`n"), [Text.UTF8Encoding]::new($false))
+        $artifactReferences.Add((New-ArtifactReference -Run $inputs.Run -Path ([string]$extra.Path) -Scope run -MediaType ([string]$extra.MediaType)))
+    }
     $evidence = [ordered]@{
         capture = [ordered]@{ source = 'harness_native_transport'; terminal = $true; worker_authored = $false }
         commands = @(
@@ -295,7 +357,7 @@ try {
         'cancelled' { New-ExecutionFailure -Code 'cancelled' -Message 'The deterministic runner-owned fixture was cancelled before completion.' }
         default { $null }
     }
-    $result = New-ExecutionResult -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Status $terminalStatus -FinalResponse $finalResponse -FinalResponseReason $finalResponseReason -StartedUtc ($executeStartUtc.ToString('o')) -FinishedUtc ($executeFinishUtc.ToString('o')) -DurationSeconds $durationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @('deterministic runner-owned fixture') -Telemetry ([ordered]@{ transcript = New-AvailableMetric -Value ([ordered]@{ artifact = 'evidence/fixture-events.jsonl'; complete = $true }); tokens = $fixtureTelemetryTokens; tool_calls = $fixtureTelemetryToolCalls; cost = New-UnavailableMetric -Reason 'fixture' }) -Artifacts @($eventsArtifact) -Evidence $evidence -AttemptCount 1
+    $result = New-ExecutionResult -Descriptor $descriptor -Profile $inputs.Profile -Run $inputs.Run -Status $terminalStatus -FinalResponse $finalResponse -FinalResponseReason $finalResponseReason -StartedUtc ($executeStartUtc.ToString('o')) -FinishedUtc ($executeFinishUtc.ToString('o')) -DurationSeconds $durationSeconds -ExitStatus $exitStatus -Failure $failure -SessionId $sessionId -IsolationCapabilities $capabilities -IsolationMechanisms @('deterministic runner-owned fixture') -Telemetry ([ordered]@{ transcript = New-AvailableMetric -Value ([ordered]@{ artifact = 'evidence/fixture-events.jsonl'; complete = $true }); tokens = $fixtureTelemetryTokens; tool_calls = $fixtureTelemetryToolCalls; cost = New-UnavailableMetric -Reason 'fixture' }) -Artifacts @($artifactReferences.ToArray()) -Evidence $evidence -AttemptCount 1
     [void](Assert-ExecutionResult -Result $result)
     Write-RunnerJson -Value $result -AsOutput
 } catch {

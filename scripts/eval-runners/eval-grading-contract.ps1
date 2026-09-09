@@ -85,7 +85,12 @@ function Test-GenericGradingReason {
 
 function Assert-EvalPassEvidence {
     param([object]$Entry, [object]$Canonical, [object]$Expected)
-    [void](Test-GradeEvidenceReference -Grade $Entry -Expected $Expected -Canonical $Canonical)
+
+    $transcriptArtifacts = $null
+    if ([string](Get-JsonProperty -Object $Entry -Name 'evidence_domain' -Default '') -eq 'transcript') {
+        $transcriptArtifacts = @(Get-CanonicalTranscriptArtifacts -Record $Expected.record -Canonical $Canonical)
+    }
+    [void](Test-GradeEvidenceReference -Grade $Entry -Expected $Expected -Canonical $Canonical -TranscriptArtifacts $transcriptArtifacts)
     if (-not $Entry.passed) { return }
     $reason = [string](Get-JsonProperty -Object $Entry -Name 'reason' -Default '')
     if (Test-GenericGradingReason -Reason $reason -Assertion ([string]$Entry.assertion)) {

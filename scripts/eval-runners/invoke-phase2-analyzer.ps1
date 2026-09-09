@@ -144,6 +144,24 @@ $bundleJson
 "@
 }
 
+function Resolve-AnalyzerTranscriptStagedPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$Artifact
+    )
+
+    Assert-SafeRelativePath -RelativePath $Artifact -FieldName 'transcript evidence artifact'
+    $relative = ('evidence/{0}' -f $Artifact.Replace('\', '/'))
+    $candidate = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot ($relative -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+    if (-not (Test-PathInside -BasePath $RepoRoot -CandidatePath $candidate)) {
+        throw "Transcript artifact '$Artifact' resolves outside the analyzer workspace."
+    }
+    return [pscustomobject]@{
+        Relative = $relative
+        FullPath = $candidate
+    }
+}
+
 function New-AnalyzerRunBundle {
     param(
         [Parameter(Mandatory = $true)][string]$Phase2Root,
@@ -173,48 +191,32 @@ function New-AnalyzerRunBundle {
     if ($transcriptAssertions.Count -gt 0) {
         $evidenceDir = Join-Path $repoRoot 'evidence'
         New-Item -ItemType Directory -Path $evidenceDir -Force | Out-Null
-        $transcriptSources = [System.Collections.Generic.List[string]]::new()
-        foreach ($af in @(Get-JsonProperty -Object $canonical -Name 'output_files' -Default @())) {
-            [void]$transcriptSources.Add([string]$af)
-        }
-        $execResultFile = [string](Get-JsonProperty -Object $canonical -Name 'execution_result_file' -Default '')
-        if (-not [string]::IsNullOrWhiteSpace($execResultFile) -and $transcriptSources -notcontains $execResultFile) {
-            [void]$transcriptSources.Add($execResultFile)
-        }
-        foreach ($artifact in $transcriptSources) {
-            $sourcePath = Join-Path $Worker.record.EvalDirectory ($artifact -replace '/', [System.IO.Path]::DirectorySeparatorChar)
-            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) { continue }
-            $sourceHash = Get-Sha256HexFromFile -Path $sourcePath
-            $fileName = [System.IO.Path]::GetFileName($sourcePath)
-            $stagedPath = Join-Path $evidenceDir $fileName
-            [System.IO.File]::Copy($sourcePath, $stagedPath, $true)
-            $stagedHash = Get-Sha256HexFromFile -Path $stagedPath
-            $entry = [ordered]@{ artifact = $artifact; source_sha256 = $sourceHash; staged_sha256 = $stagedHash }
-            if ($artifact -match '\.jsonl$') {
-                $events = [System.Collections.Generic.List[object]]::new()
-                $fileLines = [System.IO.File]::ReadAllLines($sourcePath, [System.Text.UTF8Encoding]::new($false))
-                foreach ($fileLine in $fileLines) {
-                    if ([string]::IsNullOrWhiteSpace($fileLine)) { continue }
-                    try {
-                        $parsed = $fileLine | ConvertFrom-Json -Depth 100
-                        $eventType = [string](Get-JsonProperty -Object $parsed -Name 'type' -Default '')
-                        $content = Get-JsonProperty -Object $parsed -Name 'content' -Default $null
-                        if ($null -eq $content) { $content = Get-JsonProperty -Object $parsed -Name 'data' -Default $null }
-                        $contentStr = if ($null -ne $content) { [string]$content } else { ConvertTo-Json $parsed -Compress -Depth 10 }
-                        $events.Add([ordered]@{ event_index = $events.Count; type = $eventType; content = $contentStr })
-                    } catch {
-                        $events.Add([ordered]@{ event_index = $events.Count; type = ''; content = $fileLine })
-                    }
+        $stagedPathMap = @{}
+        foreach ($artifact in @(Get-CanonicalTranscriptArtifactPaths -Canonical $canonical)) {
+            $sourcePath = Resolve-TranscriptArtifactSourcePath -Record $Worker.record -Artifact $artifact -AllowMissing
+            if ($null -eq $sourcePath) { continue }
+            $snapshot = Get-TranscriptArtifactSnapshot -Record $Worker.record -Artifact $artifact -SourcePath $sourcePath
+            $stagedLocation = Resolve-AnalyzerTranscriptStagedPath -RepoRoot $repoRoot -Artifact $artifact
+            $stagedKey = ConvertTo-ComparablePath -Path $stagedLocation.FullPath
+            if ($stagedPathMap.ContainsKey($stagedKey)) {
+                $existing = [string]$stagedPathMap[$stagedKey]
+                if (-not [string]::Equals($existing, [string]$snapshot.SourcePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw "Transcript artifacts '$existing' and '$($snapshot.SourcePath)' resolve to the same analyzer staging path '$($stagedLocation.Relative)'."
                 }
-                $entry['events'] = @($events.ToArray())
-            } else {
-                $fileLines = [System.IO.File]::ReadAllLines($sourcePath, [System.Text.UTF8Encoding]::new($false))
-                $textLines = [System.Collections.Generic.List[object]]::new()
-                for ($li = 0; $li -lt $fileLines.Count; $li++) {
-                    $textLines.Add([ordered]@{ line = $li + 1; text = [string]$fileLines[$li] })
-                }
-                $entry['lines'] = @($textLines.ToArray())
+                continue
             }
+            $stagedPathMap[$stagedKey] = [string]$snapshot.SourcePath
+            $parent = Split-Path -Parent $stagedLocation.FullPath
+            if (-not [string]::IsNullOrWhiteSpace($parent)) {
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            if (Test-Path -LiteralPath $stagedLocation.FullPath -PathType Leaf) {
+                throw "Transcript staging path '$($stagedLocation.Relative)' already exists in the analyzer workspace."
+            }
+            [System.IO.File]::Copy($snapshot.SourcePath, $stagedLocation.FullPath, $false)
+            $entry = $snapshot.Entry
+            $entry['staged_artifact'] = [string]$stagedLocation.Relative
+            $entry['staged_sha256'] = Get-Sha256HexFromFile -Path $stagedLocation.FullPath
             $stagedTranscripts.Add($entry)
         }
     }
@@ -355,7 +357,7 @@ function Confirm-AnalyzerFragment {
         if ([string]::IsNullOrWhiteSpace($reason)) { throw 'Analyzer fragment reason must be non-empty.' }
         $refs = @(Get-JsonProperty -Object $grade -Name 'evidence_refs' -Default @())
         $entry = ConvertTo-GradingEntry -Expected $expected -Passed ([bool]$grade.passed) -Reason $reason -EvidenceRefs $refs -Source 'analyzer' -Evidence $reason
-        [void](Test-GradeEvidenceReference -Grade $entry -Expected $expected -Canonical $Canonical -StagedTranscripts $StagedTranscripts)
+        [void](Test-GradeEvidenceReference -Grade $entry -Expected $expected -Canonical $Canonical -TranscriptArtifacts $StagedTranscripts)
         $entries.Add($entry)
     }
     return @($entries.ToArray())
@@ -688,8 +690,7 @@ try {
         foreach ($st in @($bundles[$worker.worker_id].StagedTranscripts)) {
             $artifact = [string]$st.artifact
             $sourceHash = [string]$st.source_sha256
-            $evalDir = $worker.record.EvalDirectory
-            $sourcePath = Join-Path $evalDir ($artifact -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+            $sourcePath = Resolve-TranscriptArtifactSourcePath -Record $worker.record -Artifact $artifact
             $iterRelative = [System.IO.Path]::GetRelativePath($iteration, $sourcePath).Replace('\', '/')
             $key = "$iterRelative`:$sourceHash"
             if ($seenTranscriptKeys.Add($key)) {
