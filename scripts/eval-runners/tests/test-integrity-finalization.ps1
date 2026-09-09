@@ -596,7 +596,7 @@ for ($index = 0; $index -lt $count; $index++) {
         Assert-ToolFails -Invocation (Invoke-TestTool -Path $validationScript -Arguments $validationArguments) -Description 'invalid grading entry validation' -ExpectedText 'passed must be a boolean'
         Assert-TestFileHashSnapshot -Expected $validationSnapshot -Message 'invalid grading validation'
 
-        foreach ($badEvidence in @('', " `t`n", 'Evaluation completed with output', "Source: output`nQuote: fabricated unavailable observation`nReason: This establishes the assertion.", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: Evaluation completed with output")) {
+        foreach ($badEvidence in @('', " `t`n", 'Evaluation completed with output', "Source: output`nQuote: fabricated unavailable observation`nReason: This establishes the assertion.", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: Evaluation completed with output", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: Assertion evaluated against output", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: The assertion is met", "Source: output`nQuote: $((Read-TestJson -Path $records[0].ResultPath).output)`nReason: Output matches the assertion")) {
             $bad = Copy-TestGradingDocument -Document $validGrading
             $bad.grading[0].evidence = $badEvidence
             Write-TestJson -Path $gradingPath -Value $bad

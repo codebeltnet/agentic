@@ -6,6 +6,7 @@ Usage: copilot [options]
   --allow-all-tools                       Allow tools
   --no-ask-user                           Disable prompts
   --disable-builtin-mcps                  Disable built-in MCP servers
+  --excluded-tools <tools>                Tools that will not be available to the model
   --secret-env-vars <names>               Secret environment variables
   --no-auto-update                        Disable updates
   --resume <session-id>                   Resume the most recent Copilot session by id

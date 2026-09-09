@@ -209,13 +209,18 @@ if ($arguments -contains '--help' -and -not ($harness -eq 'codex' -and $argument
         'copilot' {
             if ($exactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
             elseif ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-no-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
-            else { '--prompt --output-format --model --allow-all --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all-paths --allow-all-urls' }
+            else { '--prompt --output-format --model --allow-all --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --excluded-tools --available-tools --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all-paths --allow-all-urls' }
         }
         default { '--json --auto-approve --cwd --config --data-dir --hooks-dir --provider --model --thinking --timeout --retries --id' }
     }
     if ($timingFixture) { Start-Sleep -Milliseconds 30 }
     [IO.File]::AppendAllText($logPath, (([ordered]@{ invocation_kind = 'help_probe'; args = $arguments } | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     Write-Output $help
+    exit 0
+}
+if ($harness -eq 'copilot' -and ($arguments -contains 'skill') -and ($arguments -contains 'list')) {
+    [IO.File]::AppendAllText($logPath, (([ordered]@{ invocation_kind = 'skill_list_probe'; args = $arguments } | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    Write-Output '[{"name":"customize-cloud-agent","source":"builtin","enabled":true},{"name":"github-pr-media","source":"builtin","enabled":true}]'
     exit 0
 }
 $continuationFlag = $null
@@ -654,7 +659,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     if ($null -eq $threadStart) {
         $record.rpc_methods = @($initialize.method, $initialized.method, $skillsList.method)
         $record.skills_list_params = $skillsList.params
-        $record.native_skill_config_args = @($arguments | Where-Object { [string]$_ -like 'skills.*' -or [string]$_ -eq 'shell_environment_policy.inherit=none' })
+        $record.native_skill_config_args = @($arguments | Where-Object { [string]$_ -like 'skills.*' -or [string]$_ -like 'shell_environment_policy.*' })
         [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Depth 50 -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
         exit 0
     }
@@ -738,7 +743,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $record.auth_only_home = [bool]$record.parent_auth_file_visible -and -not [bool]$record.parent_config_file_visible -and -not [bool]$record.parent_skills_directory_visible -and -not [bool]$record.parent_agents_directory_visible -and -not [bool]$record.parent_sessions_directory_visible -and -not [bool]$record.parent_memories_directory_visible -and -not [bool]$record.parent_plugins_directory_visible -and -not [bool]$record.parent_mcp_configuration_visible -and -not [bool]$record.parent_agents_file_visible
     $record.rpc_methods = @($initialize.method, $initialized.method, $skillsList.method, $threadStart.method, $turnStart.method, 'thread/read')
     $record.skills_list_params = $skillsList.params
-    $record.native_skill_config_args = @($arguments | Where-Object { [string]$_ -like 'skills.*' -or [string]$_ -eq 'shell_environment_policy.inherit=none' })
+    $record.native_skill_config_args = @($arguments | Where-Object { [string]$_ -like 'skills.*' -or [string]$_ -like 'shell_environment_policy.*' })
     $record.thread_params = $threadStart.params
     $record.turn_params = $turnStart.params
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Depth 50 -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
@@ -830,13 +835,18 @@ if ($arguments -contains '--help') {
         'copilot' {
             if ($exactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
             elseif ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-no-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
-            else { '--prompt --output-format --model --allow-all --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all-paths --allow-all-urls' }
+            else { '--prompt --output-format --model --allow-all --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --excluded-tools --available-tools --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all-paths --allow-all-urls' }
         }
         default { '--json --auto-approve --cwd --config --data-dir --hooks-dir --provider --model --thinking --timeout --retries --id' }
     }
     if ($fakeDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $fakeDelayMilliseconds }
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     Write-Output $help
+    exit 0
+}
+if ($harness -eq 'copilot' -and ($arguments -contains 'skill') -and ($arguments -contains 'list')) {
+    [IO.File]::AppendAllText($logPath, (([ordered]@{ invocation_kind = 'skill_list_probe'; args = $arguments } | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    Write-Output '[{"name":"customize-cloud-agent","source":"builtin","enabled":true},{"name":"github-pr-media","source":"builtin","enabled":true}]'
     exit 0
 }
 $stdinMemory = [IO.MemoryStream]::new()
@@ -966,6 +976,12 @@ if ($harness -eq 'codex') {
         [System.IO.File]::WriteAllText((Join-Path $fakeBin "$harness.ps1"), $fakeCli, [System.Text.UTF8Encoding]::new($false))
         [System.IO.File]::WriteAllText((Join-Path $fakeBin "$harness.cmd"), "@echo off`r`npwsh -NoProfile -NonInteractive -File ""%~dp0$harness.ps1"" %*`r`n", [System.Text.UTF8Encoding]::new($false))
     }
+    $fakeGitBin = Join-Path $recordedRoot 'git-bin'
+    New-Item -ItemType Directory -Path $fakeGitBin -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $fakeGitBin 'git.cmd'), "@echo off`r`necho {""args"":""%*"",""path"":""%PATH%""}>> ""%CD%\git-probe-log.jsonl""`r`necho git version recorded.fixture`r`n", [System.Text.UTF8Encoding]::new($false))
+    $fakeGitSh = Join-Path $fakeGitBin 'git'
+    [System.IO.File]::WriteAllText($fakeGitSh, "#!/usr/bin/env sh`nprintf '{""args"":""%s"",""path"":""%s""}\n' ""`$*"" ""`$PATH"" >> ""`$PWD/git-probe-log.jsonl""`nprintf 'git version recorded.fixture\n'`n", [System.Text.UTF8Encoding]::new($false))
+    if (-not $IsWindows) { & chmod +x $fakeGitSh }
     $fakeGh = @'
 [CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArguments)
@@ -988,7 +1004,9 @@ if ($RemainingArguments.Count -eq 2 -and $RemainingArguments[0] -eq 'auth' -and 
 exit 2
 '@
     [System.IO.File]::WriteAllText((Join-Path $fakeBin 'gh.ps1'), $fakeGh, [System.Text.UTF8Encoding]::new($false))
-    $env:PATH = "$fakeBin$([System.IO.Path]::PathSeparator)$recordedOldPath"
+    $hostOnlyPath = Join-Path $recordedRoot 'host-only-bin'
+    New-Item -ItemType Directory -Path $hostOnlyPath -Force | Out-Null
+    $env:PATH = "$fakeBin$([System.IO.Path]::PathSeparator)$fakeGitBin$([System.IO.Path]::PathSeparator)$hostOnlyPath$([System.IO.Path]::PathSeparator)$recordedOldPath"
     $env:OPENAI_API_KEY = 'recorded-canary-not-logged'
     $env:AGENTIC_GLOBAL_SECRET = 'recorded-unrelated-canary-not-logged'
     $env:OPENCODE_DISABLE_PROJECT_CONFIG = '1'
@@ -1030,6 +1048,36 @@ exit 2
     $recordedVersion = Get-ExternalCommandVersion -CommandInfo $resolvedRecordedCodex -WorkingDirectory (Join-Path $with.Root 'repo')
     if (-not $recordedVersion.Available) { throw "recorded Codex --version is not observable (exit=$($recordedVersion.Process.ExitCode), timed_out=$($recordedVersion.Process.TimedOut), stdout='$($recordedVersion.Process.Stdout)', stderr='$($recordedVersion.Process.Stderr)')" }
     Assert-Equal 'recorded-codex 9.1' $recordedVersion.Version 'recorded Codex exact version helper'
+    $gitWorkspaceIteration = Join-Path $recordedRoot 'iteration-git-workspace'
+    New-Item -ItemType Directory -Path $gitWorkspaceIteration -Force | Out-Null
+    $gitWorkspaceRun = New-TestRun -IterationDirectory $gitWorkspaceIteration -Configuration with_skill -EvalName 'codex-git-workspace'
+    $gitWorkspaceRunJson = Read-RunnerJson -Path $gitWorkspaceRun.Path
+    $gitWorkspaceRunJson.gitWorkspace = $true
+    Write-TestJson -Path $gitWorkspaceRun.Path -Value $gitWorkspaceRunJson
+    $gitWorkspacePreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command preflight -RunPath $gitWorkspaceRun.Path -ProfilePath $recordedProfiles['codex']
+    Assert-Equal 'compatible' $gitWorkspacePreflight.status 'Codex gitWorkspace preflight passes when git resolves through the sanitized child PATH'
+    Assert-Equal 1 @($gitWorkspacePreflight.checks | Where-Object { $_.name -eq 'git_workspace_tool_path' -and $_.status -eq 'passed' }).Count 'Codex gitWorkspace preflight records a passed git probe'
+    $gitProbeLog = Join-Path $gitWorkspaceRun.Root 'repo\git-probe-log.jsonl'
+    Assert-True (Test-Path -LiteralPath $gitProbeLog -PathType Leaf) 'Codex gitWorkspace preflight runs git --version in the sanitized environment'
+    $gitProbeText = Get-Content -LiteralPath $gitProbeLog -Raw
+    Assert-True ([string]$gitProbeText -match [regex]::Escape('--version')) 'Codex gitWorkspace preflight probes git --version'
+    Assert-True ([string]$gitProbeText -match [regex]::Escape($fakeGitBin)) 'Codex gitWorkspace probe PATH includes the resolved git directory'
+    Assert-True ([string]$gitProbeText -notmatch [regex]::Escape($hostOnlyPath)) 'Codex gitWorkspace probe PATH excludes arbitrary host-only directories'
+    $gitWorkspaceShellPath = @($gitWorkspacePreflight.checks | Where-Object { $_.name -eq 'git_workspace_tool_path' } | Select-Object -First 1).detail
+    Assert-True ([string]$gitWorkspaceShellPath -match [regex]::Escape($fakeGitBin)) 'Codex gitWorkspace preflight reports the git directory in the sanitized PATH'
+    $pathWithoutGit = "$fakeBin$([System.IO.Path]::PathSeparator)$(Split-Path -Parent (Get-Command pwsh).Source)"
+    $pathWithGit = $env:PATH
+    try {
+        $env:PATH = $pathWithoutGit
+        $missingGitExecution = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'codex\runner.ps1') -Command execute -RunPath $gitWorkspaceRun.Path -ProfilePath $recordedProfiles['codex']
+        Assert-Equal 'incompatible' $missingGitExecution.status 'Codex gitWorkspace execution fails closed when git cannot resolve before model execution'
+        Assert-Equal 'preflight_incompatible' $missingGitExecution.final_response.reason 'Codex missing-git execution stops at preflight'
+        $missingGitLog = Join-Path $gitWorkspaceRun.Root 'repo\codex-fake-cli-log.jsonl'
+        $missingGitRecords = if (Test-Path -LiteralPath $missingGitLog -PathType Leaf) { @(Get-Content -LiteralPath $missingGitLog | ForEach-Object { $_ | ConvertFrom-Json }) } else { @() }
+        Assert-Equal 0 @($missingGitRecords | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) -or @((Get-JsonProperty -Object $_ -Name 'rpc_methods' -Default @()) | Where-Object { [string]$_ -eq 'turn/start' }).Count -gt 0 }).Count 'Codex missing-git preflight starts zero model execution processes'
+    } finally {
+        $env:PATH = $pathWithGit
+    }
     foreach ($fixtureName in @(
             'copilot-scripted-turn-1-events.jsonl',
             'copilot-scripted-turn-2-events.jsonl',
@@ -1236,6 +1284,11 @@ exit 2
             Assert-True ($args -contains '--ask-for-approval') 'Codex uses explicit approval policy'
             Assert-True ($args -contains 'never') 'Codex approval policy is never'
             Assert-True ($args -contains '--strict-config') 'Codex CLI uses strict config parsing for session controls'
+            Assert-True (@($args | Where-Object { $_ -eq 'shell_environment_policy.inherit=none' }).Count -eq 1) 'Codex CLI disables child shell environment inheritance'
+            $codexShellPathArg = @($args | Where-Object { [string]$_ -like 'shell_environment_policy.set.PATH=*' } | Select-Object -First 1)
+            Assert-Equal 1 $codexShellPathArg.Count 'Codex CLI sets a sanitized child shell PATH'
+            Assert-True ([string]$codexShellPathArg[0] -notmatch [regex]::Escape($hostOnlyPath)) 'Codex CLI child shell PATH excludes arbitrary host-only directories'
+            Assert-True ([string]$codexShellPathArg[0] -notmatch [regex]::Escape($fakeGitBin)) 'Codex CLI child shell PATH does not include git for non-git workspaces'
             Assert-True ($args -contains '--sandbox' -and $args -contains 'danger-full-access') 'Codex grants full operational sandbox permission'
             Assert-True ($args -notcontains '--approve-for-me') 'Codex avoids the conflicting approve-for-me flag'
             Assert-True (@($args | Where-Object { $_ -eq 'skills.include_instructions=false' }).Count -eq 1) 'Codex CLI disables native skill catalog injection at session scope'
@@ -1979,6 +2032,10 @@ exit 2
     Assert-True (-not [bool]$subscriptionRecord.unrelated_present) 'Codex app-server parent excludes unrelated inherited environment variables'
     Assert-True (-not [bool]$subscriptionRecord.worker_auth_file_visible) 'Codex app-server worker fixture does not receive auth.json'
     Assert-True (@($subscriptionRecord.args) -contains 'shell_environment_policy.inherit=none') 'Codex app-server disables child shell environment inheritance'
+    $subscriptionShellPathArg = @($subscriptionRecord.args | Where-Object { [string]$_ -like 'shell_environment_policy.set.PATH=*' } | Select-Object -First 1)
+    Assert-Equal 1 $subscriptionShellPathArg.Count 'Codex app-server sets a sanitized child shell PATH'
+    Assert-True ([string]$subscriptionShellPathArg[0] -notmatch [regex]::Escape($hostOnlyPath)) 'Codex app-server child shell PATH excludes arbitrary host-only directories'
+    Assert-True ([string]$subscriptionShellPathArg[0] -notmatch [regex]::Escape($fakeGitBin)) 'Codex app-server child shell PATH does not include git for non-git workspaces'
     $env:OPENAI_API_KEY = 'recorded-canary-not-logged'
     $env:CODEX_HOME = $recordedOldCodexHome
     }

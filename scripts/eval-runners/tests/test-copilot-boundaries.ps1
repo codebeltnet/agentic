@@ -21,7 +21,7 @@ foreach ($file in @('github-copilot/runner.ps1', 'bridge-execution-result.ps1', 
             Invoke-Expression $definition.Extent.Text
         }
         if ($file -eq 'github-copilot/runner.ps1' -and $definition -is [Management.Automation.Language.AssignmentStatementAst] -and
-            $definition.Left.Extent.Text -eq '$descriptor') { Invoke-Expression $definition.Extent.Text }
+            $definition.Left.Extent.Text -in @('$descriptor', '$copilotExcludedTools', '$copilotCandidateInstructionBoundary')) { Invoke-Expression $definition.Extent.Text }
     }
 }
 $copilotAuthVariables = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
@@ -194,6 +194,52 @@ if ($inputText -eq 'failure') { exit 7 }
         Assert-True (@(Find-CopilotBoundaryContradictions -Data @{ arguments = @{ path = $path } } -Projection $proof).Count -gt 0) "captured forbidden access rejected: $path"
     }
     Assert-Equal 0 @(Find-CopilotBoundaryContradictions -Data @{ arguments = @{ path = 'src/Widget.cs' } } -Projection $proof).Count 'ordinary staged source is allowed'
+
+    # --- P0 native-skill isolation regressions (model-free) ---
+    Assert-True (@(New-CopilotCliArguments -Inputs $singleInputs) -contains '--excluded-tools=skill') 'Copilot removes the native skill tool from the model tool set for both arms'
+    # Native-skill activation detector: a candidate `skill` tool call or an inherited skill-resolution result is a breach.
+    Assert-True (@(Find-CopilotNativeSkillActivation -Data @{ toolName = 'skill'; arguments = @{ skill = 'demo-skill' } } -CandidateSkillName 'demo-skill' -EventType 'tool.execution_start').Count -gt 0) 'candidate skill tool call is flagged'
+    Assert-True (@(Find-CopilotNativeSkillActivation -Data @{ skill = 'demo-skill'; found = $true; skillSource = 'inherited' } -CandidateSkillName 'demo-skill' -EventType 'tool.execution_completed').Count -gt 0) 'inherited candidate skill resolution is flagged'
+    Assert-Equal 0 @(Find-CopilotNativeSkillActivation -Data @{ toolName = 'view'; arguments = @{ path = '../skill/demo-skill/SKILL.md' } } -CandidateSkillName 'demo-skill' -EventType 'tool.execution_start').Count 'ordinary read of the staged candidate copy is not native activation'
+    Assert-Equal 0 @(Find-CopilotNativeSkillActivation -Data @{ toolName = 'shell'; arguments = @{ command = 'echo demo-skill' } } -CandidateSkillName 'demo-skill' -EventType 'command.execute').Count 'a mere text mention of the candidate is not native activation'
+
+    # Candidate-instruction identity proof (only the frozen instruction bytes are hashed, not the wrapper).
+    $demoInstruction = "# Operating instructions`n`n## Skill: demo-skill`n`nDo the demo work."
+    $demoInstructionHash = ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($demoInstruction)))).ToLowerInvariant()
+    $withPrompt = "$demoInstruction`n`n# Working environment`n`nStay in the run.`n`n# task`n`nClassify."
+    $noSkillPrompt = "# Operating instructions`n`nNo special instructions.`n`n# Working environment`n`nStay in the run.`n`n# task`n`nClassify."
+    $withEvidence = Get-CopilotCandidateInstructionEvidence -Inputs ([pscustomobject]@{ Run = [pscustomobject]@{ Mode = 'with_skill'; PromptBytes = [Text.Encoding]::UTF8.GetBytes($withPrompt); CandidateInstructionHash = $demoInstructionHash } })
+    Assert-True $withEvidence.verified 'with_skill injected instructions hash exactly to the frozen candidate hash'
+    Assert-Equal $demoInstructionHash $withEvidence.injected 'injected candidate-instruction hash equals the frozen hash'
+    Assert-Equal 0 @($withEvidence.violations).Count 'a matching candidate-instruction hash yields no violation'
+    $wrapperChanged = Get-CopilotCandidateInstructionEvidence -Inputs ([pscustomobject]@{ Run = [pscustomobject]@{ Mode = 'with_skill'; PromptBytes = [Text.Encoding]::UTF8.GetBytes("$demoInstruction`n`n# Working environment`n`nDifferent wrapper text entirely.`n`n# task`n`nOther."); CandidateInstructionHash = $demoInstructionHash } })
+    Assert-True $wrapperChanged.verified 'unrelated prompt-wrapper changes do not invalidate the candidate identity proof'
+    $mismatch = Get-CopilotCandidateInstructionEvidence -Inputs ([pscustomobject]@{ Run = [pscustomobject]@{ Mode = 'with_skill'; PromptBytes = [Text.Encoding]::UTF8.GetBytes($withPrompt); CandidateInstructionHash = ('0' * 64) } })
+    Assert-True ((-not $mismatch.verified) -and @($mismatch.violations).Count -gt 0) 'a mismatched candidate-instruction hash is a violation'
+    $baselineClean = Get-CopilotCandidateInstructionEvidence -Inputs ([pscustomobject]@{ Run = [pscustomobject]@{ Mode = 'without_skill'; PromptBytes = [Text.Encoding]::UTF8.GetBytes($noSkillPrompt); CandidateInstructionHash = $null } })
+    Assert-True ($baselineClean.verified -and @($baselineClean.violations).Count -eq 0) 'clean baseline has no candidate injection and no hash'
+    Assert-True (@((Get-CopilotCandidateInstructionEvidence -Inputs ([pscustomobject]@{ Run = [pscustomobject]@{ Mode = 'without_skill'; PromptBytes = [Text.Encoding]::UTF8.GetBytes($withPrompt); CandidateInstructionHash = $null } })).violations).Count -gt 0) 'baseline that embeds a candidate instruction section is a violation'
+    Assert-True (@((Get-CopilotCandidateInstructionEvidence -Inputs ([pscustomobject]@{ Run = [pscustomobject]@{ Mode = 'without_skill'; PromptBytes = [Text.Encoding]::UTF8.GetBytes($noSkillPrompt); CandidateInstructionHash = ('a' * 64) } })).violations).Count -gt 0) 'baseline that declares a candidate hash is a violation'
+
+    # Native-skill-catalog probe: model-free, proves candidate absence/disablement or fails closed on an enabled candidate.
+    $catalogFake = Join-Path $testRoot 'catalog-fake.ps1'
+    [IO.File]::WriteAllText($catalogFake, 'param([Parameter(ValueFromRemainingArguments=$true)][string[]]$a); if ($env:FAKE_CATALOG) { Write-Output $env:FAKE_CATALOG } else { Write-Output "[]" }')
+    $catalogCommand = [pscustomobject]@{ FileName = (Get-Command pwsh).Source; Prefix = @('-NoProfile', '-NonInteractive', '-File', $catalogFake) }
+    function New-CatalogEnv { param([string]$Json) $env = New-RunnerProbeEnvironment; $env['FAKE_CATALOG'] = $Json; return $env }
+    $absentProbe = Invoke-CopilotNativeSkillCatalogProbe -CommandInfo $catalogCommand -Environment (New-CatalogEnv '[{"name":"customize-cloud-agent","source":"builtin","enabled":true}]') -WorkingDirectory $testRoot -CandidateSkillName 'demo-skill'
+    Assert-True ($absentProbe.available -and $absentProbe.proven_absent -and -not $absentProbe.candidate_present) 'catalog probe proves an absent candidate is not natively resolvable'
+    $enabledProbe = Invoke-CopilotNativeSkillCatalogProbe -CommandInfo $catalogCommand -Environment (New-CatalogEnv '[{"name":"demo-skill","source":"personal","enabled":true}]') -WorkingDirectory $testRoot -CandidateSkillName 'demo-skill'
+    Assert-True ($enabledProbe.available -and $enabledProbe.candidate_present -and $enabledProbe.candidate_enabled -and -not $enabledProbe.proven_absent) 'catalog probe flags an enabled ambient candidate'
+    $disabledProbe = Invoke-CopilotNativeSkillCatalogProbe -CommandInfo $catalogCommand -Environment (New-CatalogEnv '[{"name":"demo-skill","source":"personal","enabled":false}]') -WorkingDirectory $testRoot -CandidateSkillName 'demo-skill'
+    Assert-True ($disabledProbe.candidate_present -and -not $disabledProbe.candidate_enabled -and $disabledProbe.proven_absent) 'a disabled ambient candidate is present but cannot activate'
+
+    # Bridge independently rejects a captured candidate native-skill activation even when runner booleans look clean.
+    $activationRun = New-TestRun -IterationDirectory (Join-Path $testRoot 'native-skill-activation') -Configuration without_skill
+    New-Item -ItemType Directory -Path (Join-Path $activationRun.Root 'evidence') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $activationRun.Root 'evidence/copilot-events.jsonl'), '{"type":"tool.execution_start","data":{"toolName":"skill","arguments":{"skill":"candidate"}}}' + "`n")
+    $activationInputs = [pscustomobject]@{ Run = Resolve-RunContract -RunPath $activationRun.Path; Profile = Resolve-ExecutionProfile -ProfilePath $profilePath }
+    $activationRaw = @{ runner = @{ name = 'github-copilot' }; status = 'completed'; evidence = @{ execution_paths = @{ projection_proven = $true; physical_run_root = (Join-Path $testRoot 'phys-activation'); source_repository_root = '' } }; artifacts = @(@{ scope = 'run'; path = 'evidence/copilot-events.jsonl' }) } | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    Assert-Rejected { Assert-CopilotCapturedBoundary -Raw $activationRaw -RunData $activationInputs.Run } 'bridge rejects a captured candidate native-skill activation'
     $warnings = [Collections.Generic.List[string]]::new()
     $checkpoint = @{ type = 'session.usage_checkpoint'; data = @{ totalPremiumRequests = 0.33; totalNanoAiu = 10; promptCacheBreakState = @(@{ models = @{ model = @{ model_call_id = 'call-1'; prompt_tokens = 100; cache_read = 70; cache_write = 20; tool_tokens = 15 } } }) } }
     $last = $checkpoint | ConvertTo-Json -Depth 20 | ConvertFrom-Json
