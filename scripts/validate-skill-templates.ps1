@@ -1607,6 +1607,16 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         if ([string]$manifest.execution_selection.runner -ne $ExpectedRunner -or [string]$manifest.execution_selection.model -ne $ExpectedModel) {
             throw "$Name manifest.execution_selection must preserve requested runner/model '$ExpectedRunner'/'$ExpectedModel'."
         }
+        if ([string]$manifest.runner_prompt -ne 'RUN-THIS.prompt.md') {
+            throw "$Name manifest.runner_prompt must declare RUN-THIS.prompt.md."
+        }
+        if ([string]$manifest.runner_prompt_sha256 -notmatch '^[0-9a-f]{64}$') {
+            throw "$Name manifest.runner_prompt_sha256 must be a lowercase SHA-256."
+        }
+        $actualPromptHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $promptPath).Hash.ToLowerInvariant()
+        if ([string]$manifest.runner_prompt_sha256 -ne $actualPromptHash) {
+            throw "$Name manifest.runner_prompt_sha256 must match RUN-THIS.prompt.md byte-for-byte."
+        }
 
         $runnerTools = Join-Path $IterationDirectory ([string]$manifest.runner_tools)
         . (Join-Path $runnerTools 'runner-common.ps1')

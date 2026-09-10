@@ -39,10 +39,21 @@ function Assert-PreparedEvalHandoffPackage {
         if ([string]::IsNullOrWhiteSpace($runnerPrompt)) {
             throw 'manifest.json must declare runner_prompt.'
         }
+        $runnerPromptHash = [string](Get-JsonProperty -Object $manifest -Name 'runner_prompt_sha256' -Default '')
+        if ([string]::IsNullOrWhiteSpace($runnerPromptHash)) {
+            throw 'manifest.json must declare runner_prompt_sha256.'
+        }
+        if (-not (Test-Sha256 -Value $runnerPromptHash) -or $runnerPromptHash -cne $runnerPromptHash.ToLowerInvariant()) {
+            throw 'manifest.runner_prompt_sha256 must be a lowercase SHA-256.'
+        }
         $resolvedPrompt = Resolve-ManifestDeclaredPath -IterationDirectory $package -RelativePath $runnerPrompt -FieldName 'runner_prompt' -Kind File -RequireExists
         $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
         if (-not [string]::Equals([System.IO.Path]::GetFullPath($resolvedPrompt), [System.IO.Path]::GetFullPath($path), $comparison)) {
             throw 'The supplied RUN-THIS.prompt.md is not the manifest-declared runner_prompt.'
+        }
+        $currentRunnerPromptHash = Get-Sha256HexFromFile -Path $resolvedPrompt
+        if ($currentRunnerPromptHash -cne $runnerPromptHash) {
+            throw 'manifest.runner_prompt_sha256 does not match the current RUN-THIS.prompt.md bytes. Requires a fresh package.'
         }
         [void](Get-ManifestRunRecords -IterationDirectory $package -Manifest $manifest)
         [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $package -Manifest $manifest)

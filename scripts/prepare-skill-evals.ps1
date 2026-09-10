@@ -1826,6 +1826,11 @@ function Invoke-PrepareMode {
         })
     }
 
+    Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -EffectiveConcurrency $effectiveConcurrency)
+    $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
+    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -RequestedConcurrency ([int]$effectiveConcurrency.Value) -PerArmTimeoutSeconds $TimeoutSeconds)
+    $runnerPromptHash = Get-FileSha256 -Path $runnerPath
+
     $manifest = [ordered]@{
         schema = $packageSchema
         skill_name = $Skill
@@ -1841,6 +1846,7 @@ function Invoke-PrepareMode {
             preset = $executionSelection.Preset
         }
         runner_prompt = 'RUN-THIS.prompt.md'
+        runner_prompt_sha256 = $runnerPromptHash
         execution_profile = 'execution-profile.json'
         analyzer_profile = 'analyzer-profile.json'
         analyzer_profile_sha256 = $analyzerProfileHash
@@ -1906,10 +1912,6 @@ function Invoke-PrepareMode {
         evals = @($manifestEvals)
     }
     ConvertTo-JsonFile -Path (Join-Path $iterationDirectory 'manifest.json') -Value $manifest
-
-    Write-Utf8File -Path (Join-Path $iterationDirectory 'README.md') -Content (New-PackageReadme -SkillName $Skill -IterationNumber $iterationNumber -IterationDirectory $iterationDirectory -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -EffectiveConcurrency $effectiveConcurrency)
-    $runnerPath = Join-Path $iterationDirectory 'RUN-THIS.prompt.md'
-    Write-Utf8File -Path $runnerPath -Content (New-RunnerPrompt -IterationDirectory $iterationDirectory -IterationNumber $iterationNumber -ManifestEvals @($manifestEvals) -ExecutionSelection $executionSelection -RequestedConcurrency ([int]$effectiveConcurrency.Value) -PerArmTimeoutSeconds $TimeoutSeconds)
     [void](Assert-PackageRunnerToolsIntegrity -IterationDirectory $iterationDirectory -Manifest $manifest)
     [void](Assert-PackageRunnerIdentity -IterationDirectory $iterationDirectory -Manifest $manifest -ExpectedRunner ([string]$executionSelection.Runner))
 
