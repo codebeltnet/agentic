@@ -1469,12 +1469,16 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Asking for an eval'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`eval <skill>`, `evaluate <skill>`'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Resolve the execution configuration before running the package preparation script.'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Eval preparation is a completion gate'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Adding or modifying any repo-managed skill triggers this workflow.'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Preparing and reporting satisfies this gate. Executing a prompt never does'
-    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '`scripts/sync-skill-install.ps1` runs last'
-    Assert-Contains -Name 'README.md' -Content $readme -Needle 'a completion gate an agent cannot skip'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### Optional eval preparation'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Eval package preparation is optional.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Prepare a package only when the user explicitly asks for an evaluation'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'A request to create, modify, validate, or release a skill does not implicitly ask for eval preparation.'
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'package preparation is not a completion gate'
+    Assert-NotContains -Name 'AGENTS.md' -Content $agents -Needle 'Adding or modifying any repo-managed skill triggers this workflow.'
+    Assert-NotContains -Name 'AGENTS.md' -Content $agents -Needle '### Eval preparation is a completion gate'
+    Assert-NotContains -Name 'README.md' -Content $readme -Needle 'a completion gate an agent cannot skip'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Package preparation is optional and happens only when the user explicitly asks for an evaluation'
+    Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'Package preparation is optional and happens only after an explicit eval request'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'prepares the paired candidate and baseline inputs as a portable package and stops'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name> -Runner <runner-id> -Model <runner-native-model>'
@@ -2981,6 +2985,9 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'run `scripts/resolve-release-entity.ps1` with the emitted `merge_base` and `head_commit`'
     Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-entity.ps1' -Content $entityResolver -Needle "'Added'"
     Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-entity.ps1' -Content $entityResolver -Needle "'Unchanged'"
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/resolve-release-entity.ps1' -Content $entityResolver -Needle 'allowed_sections = @($allowedSections)'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '-Section <proposed-section>'
+    Assert-Contains -Name 'git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -Content $entityResolverTests -Needle "Assert-Section -EntityPath 'skills/dotnet-test' -Section Fixed -Allowed `$false"
     Assert-Contains -Name 'git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -Content $entityResolverTests -Needle "Assert-Classification -EntityPath 'skills/dotnet-test' -Expected 'Added'"
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Layered Capability Classification'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not use a top-level directory or the first framework commit as the only release entity.'
