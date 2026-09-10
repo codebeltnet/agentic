@@ -4,9 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.10.0] - 2026-09-08
+## [0.10.0] - 2026-09-10
 
-This is a minor release that introduces `dotnet-nuget-update`, a deterministic NuGet dependency audit and update workflow for .NET repositories. The skill owns the complete-audit invariant, ensuring every declared package version is accounted for before any update is applied. It handles both central package management (`Directory.Packages.props`) and project-level `PackageReference` versioning, tracks stable and prerelease intent, preserves TFM-band pins (keeping `net9` or `net10` packages within their matching major when that major is the compatibility signal), and supports both normal mode (auto-applies patch/minor/revision, batches majors for approval) and yolo mode (auto-applies safe classes only, reports held majors). All scripts are deterministic and offline-testable via bundled fixtures.
+This is a minor release that introduces `dotnet-nuget-update`, a deterministic NuGet dependency audit and update workflow for .NET repositories. The skill owns the complete-audit invariant, ensuring every declared package version is accounted for before any update is applied. It handles both central package management (`Directory.Packages.props`) and project-level `PackageReference` versioning, tracks stable and prerelease intent, preserves TFM-band pins (keeping `net9` or `net10` packages within their matching major when that major is the compatibility signal), and supports both normal mode (auto-applies patch/minor/revision, batches majors for approval) and yolo mode (auto-applies safe classes only, reports held majors). All scripts are deterministic and offline-testable via bundled fixtures. Alongside that, `git-visual-commits` gained refactoring, three new eval cases for edge-case coverage, and a dedicated reference document for commit-grouping examples, while supporting validation improvements ensure all skills conform to the updated testing requirements.
 
 ### Added
 
@@ -17,6 +17,10 @@ This is a minor release that introduces `dotnet-nuget-update`, a deterministic N
 - complete-audit invariant validation ensuring `current + auto + approval + unresolved == declared` before reporting the repository as updated,
 - history-aware update tracking with adjacent XML comments surfacing as `note` fields so pin rationale remains visible during audits and auto-updates marked with `READ THE NOTE before applying` receive explicit attention,
 - README catalog entry, installation snippet, and "Why dotnet-nuget-update?" community health section explaining the need for complete dependency graph auditing, TFM-band awareness, and preservation of intentional pins and compatibility markers.
+
+### Changed
+
+- `git-visual-commits` SKILL.md refactored for improved clarity, with single-category quality-gate guidance hardened and commit-language best practices restructured to emphasize inventory refresh and per-path explanation before classification.
 
 ## [0.9.1] - 2026-09-07
 
