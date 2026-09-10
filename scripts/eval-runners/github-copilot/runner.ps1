@@ -43,7 +43,11 @@ $copilotCandidateInstructionBoundary = "`n`n# Working environment"
 $script:copilotHomeCleanupSafe = $true
 $script:copilotLogicalInputs = $null
 $script:copilotProjection = $null
+$script:copilotBoundaryContext = $null
 $script:copilotBoundaryViolations = [System.Collections.Generic.List[string]]::new()
+$script:copilotOwnArmGradingMaterialVisible = $false
+$script:copilotPairedArmVisible = $false
+$script:copilotPairedOrPackageGradingMaterialVisible = $false
 # The evaluated candidate skill name (both arms) and any observed native-skill activation of it. A non-empty violation
 # list at the end of execute is a fail-closed isolation breach: the candidate must never reach the worker natively.
 $script:copilotCandidateSkillName = $null
@@ -965,9 +969,12 @@ function Read-CopilotEvents {
         }
         if ($eventCounts.ContainsKey($eventType)) { $eventCounts[$eventType]++ } else { $eventCounts[$eventType] = 1 }
         $data = Get-JsonProperty -Object $event -Name 'data' -Default $null
-        if ($eventType -match '^(tool\.|command\.)' -and $null -ne $script:copilotProjection) {
-            $violations = @(Find-CopilotBoundaryContradictions -Data $data -Projection $script:copilotProjection)
-            foreach ($violation in $violations) { $script:copilotBoundaryViolations.Add($violation) }
+        if ($eventType -match '^(tool\.|command\.)' -and $null -ne $script:copilotBoundaryContext) {
+            $assessment = Get-CopilotBoundaryAssessment -Data $data -Boundary $script:copilotBoundaryContext
+            foreach ($violation in @($assessment.Contradictions)) { $script:copilotBoundaryViolations.Add($violation) }
+            $script:copilotOwnArmGradingMaterialVisible = $script:copilotOwnArmGradingMaterialVisible -or [bool]$assessment.OwnArmGradingMaterialVisible
+            $script:copilotPairedArmVisible = $script:copilotPairedArmVisible -or [bool]$assessment.PairedArmVisible
+            $script:copilotPairedOrPackageGradingMaterialVisible = $script:copilotPairedOrPackageGradingMaterialVisible -or [bool]$assessment.PairedOrPackageGradingMaterialVisible
         }
         if ($eventType -match '^(tool\.|command\.)' -and -not [string]::IsNullOrWhiteSpace($script:copilotCandidateSkillName)) {
             foreach ($activation in @(Find-CopilotNativeSkillActivation -Data $data -CandidateSkillName $script:copilotCandidateSkillName -EventType $eventType)) {
@@ -1474,8 +1481,11 @@ function Invoke-CopilotScriptedExecute {
             prompt_fidelity = $true
             prompt_sha256 = [string]$Inputs.Run.PromptHash
             terminal_result_capture = [bool]$terminalCapture
-            paired_arm_visible = ($null -eq $script:copilotProjection -or $script:copilotBoundaryViolations.Count -gt 0)
-            grading_material_visible = ($null -eq $script:copilotProjection -or $script:copilotBoundaryViolations.Count -gt 0)
+            execution_role = [string]$Inputs.Run.ExecutionRole
+            paired_arm_visible = [bool]$script:copilotPairedArmVisible
+            grading_material_visible = [bool]$script:copilotPairedOrPackageGradingMaterialVisible
+            paired_or_package_grading_material_visible = [bool]$script:copilotPairedOrPackageGradingMaterialVisible
+            own_arm_grading_material_visible = [bool]$script:copilotOwnArmGradingMaterialVisible
             nested_model_execution = $false
             model_execution_count = 1
             same_session_continuation = [bool]$terminalCapture
@@ -1512,7 +1522,11 @@ function Invoke-CopilotExecute {
     $logicalInputs = $Inputs
     $script:copilotLogicalInputs = $Inputs
     $script:copilotProjection = $plan
+    $script:copilotBoundaryContext = $null
     $script:copilotBoundaryViolations = [System.Collections.Generic.List[string]]::new()
+    $script:copilotOwnArmGradingMaterialVisible = $false
+    $script:copilotPairedArmVisible = $false
+    $script:copilotPairedOrPackageGradingMaterialVisible = $false
     $script:copilotCandidateSkillName = [string]$Inputs.Run.CandidateSkillName
     $script:copilotNativeSkillViolations = [System.Collections.Generic.List[string]]::new()
     $script:copilotNativeSkillCatalog = $null
@@ -1541,6 +1555,7 @@ function Invoke-CopilotExecute {
         }
         $physicalRun.PromptPath = Join-Path $plan.Root 'prompt.md'
         [IO.File]::WriteAllBytes($physicalRun.PromptPath, $Inputs.Run.PromptBytes)
+        $script:copilotBoundaryContext = New-CopilotBoundaryContext -RunData $physicalRun -PackageRoot $plan.PackageRoot -SourceRepositoryRoot $plan.SourceRepositoryRoot
         $projectedFiles = @(Get-ChildItem -LiteralPath $physicalRun.WorkingDirectoryPath -Recurse -Force -File | ForEach-Object { [IO.Path]::GetRelativePath($physicalRun.WorkingDirectoryPath, $_.FullName) })
         $physicalInputs = [pscustomobject]@{ Run = $physicalRun; Profile = $Inputs.Profile }
         $result = Invoke-CopilotWithPreparedHome -Inputs $physicalInputs -Action { Invoke-CopilotProjectedExecute -Inputs $physicalInputs }
@@ -1600,10 +1615,6 @@ function Invoke-CopilotExecute {
             $result.isolation.level = 'unsupported'
             $result.isolation.hard_filesystem_confinement = $false
             $result.exit.failure = New-ExecutionFailure -Code 'isolation_violation' -Message ([string]::Join('; ', $isolationViolations))
-            if ($result.evidence.Contains('delegation')) {
-                $result.evidence.delegation.paired_arm_visible = $true
-                $result.evidence.delegation.grading_material_visible = $true
-            }
         }
         $result.evidence.boundary.contradictions = @($script:copilotBoundaryViolations | Select-Object -Unique)
         if ($result.evidence.Contains('native_skill')) {
@@ -1627,6 +1638,10 @@ function Invoke-CopilotExecute {
         Remove-Item -LiteralPath $plan.Root -Recurse -Force
         $script:copilotLogicalInputs = $null
         $script:copilotProjection = $null
+        $script:copilotBoundaryContext = $null
+        $script:copilotOwnArmGradingMaterialVisible = $false
+        $script:copilotPairedArmVisible = $false
+        $script:copilotPairedOrPackageGradingMaterialVisible = $false
     }
 }
 
@@ -1839,8 +1854,11 @@ function Invoke-CopilotProjectedExecute {
             prompt_fidelity = $true
             prompt_sha256 = [string]$Inputs.Run.PromptHash
             terminal_result_capture = [bool]$terminalCapture
-            paired_arm_visible = ($null -eq $script:copilotProjection -or $script:copilotBoundaryViolations.Count -gt 0)
-            grading_material_visible = ($null -eq $script:copilotProjection -or $script:copilotBoundaryViolations.Count -gt 0)
+            execution_role = [string]$Inputs.Run.ExecutionRole
+            paired_arm_visible = [bool]$script:copilotPairedArmVisible
+            grading_material_visible = [bool]$script:copilotPairedOrPackageGradingMaterialVisible
+            paired_or_package_grading_material_visible = [bool]$script:copilotPairedOrPackageGradingMaterialVisible
+            own_arm_grading_material_visible = [bool]$script:copilotOwnArmGradingMaterialVisible
             nested_model_execution = $false
             model_execution_count = 1
         }

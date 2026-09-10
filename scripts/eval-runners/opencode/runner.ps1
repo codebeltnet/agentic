@@ -620,6 +620,207 @@ function Remove-OpenCodeAnsiSequences {
     return [regex]::Replace($Text, "`e\[[0-?]*[ -/]*[@-~]", '')
 }
 
+function Add-OpenCodeBoundaryValueCandidate {
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory = $true)][string]$PropertyPath,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Candidates
+    )
+
+    if ($null -eq $Value) { return }
+    if ($Value -is [string]) {
+        $leaf = [regex]::Replace($PropertyPath, '.*[.\[]', '').TrimEnd(']')
+        if ([string]::IsNullOrWhiteSpace($leaf)) { return }
+        $kind = if ($leaf -match '^(?i)(command|cmd)$') {
+            'command'
+        } elseif ($leaf -match '^(?i)(path|paths|file|files|filepath|filepaths|directory|cwd|root|target|targets|location)$') {
+            'path'
+        } else {
+            $null
+        }
+        if ($null -ne $kind) {
+            $Candidates.Add([pscustomobject]@{
+                    kind = $kind
+                    source = $PropertyPath
+                    value = [string]$Value
+                })
+        }
+        return
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in @($Value.Keys)) {
+            Add-OpenCodeBoundaryValueCandidate -Value $Value[$key] -PropertyPath ([string]::Concat($PropertyPath, '.', [string]$key)) -Candidates $Candidates
+        }
+        return
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        $index = 0
+        foreach ($item in $Value) {
+            Add-OpenCodeBoundaryValueCandidate -Value $item -PropertyPath ([string]::Concat($PropertyPath, '[', $index, ']')) -Candidates $Candidates
+            $index++
+        }
+        return
+    }
+    foreach ($property in @($Value.PSObject.Properties)) {
+        Add-OpenCodeBoundaryValueCandidate -Value $property.Value -PropertyPath ([string]::Concat($PropertyPath, '.', [string]$property.Name)) -Candidates $Candidates
+    }
+}
+
+function Get-OpenCodeBoundaryValueCandidates {
+    param([AllowNull()][object]$Value)
+
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    Add-OpenCodeBoundaryValueCandidate -Value $Value -PropertyPath 'event' -Candidates $candidates
+    return @($candidates.ToArray())
+}
+
+function Get-OpenCodeLogicalPackageRoot {
+    param([Parameter(Mandatory = $true)][object]$Projection)
+
+    $logicalRun = Get-JsonProperty -Object $Projection -Name 'LogicalRun' -Default $null
+    $logicalRunRoot = [string](Get-JsonProperty -Object $logicalRun -Name 'RunRoot' -Default '')
+    if ([string]::IsNullOrWhiteSpace($logicalRunRoot)) { return '' }
+    return [System.IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $logicalRunRoot)))
+}
+
+function Test-OpenCodeBoundaryPairedArmPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResolvedPath,
+        [Parameter(Mandatory = $true)][object]$Projection
+    )
+
+    $logicalRun = Get-JsonProperty -Object $Projection -Name 'LogicalRun' -Default $null
+    $logicalRunRoot = [string](Get-JsonProperty -Object $logicalRun -Name 'RunRoot' -Default '')
+    $packageRoot = Get-OpenCodeLogicalPackageRoot -Projection $Projection
+    if ([string]::IsNullOrWhiteSpace($packageRoot) -or -not (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $ResolvedPath)) { return $false }
+    if (-not [string]::IsNullOrWhiteSpace($logicalRunRoot) -and (Test-ObservedPathInside -BasePath $logicalRunRoot -CandidatePath $ResolvedPath)) { return $false }
+    return ($ResolvedPath -replace '\\', '/') -match '(?i)(?:^|/)(arm-\d+-(?:with_skill|without_skill)|with_skill|without_skill)(?:/|$)'
+}
+
+function Test-OpenCodeBoundaryForbiddenGradingPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResolvedPath,
+        [Parameter(Mandatory = $true)][object]$Projection
+    )
+
+    $packageRoot = Get-OpenCodeLogicalPackageRoot -Projection $Projection
+    if ([string]::IsNullOrWhiteSpace($packageRoot) -or -not (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $ResolvedPath)) { return $false }
+    $relative = [System.IO.Path]::GetRelativePath($packageRoot, $ResolvedPath).Replace('\', '/')
+    return $relative -match '(?i)(?:^|/)(eval-metadata\.json|grading\.json|execution-freeze\.json|orchestration-state\.json|benchmark\.(?:json|md)|(?:skill-creator-)?report\.html|RUN-THIS\.prompt\.md|\.external-handoff-started)(?:$|/)' -or
+        $relative -match '^(?i)(results|tools|progress)(?:/|$)'
+}
+
+function Get-OpenCodeBoundaryAssessment {
+    param(
+        [AllowEmptyCollection()][object[]]$Events = @(),
+        [Parameter(Mandatory = $true)][object]$Projection
+    )
+
+    $contradictions = [System.Collections.Generic.List[object]]::new()
+    $projectionRoot = [string](Get-JsonProperty -Object $Projection -Name 'Root' -Default '')
+    $physicalWorkingDirectory = [string](Get-JsonProperty -Object $Projection -Name 'PhysicalWorkingDirectory' -Default $projectionRoot)
+    $sourceRepositoryRoot = [string](Get-JsonProperty -Object $Projection -Name 'SourceRepositoryRoot' -Default '')
+    $packageRoot = Get-OpenCodeLogicalPackageRoot -Projection $Projection
+
+    foreach ($event in @($Events)) {
+        $eventType = [string](Get-JsonProperty -Object $event -Name 'type' -Default '')
+        if ($eventType -ne 'tool_use') { continue }
+        $tool = [string](Get-JsonProperty -Object (Get-JsonProperty -Object $event -Name 'part' -Default $null) -Name 'tool' -Default (Get-JsonProperty -Object $event -Name 'tool' -Default ''))
+        foreach ($candidate in @(Get-OpenCodeBoundaryValueCandidates -Value $event)) {
+            $pathValues = if ([string]$candidate.kind -eq 'command') {
+                if (Test-FileSystemCommandText -Text ([string]$candidate.value)) {
+                    @(Get-ObservedPathTokensFromCommandText -Text ([string]$candidate.value))
+                } else {
+                    @()
+                }
+            } else {
+                @([string]$candidate.value)
+            }
+            foreach ($pathValue in $pathValues) {
+                $observed = Get-ObservedPathInfo -Path $pathValue -BasePath $physicalWorkingDirectory
+                if ($null -eq $observed) { continue }
+                $resolvedPath = [string]$observed.FullPath
+                if (-not [string]::IsNullOrWhiteSpace($projectionRoot) -and (Test-ObservedPathInside -BasePath $projectionRoot -CandidatePath $resolvedPath)) { continue }
+
+                $category = if (-not [string]::IsNullOrWhiteSpace($packageRoot) -and (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $resolvedPath)) {
+                    if (Test-OpenCodeBoundaryForbiddenGradingPath -ResolvedPath $resolvedPath -Projection $Projection) { 'package_grading_material' }
+                    elseif (Test-OpenCodeBoundaryPairedArmPath -ResolvedPath $resolvedPath -Projection $Projection) { 'paired_arm' }
+                    else { 'package_root_outside_projection' }
+                } elseif (-not [string]::IsNullOrWhiteSpace($sourceRepositoryRoot) -and (Test-ObservedPathInside -BasePath $sourceRepositoryRoot -CandidatePath $resolvedPath)) {
+                    'source_repository_outside_projection'
+                } else {
+                    'outside_projection'
+                }
+                $message = switch ($category) {
+                    'package_grading_material' { "Structured OpenCode tool evidence referenced package grading/orchestration material outside the physical projection: '$pathValue'." }
+                    'paired_arm' { "Structured OpenCode tool evidence referenced a paired-arm/package path outside the physical projection: '$pathValue'." }
+                    'package_root_outside_projection' { "Structured OpenCode tool evidence referenced a package path outside the physical projection: '$pathValue'." }
+                    'source_repository_outside_projection' { "Structured OpenCode tool evidence referenced a source-repository path outside the physical projection: '$pathValue'." }
+                    default { "Structured OpenCode tool evidence referenced a path outside the physical projection: '$pathValue'." }
+                }
+                $contradictions.Add([ordered]@{
+                        category = $category
+                        tool = $tool
+                        source = [string]$candidate.source
+                        observed_path = [string]$pathValue
+                        resolved_path = $resolvedPath
+                        event_type = $eventType
+                        message = $message
+                    })
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Contradictions = @($contradictions.ToArray())
+        ProjectionEscapeObserved = $contradictions.Count -gt 0
+        PairedArmVisible = @($contradictions | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'category' -Default '') -eq 'paired_arm' }).Count -gt 0
+        GradingMaterialVisible = @($contradictions | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'category' -Default '') -eq 'package_grading_material' }).Count -gt 0
+    }
+}
+
+function ConvertTo-OpenCodeBoundaryAssessment {
+    param([AllowEmptyCollection()][object[]]$Contradictions = @())
+
+    return [pscustomobject]@{
+        Contradictions = @($Contradictions)
+        ProjectionEscapeObserved = @($Contradictions).Count -gt 0
+        PairedArmVisible = @($Contradictions | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'category' -Default '') -eq 'paired_arm' }).Count -gt 0
+        GradingMaterialVisible = @($Contradictions | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'category' -Default '') -eq 'package_grading_material' }).Count -gt 0
+    }
+}
+
+function Apply-OpenCodeBoundaryAssessment {
+    param(
+        [Parameter(Mandatory = $true)][string]$Status,
+        [AllowEmptyString()][string]$FailureCode = '',
+        [AllowEmptyString()][string]$FailureMessage = '',
+        [Parameter(Mandatory = $true)][object]$Assessment
+    )
+
+    $appliedStatus = $Status
+    $appliedFailureCode = $FailureCode
+    $appliedFailureMessage = $FailureMessage
+    if ([bool](Get-JsonProperty -Object $Assessment -Name 'ProjectionEscapeObserved' -Default $false) -and $Status -eq 'completed') {
+        $appliedStatus = 'incompatible'
+        $appliedFailureCode = 'opencode_projection_escape_observed'
+        $appliedFailureMessage = 'OpenCode structured tool evidence proves access outside the physical run projection.'
+    }
+    return [pscustomobject]@{
+        Status = $appliedStatus
+        FailureCode = $appliedFailureCode
+        FailureMessage = $appliedFailureMessage
+        ProjectionEscapeObserved = [bool](Get-JsonProperty -Object $Assessment -Name 'ProjectionEscapeObserved' -Default $false)
+        PairedArmVisible = [bool](Get-JsonProperty -Object $Assessment -Name 'PairedArmVisible' -Default $false)
+        GradingMaterialVisible = [bool](Get-JsonProperty -Object $Assessment -Name 'GradingMaterialVisible' -Default $false)
+        BoundaryEvidence = [ordered]@{
+            proof = 'physical_run_projection'
+            contradictions = @(Get-JsonProperty -Object $Assessment -Name 'Contradictions' -Default @())
+            event_inspection = 'structured_tool_contradiction_detector'
+        }
+    }
+}
+
 function Get-OpenCodeContinuationCapability {
     param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$HelpText)
 
@@ -801,6 +1002,7 @@ function Invoke-OpenCodeScriptedExecute {
     $artifacts = [System.Collections.Generic.List[object]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
     $nativeFailures = [System.Collections.Generic.List[string]]::new()
+    $boundaryContradictions = [System.Collections.Generic.List[object]]::new()
     $eventCounts = @{}
     $observedModels = [System.Collections.Generic.List[string]]::new()
     $usageBuckets = [ordered]@{}
@@ -865,6 +1067,10 @@ function Invoke-OpenCodeScriptedExecute {
         $artifacts.Add($turnStderrArtifact)
         $parsed = if ([string]::IsNullOrEmpty([string]$process.Stdout)) { [pscustomobject]@{ Events = @(); Errors = @() } } else { ConvertFrom-JsonLines -Text $process.Stdout }
         foreach ($parseError in @($parsed.Errors)) { $warnings.Add("OpenCode turn $turnNumber event parse error: $parseError") }
+        if (-not $hardFilesystem) {
+            $turnBoundary = Get-OpenCodeBoundaryAssessment -Events @($parsed.Events) -Projection $projection
+            foreach ($contradiction in @($turnBoundary.Contradictions)) { $boundaryContradictions.Add($contradiction) }
+        }
         $parsedEvents = Read-OpenCodeScriptedTurn -Parsed $parsed -Warnings $warnings
         $turnTiming = [ordered]@{
             turn = $turnNumber
@@ -964,6 +1170,14 @@ function Invoke-OpenCodeScriptedExecute {
         $failureMessage = 'OpenCode scripted interaction did not complete every ordered user/assistant turn.'
     }
     if ($status -eq 'completed' -and $nativeFailures.Count -gt 0) { $status = 'incompatible' }
+    $boundaryAssessment = ConvertTo-OpenCodeBoundaryAssessment -Contradictions @($boundaryContradictions.ToArray())
+    $boundaryOutcome = Apply-OpenCodeBoundaryAssessment -Status $status -FailureCode ([string]$failureCode) -FailureMessage ([string]$failureMessage) -Assessment $boundaryAssessment
+    $status = [string]$boundaryOutcome.Status
+    $failureCode = [string]$boundaryOutcome.FailureCode
+    $failureMessage = [string]$boundaryOutcome.FailureMessage
+    if ([bool]$boundaryOutcome.ProjectionEscapeObserved -and $nativeFailures -notcontains 'projection_escape_observed') {
+        $nativeFailures.Add('projection_escape_observed')
+    }
     if ([string]::IsNullOrWhiteSpace($capturedSessionId)) { $capturedSessionId = [Guid]::NewGuid().ToString('D') }
     $finished = $lastProcess.FinishedUtc
     $durationSeconds = [Math]::Round(($finished - $firstProcess.StartedUtc).TotalSeconds, 3)
@@ -1072,6 +1286,7 @@ function Invoke-OpenCodeScriptedExecute {
             complete_structured_transcript = [bool]$terminalCapture
             turn_artifacts = @($nativeTurns.ToArray() | ForEach-Object { "evidence/opencode-turn-$(Get-JsonProperty -Object $_ -Name 'turn' -Default 0)-events.jsonl" })
         }
+        boundary = $boundaryOutcome.BoundaryEvidence
         delegation = [ordered]@{
             dispatch_owner = 'runner'
             mechanism = [string]$descriptor.delegation.mechanism
@@ -1086,8 +1301,10 @@ function Invoke-OpenCodeScriptedExecute {
             prompt_fidelity = $true
             prompt_sha256 = [string]$Inputs.Run.PromptHash
             terminal_result_capture = [bool]$terminalCapture
-            paired_arm_visible = $false
-            grading_material_visible = $false
+            execution_role = [string]$Inputs.Run.ExecutionRole
+            paired_arm_visible = [bool]$boundaryOutcome.PairedArmVisible
+            grading_material_visible = [bool]$boundaryOutcome.GradingMaterialVisible
+            projection_escape_observed = [bool]$boundaryOutcome.ProjectionEscapeObserved
             nested_model_execution = $false
             model_execution_count = 1
             same_session_continuation = [bool]$terminalCapture
@@ -1449,6 +1666,7 @@ function New-OpenCodeExecutionProjection {
             EvalId = $Inputs.Run.EvalId
             EvalName = $Inputs.Run.EvalName
             Mode = $Inputs.Run.Mode
+            ExecutionRole = $Inputs.Run.ExecutionRole
             PromptPath = $physicalPrompt
             PromptBytes = $Inputs.Run.PromptBytes
             PromptHash = $Inputs.Run.PromptHash
@@ -1456,8 +1674,11 @@ function New-OpenCodeExecutionProjection {
             HomeDirectoryPath = $physicalHome
             SkillDirectoryPath = $physicalSkill
             CandidateSkillExposed = $Inputs.Run.CandidateSkillExposed
+            CandidateSkillName = $Inputs.Run.CandidateSkillName
             FixtureHash = $Inputs.Run.FixtureHash
             SkillHash = $Inputs.Run.SkillHash
+            CandidateInstructionHash = $Inputs.Run.CandidateInstructionHash
+            GitWorkspace = $Inputs.Run.GitWorkspace
             InteractionPath = $null
             InteractionHash = $Inputs.Run.InteractionHash
             Interaction = $Inputs.Run.Interaction
@@ -2474,6 +2695,18 @@ function Invoke-OpenCodeExecute {
     } elseif ([string]::IsNullOrWhiteSpace($finalText)) {
         $reason = 'opencode_did_not_return_final_response'; $warnings.Add('OpenCode exited successfully without a text response.')
     }
+    $boundaryAssessment = if ($hardFilesystem) {
+        ConvertTo-OpenCodeBoundaryAssessment
+    } else {
+        Get-OpenCodeBoundaryAssessment -Events @($parsed.Events) -Projection $projection
+    }
+    $boundaryOutcome = Apply-OpenCodeBoundaryAssessment -Status $status -FailureCode ([string]$reason) -FailureMessage ([string]$failureMessage) -Assessment $boundaryAssessment
+    $status = [string]$boundaryOutcome.Status
+    $reason = if ([string]::IsNullOrWhiteSpace([string]$boundaryOutcome.FailureCode)) { $reason } else { [string]$boundaryOutcome.FailureCode }
+    $failureMessage = if ([string]::IsNullOrWhiteSpace([string]$boundaryOutcome.FailureMessage)) { $failureMessage } else { [string]$boundaryOutcome.FailureMessage }
+    if ([string]$reason -eq 'opencode_projection_escape_observed') {
+        $failure = New-ExecutionFailure -Code 'opencode_projection_escape_observed' -Message $failureMessage
+    }
     $telemetry = [ordered]@{
         transcript = New-AvailableMetric -Value ([ordered]@{ artifact = 'evidence/opencode-events.jsonl'; complete = $true })
         tokens = if ($usageBuckets.Count -eq 0) { New-UnavailableMetric -Reason 'opencode_did_not_expose_usage' } else { New-AvailableMetric -Value $usageBuckets }
@@ -2551,6 +2784,7 @@ function Invoke-OpenCodeExecute {
             artifact = $transcriptArtifactPath
             sha256 = if ($transcriptArtifact.Count -eq 1) { [string](Get-JsonProperty -Object $transcriptArtifact[0] -Name 'sha256' -Default $null) } else { $null }
         }
+        boundary = $boundaryOutcome.BoundaryEvidence
         delegation = [ordered]@{
             dispatch_owner = 'runner'
             mechanism = [string]$descriptor.delegation.mechanism
@@ -2565,8 +2799,10 @@ function Invoke-OpenCodeExecute {
             prompt_fidelity = $true
             prompt_sha256 = [string]$Inputs.Run.PromptHash
             terminal_result_capture = [bool]$terminalCapture
-            paired_arm_visible = $false
-            grading_material_visible = $false
+            execution_role = [string]$Inputs.Run.ExecutionRole
+            paired_arm_visible = [bool]$boundaryOutcome.PairedArmVisible
+            grading_material_visible = [bool]$boundaryOutcome.GradingMaterialVisible
+            projection_escape_observed = [bool]$boundaryOutcome.ProjectionEscapeObserved
             nested_model_execution = $false
             model_execution_count = 1
         }

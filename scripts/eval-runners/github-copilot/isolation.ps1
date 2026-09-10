@@ -1,14 +1,190 @@
+function New-CopilotBoundaryContext {
+    param(
+        [Parameter(Mandatory = $true)][object]$RunData,
+        [AllowEmptyString()][string]$PackageRoot = '',
+        [AllowEmptyString()][string]$SourceRepositoryRoot = ''
+    )
+
+    $executionRole = if ($RunData.PSObject.Properties.Name -contains 'ExecutionRole' -and -not [string]::IsNullOrWhiteSpace([string]$RunData.ExecutionRole)) {
+        [string]$RunData.ExecutionRole
+    } else {
+        'eval_arm'
+    }
+    return [pscustomobject]@{
+        PackageRoot = $PackageRoot
+        SourceRepositoryRoot = $SourceRepositoryRoot
+        RunRoot = [string]$RunData.RunRoot
+        WorkingDirectoryRoot = [string]$RunData.WorkingDirectoryPath
+        ExecutionRole = $executionRole
+    }
+}
+
+function Add-CopilotBoundaryValueCandidate {
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory = $true)][string]$PropertyPath,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Candidates
+    )
+
+    if ($null -eq $Value) { return }
+    if ($Value -is [string]) {
+        $leaf = [regex]::Replace($PropertyPath, '.*[.\[]', '').TrimEnd(']')
+        if ([string]::IsNullOrWhiteSpace($leaf)) { return }
+        $kind = if ($leaf -match '^(?i)(command|cmd)$') {
+            'command'
+        } elseif ($leaf -match '^(?i)(path|paths|file|files|filepath|filepaths|directory|cwd|root|target|targets)$') {
+            'path'
+        } else {
+            $null
+        }
+        if ($null -ne $kind) {
+            $Candidates.Add([pscustomobject]@{
+                    kind = $kind
+                    source = $PropertyPath
+                    value = [string]$Value
+                })
+        }
+        return
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in @($Value.Keys)) {
+            Add-CopilotBoundaryValueCandidate -Value $Value[$key] -PropertyPath ([string]::Concat($PropertyPath, '.', [string]$key)) -Candidates $Candidates
+        }
+        return
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        $index = 0
+        foreach ($item in $Value) {
+            Add-CopilotBoundaryValueCandidate -Value $item -PropertyPath ([string]::Concat($PropertyPath, '[', $index, ']')) -Candidates $Candidates
+            $index++
+        }
+        return
+    }
+    foreach ($property in @($Value.PSObject.Properties)) {
+        Add-CopilotBoundaryValueCandidate -Value $property.Value -PropertyPath ([string]::Concat($PropertyPath, '.', [string]$property.Name)) -Candidates $Candidates
+    }
+}
+
+function Get-CopilotBoundaryValueCandidates {
+    param([AllowNull()][object]$Data)
+
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    Add-CopilotBoundaryValueCandidate -Value $Data -PropertyPath 'data' -Candidates $candidates
+    return @($candidates.ToArray())
+}
+
+function Test-CopilotBoundaryPairedArmPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResolvedPath,
+        [Parameter(Mandatory = $true)][object]$Boundary
+    )
+
+    $runRoot = [string](Get-JsonProperty -Object $Boundary -Name 'RunRoot' -Default '')
+    $packageRoot = [string](Get-JsonProperty -Object $Boundary -Name 'PackageRoot' -Default '')
+    if ([string]::IsNullOrWhiteSpace($packageRoot) -or -not (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $ResolvedPath)) { return $false }
+    if (-not [string]::IsNullOrWhiteSpace($runRoot) -and (Test-ObservedPathInside -BasePath $runRoot -CandidatePath $ResolvedPath)) { return $false }
+    return ($ResolvedPath -replace '\\', '/') -match '(?i)(?:^|/)(arm-\d+-(?:with_skill|without_skill)|with_skill|without_skill)(?:/|$)'
+}
+
+function Test-CopilotBoundaryForbiddenGradingPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$ResolvedPath,
+        [Parameter(Mandatory = $true)][object]$Boundary
+    )
+
+    $normalizedPath = $ResolvedPath -replace '\\', '/'
+    if ($normalizedPath -match '(?i)(?:^|/)(eval-metadata\.json|grading\.json|execution-freeze\.json|orchestration-state\.json|benchmark\.(?:json|md)|(?:skill-creator-)?report\.html|RUN-THIS\.prompt\.md|\.external-handoff-started)$') {
+        return $true
+    }
+    $packageRoot = [string](Get-JsonProperty -Object $Boundary -Name 'PackageRoot' -Default '')
+    if ([string]::IsNullOrWhiteSpace($packageRoot) -or -not (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $ResolvedPath)) { return $false }
+    $relative = if (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $ResolvedPath) {
+        [System.IO.Path]::GetRelativePath($packageRoot, $ResolvedPath).Replace('\', '/')
+    } else {
+        ''
+    }
+    return $relative -match '(?i)(?:^|/)(eval-metadata\.json|grading\.json|execution-freeze\.json|orchestration-state\.json|benchmark\.(?:json|md)|(?:skill-creator-)?report\.html|RUN-THIS\.prompt\.md|\.external-handoff-started)(?:$|/)' -or
+        $relative -match '^(?i)(results|tools|progress)(?:/|$)'
+}
+
+function Get-CopilotBoundaryAssessment {
+    param([object]$Data, [object]$Boundary)
+
+    # Structured tool arguments/commands can contradict projection isolation;
+    # their absence never proves OS confinement.
+    $executionRole = [string](Get-JsonProperty -Object $Boundary -Name 'ExecutionRole' -Default 'eval_arm')
+    if ([string]::IsNullOrWhiteSpace($executionRole)) { $executionRole = 'eval_arm' }
+    $workingDirectoryRoot = [string](Get-JsonProperty -Object $Boundary -Name 'WorkingDirectoryRoot' -Default (Get-JsonProperty -Object $Boundary -Name 'Root' -Default ''))
+    $runRoot = [string](Get-JsonProperty -Object $Boundary -Name 'RunRoot' -Default $workingDirectoryRoot)
+    $packageRoot = [string](Get-JsonProperty -Object $Boundary -Name 'PackageRoot' -Default '')
+    $sourceRepositoryRoot = [string](Get-JsonProperty -Object $Boundary -Name 'SourceRepositoryRoot' -Default '')
+    $contradictions = [System.Collections.Generic.List[string]]::new()
+    $ownArmGradingVisible = $false
+    $pairedArmVisible = $false
+    $pairedOrPackageGradingVisible = $false
+
+    foreach ($candidate in @(Get-CopilotBoundaryValueCandidates -Data $Data)) {
+        $pathValues = if ([string]$candidate.kind -eq 'command') {
+            if (Test-FileSystemCommandText -Text ([string]$candidate.value)) {
+                @(Get-ObservedPathTokensFromCommandText -Text ([string]$candidate.value))
+            } else {
+                @()
+            }
+        } else {
+            @([string]$candidate.value)
+        }
+        foreach ($pathValue in $pathValues) {
+            $observed = Get-ObservedPathInfo -Path $pathValue -BasePath $workingDirectoryRoot
+            if ($null -eq $observed) { continue }
+            $resolvedPath = [string]$observed.FullPath
+            $insideWorking = -not [string]::IsNullOrWhiteSpace($workingDirectoryRoot) -and (Test-ObservedPathInside -BasePath $workingDirectoryRoot -CandidatePath $resolvedPath)
+            $insideRun = -not [string]::IsNullOrWhiteSpace($runRoot) -and (Test-ObservedPathInside -BasePath $runRoot -CandidatePath $resolvedPath)
+            $insidePackage = -not [string]::IsNullOrWhiteSpace($packageRoot) -and (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $resolvedPath)
+            $insideSource = -not [string]::IsNullOrWhiteSpace($sourceRepositoryRoot) -and (Test-ObservedPathInside -BasePath $sourceRepositoryRoot -CandidatePath $resolvedPath)
+            if ($executionRole -eq 'phase2_analyzer') {
+                if ($insideWorking) {
+                    $relative = [System.IO.Path]::GetRelativePath($workingDirectoryRoot, $resolvedPath).Replace('\', '/')
+                    if ($relative -in @('input-bundle.json', 'grader.md')) { $ownArmGradingVisible = $true }
+                    continue
+                }
+                if ($insideRun) {
+                    $contradictions.Add("Tool event references analyzer transport path '$pathValue' outside the staged repo bundle.")
+                } elseif ($insidePackage) {
+                    $contradictions.Add("Tool event references package path '$pathValue' outside the staged analyzer bundle.")
+                } elseif ($insideSource) {
+                    $contradictions.Add("Tool event references source repository path '$pathValue' outside the staged analyzer bundle.")
+                } else {
+                    $contradictions.Add("Tool event references path '$pathValue' outside the staged analyzer bundle.")
+                }
+            } else {
+                if ($insideRun) {
+                    continue
+                }
+                if ($insidePackage) {
+                    $contradictions.Add("Tool event references forbidden package path '$pathValue'.")
+                } elseif ($insideSource) {
+                    $contradictions.Add("Tool event references forbidden source repository path '$pathValue'.")
+                } else {
+                    $contradictions.Add("Tool event references path '$pathValue' outside the physical projection.")
+                }
+            }
+            if (Test-CopilotBoundaryPairedArmPath -ResolvedPath $resolvedPath -Boundary ([pscustomobject]@{ PackageRoot = $packageRoot; RunRoot = $runRoot })) { $pairedArmVisible = $true }
+            if (Test-CopilotBoundaryForbiddenGradingPath -ResolvedPath $resolvedPath -Boundary ([pscustomobject]@{ PackageRoot = $packageRoot })) { $pairedOrPackageGradingVisible = $true }
+        }
+    }
+
+    return [pscustomobject]@{
+        Contradictions = @($contradictions | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+        OwnArmGradingMaterialVisible = $ownArmGradingVisible
+        PairedArmVisible = $pairedArmVisible
+        PairedOrPackageGradingMaterialVisible = $pairedOrPackageGradingVisible
+    }
+}
+
 function Find-CopilotBoundaryContradictions {
     param([object]$Data, [object]$Projection)
-    # Structured tool arguments/results can contradict projection isolation;
-    # their absence never proves OS confinement.
-    $text = ($Data | ConvertTo-Json -Depth 100 -Compress).Replace('\\', '/').Replace('\', '/')
-    foreach ($root in @($Projection.PackageRoot, $Projection.SourceRepositoryRoot) | Where-Object { $_ }) {
-        if ($text.IndexOf(([string]$root).Replace('\', '/'), [StringComparison]::OrdinalIgnoreCase) -ge 0) { 'Tool event references forbidden package/source path.' }
-    }
-    if ($text -match '(?i)(eval-metadata\.json|(?:^|[/"\s])(?:with_skill|without_skill)(?:[/"\s]|$)|(?:\.\./)+(?:results|tools|progress)(?:/|"|\s)|(?:execution-freeze|orchestration-state|grading|benchmark)\.(?:json|md)|(?:skill-creator-)?report\.html|RUN-THIS\.prompt\.md|\.external-handoff-started)') {
-        'Tool event references forbidden grading, paired-arm, or orchestration material.'
-    }
+
+    return @((Get-CopilotBoundaryAssessment -Data $Data -Boundary $Projection).Contradictions)
 }
 
 # Conservative detector for a native Copilot skill activation of the evaluated candidate. The native skill tool is
@@ -66,7 +242,7 @@ function Assert-CopilotCapturedBoundary {
     $physical = [string](Get-JsonProperty -Object $paths -Name physical_run_root -Default '')
     if ([string]::IsNullOrWhiteSpace($physical) -or (Test-PathInside -BasePath $package -CandidatePath $physical) -or ($source -and (Test-PathInside -BasePath $source -CandidatePath $physical))) { throw 'Invalid Copilot physical projection boundary.' }
     Assert-CopilotCandidateInstructionBoundary -RunData $RunData
-    $proof = [pscustomobject]@{ PackageRoot = $package; SourceRepositoryRoot = $source }
+    $proof = New-CopilotBoundaryContext -RunData $RunData -PackageRoot $package -SourceRepositoryRoot $source
     $candidateSkillName = [string]$RunData.CandidateSkillName
     $transcript = @($Raw.artifacts | Where-Object { $_.scope -eq 'run' -and $_.path -eq 'evidence/copilot-events.jsonl' })
     if ($transcript.Count -ne 1) { throw 'Copilot native transcript is missing.' }
@@ -77,7 +253,7 @@ function Assert-CopilotCapturedBoundary {
         $eventType = [string](Get-JsonProperty -Object $event -Name type -Default '')
         $data = Get-JsonProperty -Object $event -Name data -Default $null
         if ($eventType -match '^(tool\.|command\.)') {
-            if (@(Find-CopilotBoundaryContradictions -Data $data -Projection $proof).Count) { throw 'Copilot transcript contradicts claimed isolation; grading is forbidden.' }
+            if (@((Get-CopilotBoundaryAssessment -Data $data -Boundary $proof).Contradictions).Count) { throw 'Copilot transcript contradicts claimed isolation; grading is forbidden.' }
             if (@(Find-CopilotNativeSkillActivation -Data $data -CandidateSkillName $candidateSkillName -EventType $eventType).Count) { throw 'Copilot transcript shows native candidate skill activation; grading is forbidden.' }
         }
     }

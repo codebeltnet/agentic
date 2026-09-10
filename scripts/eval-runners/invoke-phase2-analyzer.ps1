@@ -221,6 +221,12 @@ function New-AnalyzerRunBundle {
         }
     }
 
+    $allowedArtifacts = [System.Collections.Generic.List[string]]::new()
+    $allowedArtifacts.Add([string]$Worker.record.ResultRelative)
+    foreach ($artifact in @((Get-JsonProperty -Object $canonical -Name 'output_files' -Default @()) | ForEach-Object { [string]$_ })) {
+        if (-not [string]::IsNullOrWhiteSpace($artifact)) { $allowedArtifacts.Add($artifact) }
+    }
+
     $bundle = [ordered]@{
         schema = 'codebeltnet/agentic/eval-analyzer-input/1'
         worker_id = $workerId
@@ -235,7 +241,7 @@ function New-AnalyzerRunBundle {
             artifact = [string]$Worker.record.ResultRelative
             lines = @($lineRecords.ToArray())
         }
-        allowed_artifacts = @(([string]$Worker.record.ResultRelative) + @((Get-JsonProperty -Object $canonical -Name 'output_files' -Default @()) | ForEach-Object { [string]$_ }))
+        allowed_artifacts = @($allowedArtifacts.ToArray())
         assertions = @($Worker.assertions | ForEach-Object {
             [ordered]@{
                 assertion_index = [int]$_.assertion_index
@@ -262,6 +268,7 @@ function New-AnalyzerRunBundle {
         skillName = $null
         iteration = 1
         mode = 'without_skill'
+        executionRole = 'phase2_analyzer'
         promptFile = 'prompt.md'
         workingDirectory = 'repo'
         homeDirectory = 'home'
@@ -320,15 +327,119 @@ function Invoke-AnalyzerPreflight {
     }
 }
 
+function ConvertFrom-AnalyzerJsonDocument {
+    param(
+        [Parameter(Mandatory = $true)][string]$Json,
+        [Parameter(Mandatory = $true)][ValidateSet('raw_json', 'fenced_json', 'fenced_json_with_surrounding_text')][string]$TransportNormalization
+    )
+
+    $trimmed = $Json.Trim()
+    if (-not ($trimmed.StartsWith('{', [System.StringComparison]::Ordinal) -and $trimmed.EndsWith('}', [System.StringComparison]::Ordinal))) {
+        throw 'response contained no JSON object candidate.'
+    }
+    try {
+        return [pscustomobject]@{
+            Fragment = $trimmed | ConvertFrom-Json -Depth 100
+            TransportNormalization = $TransportNormalization
+        }
+    } catch {
+        throw $_.Exception
+    }
+}
+
+function Get-AnalyzerFencedBlocks {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $lines = [regex]::Split($Text, "\r?\n")
+    $blocks = [System.Collections.Generic.List[object]]::new()
+    $blockStart = $null
+    $blockInfo = ''
+    $bodyLines = $null
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        $line = [string]$lines[$index]
+        if ($null -eq $blockStart) {
+            $open = [regex]::Match($line, '^[ \t]*```(?<info>[^\r\n`]*)[ \t]*$')
+            if ($open.Success) {
+                $blockStart = $index
+                $blockInfo = [string]$open.Groups['info'].Value
+                $bodyLines = [System.Collections.Generic.List[string]]::new()
+            }
+            continue
+        }
+
+        if ($line -match '^[ \t]*```[ \t]*$') {
+            $leading = if ($blockStart -gt 0) { [string]::Join([Environment]::NewLine, @($lines[0..($blockStart - 1)])) } else { '' }
+            $trailing = if ($index + 1 -lt $lines.Count) { [string]::Join([Environment]::NewLine, @($lines[($index + 1)..($lines.Count - 1)])) } else { '' }
+            $blocks.Add([pscustomobject]@{
+                    Info = $blockInfo
+                    Body = [string]::Join([Environment]::NewLine, @($bodyLines.ToArray()))
+                    LeadingText = $leading
+                    TrailingText = $trailing
+                })
+            $blockStart = $null
+            $blockInfo = ''
+            $bodyLines = $null
+            continue
+        }
+
+        $bodyLines.Add($line)
+    }
+    if ($null -ne $blockStart) {
+        throw 'Analyzer returned malformed JSON: the fenced block is not terminated.'
+    }
+    return @($blocks.ToArray())
+}
+
 function ConvertFrom-AnalyzerResponse {
     param([Parameter(Mandatory = $true)][string]$Text)
 
     if ([string]::IsNullOrWhiteSpace($Text)) { throw 'Analyzer returned an empty response.' }
-    try {
-        return $Text | ConvertFrom-Json -Depth 100
-    } catch {
-        throw "Analyzer returned malformed JSON: $($_.Exception.Message)"
+    $trimmed = $Text.Trim()
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    $parseErrors = [System.Collections.Generic.List[string]]::new()
+
+    if ($trimmed.StartsWith('{', [System.StringComparison]::Ordinal) -and $trimmed.EndsWith('}', [System.StringComparison]::Ordinal)) {
+        try {
+            $candidates.Add((ConvertFrom-AnalyzerJsonDocument -Json $trimmed -TransportNormalization 'raw_json'))
+        } catch {
+            $parseErrors.Add([string]$_.Exception.Message)
+        }
     }
+
+    $fenceBlocks = @(Get-AnalyzerFencedBlocks -Text $Text)
+    if ($fenceBlocks.Count -gt 1) {
+        throw 'Analyzer returned multiple fenced blocks; the response must contain exactly one analyzer JSON document.'
+    }
+    if ($fenceBlocks.Count -eq 1) {
+        $block = $fenceBlocks[0]
+        $info = [string]$block.Info
+        if (-not [string]::IsNullOrWhiteSpace($info) -and $info.Trim() -cne 'json') {
+            throw 'Analyzer returned malformed JSON: the fenced block must be a JSON fence.'
+        }
+        $leading = [string]$block.LeadingText
+        $trailing = [string]$block.TrailingText
+        $normalization = if ([string]::IsNullOrWhiteSpace($leading) -and [string]::IsNullOrWhiteSpace($trailing)) {
+            'fenced_json'
+        } else {
+            'fenced_json_with_surrounding_text'
+        }
+        try {
+            $candidates.Add((ConvertFrom-AnalyzerJsonDocument -Json ([string]$block.Body) -TransportNormalization $normalization))
+        } catch {
+            $parseErrors.Add([string]$_.Exception.Message)
+        }
+    }
+
+    if ($candidates.Count -gt 1) {
+        throw 'Analyzer returned multiple JSON candidates; the response must contain exactly one analyzer JSON document.'
+    }
+    if ($candidates.Count -eq 1) {
+        return $candidates[0]
+    }
+    if ($parseErrors.Count -gt 0) {
+        throw "Analyzer returned malformed JSON: $($parseErrors[0])"
+    }
+    throw 'Analyzer returned malformed JSON: response contained no unambiguous JSON object.'
 }
 
 function Confirm-AnalyzerFragment {
@@ -347,10 +458,12 @@ function Confirm-AnalyzerFragment {
     $expectedByIndex = @{}
     foreach ($assertion in @($Worker.assertions)) { $expectedByIndex[[int]$assertion.assertion_index] = $assertion }
     if ($grades.Count -ne @($Worker.assertions).Count) { throw 'Analyzer fragment grade cardinality does not match unresolved semantic assertions.' }
+    $seenIndexes = [System.Collections.Generic.HashSet[int]]::new()
     $entries = [System.Collections.Generic.List[object]]::new()
     foreach ($grade in $grades) {
         $index = [int](Get-JsonProperty -Object $grade -Name 'assertion_index' -Default -1)
         if (-not $expectedByIndex.ContainsKey($index)) { throw "Analyzer fragment includes unexpected assertion_index '$index'." }
+        if (-not $seenIndexes.Add($index)) { throw "Analyzer fragment duplicates assertion_index '$index'." }
         $expected = $expectedByIndex[$index]
         if ((Get-JsonProperty -Object $grade -Name 'passed' -Default $null) -isnot [bool]) { throw 'Analyzer fragment passed must be boolean.' }
         $reason = [string](Get-JsonProperty -Object $grade -Name 'reason' -Default '')
@@ -359,6 +472,10 @@ function Confirm-AnalyzerFragment {
         $entry = ConvertTo-GradingEntry -Expected $expected -Passed ([bool]$grade.passed) -Reason $reason -EvidenceRefs $refs -Source 'analyzer' -Evidence $reason
         [void](Test-GradeEvidenceReference -Grade $entry -Expected $expected -Canonical $Canonical -TranscriptArtifacts $StagedTranscripts)
         $entries.Add($entry)
+    }
+    if ($seenIndexes.Count -ne $expectedByIndex.Count) {
+        $missing = @($expectedByIndex.Keys | Where-Object { -not $seenIndexes.Contains([int]$_) } | Sort-Object)
+        throw "Analyzer fragment is missing assertion_index '$($missing[0])'."
     }
     return @($entries.ToArray())
 }
@@ -383,6 +500,7 @@ function New-AnalyzerResult {
         [Parameter(Mandatory = $true)][string]$RawRelative,
         [Parameter(Mandatory = $true)][string]$FragmentRelative,
         [Parameter(Mandatory = $true)][object[]]$Grades,
+        [string]$ResponseTransportNormalization = '',
         [string]$Status = 'completed',
         [string]$Failure = ''
     )
@@ -421,6 +539,7 @@ function New-AnalyzerResult {
         raw_execution_result_sha256 = Get-Sha256HexFromFile -Path $rawPath
         grading_fragment = $FragmentRelative
         grading_fragment_sha256 = Get-Sha256HexFromFile -Path $fragmentPath
+        response_transport_normalization = $ResponseTransportNormalization
         parsed_grading = @($Grades)
         input_tokens = Get-JsonProperty -Object (Get-JsonProperty -Object $tokens -Name 'value' -Default $null) -Name 'input_tokens' -Default $null
         output_tokens = Get-JsonProperty -Object (Get-JsonProperty -Object $tokens -Name 'value' -Default $null) -Name 'output_tokens' -Default $null
@@ -636,14 +755,15 @@ try {
             if ($executorSessions.Contains($sessionId)) { throw 'Analyzer session reused an executor session identity.' }
             if (@($completedAnalyzerEntries | Where-Object { [string]$_.session_id -eq $sessionId }).Count -gt 0) { throw 'Analyzer worker session was reused across arms.' }
             $responseText = [string](Get-JsonProperty -Object $raw.final_response -Name 'text' -Default '')
-            $fragment = ConvertFrom-AnalyzerResponse -Text $responseText
+            $response = ConvertFrom-AnalyzerResponse -Text $responseText
+            $fragment = $response.Fragment
             $canonical = Read-RunnerJson -Path $worker.record.ResultPath
             $workerGrades = @(Confirm-AnalyzerFragment -Fragment $fragment -Worker $worker -Canonical $canonical -StagedTranscripts $item.bundle.StagedTranscripts)
             $fragmentRelative = "phase2/fragments/$workerId.grading-fragment.json"
             $fragmentPath = Join-Path $iteration ($fragmentRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
             Write-RunnerJsonFile -Path $fragmentPath -Value $fragment
             foreach ($grade in $workerGrades) { $grades.Add($grade) }
-            $analyzerResult = New-AnalyzerResult -Worker $worker -Bundle $item.bundle -Raw $raw -AnalyzerProfile $analyzerProfile -RawRelative ([string]$item.raw_relative) -FragmentRelative $fragmentRelative -Grades $workerGrades
+            $analyzerResult = New-AnalyzerResult -Worker $worker -Bundle $item.bundle -Raw $raw -AnalyzerProfile $analyzerProfile -RawRelative ([string]$item.raw_relative) -FragmentRelative $fragmentRelative -Grades $workerGrades -ResponseTransportNormalization ([string]$response.TransportNormalization)
             $resultRelative = "phase2/results/$workerId.analyzer-result.json"
             $resultPath = Join-Path $iteration ($resultRelative -replace '/', [System.IO.Path]::DirectorySeparatorChar)
             Write-RunnerJsonFile -Path $resultPath -Value $analyzerResult

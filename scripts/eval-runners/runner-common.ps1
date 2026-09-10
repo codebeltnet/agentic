@@ -335,6 +335,155 @@ function Test-PathInside {
     return $candidate -eq $base -or $candidate.StartsWith($base + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
+function Resolve-ObservedUnixPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$BasePath,
+        [Parameter(Mandatory = $true)][string]$RelativePath
+    )
+
+    $base = ($BasePath -replace '\\', '/')
+    if (-not $base.StartsWith('/', [System.StringComparison]::Ordinal)) {
+        throw "Unix observed path base '$BasePath' must be absolute."
+    }
+    $segments = [System.Collections.Generic.List[string]]::new()
+    foreach ($segment in @($base -split '/')) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$segment)) { $segments.Add([string]$segment) }
+    }
+    foreach ($segment in @(($RelativePath -replace '\\', '/') -split '/')) {
+        switch ([string]$segment) {
+            '' { continue }
+            '.' { continue }
+            '..' {
+                if ($segments.Count -gt 0) { $segments.RemoveAt($segments.Count - 1) }
+                continue
+            }
+            default {
+                $segments.Add([string]$segment)
+            }
+        }
+    }
+    return '/' + ([string]::Join('/', @($segments.ToArray())))
+}
+
+function Get-ObservedPathInfo {
+    param(
+        [AllowEmptyString()][string]$Path,
+        [AllowEmptyString()][string]$BasePath = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    $trimmed = [string]$Path
+    while ($trimmed.Length -ge 2 -and (
+            ($trimmed.StartsWith('"', [System.StringComparison]::Ordinal) -and $trimmed.EndsWith('"', [System.StringComparison]::Ordinal)) -or
+            ($trimmed.StartsWith("'", [System.StringComparison]::Ordinal) -and $trimmed.EndsWith("'", [System.StringComparison]::Ordinal)))) {
+        $trimmed = $trimmed.Substring(1, $trimmed.Length - 2)
+    }
+    $trimmed = $trimmed.Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) { return $null }
+
+    if ($trimmed -match '^[A-Za-z]:[\\/]') {
+        return [pscustomobject]@{
+            Style = 'windows'
+            FullPath = ConvertTo-ComparablePath -Path ($trimmed -replace '/', '\')
+            Raw = $trimmed
+            Absolute = $true
+        }
+    }
+    if ($trimmed -match '^\\\\') {
+        return [pscustomobject]@{
+            Style = 'unc'
+            FullPath = ConvertTo-ComparablePath -Path ($trimmed -replace '/', '\')
+            Raw = $trimmed
+            Absolute = $true
+        }
+    }
+    if ($trimmed -match '^/') {
+        $normalized = ($trimmed -replace '\\', '/')
+        if ($normalized.Length -gt 1) { $normalized = $normalized.TrimEnd('/') }
+        return [pscustomobject]@{
+            Style = 'unix'
+            FullPath = $normalized
+            Raw = $trimmed
+            Absolute = $true
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($BasePath)) { return $null }
+    $baseInfo = Get-ObservedPathInfo -Path $BasePath
+    if ($null -eq $baseInfo) { return $null }
+    switch ([string]$baseInfo.Style) {
+        'unix' {
+            return [pscustomobject]@{
+                Style = 'unix'
+                FullPath = Resolve-ObservedUnixPath -BasePath ([string]$baseInfo.FullPath) -RelativePath $trimmed
+                Raw = $trimmed
+                Absolute = $false
+            }
+        }
+        default {
+            try {
+                $combined = [System.IO.Path]::GetFullPath((Join-Path $BasePath ($trimmed -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
+            } catch {
+                return $null
+            }
+            return [pscustomobject]@{
+                Style = [string]$baseInfo.Style
+                FullPath = ConvertTo-ComparablePath -Path $combined
+                Raw = $trimmed
+                Absolute = $false
+            }
+        }
+    }
+}
+
+function Test-ObservedPathInside {
+    param(
+        [Parameter(Mandatory = $true)][string]$BasePath,
+        [Parameter(Mandatory = $true)][string]$CandidatePath
+    )
+
+    $base = Get-ObservedPathInfo -Path $BasePath
+    $candidate = Get-ObservedPathInfo -Path $CandidatePath -BasePath $BasePath
+    if ($null -eq $base -or $null -eq $candidate -or [string]$base.Style -ne [string]$candidate.Style) { return $false }
+    $separator = if ([string]$base.Style -eq 'unix') { '/' } else { '\' }
+    $comparison = if ([string]$base.Style -eq 'unix') { [System.StringComparison]::Ordinal } else { [System.StringComparison]::OrdinalIgnoreCase }
+    return [string]$candidate.FullPath -eq [string]$base.FullPath -or ([string]$candidate.FullPath).StartsWith(([string]$base.FullPath + $separator), $comparison)
+}
+
+function Get-ObservedPathTokensFromCommandText {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+    $tokens = [System.Collections.Generic.List[string]]::new()
+    $pattern = '(?:"(?<double>(?:[A-Za-z]:[\\/]|/|\.\.?[\\/])[^"]+)"|''(?<single>(?:[A-Za-z]:[\\/]|/|\.\.?[\\/])[^'']+)''|(?<bare>(?:[A-Za-z]:[\\/]|/|\.\.?[\\/])[^ \t\r\n"''`|;&,]+))'
+    foreach ($match in [regex]::Matches($Text, $pattern)) {
+        $candidate = @($match.Groups['double'].Value, $match.Groups['single'].Value, $match.Groups['bare'].Value) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            Select-Object -First 1
+        if (-not [string]::IsNullOrWhiteSpace([string]$candidate) -and $tokens -notcontains [string]$candidate) {
+            $tokens.Add([string]$candidate)
+        }
+    }
+    return @($tokens.ToArray())
+}
+
+function Test-FileSystemCommandText {
+    param([AllowEmptyString()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    return $Text -match '(?i)\b(Get-ChildItem|Get-Content|Set-Content|Add-Content|Out-File|Copy-Item|Move-Item|Remove-Item|Select-String|type|cat|ls|dir|find|grep|rg|read|write|view|edit|glob)\b'
+}
+
+function Get-RunExecutionRole {
+    param([Parameter(Mandatory = $true)][object]$Run)
+
+    $role = [string](Get-JsonProperty -Object $Run -Name 'executionRole' -Default 'eval_arm')
+    if ([string]::IsNullOrWhiteSpace($role)) { $role = 'eval_arm' }
+    if ($role -notin @('eval_arm', 'phase2_analyzer')) {
+        throw "run.json executionRole '$role' is unsupported."
+    }
+    return $role
+}
+
 function Assert-SafeRelativePath {
     param(
         [Parameter(Mandatory = $true)][string]$RelativePath,
@@ -822,6 +971,20 @@ function Test-NativeWorkerTerminalEvidence {
         $failures.Add('delegation_terminal_evidence')
         return [pscustomobject]@{ Valid = $false; Failures = @($failures); Delegation = $null }
     }
+    $executionRole = if ($Run.PSObject.Properties.Name -contains 'ExecutionRole' -and -not [string]::IsNullOrWhiteSpace([string]$Run.ExecutionRole)) {
+        [string]$Run.ExecutionRole
+    } else {
+        'eval_arm'
+    }
+    $pairedArmVisible = [bool](Get-JsonProperty -Object $delegation -Name 'paired_arm_visible' -Default $true)
+    $forbiddenGradingVisible = if ($executionRole -eq 'phase2_analyzer') {
+        [bool](Get-JsonProperty -Object $delegation -Name 'paired_or_package_grading_material_visible' -Default (Get-JsonProperty -Object $delegation -Name 'grading_material_visible' -Default $true))
+    } else {
+        [bool](Get-JsonProperty -Object $delegation -Name 'grading_material_visible' -Default $true)
+    }
+    if ([bool](Get-JsonProperty -Object $delegation -Name 'projection_escape_observed' -Default $false)) {
+        $failures.Add('projection_escape_observed')
+    }
 
     # Different evidence requirements depending on terminal status. A
     # completed scripted run must provide full same-session interaction proof.
@@ -878,8 +1041,7 @@ function Test-NativeWorkerTerminalEvidence {
         if (-not [bool](Get-JsonProperty -Object $delegation -Name 'terminal_result_capture' -Default $false)) {
             $failures.Add('terminal_result_capture')
         }
-        if ([bool](Get-JsonProperty -Object $delegation -Name 'paired_arm_visible' -Default $true) -or
-            [bool](Get-JsonProperty -Object $delegation -Name 'grading_material_visible' -Default $true)) {
+        if ($pairedArmVisible -or $forbiddenGradingVisible) {
             $failures.Add('paired_arm_and_grading_exclusion')
         }
         if ([bool](Get-JsonProperty -Object $delegation -Name 'nested_model_execution' -Default $true) -or
@@ -889,8 +1051,7 @@ function Test-NativeWorkerTerminalEvidence {
     } else {
         # For non-success terminals, skip strict prompt/terminal-capture checks
         # but still validate working/home path alignment when provided.
-        if ([bool](Get-JsonProperty -Object $delegation -Name 'paired_arm_visible' -Default $true) -or
-            [bool](Get-JsonProperty -Object $delegation -Name 'grading_material_visible' -Default $true)) {
+        if ($pairedArmVisible -or $forbiddenGradingVisible) {
             $failures.Add('paired_arm_and_grading_exclusion')
         }
     }
@@ -1011,6 +1172,10 @@ function Resolve-RunContract {
     if ($mode -notin @('with_skill', 'without_skill')) {
         throw "run.json mode '$mode' is not with_skill or without_skill."
     }
+    $executionRole = Get-RunExecutionRole -Run $run
+    if ($executionRole -eq 'phase2_analyzer' -and $mode -ne 'without_skill') {
+        throw 'phase2_analyzer run.json must use transport mode without_skill.'
+    }
     $candidateSkillName = [string](Get-JsonProperty -Object $run -Name 'candidateSkillName' -Default '')
     if ([string]::IsNullOrWhiteSpace($candidateSkillName)) {
         throw 'run.json must declare candidateSkillName for both with_skill and without_skill arms.'
@@ -1119,6 +1284,7 @@ function Resolve-RunContract {
         EvalId = [int]$run.evalId
         EvalName = [string]$run.evalName
         Mode = $mode
+        ExecutionRole = $executionRole
         PromptPath = $promptPath
         PromptBytes = $promptBytes
         PromptHash = Get-Sha256HexFromBytes -Bytes $promptBytes
