@@ -680,7 +680,9 @@ function Get-OpenCodeLogicalPackageRoot {
     $logicalRun = Get-JsonProperty -Object $Projection -Name 'LogicalRun' -Default $null
     $logicalRunRoot = [string](Get-JsonProperty -Object $logicalRun -Name 'RunRoot' -Default '')
     if ([string]::IsNullOrWhiteSpace($logicalRunRoot)) { return '' }
-    return [System.IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $logicalRunRoot)))
+    $evalRoot = Get-ObservedParentPath -Path $logicalRunRoot
+    if ([string]::IsNullOrWhiteSpace($evalRoot)) { return '' }
+    return [string](Get-ObservedParentPath -Path $evalRoot)
 }
 
 function Test-OpenCodeBoundaryPairedArmPath {
@@ -705,7 +707,8 @@ function Test-OpenCodeBoundaryForbiddenGradingPath {
 
     $packageRoot = Get-OpenCodeLogicalPackageRoot -Projection $Projection
     if ([string]::IsNullOrWhiteSpace($packageRoot) -or -not (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $ResolvedPath)) { return $false }
-    $relative = [System.IO.Path]::GetRelativePath($packageRoot, $ResolvedPath).Replace('\', '/')
+    $relative = Get-ObservedRelativePath -BasePath $packageRoot -CandidatePath $ResolvedPath
+    if ([string]::IsNullOrWhiteSpace($relative)) { return $false }
     return $relative -match '(?i)(?:^|/)(eval-metadata\.json|grading\.json|execution-freeze\.json|orchestration-state\.json|benchmark\.(?:json|md)|(?:skill-creator-)?report\.html|RUN-THIS\.prompt\.md|\.external-handoff-started)(?:$|/)' -or
         $relative -match '^(?i)(results|tools|progress)(?:/|$)'
 }

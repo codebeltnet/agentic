@@ -2252,6 +2252,17 @@ function Assert-Throws {
     if (-not $thrown) { throw "ASSERT: $Message" }
 }
 
+function Assert-ObservedPathInside {
+    param(
+        [Parameter(Mandatory = $true)][string]$BasePath,
+        [Parameter(Mandatory = $true)][string]$CandidatePath,
+        [Parameter(Mandatory = $true)][bool]$Expected,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    Assert-Equal $Expected ([bool](Test-ObservedPathInside -BasePath $BasePath -CandidatePath $CandidatePath)) $Message
+}
+
 function Write-TestJson {
     param([string]$Path, [object]$Value)
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
@@ -2657,6 +2668,20 @@ try {
     Assert-True ($reportText -notmatch 'function Get-ResultPath') 'reporting must not contain a configuration-derived result path helper'
     Assert-True ($manifestBridgeText.Contains('Get-ManifestRunRecords') -and $manifestBridgeText.Contains('$record.ResultPath')) 'package-level bridge must resolve exact manifest records'
     Assert-True ($manifestBridgeText -notmatch 'with[-_]skill\.result\.json|without[-_]skill\.result\.json') 'package-level bridge must not encode arm-derived result filenames'
+    foreach ($case in @(
+            @{ Name = 'Windows inside'; Base = 'C:\temp\projection'; Candidate = 'C:\temp\projection\repo\README.md'; Expected = $true }
+            @{ Name = 'Windows prefix collision'; Base = 'C:\temp\projection'; Candidate = 'C:\temp\projection2\repo\README.md'; Expected = $false }
+            @{ Name = 'Windows dotdot escape'; Base = 'C:\temp\projection'; Candidate = 'C:\temp\projection\..\outside\README.md'; Expected = $false }
+            @{ Name = 'Windows case-insensitive normalized separators'; Base = 'C:\TEMP\Projection'; Candidate = 'c:/temp/projection/repo/file.txt'; Expected = $true }
+            @{ Name = 'Unix inside'; Base = '/tmp/projection'; Candidate = '/tmp/projection/repo/README.md'; Expected = $true }
+            @{ Name = 'Unix prefix collision'; Base = '/tmp/projection'; Candidate = '/tmp/projection2/README.md'; Expected = $false }
+            @{ Name = 'Unix dotdot escape'; Base = '/tmp/projection'; Candidate = '/tmp/projection/../outside/README.md'; Expected = $false }
+            @{ Name = 'Unix remains case-sensitive'; Base = '/tmp/Projection'; Candidate = '/tmp/projection/file'; Expected = $false }
+            @{ Name = 'UNC inside'; Base = '\\server\share\projection'; Candidate = '\\server\share\projection\repo\file.txt'; Expected = $true }
+            @{ Name = 'UNC share boundary'; Base = '\\server\share\projection'; Candidate = '\\server\share-other\projection\file.txt'; Expected = $false }
+        )) {
+        Assert-ObservedPathInside -BasePath ([string]$case.Base) -CandidatePath ([string]$case.Candidate) -Expected ([bool]$case.Expected) -Message ("Observed path containment stays style-aware for {0}" -f [string]$case.Name)
+    }
     Assert-Equal 1 ([regex]::Matches($opencodeRunnerText, '\$directoryArgument = Get-SandboxVisiblePath').Count) 'OpenCode CLI argument construction assigns the sandbox directory once'
     $opencodeAst = Get-OpenCodeRunnerAst
     $scriptedFunctionAst = @($opencodeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-OpenCodeScriptedExecute' }, $true) | Select-Object -First 1)
@@ -2700,6 +2725,9 @@ try {
             Mode = 'with_skill'
         }
     }
+    Assert-Equal 'C:\prepared\iteration-1' (Get-OpenCodeLogicalPackageRoot -Projection $openCodeBoundaryProjection) 'OpenCode derives the logical package root lexically from observed Windows paths'
+    Assert-True (Test-OpenCodeBoundaryForbiddenGradingPath -ResolvedPath 'C:\prepared\iteration-1\eval-01\eval-metadata.json' -Projection $openCodeBoundaryProjection) 'OpenCode grading-material detection stays lexical for observed Windows package paths'
+    Assert-True (Test-OpenCodeBoundaryPairedArmPath -ResolvedPath 'C:\prepared\iteration-1\eval-01\without_skill\repo\README.md' -Projection $openCodeBoundaryProjection) 'OpenCode paired-arm detection stays lexical for observed Windows package paths'
     foreach ($event in @(
             @{ Name = 'read inside projection'; Event = @{ type = 'tool_use'; part = @{ tool = 'read'; path = 'C:\Users\Administrator\AppData\Local\Temp\agentic-opencode-projection-fixture\repo\README.md' } } }
             @{ Name = 'write inside projection'; Event = @{ type = 'tool_use'; part = @{ tool = 'write'; path = 'C:\Users\Administrator\AppData\Local\Temp\agentic-opencode-projection-fixture\repo\out.txt' } } }

@@ -335,34 +335,75 @@ function Test-PathInside {
     return $candidate -eq $base -or $candidate.StartsWith($base + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
 }
 
-function Resolve-ObservedUnixPath {
+function Get-ObservedPathSegments {
+    param([AllowEmptyString()][string]$PathText)
+
+    if ([string]::IsNullOrWhiteSpace($PathText)) { return @() }
+    $segments = [System.Collections.Generic.List[string]]::new()
+    foreach ($segment in @($PathText -split '[\\/]')) {
+        if ($null -ne $segment -and [string]$segment -ne '') { $segments.Add([string]$segment) }
+    }
+    return @($segments.ToArray())
+}
+
+function Resolve-ObservedPathSegments {
     param(
-        [Parameter(Mandatory = $true)][string]$BasePath,
-        [Parameter(Mandatory = $true)][string]$RelativePath
+        [AllowEmptyCollection()][string[]]$BaseSegments = @(),
+        [AllowEmptyCollection()][string[]]$PathSegments = @()
     )
 
-    $base = ($BasePath -replace '\\', '/')
-    if (-not $base.StartsWith('/', [System.StringComparison]::Ordinal)) {
-        throw "Unix observed path base '$BasePath' must be absolute."
+    $resolved = [System.Collections.Generic.List[string]]::new()
+    foreach ($segment in @($BaseSegments)) {
+        if ($null -ne $segment -and [string]$segment -ne '') { $resolved.Add([string]$segment) }
     }
-    $segments = [System.Collections.Generic.List[string]]::new()
-    foreach ($segment in @($base -split '/')) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$segment)) { $segments.Add([string]$segment) }
-    }
-    foreach ($segment in @(($RelativePath -replace '\\', '/') -split '/')) {
+    foreach ($segment in @($PathSegments)) {
         switch ([string]$segment) {
             '' { continue }
             '.' { continue }
             '..' {
-                if ($segments.Count -gt 0) { $segments.RemoveAt($segments.Count - 1) }
+                if ($resolved.Count -gt 0) { $resolved.RemoveAt($resolved.Count - 1) }
                 continue
             }
             default {
-                $segments.Add([string]$segment)
+                $resolved.Add([string]$segment)
             }
         }
     }
-    return '/' + ([string]::Join('/', @($segments.ToArray())))
+    return @($resolved.ToArray())
+}
+
+function Join-ObservedPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Style,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [AllowEmptyCollection()][string[]]$Segments = @()
+    )
+
+    if (@($Segments).Count -eq 0) { return $Root }
+    $separator = if ([string]$Style -eq 'unix') { '/' } else { '\' }
+    if ($Root.EndsWith($separator, [System.StringComparison]::Ordinal)) {
+        return $Root + [string]::Join($separator, @($Segments))
+    }
+    return $Root + $separator + [string]::Join($separator, @($Segments))
+}
+
+function New-ObservedPathInfo {
+    param(
+        [Parameter(Mandatory = $true)][string]$Style,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [AllowEmptyCollection()][string[]]$Segments = @(),
+        [Parameter(Mandatory = $true)][string]$Raw,
+        [Parameter(Mandatory = $true)][bool]$Absolute
+    )
+
+    return [pscustomobject]@{
+        Style = $Style
+        Root = $Root
+        Segments = @($Segments)
+        FullPath = Join-ObservedPath -Style $Style -Root $Root -Segments @($Segments)
+        Raw = $Raw
+        Absolute = $Absolute
+    }
 }
 
 function Get-ObservedPathInfo {
@@ -382,57 +423,57 @@ function Get-ObservedPathInfo {
     if ([string]::IsNullOrWhiteSpace($trimmed)) { return $null }
 
     if ($trimmed -match '^[A-Za-z]:[\\/]') {
-        return [pscustomobject]@{
-            Style = 'windows'
-            FullPath = ConvertTo-ComparablePath -Path ($trimmed -replace '/', '\')
-            Raw = $trimmed
-            Absolute = $true
-        }
+        $segments = Resolve-ObservedPathSegments -PathSegments (Get-ObservedPathSegments -PathText $trimmed.Substring(3))
+        return New-ObservedPathInfo -Style 'windows' -Root ($trimmed.Substring(0, 1).ToUpperInvariant() + ':\') -Segments $segments -Raw $trimmed -Absolute $true
     }
     if ($trimmed -match '^\\\\') {
-        return [pscustomobject]@{
-            Style = 'unc'
-            FullPath = ConvertTo-ComparablePath -Path ($trimmed -replace '/', '\')
-            Raw = $trimmed
-            Absolute = $true
-        }
+        $uncSegments = @(Get-ObservedPathSegments -PathText $trimmed.Substring(2))
+        if ($uncSegments.Count -lt 2) { return $null }
+        $pathSegments = if ($uncSegments.Count -gt 2) { @($uncSegments[2..($uncSegments.Count - 1)]) } else { @() }
+        $segments = Resolve-ObservedPathSegments -PathSegments $pathSegments
+        return New-ObservedPathInfo -Style 'unc' -Root ('\\' + $uncSegments[0] + '\' + $uncSegments[1]) -Segments $segments -Raw $trimmed -Absolute $true
     }
     if ($trimmed -match '^/') {
-        $normalized = ($trimmed -replace '\\', '/')
-        if ($normalized.Length -gt 1) { $normalized = $normalized.TrimEnd('/') }
-        return [pscustomobject]@{
-            Style = 'unix'
-            FullPath = $normalized
-            Raw = $trimmed
-            Absolute = $true
-        }
+        $segments = Resolve-ObservedPathSegments -PathSegments (Get-ObservedPathSegments -PathText $trimmed.Substring(1))
+        return New-ObservedPathInfo -Style 'unix' -Root '/' -Segments $segments -Raw $trimmed -Absolute $true
     }
     if ([string]::IsNullOrWhiteSpace($BasePath)) { return $null }
     $baseInfo = Get-ObservedPathInfo -Path $BasePath
     if ($null -eq $baseInfo) { return $null }
-    switch ([string]$baseInfo.Style) {
-        'unix' {
-            return [pscustomobject]@{
-                Style = 'unix'
-                FullPath = Resolve-ObservedUnixPath -BasePath ([string]$baseInfo.FullPath) -RelativePath $trimmed
-                Raw = $trimmed
-                Absolute = $false
-            }
-        }
-        default {
-            try {
-                $combined = [System.IO.Path]::GetFullPath((Join-Path $BasePath ($trimmed -replace '/', [System.IO.Path]::DirectorySeparatorChar)))
-            } catch {
-                return $null
-            }
-            return [pscustomobject]@{
-                Style = [string]$baseInfo.Style
-                FullPath = ConvertTo-ComparablePath -Path $combined
-                Raw = $trimmed
-                Absolute = $false
-            }
-        }
+    $segments = Resolve-ObservedPathSegments -BaseSegments @($baseInfo.Segments) -PathSegments (Get-ObservedPathSegments -PathText $trimmed)
+    return New-ObservedPathInfo -Style ([string]$baseInfo.Style) -Root ([string]$baseInfo.Root) -Segments $segments -Raw $trimmed -Absolute $false
+}
+
+function Get-ObservedParentPath {
+    param([AllowEmptyString()][string]$Path)
+
+    $info = Get-ObservedPathInfo -Path $Path
+    if ($null -eq $info) { return $null }
+    if (@($info.Segments).Count -eq 0) { return [string]$info.FullPath }
+    $parentSegments = if (@($info.Segments).Count -gt 1) { @($info.Segments[0..(@($info.Segments).Count - 2)]) } else { @() }
+    return Join-ObservedPath -Style ([string]$info.Style) -Root ([string]$info.Root) -Segments $parentSegments
+}
+
+function Get-ObservedRelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$BasePath,
+        [Parameter(Mandatory = $true)][string]$CandidatePath
+    )
+
+    $base = Get-ObservedPathInfo -Path $BasePath
+    $candidate = Get-ObservedPathInfo -Path $CandidatePath -BasePath $BasePath
+    if ($null -eq $base -or $null -eq $candidate -or [string]$base.Style -ne [string]$candidate.Style) { return $null }
+    if (-not (Test-ObservedPathInside -BasePath ([string]$base.FullPath) -CandidatePath ([string]$candidate.FullPath))) { return $null }
+
+    $comparison = if ([string]$base.Style -eq 'unix') { [System.StringComparison]::Ordinal } else { [System.StringComparison]::OrdinalIgnoreCase }
+    $baseSegments = @($base.Segments)
+    $candidateSegments = @($candidate.Segments)
+    if ($candidateSegments.Count -lt $baseSegments.Count) { return $null }
+    for ($index = 0; $index -lt $baseSegments.Count; $index++) {
+        if (-not [string]::Equals([string]$baseSegments[$index], [string]$candidateSegments[$index], $comparison)) { return $null }
     }
+    if ($candidateSegments.Count -eq $baseSegments.Count) { return '.' }
+    return [string]::Join('/', @($candidateSegments[$baseSegments.Count..($candidateSegments.Count - 1)]))
 }
 
 function Test-ObservedPathInside {
@@ -444,9 +485,16 @@ function Test-ObservedPathInside {
     $base = Get-ObservedPathInfo -Path $BasePath
     $candidate = Get-ObservedPathInfo -Path $CandidatePath -BasePath $BasePath
     if ($null -eq $base -or $null -eq $candidate -or [string]$base.Style -ne [string]$candidate.Style) { return $false }
-    $separator = if ([string]$base.Style -eq 'unix') { '/' } else { '\' }
     $comparison = if ([string]$base.Style -eq 'unix') { [System.StringComparison]::Ordinal } else { [System.StringComparison]::OrdinalIgnoreCase }
-    return [string]$candidate.FullPath -eq [string]$base.FullPath -or ([string]$candidate.FullPath).StartsWith(([string]$base.FullPath + $separator), $comparison)
+    if (-not [string]::Equals([string]$base.Root, [string]$candidate.Root, $comparison)) { return $false }
+
+    $baseSegments = @($base.Segments)
+    $candidateSegments = @($candidate.Segments)
+    if ($candidateSegments.Count -lt $baseSegments.Count) { return $false }
+    for ($index = 0; $index -lt $baseSegments.Count; $index++) {
+        if (-not [string]::Equals([string]$baseSegments[$index], [string]$candidateSegments[$index], $comparison)) { return $false }
+    }
+    return $true
 }
 
 function Get-ObservedPathTokensFromCommandText {
@@ -851,6 +899,8 @@ function ConvertTo-ComparablePath {
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
     try {
+        # Host filesystem normalization only. Observed/captured cross-platform
+        # evidence uses the lexical observed-path helpers above instead.
         $full = [System.IO.Path]::GetFullPath($Path)
         $full = Expand-WindowsShortPath -Path $full
         $root = [System.IO.Path]::GetPathRoot($full)

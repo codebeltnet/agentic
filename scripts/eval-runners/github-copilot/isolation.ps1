@@ -99,7 +99,7 @@ function Test-CopilotBoundaryForbiddenGradingPath {
     $packageRoot = [string](Get-JsonProperty -Object $Boundary -Name 'PackageRoot' -Default '')
     if ([string]::IsNullOrWhiteSpace($packageRoot) -or -not (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $ResolvedPath)) { return $false }
     $relative = if (Test-ObservedPathInside -BasePath $packageRoot -CandidatePath $ResolvedPath) {
-        [System.IO.Path]::GetRelativePath($packageRoot, $ResolvedPath).Replace('\', '/')
+        Get-ObservedRelativePath -BasePath $packageRoot -CandidatePath $ResolvedPath
     } else {
         ''
     }
@@ -143,7 +143,7 @@ function Get-CopilotBoundaryAssessment {
             $insideSource = -not [string]::IsNullOrWhiteSpace($sourceRepositoryRoot) -and (Test-ObservedPathInside -BasePath $sourceRepositoryRoot -CandidatePath $resolvedPath)
             if ($executionRole -eq 'phase2_analyzer') {
                 if ($insideWorking) {
-                    $relative = [System.IO.Path]::GetRelativePath($workingDirectoryRoot, $resolvedPath).Replace('\', '/')
+                    $relative = Get-ObservedRelativePath -BasePath $workingDirectoryRoot -CandidatePath $resolvedPath
                     if ($relative -in @('input-bundle.json', 'grader.md')) { $ownArmGradingVisible = $true }
                     continue
                 }
