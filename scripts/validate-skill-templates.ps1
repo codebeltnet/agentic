@@ -2749,6 +2749,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/SKILL.md' -GitRef $Ref
     $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/evals/evals.json' -GitRef $Ref
     $commitLanguage = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/references/commit-language.md' -GitRef $Ref
+    $groupingExamples = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/references/grouping-examples.md' -GitRef $Ref
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '[grouping-examples.md](references/grouping-examples.md)'
     $subjectValidator = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/scripts/validate-commit-subject.ps1' -GitRef $Ref
     $subjectTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-visual-commits/scripts/test-commit-subject.ps1' -GitRef $Ref
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
@@ -2818,14 +2820,14 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Then refresh the Step 1 inventory and review tracked diffs and untracked contents; explain each path''s rationale, audience, and lifecycle'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Put a visible line in the commit plan such as `Quality gate:'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` and `auto` do not bypass this gate.'
-    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Release-adjacent splitting rule'
-    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Concrete example: if one diff updates `Directory.Build.targets`, `Directory.Packages.props`, or `testenvironments.json`,'
-    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Keep `.nuget/*/PackageReleaseNotes.txt` with the'
-    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'The rule is the abstraction: split by purpose and audience, not by the fact that the changes landed together.'
+    Assert-Contains -Name 'git-visual-commits/references/grouping-examples.md' -Content $groupingExamples -Needle '#### Release-adjacent splitting rule'
+    Assert-Contains -Name 'git-visual-commits/references/grouping-examples.md' -Content $groupingExamples -Needle 'Concrete example: if one diff updates `Directory.Build.targets`, `Directory.Packages.props`, or `testenvironments.json`,'
+    Assert-Contains -Name 'git-visual-commits/references/grouping-examples.md' -Content $groupingExamples -Needle 'Keep `.nuget/*/PackageReleaseNotes.txt` with the'
+    Assert-Contains -Name 'git-visual-commits/references/grouping-examples.md' -Content $groupingExamples -Needle 'The rule is the abstraction: split by purpose and audience, not by the fact that the changes landed together.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'do not collapse "new skill introduced" and "existing skill refactored" into one commit'
-    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '**New repo-managed skill**'
-    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'a newly introduced `skills/<name>/` folder and its local `evals/` or `references/`'
-    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'If a commit both introduces a brand-new skill and refactors an existing skill to support it, prefer separate commits.'
+    Assert-Contains -Name 'git-visual-commits/references/grouping-examples.md' -Content $groupingExamples -Needle '**New repo-managed skill**'
+    Assert-Contains -Name 'git-visual-commits/references/grouping-examples.md' -Content $groupingExamples -Needle 'a newly introduced `skills/<name>/` folder and its local `evals/` or `references/`'
+    Assert-Contains -Name 'git-visual-commits/references/grouping-examples.md' -Content $groupingExamples -Needle 'If a commit both introduces a brand-new skill and refactors an existing skill to support it, prefer separate commits.'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Allowed Prefixes'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'Gitmoji First, Fallback Second'
