@@ -2811,7 +2811,7 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Single-category context quality gate'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Exactly one changed file is the only fast-path exception; skip this gate for that case.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Did I actually read the whole `git-visual-commits` skill through EOF in this session before classifying this change?'
-    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Then re-check the complete `git status`, `git diff`, and applicable staged diff; enumerate every changed path'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Then refresh the Step 1 inventory and review tracked diffs and untracked contents; explain each path''s rationale, audience, and lifecycle'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Put a visible line in the commit plan such as `Quality gate:'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` and `auto` do not bypass this gate.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '#### Release-adjacent splitting rule'
