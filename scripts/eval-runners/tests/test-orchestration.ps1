@@ -424,6 +424,58 @@ try {
     $validTerminalEvidence = New-TestNativeTerminalEvidence -Arm $terminalArm -RunData $terminalRunData -WorkerSessionId 'native-terminal-session'
     Assert-True ((Test-NativeWorkerTerminalEvidence -ExecutionEvidence $validTerminalEvidence -Run $terminalRunData -RequestedModel ([string]$terminalArm.worker.model) -ExpectedWorkerSessionId 'native-terminal-session').Valid) 'valid terminal native-worker evidence is accepted'
     Assert-True (Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $validTerminalEvidence -Run $terminalRunData -RequestedModel ([string]$terminalArm.worker.model) -ExpectedWorkerSessionId 'native-terminal-session') 'valid terminal evidence passes the assert gate'
+    $phase2AnalyzerRunRoot = Join-Path $testRoot 'phase2-analyzer-run'
+    New-Item -ItemType Directory -Path (Join-Path $phase2AnalyzerRunRoot 'repo'), (Join-Path $phase2AnalyzerRunRoot 'home') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $phase2AnalyzerRunRoot 'prompt.md'), 'deterministic phase2 analyzer prompt', [System.Text.UTF8Encoding]::new($false))
+    Write-TestJson -Path (Join-Path $phase2AnalyzerRunRoot 'run.json') -Value ([ordered]@{
+            schema = (Get-RunnerSchemaNames).Run
+            evalId = 1
+            evalName = 'phase2-analyzer'
+            candidateSkillName = 'phase2-analyzer'
+            skillName = $null
+            mode = 'without_skill'
+            executionRole = 'phase2_analyzer'
+            promptFile = 'prompt.md'
+            workingDirectory = 'repo'
+            homeDirectory = 'home'
+            skillDirectory = $null
+            freshContextRequired = $true
+            filesystemIsolationRequired = $true
+            isolatedHomeRequired = $true
+            gitWorkspace = $false
+            fixtureHash = ('a' * 64)
+            skillHash = $null
+            candidateInstructionHash = $null
+        })
+    $phase2AnalyzerRunData = Resolve-RunContract -RunPath (Join-Path $phase2AnalyzerRunRoot 'run.json')
+    $phase2AnalyzerEvidence = [ordered]@{
+        status = 'completed'
+        session = [ordered]@{ id = 'phase2-analyzer-session'; fresh = $true; resumed = $false }
+        run = [ordered]@{ eval_id = 1; eval_name = 'phase2-analyzer'; configuration = 'without_skill' }
+        requested = [ordered]@{ model = 'fixture-model' }
+        input = [ordered]@{ prompt_sha256 = [string]$phase2AnalyzerRunData.PromptHash }
+        evidence = [ordered]@{
+            delegation = [ordered]@{
+                mechanism = 'deterministic-fake-native-worker'
+                worker_session_id = 'phase2-analyzer-session'
+                observed_model = 'fixture-model'
+                observed_working_directory = [string]$phase2AnalyzerRunData.WorkingDirectoryPath
+                observed_home = [string]$phase2AnalyzerRunData.HomeDirectoryPath
+                fresh_worker = $true
+                home_config_isolated = $true
+                prompt_fidelity = $true
+                prompt_sha256 = [string]$phase2AnalyzerRunData.PromptHash
+                terminal_result_capture = $true
+                paired_arm_visible = $false
+                grading_material_visible = $false
+                paired_or_package_grading_material_visible = $false
+                own_arm_grading_material_visible = $true
+                nested_model_execution = $false
+                model_execution_count = 1
+            }
+        }
+    }
+    Assert-True ((Test-NativeWorkerTerminalEvidence -ExecutionEvidence $phase2AnalyzerEvidence -Run $phase2AnalyzerRunData -RequestedModel 'fixture-model' -ExpectedWorkerSessionId 'phase2-analyzer-session').Valid) 'phase2 analyzer may inspect its own staged grader bundle without violating the paired-arm/grading boundary'
 
     # Runner-specific checks and the portable validator must make one terminal
     # decision. Preserve the exact runner codes while the common validator
@@ -490,6 +542,16 @@ try {
         Assert-Equal 'failed' $ev.status "$Name evidence_validation should be failed"
         Assert-True (([string]::Join(',', @($caseState.completed[[string]$terminalArm.worker_id].native_worker_evidence_failures))) -match [regex]::Escape($ExpectedFailure)) "$Name records $ExpectedFailure"
     }
+
+    $phase2AnalyzerForbidden = Copy-TestObject -Value $phase2AnalyzerEvidence
+    $phase2AnalyzerForbidden.evidence.delegation.paired_or_package_grading_material_visible = $true
+    $phase2AnalyzerValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $phase2AnalyzerForbidden -Run $phase2AnalyzerRunData -RequestedModel 'fixture-model' -ExpectedWorkerSessionId 'phase2-analyzer-session'
+    Assert-True (-not [bool]$phase2AnalyzerValidation.Valid) 'phase2 analyzer still rejects paired/package grading visibility'
+    Assert-True (([string]::Join(',', @($phase2AnalyzerValidation.Failures))) -match 'paired_arm_and_grading_exclusion') 'phase2 analyzer violation reports paired/package grading failure'
+
+    $projectionEscapeObserved = Copy-TestObject -Value $validTerminalEvidence
+    Add-Member -InputObject $projectionEscapeObserved.evidence.delegation -MemberType NoteProperty -Name projection_escape_observed -Value $true -Force
+    Invoke-TerminalEvidenceCase -Name 'projection escape observed' -Evidence $projectionEscapeObserved -ExpectedFailure 'projection_escape_observed'
 
     $modelMismatch = Copy-TestObject -Value $validTerminalEvidence
     $modelMismatch.evidence.delegation.observed_model = 'different-model'

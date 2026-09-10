@@ -27,6 +27,16 @@ $repositoryRoot = (Resolve-Path (Join-Path $runnerRoot '..')).Path
 . (Join-Path $runnerRoot 'phase2-grading.ps1')
 . (Join-Path $runnerRoot 'package-integrity.ps1')
 . (Join-Path $runnerRoot 'fanout-process.ps1')
+$invokePhase2AnalyzerPath = Join-Path $runnerRoot 'invoke-phase2-analyzer.ps1'
+$invokePhase2Tokens = $null
+$invokePhase2Errors = $null
+$invokePhase2Ast = [Management.Automation.Language.Parser]::ParseFile($invokePhase2AnalyzerPath, [ref]$invokePhase2Tokens, [ref]$invokePhase2Errors)
+if ($invokePhase2Errors.Count -gt 0) { throw "Cannot parse invoke-phase2-analyzer.ps1: $invokePhase2Errors" }
+foreach ($definition in $invokePhase2Ast.EndBlock.Statements) {
+    if ($definition -is [Management.Automation.Language.FunctionDefinitionAst]) {
+        Invoke-Expression $definition.Extent.Text
+    }
+}
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -485,6 +495,88 @@ function Copy-TestGradingDocument {
     return ConvertTo-RunnerJson -Value $Document -Depth 100 | ConvertFrom-Json -Depth 100
 }
 
+function New-AnalyzerSemanticFixture {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $fixtureRoot = Join-Path $Root 'phase2-analyzer-direct'
+    $resultsDirectory = Join-Path $fixtureRoot 'results'
+    New-Item -ItemType Directory -Path $resultsDirectory -Force | Out-Null
+    $canonicalPath = Join-Path $resultsDirectory 'with-skill.result.json'
+    $metadataPath = Join-Path $fixtureRoot 'eval-metadata.json'
+    $canonical = [ordered]@{
+        output = "alpha line`nbeta line"
+        output_files = @('with_skill/evidence/opencode-events.jsonl', 'with_skill/evidence/opencode-stderr.txt')
+    }
+    Write-TestJson -Path $canonicalPath -Value $canonical
+    Write-TestJson -Path $metadataPath -Value ([ordered]@{
+            expected_output = 'alpha line'
+            assertions = @(
+                [ordered]@{ assertion = 'alpha line is present'; evidence_domain = 'output' }
+                [ordered]@{ assertion = 'beta line is present'; evidence_domain = 'output' }
+            )
+        })
+    $record = [pscustomobject]@{
+        EvalDirectory = $fixtureRoot
+        ResultPath = $canonicalPath
+        MetadataPath = $metadataPath
+        ResultRelative = 'with_skill.result.json'
+    }
+    $assertions = @(
+        [ordered]@{ eval_id = 1; eval_name = 'phase2-direct'; configuration = 'with_skill'; assertion_index = 0; assertion = 'alpha line is present'; evidence_domain = 'output'; validator = $null; record = $record }
+        [ordered]@{ eval_id = 1; eval_name = 'phase2-direct'; configuration = 'with_skill'; assertion_index = 1; assertion = 'beta line is present'; evidence_domain = 'output'; validator = $null; record = $record }
+    )
+    return [pscustomobject]@{
+        Root = $fixtureRoot
+        Canonical = Read-RunnerJson -Path $canonicalPath
+        Record = $record
+        Worker = [pscustomobject]@{
+            worker_id = 'arm-1-with_skill'
+            eval_id = 1
+            eval_name = 'phase2-direct'
+            configuration = 'with_skill'
+            record = $record
+            assertions = $assertions
+        }
+        AnalyzerProfile = [pscustomobject]@{
+            Hash = ('f' * 64)
+            Runner = 'fixture'
+            Model = 'fixture-model'
+            ReasoningEffort = $null
+        }
+    }
+}
+
+function Assert-AnalyzerResponseAccepted {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$ExpectedNormalization,
+        [Parameter(Mandatory = $true)][object]$Fixture,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    $response = ConvertFrom-AnalyzerResponse -Text $Text
+    Assert-Equal $ExpectedNormalization ([string]$response.TransportNormalization) "$Description normalization"
+    $grades = @(Confirm-AnalyzerFragment -Fragment $response.Fragment -Worker $Fixture.Worker -Canonical $Fixture.Canonical)
+    Assert-Equal 2 $grades.Count "$Description semantic grading entry count"
+}
+
+function Assert-ActionRejected {
+    param(
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+        [Parameter(Mandatory = $true)][string]$Pattern,
+        [Parameter(Mandatory = $true)][string]$Description
+    )
+
+    $failed = $false
+    try {
+        & $Action | Out-Null
+    } catch {
+        $failed = $true
+        Assert-True ($_.Exception.Message -match $Pattern) "$Description unexpected failure: $($_.Exception.Message)"
+    }
+    Assert-True $failed "$Description unexpectedly passed"
+}
+
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-integrity-finalization-' + [Guid]::NewGuid().ToString('N'))
 $oldReportMode = [Environment]::GetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE')
 try {
@@ -760,6 +852,88 @@ for ($index = 0; $index -lt $count; $index++) {
     $validationSnapshot = Get-TestFileHashSnapshot -Paths $validationSideEffectPaths
 
     if ($Suite -in @('All', 'Grading')) {
+        $directAnalyzerFixture = New-AnalyzerSemanticFixture -Root $testRoot
+        $validAnalyzerFragment = [ordered]@{
+            schema = 'codebeltnet/agentic/eval-analyzer-fragment/1'
+            eval_id = 1
+            configuration = 'with_skill'
+            grading = @(
+                [ordered]@{
+                    assertion_index = 0
+                    passed = $true
+                    reason = 'alpha line is present in the frozen output.'
+                    evidence_refs = @([ordered]@{
+                            artifact = 'with_skill.result.json'
+                            domain = 'output'
+                            start_line = 1
+                            end_line = 1
+                            quote = 'alpha line'
+                        })
+                }
+                [ordered]@{
+                    assertion_index = 1
+                    passed = $true
+                    reason = 'beta line is present in the frozen output.'
+                    evidence_refs = @([ordered]@{
+                            artifact = 'with_skill.result.json'
+                            domain = 'output'
+                            start_line = 1
+                            end_line = 1
+                            quote = 'beta line'
+                        })
+                }
+            )
+        }
+        $validAnalyzerJson = ConvertTo-RunnerJson -Value $validAnalyzerFragment -Depth 100
+        $fencedAnalyzerJson = [string]::Join([Environment]::NewLine, @('```json', $validAnalyzerJson, '```'))
+        $fencedAnalyzerJsonWithProse = [string]::Join([Environment]::NewLine, @('The grading fragment follows.', '```json', $validAnalyzerJson, '```'))
+        $duplicateFencedAnalyzerJson = [string]::Join([Environment]::NewLine, @('```json', $validAnalyzerJson, '```', '', '```json', $validAnalyzerJson, '```'))
+        Assert-AnalyzerResponseAccepted -Text $validAnalyzerJson -ExpectedNormalization 'raw_json' -Fixture $directAnalyzerFixture -Description 'raw analyzer JSON'
+        Assert-AnalyzerResponseAccepted -Text $fencedAnalyzerJson -ExpectedNormalization 'fenced_json' -Fixture $directAnalyzerFixture -Description 'fenced analyzer JSON'
+        Assert-AnalyzerResponseAccepted -Text $fencedAnalyzerJsonWithProse -ExpectedNormalization 'fenced_json_with_surrounding_text' -Fixture $directAnalyzerFixture -Description 'fenced analyzer JSON with prose'
+        Assert-ActionRejected -Description 'empty analyzer response rejected' -Pattern 'empty response' -Action { ConvertFrom-AnalyzerResponse -Text '   ' | Out-Null }
+        Assert-ActionRejected -Description 'malformed analyzer JSON rejected' -Pattern 'malformed JSON' -Action { ConvertFrom-AnalyzerResponse -Text '```json`n{"schema":`n```' | Out-Null }
+        Assert-ActionRejected -Description 'multiple analyzer JSON candidates rejected' -Pattern 'multiple (fenced blocks|JSON candidates)' -Action { ConvertFrom-AnalyzerResponse -Text $duplicateFencedAnalyzerJson | Out-Null }
+        $wrongSchemaFragment = Copy-TestGradingDocument -Document $validAnalyzerFragment
+        $wrongSchemaFragment.schema = 'wrong/schema'
+        Assert-ActionRejected -Description 'wrong analyzer fragment schema rejected' -Pattern 'unsupported schema' -Action {
+            $response = ConvertFrom-AnalyzerResponse -Text (ConvertTo-RunnerJson -Value $wrongSchemaFragment -Depth 100)
+            Confirm-AnalyzerFragment -Fragment $response.Fragment -Worker $directAnalyzerFixture.Worker -Canonical $directAnalyzerFixture.Canonical | Out-Null
+        }
+        $wrongEvalFragment = Copy-TestGradingDocument -Document $validAnalyzerFragment
+        $wrongEvalFragment.eval_id = 2
+        Assert-ActionRejected -Description 'wrong analyzer eval id rejected' -Pattern 'does not match the requested eval arm' -Action {
+            $response = ConvertFrom-AnalyzerResponse -Text (ConvertTo-RunnerJson -Value $wrongEvalFragment -Depth 100)
+            Confirm-AnalyzerFragment -Fragment $response.Fragment -Worker $directAnalyzerFixture.Worker -Canonical $directAnalyzerFixture.Canonical | Out-Null
+        }
+        $wrongConfigurationFragment = Copy-TestGradingDocument -Document $validAnalyzerFragment
+        $wrongConfigurationFragment.configuration = 'without_skill'
+        Assert-ActionRejected -Description 'wrong analyzer configuration rejected' -Pattern 'does not match the requested eval arm' -Action {
+            $response = ConvertFrom-AnalyzerResponse -Text (ConvertTo-RunnerJson -Value $wrongConfigurationFragment -Depth 100)
+            Confirm-AnalyzerFragment -Fragment $response.Fragment -Worker $directAnalyzerFixture.Worker -Canonical $directAnalyzerFixture.Canonical | Out-Null
+        }
+        $missingAssertionFragment = Copy-TestGradingDocument -Document $validAnalyzerFragment
+        $missingAssertionFragment.grading = @($missingAssertionFragment.grading[0])
+        Assert-ActionRejected -Description 'missing analyzer assertion index rejected' -Pattern 'grade cardinality' -Action {
+            $response = ConvertFrom-AnalyzerResponse -Text (ConvertTo-RunnerJson -Value $missingAssertionFragment -Depth 100)
+            Confirm-AnalyzerFragment -Fragment $response.Fragment -Worker $directAnalyzerFixture.Worker -Canonical $directAnalyzerFixture.Canonical | Out-Null
+        }
+        $duplicateAssertionFragment = Copy-TestGradingDocument -Document $validAnalyzerFragment
+        $duplicateAssertionFragment.grading[1].assertion_index = 0
+        Assert-ActionRejected -Description 'duplicate analyzer assertion index rejected' -Pattern 'duplicates assertion_index' -Action {
+            $response = ConvertFrom-AnalyzerResponse -Text (ConvertTo-RunnerJson -Value $duplicateAssertionFragment -Depth 100)
+            Confirm-AnalyzerFragment -Fragment $response.Fragment -Worker $directAnalyzerFixture.Worker -Canonical $directAnalyzerFixture.Canonical | Out-Null
+        }
+        $phase2BundleRoot = Join-Path $testRoot 'phase2-bundle-direct'
+        New-Item -ItemType Directory -Path $phase2BundleRoot -Force | Out-Null
+        $directBundle = New-AnalyzerRunBundle -Phase2Root $phase2BundleRoot -Worker $directAnalyzerFixture.Worker -AnalyzerProfile $directAnalyzerFixture.AnalyzerProfile -AnalyzerExecutionProfilePath (Join-Path $phase2BundleRoot 'analyzer-execution-profile.json') -GraderContractText '# deterministic grader'
+        $directBundleDocument = Read-TestJson -Path $directBundle.BundlePath
+        Assert-Equal 'with_skill.result.json,with_skill/evidence/opencode-events.jsonl,with_skill/evidence/opencode-stderr.txt' ([string]::Join(',', @($directBundleDocument.allowed_artifacts))) 'allowed_artifacts preserves individual array entries'
+        $directBundleRun = Resolve-RunContract -RunPath $directBundle.RunPath
+        Assert-Equal 'phase2_analyzer' ([string]$directBundleRun.ExecutionRole) 'Phase 2 analyzer run declares its transport role explicitly'
+        Assert-Equal 'without_skill' ([string]$directBundleRun.Mode) 'Phase 2 analyzer transport stays without_skill'
+        Assert-Equal 'with_skill' ([string]$directBundleDocument.configuration) 'Phase 2 bundle preserves the graded subject configuration independently of transport mode'
+
         $skeleton = Invoke-TestTool -Path $validationScript -Arguments @('-ShowSkeleton')
         Assert-ToolPasses -Invocation $skeleton -Description 'grading skeleton emission'
         $skeletonDocument = $skeleton.Text | ConvertFrom-Json -Depth 100

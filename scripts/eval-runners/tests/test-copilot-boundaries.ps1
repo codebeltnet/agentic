@@ -189,11 +189,40 @@ if ($inputText -eq 'failure') { exit 7 }
     $forged.evidence.delegation.paired_arm_visible = $false
     $forged.evidence.delegation.grading_material_visible = $false
     Assert-Rejected { Assert-CopilotCapturedBoundary -Raw $forged -RunData $singleInputs.Run } 'bridge rejects transcript contradiction despite false invisibility flags'
-    $proof = [pscustomobject]@{ Root = 'C:/temp/projection'; PackageRoot = 'C:/source/.bot/package'; SourceRepositoryRoot = 'C:/source' }
-    foreach ($path in @('../../eval-metadata.json', '../../with_skill/repo', '../../without_skill/repo', '../../results/arm.json', '../../grading.json', '../../execution-freeze.json', '../../orchestration-state.json', '../../report.html', 'C:\source\AGENTS.md')) {
+    $proof = [pscustomobject]@{
+        PackageRoot = 'C:/source/.bot/package'
+        SourceRepositoryRoot = 'C:/source'
+        RunRoot = 'C:/source/.bot/package/eval-01/with_skill'
+        WorkingDirectoryRoot = 'C:/source/.bot/package/eval-01/with_skill/repo'
+    }
+    foreach ($path in @('../../eval-metadata.json', '../../without_skill/repo', '../../results/arm.json', '../../../grading.json', '../../../execution-freeze.json', '../../../orchestration-state.json', '../../../report.html', 'C:\source\AGENTS.md')) {
         Assert-True (@(Find-CopilotBoundaryContradictions -Data @{ arguments = @{ path = $path } } -Projection $proof).Count -gt 0) "captured forbidden access rejected: $path"
     }
     Assert-Equal 0 @(Find-CopilotBoundaryContradictions -Data @{ arguments = @{ path = 'src/Widget.cs' } } -Projection $proof).Count 'ordinary staged source is allowed'
+    $phase2AnalyzerBoundary = [pscustomobject]@{
+        PackageRoot = 'C:\prepared\iteration-1'
+        SourceRepositoryRoot = 'C:\Source\GitHub\codebeltnet\agentic'
+        RunRoot = 'C:\prepared\iteration-1\phase2\work\arm-3-without_skill'
+        WorkingDirectoryRoot = 'C:\prepared\iteration-1\phase2\work\arm-3-without_skill\repo'
+        ExecutionRole = 'phase2_analyzer'
+    }
+    $phase2InputBundleAccess = Get-CopilotBoundaryAssessment -Data @{ arguments = @{ path = 'input-bundle.json' } } -Boundary $phase2AnalyzerBoundary
+    Assert-Equal 0 @($phase2InputBundleAccess.Contradictions).Count 'phase2 analyzer may read its own staged input bundle'
+    Assert-True ([bool]$phase2InputBundleAccess.OwnArmGradingMaterialVisible) 'phase2 analyzer records own-arm bundle visibility separately from forbidden grading visibility'
+    $phase2GraderAccess = Get-CopilotBoundaryAssessment -Data @{ arguments = @{ path = 'grader.md' } } -Boundary $phase2AnalyzerBoundary
+    Assert-Equal 0 @($phase2GraderAccess.Contradictions).Count 'phase2 analyzer may read its own staged grader contract'
+    Assert-True ([bool]$phase2GraderAccess.OwnArmGradingMaterialVisible) 'phase2 analyzer records own-arm grader visibility separately from forbidden grading visibility'
+    $phase2EvidenceAccess = Get-CopilotBoundaryAssessment -Data @{ arguments = @{ path = 'evidence/with_skill/evidence/opencode-events.jsonl' } } -Boundary $phase2AnalyzerBoundary
+    Assert-Equal 0 @($phase2EvidenceAccess.Contradictions).Count 'phase2 analyzer may read its own staged one-arm evidence artifacts'
+    $phase2PairedArmAccess = Get-CopilotBoundaryAssessment -Data @{ arguments = @{ path = '..\..\arm-4-with_skill\repo\input-bundle.json' } } -Boundary $phase2AnalyzerBoundary
+    Assert-True (@($phase2PairedArmAccess.Contradictions).Count -gt 0) 'phase2 analyzer paired-arm artifact access is incompatible'
+    Assert-True ([bool]$phase2PairedArmAccess.PairedArmVisible) 'phase2 analyzer paired-arm access is classified separately'
+    $phase2PackageGradingAccess = Get-CopilotBoundaryAssessment -Data @{ arguments = @{ path = '..\..\..\..\grading.json' } } -Boundary $phase2AnalyzerBoundary
+    Assert-True (@($phase2PackageGradingAccess.Contradictions).Count -gt 0) 'phase2 analyzer package-root grading access is incompatible'
+    Assert-True ([bool]$phase2PackageGradingAccess.PairedOrPackageGradingMaterialVisible) 'phase2 analyzer package-root grading access is classified separately'
+    $phase2PackageOrchestrationAccess = Get-CopilotBoundaryAssessment -Data @{ arguments = @{ path = '..\..\..\..\execution-freeze.json' } } -Boundary $phase2AnalyzerBoundary
+    Assert-True (@($phase2PackageOrchestrationAccess.Contradictions).Count -gt 0) 'phase2 analyzer package-root orchestration access is incompatible'
+    Assert-True ([bool]$phase2PackageOrchestrationAccess.PairedOrPackageGradingMaterialVisible) 'phase2 analyzer package-root orchestration access remains forbidden'
 
     # --- P0 native-skill isolation regressions (model-free) ---
     Assert-True (@(New-CopilotCliArguments -Inputs $singleInputs) -contains '--excluded-tools=skill') 'Copilot removes the native skill tool from the model tool set for both arms'

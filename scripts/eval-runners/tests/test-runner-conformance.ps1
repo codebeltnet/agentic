@@ -2665,17 +2665,67 @@ try {
     $continuationParserAst = @($opencodeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-OpenCodeContinuationCapability' }, $true))
     $continuationArgumentAst = @($opencodeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'New-OpenCodeContinuationArguments' }, $true))
     $turnProcessAst = @($opencodeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-OpenCodeTurnProcess' }, $true))
+    $openCodeBoundaryHelperNames = @(
+        'Add-OpenCodeBoundaryValueCandidate',
+        'Get-OpenCodeBoundaryValueCandidates',
+        'Get-OpenCodeLogicalPackageRoot',
+        'Test-OpenCodeBoundaryPairedArmPath',
+        'Test-OpenCodeBoundaryForbiddenGradingPath',
+        'Get-OpenCodeBoundaryAssessment',
+        'ConvertTo-OpenCodeBoundaryAssessment',
+        'Apply-OpenCodeBoundaryAssessment'
+    )
     Assert-Equal 1 $scriptedFunctionAst.Count 'OpenCode has one selected scripted execution function'
     Assert-Equal 1 $executeFunctionAst.Count 'OpenCode has one execution dispatcher'
     Assert-Equal 0 $legacyFunctionAst.Count 'OpenCode removes the dead legacy scripted continuation function'
     Assert-Equal 1 $continuationParserAst.Count 'OpenCode keeps installed-help exact --session parsing'
     Assert-Equal 1 $continuationArgumentAst.Count 'OpenCode keeps explicit --session argument construction'
     Assert-Equal 1 $turnProcessAst.Count 'OpenCode uses a direct CLI turn-process helper'
+    foreach ($helperName in $openCodeBoundaryHelperNames) {
+        $helperAst = @($opencodeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $helperName }, $true) | Select-Object -First 1)
+        Assert-Equal 1 $helperAst.Count "OpenCode keeps boundary helper $helperName"
+        Invoke-Expression $helperAst[0].Extent.Text
+    }
     $scriptedFunctionText = [string]$scriptedFunctionAst[0].Extent.Text
     $executeFunctionText = [string]$executeFunctionAst[0].Extent.Text
     Assert-True ($scriptedFunctionText.Contains('Invoke-OpenCodeTurnProcess') -and $scriptedFunctionText.Contains('New-OpenCodeContinuationArguments') -and $scriptedFunctionText.Contains('Get-OpenCodeFutureTurnCanary')) 'selected OpenCode scripted transport uses direct CLI exact-session continuation and future-turn secrecy checks'
     Assert-True ($opencodeRunnerText -notmatch '(?i)Start-OpenCodeServer|Invoke-OpenCodeHttpRequest|SessionCreatePath|SessionMessagePath|/global/health|/doc|opencode\s+serve|serve_help_probe|opencode-server-synchronous-http') 'OpenCode runner has no eval server transport or loopback API probes'
     Assert-True ($executeFunctionText.Contains('Invoke-OpenCodeScriptedExecute') -and $executeFunctionText -notmatch '(?i)Invoke-OpenCodeScriptedExecuteLegacy\s+-Inputs') 'OpenCode dispatcher selects the direct CLI scripted transport for interaction runs'
+    $openCodeBoundaryProjection = [pscustomobject]@{
+        Root = 'C:\Users\Administrator\AppData\Local\Temp\agentic-opencode-projection-fixture'
+        PhysicalWorkingDirectory = 'C:\Users\Administrator\AppData\Local\Temp\agentic-opencode-projection-fixture\repo'
+        SourceRepositoryRoot = 'C:\Source\GitHub\codebeltnet\agentic'
+        LogicalRun = [pscustomobject]@{
+            RunRoot = 'C:\prepared\iteration-1\eval-01\with_skill'
+            Mode = 'with_skill'
+        }
+    }
+    foreach ($event in @(
+            @{ Name = 'read inside projection'; Event = @{ type = 'tool_use'; part = @{ tool = 'read'; path = 'C:\Users\Administrator\AppData\Local\Temp\agentic-opencode-projection-fixture\repo\README.md' } } }
+            @{ Name = 'write inside projection'; Event = @{ type = 'tool_use'; part = @{ tool = 'write'; path = 'C:\Users\Administrator\AppData\Local\Temp\agentic-opencode-projection-fixture\repo\out.txt' } } }
+            @{ Name = 'repo-relative shell inside projection'; Event = @{ type = 'tool_use'; part = @{ tool = 'shell'; command = 'Get-Content README.md' } } }
+        )) {
+        $assessment = Get-OpenCodeBoundaryAssessment -Events @($event.Event) -Projection $openCodeBoundaryProjection
+        Assert-Equal 0 @($assessment.Contradictions).Count "OpenCode boundary allows $($event.Name)"
+    }
+    foreach ($event in @(
+            @{ Name = 'read unrelated Windows repo'; Event = @{ type = 'tool_use'; part = @{ tool = 'read'; path = 'C:\Source\GitHub\xunit\README.md' } } }
+            @{ Name = 'write unrelated Windows repo'; Event = @{ type = 'tool_use'; part = @{ tool = 'write'; path = 'C:\Source\GitHub\xunit\README.md' } } }
+            @{ Name = 'PowerShell filesystem shell escape'; Event = @{ type = 'tool_use'; part = @{ tool = 'shell'; command = 'Get-ChildItem C:\Users\Administrator -Recurse' } } }
+            @{ Name = 'Linux absolute path escape'; Event = @{ type = 'tool_use'; part = @{ tool = 'read'; path = '/home/user/other-repo/file' } } }
+            @{ Name = 'macOS absolute path escape'; Event = @{ type = 'tool_use'; part = @{ tool = 'read'; path = '/Users/user/other-repo/file' } } }
+            @{ Name = 'source repository escape'; Event = @{ type = 'tool_use'; part = @{ tool = 'read'; path = 'C:\Source\GitHub\codebeltnet\agentic\README.md' } } }
+            @{ Name = 'prepared package escape'; Event = @{ type = 'tool_use'; part = @{ tool = 'read'; path = 'C:\prepared\iteration-1\eval-01\with_skill\repo\README.md' } } }
+        )) {
+        $assessment = Get-OpenCodeBoundaryAssessment -Events @($event.Event) -Projection $openCodeBoundaryProjection
+        Assert-True ([bool]$assessment.ProjectionEscapeObserved) "OpenCode boundary rejects $($event.Name)"
+        Assert-True (@($assessment.Contradictions).Count -gt 0) "OpenCode boundary records contradiction evidence for $($event.Name)"
+    }
+    $outsideProjectionAssessment = Get-OpenCodeBoundaryAssessment -Events @(@{ type = 'tool_use'; part = @{ tool = 'read'; path = 'C:\Source\GitHub\xunit\README.md' } }) -Projection $openCodeBoundaryProjection
+    $outsideProjectionOutcome = Apply-OpenCodeBoundaryAssessment -Status 'completed' -Assessment $outsideProjectionAssessment
+    Assert-Equal 'incompatible' ([string]$outsideProjectionOutcome.Status) 'observed OpenCode projection escape makes a completed arm incompatible'
+    Assert-Equal 'opencode_projection_escape_observed' ([string]$outsideProjectionOutcome.FailureCode) 'observed OpenCode projection escape surfaces the dedicated failure code'
+    Assert-True (@($outsideProjectionOutcome.BoundaryEvidence.contradictions).Count -gt 0) 'OpenCode boundary outcome preserves structured contradiction evidence'
 
     $rawPath = Join-Path $iteration 'conformance\results\with-skill.execution-result.json'
     $withoutRawPath = Join-Path $iteration 'conformance\results\without-skill.execution-result.json'
