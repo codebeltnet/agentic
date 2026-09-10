@@ -13,7 +13,11 @@ param(
     [string] $EntityPath,
 
     [Parameter()]
-    [switch] $IncludeWorktree
+    [switch] $IncludeWorktree,
+
+    [Parameter()]
+    [ValidateSet('Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security')]
+    [string] $Section
 )
 
 Set-StrictMode -Version Latest
@@ -120,6 +124,17 @@ else {
     'Unchanged'
 }
 
+$allowedSections = @(switch ($classification) {
+    'Added' { @('Added') }
+    'Removed' { @('Removed') }
+    'Changed' { @('Changed', 'Deprecated', 'Fixed', 'Security') }
+    default { @() }
+})
+
+if ($Section -and $Section -notin @($allowedSections)) {
+    throw "Entity '$normalizedPath' is $classification from the resolved base to the final state; section '$Section' is invalid. Allowed sections: $(@($allowedSections) -join ', '). Regenerate the outcome from the full release scope."
+}
+
 [pscustomobject]@{
     entity_path = $normalizedPath
     base_commit = $resolvedBase
@@ -128,4 +143,5 @@ else {
     base_exists = $baseExists
     final_exists = $finalExists
     classification = $classification
+    allowed_sections = @($allowedSections)
 } | ConvertTo-Json

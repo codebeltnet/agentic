@@ -231,14 +231,17 @@
     },
     {
       "id": 20,
-      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there twice. Start from a tagged base release containing `CHANGELOG.md`, `README.md`, and `scripts/validate-skills.ps1`, with no `skills/dotnet-test/` directory and no dotnet-test registration. On branch `v0.9.0/dotnet-test`, commit these steps in order: introduce `skills/dotnet-test/SKILL.md`; add its references, assets, scripts, and evals; register it in README.md and the shared validator. Run the skill once so `CHANGELOG.md` contains a draft `## [0.9.0]` section with an `Added` bullet for dotnet-test. Then make these more unreleased commits on the same branch: refine `resolve-test-package-versions.ps1` to validate packages as a combined set, add `test-resolve-test-package-versions.ps1`, update `validate-skill.ps1` to run that regression test, and revise the README.md dotnet-test capability description. Re-run the skill to update `CHANGELOG.md` and stop after the edit.",
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there twice. Start from a tagged base release containing `CHANGELOG.md`, `README.md`, and `scripts/validate-skills.ps1`, with no `skills/dotnet-test/` directory and no dotnet-test registration. On branch `v0.9.0/dotnet-test`, commit these steps in order: introduce `skills/dotnet-test/SKILL.md`; add its references, assets, scripts, and evals; register it in README.md and the shared validator. Run the skill once so `CHANGELOG.md` contains a draft `## [0.9.0]` section with an `Added` bullet for dotnet-test. Then make these more unreleased commits on the same branch: refine `resolve-test-package-versions.ps1` to validate packages as a combined set, add `test-resolve-test-package-versions.ps1`, update `validate-skill.ps1` to run that regression test, revise the README.md dotnet-test capability description; and repair scoped-property resolution, XML decoding, conflict routing, and encoding in the new resolver. Seed stale Changed and Fixed bullets that repeat these same repairs in the existing draft. Re-run the skill to update `CHANGELOG.md` and stop after the edit.",
       "expected_output": "The existing 0.9.0 draft section is regenerated from the branch's current base-to-HEAD result, keeping dotnet-test as one Added outcome in its final form instead of appending a Changed section for later pre-release refinements.",
       "expectations": [
         "Treats the existing `## [0.9.0]` section as an unreleased draft because the matching `v0.9.0` tag does not exist yet",
         "Regenerates the 0.9.0 highlight and populated sections from the resolved git result instead of using the earlier draft text as a second baseline",
         "Keeps the combined-set package validation, resolver test, validator update, and README wording changes within the Added dotnet-test outcome because the capability is still base-absent",
         "Does not preserve the earlier draft bullet as a frozen baseline that forces later refinements into `Changed`",
-        "Does not create a Changed section or Changed bullet for unreleased refinements to the still-unreleased dotnet-test introduction"
+        "Does not create a Changed section or Changed bullet for unreleased refinements to the still-unreleased dotnet-test introduction",
+        "Validates each proposed path-backed bullet with resolve-release-entity.ps1 -Section using the full branch baseline on both invocations",
+        "Uses allowed_sections to keep fixes to the new unreleased capability under Added, including scoped-property, XML-decoding, conflict-routing, and encoding corrections",
+        "Consolidates any duplicate Changed and Fixed descriptions of the same outcome into the single Added capability summary"
       ]
     },
     {
