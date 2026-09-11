@@ -491,6 +491,139 @@ function Invoke-ValidationScriptJobs {
     return @($scriptResults)
 }
 
+function Invoke-PrepareEvalPackageBatch {
+    <#
+    .SYNOPSIS
+        Runs independent prepare-skill-evals.ps1 invocations concurrently.
+    .DESCRIPTION
+        Each request carries its own -OutputRoot and its own fake model catalog, so the
+        invocations share no writable state. Running them together removes only the idle waiting
+        between them: every invocation still executes with identical arguments, and every
+        assertion still runs against its captured output and exit code.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][object[]]$Requests
+    )
+
+    $items = @(foreach ($request in $Requests) {
+        [pscustomobject]@{
+            Name       = [string]$request.Name
+            ScriptPath = $ScriptPath
+            Arguments  = @($request.Arguments)
+        }
+    })
+
+    $parallelism = Get-ValidationParallelism -WorkItemCount $items.Count -Maximum 8
+    $batch = Invoke-ThreadJobBatch `
+        -Items $items `
+        -Activity 'eval package preparation' `
+        -ThrottleLimit $parallelism `
+        -ScriptBlock {
+            param($Request)
+
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $output = @()
+            $exitCode = 1
+            try {
+                $output = & pwsh -NoProfile -NonInteractive -File $Request.ScriptPath @($Request.Arguments) 2>&1
+                $exitCode = $LASTEXITCODE
+            } finally {
+                $stopwatch.Stop()
+            }
+
+            [pscustomobject]@{
+                Name           = [string]$Request.Name
+                ExitCode       = $exitCode
+                Output         = @($output | ForEach-Object { [string]$_ })
+                ElapsedSeconds = $stopwatch.Elapsed.TotalSeconds
+            }
+        }
+
+    $map = @{}
+    foreach ($entry in @($batch)) {
+        if ($null -eq $entry -or [string]::IsNullOrWhiteSpace($entry.Name)) { continue }
+        $map[$entry.Name] = $entry
+        # Exit codes are reported rather than judged: several of these invocations are expected to
+        # fail, and the assertions that follow decide what each outcome must mean.
+        Write-Host ("[PREP] eval package preparation {0}: exit {1} ({2:n1}s)" -f $entry.Name, $entry.ExitCode, $entry.ElapsedSeconds)
+    }
+
+    return $map
+}
+
+function Invoke-ParallelNestedScripts {
+    param(
+        [string[]]$Scripts,
+        [string]$RepoRoot
+    )
+
+    $items = @(foreach ($script in $Scripts) {
+        [pscustomobject]@{ RelativePath = $script; Path = (Join-Path $RepoRoot $script) }
+    })
+
+    # Bounded well below the core count on purpose. These regressions carry large slack: they are
+    # never the critical path, so a small window keeps the processor available to the suites that
+    # are, instead of oversubscribing the machine with nested processes.
+    $parallelism = Get-ValidationParallelism -WorkItemCount $items.Count -Maximum 4
+    $batch = Invoke-ThreadJobBatch `
+        -Items $items `
+        -Activity 'runner regression scripts' `
+        -ThrottleLimit $parallelism `
+        -ScriptBlock {
+            param($Item)
+
+            $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $output = @()
+            $exitCode = 1
+            try {
+                $output = & pwsh -NoProfile -NonInteractive -File $Item.Path 2>&1
+                $exitCode = $LASTEXITCODE
+            } finally {
+                $stopwatch.Stop()
+            }
+
+            [pscustomobject]@{
+                RelativePath = $Item.RelativePath
+                ExitCode = $exitCode
+                Output = @($output | ForEach-Object { [string]$_ })
+                ElapsedSeconds = $stopwatch.Elapsed.TotalSeconds
+            }
+        }
+
+    $map = @{}
+    foreach ($entry in @($batch)) {
+        if ($null -eq $entry -or [string]::IsNullOrWhiteSpace($entry.RelativePath)) { continue }
+        $map[$entry.RelativePath] = $entry
+        Write-Host ("[{0}] nested regression {1} ({2:n1}s)" -f $(if ($entry.ExitCode -eq 0) { 'PASS' } else { 'FAIL' }), $entry.RelativePath, $entry.ElapsedSeconds)
+    }
+
+    return $map
+}
+
+function Get-ParallelNestedScriptResult {
+    param(
+        [string]$RelativePath,
+        [string]$RepoRoot
+    )
+
+    if ($script:ParallelNestedScriptResults.ContainsKey($RelativePath)) {
+        return $script:ParallelNestedScriptResults[$RelativePath]
+    }
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $RepoRoot $RelativePath) 2>&1
+    $exitCode = $LASTEXITCODE
+    $stopwatch.Stop()
+
+    return [pscustomobject]@{
+        RelativePath = $RelativePath
+        ExitCode = $exitCode
+        Output = @($output | ForEach-Object { [string]$_ })
+        ElapsedSeconds = $stopwatch.Elapsed.TotalSeconds
+    }
+}
+
 function Get-AppPlaceholderMap {
     param(
         [string]$AppType,
@@ -1242,16 +1375,42 @@ Add-ValidationResult -Results $results -Name 'Repository automation cannot launc
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'validate-skill-templates.ps1 -MetadataOnly'
 }
 
+# The runner regressions below are independent of each other, so they are executed once as a
+# bounded parallel batch instead of one after another. Each result is still asserted by its own
+# validation entry, in the same order, with the same messages and the same pass patterns.
+$script:ParallelNestedScriptResults = @{}
+$parallelNestedScripts = @(
+    'scripts/eval-runners/tests/test-codex-paths.ps1'
+    'scripts/test-validation-suites.ps1'
+    'scripts/eval-runners/tests/test-token-reporting.ps1'
+    'scripts/eval-runners/tests/test-orchestration.ps1'
+    'scripts/eval-runners/tests/test-phase1-controller-lifecycle.ps1'
+    'scripts/eval-runners/tests/test-phase1-aggregate-regressions.ps1'
+    'scripts/eval-runners/tests/test-report-utf8.ps1'
+    'scripts/eval-runners/tests/test-probe-environment.ps1'
+    'scripts/eval-runners/tests/test-runner-observability.ps1'
+    'scripts/eval-runners/tests/test-preflight-summary.ps1'
+    'scripts/eval-runners/tests/test-progress-coalescing.ps1'
+    'scripts/tests/test-validate-local.ps1'
+)
+if (-not [string]::IsNullOrWhiteSpace($Ref) -and $Suite -in @('All', 'Runners')) {
+    Write-Host '[SKIP] runner regression batch (history mode does not execute nested suites)'
+} elseif ($Suite -in @('All', 'Runners')) {
+    $script:ParallelNestedScriptResults = Invoke-ParallelNestedScripts -Scripts $parallelNestedScripts -RepoRoot $repoRoot
+}
+
 Add-ValidationResult -Results $results -Name 'Codex ambient path isolation is platform independent' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
-    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-codex-paths.ps1') 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Codex path isolation failed: $($output -join [Environment]::NewLine)" }
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-codex-paths.ps1' -RepoRoot $repoRoot
+    $output = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) { throw "Codex path isolation failed: $($output -join [Environment]::NewLine)" }
 }
 
 Add-ValidationResult -Results $results -Name 'CI schedules every deterministic validation suite' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
-    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/test-validation-suites.ps1') 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "CI suite coverage failed: $($output -join [Environment]::NewLine)" }
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/test-validation-suites.ps1' -RepoRoot $repoRoot
+    $output = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) { throw "CI suite coverage failed: $($output -join [Environment]::NewLine)" }
 }
 
 Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance remains deterministic' -Group 'Conformance' -Action {
@@ -1273,8 +1432,9 @@ Add-ValidationResult -Results $results -Name 'Eval Runner protocol conformance r
 
 Add-ValidationResult -Results $results -Name 'Token normalization and benchmark reporting remain deterministic' -Group 'Runners' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
-    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/eval-runners/tests/test-token-reporting.ps1') 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Token reporting regression failed: $($output -join [Environment]::NewLine)" }
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-token-reporting.ps1' -RepoRoot $repoRoot
+    $output = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) { throw "Token reporting regression failed: $($output -join [Environment]::NewLine)" }
 }
 
 Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains deterministic' -Group 'Runners' -Action {
@@ -1285,8 +1445,9 @@ Add-ValidationResult -Results $results -Name 'Runner-owned orchestration remains
     if (-not (Test-Path -LiteralPath $orchestrationPath -PathType Leaf)) {
         throw 'The native-worker orchestration suite is missing.'
     }
-    $orchestrationOutput = & pwsh -NoProfile -NonInteractive -File $orchestrationPath 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-orchestration.ps1' -RepoRoot $repoRoot
+    $orchestrationOutput = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
         throw "Native-worker orchestration failed: $($orchestrationOutput -join [Environment]::NewLine)"
     }
     if (@($orchestrationOutput -join [Environment]::NewLine) -notmatch 'Native worker orchestration:\s+PASS') {
@@ -1302,8 +1463,9 @@ Add-ValidationResult -Results $results -Name 'Foreground Phase 1 lifecycle remai
     if (-not (Test-Path -LiteralPath $lifecyclePath -PathType Leaf)) {
         throw 'The foreground Phase 1 lifecycle suite is missing.'
     }
-    $lifecycleOutput = & pwsh -NoProfile -NonInteractive -File $lifecyclePath 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-phase1-controller-lifecycle.ps1' -RepoRoot $repoRoot
+    $lifecycleOutput = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
         throw "Foreground Phase 1 lifecycle regressions failed: $($lifecycleOutput -join [Environment]::NewLine)"
     }
     if (@($lifecycleOutput -join [Environment]::NewLine) -notmatch 'Runner-owned foreground Phase 1 lifecycle:\s+PASS') {
@@ -1319,8 +1481,9 @@ Add-ValidationResult -Results $results -Name 'Phase 1 aggregate fail-closed regr
     if (-not (Test-Path -LiteralPath $aggregatePath -PathType Leaf)) {
         throw 'The Phase 1 aggregate regression suite is missing.'
     }
-    $aggregateOutput = & pwsh -NoProfile -NonInteractive -File $aggregatePath 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-phase1-aggregate-regressions.ps1' -RepoRoot $repoRoot
+    $aggregateOutput = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
         throw "Phase 1 aggregate regressions failed: $($aggregateOutput -join [Environment]::NewLine)"
     }
     if (@($aggregateOutput -join [Environment]::NewLine) -notmatch 'Phase 1 aggregate regressions:\s+PASS') {
@@ -1353,8 +1516,9 @@ Add-ValidationResult -Results $results -Name 'Windows UTF-8 report generation su
     if (-not (Test-Path -LiteralPath $reportUtf8Path -PathType Leaf)) {
         throw 'The Windows UTF-8 report regression is missing.'
     }
-    $reportUtf8Output = & pwsh -NoProfile -NonInteractive -File $reportUtf8Path 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-report-utf8.ps1' -RepoRoot $repoRoot
+    $reportUtf8Output = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
         throw "Windows UTF-8 report regression failed: $($reportUtf8Output -join [Environment]::NewLine)"
     }
     if (@($reportUtf8Output -join [Environment]::NewLine) -notmatch 'Report UTF-8 regression:\s+(PASS|SKIP)') {
@@ -1370,8 +1534,9 @@ Add-ValidationResult -Results $results -Name 'Model-free harness probes resolve 
     if (-not (Test-Path -LiteralPath $probeEnvironmentPath -PathType Leaf)) {
         throw 'The probe-environment regression is missing.'
     }
-    $probeEnvironmentOutput = & pwsh -NoProfile -NonInteractive -File $probeEnvironmentPath 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-probe-environment.ps1' -RepoRoot $repoRoot
+    $probeEnvironmentOutput = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
         throw "Probe-environment regression failed: $($probeEnvironmentOutput -join [Environment]::NewLine)"
     }
     if (@($probeEnvironmentOutput -join [Environment]::NewLine) -notmatch 'Probe environment regression:\s+PASS') {
@@ -1387,8 +1552,9 @@ Add-ValidationResult -Results $results -Name 'Runner live observability remains 
     if (-not (Test-Path -LiteralPath $observabilityPath -PathType Leaf)) {
         throw 'The runner observability regression is missing.'
     }
-    $observabilityOutput = & pwsh -NoProfile -NonInteractive -File $observabilityPath 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-runner-observability.ps1' -RepoRoot $repoRoot
+    $observabilityOutput = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
         throw "Runner observability regression failed: $($observabilityOutput -join [Environment]::NewLine)"
     }
     if (@($observabilityOutput -join [Environment]::NewLine) -notmatch 'Runner observability:\s+PASS') {
@@ -1404,8 +1570,9 @@ Add-ValidationResult -Results $results -Name 'Preflight raw-output boundary is c
     if (-not (Test-Path -LiteralPath $preflightPath -PathType Leaf)) {
         throw 'The preflight raw-output boundary test suite is missing.'
     }
-    $preflightOutput = & pwsh -NoProfile -NonInteractive -File $preflightPath 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-preflight-summary.ps1' -RepoRoot $repoRoot
+    $preflightOutput = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
         throw "Preflight raw-output boundary tests failed: $($preflightOutput -join [Environment]::NewLine)"
     }
     if (@($preflightOutput -join [Environment]::NewLine) -notmatch 'Preflight raw-output boundary:\s+PASS') {
@@ -1421,12 +1588,27 @@ Add-ValidationResult -Results $results -Name 'Progress coalescing renders select
     if (-not (Test-Path -LiteralPath $coalescingPath -PathType Leaf)) {
         throw 'The progress coalescing test suite is missing.'
     }
-    $coalescingOutput = & pwsh -NoProfile -NonInteractive -File $coalescingPath 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/eval-runners/tests/test-progress-coalescing.ps1' -RepoRoot $repoRoot
+    $coalescingOutput = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
         throw "Progress coalescing tests failed: $($coalescingOutput -join [Environment]::NewLine)"
     }
     if (@($coalescingOutput -join [Environment]::NewLine) -notmatch 'Progress coalescing:\s+PASS') {
         throw 'Progress coalescing tests did not report PASS.'
+    }
+}
+
+Add-ValidationResult -Results $results -Name 'Local full-validation scheduling, failure propagation, cancellation, and coverage remain deterministic' -Group 'Runners' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        return
+    }
+    $nestedResult = Get-ParallelNestedScriptResult -RelativePath 'scripts/tests/test-validate-local.ps1' -RepoRoot $repoRoot
+    $schedulerOutput = $nestedResult.Output
+    if ($nestedResult.ExitCode -ne 0) {
+        throw "Local validation scheduler regressions failed: $($schedulerOutput -join [Environment]::NewLine)"
+    }
+    if (@($schedulerOutput -join [Environment]::NewLine) -notmatch 'Local validation scheduler:\s+PASS') {
+        throw 'Local validation scheduler regressions did not report PASS.'
     }
 }
 
@@ -1733,9 +1915,34 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'Codebelt Reference discovery must fail instead of silently substituting a model.'
         }
 
+        # Roots are declared up front so the independent package preparations below can run as one
+        # batch. Each invocation keeps its own -OutputRoot and fake catalog, so they share no
+        # writable state; only the idle waiting between them is removed. The arguments and every
+        # assertion that follows are unchanged, and each result keeps its own exit code.
         $referencePackageRoot = Join-Path $packageRoot 'reference-package'
-        $referencePrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $referencePackageRoot -CodebeltReference -ModelCatalogPath $catalogPath 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        $codexPackageRoot = Join-Path $packageRoot 'codex-package'
+        $missingCodexModelRoot = Join-Path $packageRoot 'missing-codex-model-package'
+        $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
+        $explicitGithubPackageRoot = Join-Path $packageRoot 'github-explicit-runner-package'
+        $explicitOpenCodePackageRoot = Join-Path $packageRoot 'opencode-explicit-concurrency-package'
+        $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
+        $missingRunnerRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-runner-' + [Guid]::NewGuid().ToString('N'))
+        $missingOpenCodeModelRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-opencode-model-' + [Guid]::NewGuid().ToString('N'))
+
+        $prepareBatch = Invoke-PrepareEvalPackageBatch -ScriptPath $scriptPath -Requests @(
+            [pscustomobject]@{ Name = 'reference'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $referencePackageRoot, '-CodebeltReference', '-ModelCatalogPath', $catalogPath) }
+            [pscustomobject]@{ Name = 'codex'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $codexPackageRoot, '-Runner', 'codex', '-ModelCatalogPath', $catalogPath) }
+            [pscustomobject]@{ Name = 'missingCodexModel'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $missingCodexModelRoot, '-Runner', 'codex', '-Model', 'gpt-5.6-luna', '-ModelCatalogPath', $paidCatalogPath) }
+            [pscustomobject]@{ Name = 'opencode'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $opencodePackageRoot, '-Runner', 'opencode', '-Model', 'provider-paid/Paid.Model', '-ModelCatalogPath', $catalogPath) }
+            [pscustomobject]@{ Name = 'explicitGithub'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $explicitGithubPackageRoot, '-Runner', 'github-copilot', '-Model', 'gpt-5.6-luna', '-ModelCatalogPath', $catalogPath) }
+            [pscustomobject]@{ Name = 'explicitOpenCode'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $explicitOpenCodePackageRoot, '-Runner', 'opencode', '-Model', 'provider-paid/Paid.Model', '-ModelCatalogPath', $catalogPath, '-Concurrency', '16') }
+            [pscustomobject]@{ Name = 'missingSelection'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-OutputRoot', $missingSelectionRoot) }
+            [pscustomobject]@{ Name = 'missingRunner'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-OutputRoot', $missingRunnerRoot, '-Runner', 'missing-runner', '-Model', 'fixture-model') }
+            [pscustomobject]@{ Name = 'missingOpenCodeModel'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Runner', 'opencode', '-OutputRoot', $missingOpenCodeModelRoot) }
+        )
+
+        $referencePrepareOutput = $prepareBatch['reference'].Output
+        if ($prepareBatch['reference'].ExitCode -ne 0) {
             throw "prepare-skill-evals.ps1 -CodebeltReference failed against the fake current catalog: $($referencePrepareOutput -join [Environment]::NewLine)"
         }
         $referenceProfile = [System.IO.File]::ReadAllText((Join-Path $referencePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
@@ -1744,9 +1951,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
         Assert-PreparedRunnerIdentity -Name 'GitHub Copilot Codebelt Reference package' -IterationDirectory (Join-Path $referencePackageRoot 'iteration-1') -ExpectedRunner 'github-copilot' -ExpectedModel 'claude-haiku-4.5'
 
-        $codexPackageRoot = Join-Path $packageRoot 'codex-package'
-        $codexPrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $codexPackageRoot -Runner 'codex' -ModelCatalogPath $catalogPath 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        $codexPrepareOutput = $prepareBatch['codex'].Output
+        if ($prepareBatch['codex'].ExitCode -ne 0) {
             throw "prepare-skill-evals.ps1 failed for the Codex default fixture: $($codexPrepareOutput -join [Environment]::NewLine)"
         }
         $codexProfile = [System.IO.File]::ReadAllText((Join-Path $codexPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
@@ -1756,9 +1962,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         if ([int]$codexProfile.concurrency -ne 16) { throw 'Codex omitted -Concurrency must preserve the repository default of 16.' }
         Assert-PreparedRunnerIdentity -Name 'Codex package' -IterationDirectory (Join-Path $codexPackageRoot 'iteration-1') -ExpectedRunner 'codex' -ExpectedModel 'gpt-5.6-luna'
 
-        $missingCodexModelRoot = Join-Path $packageRoot 'missing-codex-model-package'
-        $missingCodexModelOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $missingCodexModelRoot -Runner 'codex' -Model 'gpt-5.6-luna' -ModelCatalogPath $paidCatalogPath 2>&1
-        if ($LASTEXITCODE -eq 0 -or ($missingCodexModelOutput -join ' ') -notmatch "model 'gpt-5\.6-luna' could not be verified") {
+        $missingCodexModelOutput = $prepareBatch['missingCodexModel'].Output
+        if ($prepareBatch['missingCodexModel'].ExitCode -eq 0 -or ($missingCodexModelOutput -join ' ') -notmatch "model 'gpt-5\.6-luna' could not be verified") {
             throw 'prepare-skill-evals.ps1 must validate explicit Codex models through current model discovery before writing a package.'
         }
         if (Test-Path -LiteralPath $missingCodexModelRoot) {
@@ -1766,9 +1971,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'prepare-skill-evals.ps1 must not create a package when current model validation fails.'
         }
 
-        $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
-        $opencodePrepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $opencodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -ModelCatalogPath $catalogPath 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        $opencodePrepareOutput = $prepareBatch['opencode'].Output
+        if ($prepareBatch['opencode'].ExitCode -ne 0) {
             throw "prepare-skill-evals.ps1 failed for the OpenCode fixture: $($opencodePrepareOutput -join [Environment]::NewLine)"
         }
         $opencodeProfile = [System.IO.File]::ReadAllText((Join-Path $opencodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
@@ -1778,9 +1982,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         if (($opencodePrepareOutput -join [Environment]::NewLine) -notmatch 'Concurrency:\s+2 \(OpenCode safe default\)') { throw 'OpenCode preparation output must identify the safe default concurrency source.' }
         Assert-PreparedRunnerIdentity -Name 'OpenCode package' -IterationDirectory (Join-Path $opencodePackageRoot 'iteration-1') -ExpectedRunner 'opencode' -ExpectedModel 'provider-paid/Paid.Model'
 
-        $explicitGithubPackageRoot = Join-Path $packageRoot 'github-explicit-runner-package'
-        $explicitGithubOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitGithubPackageRoot -Runner 'github-copilot' -Model 'gpt-5.6-luna' -ModelCatalogPath $catalogPath 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit GitHub Copilot selection: $($explicitGithubOutput -join [Environment]::NewLine)" }
+        $explicitGithubOutput = $prepareBatch['explicitGithub'].Output
+        if ($prepareBatch['explicitGithub'].ExitCode -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit GitHub Copilot selection: $($explicitGithubOutput -join [Environment]::NewLine)" }
         $explicitGithubProfile = [System.IO.File]::ReadAllText((Join-Path $explicitGithubPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
         if ([string]$explicitGithubProfile.runner -ne 'github-copilot' -or [string]$explicitGithubProfile.model -ne 'gpt-5.6-luna' -or $null -ne $explicitGithubProfile.reasoning_effort) {
             throw 'An explicit GitHub Copilot runner selection must not be overwritten by Codex defaults.'
@@ -1797,16 +2000,14 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         [System.IO.File]::WriteAllText($mismatchProfilePath, (($mismatchProfile | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
         Assert-PackageIdentityValidationFails -Name 'mismatched runner package' -IterationDirectory $mismatchIteration -ExpectedRunner 'github-copilot' -ExpectedMessagePattern 'execution-profile\.json runner .+ does not match manifest\.execution_selection\.runner'
 
-        $explicitOpenCodePackageRoot = Join-Path $packageRoot 'opencode-explicit-concurrency-package'
-        $explicitOpenCodeOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Eval 1 -OutputRoot $explicitOpenCodePackageRoot -Runner 'opencode' -Model 'provider-paid/Paid.Model' -ModelCatalogPath $catalogPath -Concurrency 16 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit OpenCode concurrency: $($explicitOpenCodeOutput -join [Environment]::NewLine)" }
+        $explicitOpenCodeOutput = $prepareBatch['explicitOpenCode'].Output
+        if ($prepareBatch['explicitOpenCode'].ExitCode -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit OpenCode concurrency: $($explicitOpenCodeOutput -join [Environment]::NewLine)" }
         $explicitOpenCodeProfile = [System.IO.File]::ReadAllText((Join-Path $explicitOpenCodePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
         if ([int]$explicitOpenCodeProfile.concurrency -ne 16) { throw 'Explicit OpenCode -Concurrency 16 must be honored without clamping.' }
         if (($explicitOpenCodeOutput -join [Environment]::NewLine) -notmatch 'Concurrency:\s+16 \(explicit -Concurrency\)') { throw 'Explicit OpenCode preparation output must identify -Concurrency as explicit.' }
 
-        $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
-        $missingSelectionOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingSelectionRoot 2>&1
-        if ($LASTEXITCODE -eq 0) {
+        $missingSelectionOutput = $prepareBatch['missingSelection'].Output
+        if ($prepareBatch['missingSelection'].ExitCode -eq 0) {
             throw 'prepare-skill-evals.ps1 must refuse to generate RUN-THIS.prompt.md without a resolved runner/model selection.'
         }
         if (($missingSelectionOutput -join ' ') -notmatch 'requires a resolved Harness \+ Model') {
@@ -1817,9 +2018,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'prepare-skill-evals.ps1 must not create an unresolved eval package.'
         }
 
-        $missingRunnerRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-runner-' + [Guid]::NewGuid().ToString('N'))
-        $missingRunnerOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $missingRunnerRoot -Runner 'missing-runner' -Model 'fixture-model' 2>&1
-        if ($LASTEXITCODE -eq 0 -or ($missingRunnerOutput -join ' ') -notmatch "Unsupported runner 'missing-runner'") {
+        $missingRunnerOutput = $prepareBatch['missingRunner'].Output
+        if ($prepareBatch['missingRunner'].ExitCode -eq 0 -or ($missingRunnerOutput -join ' ') -notmatch "Unsupported runner 'missing-runner'") {
             throw 'An unresolved explicit runner must fail closed instead of falling back to a supported runner.'
         }
         if (Test-Path -LiteralPath $missingRunnerRoot) {
@@ -1827,9 +2027,8 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'prepare-skill-evals.ps1 must not create a package for an unresolved explicit runner.'
         }
 
-        $missingOpenCodeModelRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-opencode-model-' + [Guid]::NewGuid().ToString('N'))
-        $missingOpenCodeModelOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -Runner 'opencode' -OutputRoot $missingOpenCodeModelRoot 2>&1
-        if ($LASTEXITCODE -eq 0 -or ($missingOpenCodeModelOutput -join ' ') -notmatch 'OpenCode requires an explicit -Model selector') {
+        $missingOpenCodeModelOutput = $prepareBatch['missingOpenCodeModel'].Output
+        if ($prepareBatch['missingOpenCodeModel'].ExitCode -eq 0 -or ($missingOpenCodeModelOutput -join ' ') -notmatch 'OpenCode requires an explicit -Model selector') {
             throw 'OpenCode preparation must not choose a model when the user has not supplied one.'
         }
         if (Test-Path -LiteralPath $missingOpenCodeModelRoot) {
