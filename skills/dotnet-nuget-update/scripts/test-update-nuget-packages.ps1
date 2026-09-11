@@ -40,6 +40,14 @@ try {
 '@
 
     $runner = Join-Path $PSScriptRoot 'Update-NuGetPackages.ps1'
+    $originalText = Get-Content -Raw -LiteralPath (Join-Path $repoPath 'Directory.Packages.props')
+    $preview = & pwsh -NoProfile -File $runner -RepoRoot $repoPath -Yolo -Source $sourceRoot -DryRun -AsJson | ConvertFrom-Json
+    Assert-Equal 'dry-run plans one safe update' @($preview.updates).Count 1
+    Assert-Equal 'dry-run reports its preview outcome' $preview.apply.results[0].outcome 'dry-run'
+    Assert-Equal 'dry-run counts no applied updates' $preview.appliedCount 0
+    Assert-Equal 'dry-run leaves pending updates incomplete' $preview.applyComplete $false
+    Assert-Equal 'dry-run preserves the package file' (Get-Content -Raw -LiteralPath (Join-Path $repoPath 'Directory.Packages.props')) $originalText
+
     $result = & pwsh -NoProfile -File $runner -RepoRoot $repoPath -Yolo -Source $sourceRoot -AsJson | ConvertFrom-Json
     Assert-Equal 'yolo mode is reported' $result.mode 'yolo'
     Assert-Equal 'one safe update is applied' $result.appliedCount 1

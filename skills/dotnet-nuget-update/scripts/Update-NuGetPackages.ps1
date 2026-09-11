@@ -76,7 +76,7 @@ if ($updates.Count -gt 0) {
 }
 
 $applyResults = @($applyResult.results)
-$successfulApplyCount = @($applyResults | Where-Object { $_.outcome -in @('applied', 'dry-run') }).Count
+$successfulApplyCount = @($applyResults | Where-Object { $_.outcome -eq 'applied' }).Count
 
 $failedApplyResults = @($applyResults | Where-Object { $_.outcome -notin @('applied', 'dry-run') })
 
