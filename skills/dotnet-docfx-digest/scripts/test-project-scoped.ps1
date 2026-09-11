@@ -11,6 +11,18 @@ Set-StrictMode -Version Latest
 $PSNativeCommandUseErrorActionPreference = $false
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+# This suite calls the validator dozens of times. Resolve the built assembly once so every call
+# skips the repeated `dotnet run --file` SDK startup cost instead of paying seconds per call.
+# The executed code, arguments, and working directory are unchanged, and every assertion still
+# runs. The helper falls back to `dotnet run --file` when the shared resolver is unavailable.
+$fileBasedAppHelper = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path 'scripts/file-based-app.ps1'
+if (Test-Path -LiteralPath $fileBasedAppHelper -PathType Leaf) {
+    . $fileBasedAppHelper
+} else {
+    function Get-FileBasedAppCommand { param([string]$SourcePath) [pscustomobject]@{ Executable = 'dotnet'; ArgumentPrefix = @('run', '--file', $SourcePath, '--'); Mode = 'dotnet-run'; Assembly = $null } }
+}
+$validatorApp = Get-FileBasedAppCommand -SourcePath $ValidatorPath
 $csproj = @'
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -43,7 +55,7 @@ function Invoke-ValidatorRaw {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $out = & dotnet run --file $ValidatorPath -- @AllArgs 2>$null
+        $out = & $validatorApp.Executable @($validatorApp.ArgumentPrefix + $AllArgs) 2>$null
     } finally {
         $ErrorActionPreference = $prev
     }
@@ -723,7 +735,7 @@ var w = new Acme.Core.Widget { N = 1 };
 '@
     $reqObj = @{ file = $target; uid = 'Acme.Core.Widget'; mapping = 'example'; prose = 'Build a widget.'; fence = $fence }
     [System.IO.File]::WriteAllText($req, ($reqObj | ConvertTo-Json -Depth 5), $utf8NoBom)
-    $out = & dotnet run --file $ValidatorPath -- --repo-root $ws --write-overwrite $req --json 2>$null | Out-String | ForEach-Object { ConvertFrom-ValidatorJson $_ }
+    $out = & $validatorApp.Executable @($validatorApp.ArgumentPrefix + @('--repo-root', $ws, '--write-overwrite', $req, '--json')) 2>$null | Out-String | ForEach-Object { ConvertFrom-ValidatorJson $_ }
     if ($out.status -ne 'passed') { throw "writer status=$($out.status)" }
     $written = Join-Path $ws $target
     if (-not (Test-Path $written)) { throw 'overwrite file not written' }
@@ -740,7 +752,7 @@ var w = new Acme.Core.Widget { N = 1 };
         & git -c user.email=t@e.com -c user.name=t commit -q -m overwrite 2>$null | Out-Null
     } finally { Pop-Location }
 
-    $dup = & dotnet run --file $ValidatorPath -- --repo-root $ws --write-overwrite $req --json 2>$null | Out-String | ForEach-Object { ConvertFrom-ValidatorJson $_ }
+    $dup = & $validatorApp.Executable @($validatorApp.ArgumentPrefix + @('--repo-root', $ws, '--write-overwrite', $req, '--json')) 2>$null | Out-String | ForEach-Object { ConvertFrom-ValidatorJson $_ }
     if (-not @($dup.errors | Where-Object code -eq 'OVERWRITE_UID_DUPLICATE')) { throw 'duplicate UID was not refused' }
 
     # Unbalanced fence is refused (new file).
@@ -751,7 +763,7 @@ var x = 1;
 '@
     $badObj = @{ file = '.docfx/api/types/Acme.Core.Other.md'; uid = 'Acme.Core.Other'; mapping = 'example'; fence = $badFence }
     [System.IO.File]::WriteAllText($badReq, ($badObj | ConvertTo-Json -Depth 5), $utf8NoBom)
-    $bad = & dotnet run --file $ValidatorPath -- --repo-root $ws --write-overwrite $badReq --json 2>$null | Out-String | ForEach-Object { ConvertFrom-ValidatorJson $_ }
+    $bad = & $validatorApp.Executable @($validatorApp.ArgumentPrefix + @('--repo-root', $ws, '--write-overwrite', $badReq, '--json')) 2>$null | Out-String | ForEach-Object { ConvertFrom-ValidatorJson $_ }
     if (-not @($bad.errors | Where-Object code -eq 'OVERWRITE_FENCE_UNBALANCED')) { throw 'unbalanced fence was not refused' }
 
     # Dirty-path refusal: modify the committed target then attempt a different UID write to it.
@@ -764,7 +776,7 @@ var y = 2;
 '@
     $req2Obj = @{ file = $target; uid = 'Acme.Core.Widget2'; mapping = 'example'; fence = $req2Fence }
     [System.IO.File]::WriteAllText($req2, ($req2Obj | ConvertTo-Json -Depth 5), $utf8NoBom)
-    $dirty = & dotnet run --file $ValidatorPath -- --repo-root $ws --write-overwrite $req2 --json 2>$null | Out-String | ForEach-Object { ConvertFrom-ValidatorJson $_ }
+    $dirty = & $validatorApp.Executable @($validatorApp.ArgumentPrefix + @('--repo-root', $ws, '--write-overwrite', $req2, '--json')) 2>$null | Out-String | ForEach-Object { ConvertFrom-ValidatorJson $_ }
     if (-not @($dirty.errors | Where-Object code -eq 'OVERWRITE_DIRTY_REFUSED')) { throw 'dirty path was not refused' }
 }
 
@@ -789,7 +801,7 @@ Run-Scenario 'Single JSON document on stdout while heartbeats stay on stderr' {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $combined = (& dotnet run --file $ValidatorPath -- --repo-root $ws --json --quiet 2>&1 | Out-String)
+        $combined = (& $validatorApp.Executable @($validatorApp.ArgumentPrefix + @('--repo-root', $ws, '--json', '--quiet')) 2>&1 | Out-String)
     } finally {
         $ErrorActionPreference = $prev
     }
