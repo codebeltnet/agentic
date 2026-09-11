@@ -12,6 +12,18 @@ $PSNativeCommandUseErrorActionPreference = $false
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-quality-' + [guid]::NewGuid().ToString('N'))
 
+# This suite calls the validator dozens of times. Resolve the built assembly once so every call
+# skips the repeated `dotnet run --file` SDK startup cost instead of paying seconds per call.
+# The executed code, arguments, and working directory are unchanged, and every assertion still
+# runs. The helper falls back to `dotnet run --file` when the shared resolver is unavailable.
+$fileBasedAppHelper = Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path 'scripts/file-based-app.ps1'
+if (Test-Path -LiteralPath $fileBasedAppHelper -PathType Leaf) {
+    . $fileBasedAppHelper
+} else {
+    function Get-FileBasedAppCommand { param([string]$SourcePath) [pscustomobject]@{ Executable = 'dotnet'; ArgumentPrefix = @('run', '--file', $SourcePath, '--'); Mode = 'dotnet-run'; Assembly = $null } }
+}
+$validatorApp = Get-FileBasedAppCommand -SourcePath $ValidatorPath
+
 function Write-Utf8File {
     param([string]$Path, [string]$Content)
 
@@ -36,7 +48,7 @@ function Invoke-Validator {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & dotnet run --file $ValidatorPath -- --repo-root $Workspace --json @ExtraArgs 2>$null
+        $output = & $validatorApp.Executable @($validatorApp.ArgumentPrefix + @('--repo-root', $Workspace, '--json') + $ExtraArgs) 2>$null
     } finally {
         $ErrorActionPreference = $prev
     }

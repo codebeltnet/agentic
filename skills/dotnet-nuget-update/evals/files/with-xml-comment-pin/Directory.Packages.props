@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+    <!-- Broken from 14.0.0: dropped support for netstandard2.0 which this project targets -->
+    <PackageVersion Include="SomePackage" Version="1.0.0" />
+    <PackageVersion Include="Asp.Versioning.Http" Version="8.1.0" />
+  </ItemGroup>
+</Project>

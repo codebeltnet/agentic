@@ -36,6 +36,7 @@ Only after this skill has been selected by explicit changelog or release-note in
 - For branch-derived scope, exclude every commit already reachable from the comparison branch. A merge-base is a boundary, not a release commit.
 - Run `scripts/resolve-release-scope.ps1` for branch-derived scope and use its emitted ranges without widening them.
 - For every path-backed release entity, run `scripts/resolve-release-entity.ps1` with the emitted `merge_base` and `head_commit`; use its classification instead of inferring `Added`, `Removed`, or `Changed` from commit verbs.
+- Before writing each path-backed outcome, rerun that resolver with `-Section <proposed-section>` and require success. Its `allowed_sections` bind the final bullet, including on subsequent runs.
 - Never change range inclusivity because the changelog target is a concrete version instead of `[Unreleased]`.
 - Include commits from every author/contributor in the selected scope. Do not filter to the current git user, current contributor, bot identity, configured author, or "my changes" unless the user explicitly asks for an author-filtered changelog.
 - If the current branch starts with a version hint such as `v0.3.0/`, use that to target a concrete release heading.
@@ -350,6 +351,8 @@ Do not over-classify from dramatic wording in a commit subject. The surviving de
 ### Step 6: Curate the changelog content
 
 Write the release highlight first, then the populated sections.
+
+Read `references/section-validation.md` and validate every proposed path-backed outcome with `-Section <proposed-section>` before writing. Reuse the complete branch baseline on subsequent runs and consolidate each outcome once across all sections.
 
 - Map only the surviving outcomes into `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 - Keep bullets curated and human-written.

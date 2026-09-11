@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-11
+
+This is a minor release that introduces `dotnet-nuget-update`, a deterministic NuGet dependency audit and update workflow for .NET repositories. The skill owns the complete-audit invariant, ensuring every declared package version is accounted for before any update is applied. It handles both central package management (`Directory.Packages.props`) and project-level `PackageReference` versioning, tracks stable and prerelease intent, preserves TFM-band pins (keeping `net9` or `net10` packages within their matching major when that major is the compatibility signal), and supports both normal mode (auto-applies patch/minor/revision, batches majors for approval) and yolo mode (auto-applies safe classes only, reports held majors). All scripts are deterministic and offline-testable via bundled fixtures. Alongside that, `git-visual-commits` gained refactoring and three new eval cases for edge-case coverage, `git-keep-a-changelog` gained improved entity-classification infrastructure and a dedicated reference document for section validation, and repository-level validation enhancements ensure all skills conform to updated testing requirements.
+
+### Added
+
+- `dotnet-nuget-update` skill for auditing and updating NuGet dependencies with complete declaration accounting, supporting both central package management and project-level versioning, two interactive modes (normal with approval batching, yolo for safe updates only), stable/prerelease intent inference, and TFM-band awareness so conditional `net9`/`net10` package declarations stay within their matching major when that major is the compatibility signal rather than jumping to the newest overall release,
+- bundled deterministic scripts for `dotnet-nuget-update`: `Get-DependencyAudit.ps1` for complete graph enumeration before any edit, `Get-PackageGraph.ps1` for central-package condition resolution, `Get-TargetFrameworks.ps1` for TFM matrix discovery, `Resolve-NuGetVersion.ps1` and `Compare-Version.ps1` for version investigation, `Apply-PackageUpdates.ps1` for minimal structural XML edits preserving comments and line endings, and `Get-NuGetSources.ps1` for feed configuration visibility,
+- comprehensive test coverage for `dotnet-nuget-update`: regression harnesses for dependency audit, package graph, TFM-band logic, project-level package references, version comparison, and update application, together with offline-testable fixtures covering central-package scenarios, mixed stable/prerelease intent, multi-TFM bands, plain project references, and XML comment pinning,
+- per-process memoization for live or offline flat-container NuGet version feeds in `dotnet-nuget-update`, with filesystem flat-container fixtures supporting deterministic offline testing,
+- complete-audit invariant validation in `dotnet-nuget-update` ensuring `current + auto + approval + unresolved == declared` before reporting the repository as updated,
+- history-aware update tracking in `dotnet-nuget-update` with adjacent XML comments surfacing as `note` fields so pin rationale remains visible during audits and auto-updates marked with `READ THE NOTE before applying` receive explicit attention,
+- README catalog entry, installation snippet, and "Why dotnet-nuget-update?" community health section explaining the need for complete dependency graph auditing, TFM-band awareness, and preservation of intentional pins and compatibility markers,
+- `references/section-validation.md` in `git-keep-a-changelog` documenting the section-classification contract for resolved release entities,
+- test harness `scripts/test-resolve-release-entity.ps1` in `git-keep-a-changelog` validating entity-classification behavior across multiple release scenarios.
+
+### Changed
+
+- `git-visual-commits` SKILL.md refactored for improved clarity, with single-category quality-gate guidance hardened and commit-language best practices restructured to emphasize inventory refresh and per-path explanation before classification,
+- `git-visual-commits` evals expanded with three new eval cases (26, 27, 28) covering untracked file discovery, path handling with spaces and untracked directories, and explicit scope narrowing,
+- `git-keep-a-changelog` SKILL.md improved with clarifications on entity classification workflow, pending-change handling, and section-validation procedures,
+- `git-keep-a-changelog` evals updated to reflect improved entity-classification guidance and concurrent validation requirements,
+- Repository validation infrastructure in `scripts/validate-skill-templates.ps1` hardened with concurrent suite dispatch, bounded concurrency of at least two workers, per-suite exit codes, and explicit prohibition on sequential aggregate runs,
+- Repository agent guidelines in `AGENTS.md` clarified with explicit concurrent execution guidance, per-suite validation, and user-instruction overrides for testing suspension,
+- README.md documentation updated with concurrent validation procedures and explicit messaging about running independent validation suites in parallel with bounded concurrency.
+
 ## [0.9.1] - 2026-09-07
 
 This patch release adds harness-agnostic Eval Runner execution boundary infrastructure without changing the paired evaluation methodology or existing report schemas, while optimizing skill descriptions and refactoring repository-level authoring guidance. Prepared packages now carry `execution-profile.json`, package-local runner protocol tools, and normalized `execution-result.json` evidence. The deterministic fake runner is the conformance reference, with Codex, GitHub Copilot CLI, and OpenCode as supported real adapters. Repository automation remains model-free; only a human-directed external Eval Orchestrator may invoke the selected runner, and unsupported isolation fails closed.
@@ -638,6 +664,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.10.0]: https://github.com/codebeltnet/agentic/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/codebeltnet/agentic/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/codebeltnet/agentic/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/codebeltnet/agentic/compare/v0.8.1...v0.8.2

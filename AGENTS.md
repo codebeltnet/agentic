@@ -44,7 +44,7 @@ Where `skill-creator` says to spawn with-skill and baseline subagents in the sam
 
 ### Asking for an eval
 
-`eval <skill>`, `evaluate <skill>`, `eval this skill`, `prepare evals for <skill>`, and `evaluate <skill> using the existing evals` are all requests for this workflow. Treat them as instructions to prepare the package, never to run it, and never as a request to write new eval cases unless the user asks for that too.
+`eval <skill>`, `evaluate <skill>`, `eval this skill`, `prepare evals for <skill>`, `evaluate <skill> using the existing evals`, `please do an eval`, and similar explicit evaluation requests all invoke this workflow. Treat them as instructions to prepare the package, never to run it, and never as a request to write new eval cases unless the user asks for that too.
 
 Resolve the execution configuration before running the package preparation script. Normalize explicit user intent immediately and do not ask again for a harness the user already supplied: `Codex` -> `codex`; `GitHub Copilot`, `GitHub Copilot CLI`, or `Copilot` -> `github-copilot`; `OpenCode` -> `opencode`; matching is case-insensitive. In an interactive agent session, offer Codebelt Reference first (`GitHub Copilot CLI` + `claude-haiku-4.5`) and let `scripts/prepare-skill-evals.ps1` validate that model internally; if it is unavailable, show the current discovered Copilot models and ask for a replacement. If the user selects Codex without a model, pass `-Runner codex` and let preparation resolve repository defaults (`gpt-5.6-luna` with low reasoning) and validate the model. For manual selection, ask for Harness only when the user did not already name one, then discover current models for that harness with `scripts/Get-HarnessModels.ps1`. OpenCode discovery mirrors every model exposed by all configured OpenCode providers; it exposes exact `provider/model` selectors and retains display and availability metadata when available, but availability is presentation metadata only and never filters the selectable catalog. If OpenCode is selected and no model was explicitly supplied, present every discovered selector to the user, ask the user to choose one, and stop until that choice is made. Do not choose the first, free, recommended, previous-iteration, previous-successful, or previous-failed model on the user's behalf. If the user explicitly supplies an OpenCode selector, preserve it verbatim in `execution-profile.json`; discovery may verify or annotate it, but discovery failure or incomplete metadata must never substitute another model. GitHub Copilot and Codex discovery lists all currently available models. Never guess stale model ids, silently switch harnesses, or generate an execution-ready package with a null runner or model.
 
@@ -91,21 +91,13 @@ Useful switches: `-Eval <id...>` to prepare a subset, `-Iteration <n>` plus `-Fo
 
 The expected output and the assertions are the grading key. They belong in `eval-metadata.json`, outside every run directory, and must never appear in either prompt — a baseline handed the answer key is not a baseline.
 
-### Eval preparation is a completion gate
+### Optional eval preparation
 
-Adding or modifying any repo-managed skill triggers this workflow. It is not something the user asks for separately, and "the change is small" or "the evals did not change" does not exempt it. Touching `SKILL.md`, `FORMS.md`, `references/`, `scripts/`, `assets/`, or `evals/` under `skills/<name>/` is a skill change.
+Eval package preparation is optional. A skill change does not require package preparation, and it does not require choosing a harness or model. Prepare a package only when the user explicitly asks for an evaluation, such as `eval <skill>`, `evaluate <skill>`, `please do an eval`, or a similar request. A request to create, modify, validate, or release a skill does not implicitly ask for eval preparation.
 
-After the final skill edit is in place, run:
+When the user explicitly asks for an eval, follow [Asking for an eval](#asking-for-an-eval), resolve the Harness + Model choice, and run the preparation command described there. Preparation remains model-free and never executes the generated prompts. If a package is prepared, name its prompt path in the completion message and hand it over as described below. Do not ask for a harness, prepare a package, or report an eval handoff solely because a skill changed.
 
-```
-pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>
-```
-
-It resolves every repo-managed skill this branch changed, uncommitted work included, and prepares a package for each. With no skill changed it says so and exits clean, which satisfies the gate.
-
-Then name the prepared prompt paths in the completion message so the user knows what is waiting for them. Preparing and reporting satisfies this gate. Executing a prompt never does, and an agent that runs one has broken the Priority 1 rule rather than completed the gate.
-
-Run it before `scripts/sync-skill-install.ps1`, which stays the last gate because it must observe the final state of every file. See [Blocking Completion Gates](#blocking-completion-gates).
+`scripts/sync-skill-install.ps1` remains the last gate when a repo-managed skill was edited. An explicitly requested eval adds package preparation before handoff, but package preparation is not a completion gate. See [Blocking Completion Gates](#blocking-completion-gates).
 
 ### Manual execution boundary
 
@@ -181,13 +173,16 @@ Every repo-managed skill must include its own `evals/evals.json` file at `skills
 - When `files` is present, keep the paths relative to `skills/<name>/` and validate that every fixture exists
 - Treat eval prompts, expected outcomes, and assertions as versioned review specifications; their presence never authorizes automated model execution
 - Start with `pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -MetadataOnly` for a sub-second repository-wide metadata and fixture check
-- Run only the changed skill's deterministic validator and focused regression scripts during iteration; independent read-only checks may use bounded local parallelism, while shared-file mutations stay sequential
-- Run `pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1` once before completion for the repository gate
+- Run only the changed skill's deterministic validator and focused regression scripts during iteration; run independent checks concurrently with bounded local parallelism, while shared-file mutations stay sequential.
+- For the repository completion gate, run the complete CI matrix locally with the permanent parallel scheduler: `pwsh -NoProfile -File ./scripts/validate-local.ps1`. It derives every suite from `.github/workflows/validate-skill-templates.yml`, so local and CI coverage stay aligned, and that matrix remains the source of truth for script paths and `-Suite` values, including the transport-specific conformance suites and phase-specific integrity suites. The scheduler runs each suite in a separate PowerShell 7 process with bounded concurrency, streams a log per suite, kills timed-out process trees, isolates temporary fixtures, and exits non-zero unless every suite passed and printed its terminal success marker. It writes `summary.json` beside the logs with per-suite status, exit codes, timings, and coverage counts. The DocFX suite always receives `-Full`. A timeout or a skipped check is a failure, never a pass.
+- `scripts/validate-local.ps1` is the only sanctioned local full-run entry point. Do not hand-roll process fan-out, and do not rely on ad hoc, under-parallelized dispatch. For focused iteration, run a single suite or group directly (`-Suite Templates`, `-Suite Preparation`, `-Suite Runners`, `-Full -Suite Docfx`, plus the conformance and integrity `-Suite` values), and use `-MetadataOnly` for the sub-second metadata and fixture check. Do not invoke the sequential aggregate `scripts/validate-skill-templates.ps1` with no `-Suite` or with `-Suite All` for agent-driven validation, and do not run the CI suite matrix in a sequential loop. If concurrent execution is unavailable, report the limitation instead of silently falling back to sequential execution.
+- `scripts/validate-local.ps1` is covered by `scripts/tests/test-validate-local.ps1`, which asserts scheduling, concurrency bounding, failure propagation, silent-skip detection, timeout and process-tree teardown, deadline cancellation, coverage parity, and output-root safety against fixture workflows. Update those tests when the scheduler's contract changes.
+- An explicit user instruction to skip or stop testing overrides these validation gates for that session. Stop any tests you started, run no further validation, and report the unvalidated work.
 - Follow the top-level **AI/LLM Evaluation Automation Prohibition** for every eval. No per-skill or third-party requirement overrides it.
 - To compare a skill against a baseline, prepare a package with **Portable Eval Handoff** and hand `RUN-THIS.prompt.md` to the user; the repository agent never runs the prompts, while the user-directed external executor runs, grades, and reports the paired comparison
 - Deterministic scaffold/template skills must keep local deterministic validators as well; evals supplement validators, they do not replace them
 
-If you add a new skill or modify an existing repo-managed skill, update that skill's `evals/evals.json` and run `pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` before considering the work complete. Use `-CodebeltReference` instead only after its dynamic Copilot model check passes. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
+If you add a new skill or modify an existing repo-managed skill, keep that skill's `evals/evals.json` present and update it when the eval definitions or fixtures change. Package preparation is optional and is triggered only by an explicit eval request; when requested, use `pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>`. Use `-CodebeltReference` instead only after its dynamic Copilot model check passes. Do not commit temp workspaces, benchmark outputs, or generated review files into this repository unless the user explicitly asks for checked-in artifacts.
 
 ## Git Identity
 
@@ -282,6 +277,15 @@ When a skill needs time-sensitive or environment-sensitive values, prefer comput
 - When a dynamic default exists, describe both the source and the fallback behavior in `FORMS.md` / `SKILL.md`
 - If a value changes over time (supported frameworks, current versions, generated paths, repo-derived names), assume hardcoding will drift and design for refreshable computation
 
+## File-Based App Invocation
+
+A .NET file-based app (`dotnet run --file <app>.cs`) re-runs SDK, restore, and MSBuild evaluation on every call. On current hardware that fixed cost is several seconds even when the built output is already up to date, and the deterministic suites invoke the same app dozens of times per run.
+
+- Test code that invokes a file-based app must resolve the built assembly once with `scripts/file-based-app.ps1` (`Get-FileBasedAppCommand`) and execute that assembly, instead of calling `dotnet run --file` per invocation.
+- The helper caches a build artifact keyed by source hash and SDK version under the user temp directory and outside the repository. It never caches a validation result: every assertion still runs on every execution.
+- When the helper cannot prepare or locate a cached build it falls back to `dotnet run --file`, so behavior is never worse than the unoptimized path, only slower.
+- Do not reintroduce per-call `dotnet run --file` in a deterministic suite. Measure the suite before and after any change to how it invokes a file-based app.
+
 ## Scaffold Invariants
 
 For repo-managed .NET scaffolding skills, preserve semantic versioning infrastructure unless you are replacing it end-to-end in the same change.
@@ -317,7 +321,7 @@ Before any completion message, reread the skill instructions and the current con
 
 For script-backed workflows, creating or editing files is not enough on its own. If a skill requires deterministic maintenance or verification commands, run them before completion and report their concrete outcome. For `dotnet-docfx-digest`, `scripts/agents.cs` and `scripts/docfx.cs --build-api-model --validate-samples --verify-docfx-build` are blocking completion gates whenever the skill or task summary says they are required.
 
-Whenever a repo-managed skill was edited, two gates apply in a fixed order. `pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` (or `-CodebeltReference` after dynamic availability verification) runs first and prepares the eval packages for the changed skills, reporting the prompt paths. `scripts/sync-skill-install.ps1` runs last, because every other step can still change a file. Report the actual output of both; an earlier run in the same session satisfies neither. See [Eval preparation is a completion gate](#eval-preparation-is-a-completion-gate) and [Local Install Sync](#local-install-sync).
+When a repo-managed skill was edited, `scripts/sync-skill-install.ps1` runs last, because every other step can still change a file. Report its actual output; an earlier run in the same session satisfies neither. If the user explicitly requested an eval, prepare the package before handing it over as described in [Optional eval preparation](#optional-eval-preparation), but do not treat that preparation as a completion gate. See [Local Install Sync](#local-install-sync).
 
 ## User Input UX
 

@@ -283,6 +283,41 @@
         "Treats the full current worktree as scope because the user did not narrow it",
         "Does not replace bot identity with a human-authored commit plus a Co-authored-by trailer"
       ]
+    },
+    {
+      "id": 26,
+      "prompt": "Please git commit, yolo. The worktree has an unstaged change to src/Router.cs, a staged change to config/routes.json, and new untracked src/RoutePolicy.cs and assets/route-map.svg. git diff --stat only lists src/Router.cs. All four files belong to this routing change.",
+      "expected_output": "A complete commit workflow accounting for all four paths, inspecting untracked contents and reconciling inventory, plan, index, recorded commits, and final status.",
+      "expectations": [
+        "Uses git status --short --untracked-files=all or its NUL-delimited porcelain equivalent as the scope inventory instead of a diff summary",
+        "Inspects and includes both src/RoutePolicy.cs and assets/route-map.svg without asking permission merely because they are untracked",
+        "Accounts for the pre-existing staged config/routes.json change when verifying each commit group",
+        "Compares exact planned paths with the inventory and reports no omitted in-scope paths",
+        "Checks staged contents and recorded commit paths against each group and verifies no in-scope tracked or untracked changes remain"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "Please review my working tree and show the commit plan only. I changed README.md and added a new assets folder containing logo.svg and dark theme/banner.svg. Git is configured with status.showUntrackedFiles=no. A scratch file under ignored .cache/ also exists.",
+      "expected_output": "A read-only plan that explicitly discovers both new files, handles the path containing spaces, covers the README change, and excludes the ignored scratch file.",
+      "expectations": [
+        "Overrides hidden untracked status with --untracked-files=all and enumerates individual files in new directories",
+        "Inspects both untracked assets and includes assets/logo.svg and assets/dark theme/banner.svg in the plan",
+        "Preserves the space-containing path as one filename",
+        "Excludes the ignored .cache file without force-adding it",
+        "Does not stage or commit for a plan-only request"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "Please git commit only the README.md change, yolo. src/Router.cs is modified and src/RoutePolicy.cs is untracked too; leave both alone.",
+      "expected_output": "A README-only commit that records the explicit exclusions and reports the remaining source changes accurately.",
+      "expectations": [
+        "Limits the commit to README.md because the user explicitly narrowed scope",
+        "Leaves both src/Router.cs and src/RoutePolicy.cs out of the commit and preserves their contents",
+        "Reconciles final status against the explicit exclusions instead of requiring an entirely clean worktree",
+        "Does not claim the entire worktree is clean when excluded paths remain"
+      ]
     }
   ]
 }

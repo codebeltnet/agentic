@@ -86,13 +86,15 @@ Evals let you verify the skill works and measure improvement over a baseline. Ev
 
 Aim for 3–5 evals that cover distinct scenarios: happy path, edge cases, and cases where the skill should *not* do something.
 
-Evals are prepared, not executed, from this repository. Adding or modifying a repo-managed skill requires preparing the packages for every skill the branch touched, which is a completion gate rather than an optional extra:
+Evals are prepared, not executed, from this repository. Package preparation is optional and happens only after an explicit eval request, such as `eval <skill>`, `evaluate <skill>`, or `please do an eval`. Adding or modifying a repo-managed skill does not require a package, a harness choice, or a model choice.
+
+When an eval is requested, prepare the changed packages with:
 
 ```console
 pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner github-copilot
 ```
 
-Run it after the last skill edit and before `scripts/sync-skill-install.ps1`, which stays last. For a single skill on demand, use:
+For a single skill on demand, use:
 
 ```console
 pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill <skill-name> -Runner <runner-id> -Model <runner-native-model>
@@ -135,6 +137,14 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1
 
 Run the validator locally first for the fastest feedback loop. GitHub Actions also runs the same script on pull requests, but CI is the backstop, not the primary authoring loop.
 
+That command runs one script's groups in order, which is fine for a focused check but slow for the whole repository. For the complete gate, run the CI matrix in parallel instead:
+
+```console
+pwsh -NoProfile -File ./scripts/validate-local.ps1
+```
+
+The scheduler reads every suite from `.github/workflows/validate-skill-templates.yml`, runs each in a separate PowerShell 7 process with bounded concurrency and a streamed log, enforces per-suite timeouts by killing the process tree, and keeps going after a failure so a single run reports every problem. It exits non-zero unless every suite exited zero and printed its terminal success marker, and it writes `summary.json` with the coverage counts beside the logs. Use `-ListSuites` to see what will run, and `-MaxConcurrency`, `-TimeoutSeconds`, and `-DeadlineSeconds` to tune. The scheduler's own behavior is covered by `scripts/tests/test-validate-local.ps1`.
+
 To compare a change against the initial imported version, run the same harness against a git ref:
 
 ```console
@@ -149,9 +159,10 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD
 - [ ] At least one eval in `evals/evals.json`
 - [ ] The skill's `evals/evals.json` exists and its `skill_name` matches the folder/frontmatter name
 - [ ] Any optional `files` entries in `evals/evals.json` point to real fixture files under the same skill folder
-- [ ] `pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` or `-CodebeltReference` was run after the last skill edit, and the prepared prompt paths were reported
+- [ ] If an eval was explicitly requested, `pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` or `-CodebeltReference` was run, and the prepared prompt paths were reported
 - [ ] If an external evaluation was run, each result includes the producing model and the package contains the first-party `report.html`, exact upstream `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`; use `-CollectResults` only for explicitly authorized forensic recovery of an existing package
-- [ ] `scripts/validate-skill-templates.ps1` passes for the current working tree when changing scaffold or template behavior
+- [ ] `pwsh -NoProfile -File ./scripts/validate-local.ps1` passes for the current working tree when changing scaffold or template behavior, with every CI-matrix suite reported as passed and verified
+- [ ] Focused iteration used `scripts/validate-skill-templates.ps1 -Suite <group>` or another single suite rather than a sequential loop over the matrix
 - [ ] If CI is enabled for the branch, the GitHub Actions validation job passes too
 - [ ] Eval packages live in `.bot/<skill-name>-workspace/` or a temp path, never anywhere else in the working tree
 - [ ] Changed skill files are synced across `skills/<name>/`, `~/.claude/skills/<name>/`, and `~/.agents/skills/<name>/`
