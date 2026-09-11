@@ -111,9 +111,16 @@ switch -Regex ($Suite) {
         exit 0
     }
     '^Tree$' {
-        $child = Start-Process -FilePath (Join-Path $PSHOME 'pwsh') -PassThru -WindowStyle Hidden -ArgumentList @(
-            '-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 180'
-        )
+        $treeStartArgs = @{
+            FilePath = (Join-Path $PSHOME 'pwsh')
+            PassThru = $true
+            ArgumentList = @(
+                '-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 180'
+            )
+        }
+        # -WindowStyle is Windows-only; on Linux/macOS Start-Process throws NotSupportedException.
+        if ($IsWindows) { $treeStartArgs.WindowStyle = 'Hidden' }
+        $child = Start-Process @treeStartArgs
         Write-Probe 'child.pid' ([string]$child.Id)
         Start-Sleep -Seconds 180
         exit 0
