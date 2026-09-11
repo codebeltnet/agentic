@@ -5,6 +5,8 @@ param(
     [switch]$IncludePrerelease,
     [switch]$OutdatedOnly,
     [string[]]$Source = @('https://api.nuget.org/v3-flatcontainer'),
+    [ValidateRange(1, 32)][int]$MaxConcurrency = 8,
+    [ValidateRange(1, 300)][int]$TimeoutSec = 15,
     [switch]$AsJson
 )
 
@@ -195,6 +197,21 @@ if ($declarations.Count -eq 0) {
     return
 }
 
+# Resolve each distinct package once, then classify every declaration from the
+# in-memory result. Conditional duplicates are audit rows, not duplicate I/O.
+$resolvableIds = @(
+    $declarations |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_.current) -and (Test-NuGetLiteralVersion -Version $_.current) } |
+        ForEach-Object { $_.id } |
+        Sort-Object -Unique
+)
+$versionFeeds = @{}
+if ($resolvableIds.Count -gt 0) {
+    foreach ($feed in @(Get-NuGetVersionListsBatch -Ids $resolvableIds -Sources $Source -MaxConcurrency $MaxConcurrency -TimeoutSec $TimeoutSec)) {
+        $versionFeeds[$feed.id.ToLowerInvariant()] = $feed
+    }
+}
+
 $rows = foreach ($declaration in $declarations) {
     if ([string]::IsNullOrWhiteSpace($declaration.current)) {
         [pscustomobject]@{
@@ -232,7 +249,7 @@ $rows = foreach ($declaration in $declarations) {
         continue
     }
 
-    $feed = Get-NuGetVersionListMerged -Id $declaration.id -Sources $Source
+    $feed = $versionFeeds[$declaration.id.ToLowerInvariant()]
     if (-not $feed.found) {
         [pscustomobject]@{
             id            = $declaration.id

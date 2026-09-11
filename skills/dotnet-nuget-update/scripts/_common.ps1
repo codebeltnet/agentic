@@ -301,14 +301,17 @@ function Get-TfmBand {
 $script:NuGetServiceIndexCache = @{}
 
 function Resolve-NuGetFlatContainerBase {
-    param([Parameter(Mandatory)][string]$ServiceIndexUrl)
+    param(
+        [Parameter(Mandatory)][string]$ServiceIndexUrl,
+        [ValidateRange(1, 300)][int]$TimeoutSec = 15
+    )
 
     $key = $ServiceIndexUrl.Trim()
     if ($script:NuGetServiceIndexCache.ContainsKey($key)) {
         return $script:NuGetServiceIndexCache[$key]
     }
 
-    $index = Invoke-RestMethod -Uri $key -Method Get -TimeoutSec 30 -ErrorAction Stop
+    $index = Invoke-RestMethod -Uri $key -Method Get -TimeoutSec $TimeoutSec -ErrorAction Stop
     $resources = @($index.resources)
     $flat = @($resources | Where-Object { $_."@type" -eq 'PackageBaseAddress/3.0.0' })
     if ($flat.Count -eq 0) {
@@ -326,7 +329,8 @@ function Resolve-NuGetFlatContainerBase {
 function Get-NuGetVersionList {
     param(
         [Parameter(Mandatory)][string]$Id,
-        [string]$Source = 'https://api.nuget.org/v3-flatcontainer'
+        [string]$Source = 'https://api.nuget.org/v3-flatcontainer',
+        [ValidateRange(1, 300)][int]$TimeoutSec = 15
     )
 
     $base = $Source.Trim()
@@ -335,7 +339,7 @@ function Get-NuGetVersionList {
     $effectiveSource = $Source
     if ($isHttp -and $base -match 'index\.json\s*$') {
         try {
-            $flatBase = Resolve-NuGetFlatContainerBase -ServiceIndexUrl $base
+            $flatBase = Resolve-NuGetFlatContainerBase -ServiceIndexUrl $base -TimeoutSec $TimeoutSec
             $base = $flatBase.Trim()
             $effectiveSource = "$Source (flat-container $base)"
         }
@@ -368,7 +372,7 @@ function Get-NuGetVersionList {
 
     try {
         $response = if ($isHttp) {
-            Invoke-RestMethod -Uri $location -Method Get -TimeoutSec 30 -ErrorAction Stop
+            Invoke-RestMethod -Uri $location -Method Get -TimeoutSec $TimeoutSec -ErrorAction Stop
         } else {
             Get-Content -Raw -LiteralPath $location -ErrorAction Stop | ConvertFrom-Json
         }
@@ -397,67 +401,251 @@ function Get-NuGetVersionList {
     return $result
 }
 
+function Get-NuGetVersionListsBatch {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Ids,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Sources,
+        [ValidateRange(1, 32)][int]$MaxConcurrency = 8,
+        [ValidateRange(1, 300)][int]$TimeoutSec = 15
+    )
+
+    $orderedIds = [System.Collections.Generic.List[string]]::new()
+    $seenIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($id in $Ids) {
+        $trimmedId = if ($null -eq $id) { $null } else { $id.Trim() }
+        if (-not [string]::IsNullOrWhiteSpace($trimmedId) -and $seenIds.Add($trimmedId)) {
+            $orderedIds.Add($trimmedId)
+        }
+    }
+    if ($orderedIds.Count -eq 0) { return @() }
+
+    $sourceEntries = [System.Collections.Generic.List[string]]::new()
+    $seenSources = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($rawEntry in @($Sources | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        foreach ($part in ($rawEntry -split ';')) {
+            $trimmed = $part.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($trimmed) -and $seenSources.Add($trimmed)) {
+                $sourceEntries.Add($trimmed)
+            }
+        }
+    }
+    if ($sourceEntries.Count -eq 0) {
+        $sourceEntries.Add('https://api.nuget.org/v3-flatcontainer')
+    }
+
+    # Resolve service indexes once per source before fan-out. Package index
+    # lookups are independent; rediscovering the same feed metadata per package
+    # only adds latency and unnecessary network traffic.
+    $descriptors = [System.Collections.Generic.List[object]]::new()
+    $descriptorKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($sourceEntry in $sourceEntries) {
+        $lookupSource = $sourceEntry
+        $sourceError = $null
+        $isHttp = $lookupSource -match '^https?://'
+        $effectiveSource = $sourceEntry
+
+        if ($isHttp -and $lookupSource -match 'index\.json\s*$') {
+            try {
+                $flatBase = Resolve-NuGetFlatContainerBase -ServiceIndexUrl $lookupSource -TimeoutSec $TimeoutSec
+                $lookupSource = $flatBase.Trim()
+                $effectiveSource = "$sourceEntry (flat-container $lookupSource)"
+            }
+            catch {
+                $sourceError = "service-index lookup failed for '$sourceEntry': $($_.Exception.Message)"
+            }
+        }
+
+        $normalizedBase = if ($isHttp) { $lookupSource.TrimEnd('/') } else { $lookupSource.TrimEnd('\', '/') }
+        $descriptorKey = $normalizedBase.ToLowerInvariant()
+        if ($descriptorKeys.Add($descriptorKey)) {
+            $descriptors.Add([pscustomobject]@{
+                key             = $descriptorKey
+                source          = $sourceEntry
+                lookupSource    = $lookupSource
+                normalizedBase  = $normalizedBase
+                effectiveSource = $effectiveSource
+                isHttp          = $isHttp
+                error           = $sourceError
+            })
+        }
+    }
+
+    $feeds = @{}
+    $pending = [System.Collections.Generic.List[object]]::new()
+    foreach ($id in $orderedIds) {
+        foreach ($descriptor in $descriptors) {
+            $packageId = $id.ToLowerInvariant()
+            $requestKey = "$packageId|$($descriptor.key)"
+            $cacheKey = "$($descriptor.normalizedBase)|$packageId"
+            if ($script:NuGetVersionCache.ContainsKey($cacheKey)) {
+                $feeds[$requestKey] = $script:NuGetVersionCache[$cacheKey]
+                continue
+            }
+
+            if ($descriptor.error) {
+                $location = if ($descriptor.isHttp) {
+                    "$($descriptor.normalizedBase)/$packageId/index.json"
+                } else {
+                    Join-Path (Join-Path $descriptor.normalizedBase $packageId) 'index.json'
+                }
+                $feeds[$requestKey] = [pscustomobject]@{
+                    id       = $id
+                    found    = $false
+                    source   = $descriptor.source
+                    url      = $location
+                    error    = $descriptor.error
+                    versions = @()
+                }
+                continue
+            }
+
+            $location = if ($descriptor.isHttp) {
+                "$($descriptor.normalizedBase)/$packageId/index.json"
+            } else {
+                Join-Path (Join-Path $descriptor.normalizedBase $packageId) 'index.json'
+            }
+            $pending.Add([pscustomobject]@{
+                id              = $id
+                requestKey      = $requestKey
+                cacheKey        = $cacheKey
+                location        = $location
+                lookupSource    = $descriptor.lookupSource
+                normalizedBase  = $descriptor.normalizedBase
+                effectiveSource = $descriptor.effectiveSource
+                isHttp          = $descriptor.isHttp
+            })
+        }
+    }
+
+    if ($pending.Count -eq 1) {
+        $request = $pending[0]
+        $feed = Get-NuGetVersionList -Id $request.id -Source $request.lookupSource -TimeoutSec $TimeoutSec
+        $feeds[$request.requestKey] = $feed
+        $script:NuGetVersionCache[$request.cacheKey] = $feed
+    } elseif ($pending.Count -gt 1) {
+        $throttle = [Math]::Min($MaxConcurrency, $pending.Count)
+        $batchResults = @(
+            $pending | ForEach-Object -Parallel {
+                $request = $_
+                $ErrorActionPreference = 'Stop'
+                try {
+                    $response = if ($request.isHttp) {
+                        Invoke-RestMethod -Uri $request.location -Method Get -TimeoutSec $using:TimeoutSec -ErrorAction Stop
+                    } else {
+                        Get-Content -Raw -LiteralPath $request.location -ErrorAction Stop | ConvertFrom-Json
+                    }
+                    [pscustomobject]@{
+                        requestKey = $request.requestKey
+                        cacheKey   = $request.cacheKey
+                        id         = $request.id
+                        source     = $request.effectiveSource
+                        url        = $request.location
+                        found      = $true
+                        error      = $null
+                        versions   = @($response.versions)
+                    }
+                }
+                catch {
+                    [pscustomobject]@{
+                        requestKey = $request.requestKey
+                        cacheKey   = $request.cacheKey
+                        id         = $request.id
+                        source     = $request.effectiveSource
+                        url        = $request.location
+                        found      = $false
+                        error      = $_.Exception.Message
+                        versions   = @()
+                    }
+                }
+            } -ThrottleLimit $throttle
+        )
+
+        foreach ($batchResult in $batchResults) {
+            $feed = if ($batchResult.found) {
+                [pscustomobject]@{
+                    id       = $batchResult.id
+                    found    = $true
+                    source   = $batchResult.source
+                    url      = $batchResult.url
+                    error    = $null
+                    versions = (Sort-NuGetVersion -Version ([string[]]@($batchResult.versions)))
+                }
+            } else {
+                [pscustomobject]@{
+                    id       = $batchResult.id
+                    found    = $false
+                    source   = $batchResult.source
+                    url      = $batchResult.url
+                    error    = $batchResult.error
+                    versions = @()
+                }
+            }
+            $feeds[$batchResult.requestKey] = $feed
+            $script:NuGetVersionCache[$batchResult.cacheKey] = $feed
+        }
+    }
+
+    # Network completion order is intentionally discarded. Merge feeds in
+    # caller-provided source order and return IDs in first-seen declaration order
+    # so audit output remains deterministic.
+    $results = [System.Collections.Generic.List[object]]::new()
+    foreach ($id in $orderedIds) {
+        $merged = [System.Collections.Generic.List[string]]::new()
+        $seenVersions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $errors = [System.Collections.Generic.List[string]]::new()
+        $usedSources = [System.Collections.Generic.List[string]]::new()
+        $lastUrl = $null
+
+        foreach ($descriptor in $descriptors) {
+            $requestKey = "$($id.ToLowerInvariant())|$($descriptor.key)"
+            $feed = $feeds[$requestKey]
+            $lastUrl = $feed.url
+            if ($feed.found) {
+                $null = $usedSources.Add($feed.source)
+                foreach ($version in @($feed.versions)) {
+                    if ($seenVersions.Add($version)) {
+                        $merged.Add($version)
+                    }
+                }
+            } else {
+                $errors.Add("$($descriptor.source) : $($feed.error)")
+            }
+        }
+
+        if ($usedSources.Count -gt 0) {
+            $results.Add([pscustomobject]@{
+                id       = $id
+                found    = $true
+                source   = ($usedSources -join '; ')
+                url      = $lastUrl
+                error    = $null
+                versions = (Sort-NuGetVersion -Version @($merged.ToArray()))
+            })
+        } else {
+            $results.Add([pscustomobject]@{
+                id       = $id
+                found    = $false
+                source   = ($sourceEntries -join '; ')
+                url      = $lastUrl
+                error    = ($errors -join ' | ')
+                versions = @()
+            })
+        }
+    }
+
+    return @($results)
+}
+
 function Get-NuGetVersionListMerged {
     param(
         [Parameter(Mandatory)][string]$Id,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Sources
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Sources,
+        [ValidateRange(1, 32)][int]$MaxConcurrency = 8,
+        [ValidateRange(1, 300)][int]$TimeoutSec = 15
     )
 
-    $rawSources = @($Sources | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $flatSources = [System.Collections.Generic.List[string]]::new()
-    foreach ($rawEntry in $rawSources) {
-        foreach ($part in ($rawEntry -split ';')) {
-            $trimmed = $part.Trim()
-            if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
-                $flatSources.Add($trimmed)
-            }
-        }
-    }
-    $effectiveSources = @($flatSources.ToArray())
-    if ($effectiveSources.Count -eq 0) {
-        $effectiveSources = @('https://api.nuget.org/v3-flatcontainer')
-    }
-
-    $merged = [System.Collections.Generic.List[string]]::new()
-    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $errors = [System.Collections.Generic.List[string]]::new()
-    $usedSources = [System.Collections.Generic.List[string]]::new()
-    $lastUrl = $null
-
-    foreach ($sourceEntry in $effectiveSources) {
-        $feed = Get-NuGetVersionList -Id $Id -Source $sourceEntry
-        $lastUrl = $feed.url
-        if ($feed.found) {
-            $null = $usedSources.Add($sourceEntry)
-            foreach ($version in @($feed.versions)) {
-                if ($seen.Add($version)) {
-                    $merged.Add($version)
-                }
-            }
-        } else {
-            $errors.Add("$sourceEntry : $($feed.error)")
-        }
-    }
-
-    if ($usedSources.Count -gt 0) {
-        return [pscustomobject]@{
-            id       = $Id
-            found    = $true
-            source   = ($usedSources -join '; ')
-            url      = $lastUrl
-            error    = $null
-            versions = (Sort-NuGetVersion -Version @($merged.ToArray()))
-        }
-    }
-
-    return [pscustomobject]@{
-        id       = $Id
-        found    = $false
-        source   = ($effectiveSources -join '; ')
-        url      = $lastUrl
-        error    = ($errors -join ' | ')
-        versions = @()
-    }
+    return (Get-NuGetVersionListsBatch -Ids @($Id) -Sources $Sources -MaxConcurrency $MaxConcurrency -TimeoutSec $TimeoutSec)[0]
 }
 
 function Get-AdjacentXmlComment {

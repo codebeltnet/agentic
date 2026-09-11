@@ -19,8 +19,10 @@ Use this skill when a .NET repository needs a complete dependency audit or a con
 Your first deterministic step is:
 
 ```powershell
-pwsh -NoProfile -File "<skill-root>/scripts/Get-DependencyAudit.ps1" -RepoRoot "<repo-root>"
+pwsh -NoProfile -File "<skill-root>/scripts/Get-DependencyAudit.ps1" -RepoRoot "<repo-root>" -MaxConcurrency 8 -TimeoutSec 15
 ```
+
+For yolo runs, keep the default bounded fan-out unless the feed or repository imposes a stricter limit. Do not resolve package IDs one at a time. All independent NuGet index requests should be issued through the audit's batch lookup; only declaration classification and file edits remain ordered.
 
 Use `scripts/Get-DependencyAudit.ps1 -RepoRoot <path>` to enumerate every declaration before touching anything. The skill is complete only when every declared package version is accounted for.
 
@@ -31,9 +33,10 @@ The bundled scripts do the mechanical work:
 - `scripts/Get-TargetFrameworks.ps1` exposes the repository TFM matrix.
 - `scripts/Resolve-NuGetVersion.ps1` and `scripts/Compare-Version.ps1` investigate one package or version pair.
 - `scripts/Apply-PackageUpdates.ps1` performs the minimal structural edit.
+- `scripts/Update-NuGetPackages.ps1` keeps the audit, in-memory safe-update plan, and structural apply in one orchestration command for yolo or attended auto-update runs.
 - `scripts/Get-NuGetSources.ps1` shows configured package feeds without exposing secrets.
 
-The agent orchestrates. The scripts own the deterministic enumeration, comparison, and file edits.
+The agent orchestrates. The scripts own the deterministic enumeration, comparison, and file edits. Dependency audits deduplicate package IDs and resolve independent NuGet version indexes with bounded parallel lookups (default concurrency: 8); repeated conditional declarations reuse the same response. Results are merged in declaration/source order, so concurrency changes elapsed time, not audit semantics. Network lookups use a bounded timeout and record failures as unresolved rows rather than retrying indefinitely.
 
 ## Two modes
 
@@ -41,7 +44,7 @@ The agent orchestrates. The scripts own the deterministic enumeration, compariso
 
 Normal mode is for an attended update run.
 
-1. Audit the whole graph first.
+1. Audit the whole graph first, using the audit's deduplicated bounded-parallel feed lookup.
 2. Auto-apply only `revision`, `patch`, `minor`, and same-major `prerelease` steps.
 3. Do not interrupt the user for each package.
 4. Batch all `major` candidates into one approval question after the full audit is complete.
@@ -51,7 +54,7 @@ Normal mode is for an attended update run.
 
 Yolo mode means no approval prompts, not broader authority.
 
-1. Audit the whole graph first.
+1. Audit the whole graph first, using the audit's deduplicated bounded-parallel feed lookup.
 2. Auto-apply only `revision`, `patch`, `minor`, and same-major `prerelease` steps.
 3. Hold all `major` candidates.
 4. Report the held majors explicitly at the end.
@@ -119,7 +122,7 @@ A version comparison can tell you what is newer. It cannot tell you why a reposi
 
 NuGet props files and project files are structured XML, so edit them structurally and minimally.
 
-Use `scripts/Apply-PackageUpdates.ps1` to update only the targeted declaration. Preserve:
+Use `scripts/Update-NuGetPackages.ps1 -RepoRoot <path> -Yolo` for a yolo update pass. It applies only safe auto candidates without prompting, holds note-bearing auto candidates for review, holds majors, and reports unresolved rows. Use `-DryRun` to inspect the structural apply plan without writing. For manual or targeted edits, use `scripts/Apply-PackageUpdates.ps1` to update only the targeted declaration. Preserve:
 
 - conditions and item-group boundaries,
 - comments and blank lines,

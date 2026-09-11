@@ -14,6 +14,7 @@ $requiredFiles = @(
     'scripts/Resolve-NuGetVersion.ps1',
     'scripts/Compare-Version.ps1',
     'scripts/Apply-PackageUpdates.ps1',
+    'scripts/Update-NuGetPackages.ps1',
     'scripts/Get-NuGetSources.ps1',
     'scripts/run-tests.ps1',
     'scripts/validate-skill.ps1',
@@ -22,7 +23,8 @@ $requiredFiles = @(
     'scripts/test-package-graph.ps1',
     'scripts/test-dependency-audit.ps1',
     'scripts/test-apply-updates.ps1',
-    'scripts/test-project-package-refs.ps1'
+    'scripts/test-project-package-refs.ps1',
+    'scripts/test-update-nuget-packages.ps1'
 )
 
 foreach ($relativePath in $requiredFiles) {

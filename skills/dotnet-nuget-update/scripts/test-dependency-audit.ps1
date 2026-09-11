@@ -1,6 +1,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. "$PSScriptRoot/_common.ps1"
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $workspace = Join-Path $repoRoot ('.bot\dotnet-nuget-update-tests\audit-' + [Guid]::NewGuid().ToString('N'))
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -49,6 +51,10 @@ try {
   </PropertyGroup>
 </Project>
 '@
+
+    $batch = @(Get-NuGetVersionListsBatch -Ids @('SomePackage', 'SomePackage', 'Newtonsoft.Json') -Sources @($sourceRoot) -MaxConcurrency 2 -TimeoutSec 2)
+    Assert-Equal 'batch lookup deduplicates package IDs' $batch.Count 2
+    Assert-Equal 'batch lookup preserves first-seen package order' ($batch[0].id + ',' + $batch[1].id) 'SomePackage,Newtonsoft.Json'
 
     $audit = & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'Get-DependencyAudit.ps1') -RepoRoot (Join-Path $workspace 'repo') -Source $sourceRoot -AsJson | ConvertFrom-Json
 

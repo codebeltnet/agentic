@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory)][string]$Id,
     [switch]$IncludePrerelease,
     [string[]]$Source = @('https://api.nuget.org/v3-flatcontainer'),
+    [ValidateRange(1, 32)][int]$MaxConcurrency = 8,
+    [ValidateRange(1, 300)][int]$TimeoutSec = 15,
     [switch]$AsJson
 )
 
@@ -11,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 . "$PSScriptRoot/_common.ps1"
 
-$feed = Get-NuGetVersionListMerged -Id $Id -Sources $Source
+$feed = Get-NuGetVersionListMerged -Id $Id -Sources $Source -MaxConcurrency $MaxConcurrency -TimeoutSec $TimeoutSec
 if (-not $feed.found) {
     $missing = [pscustomobject]@{
         id       = $Id
