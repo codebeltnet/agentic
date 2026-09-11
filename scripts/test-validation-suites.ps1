@@ -37,3 +37,40 @@ foreach ($script in @('scripts/validate-skill-templates.ps1', 'scripts/eval-runn
 }
 if ($workflow -notmatch '(?m)^  validate-skill-templates:' -or $workflow -notmatch 'needs: validate' -or $workflow -notmatch "VALIDATION_RESULT -ne 'success'") { throw 'The required aggregate check must reject failed, skipped, or cancelled suites.' }
 Write-Output 'CI suite coverage: PASS'
+
+# Exercise the production validation block against both supported content layouts.
+& {
+    $tokens = $null
+    $parseErrors = $null
+    $validatorAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'scripts/validate-skill-templates.ps1'), [ref]$tokens, [ref]$parseErrors)
+    foreach ($name in @('Assert-Contains', 'Assert-NotContains')) {
+        $definition = $validatorAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    $command = $validatorAst.Find({ param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Add-ValidationResult' -and $node.Extent.Text.Contains("-Name 'Git visual commits skill enforces subject, identity, and grouping locks'") }, $true)
+    $action = @($command.CommandElements | Where-Object { $_ -is [Management.Automation.Language.ScriptBlockExpressionAst] })[0].ScriptBlock.GetScriptBlock()
+    $skillPath = 'skills/git-visual-commits/SKILL.md'
+    $examplesPath = 'skills/git-visual-commits/references/grouping-examples.md'
+    $currentSkill = [IO.File]::ReadAllText((Join-Path $repoRoot $skillPath))
+    $examples = [IO.File]::ReadAllText((Join-Path $repoRoot $examplesPath))
+    function Get-FileText {
+        param($RepoRoot, $RelativePath, $GitRef)
+        if ($RelativePath -eq $skillPath) { return $fixtureSkill }
+        if ($RelativePath -eq $examplesPath -and $missingExamples) { throw 'Missing grouping examples fixture' }
+        return [IO.File]::ReadAllText((Join-Path $RepoRoot $RelativePath))
+    }
+    foreach ($case in @('current', 'historical-inline', 'historical-linked', 'broken-historical-link', 'missing-current-reference', 'missing-historical-content')) {
+        $Ref = if ($case -in @('current', 'missing-current-reference')) { '' } else { 'fixture-ref' }
+        $fixtureSkill = $currentSkill
+        $missingExamples = $case -in @('historical-inline', 'broken-historical-link', 'missing-current-reference', 'missing-historical-content')
+        if ($case -in @('historical-inline', 'missing-historical-content')) {
+            $fixtureSkill = $currentSkill.Replace('[grouping-examples.md](references/grouping-examples.md)', '')
+            if ($case -eq 'historical-inline') { $fixtureSkill += "`n$examples" }
+        }
+        $failure = $null
+        try { & $action } catch { $failure = $_ }
+        $shouldFail = $case -in @('broken-historical-link', 'missing-current-reference', 'missing-historical-content')
+        if ($shouldFail -ne ($null -ne $failure)) { throw "Grouping reference regression '$case' failed: $failure" }
+    }
+    Write-Output 'Grouping reference layouts: PASS (6 cases)'
+}
