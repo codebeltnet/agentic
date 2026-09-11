@@ -24,6 +24,51 @@ if ((ConvertTo-CodexComparablePath $comparable) -cne $comparable) { throw 'Path 
 if (-not (Test-CodexPathInsideComparableRoot $staged (Join-Path $staged 'FORMS.md'))) { throw 'Staged descendants must remain inside their root.' }
 if (Test-CodexPathInsideComparableRoot $staged ($staged + '-other/FORMS.md')) { throw 'A sibling prefix is not a descendant.' }
 
+if ($IsWindows) {
+    Add-Type -Namespace AgenticPathTests -Name Native -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+public static extern uint GetShortPathName(string path, System.Text.StringBuilder buffer, uint size);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+public static extern uint GetLongPathName(string path, System.Text.StringBuilder buffer, uint size);
+'@
+    # TEMP itself can contain a short user-profile component. Derive the
+    # expected long spelling with Win32, independently of the helper under test.
+    $buffer = [Text.StringBuilder]::new(32768)
+    $length = [AgenticPathTests.Native]::GetLongPathName([IO.Path]::GetTempPath(), $buffer, $buffer.Capacity)
+    if ($length -eq 0 -or $length -ge $buffer.Capacity) { throw 'Cannot resolve the temporary directory long path.' }
+    $tempRoot = $buffer.ToString().TrimEnd('\', '/')
+    $pathRoot = Join-Path $tempRoot ('agentic-paths-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $directory = [IO.Directory]::CreateDirectory((Join-Path $pathRoot 'long directory [literal] æ')).FullName
+        $file = Join-Path $directory 'long filename [literal].json'
+        [IO.File]::WriteAllText($file, '{}')
+        $missing = Join-Path $directory 'missing parent/child/file.json'
+        foreach ($path in @($directory, $file, $missing, [IO.Path]::GetPathRoot($directory))) {
+            if ((Expand-WindowsShortPath $path) -cne [IO.Path]::GetFullPath($path)) { throw "Long path spelling changed: $path" }
+        }
+        if ((Expand-WindowsShortPath (Join-Path $directory '../long directory [literal] æ')) -cne $directory) { throw 'Relative components must normalize.' }
+
+        $shortCases = 0
+        foreach ($path in @($directory, $file, $env:ProgramFiles)) {
+            $buffer = [Text.StringBuilder]::new(32768)
+            $length = [AgenticPathTests.Native]::GetShortPathName($path, $buffer, $buffer.Capacity)
+            if ($length -eq 0 -or $length -ge $buffer.Capacity) { throw "Cannot query short path: $path" }
+            $short = $buffer.ToString()
+            if ($short -ieq $path) { continue } # Volumes may have 8.3 creation disabled.
+            if (-not (Test-ExactObservedPath -Expected $path -Observed $short)) { throw "Short path must match its long spelling: $short" }
+            if ([IO.Directory]::Exists($path)) {
+                $suffix = 'missing parent/child/file.json'
+                if (-not (Test-ExactObservedPath -Expected (Join-Path $path $suffix) -Observed (Join-Path $short $suffix))) { throw 'A missing tail must retain expansion of its existing short parent.' }
+            }
+            $shortCases++
+        }
+        Write-Output "Windows path compatibility: PASS; $shortCases native short-path cases"
+    } finally {
+        if ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($pathRoot)) -ne $tempRoot) { throw 'Path fixture cleanup must stay under the temporary directory.' }
+        if (Test-Path -LiteralPath $pathRoot) { Remove-Item -LiteralPath $pathRoot -Recurse -Force }
+    }
+}
+
 foreach ($access in @('command', 'file')) {
     $isolation = [ordered]@{ ambient_skill_paths_observed = @($ambient); failures = @() }
     $parameters = @{ NativeSkillIsolation = $isolation; AllowedStagedSkillRoot = $staged }

@@ -269,20 +269,22 @@ function Expand-WindowsShortPath {
             # is the final component. Walk existing components so a short
             # parent such as ADMINI~1 is expanded before comparing a nested
             # runner path.
+            # Use filesystem APIs in this hot loop; PowerShell provider calls
+            # multiply across every arm's repeated integrity checks.
             $current = $root
             $remaining = $fullPath.Substring($root.Length) -split '[\\/]'
             for ($componentIndex = 0; $componentIndex -lt $remaining.Count; $componentIndex++) {
                 $component = [string]$remaining[$componentIndex]
                 if ([string]::IsNullOrWhiteSpace($component)) { continue }
-                $next = Join-Path -Path $current -ChildPath $component
-                if (Test-Path -LiteralPath $next -PathType Container) {
+                $next = [System.IO.Path]::Combine($current, $component)
+                if ([System.IO.Directory]::Exists($next)) {
                     $current = ([System.IO.DirectoryInfo]::new($next)).FullName
-                } elseif (Test-Path -LiteralPath $next -PathType Leaf) {
+                } elseif ([System.IO.File]::Exists($next)) {
                     $current = ([System.IO.FileInfo]::new($next)).FullName
                 } else {
-                    $current = Join-Path -Path $current -ChildPath $component
+                    $current = $next
                     if ($componentIndex + 1 -lt $remaining.Count) {
-                        $current = Join-Path -Path $current -ChildPath ([string]::Join([System.IO.Path]::DirectorySeparatorChar, @($remaining[($componentIndex + 1)..($remaining.Count - 1)] | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })))
+                        $current = [System.IO.Path]::Combine($current, [string]::Join([System.IO.Path]::DirectorySeparatorChar, @($remaining[($componentIndex + 1)..($remaining.Count - 1)] | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })))
                     }
                     break
                 }
