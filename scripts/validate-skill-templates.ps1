@@ -827,6 +827,11 @@ if ($MetadataOnly) {
     exit 0
 }
 
+Add-ValidationResult -Results $results -Name 'Release evidence collection preserves squash contributors and rejects incomplete sources' -Action {
+    & python -B (Join-Path $repoRoot 'skills/git-remote-release/scripts/test-release-evidence.py')
+    if ($LASTEXITCODE -ne 0) { throw "Release evidence regression checks failed with exit code $LASTEXITCODE" }
+}
+
 Add-ValidationResult -Results $results -Name 'Active local shell guidance rejects only legacy PowerShell executable use' -Action {
     $findings = @(Get-LocalShellPolicyFindings -RepoRoot $repoRoot -GitRef $Ref)
 
