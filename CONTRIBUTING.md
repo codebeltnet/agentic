@@ -145,6 +145,8 @@ pwsh -NoProfile -File ./scripts/validate-local.ps1
 
 The scheduler reads every suite from `.github/workflows/validate-skill-templates.yml`, runs each in a separate PowerShell 7 process with bounded concurrency and a streamed log, enforces per-suite timeouts by killing the process tree, and keeps going after a failure so a single run reports every problem. It exits non-zero unless every suite exited zero and printed its terminal success marker, and it writes `summary.json` with the coverage counts beside the logs. Use `-ListSuites` to see what will run, and `-MaxConcurrency`, `-TimeoutSeconds`, and `-DeadlineSeconds` to tune. The scheduler's own behavior is covered by `scripts/tests/test-validate-local.ps1`.
 
+For performance comparisons, inspect `ElapsedSeconds` and the per-suite `Seconds` in that summary. The CI matrix runs on separate Ubuntu runners concurrently; local suites share one machine, including their nested builds and child processes. Once every suite is running, increasing `-MaxConcurrency` cannot shorten the slowest suite. The manifest result bridge therefore reuses its PowerShell runtime for deterministic one-arm validation, retaining every freeze and provenance check and the separate processes used for runner probes and execution.
+
 To compare a change against the initial imported version, run the same harness against a git ref:
 
 ```console

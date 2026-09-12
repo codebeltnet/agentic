@@ -827,6 +827,11 @@ if ($MetadataOnly) {
     exit 0
 }
 
+Add-ValidationResult -Results $results -Name 'Release evidence collection preserves squash contributors and rejects incomplete sources' -Action {
+    & python -B (Join-Path $repoRoot 'skills/git-remote-release/scripts/test-release-evidence.py')
+    if ($LASTEXITCODE -ne 0) { throw "Release evidence regression checks failed with exit code $LASTEXITCODE" }
+}
+
 Add-ValidationResult -Results $results -Name 'Active local shell guidance rejects only legacy PowerShell executable use' -Action {
     $findings = @(Get-LocalShellPolicyFindings -RepoRoot $repoRoot -GitRef $Ref)
 
@@ -3103,7 +3108,16 @@ Add-ValidationResult -Results $results -Name 'Git visual squash summary skill st
 
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'This skill turns a stack of commits into a curated grouped summary'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'This skill is non-mutating:'
-    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Retain only distinct high-signal change groups.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Account for every distinct surviving change in the output.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'There is no total line limit'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Build an internal coverage inventory from the complete `--name-status` output.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'If any output is truncated, retrieve the missing content in bounded batches'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Every changed path and each distinct surviving outcome must map to an accurate output line.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Include commits from every author/contributor in the selected range.'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'resolve `<base>` to the merge-base commit'
+    Assert-NotContains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle '2-5 compact lines'
+    Assert-NotContains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Retain only distinct high-signal change groups.'
+    Assert-NotContains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Drop low-signal noise'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Read `references/commit-language.md` before choosing any emoji or optional prefix.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Default to emoji plus description only.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Favor readable GitHub and terminal output over cleverness.'
@@ -3126,7 +3140,9 @@ Add-ValidationResult -Results $results -Name 'Git visual squash summary skill st
     Assert-Contains -Name 'git-visual-squash-summary/references/commit-language.md' -Content $commitLanguage -Needle 'Gitmoji First, Fallback Second'
 
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Does not run mutating git commands'
-    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Retains only distinct high-signal change groups'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Accounts for every distinct surviving change in the output'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Covers all eight changed paths and both independent Worker.cs outcomes'
+    Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Includes Alice, Bob, and the dependency bot'
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Reads like a curated human-written condensed history rather than a dump of commit subjects'
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Favors readable GitHub and terminal output'
     Assert-Contains -Name 'git-visual-squash-summary/evals/evals.json' -Content $evals -Needle 'Returns grouped lines only and never adds a title or body'
@@ -3271,7 +3287,7 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'establishes each user-facing release entity against the base'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'reduces each package to its surviving base-to-`HEAD` delta before classifying history'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'establishes each package capability against the base'
-    Assert-Contains -Name 'README.md' -Content $readme -Needle 'reducing the cumulative base-to-`HEAD` delta first so reverted churn disappears'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle 'Covers every surviving change on the full current feature branch across all contributors'
     Assert-Contains -Name 'README.md' -Content $readme -Needle '**Final-state first** — computes the cumulative base-to-`HEAD` delta before reading chronology'
 }
 
