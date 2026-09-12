@@ -18,7 +18,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Result,
 
-    [switch]$RequireNativeDelegation
+    [switch]$RequireNativeDelegation,
+
+    # Internal composition path: return the summary and propagate exceptions
+    # to the manifest bridge without starting another PowerShell runtime.
+    [switch]$AsObject
 )
 
 $ErrorActionPreference = 'Stop'
@@ -369,8 +373,11 @@ try {
         throw "Execution integrity failure: canonical result '$Result' is neither a prepared stub nor the frozen bridged result; refusing repair."
     }
     Write-BridgeJson -Path $resultPath -Value $portableResult
-    Write-RunnerJson -Value ([ordered]@{ schema = 'codebeltnet/agentic/eval-result-bridge/1'; result = [System.IO.Path]::GetRelativePath($iterationDirectory, $resultPath).Replace('\', '/'); execution_status = $raw.status }) -AsOutput
+    $summary = [ordered]@{ schema = 'codebeltnet/agentic/eval-result-bridge/1'; result = [System.IO.Path]::GetRelativePath($iterationDirectory, $resultPath).Replace('\', '/'); execution_status = $raw.status }
+    if ($AsObject) { return [pscustomobject]$summary }
+    Write-RunnerJson -Value $summary -AsOutput
 } catch {
+    if ($AsObject) { throw }
     [Console]::Error.WriteLine($_.Exception.Message)
     exit 2
 }
