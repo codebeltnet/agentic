@@ -29,10 +29,10 @@
     {
       "id": 3,
       "prompt": "I only want the grouped squash summary for this branch versus main. The history is noisy and repetitive, with several tiny follow-up commits and typo fixes. Keep every output line under 72 characters.",
-      "expected_output": "A concise grouped summary with a strict 72-character maximum per line that collapses repetitive history into intent-based wording and drops low-signal noise.",
+      "expected_output": "A complete grouped summary with a strict 72-character maximum per line that merges repetitive history while retaining independent surviving corrections.",
       "expectations": [
         "Groups by intent rather than chronology",
-        "Drops low-signal noise such as typo-only or trivial follow-up commits",
+        "Merges repetitive follow-ups without dropping independent surviving typo corrections",
         "Favors readable GitHub and terminal output",
         "Keeps every output line at or below 72 characters",
         "Does not prepend a title, bullets, or numbering"
@@ -53,10 +53,10 @@
     {
       "id": 5,
       "prompt": "We have about 100 commits here: 30 overlap heavily, 20 are typo-level noise, and the remaining work collapses into five real categories. Give me the curated grouped summary only.",
-      "expected_output": "A grouped summary that preserves the five meaningful categories, merges overlap, and drops typo-level noise.",
+      "expected_output": "A grouped summary that preserves the five categories and all surviving typo corrections, merging overlap without imposing a five-line limit.",
       "expectations": [
         "Highlights distinct meaningful efforts instead of forcing one dominant umbrella theme",
-        "Retains only distinct high-signal change groups",
+        "Accounts for every distinct surviving change in the output",
         "Does not collapse several unique top-level efforts into one stitched sentence",
         "Outputs grouped lines only"
       ]
@@ -69,7 +69,7 @@
         "Defaults to the full current feature branch for squash-and-merge requests",
         "Does not ask a clarifying question about which branch commits to include",
         "Treats a later changelog or release-finalization commit as branch-in-scope by default",
-        "Lets semantic collapsing decide whether low-signal late commits deserve their own line",
+        "Covers surviving release-finalization changes explicitly in a parent group or their own line",
         "If a retained line is mainly changelog or release-status communication, prefers 💬 from the shared reference",
         "Returns grouped summary lines only"
       ]
@@ -203,12 +203,12 @@
     {
       "id": 18,
       "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-visual-squash-summary there. Start from `main` with `src/WidgetClient.cs`. On a feature branch: add `SendAsync`; fix it twice; replace the first implementation with a second; add a temporary `LegacyMode` option and later remove it; briefly delete `WidgetClient.Send()` and restore it unchanged; finish with a docs or release-prep follow-up commit. Return the grouped squash summary lines only.",
-      "expected_output": "The grouped summary keeps one surviving `SendAsync` capability line, omits `LegacyMode`, omits the restored `Send()` removal, and produces a small number of high-signal lines independent of commit count.",
+      "expected_output": "The grouped summary keeps one surviving `SendAsync` capability line, omits `LegacyMode` and the restored `Send()` removal, and covers the surviving docs or release-prep follow-up independently of commit count.",
       "expectations": [
         "Keeps one line for the surviving `SendAsync` capability in its final form",
         "Omits the temporary `LegacyMode` work because it does not survive into `HEAD`",
         "Does not emit a breaking-removal claim for `WidgetClient.Send()` because it was restored unchanged",
-        "Produces a small number of high-signal lines independent of commit count",
+        "Covers the surviving docs or release-prep follow-up without imposing a total line limit",
         "Does not emit one line per fixup or implementation swap"
       ]
     },
@@ -221,7 +221,39 @@
         "Does not restate the skill's rules as an `I understand the instructions` or `I will ...` preamble",
         "Does not ask `Would you like me to generate a squash summary of your current branch now?` or any equivalent offer to proceed",
         "Does not announce a plan and stop before any git command has run",
-        "Returns one of only three permitted response shapes: the grouped lines, `No branch changes to summarize.`, or a single base-branch question after every Step 1 fallback failed"
+        "Returns grouped lines, `No branch changes to summarize.`, a base-branch question after every fallback failed, or a blocker for inaccessible diff evidence"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Give me the squash summary from the attached branch evidence. It contains the complete merge-base-to-HEAD diff and contributor history. Return the normal grouped lines only.",
+      "files": ["evals/files/complete-branch.md"],
+      "expected_output": "A complete summary covering all nine independent surviving outcomes across the three contributors, including both unrelated changes in Worker.cs and the small docs, CI, release, asset, and file-mode changes. No five-line cap or contributor selection.",
+      "expectations": [
+        "Reports cancellation propagation in Worker.cs",
+        "Reports redaction of access tokens from Worker.cs logging separately from cancellation",
+        "Reports the corrected setup command in docs/setup.md",
+        "Reports the Windows CI job in .github/workflows/test.yml",
+        "Reports the Newtonsoft.Json upgrade to 13.0.3",
+        "Reports removal of the obsolete legacy.conf file",
+        "Reports the changelog release date correction",
+        "Reports the changed logo asset without inventing its appearance",
+        "Reports the executable permission on scripts/check.sh",
+        "Includes Alice, Bob, and the dependency bot's surviving work without author filters",
+        "Uses as many lines as complete coverage requires and keeps each line at or below 72 characters"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "Summarize the full current branch for squash merge. Your first diff response was truncated after src/Worker.cs. The full name-status inventory also contains docs/setup.md, .github/workflows/test.yml, Directory.Packages.props, legacy.conf, CHANGELOG.md, assets/logo.png, and scripts/check.sh. Use the attached complete evidence to retrieve the remainder and return the grouped lines.",
+      "files": ["evals/files/complete-branch.md"],
+      "expected_output": "The summary recovers every remaining path from the provided evidence instead of treating the truncated excerpt as the full changeset, covering all nine independent outcomes.",
+      "expectations": [
+        "Inspects the complete supplied evidence after the truncated excerpt",
+        "Covers all eight changed paths and both independent Worker.cs outcomes",
+        "Does not treat filenames or diff statistics alone as proof of outcome coverage",
+        "Does not infer visual details for the binary logo change",
+        "Does not stop after recent commits, one contributor, or five lines"
       ]
     }
   ]
