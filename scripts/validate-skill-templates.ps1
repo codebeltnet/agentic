@@ -3163,6 +3163,15 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     $scopeResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-scope.ps1' -GitRef $Ref
     $entityResolver = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/resolve-release-entity.ps1' -GitRef $Ref
     $entityResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -GitRef $Ref
+    $dependencyRemovals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/references/dependency-removals.md' -GitRef $Ref
+
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Explicitly name removed dependencies under `Removed`, including test/build tooling, even when `Changed` explains their replacement.'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Read `references/dependency-removals.md`'
+    Assert-Contains -Name 'git-keep-a-changelog/references/dependency-removals.md' -Content $dependencyRemovals -Needle 'A surviving `Directory.Build.props` classified as `Changed` cannot veto a package''s `Removed` classification.'
+    Assert-Contains -Name 'git-keep-a-changelog/references/dependency-removals.md' -Content $dependencyRemovals -Needle 'A reference moved from a project file into shared or central configuration is a move, not a removed dependency.'
+    Assert-Contains -Name 'git-keep-a-changelog/references/dependency-removals.md' -Content $dependencyRemovals -Needle 'Replacement prose under `Changed` alone fails this check.'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Names both coverlet.collector and coverlet.msbuild under Removed, even when Changed explains their replacement'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Names Legacy.TestLogger under Removed with test-only scope even though no replacement was introduced'
 
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Create or update `CHANGELOG.md` directly, then stop for user review.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Bare `yolo` / `auto`, `git bot commit yolo`, and other commit-execution requests do not activate this skill'
