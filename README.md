@@ -369,6 +369,7 @@ Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too
 - **Deterministic release isolation** — resolves the real comparison branch, excludes its merge boundary, and verifies that no commit already on the base branch can bleed into the new release
 - **PR-complete history** — keeps every branch-unique commit from every contributor while avoiding a same-name feature tracking ref as the comparison base
 - **Cumulative dependency coverage** — when version manifests changed across the release range, diffs them from base to `HEAD` so the changelog reflects the surviving package/version story instead of only per-commit fragments
+- **Explicit dependency removals** — names outgoing packages under `Removed`, including test/build tooling, while retaining useful replacement context under `Changed`; distinguishes actual removals from moved references, reverted changes, and runtime impact
 - **Whole-branch by default** — treats the selected branch or range as author-agnostic scope, so all contributors' commits are in play unless you explicitly narrow by author
 - **Version-aware by branch** — uses a branch prefix like `v0.3.0/...` as the release heading hint when present
 - **Mandatory pending-worktree gate** — when a concrete release has uncommitted changes, the skill must ask a short `Yes / No / Custom` confirmation question before folding them into the changelog draft, with a `FORMS.md` definition that compatible hosts can render as native choices
