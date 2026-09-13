@@ -267,6 +267,32 @@
         "Does not repeat a newly supported adapter in both Added and Changed or describe it merely as added to an existing lineup under Changed",
         "Keeps the changelog grounded in the final state and includes contributions from every selected author"
       ]
+    },
+    {
+      "id": 23,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start on main with a tagged v1.0.0 base containing CHANGELOG.md, Directory.Packages.props declaring coverlet.collector and coverlet.msbuild at 10.0.1, and Directory.Build.props referencing both packages with PrivateAssets=all inside an IsTestProject condition. On branch v1.0.1/coverage-provider, remove both package declarations and references, and add Microsoft.Testing.Extensions.CodeCoverage at 18.11.2 to the same test-only scope. Commit with a message explaining the coverage provider replacement. Commit an existing 1.0.1 changelog draft containing only a Changed bullet explaining the replacement. Update CHANGELOG.md for this branch using yolo mode, then run the skill again against the same branch and stop after the edit. Do not restore packages or run tests in the fixture repository.",
+      "expected_output": "The 1.0.1 patch entry retains useful replacement context under Changed and explicitly names both outgoing Coverlet packages under Removed, identifying test project scope. A second edit preserves the disclosure without duplicating it.",
+      "expectations": [
+        "Checks cumulative central package declarations and shared test references before classifying the removed packages",
+        "Names both coverlet.collector and coverlet.msbuild under Removed, even when Changed explains their replacement",
+        "Retains a Changed explanation of the migration to Microsoft.Testing.Extensions.CodeCoverage",
+        "Describes the removals as test project dependencies without claiming a runtime dependency or public API removal",
+        "Does not let the surviving props files' Changed classification suppress package-level Removed outcomes",
+        "Keeps the release classified as patch rather than inferring a major release from test-only removals",
+        "Keeps exactly one Removed section and one disclosure per outgoing package on the second edit, with standard section order and punctuation"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start on main with a tagged base containing CHANGELOG.md and test/Tests.csproj with development-only references to Legacy.TestLogger, Shared.TestHelper, and Restored.TestHelper. Add a build/Shared.props imported by the project. On branch v2.0.1/test-cleanup, remove Legacy.TestLogger with no replacement; move the unchanged Shared.TestHelper reference into the imported props file; remove then restore Restored.TestHelper unchanged; and add then remove Temporary.TestHelper in separate commits. Commit every change and update CHANGELOG.md. Do not restore packages or run tests in the fixture repository.",
+      "expected_output": "Removed explicitly discloses the standalone Legacy.TestLogger test dependency removal. The moved reference and dependency churn do not become false removals or additions.",
+      "expectations": [
+        "Detects dependency removals in project files even when no central package manifest exists",
+        "Names Legacy.TestLogger under Removed with test-only scope even though no replacement was introduced",
+        "Does not report Shared.TestHelper as removed because its unchanged reference survives in imported shared configuration",
+        "Omits Restored.TestHelper and Temporary.TestHelper because neither leaves a surviving dependency change",
+        "Does not invent a replacement provider, runtime impact, or consumer migration requirement"
+      ]
     }
   ]
 }

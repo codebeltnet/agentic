@@ -1,5 +1,7 @@
 # Validate proposed sections
 
+For dependencies inside surviving manifests, read `dependency-removals.md`. Validate package-level existence and scope from the manifest delta; the containing file's `Changed` classification does not classify its removed entries. A replacement explanation under `Changed` and explicit outgoing packages under `Removed` are distinct outcomes.
+
 Validate each proposed path-backed outcome before writing it. Reuse the full release scope from Step 1 and the entity boundary from Step 4e, including its supporting files. Pass the intended section to the resolver:
 
 ```powershell

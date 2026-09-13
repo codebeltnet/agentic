@@ -45,6 +45,7 @@ Only after this skill has been selected by explicit changelog or release-note in
 - Always write a release highlight immediately below the target heading.
 - The release highlight must explicitly classify the release as `major`, `minor`, or `patch`.
 - Use the standard Keep a Changelog section order: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
+- Explicitly name removed dependencies under `Removed`, including test/build tooling, even when `Changed` explains their replacement. Read `references/dependency-removals.md` for classification and verification.
 - Omit empty sections instead of emitting placeholders.
 - Always maintain the Keep a Changelog compare-link footer at the bottom of the file.
 - Preserve natural line breaks and readable prose. Do not apply any fixed column limit or artificial hard wrapping to changelog paragraphs or bullets.
@@ -280,7 +281,7 @@ Follow these sub-steps in order. Manifest detection and cumulative manifest diff
 git diff --name-only <diff_range>
 ```
 
-If any dependency or version manifest appears — `Directory.Packages.props`, `Directory.Build.props`, `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `pom.xml`, `build.gradle`, `go.mod`, `go.sum`, or similar — proceed to 4b immediately. Do not read commit bodies first.
+If any dependency or version manifest appears — `Directory.Packages.props`, `Directory.Build.props`, `*.csproj`, `*.fsproj`, `*.vbproj`, `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `pom.xml`, `build.gradle`, `go.mod`, `go.sum`, or similar — proceed to 4b immediately. Do not read commit bodies first.
 
 **4b — Diff each touched manifest.** For every manifest found in 4a, run its cumulative diff across the emitted `diff_range`:
 
@@ -423,5 +424,4 @@ After updating `CHANGELOG.md`, stop and let the user review the file. Do not com
 - Using the feature branch's same-name remote tracking ref as the comparison base, producing an empty or misleading branch scope.
 - Letting a concrete version heading or yolo/auto mode change committed-history inclusivity.
 - Summarizing commit chronology first and trying to deduplicate the prose afterward instead of reducing the final state first.
-- Understating dependency or version changes because the skill only read individual commit diffs and never inspected the surviving manifest delta from base to `HEAD`.
-- Reading commit messages before running manifest diffs, then reporting only the packages mentioned in whichever commits happened to be read first, rather than the full cumulative set from the manifest diff.
+- Hiding dependency removals inside replacement wording or dismissing them as low-signal test/build maintenance.
