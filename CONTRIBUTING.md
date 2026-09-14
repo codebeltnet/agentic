@@ -137,7 +137,7 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1
 
 Run the validator locally first for the fastest feedback loop. GitHub Actions also runs the same script on pull requests, but CI is the backstop, not the primary authoring loop.
 
-That command runs one script's groups in order, which is fine for a focused check but slow for the whole repository. For the complete gate, run the CI matrix in parallel instead:
+That command runs one script's groups in order, which is fine for a focused check but slow for the whole repository. Full local validation requires explicit human approval for that specific run. Without approval, focused checks satisfy the local completion gate; state that the full matrix was not run. After approval, run the complete gate — the CI matrix in parallel — instead:
 
 ```console
 pwsh -NoProfile -File ./scripts/validate-local.ps1
@@ -163,7 +163,7 @@ pwsh -NoProfile -File ./scripts/validate-skill-templates.ps1 -Ref HEAD
 - [ ] Any optional `files` entries in `evals/evals.json` point to real fixture files under the same skill folder
 - [ ] If an eval was explicitly requested, `pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -Runner <runner-id> -Model <runner-native-model>` or `-CodebeltReference` was run, and the prepared prompt paths were reported
 - [ ] If an external evaluation was run, each result includes the producing model and the package contains the first-party `report.html`, exact upstream `skill-creator-report.html`, `benchmark.json`, and `benchmark.md`; use `-CollectResults` only for explicitly authorized forensic recovery of an existing package
-- [ ] `pwsh -NoProfile -File ./scripts/validate-local.ps1` passes for the current working tree when changing scaffold or template behavior, with every CI-matrix suite reported as passed and verified
+- [ ] When changing scaffold or template behavior, either the explicitly approved `pwsh -NoProfile -File ./scripts/validate-local.ps1` passes for the current working tree with every CI-matrix suite reported as passed and verified, or focused checks satisfy the local gate and the full matrix was not run for lack of approval
 - [ ] Focused iteration used `scripts/validate-skill-templates.ps1 -Suite <group>` or another single suite rather than a sequential loop over the matrix
 - [ ] If CI is enabled for the branch, the GitHub Actions validation job passes too
 - [ ] Eval packages live in `.bot/<skill-name>-workspace/` or a temp path, never anywhere else in the working tree
