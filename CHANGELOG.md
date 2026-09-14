@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.10.1] - 2026-09-14
 
-This is a minor release that enhances `git-keep-a-changelog` with explicit dependency removal disclosure and improved pending-change handling for both committed and worktree edits, refactors `git-visual-squash-summary` to require complete coverage of all surviving changes and contributors, and adds deterministic GitHub API evidence collection to `git-remote-release`. The eval-runner infrastructure gains JSON property-lookup performance optimization and in-process result validation via composition mode. Repository guidance is expanded with scratch-file isolation practices and scheduler-performance documentation for local validation.
+This is a patch release that enhances `git-keep-a-changelog` with explicit dependency removal disclosure and improved pending-change handling for both committed and worktree edits, refactors `git-visual-squash-summary` to require complete coverage of all surviving changes and contributors, and adds deterministic GitHub API evidence collection to `git-remote-release`. The eval-runner infrastructure gains JSON property-lookup performance optimization and in-process result validation via composition mode. Repository guidance is expanded with scratch-file isolation practices and scheduler-performance documentation for local validation.
 
 ### Added
 
