@@ -362,7 +362,7 @@ On repeated runs, the entity resolver checks each proposed bullet section agains
 
 Writing `CHANGELOG.md` well is harder than it looks. Raw commit subjects are too noisy, PR titles often miss migration context, and release notes get much better when the writer actually reads the commit bodies and understands the net diff. That is where **git-keep-a-changelog** fits: it turns the current branch into a curated Keep a Changelog entry and creates or updates the file directly for review.
 
-Dependency summaries distinguish package switches from verified renames and version upgrades. Switching to an integration package that retains the original transitively is described as a direct-reference change, with transitive retention stated only when dependency evidence supports it.
+The skill establishes each outcome's identity, scope, before/after state, and supporting evidence before drafting. It then reviews every factual clause in the written entry, including retained draft text and the release highlight. Commit wording and existing prose cannot substitute for evidence of a rename, version upgrade, behavioral change, or dependency relationship.
 
 - **Keep a Changelog first** — writes `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security` sections in the expected style
 - **Full-commit context** — reads complete commit messages and the net diff before writing
