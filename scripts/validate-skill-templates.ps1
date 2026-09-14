@@ -828,8 +828,25 @@ if ($MetadataOnly) {
 }
 
 Add-ValidationResult -Results $results -Name 'Release evidence collection preserves squash contributors and rejects incomplete sources' -Action {
-    & python -B (Join-Path $repoRoot 'skills/git-remote-release/scripts/test-release-evidence.py')
-    if ($LASTEXITCODE -ne 0) { throw "Release evidence regression checks failed with exit code $LASTEXITCODE" }
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        & python -B (Join-Path $repoRoot 'skills/git-remote-release/scripts/test-release-evidence.py')
+        if ($LASTEXITCODE -ne 0) { throw "Release evidence regression checks failed with exit code $LASTEXITCODE" }
+    } else {
+        $evidenceTemp = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-release-evidence-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $evidenceTemp -Force | Out-Null
+        try {
+            $collectorText = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-release/scripts/collect-release-evidence.py' -GitRef $Ref
+            $collectorTestText = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-release/scripts/test-release-evidence.py' -GitRef $Ref
+            Write-Utf8File -Path (Join-Path $evidenceTemp 'collect-release-evidence.py') -Content $collectorText
+            Write-Utf8File -Path (Join-Path $evidenceTemp 'test-release-evidence.py') -Content $collectorTestText
+            & python -B (Join-Path $evidenceTemp 'test-release-evidence.py')
+            if ($LASTEXITCODE -ne 0) { throw "Release evidence regression checks failed with exit code $LASTEXITCODE at ref '$Ref'" }
+        } finally {
+            if (Test-Path $evidenceTemp) {
+                Remove-Item -Path $evidenceTemp -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Active local shell guidance rejects only legacy PowerShell executable use' -Action {
@@ -3164,6 +3181,7 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     $entityResolver = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/resolve-release-entity.ps1' -GitRef $Ref
     $entityResolverTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/scripts/test-resolve-release-entity.ps1' -GitRef $Ref
     $dependencyRemovals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/references/dependency-removals.md' -GitRef $Ref
+    $sectionValidation = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-keep-a-changelog/references/section-validation.md' -GitRef $Ref
 
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Explicitly name removed dependencies under `Removed`, including test/build tooling, even when `Changed` explains their replacement.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Read `references/dependency-removals.md`'
@@ -3241,6 +3259,18 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not let yolo mode widen committed history or include the v10.0.9 boundary commit'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Runs scripts/resolve-release-entity.ps1 for the path-backed dotnet-test entity and uses its Added classification'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not select git-keep-a-changelog from bare yolo wording inside a git bot commit request'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Factual review: reread the written target entry and verify every factual clause against the before/after evidence'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Section validation alone does not establish that the prose is true'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'A valid section or successful resolver run does not validate these claims'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'A `Changed` path can therefore carry `Added` or `Removed` sub-outcomes'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Validate the containing file itself as `Changed` via the resolver'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Do not require the resolver to list `Added` for a `Changed` file'
+    Assert-Contains -Name 'git-keep-a-changelog/references/section-validation.md' -Content $sectionValidation -Needle 'A `Changed` path classification never vetoes an `Added` sub-outcome'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Places ModelContextProtocol.AspNetCore 2.2.0 under Added and describes its evidenced ASP.NET Core MCP transport capabilities'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Does not describe the package switch as a rename or version upgrade'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Uses the exact package dependency metadata as evidence for transitive retention'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Removes unsupported corruption-fix and throughput claims from the written entry'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Reviews the final written text against inspected evidence rather than treating valid section placement as factual validation'
     Assert-Contains -Name 'README.md' -Content (Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref) -Needle '**Trigger isolation**'
 
     if ([string]::IsNullOrWhiteSpace($Ref)) {

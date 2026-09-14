@@ -87,6 +87,8 @@ def collect(repository, previous, current, api=github):
     covered = set()
     unresolved = set()
     source_order = {}
+    deferred_review = {}
+    deferred_fetch_failed = set()
     for position, commit in enumerate(commits):
         sha = commit["sha"]
         pages = read(f"{root}/commits/{sha}/pulls?per_page=100")
@@ -96,6 +98,8 @@ def collect(repository, previous, current, api=github):
             continue
         associated = [pr for page in pages for pr in page]
         evidence["associations"][sha] = [pr["number"] for pr in associated]
+        pending_review = []
+        pending_fetch_failed = False
         for candidate in sorted(associated, key=lambda pr: pr["number"]):
             number = candidate["number"]
             if number not in details:
@@ -103,14 +107,15 @@ def collect(repository, previous, current, api=github):
                 details[number] = pages[0] if pages else None
             pr = details[number]
             if pr is None:
-                unresolved.add(sha)
+                pending_fetch_failed = True
                 continue
             if not pr["merged_at"] or pr["base"]["repo"]["full_name"].casefold() != repository.casefold():
                 continue
             if pr["merge_commit_sha"] not in shas:
                 # Do not guess about rebase, partial, or later integration histories.
-                issues.append(f"Commit {sha}: PR #{number} integration needs reachability review")
-                unresolved.add(sha)
+                # Defer: a later-merged PR outside the range is simply excluded when
+                # another associated PR already covers this commit.
+                pending_review.append(number)
                 continue
             covered.add(sha)
             if any(item["number"] == number for item in evidence["pull_requests"]):
@@ -130,6 +135,21 @@ def collect(repository, previous, current, api=github):
             line = source(pr["title"], pr["html_url"], authors)
             evidence["sources"].append(line)
             source_order[line] = (position, number)
+        # Defer reachability decisions until all commits are processed: a commit
+        # covered directly or via another PR's original commits excludes any
+        # later-merged outside-range association instead of failing the run.
+        if pending_review:
+            deferred_review.setdefault(sha, []).extend(pending_review)
+        if pending_fetch_failed:
+            deferred_fetch_failed.add(sha)
+    for sha, numbers in deferred_review.items():
+        if sha not in covered:
+            for number in numbers:
+                issues.append(f"Commit {sha}: PR #{number} integration needs reachability review")
+            unresolved.add(sha)
+    for sha in deferred_fetch_failed:
+        if sha not in covered:
+            unresolved.add(sha)
     for position, commit in enumerate(commits):
         if commit["sha"] not in covered | unresolved:
             line = source(commit["commit"]["message"], commit["html_url"], contributors([commit]))
