@@ -18,7 +18,7 @@ Read `FORMS.md` when pending worktree changes require user confirmation and the 
 
 Only after this skill has been selected by explicit changelog or release-note intent, `yolo` or `auto` in that same request (case-insensitive) enables full-autonomy mode. Bare `yolo` / `auto`, `git bot commit yolo`, and other commit-execution requests do not activate this skill:
 
-- **Skip Step 3 entirely.** Do not ask the confirmation question. Do not present the `Yes / No / Custom` gate.
+- **Skip Step 3's confirmation only.** Do not ask the confirmation question. Do not present the `Yes / No / Custom` gate. Still discover and inspect every pending change in Step 4.
 - **Include all pending changes automatically.** Staged, unstaged, and untracked files are all treated as part of the release scope without asking.
 - **Keep committed history isolated.** Yolo changes only the pending-worktree decision; use the same resolved branch ranges and bleed guard as every other invocation.
 - **Make all scope decisions independently.** The user has explicitly delegated judgment. Do not pause for input at any point in the workflow.
@@ -75,6 +75,8 @@ History = provenance used to explain Result
 ```
 
 History is evidence; the resulting state is truth.
+
+When pending changes are included, every `HEAD` endpoint in the classification rules below means the effective final state: committed content overlaid with the selected staged, unstaged, and untracked changes. Pending changes can remove or undo committed outcomes; they are not merely extra bullets. An empty committed diff does not mean an empty release draft.
 
 The current contents of the target heading are cached output, not a release baseline. When rerunning on an unreleased version branch whose matching tag is absent, discard the prior draft narrative and regenerate the heading from the resolved base-to-`HEAD` result so later refinements to the same new capability remain part of its `Added` outcome.
 
@@ -229,7 +231,7 @@ This is a required checkpoint. Do not proceed to Step 4 until this step is compl
 
 After resolving the target heading, check whether the worktree contains changes that are not part of the committed history yet.
 
-**If yolo/auto mode is active: skip this entire step.** Include all pending changes (staged, unstaged, untracked) automatically and proceed to Step 4.
+**If yolo/auto mode is active: skip the confirmation gate.** Include all pending changes (staged, unstaged, untracked) automatically and proceed to Step 4's complete inventory and content inspection.
 
 - Count staged, unstaged, and untracked changes separately.
 - If there are no pending changes, continue normally.
@@ -275,11 +277,21 @@ If any check fails, stop without editing `CHANGELOG.md`. Report the resolved ref
 
 Follow these sub-steps in order. Manifest detection and cumulative manifest diffs must run before commit-body interpretation.
 
-**4a — Detect manifest changes.** Check the files changed across the emitted `diff_range`:
+**4a — Discover the complete changed-file inventory, then detect manifests.** Start with the emitted `diff_range`:
 
 ```bash
 git diff --name-only <diff_range>
 ```
+
+When pending changes are included (automatically in yolo/auto), union that inventory with the selected staged, unstaged, and untracked paths before detecting manifests:
+
+```bash
+git diff --cached --name-only
+git diff --name-only
+git ls-files --others --exclude-standard
+```
+
+Deduplicate paths, but retain deletions. Read the contents of included untracked files; listing their names is not inspection. Include manifests changed only in the worktree or newly untracked, even when `diff_range` is empty. Do not stage files to make Git show them. Independent file reads may run concurrently with bounded concurrency; reconcile the combined evidence before classifying or editing.
 
 If any dependency or version manifest appears — `Directory.Packages.props`, `Directory.Build.props`, `*.csproj`, `*.fsproj`, `*.vbproj`, `package.json`, `pnpm-lock.yaml`, `yarn.lock`, `pom.xml`, `build.gradle`, `go.mod`, `go.sum`, or similar — proceed to 4b immediately. Do not read commit bodies first.
 
@@ -291,7 +303,9 @@ git diff <diff_range> -- package.json
 # Repeat for every manifest identified in 4a.
 ```
 
-Parse the cumulative delta: which packages were added, removed, upgraded, or downgraded, and the exact before → after versions that survive at `HEAD`. This is the authoritative dependency evidence. Individual commit messages may describe partial steps; they do not override the resulting manifest diff.
+When all pending changes are included, also compare each tracked manifest directly from the resolved base to its current working copy with `git diff <merge_base> -- <manifest-path>` (a single base endpoint, not `<diff_range>`). Read included untracked manifests directly and compare their package identities with the base and other final manifests. This catches references moved into new shared files without inventing removals. For a custom pending subset, reconstruct only that subset from committed content plus its selected deltas; do not use the full working copy for a staged-only scope.
+
+Parse the cumulative delta: which packages were added, removed, upgraded, or downgraded, and the exact before → after versions that survive at the effective final state. This is the authoritative dependency evidence. Individual commit messages may describe partial steps; they do not override the resulting manifest diff. Apply `references/dependency-removals.md` to pending-only removals as well as committed removals.
 
 **4c — Inspect the cumulative diff before history.** Use the emitted `diff_range`:
 
@@ -311,12 +325,12 @@ git diff
 git ls-files --others --exclude-standard
 ```
 
-Pending changes are additive final-state evidence. They never justify widening `history_range` or `diff_range`.
+Read the included untracked files, then reconcile all selected deltas against the same base. When all pending changes are included, `git diff <merge_base> --` shows the net tracked-file result, including cancellations between commits, index, and worktree; untracked content must still be inspected separately. Pending changes overlay committed state rather than forming an independent list of additions. They never justify widening `history_range` or `diff_range`.
 
 **4e — Determine the surviving outcomes at the final state.**
 
 - Identify each user-facing release entity and test its existence at the resolved base before classifying its child paths or commit verbs.
-- For each path-backed entity, run the bundled classifier. Pass `-IncludeWorktree` only when pending changes for that entity are in the approved scope:
+- For each path-backed entity, run the bundled classifier. Pass `-IncludeWorktree` on both classification and `-Section` validation whenever that entity's full pending state is included, including automatically in yolo/auto. Omitting it validates committed content only. Do not use it for a custom subset that excludes some changes to the entity; verify that subset's effective state separately instead of treating a HEAD-only result as final:
 
 ```powershell
 pwsh -NoProfile -File <skill-root>/scripts/resolve-release-entity.ps1 -Repository . -BaseCommit <merge_base> -HeadCommit <head_commit> -EntityPath skills/dotnet-test

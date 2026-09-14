@@ -293,6 +293,33 @@
         "Omits Restored.TestHelper and Temporary.TestHelper because neither leaves a surviving dependency change",
         "Does not invent a replacement provider, runtime impact, or consumer migration requirement"
       ]
+    },
+    {
+      "id": 25,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. Start on main with a tagged v1.0.0 base containing CHANGELOG.md, Directory.Packages.props declaring coverlet.collector and coverlet.msbuild, and Directory.Build.props referencing both only for test projects. Create v1.0.1/coverage without committing any branch changes. Stage removal of both package declarations and addition of Microsoft.Testing.Extensions.CodeCoverage. Leave matching shared reference changes unstaged. Add an untracked global.json selecting Microsoft.Testing.Platform. Update CHANGELOG.md using git-keep-a-changelog yolo, then rerun it. Do not stage or commit the pending files, restore packages, or run fixture tests.",
+      "expected_output": "The draft includes the complete pending coverage migration despite an empty committed range, names both outgoing packages under Removed, and describes the untracked runner configuration. Repeating the update does not duplicate outcomes or mutate the index.",
+      "expectations": [
+        "Discovers staged, unstaged, and untracked paths before selecting manifests even though the committed diff is empty",
+        "Reads the untracked global.json contents rather than inferring its behavior from the filename",
+        "Names coverlet.collector and coverlet.msbuild under Removed with test-only scope",
+        "Includes the coverage replacement and Microsoft.Testing.Platform runner configuration",
+        "Uses IncludeWorktree for included pending path-backed classification and section validation",
+        "Does not ask for pending-change confirmation in yolo mode or widen committed history",
+        "Preserves pending source files and the index, and avoids duplicate outcomes on the second edit"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. On main, commit a tagged base with CHANGELOG.md and a test project referencing Legacy.TestLogger, Shared.TestHelper, and Restored.TestHelper. Create v1.0.1/test-cleanup. Commit adding Temporary.TestHelper. Then stage removal of Legacy.TestLogger, Shared.TestHelper, and Restored.TestHelper. In unstaged edits restore Restored.TestHelper exactly, remove Temporary.TestHelper, and import an untracked build/Shared.props containing the unchanged Shared.TestHelper reference. Update CHANGELOG.md with git-keep-a-changelog auto. Leave pending source files and the index unchanged; do not restore packages or run fixture tests.",
+      "expected_output": "The final draft discloses only the surviving Legacy.TestLogger dependency removal. It reconciles the index, worktree, untracked shared import, and committed introduction against the original base.",
+      "expectations": [
+        "Names Legacy.TestLogger under Removed with test scope",
+        "Reads the untracked imported props file and does not report Shared.TestHelper as removed",
+        "Omits the Restored.TestHelper removal because unstaged content restores its base state",
+        "Omits Temporary.TestHelper because its committed addition is cancelled by pending removal",
+        "Does not summarize committed and pending changes as separate additive bullet lists",
+        "Does not stage, commit, or alter source files to construct the comparison"
+      ]
     }
   ]
 }

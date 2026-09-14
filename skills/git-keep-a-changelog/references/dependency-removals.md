@@ -6,6 +6,8 @@ Readers scanning `Removed` need to discover which dependencies disappeared. A re
 
 Use the cumulative manifest delta from Step 4b, including project files, shared imports, and central package declarations. Reconcile package identity across the relevant manifests at the base and final state, including approved pending changes. A deleted line alone is not proof that a dependency disappeared.
 
+Discover manifests from committed, staged, unstaged, and untracked paths before this comparison. With all pending changes included, compare tracked manifests using `git diff <merge_base> -- <manifest-path>` and read untracked manifests directly. A two-commit `diff_range` cannot reveal pending-only removals. Yolo/auto includes those changes automatically; it skips confirmation, not discovery or removal disclosure. Reconcile against the final contents so a staged removal restored in the worktree is not reported, and a reference moved into an untracked imported file is not mistaken for a removed package.
+
 - A dependency present at the base and absent from the final dependency declarations belongs under `Removed`. Name its exact package identifier. Group related removals in one bullet if every identifier remains explicit.
 - If it survives for another project or target framework, describe the scope from which it was removed rather than claiming repository-wide removal.
 - A reference moved from a project file into shared or central configuration is a move, not a removed dependency. Removing only an unused central version declaration does not prove removal of a runtime dependency; describe the declaration cleanup accurately when relevant.
