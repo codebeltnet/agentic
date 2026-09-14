@@ -6,11 +6,11 @@ For dependencies inside surviving manifests, read `dependency-removals.md`. Vali
 
 For switches between package identifiers, verify rename and upgrade claims separately. If the outgoing package survives transitively, qualify `Removed` as removal of its direct reference and require dependency metadata or graph evidence for that retention claim.
 
-For changed source files, validate user-facing sub-outcomes separately from the file's path classification. A pre-existing type can contain a new `Added` capability; keep its integral headers, protocol negotiation, lifecycle operations, examples, and configuration validation with that capability. Name a public configuration member with its declared type when the type determines the supported modes.
+For changed source files, validate user-facing sub-outcomes separately from the file's path classification. A pre-existing type can contain a new `Added` capability; keep its integral headers, protocol negotiation, lifecycle operations, examples, and configuration validation with that capability. Name a public configuration member with its declared type when the type determines the supported modes. The resolver classifies the containing file as `Changed`; validate it with `-Section Changed` and place the new capability bullet under `Added` from symbol-level before/after evidence. A `Changed` path classification never vetoes an `Added` sub-outcome and never requires the resolver to list `Added` in `allowed_sections` for that path.
 
 In yolo/auto, pending changes are already included. Pass `-IncludeWorktree` during section validation as well as initial classification so pending-only additions and deletions are checked against the same effective final state. Reading untracked contents and reconciling pending manifest entries remain required even when the committed range is empty.
 
-Validate each proposed path-backed outcome before writing it. Reuse the full release scope from Step 1 and the entity boundary from Step 4e, including its supporting files. Pass the intended section to the resolver:
+Validate each path-entity boundary before writing it. Reuse the full release scope from Step 1 and the entity boundary from Step 4e, including its supporting files. Pass the path's own section to the resolver (for example, `Changed` for a modified pre-existing file); validate semantic `Added` or `Removed` sub-outcomes inside a `Changed` path from their own before/after evidence instead of requiring the containing path to allow that section:
 
 ```powershell
 pwsh -NoProfile -File <skill-root>/scripts/resolve-release-entity.ps1 -Repository . -BaseCommit <merge_base> -HeadCommit <head_commit> -EntityPath <entity-path> -Section <proposed-section>

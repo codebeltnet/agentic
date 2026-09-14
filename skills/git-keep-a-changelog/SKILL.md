@@ -347,10 +347,10 @@ Read the included untracked files, then reconcile all selected deltas against th
 pwsh -NoProfile -File <skill-root>/scripts/resolve-release-entity.ps1 -Repository . -BaseCommit <merge_base> -HeadCommit <head_commit> -EntityPath skills/dotnet-test
 ```
 
-- Treat the emitted `classification` as authoritative for `Added`, `Removed`, `Changed`, or `Unchanged`. Use semantic analysis only to group paths into the correct user-facing entity and to choose among non-structural sections such as `Fixed` or `Security` when the entity already existed at the base.
+- Treat the emitted `classification` as authoritative for the path entity's own existence (`Added`, `Removed`, `Changed`, or `Unchanged`). The resolver classifies whole paths, not entries inside a manifest or symbols inside a source file. A `Changed` path can therefore carry `Added` or `Removed` sub-outcomes at package or capability level; validate those sub-outcomes from their own before/after evidence as described in `references/dependency-removals.md` and `references/section-validation.md`. Use semantic analysis to group paths into the correct user-facing entity and to choose among non-structural sections such as `Fixed` or `Security` when the entity already existed at the base.
 - Eliminate exact reversions, temporary files/features, and dependency churn that returned to the base value.
 - Merge intermediate add/change/fix churn into the final surviving capability or behavior.
-- A new behavior introduced inside an existing source file is still an `Added` capability when that behavior was absent at the base. Keep validation, protocol negotiation, required headers, lifecycle operations, and examples that make the same new capability usable together under `Added`; do not move an integral validation branch to `Fixed` merely because the containing type pre-existed.
+- A new behavior introduced inside an existing source file is still an `Added` capability when that behavior was absent at the base. Validate the containing file itself as `Changed` via the resolver; place the new capability bullet under `Added` from symbol-level before/after evidence. Keep validation, protocol negotiation, required headers, lifecycle operations, and examples that make the same new capability usable together under `Added`; do not move an integral validation branch to `Fixed` merely because the containing type pre-existed.
 - For every changed source file, compare the symbol-level before and after state and account for newly introduced public properties, declared types, methods, endpoints, headers, protocol constants, examples, and validation branches. When a configuration property's type carries the feature semantics, name both the property and its declared type, such as `SessionMode` of type `HttpServerSessionMode` on `McpDocumentOptions`.
 - A pre-existing file that remains present but changes, including `CONTRIBUTING.md`, is `Changed` at the path level. A new capability documented in that file may be mentioned in the capability's `Added` outcome, but the file itself must not be described as newly introduced.
 - Preserve rename/move as one surviving outcome when the cumulative diff supports it.
@@ -381,7 +381,7 @@ Do not over-classify from dramatic wording in a commit subject. The surviving de
 
 Draft the populated sections from the verified outcomes, then write the release highlight to summarize them. Place the highlight before the sections in the file.
 
-Read `references/section-validation.md` and validate every proposed path-backed outcome with `-Section <proposed-section>` before writing. Reuse the complete branch baseline on subsequent runs and consolidate each outcome once across all sections.
+Read `references/section-validation.md` and validate every path-entity boundary with `-Section` matching its own path classification before writing. Do not require the resolver to list `Added` for a `Changed` file's new-capability sub-outcome; validate the containing file as `Changed` and place the semantic capability under `Added` from symbol-level evidence. Reuse the complete branch baseline on subsequent runs and consolidate each outcome once across all sections.
 
 - Map only the surviving outcomes into `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, and `Security`.
 - Keep bullets curated and human-written.
