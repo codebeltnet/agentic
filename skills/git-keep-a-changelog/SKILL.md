@@ -54,6 +54,7 @@ Only after this skill has been selected by explicit changelog or release-note in
 - Use the standard Keep a Changelog section order: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
 - Explicitly name removed dependencies under `Removed`, including test/build tooling, even when `Changed` explains their replacement. Read `references/dependency-removals.md` for classification and verification.
 - A switch between package identifiers is not proof of a rename or version upgrade. Verify package identity, version changes, and direct versus transitive scope separately using that reference.
+- When a final manifest introduces a package identifier that was absent at the base, classify that incoming dependency under `Added`; classify an outgoing direct identifier that is absent from the final declarations under `Removed`. If the incoming package provides a newly evidenced integration capability, describe that capability under `Added` and the outgoing direct-reference scope under `Removed`; do not collapse the two package-level outcomes into a generic `Changed` switch.
 - Omit empty sections instead of emitting placeholders.
 - Always maintain the Keep a Changelog compare-link footer at the bottom of the file.
 - Preserve natural line breaks and readable prose. Do not apply any fixed column limit or artificial hard wrapping to changelog paragraphs or bullets.
@@ -311,7 +312,7 @@ When all pending changes are included, also compare each tracked manifest direct
 
 Read `references/dependency-removals.md` for every dependency delta, including pending-only changes. First record each exact package identity, affected project/target, and base and final direct declarations and versions. Record resolved dependency relationships separately when evidence exists. A manifest diff proves declaration changes; it does not by itself prove package identity continuity, dependency graph changes, or newly used capabilities.
 
-Only then classify the facts: a version change within one identity supports upgrade/downgrade wording; an outgoing identity and an incoming identity establish separate declaration changes. Describe a switch when they serve a replacement role in the project. Call it a rename only with independent evidence of identity continuity. Additional capabilities or transitive retention require their own evidence. Do not compare version numbers belonging to different identities as if they formed one version history.
+Only then classify the facts: a version change within one identity supports upgrade/downgrade wording; an incoming identity absent at the base and present at the final state is an `Added` dependency outcome; an outgoing identity present at the base and absent from final direct declarations is a `Removed` outcome. Describe the relationship as a switch or replacement when the project evidence supports it, without adding a redundant `Changed` bullet. Call it a rename only with independent evidence of identity continuity. Additional capabilities or transitive retention require their own evidence. Do not compare version numbers belonging to different identities as if they formed one version history.
 
 **4c — Inspect the cumulative diff before history.** Use the emitted `diff_range`:
 
@@ -383,6 +384,7 @@ Read `references/section-validation.md` and validate every proposed path-backed 
 - A capability, file, or dependency change that returned to the base state stays out of the changelog entirely.
 - Drop low-signal churn such as typo-only commits, trivial fixups, or mechanical follow-ups unless they materially change the release story.
 - Choose each change verb from the verified before/after facts. A sentence combining several claims must support each one separately; remove any unsupported qualifier, explanation, or effect.
+- Represent a package switch with separate `Added` and `Removed` outcomes when the incoming and outgoing identities have different base-to-final existence states; use `Changed` only for an independently evidenced migration effect or an identity-preserving version change.
 - Use natural prose line breaks. Keep paragraphs and bullets readable, but do not column-wrap them artificially or target a fixed line width.
 - End each bullet with `,` except the final bullet in a populated section, which must end with `.`.
 

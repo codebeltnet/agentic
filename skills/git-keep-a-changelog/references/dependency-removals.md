@@ -9,6 +9,7 @@ Use the cumulative manifest delta from Step 4b, including project files, shared 
 Discover manifests from committed, staged, unstaged, and untracked paths before this comparison. With all pending changes included, compare tracked manifests using `git diff <merge_base> -- <manifest-path>` and read untracked manifests directly. A two-commit `diff_range` cannot reveal pending-only removals. Yolo/auto includes those changes automatically; it skips confirmation, not discovery or removal disclosure. Reconcile against the final contents so a staged removal restored in the worktree is not reported, and a reference moved into an untracked imported file is not mistaken for a removed package.
 
 - A dependency present at the base and absent from the final dependency declarations belongs under `Removed`. Name its exact package identifier. Group related removals in one bullet if every identifier remains explicit.
+- A distinct package identifier absent at the base and present in the final dependency declarations is an `Added` dependency outcome, even when it replaces an outgoing package. If its metadata or source evidence documents a new integration capability, describe that capability under `Added`.
 - If it survives for another project or target framework, describe the scope from which it was removed rather than claiming repository-wide removal.
 - A reference moved from a project file into shared or central configuration is a move, not a removed dependency. Removing only an unused central version declaration does not prove removal of a runtime dependency; describe the declaration cleanup accurately when relevant.
 - Omit temporary dependencies absent at both endpoints and removals reverted before the final state. An ordinary version upgrade is `Changed`, not removal of the old version.
@@ -28,14 +29,14 @@ An integration, extension, umbrella, or metapackage can add capabilities while d
 
 When the outgoing package survives transitively, the `Removed` disclosure concerns the direct reference only; it must not imply that the package or its capabilities disappeared.
 
-Keep a useful `Changed` bullet explaining a provider or tooling migration, and add a `Removed` bullet naming the outgoing dependencies. These describe the migration and its distinct package removals; the one-outcome rule does not suppress either. Avoid repeating the full migration narrative in both sections.
+When an incoming package is a newly introduced integration or extension capability, pair its `Added` bullet with a `Removed` bullet naming the outgoing direct dependency. These are separate package-identity outcomes; do not add a redundant `Changed` switch bullet. Use `Changed` for provider or tooling migration context only when it describes an independently evidenced effect that the `Added` and `Removed` bullets do not already express.
 
 For example, when the manifests prove that test-only Coverlet references were replaced:
 
 ```markdown
-### Changed
+### Added
 
-- Replaced Coverlet with Microsoft.Testing.Extensions.CodeCoverage for test coverage collection.
+- Added `Microsoft.Testing.Extensions.CodeCoverage` for test coverage collection.
 
 ### Removed
 
