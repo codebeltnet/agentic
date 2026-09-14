@@ -320,6 +320,30 @@
         "Does not summarize committed and pending changes as separate additive bullet lists",
         "Does not stage, commit, or alter source files to construct the comparison"
       ]
+    },
+    {
+      "id": 27,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. On main, commit a tagged v1.0.0 base containing CHANGELOG.md, Directory.Packages.props declaring ModelContextProtocol 2.2.0, and src/Library/Library.csproj referencing it. Create v1.0.1/aspnetcore-integration and switch the central declaration and project reference to ModelContextProtocol.AspNetCore 2.2.0. Include vendor/ModelContextProtocol.AspNetCore.nuspec with package id ModelContextProtocol.AspNetCore, version 2.2.0, description ASP.NET Core integration extensions, and an exact dependency on ModelContextProtocol [2.2.0] for the project's net10.0 target. Commit the change with subject 'Rename and upgrade MCP dependency' and a body explaining that the integration package adds ASP.NET Core capabilities. Commit a draft 1.0.1 changelog bullet saying 'ModelContextProtocol package renamed and upgraded to ModelContextProtocol.AspNetCore version 2.2.0', without creating a v1.0.1 tag. Update CHANGELOG.md using git-keep-a-changelog. Do not restore packages or run fixture tests.",
+      "expected_output": "The draft describes switching the direct dependency to the ASP.NET Core integration package. It removes the false rename and upgrade claims and qualifies the outgoing direct reference while preserving its evidenced transitive availability.",
+      "expectations": [
+        "Describes a switch to ModelContextProtocol.AspNetCore 2.2.0 for ASP.NET Core integration capabilities",
+        "Does not describe the package switch as a rename or version upgrade despite the misleading commit subject and draft",
+        "Names ModelContextProtocol under Removed as a direct reference only and explains its transitive retention through ModelContextProtocol.AspNetCore",
+        "Uses the exact package dependency metadata as evidence for transitive retention rather than inferring it from the package names",
+        "Does not claim existing MCP capabilities were removed or newly exposed integration APIs are already used by the library",
+        "Rewrites the stale draft bullet rather than preserving or duplicating its unsupported claims"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. On main, commit a tagged base with CHANGELOG.md and an app project directly referencing Example.Client 1.0.0 and Stable.Utility 3.0.0. On v1.0.1/dependencies, switch Example.Client to Example.Client.Hosting 2.0.0 and upgrade Stable.Utility to 3.1.0. Provide no lockfile, resolved assets, package metadata, or publisher migration documentation. Commit with subject 'Upgrade dependencies'. Update CHANGELOG.md using git-keep-a-changelog using only the supplied local evidence; do not contact a package registry, restore packages, or run fixture tests.",
+      "expected_output": "The changelog describes the direct-reference switch with its known version and separately reports the supported Stable.Utility upgrade. It does not invent identity continuity, capabilities, or dependency graph relationships for the package switch.",
+      "expectations": [
+        "Describes switching the direct reference from Example.Client to Example.Client.Hosting 2.0.0 without calling it a rename or version upgrade",
+        "Names the removed direct Example.Client reference under Removed without claiming absence from the resolved dependency graph",
+        "Does not claim Example.Client survives transitively or invent added hosting behavior from the package name alone",
+        "Reports Stable.Utility upgraded from 3.0.0 to 3.1.0 because that change preserves package identity"
+      ]
     }
   ]
 }

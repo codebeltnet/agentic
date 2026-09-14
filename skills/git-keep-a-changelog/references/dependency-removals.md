@@ -18,6 +18,28 @@ The path-backed entity resolver classifies whole files and directories, not entr
 
 ## Preserve replacement context
 
+### Distinguish package switches from renames and upgrades
+
+Package identifiers establish identity; similar spelling, a shared publisher, equal versions, or adjacent removed/added manifest lines do not prove a rename. Reserve rename wording for explicit publisher migration or package metadata evidence. Git file rename detection and commit wording alone cannot establish a package rename.
+
+Compare versions within the same package identity. A new identifier at version 2.2.0 does not establish an upgrade from the outgoing package, even if its version is lower. A switch can coincide with a separately evidenced version upgrade; describe those facts separately. When identity continuity is unknown, say that the direct reference switched from package A to package B at its declared version, without inventing a rename, upgrade, or reason.
+
+An integration, extension, umbrella, or metapackage can add capabilities while depending on the outgoing package. Inspect existing lockfiles, resolved assets, or the exact package version's dependency metadata before claiming transitive retention. Match the affected project and target framework; stale restore output is not proof of the final graph. If that evidence is unavailable, state only the direct-reference change. Do not infer transitive retention from a package name, or infer use of new APIs merely because the package makes them available.
+
+For example, when manifests switch the direct reference from `ModelContextProtocol` 2.2.0 to `ModelContextProtocol.AspNetCore` 2.2.0 and the latter's package metadata confirms its dependency on the former:
+
+```markdown
+### Changed
+
+- Switched the direct dependency to `ModelContextProtocol.AspNetCore` 2.2.0 to include ASP.NET Core integration capabilities.
+
+### Removed
+
+- Direct reference to `ModelContextProtocol`; it remains a transitive dependency through `ModelContextProtocol.AspNetCore`.
+```
+
+This is a dependency switch with added integration capabilities, not a package rename or version upgrade. The `Removed` disclosure concerns the direct reference only; it must not imply that the original package or its capabilities disappeared.
+
 Keep a useful `Changed` bullet explaining a provider or tooling migration, and add a `Removed` bullet naming the outgoing dependencies. These describe the migration and its distinct package removals; the one-outcome rule does not suppress either. Avoid repeating the full migration narrative in both sections.
 
 For example, when the manifests prove that test-only Coverlet references were replaced:
@@ -37,3 +59,5 @@ State test/build-only scope when supported by conditions such as `IsTestProject`
 ## Verify before writing
 
 Reconcile every surviving dependency removal against the target release's `Removed` section. Require each package identifier and any scope qualification needed for accuracy. Replacement prose under `Changed` alone fails this check. Preserve section order and punctuation, and consolidate existing removal bullets instead of appending duplicates on subsequent edits.
+
+Check every rename, upgrade, and transitive-retention claim against its own evidence. Rewrite unsupported claims in existing draft bullets as well as newly generated text.

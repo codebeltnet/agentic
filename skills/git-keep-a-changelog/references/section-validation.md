@@ -2,6 +2,8 @@
 
 For dependencies inside surviving manifests, read `dependency-removals.md`. Validate package-level existence and scope from the manifest delta; the containing file's `Changed` classification does not classify its removed entries. A replacement explanation under `Changed` and explicit outgoing packages under `Removed` are distinct outcomes.
 
+For switches between package identifiers, verify rename and upgrade claims separately. If the outgoing package survives transitively, qualify `Removed` as removal of its direct reference and require dependency metadata or graph evidence for that retention claim.
+
 In yolo/auto, pending changes are already included. Pass `-IncludeWorktree` during section validation as well as initial classification so pending-only additions and deletions are checked against the same effective final state. Reading untracked contents and reconciling pending manifest entries remain required even when the committed range is empty.
 
 Validate each proposed path-backed outcome before writing it. Reuse the full release scope from Step 1 and the entity boundary from Step 4e, including its supporting files. Pass the intended section to the resolver:

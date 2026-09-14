@@ -46,6 +46,7 @@ Only after this skill has been selected by explicit changelog or release-note in
 - The release highlight must explicitly classify the release as `major`, `minor`, or `patch`.
 - Use the standard Keep a Changelog section order: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
 - Explicitly name removed dependencies under `Removed`, including test/build tooling, even when `Changed` explains their replacement. Read `references/dependency-removals.md` for classification and verification.
+- A switch between package identifiers is not proof of a rename or version upgrade. Verify package identity, version changes, and direct versus transitive scope separately using that reference.
 - Omit empty sections instead of emitting placeholders.
 - Always maintain the Keep a Changelog compare-link footer at the bottom of the file.
 - Preserve natural line breaks and readable prose. Do not apply any fixed column limit or artificial hard wrapping to changelog paragraphs or bullets.
@@ -306,6 +307,8 @@ git diff <diff_range> -- package.json
 When all pending changes are included, also compare each tracked manifest directly from the resolved base to its current working copy with `git diff <merge_base> -- <manifest-path>` (a single base endpoint, not `<diff_range>`). Read included untracked manifests directly and compare their package identities with the base and other final manifests. This catches references moved into new shared files without inventing removals. For a custom pending subset, reconstruct only that subset from committed content plus its selected deltas; do not use the full working copy for a staged-only scope.
 
 Parse the cumulative delta: which packages were added, removed, upgraded, or downgraded, and the exact before → after versions that survive at the effective final state. This is the authoritative dependency evidence. Individual commit messages may describe partial steps; they do not override the resulting manifest diff. Apply `references/dependency-removals.md` to pending-only removals as well as committed removals.
+
+Match versions by package identity before calling anything an upgrade or downgrade. For different identifiers, establish whether this is a replacement, a switch to an integration package, or a publisher-confirmed rename; similar names and adjacent diff lines do not establish continuity. Qualify removal of a direct reference separately from disappearance from the dependency graph.
 
 **4c — Inspect the cumulative diff before history.** Use the emitted `diff_range`:
 
