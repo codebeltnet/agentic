@@ -20,6 +20,8 @@ For each surviving outcome, establish the entity and scope, its before and after
 
 Use the most specific wording the evidence supports. When a reason, identity relationship, or user impact is unknown, describe the observed change without that explanation. Investigate further when the missing fact affects classification; otherwise omit the unsupported clause. Do not fill gaps from naming similarities or familiar migration patterns.
 
+Before drafting prose, build a complete evidence ledger in working context. Give every changed, staged, unstaged, and included untracked path a base state, final state, user-facing outcome or evidence-backed omission, and proposed section. For manifests, add a separate row for every package identity and direct declaration. For changed source and public documentation, split the file into its user-facing sub-outcomes — public members and types, routes, HTTP headers, protocol versions, examples, validation, and documented behavior — instead of reducing the whole file to one broad label. Do not start writing until this inventory is reconciled against the final state.
+
 Read `FORMS.md` when pending worktree changes require user confirmation and the host supports native structured input controls. If native structured input is unavailable, use the deterministic plain-text fallback defined there. `FORMS.md` is not used in yolo/auto mode — see **Yolo / Auto Mode** below.
 
 ## Yolo / Auto Mode
@@ -55,6 +57,8 @@ Only after this skill has been selected by explicit changelog or release-note in
 - Explicitly name removed dependencies under `Removed`, including test/build tooling, even when `Changed` explains their replacement. Read `references/dependency-removals.md` for classification and verification.
 - A switch between package identifiers is not proof of a rename or version upgrade. Verify package identity, version changes, and direct versus transitive scope separately using that reference.
 - When a final manifest introduces a package identifier that was absent at the base, classify that incoming dependency under `Added`; classify an outgoing direct identifier that is absent from the final declarations under `Removed`. If the incoming package provides a newly evidenced integration capability, describe that capability under `Added` and the outgoing direct-reference scope under `Removed`; do not collapse the two package-level outcomes into a generic `Changed` switch.
+- Package-level outcomes are independent of the containing file's classification: one changed manifest can carry `Added` incoming packages, `Changed` identity-preserving upgrades, and `Removed` outgoing packages at the same time. Account for each surviving package identity separately.
+- An included untracked configuration file is an `Added` outcome when it is absent at the base and present in the final state. Read its contents and describe the behavior it configures; do not omit it because it has no committed diff.
 - Omit empty sections instead of emitting placeholders.
 - Always maintain the Keep a Changelog compare-link footer at the bottom of the file.
 - Preserve natural line breaks and readable prose. Do not apply any fixed column limit or artificial hard wrapping to changelog paragraphs or bullets.
@@ -312,7 +316,7 @@ When all pending changes are included, also compare each tracked manifest direct
 
 Read `references/dependency-removals.md` for every dependency delta, including pending-only changes. First record each exact package identity, affected project/target, and base and final direct declarations and versions. Record resolved dependency relationships separately when evidence exists. A manifest diff proves declaration changes; it does not by itself prove package identity continuity, dependency graph changes, or newly used capabilities.
 
-Only then classify the facts: a version change within one identity supports upgrade/downgrade wording; an incoming identity absent at the base and present at the final state is an `Added` dependency outcome; an outgoing identity present at the base and absent from final direct declarations is a `Removed` outcome. Describe the relationship as a switch or replacement when the project evidence supports it, without adding a redundant `Changed` bullet. Call it a rename only with independent evidence of identity continuity. Additional capabilities or transitive retention require their own evidence. Do not compare version numbers belonging to different identities as if they formed one version history.
+Only then classify the facts: a version change within one identity supports one `Changed` upgrade/downgrade outcome; an incoming identity absent at the base and present at the final state is one `Added` dependency outcome; an outgoing identity present at the base and absent from final direct declarations is one `Removed` outcome. Before drafting `Changed`, verify that every surviving same-identity version pair has been accounted for. Describe the relationship as a switch or replacement when the project evidence supports it, without adding a redundant `Changed` bullet. Call it a rename only with independent evidence of identity continuity. Additional capabilities or transitive retention require their own evidence. Do not compare version numbers belonging to different identities as if they formed one version history.
 
 **4c — Inspect the cumulative diff before history.** Use the emitted `diff_range`:
 
@@ -346,6 +350,9 @@ pwsh -NoProfile -File <skill-root>/scripts/resolve-release-entity.ps1 -Repositor
 - Treat the emitted `classification` as authoritative for `Added`, `Removed`, `Changed`, or `Unchanged`. Use semantic analysis only to group paths into the correct user-facing entity and to choose among non-structural sections such as `Fixed` or `Security` when the entity already existed at the base.
 - Eliminate exact reversions, temporary files/features, and dependency churn that returned to the base value.
 - Merge intermediate add/change/fix churn into the final surviving capability or behavior.
+- A new behavior introduced inside an existing source file is still an `Added` capability when that behavior was absent at the base. Keep validation, protocol negotiation, required headers, lifecycle operations, and examples that make the same new capability usable together under `Added`; do not move an integral validation branch to `Fixed` merely because the containing type pre-existed.
+- For every changed source file, compare the symbol-level before and after state and account for newly introduced public properties, declared types, methods, endpoints, headers, protocol constants, examples, and validation branches. When a configuration property's type carries the feature semantics, name both the property and its declared type, such as `SessionMode` of type `HttpServerSessionMode` on `McpDocumentOptions`.
+- A pre-existing file that remains present but changes, including `CONTRIBUTING.md`, is `Changed` at the path level. A new capability documented in that file may be mentioned in the capability's `Added` outcome, but the file itself must not be described as newly introduced.
 - Preserve rename/move as one surviving outcome when the cumulative diff supports it.
 - Do not place one surviving outcome under multiple changelog sections merely because its lifecycle crossed several verbs during development.
 
@@ -385,6 +392,7 @@ Read `references/section-validation.md` and validate every proposed path-backed 
 - Drop low-signal churn such as typo-only commits, trivial fixups, or mechanical follow-ups unless they materially change the release story.
 - Choose each change verb from the verified before/after facts. A sentence combining several claims must support each one separately; remove any unsupported qualifier, explanation, or effect.
 - Represent a package switch with separate `Added` and `Removed` outcomes when the incoming and outgoing identities have different base-to-final existence states; use `Changed` only for an independently evidenced migration effect or an identity-preserving version change.
+- Before finalizing, reconcile the written entry against the evidence ledger: every included untracked file, every same-identity package version delta, every outgoing direct dependency, and every user-facing source-level addition must either appear in the appropriate section or have a recorded reason for omission. A broad summary is not a substitute for those surviving outcomes.
 - Use natural prose line breaks. Keep paragraphs and bullets readable, but do not column-wrap them artificially or target a fixed line width.
 - End each bullet with `,` except the final bullet in a populated section, which must end with `.`.
 

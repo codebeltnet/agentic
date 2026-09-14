@@ -357,6 +357,22 @@
         "Either omits the internal refactor or describes its observed implementation scope accurately",
         "Reviews the final written text against inspected evidence rather than treating valid section placement as factual validation"
       ]
+    },
+    {
+      "id": 30,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. Start on main with a tagged v10.2.5 base containing CHANGELOG.md, an existing `.github/CONTRIBUTING.md`, existing DocFX pages, a pre-existing `McpDocumentFilter` and `McpDocumentOptions` implementation, `Directory.Packages.props` declaring Codebelt.Bootstrapper.Web 5.2.0, Codebelt.Extensions.Asp.Versioning 10.2.3, Codebelt.Extensions.Xunit.App 11.2.1, Cuemon.Extensions.AspNetCore.Mvc.Formatters.Text.Json 10.7.0, Microsoft.NET.Test.Sdk 18.9.0, MinVer 7.0.0, ModelContextProtocol 2.2.0, xunit.v3 3.2.2, xunit.v3.runner.console 3.2.2, and xunit.runner.visualstudio 3.1.5, and existing test-only references to coverlet.msbuild and coverlet.collector. On branch v10.2.6/service-update, update `Codebelt.Bootstrapper.Web` to 5.2.1, `Codebelt.Extensions.Asp.Versioning` to 10.2.4, `Codebelt.Extensions.Xunit.App` to 12.0.1, `Cuemon.Extensions.AspNetCore.Mvc.Formatters.Text.Json` to 10.7.1, `Microsoft.NET.Test.Sdk` to 18.10.0, `MinVer` to 8.0.0, `xunit.v3` to 4.0.1, `xunit.v3.runner.console` to 4.0.1, and `xunit.runner.visualstudio` to 4.0.0; add Microsoft.Testing.Extensions.CodeCoverage 18.11.2 and replace the test-only Coverlet references; switch the direct MCP package declaration and project reference from ModelContextProtocol 2.2.0 to ModelContextProtocol.AspNetCore 2.2.0; and modify the existing source and docs to add `SessionMode` of type `HttpServerSessionMode`, stateful/stateless/hybrid Streamable HTTP behavior, required `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` headers, 2026-07-28 request metadata, session GET/DELETE operations, and legacy-SSE/session-mode validation. Modify the existing CONTRIBUTING file and commit a stale 10.2.6 changelog draft. Add an untracked `global.json` whose test runner is `Microsoft.Testing.Platform`. Update CHANGELOG.md with git-keep-a-changelog yolo, then rerun it once. Do not restore packages or run tests in the fixture repository.",
+      "expected_output": "The final patch release entry accounts for the complete MCP transport modernization, test-runner configuration and coverage migration, all surviving dependency upgrades, the existing documentation and contribution-guide changes, and the direct package switch. It places the introduced ModelContextProtocol.AspNetCore package and its new MCP behavior under Added, names the outgoing direct ModelContextProtocol package and both Coverlet packages under Removed, places same-identity version changes and existing-file documentation changes under Changed, and preserves the complete outcome set on the second edit without duplication.",
+      "expectations": [
+        "Discovers and reads untracked global.json, then reports the Microsoft.Testing.Platform runner configuration under Added",
+        "Classifies the incoming ModelContextProtocol.AspNetCore 2.2.0 dependency under Added and the outgoing direct ModelContextProtocol dependency under Removed",
+        "Does not describe the distinct MCP package switch as a rename or cross-identity upgrade, and does not omit it because Directory.Packages.props is a changed file",
+        "Names coverlet.msbuild and coverlet.collector under Removed while placing Microsoft.Testing.Extensions.CodeCoverage under Added",
+        "Accounts for every surviving same-identity version change, including Microsoft.NET.Test.Sdk, MinVer, xunit.v3, xunit.v3.runner.console, and xunit.runner.visualstudio",
+        "Names SessionMode together with its HttpServerSessionMode type and describes stateful, stateless, and hybrid behavior",
+        "Keeps the new MCP headers, request metadata, session lifecycle operations, and incompatible legacy-SSE validation together under Added rather than moving integral validation to Fixed",
+        "Classifies the pre-existing CONTRIBUTING.md and DocFX files as Changed rather than Added",
+        "Rewrites the stale draft and preserves the complete Added, Changed, and Removed outcomes without duplicates on the second edit"
+      ]
     }
   ]
 }
