@@ -12,6 +12,14 @@ compatibility: >
 
 This skill creates or updates `CHANGELOG.md` directly using the Keep a Changelog 1.1.0 structure. It is git-aware, changelog-focused, and optimized for a human-readable release summary rather than generated release-note noise.
 
+## Writing contract
+
+Explain what changed for the reader using verified differences between the release base and final state. Establish facts before choosing release language. A plausible description is insufficient: every factual clause in a bullet or highlight must be supported by inspected evidence.
+
+For each surviving outcome, establish the entity and scope, its before and after state, the evidence location, and the supported effect. Keep this compact working record in context; no additional repository artifact is required. Use it to draft the entry, then review the actual written text against it. Existing changelog prose and commit messages are claims to check, not facts to carry forward.
+
+Use the most specific wording the evidence supports. When a reason, identity relationship, or user impact is unknown, describe the observed change without that explanation. Investigate further when the missing fact affects classification; otherwise omit the unsupported clause. Do not fill gaps from naming similarities or familiar migration patterns.
+
 Read `FORMS.md` when pending worktree changes require user confirmation and the host supports native structured input controls. If native structured input is unavailable, use the deterministic plain-text fallback defined there. `FORMS.md` is not used in yolo/auto mode — see **Yolo / Auto Mode** below.
 
 ## Yolo / Auto Mode
@@ -23,7 +31,6 @@ Only after this skill has been selected by explicit changelog or release-note in
 - **Keep committed history isolated.** Yolo changes only the pending-worktree decision; use the same resolved branch ranges and bleed guard as every other invocation.
 - **Make all scope decisions independently.** The user has explicitly delegated judgment. Do not pause for input at any point in the workflow.
 - All other quality rules remain in force: the release highlight is still required, the SemVer classification is still required, bullet punctuation still applies, and the compare-link footer must still be maintained.
-- Yolo/auto is a user signal of full autonomy — not a shortcut past quality. Treat it as deliberate and act on it immediately.
 
 ## Non-Negotiable Rules
 
@@ -65,6 +72,7 @@ These checkpoints cannot be skipped or bypassed, even when the user's opening re
 2. Release isolation: for branch-derived scope, run the bundled resolver and require `base_history_bleed` to be `false`. The `excluded_boundary_commit` must not appear in `selected_commits`.
 3. Release highlight contract: every concrete release entry must include a release highlight paragraph that explicitly classifies the release as `major`, `minor`, or `patch`.
 4. Bullet punctuation: all bullets must end with `,` except the final bullet in each populated section, which must end with `.` Do not finish the edit until this is consistent.
+5. Factual review: reread the written target entry and verify every factual clause against the before/after evidence, including clauses retained from an existing draft. Section validation alone does not establish that the prose is true.
 
 ## Deterministic Reduction Model
 
@@ -172,10 +180,6 @@ The Step 3 confirmation gate exists to prevent silent inclusion of worktree chan
 
 **Exception — scoped yolo/auto bypasses the gate by design.** When the user explicitly passes `yolo` or `auto` within an explicit changelog or release-note request, they are granting full autonomy for that changelog task. That is not a vague hint like `include everything` — it is a deliberate, recognized mode. Skip Step 3, include all pending changes, and proceed.
 
-### Why this matters
-
-Silent inclusion of pending changes in a changelog is a production risk. The gate ensures the release scope is intentional, visible, and explicitly confirmed before the draft becomes part of the project's recorded release history.
-
 ## Workflow
 
 ### Step 1: Resolve the source range
@@ -207,7 +211,7 @@ The JSON output separates two evidence surfaces:
 
 The comparison boundary is always excluded from a branch-derived release, even when it is tagged or the changelog target is a concrete version. If the previous release tag points at the merge-base, that confirms the commit belongs to the previous release; it is not a reason to include it.
 
-Do not confuse the excluded merge boundary with the first PR commit. `history_range` includes every branch-unique commit after that boundary, including the PR's earliest commit and commits from other contributors. This preserves complete checked-out PR coverage without importing completed base-branch history.
+`history_range` includes every branch-unique commit after the boundary, including the earliest PR commit and every contributor.
 
 ### Step 2: Resolve the changelog target
 
@@ -217,7 +221,6 @@ When the user asks to "finalize", "ready to release", "rtr", "release", "publish
 - Extract the version from the current branch name if it starts with a version prefix such as `v0.3.0/feature-name`.
 - When the target is `## [X.Y.Z]`, check whether `refs/tags/vX.Y.Z` exists locally. If it does not, any existing `## [X.Y.Z]` section is still a branch draft rather than released history.
 - Target `## [X.Y.Z] - YYYY-MM-DD` (today's date) for that extracted version.
-- This is a strong signal that the user wants to finalize that specific release in the changelog.
 
 Otherwise:
 - If the branch name starts with a version prefix such as `v0.3.0/feature-name`, target `## [0.3.0] - YYYY-MM-DD`.
@@ -306,9 +309,9 @@ git diff <diff_range> -- package.json
 
 When all pending changes are included, also compare each tracked manifest directly from the resolved base to its current working copy with `git diff <merge_base> -- <manifest-path>` (a single base endpoint, not `<diff_range>`). Read included untracked manifests directly and compare their package identities with the base and other final manifests. This catches references moved into new shared files without inventing removals. For a custom pending subset, reconstruct only that subset from committed content plus its selected deltas; do not use the full working copy for a staged-only scope.
 
-Parse the cumulative delta: which packages were added, removed, upgraded, or downgraded, and the exact before → after versions that survive at the effective final state. This is the authoritative dependency evidence. Individual commit messages may describe partial steps; they do not override the resulting manifest diff. Apply `references/dependency-removals.md` to pending-only removals as well as committed removals.
+Read `references/dependency-removals.md` for every dependency delta, including pending-only changes. First record each exact package identity, affected project/target, and base and final direct declarations and versions. Record resolved dependency relationships separately when evidence exists. A manifest diff proves declaration changes; it does not by itself prove package identity continuity, dependency graph changes, or newly used capabilities.
 
-Match versions by package identity before calling anything an upgrade or downgrade. For different identifiers, establish whether this is a replacement, a switch to an integration package, or a publisher-confirmed rename; similar names and adjacent diff lines do not establish continuity. Qualify removal of a direct reference separately from disappearance from the dependency graph.
+Only then classify the facts: a version change within one identity supports upgrade/downgrade wording; an outgoing identity and an incoming identity establish separate declaration changes. Describe a switch when they serve a replacement role in the project. Call it a rename only with independent evidence of identity continuity. Additional capabilities or transitive retention require their own evidence. Do not compare version numbers belonging to different identities as if they formed one version history.
 
 **4c — Inspect the cumulative diff before history.** Use the emitted `diff_range`:
 
@@ -354,7 +357,7 @@ git log --reverse --stat --format=medium <history_range>
 
 Read every selected contributor's full subject and body. The boundary commit and any commit already reachable from the comparison branch are absent by construction and must remain absent.
 
-Use history only to explain the surviving outcomes, confirm rename intent, extract accurate user-facing terminology, and understand why a fix matters. Never let an intermediate commit override contradictory final-state evidence.
+Use history only to explain the surviving outcomes: investigate rationale, terminology, and intended relationships, then check those claims against the resulting files and relevant metadata. A commit that calls something a rename, upgrade, fix, or optimization does not establish that outcome. Never let an intermediate commit override contradictory final-state evidence.
 
 ### Step 5: Classify the release
 
@@ -368,7 +371,7 @@ Do not over-classify from dramatic wording in a commit subject. The surviving de
 
 ### Step 6: Curate the changelog content
 
-Write the release highlight first, then the populated sections.
+Draft the populated sections from the verified outcomes, then write the release highlight to summarize them. Place the highlight before the sections in the file.
 
 Read `references/section-validation.md` and validate every proposed path-backed outcome with `-Section <proposed-section>` before writing. Reuse the complete branch baseline on subsequent runs and consolidate each outcome once across all sections.
 
@@ -379,7 +382,7 @@ Read `references/section-validation.md` and validate every proposed path-backed 
 - Supporting catalog, documentation, validator, and eval changes whose sole purpose is introducing that new capability stay with its `Added` outcome. Classify a shared-file change separately only when it changes a pre-existing capability independently of the new introduction.
 - A capability, file, or dependency change that returned to the base state stays out of the changelog entirely.
 - Drop low-signal churn such as typo-only commits, trivial fixups, or mechanical follow-ups unless they materially change the release story.
-- Use history only for naming, rationale, rename intent, and bug context. Do not let a dramatic commit message manufacture an extra bullet that the final diff does not support.
+- Choose each change verb from the verified before/after facts. A sentence combining several claims must support each one separately; remove any unsupported qualifier, explanation, or effect.
 - Use natural prose line breaks. Keep paragraphs and bullets readable, but do not column-wrap them artificially or target a fixed line width.
 - End each bullet with `,` except the final bullet in a populated section, which must end with `.`.
 
@@ -399,46 +402,6 @@ Preserve the file's existing structure while editing.
 
 ### Step 8: Stop after the edit
 
+Reread the target entry from disk, including its highlight and any retained text. For each factual clause, identify its supporting outcome and evidence. Check identity, versions, scope, behavior, and causal explanations independently. A valid section or successful resolver run does not validate these claims. Correct unsupported wording and repeat this review before handing the file back.
+
 After updating `CHANGELOG.md`, stop and let the user review the file. Do not commit, tag, push, or create a release unless the user asks.
-
-## Good Output Characteristics
-
-- Reads like a curated release narrative, not a generated log dump.
-- Uses the Keep a Changelog section order consistently.
-- Includes a required SemVer-aware release highlight.
-- Creates a compliant `CHANGELOG.md` scaffold when the file is missing.
-- Reflects the meaning of full commit bodies and the net diff.
-- Classifies only surviving base-to-`HEAD` outcomes; reverted or cancelled work disappears.
-- Resolves branch-derived scope with the bundled script, uses branch-unique commits for history and the merge boundary for net diffs, and verifies that no selected commit is already reachable from the comparison branch.
-- Excludes the comparison boundary from both concrete releases and `[Unreleased]`; changelog heading choice never changes Git range inclusivity.
-- Treats the selected branch or range as author-agnostic scope and includes every contributor's commits unless the user explicitly narrows by author.
-- Treats Step 3 as a mandatory confirmation gate for concrete releases and asks the `Yes / No / Custom` question before including pending worktree changes (or skips Step 3 entirely and includes all changes when yolo/auto mode is active).
-- Keeps yolo/auto limited to pending-worktree inclusion and never uses autonomy mode to widen committed history.
-- If an unreleased concrete version draft already exists, rewrites that draft from the current git truth so pre-release refinements to a base-absent capability remain under `Added`.
-- Maintains or inserts the compare-link footer at the bottom of the file on both create and update paths.
-- Preserves natural prose wrapping with no fixed column-width target.
-- Keeps bullets specific, concrete, non-repetitive, and consistently punctuated.
-- Preserves existing compare-link structure when updating versions.
-
-## Bad Output Characteristics
-
-- **CRITICAL — Including the comparison boundary or previous release commit in a new release.** This silently duplicates already-released work. Never widen a branch-derived range with `^`; require the resolver's bleed guard to pass before writing.
-- Copying commit subjects line by line into the changelog.
-- Reporting temporary features, files, APIs, or dependencies that leave no surviving base-to-`HEAD` change.
-- Putting one surviving capability under multiple sections because its intermediate commits used different verbs.
-- Putting any part of a base-absent capability under `Changed` or `Fixed` because later commits refined, documented, validated, or fixed it before its first release.
-- Using an older unreleased draft heading as a second baseline, preserving its earlier `Added` bullet and then appending `Changed` / `Fixed` for later commits to the same still-unreleased capability.
-- Omitting the release highlight.
-- Failing to classify the release as major, minor, or patch.
-- Refusing to proceed just because `CHANGELOG.md` does not exist yet.
-- Silently including, silently ignoring, or otherwise bypassing the pending-worktree confirmation gate for a concrete release draft (bypassing via explicit `yolo` or `auto` is intentional, not silent).
-- Using any artificial fixed-width wrapping for changelog prose.
-- Mixing bullet punctuation or leaving section bullets without the required trailing `,` / final `.` pattern.
-- Emitting empty `Added` / `Changed` / `Fixed` headings.
-- Updating an existing changelog entry but leaving the compare-link footer missing or stale.
-- Claiming breaking changes, fixes, or security work not supported by git.
-- Filtering the selected branch or range to the current user's or current contributor's commits, or treating "my changes" as the default release scope.
-- Using the feature branch's same-name remote tracking ref as the comparison base, producing an empty or misleading branch scope.
-- Letting a concrete version heading or yolo/auto mode change committed-history inclusivity.
-- Summarizing commit chronology first and trying to deduplicate the prose afterward instead of reducing the final state first.
-- Hiding dependency removals inside replacement wording or dismissing them as low-signal test/build maintenance.

@@ -323,14 +323,14 @@
     },
     {
       "id": 27,
-      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. On main, commit a tagged v1.0.0 base containing CHANGELOG.md, Directory.Packages.props declaring ModelContextProtocol 2.2.0, and src/Library/Library.csproj referencing it. Create v1.0.1/aspnetcore-integration and switch the central declaration and project reference to ModelContextProtocol.AspNetCore 2.2.0. Include vendor/ModelContextProtocol.AspNetCore.nuspec with package id ModelContextProtocol.AspNetCore, version 2.2.0, description ASP.NET Core integration extensions, and an exact dependency on ModelContextProtocol [2.2.0] for the project's net10.0 target. Commit the change with subject 'Rename and upgrade MCP dependency' and a body explaining that the integration package adds ASP.NET Core capabilities. Commit a draft 1.0.1 changelog bullet saying 'ModelContextProtocol package renamed and upgraded to ModelContextProtocol.AspNetCore version 2.2.0', without creating a v1.0.1 tag. Update CHANGELOG.md using git-keep-a-changelog. Do not restore packages or run fixture tests.",
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. On main, commit a tagged v1.0.0 base containing CHANGELOG.md, Directory.Packages.props declaring Example.Protocol 4.3.0, and src/Library/Library.csproj referencing it. Create v1.0.1/aspnetcore-integration and switch the central declaration and project reference to Example.Protocol.Hosting 4.3.0. Include vendor/Example.Protocol.Hosting.nuspec with package id Example.Protocol.Hosting, version 4.3.0, description ASP.NET Core integration extensions, and an exact dependency on Example.Protocol [4.3.0] for the project's net10.0 target. Commit the change with subject 'Rename and upgrade protocol dependency' and a body explaining that the integration package adds ASP.NET Core capabilities. Commit a draft 1.0.1 changelog bullet saying 'Example.Protocol package renamed and upgraded to Example.Protocol.Hosting version 4.3.0', without creating a v1.0.1 tag. Update CHANGELOG.md using git-keep-a-changelog. Do not restore packages or run fixture tests.",
       "expected_output": "The draft describes switching the direct dependency to the ASP.NET Core integration package. It removes the false rename and upgrade claims and qualifies the outgoing direct reference while preserving its evidenced transitive availability.",
       "expectations": [
-        "Describes a switch to ModelContextProtocol.AspNetCore 2.2.0 for ASP.NET Core integration capabilities",
+        "Describes a switch to Example.Protocol.Hosting 4.3.0 for ASP.NET Core integration capabilities",
         "Does not describe the package switch as a rename or version upgrade despite the misleading commit subject and draft",
-        "Names ModelContextProtocol under Removed as a direct reference only and explains its transitive retention through ModelContextProtocol.AspNetCore",
+        "Names Example.Protocol under Removed as a direct reference only and explains its transitive retention through Example.Protocol.Hosting",
         "Uses the exact package dependency metadata as evidence for transitive retention rather than inferring it from the package names",
-        "Does not claim existing MCP capabilities were removed or newly exposed integration APIs are already used by the library",
+        "Does not claim existing protocol capabilities were removed or newly exposed integration APIs are already used by the library",
         "Rewrites the stale draft bullet rather than preserving or duplicating its unsupported claims"
       ]
     },
@@ -343,6 +343,18 @@
         "Names the removed direct Example.Client reference under Removed without claiming absence from the resolved dependency graph",
         "Does not claim Example.Client survives transitively or invent added hosting behavior from the package name alone",
         "Reports Stable.Utility upgraded from 3.0.0 to 3.1.0 because that change preserves package identity"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. Commit a tagged v1.0.0 base with CHANGELOG.md and a public FormatLabel function that returns prefix + value. On v1.0.1/formatting, introduce a private helper that performs the same concatenation and have FormatLabel call it without changing its signature or output. Commit with subject 'Optimize formatter and fix output corruption' but supply no benchmarks or defect reproduction. Commit an untagged 1.0.1 draft whose highlight says 'Faster formatting with corrected output' and whose Fixed bullet says 'Fixed corrupted labels and doubled formatting throughput'. Update CHANGELOG.md using git-keep-a-changelog from the local evidence, without running benchmarks or changing source files.",
+      "expected_output": "The entry omits unsupported correctness and performance claims from both the highlight and bullet. It either omits the internal refactor as low-signal or describes only the evidenced implementation change without presenting a user-visible fix or speed improvement.",
+      "expectations": [
+        "Inspects the before and after implementation rather than adopting the commit subject or existing draft as evidence of an output defect",
+        "Removes unsupported corruption-fix and throughput claims from the written entry, including its highlight",
+        "Does not invent user-visible behavior, benchmark results, or a public API change",
+        "Either omits the internal refactor or describes its observed implementation scope accurately",
+        "Reviews the final written text against inspected evidence rather than treating valid section placement as factual validation"
       ]
     }
   ]

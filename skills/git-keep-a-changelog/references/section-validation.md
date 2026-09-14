@@ -1,5 +1,7 @@
 # Validate proposed sections
 
+Section checks establish where an outcome belongs, not whether its description is accurate. For each proposed bullet, verify its subject, change verb, versions, affected scope, and stated effect against the working evidence record. Apply the same review to the release highlight and retained draft clauses. If a compound sentence contains an unsupported claim, remove or correct that clause even when the rest of the sentence is true.
+
 For dependencies inside surviving manifests, read `dependency-removals.md`. Validate package-level existence and scope from the manifest delta; the containing file's `Changed` classification does not classify its removed entries. A replacement explanation under `Changed` and explicit outgoing packages under `Removed` are distinct outcomes.
 
 For switches between package identifiers, verify rename and upgrade claims separately. If the outgoing package survives transitively, qualify `Removed` as removal of its direct reference and require dependency metadata or graph evidence for that retention claim.
