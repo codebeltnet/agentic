@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-09-14
+
+This is a patch release that enhances `git-keep-a-changelog` with explicit dependency removal disclosure and improved pending-change handling for both committed and worktree edits, refactors `git-visual-squash-summary` to require complete coverage of all surviving changes and contributors, and adds deterministic GitHub API evidence collection to `git-remote-release`. The eval-runner infrastructure gains JSON property-lookup performance optimization and in-process result validation via composition mode. Repository guidance is expanded with scratch-file isolation practices and scheduler-performance documentation for local validation.
+
+### Added
+
+- Explicit dependency removal disclosure in `git-keep-a-changelog`, with new `references/dependency-removals.md` documenting how to classify removals versus replacements, moves, and reverted changes, distinguishing direct removals from transitive availability, and reconciling manifest deltas across all touched project files, central declarations, staged, unstaged, and untracked sources,
+- Comprehensive validation guidance in `references/section-validation.md` for `git-keep-a-changelog`, requiring section validation for every proposed path-backed outcome using the bundled classifier with `-IncludeWorktree` for approved pending changes and `-Section` to verify allowed outcomes before writing,
+- Two new eval cases (25, 26) for `git-keep-a-changelog` covering empty-committed-range pending-change scenarios, staged and unstaged manifest changes with untracked imports, restoration and cancellation of pending edits, and complete discovery of worktree paths before manifest detection,
+- Deterministic GitHub API evidence collector `collect-release-evidence.py` for `git-remote-release`, parsing authenticated API responses with squash-commit contributor preservation, handling rate limits, verifying-source tracking, and complex multi-PR scenarios, paired with regression test suite (ids 5–9) and `aws-signature-v4-v10.0.12.json` fixture for signature verification,
+- Test runner `test-release-evidence.py` validating evidence collection behavior across edge cases and preserving contributor identity through squash-commit resolution,
+- Complete-coverage refactoring for `git-visual-squash-summary`, eliminating the notion of high-signal filtering and requiring accounting for every distinct surviving change and all contributors across the branch without total line caps,
+- Two new eval cases (20, 21) for `git-visual-squash-summary` covering truncated-diff recovery and complete multi-contributor coverage,
+- Scratch File Isolation section in `AGENTS.md` standardizing where temporary artifacts, API responses, investigation notes, intermediate files, and eval fixtures belong, establishing `.bot/<task>-workspace/` as the default inside the repository and allowing `$env:TEMP` for items with no reason to sit nearby, and forbidding temporary git repos and test branches from becoming part of the working tree,
+- README reference to Scratch File Isolation guidance and clarification that full local validation requires explicit human approval rather than serving as a default completion gate,
+- Scheduler performance documentation in `CONTRIBUTING.md` explaining CI concurrent execution versus shared-machine local validation and how the manifest result bridge reuses the PowerShell runtime for deterministic validation.
+
+### Changed
+
+- `git-keep-a-changelog` Step 3 semantics clarified: yolo/auto skips the confirmation gate only, still discovering and inspecting every pending change in Step 4, with yolo/auto treating staged, unstaged, and untracked files as automatically included without asking,
+- `git-keep-a-changelog` Step 4a expanded to discover the complete changed-file inventory from both committed and pending sources before manifest detection, reading untracked-file contents and independent concurrent reads bounded by concurrency,
+- `git-keep-a-changelog` Step 4b enhanced to compare tracked manifests from merge-base to working copy, read untracked manifests directly, catch references moved into new shared files, and apply `dependency-removals.md` guidance to pending-only removals alongside committed ones,
+- `git-keep-a-changelog` Step 4d and 4e clarified to show how pending changes overlay committed state, reconcile against the same base, and require `-IncludeWorktree` on both initial classification and `-Section` validation when the entity's full pending state is included,
+- `git-visual-squash-summary` SKILL.md completely refactored to eliminate high-signal filtering and require every distinct surviving change and all contributors to be accounted for in the output, with updates to the README "Why" section and corresponding validator assertions,
+- Eval-runner JSON property helpers refactored to avoid allocating pipelines for every lookup, improving both performance and correctness in `scripts/eval-runners/runner-common.ps1`,
+- `bridge-execution-result.ps1` enhanced with `-AsObject` composition mode to enable in-process result validation without subprocess spawning, maintaining all freeze and provenance checks while improving determinism,
+- `bridge-manifest-results.ps1` updated to use runner-common composition mode, eliminating subprocess spawning for deterministic single-arm validation,
+- Comprehensive test coverage for eval-runner helpers and bridge composition added to `scripts/eval-runners/tests/test-runner-conformance.ps1`.
+
 ## [0.10.0] - 2026-09-11
 
 This is a minor release that introduces `dotnet-nuget-update`, a deterministic NuGet dependency audit and update workflow for .NET repositories. The skill owns the complete-audit invariant, ensuring every declared package version is accounted for before any update is applied. It handles both central package management (`Directory.Packages.props`) and project-level `PackageReference` versioning, tracks stable and prerelease intent, preserves TFM-band pins (keeping `net9` or `net10` packages within their matching major when that major is the compatibility signal), and supports both normal mode (auto-applies patch/minor/revision, batches majors for approval) and yolo mode (auto-applies safe classes only, reports held majors). All scripts are deterministic and offline-testable via bundled fixtures. Alongside that, `git-visual-commits` gained refactoring and three new eval cases for edge-case coverage, `git-keep-a-changelog` gained improved entity-classification infrastructure and a dedicated reference document for section validation, and repository-level validation enhancements ensure all skills conform to updated testing requirements.
@@ -664,6 +693,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.10.1]: https://github.com/codebeltnet/agentic/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/codebeltnet/agentic/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/codebeltnet/agentic/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/codebeltnet/agentic/compare/v0.8.2...v0.9.0

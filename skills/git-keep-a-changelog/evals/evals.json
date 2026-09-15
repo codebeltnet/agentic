@@ -267,6 +267,112 @@
         "Does not repeat a newly supported adapter in both Added and Changed or describe it merely as added to an existing lineup under Changed",
         "Keeps the changelog grounded in the final state and includes contributions from every selected author"
       ]
+    },
+    {
+      "id": 23,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start on main with a tagged v1.0.0 base containing CHANGELOG.md, Directory.Packages.props declaring coverlet.collector and coverlet.msbuild at 10.0.1, and Directory.Build.props referencing both packages with PrivateAssets=all inside an IsTestProject condition. On branch v1.0.1/coverage-provider, remove both package declarations and references, and add Microsoft.Testing.Extensions.CodeCoverage at 18.11.2 to the same test-only scope. Commit with a message explaining the coverage provider replacement. Commit an existing 1.0.1 changelog draft containing only a Changed bullet explaining the replacement. Update CHANGELOG.md for this branch using yolo mode, then run the skill again against the same branch and stop after the edit. Do not restore packages or run tests in the fixture repository.",
+      "expected_output": "The 1.0.1 patch entry retains useful replacement context under Changed and explicitly names both outgoing Coverlet packages under Removed, identifying test project scope. A second edit preserves the disclosure without duplicating it.",
+      "expectations": [
+        "Checks cumulative central package declarations and shared test references before classifying the removed packages",
+        "Names both coverlet.collector and coverlet.msbuild under Removed, even when Changed explains their replacement",
+        "Retains a Changed explanation of the migration to Microsoft.Testing.Extensions.CodeCoverage",
+        "Describes the removals as test project dependencies without claiming a runtime dependency or public API removal",
+        "Does not let the surviving props files' Changed classification suppress package-level Removed outcomes",
+        "Keeps the release classified as patch rather than inferring a major release from test-only removals",
+        "Keeps exactly one Removed section and one disclosure per outgoing package on the second edit, with standard section order and punctuation"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`, then use git-keep-a-changelog there. Start on main with a tagged base containing CHANGELOG.md and test/Tests.csproj with development-only references to Legacy.TestLogger, Shared.TestHelper, and Restored.TestHelper. Add a build/Shared.props imported by the project. On branch v2.0.1/test-cleanup, remove Legacy.TestLogger with no replacement; move the unchanged Shared.TestHelper reference into the imported props file; remove then restore Restored.TestHelper unchanged; and add then remove Temporary.TestHelper in separate commits. Commit every change and update CHANGELOG.md. Do not restore packages or run tests in the fixture repository.",
+      "expected_output": "Removed explicitly discloses the standalone Legacy.TestLogger test dependency removal. The moved reference and dependency churn do not become false removals or additions.",
+      "expectations": [
+        "Detects dependency removals in project files even when no central package manifest exists",
+        "Names Legacy.TestLogger under Removed with test-only scope even though no replacement was introduced",
+        "Does not report Shared.TestHelper as removed because its unchanged reference survives in imported shared configuration",
+        "Omits Restored.TestHelper and Temporary.TestHelper because neither leaves a surviving dependency change",
+        "Does not invent a replacement provider, runtime impact, or consumer migration requirement"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. Start on main with a tagged v1.0.0 base containing CHANGELOG.md, Directory.Packages.props declaring coverlet.collector and coverlet.msbuild, and Directory.Build.props referencing both only for test projects. Create v1.0.1/coverage without committing any branch changes. Stage removal of both package declarations and addition of Microsoft.Testing.Extensions.CodeCoverage. Leave matching shared reference changes unstaged. Add an untracked global.json selecting Microsoft.Testing.Platform. Update CHANGELOG.md using git-keep-a-changelog yolo, then rerun it. Do not stage or commit the pending files, restore packages, or run fixture tests.",
+      "expected_output": "The draft includes the complete pending coverage migration despite an empty committed range, names both outgoing packages under Removed, and describes the untracked runner configuration. Repeating the update does not duplicate outcomes or mutate the index.",
+      "expectations": [
+        "Discovers staged, unstaged, and untracked paths before selecting manifests even though the committed diff is empty",
+        "Reads the untracked global.json contents rather than inferring its behavior from the filename",
+        "Names coverlet.collector and coverlet.msbuild under Removed with test-only scope",
+        "Includes the coverage replacement and Microsoft.Testing.Platform runner configuration",
+        "Uses IncludeWorktree for included pending path-backed classification and section validation",
+        "Does not ask for pending-change confirmation in yolo mode or widen committed history",
+        "Preserves pending source files and the index, and avoids duplicate outcomes on the second edit"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. On main, commit a tagged base with CHANGELOG.md and a test project referencing Legacy.TestLogger, Shared.TestHelper, and Restored.TestHelper. Create v1.0.1/test-cleanup. Commit adding Temporary.TestHelper. Then stage removal of Legacy.TestLogger, Shared.TestHelper, and Restored.TestHelper. In unstaged edits restore Restored.TestHelper exactly, remove Temporary.TestHelper, and import an untracked build/Shared.props containing the unchanged Shared.TestHelper reference. Update CHANGELOG.md with git-keep-a-changelog auto. Leave pending source files and the index unchanged; do not restore packages or run fixture tests.",
+      "expected_output": "The final draft discloses only the surviving Legacy.TestLogger dependency removal. It reconciles the index, worktree, untracked shared import, and committed introduction against the original base.",
+      "expectations": [
+        "Names Legacy.TestLogger under Removed with test scope",
+        "Reads the untracked imported props file and does not report Shared.TestHelper as removed",
+        "Omits the Restored.TestHelper removal because unstaged content restores its base state",
+        "Omits Temporary.TestHelper because its committed addition is cancelled by pending removal",
+        "Does not summarize committed and pending changes as separate additive bullet lists",
+        "Does not stage, commit, or alter source files to construct the comparison"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. On main, commit a tagged v1.0.0 base containing CHANGELOG.md, Directory.Packages.props declaring ModelContextProtocol 2.2.0, and src/Library/Library.csproj referencing it. Create v1.0.1/aspnetcore-integration and switch the central declaration and project reference to ModelContextProtocol.AspNetCore 2.2.0. Include vendor/ModelContextProtocol.AspNetCore.nuspec with package id ModelContextProtocol.AspNetCore, version 2.2.0, description ASP.NET Core integration extensions for MCP transport, and an exact dependency on ModelContextProtocol [2.2.0] for the project's net10.0 target. Commit the change with subject 'Rename and upgrade MCP dependency' and a body explaining that the integration package adds ASP.NET Core transport capabilities. Commit a draft 1.0.1 changelog bullet saying 'ModelContextProtocol package renamed and upgraded to ModelContextProtocol.AspNetCore version 2.2.0', without creating a v1.0.1 tag. Update CHANGELOG.md using git-keep-a-changelog. Do not restore packages or run fixture tests.",
+      "expected_output": "The draft places ModelContextProtocol.AspNetCore 2.2.0 under Added as the introduced ASP.NET Core MCP transport package and places ModelContextProtocol under Removed as the outgoing direct reference. It removes the false rename and upgrade claims and does not add a redundant Changed switch bullet.",
+      "expectations": [
+        "Places ModelContextProtocol.AspNetCore 2.2.0 under Added and describes its evidenced ASP.NET Core MCP transport capabilities",
+        "Does not describe the package switch as a rename or version upgrade despite the misleading commit subject and draft",
+        "Names ModelContextProtocol under Removed as a direct reference only and explains its transitive retention through ModelContextProtocol.AspNetCore",
+        "Uses the exact package dependency metadata as evidence for transitive retention rather than inferring it from the package names",
+        "Does not claim existing MCP capabilities were removed or newly exposed integration APIs are already used by the library",
+        "Does not repeat the package switch under Changed after representing the incoming and outgoing identities under Added and Removed",
+        "Rewrites the stale draft bullet rather than preserving or duplicating its unsupported claims"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. On main, commit a tagged base with CHANGELOG.md and an app project directly referencing Example.Client 1.0.0 and Stable.Utility 3.0.0. On v1.0.1/dependencies, switch Example.Client to Example.Client.Hosting 2.0.0 and upgrade Stable.Utility to 3.1.0. Provide no lockfile, resolved assets, package metadata, or publisher migration documentation. Commit with subject 'Upgrade dependencies'. Update CHANGELOG.md using git-keep-a-changelog using only the supplied local evidence; do not contact a package registry, restore packages, or run fixture tests.",
+      "expected_output": "The changelog describes the direct-reference switch with its known version and separately reports the supported Stable.Utility upgrade. It does not invent identity continuity, capabilities, or dependency graph relationships for the package switch.",
+      "expectations": [
+        "Describes switching the direct reference from Example.Client to Example.Client.Hosting 2.0.0 without calling it a rename or version upgrade",
+        "Names the removed direct Example.Client reference under Removed without claiming absence from the resolved dependency graph",
+        "Does not claim Example.Client survives transitively or invent added hosting behavior from the package name alone",
+        "Reports Stable.Utility upgraded from 3.0.0 to 3.1.0 because that change preserves package identity"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. Commit a tagged v1.0.0 base with CHANGELOG.md and a public FormatLabel function that returns prefix + value. On v1.0.1/formatting, introduce a private helper that performs the same concatenation and have FormatLabel call it without changing its signature or output. Commit with subject 'Optimize formatter and fix output corruption' but supply no benchmarks or defect reproduction. Commit an untagged 1.0.1 draft whose highlight says 'Faster formatting with corrected output' and whose Fixed bullet says 'Fixed corrupted labels and doubled formatting throughput'. Update CHANGELOG.md using git-keep-a-changelog from the local evidence, without running benchmarks or changing source files.",
+      "expected_output": "The entry omits unsupported correctness and performance claims from both the highlight and bullet. It either omits the internal refactor as low-signal or describes only the evidenced implementation change without presenting a user-visible fix or speed improvement.",
+      "expectations": [
+        "Inspects the before and after implementation rather than adopting the commit subject or existing draft as evidence of an output defect",
+        "Removes unsupported corruption-fix and throughput claims from the written entry, including its highlight",
+        "Does not invent user-visible behavior, benchmark results, or a public API change",
+        "Either omits the internal refactor or describes its observed implementation scope accurately",
+        "Reviews the final written text against inspected evidence rather than treating valid section placement as factual validation"
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP`. Start on main with a tagged v10.2.5 base containing CHANGELOG.md, an existing `.github/CONTRIBUTING.md`, existing DocFX pages, a pre-existing `McpDocumentFilter` and `McpDocumentOptions` implementation, `Directory.Packages.props` declaring Codebelt.Bootstrapper.Web 5.2.0, Codebelt.Extensions.Asp.Versioning 10.2.3, Codebelt.Extensions.Xunit.App 11.2.1, Cuemon.Extensions.AspNetCore.Mvc.Formatters.Text.Json 10.7.0, Microsoft.NET.Test.Sdk 18.9.0, MinVer 7.0.0, ModelContextProtocol 2.2.0, xunit.v3 3.2.2, xunit.v3.runner.console 3.2.2, and xunit.runner.visualstudio 3.1.5, and existing test-only references to coverlet.msbuild and coverlet.collector. On branch v10.2.6/service-update, update `Codebelt.Bootstrapper.Web` to 5.2.1, `Codebelt.Extensions.Asp.Versioning` to 10.2.4, `Codebelt.Extensions.Xunit.App` to 12.0.1, `Cuemon.Extensions.AspNetCore.Mvc.Formatters.Text.Json` to 10.7.1, `Microsoft.NET.Test.Sdk` to 18.10.0, `MinVer` to 8.0.0, `xunit.v3` to 4.0.1, `xunit.v3.runner.console` to 4.0.1, and `xunit.runner.visualstudio` to 4.0.0; add Microsoft.Testing.Extensions.CodeCoverage 18.11.2 and replace the test-only Coverlet references; switch the direct MCP package declaration and project reference from ModelContextProtocol 2.2.0 to ModelContextProtocol.AspNetCore 2.2.0; and modify the existing source and docs to add `SessionMode` of type `HttpServerSessionMode`, stateful/stateless/hybrid Streamable HTTP behavior, required `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` headers, 2026-07-28 request metadata, session GET/DELETE operations, and legacy-SSE/session-mode validation. Modify the existing CONTRIBUTING file and commit a stale 10.2.6 changelog draft. Add an untracked `global.json` whose test runner is `Microsoft.Testing.Platform`. Update CHANGELOG.md with git-keep-a-changelog yolo, then rerun it once. Do not restore packages or run tests in the fixture repository.",
+      "expected_output": "The final patch release entry accounts for the complete MCP transport modernization, test-runner configuration and coverage migration, all surviving dependency upgrades, the existing documentation and contribution-guide changes, and the direct package switch. It places the introduced ModelContextProtocol.AspNetCore package and its new MCP behavior under Added, names the outgoing direct ModelContextProtocol package and both Coverlet packages under Removed, places same-identity version changes and existing-file documentation changes under Changed, and preserves the complete outcome set on the second edit without duplication.",
+      "expectations": [
+        "Discovers and reads untracked global.json, then reports the Microsoft.Testing.Platform runner configuration under Added",
+        "Classifies the incoming ModelContextProtocol.AspNetCore 2.2.0 dependency under Added and the outgoing direct ModelContextProtocol dependency under Removed",
+        "Does not describe the distinct MCP package switch as a rename or cross-identity upgrade, and does not omit it because Directory.Packages.props is a changed file",
+        "Names coverlet.msbuild and coverlet.collector under Removed while placing Microsoft.Testing.Extensions.CodeCoverage under Added",
+        "Accounts for every surviving same-identity version change, including Microsoft.NET.Test.Sdk, MinVer, xunit.v3, xunit.v3.runner.console, and xunit.runner.visualstudio",
+        "Names SessionMode together with its HttpServerSessionMode type and describes stateful, stateless, and hybrid behavior",
+        "Keeps the new MCP headers, request metadata, session lifecycle operations, and incompatible legacy-SSE validation together under Added rather than moving integral validation to Fixed",
+        "Classifies the pre-existing CONTRIBUTING.md and DocFX files as Changed rather than Added",
+        "Rewrites the stale draft and preserves the complete Added, Changed, and Removed outcomes without duplicates on the second edit"
+      ]
     }
   ]
 }

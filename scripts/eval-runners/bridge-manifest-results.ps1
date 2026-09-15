@@ -88,13 +88,17 @@ try {
         # terminal evidence; a status/path match alone cannot prove that the
         # canonical result reflects the current raw file. The one-arm bridge
         # preserves existing grading while revalidating hashes and provenance.
-        $bridgeOutput = & pwsh -NoProfile -NonInteractive -File $oneArmBridge `
-            -Run $record.RunManifestPath `
-            -ExecutionResult $record.ExecutionResultPath `
-            -Result $record.ResultPath `
-            -RequireNativeDelegation:$effectiveRequireNativeDelegation 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "$($record.EvalName)/$($record.Configuration) bridge failed for manifest paths run='$($record.RunManifestRelative)', execution='$($record.ExecutionResultRelative)', result='$($record.ResultRelative)': $([string]::Join(' ', @($bridgeOutput)))"
+        # A child script scope isolates each arm's variables and helpers while
+        # reusing the runtime. This is deterministic validation, not a worker
+        # session: every arm still checks the complete freeze and provenance.
+        try {
+            $null = & $oneArmBridge `
+                -Run $record.RunManifestPath `
+                -ExecutionResult $record.ExecutionResultPath `
+                -Result $record.ResultPath `
+                -RequireNativeDelegation:$effectiveRequireNativeDelegation -AsObject
+        } catch {
+            throw "$($record.EvalName)/$($record.Configuration) bridge failed for manifest paths run='$($record.RunManifestRelative)', execution='$($record.ExecutionResultRelative)', result='$($record.ResultRelative)': $($_.Exception.Message)"
         }
         $bridged.Add("$($record.EvalName)/$($record.Configuration)")
     }

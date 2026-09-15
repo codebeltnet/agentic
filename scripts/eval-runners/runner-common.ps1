@@ -82,8 +82,13 @@ function Get-JsonProperty {
         return $Default
     }
 
-    if ($null -ne $Object -and @($Object.PSObject.Properties | ForEach-Object { [string]$_.Name }) -contains $Name -and $null -ne $Object.$Name) {
-        return $Object.$Name
+    if ($null -ne $Object -and -not [string]::IsNullOrEmpty($Name)) {
+        # PSObject's indexer is case-insensitive, just like the previous
+        # property-name scan, without allocating a pipeline for every lookup.
+        $property = $Object.PSObject.Properties[$Name]
+        if ($null -ne $property -and $null -ne $property.Value) {
+            return $property.Value
+        }
     }
 
     return $Default
@@ -157,7 +162,12 @@ function Test-JsonProperty {
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    return (Get-JsonPropertyNames -Object $Object) -contains $Name
+    if ($null -eq $Object) { return $false }
+    if ($Object -is [System.Collections.IDictionary]) {
+        # Preserve case-insensitive key matching even for case-sensitive maps.
+        return $Object.Keys -contains $Name
+    }
+    return $null -ne $Object.PSObject.Properties[$Name]
 }
 
 function Read-RunnerJson {

@@ -2,6 +2,19 @@
   "skill_name": "git-remote-release",
   "evals": [
     {
+      "id": 9,
+      "prompt": "Generate release notes for https://github.com/codebeltnet/benchmarkdotnet/compare/v1.3.3...v1.3.4. Python and authenticated gh are available. Include the contributors and all meaningful changes, even though the release is a single squash commit.",
+      "expected_output": "Uses the bundled deterministic collector and draft verifier. PR #22 appears once with codebelt-aicia[bot], aicia-bot and gimlichael. Notes cover final configuration, test/build, and documentation changes as well as the initial service update.",
+      "expectations": [
+        "Runs collect-release-evidence.py collect and inspects completeness before drafting",
+        "Reads all five original PR commits and final file patches rather than relying on the PR opener or initial automated body",
+        "Credits @codebelt-aicia[bot], @aicia-bot and @gimlichael on the single PR #22 source line",
+        "Includes configuration, test/build changes and contributing documentation",
+        "Does not infer a consumer breaking change merely from test or build package major upgrades",
+        "Runs collect-release-evidence.py verify against the saved evidence and draft and fixes any source mismatch before returning"
+      ]
+    },
+    {
       "id": 1,
       "prompt": "Generate release notes for https://github.com/codebeltnet/agentic/compare/v0.4.5...v0.4.6",
       "expected_output": "Release notes starting with ## What's Changed, a human-friendly summary of changes between v0.4.5 and v0.4.6, a Sources section with PR/commit references, and ending with the full changelog link.",
@@ -53,6 +66,57 @@
         "Includes all contributors from the detected commits and pull requests",
         "Sources section uses @author format when GitHub username is available, plain author name otherwise",
         "Final line is the full changelog compare link using branch names"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Generate release notes for https://github.com/codebeltnet/newtonsoft-json/compare/v10.1.7...v10.1.8. Resolve sources from GitHub metadata.",
+      "expected_output": "Sources contains * V10.1.8/service update by @codebelt-aicia[bot] in https://github.com/codebeltnet/newtonsoft-json/pull/38 and ends with the supplied compare URL.",
+      "expectations": [
+        "Queries associated pull requests for commit 6a85bfa575d407a0608f8aa7c3a5738f78a7731f even without a PR number in its subject",
+        "Uses PR #38 exactly once and does not also list its covered commit URL",
+        "Preserves REST user.login codebelt-aicia[bot], not codebelt-aicia",
+        "Uses the PR title and html_url instead of commit metadata"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Draft release notes from this supplied API snapshot only for example/widget v1...v2. The complete comparison has commits a, b, c, d. All association pages are complete. Commits a and b map to merged PR #10, title Fix parser, user.login build-helper[bot], html_url https://github.com/example/widget/pull/10, base.repo.full_name example/widget, merge_commit_sha b. Commit c maps to merged PR #11, title Update docs, user.login sam, html_url https://github.com/example/widget/pull/11, base.repo.full_name example/widget, merge_commit_sha c. It also maps to open PR #12 with merged_at null and a later merged PR #13 whose integration is outside v2. Commit d has an empty successful association response, subject Fix typo, author.login alex, html_url https://github.com/example/widget/commit/d. The three merged PRs have non-null merged_at. No other changes or contributors exist.",
+      "expected_output": "Sources lists PR #10 once, PR #11 once, and direct commit d. Bot attribution is exact; open and later PRs are excluded.",
+      "expectations": [
+        "Lists both qualifying PRs exactly once",
+        "Does not list commit a, b, or c URLs",
+        "Lists direct commit d by @alex",
+        "Preserves @build-helper[bot]",
+        "Excludes PR #12 and PR #13"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Write release notes for example/widget v1...v2 from this evidence only. The complete comparison contains commit abc, subject Service update, author display name Build Helper. Its associated-PR request returned HTTP 403 rate limit exceeded. No other API route or retry is available. Do not invent missing data.",
+      "expected_output": "Explicitly identifies source resolution as incomplete for abc before the final changelog link, without pretending the failed request proves a direct commit or inventing a GitHub login.",
+      "expectations": [
+        "Treats the failed lookup as unresolved rather than no PR",
+        "Does not present abc as a verified direct-commit source",
+        "Does not invent an @login from Build Helper",
+        "Reports the incomplete source lookup before the final changelog link"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Generate release notes for codebeltnet/aws-signature-v4 v10.0.11...v10.0.12 using only the attached GitHub API snapshot in aws-signature-v4-v10.0.12.json. The snapshot is complete: the sole comparison commit is associated with PR #34, and all original PR commits and final changed files are included. Produce paste-ready notes.",
+      "files": [
+        "evals/files/aws-signature-v4-v10.0.12.json"
+      ],
+      "expected_output": "Release notes cover dependency upgrades, repository standards, Microsoft Testing Platform and coverage migration, and contributing documentation. One PR #34 source credits codebelt-aicia[bot], aicia-bot and gimlichael. The stale dependency-only PR body does not limit the summary.",
+      "expectations": [
+        "Credits @codebelt-aicia[bot], @aicia-bot and @gimlichael together on the single PR #34 source line",
+        "Does not replace @aicia-bot with the Git display name @aicia[bot]",
+        "Uses the original five PR commits despite the tag comparison containing only one squash commit",
+        "Mentions Microsoft.Testing.Platform and the replacement of coverlet with Microsoft.Testing.Extensions.CodeCoverage",
+        "Includes repository standards configuration and contributing guidelines as well as dependency upgrades",
+        "Does not claim unverified runtime signing improvements or merely repeat the dependency-only PR body",
+        "Ends with the v10.0.11...v10.0.12 compare link without duplicate covered commit sources"
       ]
     }
   ]

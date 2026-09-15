@@ -14,6 +14,8 @@ This skill is non-mutating: it inspects history and diffs, then returns grouped 
 
 This skill has one job: produce a ready-to-paste squash-and-merge summary for the full current feature branch unless the user explicitly asked for a narrower range.
 
+Full means every distinct surviving change from every contributor. Group related changes without losing coverage. There is no total line limit; the 72-character limit applies to each line only.
+
 This skill answers one question: **What would this branch effectively do if it were squashed into one commit now?**
 
 ## Start Here: The First Response Is the Summary
@@ -22,11 +24,12 @@ Invoking this skill is the request. Nothing needs confirming, because the skill 
 
 So the first thing to do after loading this skill is run the read-only commands in Step 1 — not compose a reply. The first thing the user sees is the finished grouped summary.
 
-A response from this skill is one of exactly three things:
+A response from this skill is one of exactly four things:
 
 1. The grouped summary lines. This is the normal case and covers nearly every invocation.
 2. `No branch changes to summarize.` when every safe base-branch comparison is genuinely empty.
 3. One direct question naming the missing base branch or range — only after the Step 1 fallbacks have all been tried and failed.
+4. A concise blocker identifying inaccessible diff evidence when complete inspection is impossible.
 
 Everything else is a failed invocation, including:
 
@@ -75,9 +78,9 @@ Do not classify commit 1, then commit 2, then commit 3 and merge duplicate prose
 - Preserve technical identifiers exactly where possible.
 - Group by intent, not chronology.
 - Classify only changes that survive between the resolved base and `HEAD`.
-- Retain only distinct high-signal change groups.
+- Account for every distinct surviving change in the output.
 - Merge repetition and overlapping commits into their parent group.
-- Drop low-signal noise such as typo-only, fixup-only, and trivial follow-up commits unless they materially change a retained group.
+- Merge typo corrections, fixups, and trivial follow-ups into an accurately described parent outcome. Give independent surviving corrections their own line when no parent covers them.
 - Dependencies and version pins matter only when they survive into the final diff.
 - Do not retain reverted experiments, temporary dependency upgrades, or removed late-stage implementations.
 - Prefer strong concrete verbs and concise phrasing.
@@ -133,7 +136,9 @@ git merge-base HEAD master
 
 ### Step 2: Inspect the cumulative branch delta first
 
-Do not summarize from commit subjects alone when the range is noisy or long. Inspect the cumulative base-to-`HEAD` delta first so the final message reflects what actually survives.
+For an ordinary branch comparison, resolve `<base>` to the merge-base commit of the selected base branch and `HEAD`, not the base branch's current tip. Use `<range>` as `<base>..HEAD`. For an explicitly supplied narrower range, preserve its requested endpoints. Keep the resolved endpoints fixed throughout inspection so unrelated changes on an advancing base branch do not enter the summary.
+
+Always inspect the cumulative base-to-`HEAD` delta before summarizing. Commit subjects and diff statistics alone cannot establish complete coverage.
 
 Helpful read-only commands:
 
@@ -146,12 +151,18 @@ git log --reverse --stat --format=medium <range>
 git log --reverse --format="%h %an <%ae> %s" <range>
 ```
 
+Build an internal coverage inventory from the complete `--name-status` output. Inspect every changed path and every distinct change within it, including additions, deletions, renames, documentation, tests, CI, configuration, dependencies, release files, binary assets, file modes, and submodule updates when present. For non-text changes, inspect the available metadata and describe only what it establishes.
+
+If any output is truncated, retrieve the missing content in bounded batches by path and, for large files, by hunk until the inventory is fully inspected. Do not sample recent commits, large files, familiar directories, or selected contributors. Do not use log count/date limits or `--first-parent` to exclude evidence from the selected range; merged contributors' surviving work belongs in the cumulative diff too.
+
+For each inventory entry, record its surviving outcomes and the proposed summary lines that cover them. A file can contain several unrelated outcomes, and one outcome can span several files. Track both so reading every filename does not masquerade as covering every change. Keep this inventory internal; the user receives the grouped lines.
+
 ### Step 3: Collapse to semantic intent
 
-Before drafting the summary, reduce the range into the smallest truthful set of retained groups:
+Before drafting the summary, reduce the range into complete, non-repetitive groups:
 
 - Start from the cumulative base-to-`HEAD` diff, not from commit labels.
-- For every relevant file, dependency, version pin, config value, API, or behavior, decide what survives at `HEAD`.
+- For every inventoried file, dependency, version pin, config value, API, or behavior, decide what survives at `HEAD`.
 - Eliminate exact reversions, temporary files/features, dependency churn that returned to the base value, and experiments abandoned before `HEAD`.
 - Merge repeated fixes, redesigns, and follow-ups into the one surviving outcome they affected.
 - If a feature or capability was absent at base and present at `HEAD`, describe it once in its final form. Intermediate fixes do not create extra lines.
@@ -164,8 +175,8 @@ Before drafting the summary, reduce the range into the smallest truthful set of 
 - A dependency or version that returns to the base value does not deserve a retained line.
 - Do not absorb surviving package version updates into a generic build-system, configuration, or refactor line just because they landed in the same commit.
 - When the diff mixes shared dependency manifests or version pins with build-system metadata or project-structure refactors, keep those as separate retained groups when both survive in the final diff.
-- Keep documentation-only work separate in your reasoning, but include it only when it represents a meaningful unique change.
-- Treat late changelog, version-bump, or release-finalization commits as part of the branch by default, then decide here whether they deserve a retained summary line or should be merged into a stronger parent group.
+- Include surviving documentation-only work, even small corrections. Merge it with related documentation only when the line still describes the correction accurately.
+- Include late changelog, version-bump, and release-finalization changes. Merge them into a parent group only when that line explicitly covers their surviving outcome; otherwise give them their own line.
 - Highlight distinct meaningful efforts instead of forcing one dominant umbrella theme.
 - Use chronological history after this reduction to confirm rename intent, extract accurate terminology, understand bug context, and explain why the surviving outcome matters. Never let an intermediate commit override contradictory final-state evidence.
 
@@ -176,7 +187,7 @@ Reduction checklist:
 - Are dependency/version changes still distinct in the final diff from build/config/refactor work?
 - Does any candidate line rely on a commit message the final diff contradicts? If yes, trust the final diff.
 
-Ask yourself: "If I had to explain the real work in 2-5 compact lines, what are the distinct changes that mattered?"
+Ask yourself: "Which surviving changes are still missing from these lines?" Add lines until every outcome in the coverage inventory is represented. Importance, contributor, recency, and size are never reasons to omit a surviving change. Reduction removes duplicate descriptions and cancelled history, not independent final changes.
 
 #### Emoji Resolution: Common Mistakes
 
@@ -208,7 +219,7 @@ Use this exact output shape:
 Formatting rules:
 
 - Return grouped lines only. Do not prepend a title.
-- Use one line per retained high-signal group.
+- Use one line per distinct surviving group, adding lines when needed to cover its outcomes within 72 characters.
 - Keep every line at or below 72 characters.
 - Default to emoji plus description only. Use `<emoji> <prefix>: ...` only when the user explicitly asked to mirror conventional-commit prefixes.
 - Start each description lowercase after the emoji, usually with a lowercase imperative verb such as `add`, `update`, `refresh`, `preserve`, `split`, or `remove`.
@@ -231,6 +242,8 @@ Formatting rules:
 
 ### Step 5: Return the grouped lines only
 
+Before returning, reconcile the draft against the complete coverage inventory. Every changed path and each distinct surviving outcome must map to an accurate output line. A vague umbrella such as "update tooling" does not cover unnamed independent tool changes. Check the reverse mapping too: every claim must have inspected diff evidence. Reverted history needs no line because it leaves no cumulative change. Never present a sampled or partially inspected diff as a complete summary; if evidence remains inaccessible, state the blocker rather than claiming completion.
+
 Output the finished grouped summary lines and stop. Do not run `git commit`, `git bot commit`, `git add`, or any other mutating command.
 
 ## Good Output Characteristics
@@ -243,7 +256,7 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Keeps distinct meaningful efforts on separate lines.
 - Describes only surviving base-to-`HEAD` outcomes; temporary churn disappears.
 - Describes one surviving outcome once, even if many commits touched it.
-- Drops noisy fixups and typo-only churn instead of preserving them.
+- Merges repeated fixups while preserving independent surviving corrections.
 - Fits naturally beneath a PR title or in compact GitHub and terminal views.
 - Includes only claims supported by the inspected diff.
 - Preserves names such as commands, types, files, APIs, flags, and paths.
@@ -270,5 +283,6 @@ Output the finished grouped summary lines and stop. Do not run `git commit`, `gi
 - Losing or renaming important technical identifiers unnecessarily.
 - Inventing refactors, fixes, or docs changes not supported by the diff.
 - Counting commits instead of surviving outcomes.
+- Picking only high-signal changes, stopping at a fixed number of lines, or skipping uninspected portions of truncated output.
 - Adding a title, body, bullets, or numbered outline.
 - Exceeding 72 characters on any output line.

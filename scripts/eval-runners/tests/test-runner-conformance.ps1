@@ -2173,6 +2173,31 @@ function Add-TestInteractionSources {
 }
 
 if ($Suite -in @('All', 'Protocol')) {
+    # These helpers are on every nested protocol-validation path. Direct lookup
+    # must retain null/default, falsey-value, case, and dictionary semantics.
+    foreach ($document in @(
+        [pscustomobject]@{ Present = 'value'; Null = $null; Flag = $false; Count = 0; Empty = ''; Items = @(1, 2) },
+        @{ Present = 'value'; Null = $null; Flag = $false; Count = 0; Empty = ''; Items = @(1, 2) },
+        [ordered]@{ Present = 'value'; Null = $null; Flag = $false; Count = 0; Empty = ''; Items = @(1, 2) }
+    )) {
+        Assert-Equal 'value' (Get-JsonProperty $document 'pReSeNt' 'fallback') 'property lookup ignores case'
+        Assert-Equal 'fallback' (Get-JsonProperty $document 'missing' 'fallback') 'missing property uses default'
+        Assert-Equal 'fallback' (Get-JsonProperty $document 'Null' 'fallback') 'null property uses default'
+        Assert-True ((Get-JsonProperty $document 'Flag' 'fallback') -ceq $false) 'false is preserved'
+        Assert-Equal 0 (Get-JsonProperty $document 'Count' 'fallback') 'zero and dictionary member collisions are preserved'
+        Assert-Equal '' (Get-JsonProperty $document 'Empty' 'fallback') 'empty string is preserved'
+        Assert-Equal '1,2' ((Get-JsonProperty $document 'Items') -join ',') 'array values are preserved'
+        Assert-True (Test-JsonProperty $document 'nUlL') 'present null property exists regardless of case'
+        Assert-True (-not (Test-JsonProperty $document 'missing')) 'absent property does not exist'
+    }
+    $caseSensitiveMap = [System.Collections.Hashtable]::new([StringComparer]::Ordinal)
+    $caseSensitiveMap.Add('Present', 'value')
+    Assert-True (Test-JsonProperty $caseSensitiveMap 'present') 'dictionary existence retains case-insensitive matching'
+    Assert-Equal 'fallback' (Get-JsonProperty $caseSensitiveMap 'present' 'fallback') 'dictionary retrieval retains its comparer'
+    Assert-Equal 'fallback' (Get-JsonProperty $null 'missing' 'fallback') 'null object uses default'
+    Assert-Equal 'fallback' (Get-JsonProperty ([pscustomobject]@{}) '' 'fallback') 'empty property name uses default'
+    Assert-True (-not (Test-JsonProperty $null 'missing')) 'null object has no properties'
+
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-runner-conformance-' + [Guid]::NewGuid().ToString('N'))
 try {
     $iteration = Join-Path $testRoot 'iteration-1'
@@ -2646,6 +2671,18 @@ try {
     Assert-True (@($portable.output_files).Count -gt 0) 'bridge carries confined evidence paths'
     Assert-Equal 'preserved assertion' $portable.grading[0].text 'bridge preserves the canonical grading entry'
     Assert-True ($null -eq $portable.grading[0].passed) 'bridge preserves the canonical grading state before grading'
+
+    $portableHash = Get-Sha256HexFromFile -Path $resultPath
+    $objectSummary = @(& $bridgePath -Run $with.Path -ExecutionResult $rawPath -Result $resultPath -AsObject)
+    Assert-Equal 1 $objectSummary.Count 'composed bridge returns exactly one summary without protocol noise'
+    Assert-Equal 'codebeltnet/agentic/eval-result-bridge/1' $objectSummary[0].schema 'composed bridge returns a structured summary'
+    Assert-Equal $portableHash (Get-Sha256HexFromFile -Path $resultPath) 'composed bridge preserves standalone canonical bytes and grading'
+    $composedFailure = $null
+    try {
+        $null = & $bridgePath -Run $with.Path -ExecutionResult $rawPath -Result (Join-Path $testRoot 'outside-result.json') -AsObject
+    } catch { $composedFailure = $_.Exception.Message }
+    Assert-True ($null -ne $composedFailure -and $composedFailure.Contains('must remain inside')) 'composed bridge throws validation failures to its caller'
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $testRoot 'outside-result.json'))) 'composed bridge refuses an out-of-package write'
 
     $manifestPackage = Join-Path $iteration 'manifest-path-regression'
     $manifestEval = Join-Path $manifestPackage 'conformance'
