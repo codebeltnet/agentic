@@ -828,6 +828,10 @@ if ($MetadataOnly) {
 }
 
 Add-ValidationResult -Results $results -Name 'Release evidence collection preserves squash contributors and rejects incomplete sources' -Action {
+    $releaseSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-release/SKILL.md' -GitRef $Ref
+    Assert-Contains -Name 'git-remote-release/SKILL.md' -Content $releaseSkill -Needle 'Do not put temporary evidence or draft release notes in the current repository, including ignored repository-local folders.'
+    Assert-NotContains -Name 'git-remote-release/SKILL.md' -Content $releaseSkill -Needle "or the repository's ignored `.bot/` directory"
+
     if ([string]::IsNullOrWhiteSpace($Ref)) {
         & python -B (Join-Path $repoRoot 'skills/git-remote-release/scripts/test-release-evidence.py')
         if ($LASTEXITCODE -ne 0) { throw "Release evidence regression checks failed with exit code $LASTEXITCODE" }
@@ -2983,6 +2987,10 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '## Working-tree Scratch Isolation'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Treat the active repository as the subject of review, never as scratch storage.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'use a unique absolute path under the operating system''s temporary directory'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'never delete a pre-existing or user-authored untracked file merely because its name looks temporary.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Invocation Routing Lock'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Interpret `Please do a git bot commit yolo` as `git bot commit` identity plus auto-approval for the full current worktree.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` is not the commit message, and it does not request a changelog.'
@@ -3103,6 +3111,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats yolo as explicit approval to complete the commit workflow in the same turn after required checks pass'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not ask whether to proceed, wait for another approval, or return a pending commit plan after presenting the status summary'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not replace bot identity with a human-authored commit plus a Co-authored-by trailer'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not redirect git diff or other inspection output to a repo-relative scratch file such as diff.txt or git-diff.txt'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not create or leave repo-local scratch files or directories during the plan-only workflow'
     Assert-Contains -Name 'README.md' -Content $readme -Needle '**Single-category context gate**'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'Multi-file plans that initially collapse to one category also require a visible full-context quality gate'
     Assert-Contains -Name 'README.md' -Content $readme -Needle '**Authoritative command routing**'
@@ -3125,6 +3135,7 @@ Add-ValidationResult -Results $results -Name 'Git visual squash summary skill st
 
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'This skill turns a stack of commits into a curated grouped summary'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'This skill is non-mutating:'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'never create repo-local scratch files to capture diffs, logs, notes, or intermediate summaries.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Account for every distinct surviving change in the output.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'There is no total line limit'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Build an internal coverage inventory from the complete `--name-status` output.'
