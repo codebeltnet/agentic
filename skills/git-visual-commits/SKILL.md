@@ -10,6 +10,14 @@ description: >
 
 This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji, and only adding a conventional prefix when the user explicitly asks for that combo. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
 
+## Working-tree Scratch Isolation
+
+Treat the active repository as the subject of review, never as scratch storage. Do not create or leave ad-hoc files or directories there for captured diffs, command output, logs, notes, draft messages, or intermediate state. In particular, never redirect a diff to repo-relative paths such as `diff.txt`, `git-diff.txt`, `status.txt`, `*.log`, `tmp/`, or `.cache/`.
+
+- Keep `git status`, `git diff`, and related inspection output in the terminal. If output must be persisted for a concrete reason, use a unique absolute path under the operating system's temporary directory (for example, `[System.IO.Path]::GetTempPath()` / `$env:TEMP`) or another session-storage location that is outside the repository.
+- Resolve and verify the temporary path before writing; do not use a relative filename or a path derived from the current repository as a convenience.
+- Refresh `git status --short --untracked-files=all` after inspection and before the final report. Remove only scratch artifacts created by this workflow, after verifying their exact paths; never delete a pre-existing or user-authored untracked file merely because its name looks temporary.
+
 ## Critical Rules
 
 ### Invocation Routing Lock

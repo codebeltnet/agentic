@@ -20,7 +20,7 @@ When Python 3 and authenticated `gh` are available, run the bundled `scripts/col
 python <skill-directory>/scripts/collect-release-evidence.py collect <owner/repo> <previous-ref> <current-ref> --output <temporary-directory>/release-evidence.json
 ```
 
-Use an absolute skill path and an output directory under the operating system's temporary directory, or the repository's ignored `.bot/` directory. The collector only reads GitHub through `gh api` GET requests and writes the requested evidence file. It does not change Git configuration, refs, or remote content. It requires Python 3.9+ and a `gh` version supporting `--paginate --slurp`.
+Use an absolute skill path and an output directory under the operating system's temporary directory. Do not put temporary evidence or draft release notes in the current repository, including ignored repository-local folders. The collector only reads GitHub through `gh api` GET requests and writes the requested evidence file. It does not change Git configuration, refs, or remote content. It requires Python 3.9+ and a `gh` version supporting `--paginate --slurp`.
 
 Read the resulting `commits`, every `pull_requests[].commits`, and final `files` before writing the summary. Use `sources` verbatim in the Sources section. The opening PR body is context, not the change inventory. Check each meaningful final file change against the summary. Inspect `files_without_patch` through another read-only route when needed; binary files and omitted patches still require consideration. Distinguish repository test/build tooling changes from changes to dependencies shipped to package consumers before claiming a breaking change.
 
