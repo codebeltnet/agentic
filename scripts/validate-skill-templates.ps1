@@ -2988,6 +2988,11 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '## Working-tree Scratch Isolation'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'This is a pre-write requirement in every mode'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'including symlink/junction targets'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'never fall back to the working directory'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'git diff > git_diff_output.txt'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Never writes git_diff_output.txt or other scratch artifacts anywhere inside the project'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Treat the active repository as the subject of review, never as scratch storage.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'use a unique absolute path under the operating system''s temporary directory'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'never delete a pre-existing or user-authored untracked file merely because its name looks temporary.'
