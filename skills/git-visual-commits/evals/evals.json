@@ -327,6 +327,8 @@
         "Does not redirect git diff or other inspection output to a repo-relative scratch file such as diff.txt or git-diff.txt",
         "Uses direct or bounded terminal inspection for the large diff, or an absolute verified path outside the repository when persistence is necessary",
         "Does not create or leave repo-local scratch files or directories during the plan-only workflow",
+        "Never writes git_diff_output.txt or other scratch artifacts anywhere inside the project, including absolute paths, ignored .bot or .cache directories, and .git, even with later cleanup planned",
+        "Verifies the resolved physical destination is outside the project and all worktrees before persisting output; uses terminal or memory inspection if temporary storage is unsafe or unverifiable",
         "Does not stage or commit for a plan-only request"
       ]
     }
