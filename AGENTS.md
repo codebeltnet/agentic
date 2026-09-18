@@ -309,11 +309,11 @@ When committing changes to this repo, group by technology and logical purpose â€
 - Template files (`.csproj`, `.yml`, `.cs`) get their own commit(s)
 - Documentation updates (`README.md`, `CONTRIBUTING.md`) get their own commit
 
-## Markdown Formatting
+## Markdown Prose Formatting
 
-All markdown files in this repository must use natural paragraph flow. Do not artificially break paragraphs at fixed column widths or insert hard line breaks within sentences. Paragraphs should flow as complete thoughts, allowing line wrapping to be determined by the reader's viewport or rendering engine, not by arbitrary character limits.
+Do not hard-wrap prose to a fixed column width. Keep paragraphs and Markdown list items on continuous natural lines regardless of their length. Do not insert line breaks merely to satisfy 80, 100, 120, or any other column-width limit; rely on editor soft wrapping for visual presentation. Insert physical line breaks only where Markdown structure requires them, such as between paragraphs, headings, list items, code blocks, and tables. When modifying existing Markdown, remove unnecessary hard wrapping from the prose you touch.
 
-**Why:** Natural paragraphs are more readable, easier to edit, and render correctly across all devices and markdown renderers. Artificially clipped paragraphs create maintenance friction and look awkward in source control diffs.
+**Why:** Natural paragraphs and list items are easier to read and edit, and they render consistently across Markdown viewers. Arbitrary line breaks create maintenance friction and noisy diffs.
 
 ## README Sync
 
