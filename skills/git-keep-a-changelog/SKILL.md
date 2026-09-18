@@ -61,7 +61,7 @@ Only after this skill has been selected by explicit changelog or release-note in
 - An included untracked configuration file is an `Added` outcome when it is absent at the base and present in the final state. Read its contents and describe the behavior it configures; do not omit it because it has no committed diff.
 - Omit empty sections instead of emitting placeholders.
 - Always maintain the Keep a Changelog compare-link footer at the bottom of the file.
-- Preserve natural line breaks and readable prose. Do not apply any fixed column limit or artificial hard wrapping to changelog paragraphs or bullets.
+- **Never hard-wrap changelog prose.** Keep every paragraph and bullet item on one physical line, regardless of length. Do not insert line breaks to satisfy 80, 100, 120, or any other column width; rely on editor soft wrapping. Insert physical line breaks only between Markdown structures, and rejoin unnecessary wraps in prose you touch. Treat any arbitrary line break inside a paragraph or bullet as a formatting failure that must be corrected before completion.
 - End each bullet with `,` and end the last bullet in each section with `.`.
 - If pending worktree changes exist for a concrete release draft, do not silently include or exclude them. Ask the user first with a short `Yes / No / Custom` prompt. **Exception: in yolo/auto mode, include all pending changes automatically without asking.**
 - Yolo/auto changes pending-worktree handling only. It never widens committed history or includes the comparison boundary.
@@ -393,7 +393,7 @@ Read `references/section-validation.md` and validate every path-entity boundary 
 - Choose each change verb from the verified before/after facts. A sentence combining several claims must support each one separately; remove any unsupported qualifier, explanation, or effect.
 - Represent a package switch with separate `Added` and `Removed` outcomes when the incoming and outgoing identities have different base-to-final existence states; use `Changed` only for an independently evidenced migration effect or an identity-preserving version change.
 - Before finalizing, reconcile the written entry against the evidence ledger: every included untracked file, every same-identity package version delta, every outgoing direct dependency, and every user-facing source-level addition must either appear in the appropriate section or have a recorded reason for omission. A broad summary is not a substitute for those surviving outcomes.
-- Use natural prose line breaks. Keep paragraphs and bullets readable, but do not column-wrap them artificially or target a fixed line width.
+- Keep every changelog paragraph and bullet item on a continuous physical line. Break lines only between Markdown structures, and rejoin arbitrary wraps in prose you edit.
 - End each bullet with `,` except the final bullet in a populated section, which must end with `.`.
 
 ### Step 7: Update CHANGELOG.md carefully
@@ -413,5 +413,7 @@ Preserve the file's existing structure while editing.
 ### Step 8: Stop after the edit
 
 Reread the target entry from disk, including its highlight and any retained text. For each factual clause, identify its supporting outcome and evidence. Check identity, versions, scope, behavior, and causal explanations independently. A valid section or successful resolver run does not validate these claims. Correct unsupported wording and repeat this review before handing the file back.
+
+Inspect the entry's physical line layout before completing it. Each prose paragraph and each bullet must occupy one physical line unless the Markdown structure genuinely requires more than one. Rejoin every arbitrary wrap, regardless of line length. Any hard-wrapped paragraph or bullet means the edit is incomplete.
 
 After updating `CHANGELOG.md`, stop and let the user review the file. Do not commit, tag, push, or create a release unless the user asks.

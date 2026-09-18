@@ -37,10 +37,10 @@
     },
     {
       "id": 4,
-      "prompt": "Please update CHANGELOG.md in Keep a Changelog style, but do not hard-wrap the prose. I want natural line breaks that read well for humans.",
-      "expected_output": "The changelog is updated with natural prose line breaks instead of artificial narrow wrapping.",
+      "prompt": "Please update CHANGELOG.md in Keep a Changelog style. Do not hard-wrap the prose or split a long bullet across physical lines; use one physical line per paragraph and list item, regardless of length.",
+      "expected_output": "The changelog uses one physical line per prose paragraph and bullet item, with line breaks only between Markdown structures.",
       "expectations": [
-        "Preserves natural prose wrapping instead of forcing any fixed column width",
+        "Keeps each prose paragraph and bullet item on one physical line regardless of length",
         "Uses the standard Keep a Changelog section order",
         "Omits empty sections instead of inserting placeholders",
         "Avoids dumping raw commit subjects verbatim",

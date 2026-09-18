@@ -146,6 +146,8 @@ After writing `Directory.Packages.props`, re-check the generated versions agains
 
 ## Step 5: Generate All Files
 
+When writing or changing Markdown in the scaffold, keep each prose paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping, break lines only between Markdown structures, and rejoin unnecessary wraps in prose you touch.
+
 Generate files in this order:
 
 ### 1. Copy shared templates
@@ -200,6 +202,7 @@ After generating, verify:
 - [ ] No generated app or test `.csproj` file introduces `<TargetFramework>`; framework selection stays centralized in the generated root `Directory.Build.props`
 - [ ] `ci-pipeline.yml` has the correct settings (build + test only)
 - [ ] Root governance docs exist: `README.md`, `CHANGELOG.md`, `.github/CODE_OF_CONDUCT.md`, `.github/CONTRIBUTING.md`
+- [ ] Authored Markdown paragraphs and list items have no fixed-width hard wraps
 - [ ] `.editorconfig` is present with file-scoped namespace enforcement
 - [ ] `AGENTS.md` references `.bot/` and coding guidelines
 - [ ] `.github/copilot-instructions.md` has project-specific patterns

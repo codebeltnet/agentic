@@ -36,3 +36,5 @@ Documentation must be:
 ## Consistency
 
 Match the repository's documentation conventions (tone, formatting, wrapping, DocFX layout). If the repo mandates natural paragraph flow, do not hard-wrap; if it uses a specific overwrite/layout structure, follow it rather than inventing a parallel one.
+
+For Markdown prose, keep each paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures. When modifying existing Markdown, rejoin unnecessary hard wraps in the prose you touch.

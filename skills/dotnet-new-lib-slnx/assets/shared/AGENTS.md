@@ -17,6 +17,10 @@ This document provides guidance for AI agents working in this repository.
 - **XML documentation:** All public APIs must have XML documentation comments
 - **Testing:** Use xUnit v3 with Codebelt.Extensions.Xunit.App base classes
 
+## Markdown Prose Formatting
+
+Do not hard-wrap prose to a fixed column width. Keep paragraphs and Markdown list items on continuous natural lines regardless of their length. Do not insert line breaks merely to satisfy 80, 100, 120, or any other column-width limit; rely on editor soft wrapping for visual presentation. Insert physical line breaks only where Markdown structure requires them, such as between paragraphs, headings, list items, code blocks, and tables. When modifying existing Markdown, remove unnecessary hard wrapping from the prose you touch.
+
 ## Project Structure
 
 - `src/` — Production source code

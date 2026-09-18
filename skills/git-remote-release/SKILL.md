@@ -205,6 +205,8 @@ Sources:
 **Full Changelog**: https://github.com/{owner}/{repo}/compare/{previousRef}...{currentRef}
 ```
 
+Keep each prose paragraph and Markdown list item on one physical line regardless of length. Do not hard-wrap release notes to a fixed column width; rely on editor soft wrapping and use physical line breaks only between Markdown structures. Rejoin unnecessary hard wraps in any existing prose you edit.
+
 ### The summary section
 
 The summary is the heart of the release note. It must be:
@@ -406,3 +408,4 @@ Before returning the result, verify:
 17. PR titles, URLs, and author logins match REST metadata exactly, including `[bot]`; no normalized app slug replaces a bot login.
 18. Each qualifying PR's original commit inventory is complete, and every verified author/co-author is credited on its source line, even for squash merges and automated release PRs.
 19. The summary covers meaningful final changes across all authors and changed files; stale PR descriptions do not override diff evidence.
+20. Each prose paragraph and Markdown list item occupies one physical line, regardless of length.

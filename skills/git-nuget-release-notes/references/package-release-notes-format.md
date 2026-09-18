@@ -61,6 +61,7 @@ Use sections in this order and omit empty ones:
 - Follow the verb with the concrete subject: package, type, member, namespace, or behavior that changed.
 - Prefer exact technical identifiers over vague prose.
 - Avoid punctuation-heavy embellishment and avoid copying commit subjects verbatim.
+- Keep every bullet on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping.
 
 Examples:
 

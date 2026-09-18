@@ -95,6 +95,8 @@ When copying template files, replace these placeholders in file contents:
 
 ## Step 5: Generate All Files
 
+When writing or changing Markdown in the scaffold, keep each prose paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping, break lines only between Markdown structures, and rejoin unnecessary wraps in prose you touch.
+
 Generate files in this order:
 
 ### 1. Copy shared templates
@@ -181,6 +183,7 @@ After generating, verify:
 - [ ] `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/{BENCHMARK_RUNNER_PROJECT_NAME}.csproj` references the default tuning benchmark project and relies on central package management
 - [ ] `ci-pipeline.yml` has the correct SNK and SonarCloud settings
 - [ ] Root governance docs exist: `README.md`, `CHANGELOG.md`, `LICENSE`, `.github/CODE_OF_CONDUCT.md`, `.github/CONTRIBUTING.md`
+- [ ] Authored Markdown paragraphs and list items have no fixed-width hard wraps
 - [ ] `.docfx/docfx.json` lists all source projects and has correct metadata
 - [ ] `.editorconfig` is present, sets `charset = utf-8`, and keeps file-scoped namespace enforcement
 - [ ] Generated text files do not contain common mojibake markers such as `â€”`, `â€“`, `â€`, or `�`

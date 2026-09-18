@@ -409,6 +409,8 @@ The reason is mandatory. Package requirements, "full example needs X", "shows th
 
 ## Namespace and Summary Style
 
+Keep each prose paragraph and Markdown list item on one physical line regardless of length. Do not hard-wrap DocFX Markdown to a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures. Rejoin unnecessary hard wraps in the prose you touch.
+
 Namespace overview pages must explain what problem the namespace solves, when to use it, and where a newcomer should start. Avoid inventory-only blurbs such as “contains types and extension methods for...”
 
 Before writing a namespace page, identify its key entry points from recent release notes or changelog entries, package READMEs, public factories/builders, and the strongest functional tests. When several APIs solve adjacent problems, add compact decision guidance that tells readers which API to choose first and why. Do not let a naming-convention table displace the product story.

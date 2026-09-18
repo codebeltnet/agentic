@@ -150,6 +150,8 @@ Do not override the base image's `/cdnroot`, port, runtime user (`65532`), or wo
 
 ## Workflow
 
+When updating Markdown documentation, keep each prose paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping, break lines only between Markdown structures, and rejoin unnecessary wraps in prose you touch.
+
 1. Run `inspect --repo-root <root> --json` and read `FORMS.md` plus the relevant references. Resolve ambiguous projects and the required CDN-equivalent question.
 2. Stop for `RiskyGeneratedAssets` unless a complete generated-output design and runtime URL behavior can be established. Never bypass the guardrail to make the simple template fit.
 3. Run `plan --repo-root <root> --project <project> --json`, adding `--cdn-equivalent` when selected. For an existing Cuemon package reference, require the NuGet-backed latest-stable result and use its exact version; stop on dependency-resolution failure.

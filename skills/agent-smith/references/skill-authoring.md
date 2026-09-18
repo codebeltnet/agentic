@@ -42,6 +42,8 @@ Keep the response compact, but cover every item:
 - Match control to fragility. Explain intent where judgment is safe; use exact commands and fail-closed gates where sequence or correctness is fragile.
 - Bundle a tested script when execution traces show agents repeatedly recreating the same deterministic logic.
 
+When authoring or editing Markdown skill files, keep each prose paragraph and list item on one physical line regardless of length. Do not hard-wrap at a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures. Rejoin unnecessary hard wraps in prose you touch.
+
 See [Best practices for skill creators](https://agentskills.io/skill-creation/best-practices) for deeper guidance on real-task grounding, context economy, progressive disclosure, calibrated control, reusable scripts, and validation loops.
 
 ## Descriptions
