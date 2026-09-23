@@ -14,11 +14,12 @@ Open or maintain one GitHub pull request for the entire committed current branch
 - The explicit PR request authorizes read-only preparation. In normal mode, show the preview below and **stop for explicit approval before any remote write**. A later approval applies only to that prepared plan.
 - `yolo` or `auto` attached to the same explicit PR request authorizes the narrow write phase after displaying the same preview as status. Continue without a second question. Neither mode authorizes force push, rebase, reset, amend, merge, branch deletion, auto-merge, or unrelated writes.
 - A dirty worktree, including untracked files, blocks both modes. Explain that a PR contains committed changes only. Do not stage, commit, stash, discard, or automatically invoke `git-visual-commits`.
+- A missing upstream tracking branch, or a local/upstream branch-name mismatch, also blocks both modes. The skill never guesses a PR head after a rename or silent tracking drift; fix tracking first, then rerun the workflow.
 - Commit requests belong to `git-visual-commits`; squash wording belongs to `git-visual-squash-summary`; release notes belong to `git-remote-release`; changelogs belong to `git-keep-a-changelog`. This skill independently reads the complete PR comparison.
 
 ## Phase 1: prepare
 
-1. Check `git` and `gh` are available. Run the read-only collector from the current working directory, with an absolute skill path. Use a unique operating-system temp directory, or ignored `.bot/` when needed. The collector fails closed for detached `HEAD`, the base branch, dirty worktree, missing auth/assignee eligibility, empty comparison, diverged remote head, and ambiguous templates. It discovers the GitHub repository, authenticated account, actual default branch, fork parent when applicable, upstream head branch, open PR, and push need. Supply `-Repository owner/repo` or `-Base branch` only when explicitly chosen or needed to resolve real ambiguity.
+1. Check `git` and `gh` are available. Run the read-only collector from the current working directory, with an absolute skill path. Use a unique operating-system temp directory, or ignored `.bot/` when needed. The collector fails closed for detached `HEAD`, the base branch, dirty worktree, missing or mismatched upstream tracking, missing auth/assignee eligibility, empty comparison, diverged remote head, and ambiguous templates. It discovers the GitHub repository, authenticated account, actual default branch, fork parent when applicable, upstream head branch, open PR, and push need. If the local branch was renamed or never tracked, repair the upstream first with `git push --set-upstream origin HEAD` or `git branch --set-upstream-to=origin/<branch>` after the remote branch name is correct. Supply `-Repository owner/repo` or `-Base branch` only when explicitly chosen or needed to resolve real ambiguity.
 
    ```text
    pwsh -NoProfile -NonInteractive -File <skill>/scripts/prepare-pr.ps1 -OutputDirectory <temp-directory>
@@ -44,7 +45,7 @@ Before any `git push`, `gh pr create`, `gh pr edit`, assignee change, or equival
 - Proposed **title** and concise description preview, with the complete body available at its temp path on request.
 - Commit count, changed-file count, authenticated assignee, and whether a normal branch push is required.
 - Existing PR URL on update, plus whether its **entire current body** will be replaced and whether title/body/assignment need changes.
-- Exact planned writes: optional normal push (and upstream setup if needed), create or edit the intended PR, and add the authenticated assignee if absent. Include ready/draft state.
+- Exact planned writes: optional normal push to the already-tracked head branch, create or edit the intended PR, and add the authenticated assignee if absent. Include ready/draft state.
 
 In normal mode ask for explicit approval and stop. With same-request `yolo`/`auto`, display the preview as status and proceed. No approval is inferred from a prior unrelated `yolo`/`auto`.
 
