@@ -5,7 +5,7 @@
       "id": 1,
       "prompt": "Please create a PR from my clean tracked v0.10.2/service-update branch. It has three commits changing a validator, its tests, and unrelated contributor guidance. The branch already tracks origin/v0.10.2/service-update, but my latest local commits are not pushed yet. Do not treat this as approval to write remotely.",
       "expected_output": "Collects the complete three-dot comparison, maps every changed path to reviewer themes, proposes V0.10.2/service update, and stops after the full CREATE preview before push or PR write.",
-      "expectations": ["Title is V0.10.2/service update", "All commits, bodies, final patches, statuses, and paths are inspected", "Validator and contributor guidance remain distinct themes", "Preview names repo, base/head, title, body summary, counts, authenticated assignee, push, and exact writes", "No push or PR write occurs without approval"]
+      "expectations": ["Title is V0.10.2/service update", "All commits, bodies, final patches, statuses, and paths are inspected", "Validator behavior and contributor guidance are summarized as reviewer themes rather than a file list", "The previewed body uses a short opening summary plus concise thematic sections", "Preview names repo, base/head, title, body summary, counts, authenticated assignee, push, and exact writes", "No push or PR write occurs without approval"]
     },
     {
       "id": 2,
@@ -46,8 +46,8 @@
     {
       "id": 8,
       "prompt": "Refresh the already-open PR for my branch. I added commits since its description was written. One early commit claimed a feature that a later commit reverted; a binary file and a rename are also in the final comparison.",
-      "expected_output": "Finds the existing head/base PR, regenerates the whole description from the current final diff, accounts for all files, previews full-body replacement, and updates the same PR after approval.",
-      "expectations": ["Existing PR is UPDATE rather than duplicate CREATE", "New commits and final patches determine current description", "Reverted behavior is not claimed", "Binary and rename remain explicit evidence entries", "Whole-body replacement policy is previewed", "Persisted body is checked exactly against the new body"]
+      "expected_output": "Finds the existing head/base PR, regenerates the whole description from the current final diff into concise reviewer themes, accounts for all files, previews full-body replacement, and updates the same PR after approval.",
+      "expectations": ["Existing PR is UPDATE rather than duplicate CREATE", "New commits and final patches determine the current description", "Reverted behavior is not claimed even if earlier commits said otherwise", "Binary and rename remain explicit evidence entries even when the prose stays concise", "Whole-body replacement policy is previewed", "Persisted body is checked exactly against the new body"]
     },
     {
       "id": 9,
@@ -64,14 +64,14 @@
     {
       "id": 11,
       "prompt": "Make a PR for a repository with a default PR template containing summary, related issue, validation, and unchecked checkboxes. The branch diff changes code and tests but no test command has run and no issue was linked.",
-      "expected_output": "Uses the repository template, fills supported change details, leaves unsupported boxes unchecked, and invents no test result or issue relationship.",
-      "expectations": ["Repository default template wins over fallback layout", "Required headings and checklist structure remain", "No unsupported checklist item is checked", "No invented test run, CI result, or Closes/Fixes/Resolves keyword", "No diffhunk links or AI attribution"]
+      "expected_output": "Uses the repository template, fills supported change details with concise reviewer-oriented synthesis, leaves unsupported boxes unchecked, and invents no test result or issue relationship.",
+      "expectations": ["Repository default template wins over fallback layout", "Required headings and checklist structure remain", "Template headings are filled with concise thematic content instead of an appended fallback inventory", "No unsupported checklist item is checked", "No invented test run, CI result, or Closes/Fixes/Resolves keyword", "No diffhunk links or AI attribution"]
     },
     {
       "id": 12,
-      "prompt": "Create a PR yolo for a large branch with several unrelated change areas, generated files, deletions, and a patch-unavailable binary. Verify that the GitHub PR files API returns a different file set than local base...head.",
-      "expected_output": "Groups the body into concise themes while accounting for every local path; post-write verification reports the mismatched GitHub inventory and does not claim success.",
-      "expectations": ["Every path has an internal coverage theme", "Mechanical/generated and binary entries are not silently lost", "GitHub files API is paginated", "Mismatch blocks success and reports any already-created PR URL", "No fabricated behavior or validation claims"]
+      "prompt": "Create a PR yolo for a large branch with several unrelated change areas, generated files, deletions, and a patch-unavailable binary. The branch shape is similar to a release-sized skill PR: one new skill with scripts/evals/tests, broad repository guidance changes, documentation/catalog updates, validation work, and supporting assets. Verify that the GitHub PR files API returns a different file set than local base...head.",
+      "expected_output": "Groups the body into a short opening summary plus a small number of coarse reviewer themes while accounting for every local path; post-write verification reports the mismatched GitHub inventory and does not claim success.",
+      "expectations": ["Every path has an internal coverage theme even when many files collapse into shared reviewer sections", "The body uses a concise opening summary and a small number of coarse reviewer themes for this large PR", "Mechanical/generated, asset, reference, and binary entries are summarized honestly rather than surfaced as individual file bullets", "No duplicate final Changes Summary repeats the thematic body", "GitHub files API is paginated", "Mismatch blocks success and reports any already-created PR URL", "No fabricated behavior or validation claims"]
     },
     {
       "id": 13,
@@ -90,6 +90,12 @@
       "prompt": "Open a pull request after I renamed my local branch from v0.10.2/service-update to v0.11.0/chore-and-git-remote-pr, but its upstream still points at origin/v0.10.2/service-update.",
       "expected_output": "Fails before evidence collection, names the local/upstream mismatch explicitly, explains that stale tracking would target the wrong remote branch, and tells me how to update the remote branch name and upstream before retrying.",
       "expectations": ["Local and upstream branch names are both shown", "The mismatch is treated as stale tracking or an incomplete rename", "Guidance includes updating upstream tracking after the remote branch name is corrected", "No push, PR write, or silent recovery is attempted"]
+    },
+    {
+      "id": 16,
+      "prompt": "Refresh the PR for a branch comparable to codebeltnet/agentic#44: it adds one new skill with scripts, evals, and tests; restructures another skill with many reference changes; normalizes markdown across a large set of skills and scaffold templates; updates the README catalog and release notes; extends deterministic validation; and adds a handful of hero assets. The current generated body is accurate but bloated into a file-by-file inventory. Replace it with the current final-diff summary.",
+      "expected_output": "Keeps full internal coverage but rewrites the body into a concise reviewer-facing structure: short opening paragraph, a few bold themes, concise bullets, and no trailing inventory summary.",
+      "expectations": ["Complete changed-file coverage is maintained internally even though many files collapse into shared themes", "The opening paragraph explains the purpose and major outcome before the thematic sections", "Themes are coarse reviewer-facing categories rather than per-directory or per-file labels", "Related skill docs, references, evals, assets, README, and validation changes are collapsed into shared themes when they support the same outcome", "Mechanical or supporting changes are summarized rather than enumerated one file at a time", "Paths, scripts, or identifiers appear only when they materially help the reviewer", "No duplicate final Changes Summary or commit-log restatement appears after the thematic body"]
     }
   ]
 }
