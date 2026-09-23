@@ -314,6 +314,7 @@ Commit messages are the most-read documentation in any codebase — yet they're 
 - **CLI override remains deterministic** — `/git-visual-commits git bot commit yolo` bypasses automatic skill selection when explicit invocation is preferred
 - **Identity lock stays honest** — `git bot commit` means bot attribution, not just "AI did the work", and the flow now verifies the resulting author after commit
 - **Direct git execution for bot identity** — identity-sensitive commit paths should use direct shell/terminal git commands, not wrappers that may bypass aliases
+- **Large-diff review stays bounded** — starts with diff stats, narrows to path-specific or other bounded reads, and uses verified OS temp storage outside the repo only as a cleanup-verified fallback
 - **Clarifies before correcting** — vague feedback like "4 is wrong" triggers a short question, not a guessed revert or regrouping
 - **Evidence-backed explanations** — emoji and grouping justifications stay tied to references actually inspected in the session
 - **Reference-validated emoji choices** — the workflow reads the bundled `commit-language.md` skill resource before proposing commit subjects and does not treat a missing repo-root `references/` folder as the same thing as a missing skill reference
