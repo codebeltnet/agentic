@@ -7,10 +7,19 @@ param(
 if (-not $Approved) { throw 'Remote writes require explicit approval or yolo/auto attached to the same PR request.' }
 if (-not (Test-Path -LiteralPath $PlanFile -PathType Leaf)) { throw 'Prepared plan file is missing.' }
 $plan = Get-Content -LiteralPath $PlanFile -Raw -Encoding utf8 | ConvertFrom-Json
+$approvalKey = $plan.PSObject.Properties['approval_key']
+if (-not $approvalKey -or [string]::IsNullOrWhiteSpace([string]$approvalKey.Value)) {
+    throw 'Prepared title/draft approval data is missing. Rebuild the plan and show a new preview.'
+}
+$Title = [string]$plan.title
+if ([string]::IsNullOrWhiteSpace($Title)) { throw 'Prepared title is empty. Rebuild the plan and show a new preview.' }
+if ($plan.draft -isnot [bool]) { throw 'Prepared draft state is invalid. Rebuild the plan and show a new preview.' }
+$Draft = [bool]$plan.draft
+if ((Get-PlanApprovalKey $Title $Draft) -cne [string]$approvalKey.Value) {
+    throw 'Prepared title or draft state changed after the preview. Rebuild the plan and show a new preview.'
+}
 $EvidenceFile = [string]$plan.evidence_file
 $BodyFile = [string]$plan.body_file
-$Title = [string]$plan.title
-$Draft = [bool]$plan.draft
 if (-not (Test-Path -LiteralPath $EvidenceFile -PathType Leaf)) { throw 'Prepared evidence file is missing.' }
 if (-not (Test-Path -LiteralPath $BodyFile -PathType Leaf)) { throw 'Prepared body file is missing.' }
 $expected = Get-Content -LiteralPath $EvidenceFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -26,7 +35,7 @@ $null = Assert-ScratchPath $PlanFile $root
 $null = Assert-ScratchPath $EvidenceFile $root
 $null = Assert-ScratchPath $BodyFile $root
 if ((Get-FileHash -LiteralPath $EvidenceFile -Algorithm SHA256).Hash -cne $plan.evidence_hash -or (Get-FileHash -LiteralPath $BodyFile -Algorithm SHA256).Hash -cne $plan.body_hash -or (Get-PrSnapshotKey $expected) -cne $plan.snapshot_key) {
-    throw 'Prepared title/body/evidence changed after the preview. Rebuild the plan and show a new preview.'
+    throw 'Prepared body or evidence changed after the preview. Rebuild the plan and show a new preview.'
 }
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("git-remote-pr-recheck-" + [guid]::NewGuid().ToString('N'))
 $number = $null

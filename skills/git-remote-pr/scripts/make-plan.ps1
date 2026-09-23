@@ -20,6 +20,7 @@ try {
     if ($Draft -and $evidence.existing_pr -and -not $evidence.existing_pr.draft) { throw 'An existing ready PR cannot be converted to draft by this workflow.' }
     $assigned = $evidence.existing_pr -and @($evidence.existing_pr.assignees) -contains $evidence.assignee
     $metadata = if (-not $evidence.existing_pr) { 'CREATE' } elseif ($evidence.existing_pr.title -cne $Title -or $evidence.existing_pr.body -cne $body) { 'UPDATE' } else { 'NONE' }
+    $plannedDraft = if ($evidence.existing_pr) { [bool]$evidence.existing_pr.draft } else { [bool]$Draft }
     $plan = [ordered]@{
         schema = 'codebeltnet/git-remote-pr/plan/1'
         evidence_file = $evidencePath
@@ -28,7 +29,8 @@ try {
         body_file = $bodyPath
         body_hash = (Get-FileHash -LiteralPath $bodyPath -Algorithm SHA256).Hash
         title = $Title
-        draft = if ($evidence.existing_pr) { [bool]$evidence.existing_pr.draft } else { [bool]$Draft }
+        draft = $plannedDraft
+        approval_key = Get-PlanApprovalKey $Title $plannedDraft
         action = $evidence.action
         repository = $evidence.repository
         base = $evidence.base

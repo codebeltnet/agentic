@@ -176,8 +176,9 @@ try {
         Assert ((Get-PrTitle 'v12.0.2/chore-work') -ceq 'V12.0.2/chore work') 'Title normalization for chore branch failed.'
         Assert ((Get-PrTitle 'v0.10.0/dotnet-nuget-update') -ceq 'V0.10.0/dotnet nuget update') 'Title normalization for NuGet branch failed.'
         Assert ((Get-PrTitle 'v1.0.0/add_CLIContext') -ceq 'V1.0.0/add CLIContext') 'Title normalization lost meaningful internal casing.'
-        Assert (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.11.0/chore_and_git_remote_pr') 'Branch normalization should allow separator-only differences.'
-        Assert (-not (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.10.2/service-update')) 'Branch normalization should not hide real mismatches.'
+        Assert (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.11.0/chore-and-git-remote-pr') 'Exact branch comparison should accept matching names.'
+        Assert (-not (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.11.0/chore_and_git_remote_pr')) 'Branch comparison must reject separator-only differences.'
+        Assert (-not (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.10.2/service-update')) 'Branch comparison should not hide real mismatches.'
         $noUpstream = Run-Prepare (Join-Path $root 'no-upstream')
         Assert ($noUpstream.code -ne 0 -and $noUpstream.text -match 'no upstream tracking branch' -and $noUpstream.text -match 'set-upstream') 'Missing upstream tracking did not fail closed.'
         Assert (-not (Test-Git @('ls-remote', '--heads', 'origin', 'refs/heads/v0.10.2/service-update'))) 'Unexpected remote branch before upstream push.'
@@ -186,10 +187,11 @@ try {
         Test-Git @('add', 'guide.md') | Out-Null
         Test-Git @('commit', '-m', 'Document review flow') | Out-Null
         Test-Git @('switch', '-c', 'v0.11.0/chore-and-git-remote-pr') | Out-Null
+        Test-Git @('push', 'origin', 'HEAD:refs/heads/v0.11.0/chore_and_git_remote_pr') | Out-Null
         Test-Git @('config', 'branch.v0.11.0/chore-and-git-remote-pr.remote', 'origin') | Out-Null
-        Test-Git @('config', 'branch.v0.11.0/chore-and-git-remote-pr.merge', 'refs/heads/v0.10.2/service-update') | Out-Null
+        Test-Git @('config', 'branch.v0.11.0/chore-and-git-remote-pr.merge', 'refs/heads/v0.11.0/chore_and_git_remote_pr') | Out-Null
         $mismatch = Run-Prepare (Join-Path $root 'mismatch')
-        Assert ($mismatch.code -ne 0 -and $mismatch.text.Contains("Local branch 'v0.11.0/chore-and-git-remote-pr'") -and $mismatch.text.Contains('origin/v0.10.2/service-update') -and $mismatch.text.Contains('git branch --set-upstream-to=origin/v0.11.0/chore-and-git-remote-pr')) 'Stale branch tracking mismatch did not fail closed.'
+        Assert ($mismatch.code -ne 0 -and $mismatch.text.Contains("Local branch 'v0.11.0/chore-and-git-remote-pr'") -and $mismatch.text.Contains('origin/v0.11.0/chore_and_git_remote_pr') -and $mismatch.text.Contains('git branch --set-upstream-to=origin/v0.11.0/chore-and-git-remote-pr')) 'Separator-only branch tracking mismatch did not fail closed.'
         Test-Git @('switch', 'v0.10.2/service-update') | Out-Null
         Test-Git @('branch', '-D', 'v0.11.0/chore-and-git-remote-pr') | Out-Null
         Test-Git @('branch', 'develop', 'main') | Out-Null
@@ -266,8 +268,23 @@ try {
         Assert ($plan.push_required -and $plan.metadata_write -eq 'CREATE' -and $plan.assignment_write) 'Plan did not declare exact create writes.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Planning made a GH write.'
         $planPath = Join-Path (Split-Path $paths.evidence) 'plan.json'
+        $planRaw = [System.IO.File]::ReadAllText($planPath, $utf8)
         $noApprovalLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath 2>&1)
         Assert ($LASTEXITCODE -ne 0 -and ($noApprovalLines -join "`n") -match 'approval') 'Execute accepted a plan without approval.'
+        $titleTamper = $planRaw | ConvertFrom-Json
+        $titleTamper.title = 'Unexpected retitle after approval'
+        [System.IO.File]::WriteAllText($planPath, ($titleTamper | ConvertTo-Json -Depth 8), $utf8)
+        $titleTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($titleTamperedLines -join "`n") -match 'title or draft state changed after the preview') 'Altered title passed the prepared plan integrity check.'
+        Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Changed title made a GH write.'
+        [System.IO.File]::WriteAllText($planPath, $planRaw, $utf8)
+        $draftTamper = $planRaw | ConvertFrom-Json
+        $draftTamper.draft = $true
+        [System.IO.File]::WriteAllText($planPath, ($draftTamper | ConvertTo-Json -Depth 8), $utf8)
+        $draftTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($draftTamperedLines -join "`n") -match 'title or draft state changed after the preview') 'Altered draft state passed the prepared plan integrity check.'
+        Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Changed draft state made a GH write.'
+        [System.IO.File]::WriteAllText($planPath, $planRaw, $utf8)
         [System.IO.File]::AppendAllText($bodyPath, "`nAltered after preview.", $utf8)
         $tamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
         Assert ($LASTEXITCODE -ne 0 -and ($tamperedLines -join "`n") -match 'changed after the preview') 'Altered body passed the prepared plan hash.'
