@@ -2889,6 +2889,12 @@ Add-ValidationResult -Results $results -Name 'Agent Smith preserves its operatin
     if ($LASTEXITCODE -ne 0) {
         throw "Agent Smith focused validation failed with exit code $LASTEXITCODE."
     }
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/tests/test-agent-smith-ref.ps1')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Agent Smith ref isolation regressions failed with exit code $LASTEXITCODE."
+        }
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Strong-name skill enforces post-summary confirmation before generation' -Action {

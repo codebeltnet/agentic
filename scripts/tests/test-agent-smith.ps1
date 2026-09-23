@@ -174,6 +174,37 @@ foreach ($id in 1..34) {
     $checks++
 }
 
-& pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot "$skillPath/scripts/test-repair-roslyn-multiproject-artifacts.ps1")
-if ($LASTEXITCODE -ne 0) { throw "Roslyn artifact recovery regressions failed (exit $LASTEXITCODE)." }
+$regressionRoot = $repoRoot
+$historicalRoot = $null
+try {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) {
+        $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+        $historicalRoot = [System.IO.Path]::GetFullPath((Join-Path $tempRoot ('agent-smith-ref-regression-' + [guid]::NewGuid().ToString('N'))))
+        if (-not $historicalRoot.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Historical regression workspace escaped the temporary root: $historicalRoot"
+        }
+        $regressionRoot = $historicalRoot
+        $scriptsRoot = Join-Path $regressionRoot "$skillPath/scripts"
+        try {
+            $null = [System.IO.Directory]::CreateDirectory($scriptsRoot)
+            # The regression's only dependency is its sibling repair script. Use the same
+            # ref contents already asserted above, preserving their relative layout.
+            [System.IO.File]::WriteAllText((Join-Path $scriptsRoot 'repair-roslyn-multiproject-artifacts.ps1'), $repair)
+            [System.IO.File]::WriteAllText((Join-Path $scriptsRoot 'test-repair-roslyn-multiproject-artifacts.ps1'), $repairTests)
+        } catch {
+            throw "Cannot materialize Roslyn artifact recovery regressions at '$Ref' in '${historicalRoot}': $_"
+        }
+        Push-Location -LiteralPath $historicalRoot
+    }
+    try {
+        & pwsh -NoProfile -NonInteractive -File (Join-Path $regressionRoot "$skillPath/scripts/test-repair-roslyn-multiproject-artifacts.ps1")
+        if ($LASTEXITCODE -ne 0) { throw "Roslyn artifact recovery regressions failed (exit $LASTEXITCODE; ref '$Ref'; script root '$regressionRoot')." }
+    } finally {
+        if ($historicalRoot) { Pop-Location }
+    }
+} finally {
+    if ($historicalRoot -and (Test-Path -LiteralPath $historicalRoot)) {
+        Remove-Item -LiteralPath $historicalRoot -Recurse -Force
+    }
+}
 Write-Output "All Agent Smith focused checks passed ($checks content/schema checks plus Roslyn recovery regressions)."
