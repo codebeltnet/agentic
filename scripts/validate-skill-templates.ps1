@@ -2881,41 +2881,13 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, p
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Agent Smith protects informational and multi-target EditorConfig remediation' -Action {
-    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/SKILL.md' -GitRef $Ref
-    $reference = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/references/dotnet-editorconfig-conformance.md' -GitRef $Ref
-    $skillAuthoring = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/references/skill-authoring.md' -GitRef $Ref
-    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/evals/evals.json' -GitRef $Ref
-    $repair = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/scripts/repair-roslyn-multiproject-artifacts.ps1' -GitRef $Ref
-    $repairTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/scripts/test-repair-roslyn-multiproject-artifacts.ps1' -GitRef $Ref
-
-    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'every discovery, investigation, retry, and final `dotnet format` command must include both `--severity info` and `--verify-no-changes`'
-    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'scripts/repair-roslyn-multiproject-artifacts.ps1'
-    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'Always analyze the task graph for safe parallelism and concurrency.'
-    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle '**Be concise. Sacrifice grammar for the sake of concision.**'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Batch independent retrieval through one multi-call request where the tool supports it.'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Choose C# and .NET by default for non-trivial reusable scripts'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle '## Required authoring feedback'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Microsoft''s official .NET support policy'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Optimizing skill descriptions'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Evaluating skill output quality'
-    Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle 'dotnet format style "<solution-or-project>"'
-    Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle '`dotnet format` defaults to severity `warn`'
-    Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle 'Directory application is all-or-nothing at preflight'
-    Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle "git grep -n -F 'Unmerged change from project'"
-    Assert-Contains -Name 'agent-smith/evals/evals.json' -Content $evals -Needle 'finish fixing all IDE0161 findings in MultiTargeted.sln'
-    Assert-Contains -Name 'agent-smith/evals/evals.json' -Content $evals -Needle 'fetches twelve independent service endpoints sequentially'
-    Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle 'function Test-LinePrefix'
-    Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle "pattern = 'whole-document-namespace-conversion'"
-    Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle "pattern = 'unrecognized'"
-    Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle '$Apply -and -not $hasUnsafeArtifact'
-    Assert-Contains -Name 'test-repair-roslyn-multiproject-artifacts.ps1' -Content $repairTests -Needle 'Directory apply partially repaired a file despite an unsafe sibling artifact.'
-    Assert-Contains -Name 'test-repair-roslyn-multiproject-artifacts.ps1' -Content $repairTests -Needle 'An unsupported localized artifact should fail closed.'
-
-    $repairTestPath = Join-Path $repoRoot 'skills/agent-smith/scripts/test-repair-roslyn-multiproject-artifacts.ps1'
-    & pwsh -NoProfile -NonInteractive -File $repairTestPath
+Add-ValidationResult -Results $results -Name 'Agent Smith preserves its operating model, reference routing, and conformance safeguards' -Action {
+    $testPath = Join-Path $repoRoot 'scripts/tests/test-agent-smith.ps1'
+    $testArguments = @('-NoProfile', '-NonInteractive', '-File', $testPath)
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { $testArguments += @('-Ref', $Ref) }
+    & pwsh @testArguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Agent Smith Roslyn multi-project artifact repair tests failed with exit code $LASTEXITCODE."
+        throw "Agent Smith focused validation failed with exit code $LASTEXITCODE."
     }
 }
 
