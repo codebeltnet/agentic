@@ -322,13 +322,16 @@
     {
       "id": 29,
       "prompt": "Please review the current worktree and show the commit plan only. It contains a large diff, so inspect it carefully without polluting the repository with captured output or temporary files.",
-      "expected_output": "A read-only commit plan that keeps diff and command output in the terminal or, only when persistence is necessary, in verified operating-system temp/session storage outside the repository.",
+      "expected_output": "A read-only commit plan that sizes the diff with stats first, keeps inspection in the terminal or bounded path-specific reads when possible, and uses verified operating-system temp/session storage outside the repository only when persistence is necessary.",
       "expectations": [
+        "Starts with `git diff --stat` and `git diff --staged --stat` before inspecting full hunks",
+        "Uses path-specific or other bounded diff inspection instead of immediately running or repeating an unbounded full-worktree diff",
         "Does not redirect git diff or other inspection output to a repo-relative scratch file such as diff.txt or git-diff.txt",
         "Uses direct or bounded terminal inspection for the large diff, or an absolute verified path outside the repository when persistence is necessary",
         "Does not create or leave repo-local scratch files or directories during the plan-only workflow",
         "Never writes git_diff_output.txt or other scratch artifacts anywhere inside the project, including absolute paths, ignored .bot or .cache directories, and .git, even with later cleanup planned",
         "Verifies the resolved physical destination is outside the project and all worktrees before persisting output; uses terminal or memory inspection if temporary storage is unsafe or unverifiable",
+        "Deletes any temporary persisted diff artifact it created before reporting completion",
         "Does not stage or commit for a plan-only request"
       ]
     }
