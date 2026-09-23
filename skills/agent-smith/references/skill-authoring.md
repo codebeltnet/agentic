@@ -6,33 +6,25 @@ Load when creating, modifying, reviewing, describing, or evaluating agent skills
 
 - Ground instructions in real tasks, repository artifacts, execution traces, corrections, and failure cases. Generic advice adds little value.
 - Inspect the current skill, applicable repository instructions, execution traces, repeated helper work, and failures before choosing changes. When artifacts are unavailable, make this the first required action instead of treating a hypothetical design as confirmed.
-- Always map the task graph. Identify independent reads, searches, API calls, executor runs, validators, and graders. Suggest bounded parallel execution and encode it when safe.
+- Always map the task graph. Identify independent reads, searches, API calls, validators, and any explicitly authorized executors or graders. Suggest bounded parallel execution only when beneficial and permitted; mapping work does not authorize model calls or delegation.
 - Keep true dependencies, shared-file mutations, rate-limited operations, and fragile ordered workflows sequential. Parallelism must preserve deterministic outputs, stable ordering, error attribution, cancellation, and service limits.
 - Batch independent retrieval through one multi-call request where the tool supports it. Otherwise fan out with an explicit concurrency bound. Avoid sequential fetching by habit.
 - Measure the result. Compare elapsed time, tokens/cost, error rate, and output quality; do not assume concurrency improved the workflow.
 
-## .NET-first bundled scripts
+## Proportional bundled automation
 
-Choose C# and .NET by default for non-trivial reusable scripts, deterministic validators, data transformation, and orchestration in this .NET-first skill collection. Perceived cross-repository portability alone does not justify retaining or introducing Python, Bash, or PowerShell.
-
-1. Inspect repository SDK pins, target frameworks, existing script conventions, and supported execution hosts.
-2. If no compatible local constraint decides the version, resolve the latest supported LTS from [Microsoft's official .NET support policy](https://dotnet.microsoft.com/platform/support/policy/dotnet-core). Do not hardcode a release that will drift.
-3. Prefer a small C# file-based app when the supported SDK and host make it practical; use a minimal project only when dependencies or build behavior require one.
-4. Preserve bounded concurrency, cancellation, deterministic ordering, actionable errors, and non-zero failure exits in script design.
-5. Use another language only when an observed repository standard, host limitation, vendor SDK, or materially simpler native tool makes it the better engineering choice. State the evidence.
-
-Do not turn a one-line native command into a C# program. The preference applies where a bundled script provides reusable value.
+Load `automation.md` before choosing or changing a bundled script runtime. It defines the default decision order: a sufficient native command, PowerShell 7 for small focused scripts, then C#/.NET when complexity, reuse, or growth benefits from application structure. Preserve a sound small script; justify migrating substantial automation by maintainability and validation evidence. Use `agentic-engineering.md` when designing model selection or worker orchestration.
 
 ## Required authoring feedback
 
 Keep the response compact, but cover every item:
 
-- **Evidence** — inspected skill, repository rules, traces/repeated work, and failures; name anything unavailable.
-- **Parallelism** — independent operations, concurrency bound, sequential constraints, deterministic ordering, failure attribution, cancellation, and rate limits.
-- **Scripts** — C#/.NET default or the concrete evidence for an exception; SDK/target-framework resolution and validation behavior.
-- **Description** — concise imperative user intent, trigger boundaries, 1,024-character gate, realistic positive and near-miss trigger tests, repeated runs, and fixed train/validation split.
-- **Evaluation** — clean-context candidate-versus-original baseline, objective assertions, deterministic mechanical grading, timing/cost/error/quality metrics, aggregation, and human review.
-- **Status** — commands and evidence actually produced; blockers, compatibility impact, validation limits, and material risk.
+- **Evidence** - inspected skill, repository rules, traces/repeated work, and failures; name anything unavailable.
+- **Parallelism** - independent operations, concurrency bound, sequential constraints, deterministic ordering, failure attribution, cancellation, and rate limits.
+- **Scripts** - proportional runtime choice, repository/host evidence, and validation behavior; SDK/target-framework resolution when .NET is selected.
+- **Description** - concise imperative user intent, trigger boundaries, 1,024-character gate, and realistic positive and near-miss cases; distinguish inspected cases from measured trigger behavior.
+- **Evaluation** - updated objective assertions and deterministic checks; distinguish these from authorized clean-context comparisons, timing/cost/error/quality metrics, aggregation, and human review that actually occurred.
+- **Status** - commands and evidence actually produced; blockers, compatibility impact, validation limits, and material risk.
 
 ## Skill content
 
@@ -55,15 +47,16 @@ Treat the frontmatter `description` as the activation contract:
 - include realistic positive contexts and precise near-miss boundaries;
 - remain concise and within the specification's 1,024-character limit;
 - test triggering with realistic should-trigger and should-not-trigger queries;
-- run queries repeatedly because activation is nondeterministic;
-- keep a fixed train/validation split while iterating to avoid overfitting.
+- when model-backed trigger testing is explicitly authorized, run queries repeatedly because activation is nondeterministic and keep a fixed train/validation split while iterating to avoid overfitting.
 
 See [Optimizing skill descriptions](https://agentskills.io/skill-creation/optimizing-descriptions) for query design, repeated trigger testing, train/validation splits, and the optimization loop.
 
 ## Evaluation
 
+First follow repository authorization and execution rules. Editing a skill does not authorize model-backed runs, description optimization, or agent fan-out. Where the repository requires deterministic checks and a separate portable handoff, update eval specifications, run focused deterministic validation, and prepare a package only when explicitly requested. Never execute a package you prepared or claim behavioral improvement from content checks alone. The comparison process below applies only at an authorized execution boundary; it is not an automatic completion gate.
+
 1. Start with a small varied set of realistic prompts, expected outcomes, and required fixtures.
-2. Run each case in a clean context with the candidate skill and a baseline: no skill for a new capability, or the original/previous skill for an update.
+2. Use the repository's baseline protocol in clean contexts. For a skill-effect comparison, vary only skill presence; for an explicitly designed revision comparison, use the original/previous skill. Hold model, configuration, inputs, and environment constant, and disable cross-session memory.
 3. Run independent paired executors concurrently when resources allow. Do the same for independent deterministic grading. Do not let configurations share mutable state.
 4. Add objective assertions after inspecting initial outputs. Use scripts for mechanical checks and concrete evidence for every pass.
 5. Capture timing and token/cost data. Aggregate quality and performance deltas; inspect non-discriminating, always-failing, and high-variance assertions.

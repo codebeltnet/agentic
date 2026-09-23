@@ -6,7 +6,7 @@ description: >
 
 # Git Repo Digest
 
-![Git Repo Digest](assets/hero.jpg)
+![Git Repo Digest](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/git-repo-digest/assets/hero.jpg)
 
 Use this skill to turn a deterministic digest workspace into website-ready or docs-ready Markdown. The bundled `scripts/digest.cs` runner owns repository access, evidence gathering, package discovery, evidence packing, prompt generation, and generated instructions. The agent owns reading that evidence, writing the digest files, and validating that every claim is grounded.
 

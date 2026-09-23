@@ -41,7 +41,7 @@ Keep each prose paragraph and list item on one physical line regardless of lengt
 <Docs, README, XML/API docs, or release notes to update; examples that must compile.>
 
 ## Performance requirements
-<Workload, objective, baseline, and how improvement must be measured — if performance is in scope.>
+<Workload, objective, baseline, and how improvement must be measured - if performance is in scope.>
 
 ## Validation commands
 <Exact commands to run: format, lint, build, test, docs build, benchmark, package validation.>

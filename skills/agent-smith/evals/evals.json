@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "/agent-smith add validation for an optional configuration property",
-      "expected_output": "A proportional implementation: inspects the repository, follows existing conventions and naming, adds the validation plus a test, validates, and reports briefly — without producing an architecture document or other ceremony.",
+      "expected_output": "A proportional implementation: inspects the repository, follows existing conventions and naming, adds the validation plus a test, validates, and reports briefly - without producing an architecture document or other ceremony.",
       "expectations": [
         "Scales the process to a small task and does not produce an architecture document or heavy ceremony",
         "Inspects the repository and follows existing conventions and naming for the configuration property",
@@ -186,8 +186,8 @@
     },
     {
       "id": 14,
-      "prompt": "/agent-smith improve our incident-research skill in this .NET-first repository family. It fetches twelve independent service endpoints sequentially, includes a reusable Python validator, has a long implementation-focused description, and has never been compared with a baseline. Keep the guidance reusable across our repositories and tell future agents how to validate the change.",
-      "expected_output": "A concise, evidence-driven skill-authoring workflow grounded in real traces and repository constraints. It explicitly maps safe bounded concurrency for independent fetches and eval work, preserves ordered or rate-limited operations, favors a C#/.NET validator using a dynamically resolved supported LTS when local pins do not decide, improves and tests the description as an activation contract, and requires clean-context candidate-versus-baseline evals with objective grading, timing, aggregation, and human review.",
+      "prompt": "/agent-smith improve our incident-research skill in this .NET-first repository family. It fetches twelve independent service endpoints sequentially, includes a 900-line reusable Python validator with schema handling, retries and shared mutable state, has a long implementation-focused description, and has never been compared with a baseline. Repository rules prohibit automated model calls and require a separately requested portable eval handoff. This request is for editing and deterministic validation only. Keep the guidance reusable across our repositories and tell future agents how to validate the change.",
+      "expected_output": "A concise, evidence-driven skill-authoring workflow grounded in real traces and repository constraints. It maps bounded concurrency for independent fetches, preserves dependencies and service limits, justifies .NET for the substantial validator, refines the activation contract, and updates eval specifications with focused deterministic validation. It distinguishes inspected trigger cases from measured behavior and reserves model-backed comparisons for the separately authorized repository handoff.",
       "expectations": [
         "The response requires inspecting the existing skill, repository conventions, real execution traces, and failure evidence before rewriting generic guidance",
         "The response identifies the twelve independent endpoint calls as concurrency candidates and recommends batching or bounded fan-out instead of sequential fetching",
@@ -195,9 +195,238 @@
         "The response recommends measuring elapsed time, cost or tokens, error rate, and output quality rather than assuming concurrency is faster",
         "The response favors replacing the reusable Python validator with C# and .NET unless repository or host constraints justify another language",
         "The response resolves the latest supported .NET LTS dynamically from Microsoft's official support policy when no compatible repository SDK or target-framework pin decides the version, rather than hardcoding a drifting release",
-        "The response treats the description as the activation contract, uses concise imperative user-intent wording, respects the 1,024-character limit, and tests realistic positive and near-miss triggers with repeated runs and a fixed train/validation split",
-        "The response requires realistic clean-context candidate-versus-original baseline evals, objective assertions with deterministic grading where possible, timing capture, benchmark aggregation, and human review",
-        "The feedback is concise and permits compact fragments without omitting validation limits, blockers, compatibility impact, or material risk"
+        "The response treats the description as the activation contract, uses concise user-intent wording, respects the 1,024-character limit, and inspects realistic positive and near-miss cases without claiming measured trigger behavior",
+        "The response updates objective eval specifications and focused deterministic checks, does not launch model calls or prepare an unrequested package, and reserves comparisons for the repository's explicit portable handoff",
+        "The feedback uses natural, concise sentences without sacrificing grammar, validation limits, blockers, compatibility impact, or material risk"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "Design a public customer lookup contract. The upstream CRM returns 420 fields; the checkout consumer needs customerId, displayName, and canPurchase. Another engineer proposes exposing the generated CRM entity to avoid a mapping layer and to make future fields available. No existing public contract has shipped. Recommend a contract and explain what to validate.",
+      "expected_output": "A consumer-oriented contract with only the three required capabilities and internal mapping, justified by Interface Segregation and long-term compatibility cost rather than payload size alone.",
+      "expectations": [
+        "Proposes a coherent response containing customerId, displayName, and canPurchase without exposing the CRM entity or its remaining fields",
+        "Explains that consumer requirements determine the contract and that a replaceable source should remain behind the boundary",
+        "Treats every exposed serialized element as a compatibility commitment and rejects speculative future fields",
+        "Calls for contract/serialization checks that verify both required fields and absence of unintended exposure, including missing or invalid source values"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Review an application's delivery design. PR runs build, tests, coverage and analysis. Release builds and tests container digest sha256:abc123 for commit C. Staging and production each check out C and run docker build with different environment settings, then deploy a mutable latest tag. The team says using the same commit guarantees the tested product. Recommend a correction and acceptance checks.",
+      "expected_output": "Classifies Application, keeps release artifact creation separate from deployment, and promotes the exact validated digest with runtime configuration and traceability.",
+      "expectations": [
+        "Identifies the Application archetype and distinguishes PR validation, release artifact creation, and deployment",
+        "Rejects rebuilding in staging or production even from the same source commit",
+        "Promotes the already-produced immutable release digest through both environments and supplies environment settings at runtime",
+        "Requires artifact identity/provenance and required validation evidence at promotion, with failure when the expected artifact is missing",
+        "Does not present mutable latest tags or repeat builds as proof of immutable promotion"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Our .NET-first team's 18-line PowerShell 7 script reads one JSON manifest, invokes two native commands, checks each exit code, and copies their reports. It has focused checks, no scheduling or state machine, and works on both supported hosts. A reviewer wants a C# project because the script is reusable and deterministic. Should we rewrite it?",
+      "expected_output": "Keeps the small focused script, explains that reuse and determinism alone do not justify a rewrite, and identifies evidence that would change the decision.",
+      "expectations": [
+        "Recommends retaining PowerShell 7 for the described focused orchestration",
+        "Rejects language preference, reuse, or determinism alone as sufficient reason for a C# rewrite",
+        "Preserves native exit propagation and supported-host checks",
+        "Identifies substantial growth in responsibilities, state, or concurrency as a reason to reassess .NET without imposing that complexity now"
+      ]
+    },
+    {
+      "id": 18,
+      "prompt": "A .NET-first repository has a 2,400-line PowerShell automation script and a 1,600-line Python helper. Together they implement job scheduling, resumable state, schema migration, parallel retries and report aggregation. Failures are hard to attribute, cancellation leaks jobs, and changes keep breaking other paths. The supported Windows and Linux hosts already have .NET; no repository rule requires these languages. Propose a maintainable direction without a risky big-bang rewrite.",
+      "expected_output": "Recommends an incremental C#/.NET implementation for the application-sized automation, ties the choice to specific maintainability and correctness problems, and preserves observable behavior through migration checks.",
+      "expectations": [
+        "Favors C#/.NET for the substantive reusable automation and cites type safety, structured components, testability, concurrency, cancellation, or diagnostics as concrete benefits",
+        "Does not default to another Python script or indefinitely extend the PowerShell monolith merely because it already exists",
+        "Proposes incremental extraction with behavior/exit-code/report-contract checks rather than a big-bang replacement",
+        "Preserves supported OS behavior, deterministic aggregation, bounded concurrency, and attributable failures",
+        "Respects existing compatible SDK pins or resolves a supported LTS from authoritative evidence rather than hardcoding a current version"
+      ]
+    },
+    {
+      "id": 19,
+      "prompt": "Choose a branching strategy for a greenfield service with six developers, daily releases, automated PR checks, and no repository or organization branching policy. A template offers GitFlow and trunk-based development as equally preferred choices. Recommend one and describe when an additional branch would be justified.",
+      "expected_output": "Chooses scaled trunk-based development with small short-lived branches and protected mainline; reserves additional long-lived branches for demonstrated maintenance needs.",
+      "expectations": [
+        "Recommends scaled trunk-based development as the default for the stated constraints",
+        "Includes short-lived branches, small PRs, required checks, and frequent integration",
+        "Does not present GitFlow as an equally preferred default or add develop/release branches without a requirement",
+        "Explains that an established repository policy would win and that concurrent supported release lines may justify support branches"
+      ]
+    },
+    {
+      "id": 20,
+      "prompt": "Review a shared workflow replacement. This repository explicitly adopts its repository-family policy requiring release tooling and tests on Windows and Linux. Local policy has no exception. The proposed workflow runs only on Ubuntu and uses a Bash-only path helper; its one CI job passes. The author says cross-platform .NET code makes the Windows job redundant. Decide whether this meets the contract and how to finish.",
+      "expected_output": "Recognizes applicable family policy, rejects the green Linux-only run as proof of required OS support, and restores or reports the missing Windows verification without inventing a broader matrix.",
+      "expectations": [
+        "Uses the explicit adoption of family policy as the basis for requiring Windows and Linux coverage",
+        "Identifies the unsupported helper and missing Windows validation despite the successful Ubuntu job",
+        "Requires compatible automation and validation for both declared hosts or an explicit policy change, not a silent support reduction",
+        "Does not claim cross-platform correctness from .NET alone and does not impose macOS or the same family policy on unrelated repositories"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "We need to normalize 2,000 records against a fixed JSON schema and classify a small set of ambiguous descriptions. Most transformations are deterministic. Someone proposes our most expensive deep-reasoning model for every record and three agents to vote on each result. Model choice is open. Recommend a capability and orchestration approach; no live experiment is authorized.",
+      "expected_output": "Uses deterministic tooling for mechanical normalization and the least costly adequate capability for bounded classification, with validation-based escalation and no opinion fan-out or unrequested experiment.",
+      "expectations": [
+        "Uses deterministic schema/transformation tooling where it suffices and a lightweight capability only for work where a model adds value",
+        "Rejects routine strongest-model use and three-agent voting for the stated mechanical workload",
+        "Defines acceptance checks and escalation triggers for ambiguous or failed cases, considering total cost including rework",
+        "Describes capability classes without hardcoding vendor model names or price tiers",
+        "Does not run model calls or claim measured savings without the authorized experiment"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Select AI capability for reviewing a proposed irreversible tenant-data migration with subtle authorization boundaries and unclear rollback behavior. A cheap model produced a confident plan, but no one has checked it. The migration could expose customer data or destroy records. The budget allows stronger reasoning and domain review. What should happen before implementation?",
+      "expected_output": "Escalates reasoning capability because uncertainty and consequences dominate per-call price, resolves missing facts, and requires independent validation and migration safety evidence.",
+      "expectations": [
+        "Recommends powerful/deep-reasoning capability and appropriate domain review because of material security and data-loss risk",
+        "Explains that the lowest per-call price can be more expensive after error and rework costs",
+        "Requires clarification or investigation of authorization, rollback, and data invariants before irreversible implementation",
+        "Does not treat confidence, stronger capability, or agent agreement as proof; requires evidence such as representative migration rehearsal and authorization checks",
+        "Does not apply a mechanical-task cheap-model default blindly or hardcode a vendor model"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "Assess this release gate: the test command exits 1 but its wrapper always exits 0; coverage upload is skipped if its report is absent; an unsupported analyzer is recorded as passed; a teammate removes a failing compatibility assertion. The dashboard is green with no error text. We need all four checks for release. Give the required outcome, diagnostics, and a focused verification plan.",
+      "expected_output": "Rejects manufactured success, preserves required scope and assertions, propagates failures, and distinguishes each incomplete or failed state from positively verified success.",
+      "expectations": [
+        "Refuses to call the release successful based on a green dashboard or absence of errors",
+        "Requires propagation of the test failure and blocks release while required checks remain failed, skipped, unsupported, or unvalidated",
+        "Restores compatibility validation rather than weakening assertions merely for a pass; changes an expectation only with evidence that it was wrong",
+        "Requires actionable diagnostics naming the failed command/exit status, missing report, unsupported analyzer, and unresolved compatibility finding",
+        "Proposes failure-path checks covering non-zero child exit, absent output, unsupported capability, and a truly verified success case without silently skipping any required condition"
+      ]
+    },
+    {
+      "id": 24,
+      "prompt": "Review an unreleased library change. The new feature works and all local tests pass. Its patch also makes InternalStore public, exposes a RawProviderPayload property and ProviderChanged event, adds a UseExperimentalBackend option, and returns an implementation cache dictionary. None has a consumer beyond internal wiring. The author calls these harmless additive changes. Decide what should ship and what compatibility checks matter.",
+      "expected_output": "Removes or internalizes unnecessary new surface before release, preserves the required capability, and explains why passing tests and additive changes do not justify long-term exposure.",
+      "expectations": [
+        "Rejects the unneeded public type, property, event, option, and cache exposure; recommends keeping implementation wiring internal",
+        "Explains public and serialized/configuration commitments independently of local test success",
+        "Reviews source, binary, behavioral, configuration, and wire implications where applicable and calls for public-surface checks",
+        "Does not approve exposure solely because additions can be SemVer-minor or tests pass",
+        "Distinguishes removing unreleased additions from removing already-shipped contracts, which would require compatibility and migration handling"
+      ]
+    },
+    {
+      "id": 25,
+      "prompt": "An internal scheduling tool has four CRUD screens, one team, low load, and no independent scaling or audit-replay requirement. A proposal adds microservices, CQRS, event sourcing and a message broker because they are modern and will look clean. Existing code is a coherent modular application. Recommend a direction and explain what evidence could justify changing it later.",
+      "expected_output": "Retains the simple coherent application, reasons from use cases and boundaries, and requires concrete requirements before adopting distributed or persistence patterns.",
+      "expectations": [
+        "Reasons Outside-In from the actual use cases and current boundaries rather than adopting a fashionable template",
+        "Rejects the proposed distributed complexity without a demonstrated requirement",
+        "Names operational and maintenance costs such as partial failure, ordering, deployment, or schema evolution",
+        "Gives concrete future requirements that could justify a pattern without adding speculative abstractions now",
+        "Challenges the proposal respectfully with evidence and trade-offs rather than empty praise or blanket hostility to the patterns"
+      ]
+    },
+    {
+      "id": 26,
+      "prompt": "We explicitly chose REST for an approval workflow so clients can discover valid state transitions as policy evolves. A design review proposes fixed approve/reject URLs embedded in every client and calls hypermedia optional ceremony because the API already uses HTTP and JSON. Assess the proposal while preserving asynchronous approval, caching, and optimistic concurrency requirements.",
+      "expected_output": "Applies the Uniform Interface constraint and representation-driven transitions for the stated REST architecture, while retaining HTTP semantics and acknowledging alternatives accurately.",
+      "expectations": [
+        "Explains that HTTP and JSON alone do not establish REST and identifies the Uniform Interface constraint",
+        "Requires meaningful hypermedia controls/link relations and media-type semantics for discovering valid state transitions rather than dismissing them as ceremony",
+        "Preserves 202 Accepted plus a status resource for asynchronous work, cache correctness, optimistic concurrency, and retry/idempotency semantics",
+        "Allows a deliberate alternative HTTP architecture if the requirements change but describes its coupling accurately instead of relabeling RPC as REST"
+      ]
+    },
+    {
+      "id": 27,
+      "prompt": "A private fixed-client HTTP API exposes POST /calculate and returns JSON. There is no discoverability or state-transition requirement, and the team calls it an HTTP RPC interface. A reviewer demands a full HATEOAS redesign to make any HTTP service valid. Assess the demand and the checks that still apply.",
+      "expected_output": "Accepts the accurately described HTTP RPC architecture where requirements support it and retains HTTP correctness without imposing REST constraints.",
+      "expectations": [
+        "Does not require HATEOAS or a REST redesign for this fixed-operation HTTP API",
+        "Preserves the accurate HTTP RPC description rather than calling HTTP plus JSON REST",
+        "Still considers method/status semantics, media types, errors, retry/idempotency behavior, and caching where applicable",
+        "Explains the architecture decision from requirements and coupling rather than treating either style as universally superior"
+      ]
+    },
+    {
+      "id": 28,
+      "prompt": "Design lifecycle responsibilities for a reusable NuGet library with public API compatibility obligations and generated documentation. A copied application template has PR, Release, Staging Deploy and Production Deploy jobs that rebuild the library. No service is hosted by this product. What stages and evidence belong here?",
+      "expected_output": "Classifies Package, requires PR quality and compatibility checks, versions/packages/publishes an immutable artifact at release, and removes the invented product deployment lifecycle.",
+      "expectations": [
+        "Classifies the deliverable as Package and explains why it normally has no product deployment phase",
+        "Places build, full tests, coverage, static analysis, and applicable compatibility validation in PR responsibilities",
+        "Places versioning, packaging, immutable package publication, and applicable documentation generation/publication in release responsibilities",
+        "Rejects environment-specific package rebuilds and distinguishes documentation hosting from deploying the library product"
+      ]
+    },
+    {
+      "id": 29,
+      "prompt": "Plan authorized agent work with these dependencies: A and B independently inspect separate modules; C edits a shared schema after both finish; D and E both modify the generated client after C; F aggregates all required evidence. The service allows two concurrent workers. One proposal starts six agents, aggregates by completion order, ignores missing workers, and retries indefinitely after cancellation. Give a better task graph and how to assess its value. Planning only; do not launch workers.",
+      "expected_output": "Uses a bounded dependency graph, serializes shared mutations, defines attributable terminal results and cancellation, and compares total orchestration value without inventing measurements.",
+      "expectations": [
+        "Runs A and B concurrently within a bound of two, waits for both before C, and serializes or consolidates D and E because they share mutable output",
+        "Defines worker responsibilities, inputs, permitted writes, outputs, and acceptance evidence",
+        "Aggregates by stable task identity rather than completion order and treats a missing or failed required worker as incomplete/failure",
+        "Propagates cancellation with bounded timeouts/retries and respects the external-service concurrency limit",
+        "Compares elapsed time, total cost including coordination/rework, error rate, or quality with a simpler baseline and does not fabricate results",
+        "Does not launch workers or add agents merely for more opinions"
+      ]
+    },
+    {
+      "id": 30,
+      "prompt": "Choose automation for an unrelated TypeScript repository. Its AGENTS.md explicitly requires existing Node scripts on Linux; the host has neither PowerShell nor .NET. A similarly named repository in another organization uses a .NET-first family template with Windows support. The requested change is a small extension to an existing Node validation script. Which policy and tool choice should govern?",
+      "expected_output": "Follows explicit local policy and host evidence, keeps the Node implementation, and refuses to infer family membership from a similar name.",
+      "expectations": [
+        "Keeps the existing Node implementation under local AGENTS.md and host constraints",
+        "Does not impose .NET, PowerShell, Windows support, or another organization's family conventions",
+        "Explains that family applicability requires evidence and that operating defaults apply only after more specific constraints",
+        "Retains focused validation and honest reporting without expanding into a language migration"
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "Write a short engineering review of a proposal to expose an unused internal field. The author says shorter feedback is always better and suggests: 'Ship. Tests green. API fine.' No public-surface check ran. Give readable feedback that distinguishes the requirement from your recommendation, without empty praise. There is no local writing convention.",
+      "expected_output": "Concise natural prose that explains the compatibility concern and missing validation without telegraphic fragments, exaggerated certainty, or filler.",
+      "expectations": [
+        "Uses concise, natural, technically defensible sentences rather than sacrificing grammar for compression",
+        "Identifies missing public-surface validation and does not equate passing tests with API suitability",
+        "Distinguishes the required consumer-contract discipline from a recommended implementation change",
+        "Uses no em dash; if bullet lists are used their Markdown marker is a hyphen",
+        "Includes no empty praise, personal identity claims, or fictional roleplay"
+      ]
+    },
+    {
+      "id": 32,
+      "prompt": "/agent-smith fix IDE0055 under src/Core. The activated skill installation is missing references/dotnet-editorconfig-conformance.md, and attempts to read that exact path fail. A teammate suggests reconstructing the formatter workflow from memory so work can proceed. Explain the next action and whether any formatter command should run.",
+      "expected_output": "Fails closed at the required reference boundary, reports the missing activated-skill resource and repair action, and does not improvise specialized commands.",
+      "expectations": [
+        "Stops before the first formatter command because the mandatory conformance reference cannot be loaded",
+        "Identifies the missing path in the activated skill installation and recommends restoring or repairing that installation",
+        "Does not search the target repository for a substitute, reconstruct commands from memory, or claim conformance",
+        "Preserves the user's IDE0055 and src/Core scope for work after the prerequisite is restored"
+      ]
+    },
+    {
+      "id": 33,
+      "prompt": "In a .NET-first workspace I only need the Git commit hash for an existing checkout. There is no special output format, retry logic, or repository wrapper requirement. A draft adds a C# console app and another suggests a reusable PowerShell module. What should we implement?",
+      "expected_output": "Uses the sufficient native Git command directly with its exit status and rejects unnecessary program or module scaffolding.",
+      "expectations": [
+        "Recommends a direct native command such as git rev-parse HEAD for the stated operation",
+        "Does not introduce a C# app, PowerShell module, or Python fallback for a single sufficient command",
+        "Retains failure handling for an invalid checkout or failed command without turning absence of output into success"
+      ]
+    },
+    {
+      "id": 34,
+      "prompt": "Produce a two-item release-note artifact for a repository whose documentation guide requires asterisk Markdown bullets and a maximum of 80 columns per physical line. The changes are: an export operation now propagates cancellation to its background jobs; missing verification reports now block release with the failing operation named. Then explain the changes briefly outside the artifact. Use the repository convention for the artifact.",
+      "expected_output": "Follows the explicit artifact convention while keeping the surrounding engineering explanation concise and natural; does not impose global style defaults on the repository's document.",
+      "expectations": [
+        "Produces the release-note artifact with asterisk bullets and physical lines no longer than 80 columns as explicitly required",
+        "Preserves the concrete cancellation and missing-report behaviors without claiming tests ran",
+        "Uses natural, concise explanatory prose outside the artifact and does not object that the skill normally prefers hyphen bullets or unwrapped paragraphs",
+        "Does not turn a local artifact-format exception into a global change to engineering response style"
       ]
     }
   ]

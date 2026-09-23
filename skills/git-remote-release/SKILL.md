@@ -6,7 +6,7 @@ description: >
 
 # Git Remote Release
 
-![Git Remote Release](assets/hero.jpg)
+![Git Remote Release](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/git-remote-release/assets/hero.jpg)
 
 This skill generates polished GitHub release notes from the commits and pull requests between two tags, two branches, or the current branch and the upstream default branch. It produces a human-friendly summary optimized for release notes, not a raw commit log.
 

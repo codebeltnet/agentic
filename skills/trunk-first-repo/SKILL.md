@@ -6,7 +6,7 @@ description: >
 
 # Trunk-First Repo
 
-![Trunk-First Repo](assets/hero.jpg)
+![Trunk-First Repo](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/trunk-first-repo/assets/hero.jpg)
 
 Initialize a folder as a git repository following [scaled trunk-based development](https://trunkbaseddevelopment.com/#scaled-trunk-based-development). The core principle: **main is sacred** — it starts empty and content only enters through peer-reviewed pull requests from short-lived feature branches.
 

@@ -6,6 +6,8 @@ description: >
 
 # .NET Application Solution Setup (Codebelt Conventions)
 
+![.NET Application Solution Setup](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-new-app-slnx/assets/hero.jpg)
+
 ## Upstream Source
 
 | Field | Value |

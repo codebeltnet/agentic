@@ -6,6 +6,8 @@ description: >
 
 # .NET DocFX Digest Steward
 
+![.NET DocFX Digest](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-docfx-digest/assets/hero.jpg)
+
 ## Description
 
 Create and maintain developer-friendly DocFX documentation digests for .NET public APIs. Keep namespace pages, generated API pages, examples, availability notes, and verification aligned with the actual source code and tests.

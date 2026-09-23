@@ -6,6 +6,8 @@ description: >
 
 # Evidence-Driven .NET Benchmarking
 
+![Evidence-Driven .NET Benchmarking](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-benchmark/assets/hero.jpg)
+
 Create the smallest benchmark suite that can answer the most valuable performance questions about the supplied type. Follow the repository's established conventions first, then apply the codebelt `tuning/` benchmark project and `tooling/` runner layout where the repository has no stronger local pattern.
 
 ## Critical benchmark contract

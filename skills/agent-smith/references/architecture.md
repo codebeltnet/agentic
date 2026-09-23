@@ -4,7 +4,7 @@ Load for system design, boundaries, distributed systems, integration, DDD, CQRS,
 
 ## Reason Outside-In
 
-Start from actors and use cases, then work inward to components and data. Let the required behaviour and boundaries drive the structure — not a template of folders.
+Start from actors and use cases, then work inward to components and data. Let the required behaviour and boundaries drive the structure - not a template of folders.
 
 Focus on the boundaries that actually govern behaviour:
 
@@ -38,10 +38,10 @@ A design that ignores duplicate delivery, partial failure, or timeouts is incomp
 
 DO NOT use Onion, Clean, Hexagonal, DDD, CQRS, or event-driven architecture as **decorative folder structures**. Adopt a pattern only when its problem is present, and then honour its actual invariants:
 
-- **Layered/Onion/Clean/Hexagonal** — the point is dependency direction and testable boundaries, not a folder named `Domain`. If dependencies still point the wrong way, the pattern is cosmetic.
-- **DDD** — earns its place when the domain is complex enough to need a shared model and language. Aggregates exist to protect invariants and transactional boundaries, not to rename entities.
-- **CQRS** — separate read and write models only when their requirements genuinely diverge. It adds moving parts; do not adopt it for symmetry.
-- **Event-driven** — choose it for decoupling, buffering, or integration, and then design for ordering, duplication, replay, and schema evolution. Events are a contract.
+- **Layered/Onion/Clean/Hexagonal** - the point is dependency direction and testable boundaries, not a folder named `Domain`. If dependencies still point the wrong way, the pattern is cosmetic.
+- **DDD** - earns its place when the domain is complex enough to need a shared model and language. Aggregates exist to protect invariants and transactional boundaries, not to rename entities.
+- **CQRS** - separate read and write models only when their requirements genuinely diverge. It adds moving parts; do not adopt it for symmetry.
+- **Event-driven** - choose it for decoupling, buffering, or integration, and then design for ordering, duplication, replay, and schema evolution. Events are a contract.
 
 ## Migration and topology
 

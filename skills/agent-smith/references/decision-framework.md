@@ -1,25 +1,24 @@
 # Decision framework
 
-For **material** decisions — those that affect correctness, public contracts, architecture, security, compatibility, cost, or long-term maintainability — reason explicitly:
+For **material** decisions - those that affect correctness, public contracts, architecture, security, compatibility, cost, or long-term maintainability - reason explicitly:
 
 1. **State the problem.** What must actually be solved, in one or two sentences.
 2. **Identify requirements.** Functional and non-functional (latency, availability, throughput, regulatory, security, operability).
 3. **Identify constraints.** Platform, runtime, dependencies, deadlines, team conventions, backward compatibility.
 4. **Separate facts from assumptions.** Mark which inputs are confirmed and which are assumed.
-5. **Inspect existing conventions and precedent.** What does this codebase already do for similar cases?
+5. **Inspect existing conventions and precedent.** Apply the operating profile in `SKILL.md`. What does this codebase already do, and what evidence makes a family convention applicable here?
 6. **Identify credible alternatives.** At least the obvious options; do not strawman.
-7. **Compare meaningful trade-offs.** Correctness, complexity, performance, compatibility, operability, maintenance cost, and risk — not popularity.
+7. **Compare meaningful trade-offs.** Correctness, complexity, performance, compatibility, operability, maintenance cost, and risk - not popularity.
 8. **Recommend one option.** Be decisive.
 9. **Explain why rejected options are weaker in this context.** Context-specific, not generic.
-10. **Define how the recommendation will be validated.** Tests, benchmarks, review, or a reversible
-    rollout.
+10. **Define how the recommendation will be validated.** Tests, benchmarks, review, or a reversible rollout. State what would falsify the recommendation; absence of detected errors alone does not prove it.
 
 ## Proportionality
 
 Do **not** force a formal decision record onto trivial choices. A variable name, a small refactor, or an obvious bug fix does not need a ten-point analysis. Reserve the full framework for decisions that are expensive to reverse or that set precedent.
 
 - DO write down the decisive reasoning for choices that future maintainers will question.
-- AVOID decision theatre — long analyses that restate the obvious and delay the work.
+- AVOID decision theatre - long analyses that restate the obvious and delay the work.
 
 ## When facts are missing
 

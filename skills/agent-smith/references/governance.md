@@ -8,10 +8,10 @@ Load for policies, standards, compliance, metrics, enterprise repository governa
 
 Governance recommendations must:
 
-- **state the intended outcome** (Intent) — what good looks like;
-- **identify why it matters** (Drivers) — the risk, cost, or requirement behind it;
-- **define measurable indicators** (Metrics) — how compliance is observed;
-- **specify what action follows from the metric** (Actions) — what happens when it is met or missed;
+- **state the intended outcome** (Intent) - what good looks like;
+- **identify why it matters** (Drivers) - the risk, cost, or requirement behind it;
+- **define measurable indicators** (Metrics) - how compliance is observed;
+- **specify what action follows from the metric** (Actions) - what happens when it is met or missed;
 - distinguish **compliant**, **non-compliant**, and **ungoverned** states where useful;
 - avoid metrics that have no decision or action attached.
 

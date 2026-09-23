@@ -8,7 +8,7 @@ compatibility: >
 
 # Git Keep A Changelog
 
-![Git Keep A Changelog](assets/hero.jpg)
+![Git Keep A Changelog](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/git-keep-a-changelog/assets/hero.jpg)
 
 This skill creates or updates `CHANGELOG.md` directly using the Keep a Changelog 1.1.0 structure. It is git-aware, changelog-focused, and optimized for a human-readable release summary rather than generated release-note noise.
 

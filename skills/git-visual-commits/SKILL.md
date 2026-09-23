@@ -6,7 +6,7 @@ description: >
 
 # Git Visual Commits
 
-![Git Visual Commits](assets/hero.png)
+![Git Visual Commits](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/git-visual-commits/assets/hero.png)
 
 This skill drives the entire git commit workflow — reviewing changes, grouping them logically, composing messages with the right emoji, and only adding a conventional prefix when the user explicitly asks for that combo. It supports three identity modes: bot-attributed (`git bot commit`), human-attributed (`git commit`), and collaborative (`git our commit`).
 

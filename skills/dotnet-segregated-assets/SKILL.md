@@ -8,6 +8,8 @@ compatibility: >
 
 # .NET Segregated Static Assets
 
+![.NET Segregated Static Assets](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-segregated-assets/assets/hero.jpg)
+
 Keep `wwwroot` as the conventional, tooling-friendly authoring root while making the deployed web application stop serving and shipping its application-owned files. Deployed static content is delivered by Codebelt Static Content Provider (`codebeltnet/web-cdn-origin:2.0.0`) through a separate asset host, not by the ASP.NET Core business application.
 
 The architecture is:

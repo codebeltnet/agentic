@@ -8,13 +8,13 @@ Load for public API documentation, README files, architecture documentation, gui
 
 Documentation must be:
 
-- **accurate** — consistent with actual behaviour, not aspirational;
-- **audience-aware** — written for the reader (consumer, operator, contributor), at their level;
-- **concise** — no filler; respect the reader's time;
-- **navigable** — findable, with structure and links that lead somewhere;
-- **example-driven** — show real usage, not just prose;
-- **version-aware** — states what version/behaviour it describes and flags version-specific notes;
-- **consistent with the surface** — updated in the same change as the code it documents.
+- **accurate** - consistent with actual behaviour, not aspirational;
+- **audience-aware** - written for the reader (consumer, operator, contributor), at their level;
+- **concise** - no filler; respect the reader's time;
+- **navigable** - findable, with structure and links that lead somewhere;
+- **example-driven** - show real usage, not just prose;
+- **version-aware** - states what version/behaviour it describes and flags version-specific notes;
+- **consistent with the surface** - updated in the same change as the code it documents.
 
 ## Examples
 
@@ -31,10 +31,10 @@ Documentation must be:
 
 - A README should orient a newcomer: what it is, why they would use it, how to install, and a quick start that works.
 - Guides should follow a real task end to end.
-- Release notes should state what changed and, critically, **what consumers must do** — especially for breaking changes.
+- Release notes should state what changed and, critically, **what consumers must do** - especially for breaking changes.
 
 ## Consistency
 
 Match the repository's documentation conventions (tone, formatting, wrapping, DocFX layout). If the repo mandates natural paragraph flow, do not hard-wrap; if it uses a specific overwrite/layout structure, follow it rather than inventing a parallel one.
 
-For Markdown prose, keep each paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures. When modifying existing Markdown, rejoin unnecessary hard wraps in the prose you touch.
+Unless the artifact's local convention requires otherwise, keep each Markdown paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures. When modifying existing Markdown, rejoin unnecessary hard wraps in the prose you touch.

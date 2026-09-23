@@ -6,6 +6,8 @@ description: >
 
 # .NET Library Solution Setup (Codebelt Conventions)
 
+![.NET Library Solution Setup](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-new-lib-slnx/assets/hero.jpg)
+
 ## Upstream Source
 
 | Field | Value |
