@@ -827,6 +827,21 @@ if ($MetadataOnly) {
     exit 0
 }
 
+Add-ValidationResult -Results $results -Name 'Git remote PR routing and deterministic workflow stay integrated' -Group 'Templates' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $prSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-pr/SKILL.md' -GitRef $Ref
+    $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
+    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### PR Skill Routing'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '| [git-remote-pr](skills/git-remote-pr/SKILL.md) |'
+    Assert-Contains -Name 'git-remote-pr/SKILL.md' -Content $prSkill -Needle '**Body ownership policy:**'
+    Assert-Contains -Name 'git-remote-pr/SKILL.md' -Content $prSkill -Needle 'prepare-pr.ps1'
+    Assert-Contains -Name 'git-remote-pr/SKILL.md' -Content $prSkill -Needle 'make-plan.ps1'
+    Assert-Contains -Name 'git-remote-pr/SKILL.md' -Content $prSkill -Needle 'execute-pr.ps1'
+    & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'skills/git-remote-pr/scripts/test-pr.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'git-remote-pr deterministic regressions failed.' }
+}
+
 Add-ValidationResult -Results $results -Name 'Release evidence collection preserves squash contributors and rejects incomplete sources' -Action {
     $releaseSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-release/SKILL.md' -GitRef $Ref
     Assert-Contains -Name 'git-remote-release/SKILL.md' -Content $releaseSkill -Needle 'Do not put temporary evidence or draft release notes in the current repository, including ignored repository-local folders.'

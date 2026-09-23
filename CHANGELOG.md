@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-09-23
+
+This is a minor release introducing `git-remote-pr`, a Git and GitHub CLI skill for managing GitHub pull requests from the complete committed branch comparison, establishing working-tree scratch isolation standards for all skills, and applying markdown prose formatting conventions across the skill documentation suite. The new skill brings deterministic evidence collection, safe push and assignment handling, post-write verification, and focused regression tests. Repository guidance clarifies where temporary artifacts belong, and skill documentation now follows consistent markdown formatting standards.
+
+### Added
+
+- `git-remote-pr`, a Git and GitHub CLI skill for preparing, reviewing, creating, and refreshing GitHub pull requests from the complete committed `base...head` changeset, with deterministic evidence collection (`prepare-pr.ps1`), safe push and assignment handling, post-write verification (`execute-pr.ps1`), plan generation and preview (`make-plan.ps1`), regression test suite, and PR routing guidance in AGENTS.md,
+- PR Skill Routing section in AGENTS.md documenting when and how `git-remote-pr` is invoked, its approval boundary, scope rules, and interaction with commit and release-note workflows,
+- Working-tree Scratch Isolation section in AGENTS.md establishing consistent practices for temporary artifacts, API responses, investigation notes, intermediate files, and eval fixtures, designating `.bot/<task>-workspace/` as the default inside the repository and allowing operating-system temp directories for items with no reason to sit nearby, and forbidding temporary git repos and test branches from becoming part of the working tree,
+- Markdown Prose Formatting standards section in AGENTS.md requiring prose paragraphs and list items to remain on continuous physical lines without arbitrary hard wrapping and relying on editor soft wrapping for visual presentation,
+- Updated README.md with `git-remote-pr` entry in the skills catalog, installation command, and a new "Why git-remote-pr?" community health section explaining the skill's purpose and boundaries,
+- Deterministic validation for `git-remote-pr` in `scripts/validate-skill-templates.ps1` asserting that PR skill routing and deterministic workflow remain integrated across AGENTS.md, README.md, SKILL.md, and bundled scripts,
+- New eval case for `git-visual-commits` testing working-tree scratch isolation principles,
+- Markdown prose formatting applied consistently across 12 skill SKILL.md files, reference documents, and asset templates, including agent-smith, dotnet-docfx-digest, dotnet-new-app-slnx, dotnet-new-lib-slnx, dotnet-segregated-assets, git-keep-a-changelog, git-nuget-readme, git-nuget-release-notes, git-remote-release, git-repo-digest, git-visual-commits, and git-visual-squash-summary,
+- Enhanced `git-visual-commits` scratch file isolation guidance with explicit pre-write requirements, temporary path verification, symlink and junction target checks, and forbidden pattern examples.
+
+### Changed
+
+- Repository-level guidance in AGENTS.md now includes markdown prose formatting standards and working-tree scratch isolation principles as core agent conventions,
+- README.md updated with markdown prose formatting guidance for skill authors and additional community health sections explaining repository standards,
+- `scripts/validate-skill-templates.ps1` enhanced with validators for git-remote-pr integration, markdown formatting standards, and working-tree scratch isolation across affected skills,
+- `git-visual-commits` SKILL.md clarified with improved scratch file isolation requirements and pre-write verification procedures,
+- `git-keep-a-changelog` SKILL.md and evals updated for markdown formatting standards consistency.
+
 ## [0.10.1] - 2026-09-14
 
 This is a patch release that enhances `git-keep-a-changelog` with explicit dependency removal disclosure and improved pending-change handling for both committed and worktree edits, refactors `git-visual-squash-summary` to require complete coverage of all surviving changes and contributors, and adds deterministic GitHub API evidence collection to `git-remote-release`. The eval-runner infrastructure gains JSON property-lookup performance optimization and in-process result validation via composition mode. Repository guidance is expanded with scratch-file isolation practices and scheduler-performance documentation for local validation.
@@ -693,6 +717,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.11.0]: https://github.com/codebeltnet/agentic/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/codebeltnet/agentic/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/codebeltnet/agentic/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/codebeltnet/agentic/compare/v0.9.0...v0.9.1

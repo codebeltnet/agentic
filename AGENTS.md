@@ -199,7 +199,7 @@ Never set or override `git user.name`, `git user.email`, or `alias.bot` in the *
 Agents must never commit code changes or push to remote repositories without explicit user approval. A direct commit request that includes `yolo` or `auto` is explicit approval for the current commit request; it authorizes the agent to complete that commit workflow in the same turn after the required checks pass.
 
 - **Commits**: Request confirmation from the user before staging and committing code unless the same explicit commit request includes `yolo` or `auto`. In that auto-approved case, present the plan as status information and continue directly to staging and committing; do not ask a second confirmation question or end with a pending plan. Required review, scope, identity, message-validation, and post-commit checks still apply.
-- **Remote Operations**: Do not push, pull, fetch, or interact with `origin` or any remote repository without explicit user instruction. These operations modify repository history and can cause data loss if performed unexpectedly.
+- **Remote Operations**: Do not push, pull, fetch, or interact with `origin` or any remote repository without explicit user instruction. An explicit PR request authorizes read-only remote preparation; PR writes follow the PR Skill Routing approval boundary below.
 
 **Why:** Automatic commits can pollute history with incomplete work, debugging code, or unintended changes. Unexpected remote operations can overwrite or lose commits on shared branches. Never treat silence, urgency, or momentum as approval; `yolo` or `auto` counts as approval only when attached to the same explicit commit request.
 
@@ -208,6 +208,10 @@ Agents must never commit code changes or push to remote repositories without exp
 When the user asks to commit or stage changes, write or review a commit message, or says `git bot commit`, `git commit`, or `git our commit`, invoke `git-visual-commits` before responding to the request or running Git commands for that commit workflow. Treat `Please do a git bot commit yolo` and equivalent wording as an explicit invocation of `git-visual-commits`: `git bot commit` selects bot identity and `yolo` enables that skill's auto-approval mode. Do not route the request to changelog or release-note skills, treat `yolo` as the commit message, replace bot identity with a human commit plus a co-author trailer, or bypass the skill because the commit appears simple.
 
 Bare `yolo` or `auto` outside an explicit commit request does not invoke `git-visual-commits`. Likewise, those modifiers do not invoke `git-keep-a-changelog` unless the user explicitly requests a changelog or release-note output. Users can force deterministic CLI selection with `/git-visual-commits` when they do not want to rely on automatic skill selection.
+
+### PR Skill Routing
+
+When the user asks to create, open, make, or refresh a GitHub pull request, invoke `git-remote-pr` before remote PR operations. Normal requests inspect the complete committed `base...head` changeset, prepare a title/body and exact mutation preview, then require explicit approval before `git push` or PR writes. `yolo`/`auto` attached to that same explicit PR request authorizes those narrow writes after the preview is shown; bare `yolo`/`auto` does not invoke the skill. Existing PR descriptions are regenerated from the complete current changeset. Dirty worktrees are not auto-committed, and approval never authorizes force pushes or history rewriting. Commit requests remain with `git-visual-commits`; release-note requests remain with `git-remote-release`. `/git-remote-pr` can force deterministic selection where supported.
 
 ## Skill Creation
 
