@@ -53,18 +53,16 @@ if (($skill -split '\s+').Count -ge 5000) { throw 'SKILL.md must remain below 5,
 
 $orderedPolicy = @(
     '1. Explicit task constraints.',
-    '2. Local repository policy and established conventions.',
-    '3. Repository-family conventions, where evidence establishes their applicability.',
-    '4. Engineering operating defaults.',
-    '5. Generic ecosystem convention.'
+    '2. Local repository policy, established conventions, and observed repository evidence.',
+    '3. Engineering operating defaults.',
+    '4. Generic ecosystem convention.'
 )
-$previous = -1
-foreach ($policy in $orderedPolicy) {
-    $position = $skill.IndexOf($policy, [StringComparison]::Ordinal)
-    if ($position -le $previous) { throw "Operating profile is missing or out of order: $policy" }
-    $previous = $position
-    $checks++
+$profile = [regex]::Match($skill, '(?ms)^## Engineering operating profile\r?\n(?<body>.*?)(?=^## |\z)').Groups['body'].Value
+$actualPolicy = @([regex]::Matches($profile, '(?m)^\d+\..*$') | ForEach-Object { $_.Value.TrimEnd() })
+if (($actualPolicy -join "`n") -cne ($orderedPolicy -join "`n")) {
+    throw 'Operating profile must contain exactly the four declared precedence levels in order.'
 }
+$checks++
 foreach ($value in @('Consistency', 'Quality', 'Vigilance', 'Due diligence')) {
     Assert-Contains 'SKILL.md' $skill "**${value}:**"
 }
@@ -87,6 +85,8 @@ Assert-Contains 'delivery-and-repositories.md' $delivery '| Responsibility | Pac
 Assert-Contains 'delivery-and-repositories.md' $delivery 'never compile or rebuild the product'
 Assert-Contains 'delivery-and-repositories.md' $delivery 'scaled trunk-based development'
 Assert-Contains 'delivery-and-repositories.md' $delivery 'Do not invent a universal OS matrix'
+Assert-Contains 'delivery-and-repositories.md' $delivery 'Follow shared tooling and configuration that the repository actually uses.'
+Assert-Contains 'delivery-and-repositories.md' $delivery 'If local repository policy requires Windows and Linux'
 Assert-Contains 'automation.md' $automation '1. Use a simple native command'
 Assert-Contains 'automation.md' $automation '2. Use PowerShell 7'
 Assert-Contains 'automation.md' $automation '3. Use C#/.NET'
@@ -134,6 +134,10 @@ $paths = if ([string]::IsNullOrWhiteSpace($Ref)) {
 }
 foreach ($path in $paths) {
     $text = Read-RepositoryText $path
+    if ($text -match '(?i)\brepository[- ]famil(?:y|ies)\b|\bfamily (?:conventions?|policy|defaults?|workflow|membership|template)\b') {
+        throw "Removed policy-layer terminology remains in $path."
+    }
+    $checks++
     if ($text.Contains([char]0x2014) -or $text -match '(?m)^\s*\*\s|Sacrifice grammar|Prefer clear fragments') {
         throw "Outdated writing convention in $path."
     }
@@ -151,6 +155,14 @@ foreach ($path in $paths | Where-Object { $_ -like '*/references/*' }) {
 }
 
 $cases = ($evals | ConvertFrom-Json).evals
+if ($evals -match '(?i)\brepository[- ]famil(?:y|ies)\b|\bfamily (?:conventions?|policy|defaults?|workflow|membership|template)\b') {
+    throw 'Eval scenarios must exercise local repository evidence directly.'
+}
+$checks++
+Assert-Contains 'eval 20' ($cases | Where-Object id -eq 20).prompt "AGENTS.md requires release tooling and tests on Windows and Linux"
+Assert-Contains 'eval 20' (($cases | Where-Object id -eq 20).expectations -join "`n") "shared workflow configuration as the basis"
+Assert-Contains 'eval 30' ($cases | Where-Object id -eq 30).prompt 'nothing in the current repository adopts that template or its conventions'
+Assert-Contains 'eval 30' (($cases | Where-Object id -eq 30).expectations -join "`n") 'similar naming is not local evidence'
 if ($cases.Count -ne 34 -or @($cases.id | Sort-Object -Unique).Count -ne 34) {
     throw 'Expected 14 preserved regression cases plus 20 judgement scenarios with unique IDs.'
 }
