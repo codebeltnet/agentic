@@ -4,9 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.11.0] - 2026-09-23
+## [0.11.0] - 2026-09-24
 
-This is a minor release introducing `git-remote-pr`, a Git and GitHub CLI skill for managing GitHub pull requests from the complete committed branch comparison, establishing working-tree scratch isolation standards for all skills, and applying markdown prose formatting conventions across the skill documentation suite. The new skill brings deterministic evidence collection, safe push and assignment handling, post-write verification, and focused regression tests. Repository guidance clarifies where temporary artifacts belong, and skill documentation now follows consistent markdown formatting standards.
+This is a minor release introducing `git-remote-pr`, a Git and GitHub CLI skill for managing GitHub pull requests from the complete committed branch comparison, establishing working-tree scratch isolation standards for all skills, and applying markdown prose formatting conventions across the skill documentation suite. The new skill brings deterministic evidence collection, safe push and assignment handling, post-write verification, and focused regression tests. Repository guidance clarifies where temporary artifacts belong, and skill documentation now follows consistent markdown formatting standards. The `agent-smith` skill is restructured around an operating model framework, with new capability references for agentic engineering patterns and automation, a dedicated validation test suite, and visual identification assets for all skills.
 
 ### Added
 
@@ -18,13 +18,19 @@ This is a minor release introducing `git-remote-pr`, a Git and GitHub CLI skill 
 - Deterministic validation for `git-remote-pr` in `scripts/validate-skill-templates.ps1` asserting that PR skill routing and deterministic workflow remain integrated across AGENTS.md, README.md, SKILL.md, and bundled scripts,
 - New eval case for `git-visual-commits` testing working-tree scratch isolation principles,
 - Markdown prose formatting applied consistently across 12 skill SKILL.md files, reference documents, and asset templates, including agent-smith, dotnet-docfx-digest, dotnet-new-app-slnx, dotnet-new-lib-slnx, dotnet-segregated-assets, git-keep-a-changelog, git-nuget-readme, git-nuget-release-notes, git-remote-release, git-repo-digest, git-visual-commits, and git-visual-squash-summary,
-- Enhanced `git-visual-commits` scratch file isolation guidance with explicit pre-write requirements, temporary path verification, symlink and junction target checks, and forbidden pattern examples.
+- Enhanced `git-visual-commits` scratch file isolation guidance with explicit pre-write requirements, temporary path verification, symlink and junction target checks, and forbidden pattern examples,
+- `agent-smith` skill restructured with operating model framework focus, clarifying durable software and agentic engineering decision orientation, updated descriptions emphasizing intent and trigger precision, and refactored guidance for skills across the portfolio,
+- Two new reference documents for `agent-smith`: `agentic-engineering.md` documenting patterns and principles for engineering autonomous agent systems, and `automation.md` covering automation boundaries, safety, and governance,
+- `test-agent-smith.ps1` deterministic validation test suite for `agent-smith` skill including conformance assertions, guidance validation, and reference coverage checks, integrated into `scripts/validate-skill-templates.ps1` for automated repository validation,
+- Hero images (`.jpg`) for eight skills providing visual identification and documentation rendering support: agent-smith, dotnet-benchmark, dotnet-docfx-digest, dotnet-new-app-slnx, dotnet-new-lib-slnx, dotnet-remote-testing, dotnet-segregated-assets, dotnet-test, and git-remote-pr,
+- Updated skill descriptions across the repository portfolio to emphasize operating model, trigger precision, and user intent following progressive-disclosure principles from the specification.
 
 ### Changed
 
 - Repository-level guidance in AGENTS.md now includes markdown prose formatting standards and working-tree scratch isolation principles as core agent conventions,
-- README.md updated with markdown prose formatting guidance for skill authors and additional community health sections explaining repository standards,
-- `scripts/validate-skill-templates.ps1` enhanced with validators for git-remote-pr integration, markdown formatting standards, and working-tree scratch isolation across affected skills,
+- README.md updated with markdown prose formatting guidance for skill authors, updated skills table with hero images and refined descriptions, and additional community health sections explaining repository standards,
+- `agent-smith` description and README catalog entry refactored to emphasize operating model for durable software and agentic engineering rather than comprehensive reference,
+- `scripts/validate-skill-templates.ps1` enhanced with validators for git-remote-pr integration, markdown formatting standards, working-tree scratch isolation across affected skills, and agent-smith skill validation,
 - `git-visual-commits` SKILL.md clarified with improved scratch file isolation requirements and pre-write verification procedures,
 - `git-keep-a-changelog` SKILL.md and evals updated for markdown formatting standards consistency.
 
