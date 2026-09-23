@@ -19,10 +19,6 @@ try {
     $OutputDirectory = Assert-ScratchPath $OutputDirectory $root
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 
-    Invoke-Gh @('auth', 'status') | Out-Null
-    $viewer = Get-GhJson 'user'
-    if (-not $viewer.login) { throw 'GitHub authentication did not return an account. Run gh auth login.' }
-
     $remoteNames = @((Invoke-Git @('remote')).Text -split "`n" | Where-Object { $_ })
     $remoteRepos = @{}
     foreach ($name in $remoteNames) {
@@ -30,11 +26,32 @@ try {
         $parsed = Get-RemoteRepo $url
         if ($parsed) { $remoteRepos[$name] = $parsed }
     }
+    $suggestedHeadRemote = if ($remoteRepos.ContainsKey('origin')) { 'origin' } else { $remoteRepos.Keys | Sort-Object | Select-Object -First 1 }
+    $upstreamRef = Invoke-Git @('rev-parse', '--abbrev-ref', '@{u}') -AllowFailure
     $upstreamRemote = (Invoke-Git @('config', '--get', "branch.$branch.remote") -AllowFailure).Text.Trim()
     $mergeRef = (Invoke-Git @('config', '--get', "branch.$branch.merge") -AllowFailure).Text.Trim()
-    $remoteBranch = if ($mergeRef -match '^refs/heads/(.+)$') { $Matches[1] } else { $branch }
-    $headRemote = if ($upstreamRemote -and $remoteRepos.ContainsKey($upstreamRemote)) { $upstreamRemote } elseif ($remoteRepos.ContainsKey('origin')) { 'origin' } else { $remoteRepos.Keys | Sort-Object | Select-Object -First 1 }
-    if (-not $headRemote) { throw 'No GitHub remote is configured for the current branch.' }
+    if ($upstreamRef.Code -ne 0 -or -not $upstreamRemote -or -not $mergeRef) {
+        $setUpstreamRemote = if ($suggestedHeadRemote) { $suggestedHeadRemote } else { 'origin' }
+        throw "Current branch '$branch' has no upstream tracking branch. git-remote-pr refuses to guess a PR head branch because stale tracking after a local rename can target the wrong remote branch. Set it explicitly with: git push --set-upstream $setUpstreamRemote HEAD`nor: git branch --set-upstream-to=$setUpstreamRemote/$branch"
+    }
+    $upstreamRefText = $upstreamRef.Text.Trim()
+    if ($mergeRef -notmatch '^refs/heads/(.+)$') {
+        throw "Current branch '$branch' tracks '$upstreamRefText', but the configured merge ref '$mergeRef' is not a GitHub branch under refs/heads/. Update the upstream before retrying."
+    }
+    $remoteBranch = $Matches[1]
+    if (-not $remoteRepos.ContainsKey($upstreamRemote)) {
+        $targetRemote = if ($suggestedHeadRemote) { $suggestedHeadRemote } else { '<remote>' }
+        throw "Current branch '$branch' tracks '$upstreamRefText', but remote '$upstreamRemote' is not a GitHub remote the skill can use. Point the branch at the intended GitHub remote with: git branch --set-upstream-to=$targetRemote/$branch"
+    }
+    if (-not (Test-EquivalentBranchNames $branch $remoteBranch)) {
+        throw "Local branch '$branch' does not match upstream tracking branch '$upstreamRemote/$remoteBranch'. This usually means a local rename left tracking stale or the remote branch still uses the old name. Update tracking with: git branch --set-upstream-to=$upstreamRemote/$branch after the remote branch name is corrected. If the remote still needs the renamed branch, publish it first with: git push $upstreamRemote HEAD:refs/heads/$branch"
+    }
+    $headRemote = $upstreamRemote
+
+    Invoke-Gh @('auth', 'status') | Out-Null
+    $viewer = Get-GhJson 'user'
+    if (-not $viewer.login) { throw 'GitHub authentication did not return an account. Run gh auth login.' }
+
     $headRepo = $remoteRepos[$headRemote]
     $headMeta = Get-GhJson "repos/$headRepo"
     if (-not $headMeta.full_name) { throw "Cannot resolve GitHub head repository $headRepo." }

@@ -42,6 +42,21 @@ function Get-PrTitle { param([string]$Branch)
     $title = $Branch.Replace('-', ' ').Replace('_', ' ')
     return $title.Substring(0, 1).ToUpperInvariant() + $title.Substring(1)
 }
+function Normalize-BranchSegment { param([string]$Segment)
+    if ($null -eq $Segment) { return '' }
+    return ([regex]::Replace($Segment.Trim(), '[-_]+', '-')).Trim('-')
+}
+function Test-EquivalentBranchNames { param([string]$LocalBranch, [string]$RemoteBranch)
+    if ([string]::IsNullOrWhiteSpace($LocalBranch) -or [string]::IsNullOrWhiteSpace($RemoteBranch)) { return $false }
+    if ($LocalBranch -ceq $RemoteBranch) { return $true }
+    $localSegments = $LocalBranch -split '/'
+    $remoteSegments = $RemoteBranch -split '/'
+    if ($localSegments.Count -ne $remoteSegments.Count) { return $false }
+    for ($index = 0; $index -lt $localSegments.Count; $index++) {
+        if ((Normalize-BranchSegment $localSegments[$index]) -cne (Normalize-BranchSegment $remoteSegments[$index])) { return $false }
+    }
+    return $true
+}
 function Assert-ScratchPath { param([string]$Path, [string]$RepoRoot)
     $target = [System.IO.Path]::GetFullPath($Path)
     $root = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd([char[]]@('/', '\'))

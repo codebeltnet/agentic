@@ -42,12 +42,7 @@ try {
     }
     if ($Draft -and $expected.existing_pr -and -not $expected.existing_pr.draft) { throw 'An existing ready PR cannot be converted to draft by this workflow.' }
     if ($fresh.push_required) {
-        $upstreamRemote = (Invoke-Git @('config', '--get', "branch.$($fresh.head).remote") -AllowFailure).Text.Trim()
-        $upstreamMerge = (Invoke-Git @('config', '--get', "branch.$($fresh.head).merge") -AllowFailure).Text.Trim()
-        $pushArgs = @('push')
-        if (-not $upstreamRemote -or -not $upstreamMerge) { $pushArgs += '--set-upstream' }
-        $pushArgs += @($fresh.head_remote, "HEAD:refs/heads/$($fresh.remote_branch)")
-        Invoke-Git $pushArgs | Out-Null
+        Invoke-Git @('push', $fresh.head_remote, "HEAD:refs/heads/$($fresh.remote_branch)") | Out-Null
         $pushDone = $true
     }
     $remoteSha = Get-RemoteSha $fresh.head_remote $fresh.remote_branch
