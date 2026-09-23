@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Please create a PR from my clean v0.10.2/service-update branch. It has three commits changing a validator, its tests, and unrelated contributor guidance. The branch is not pushed yet. Do not treat this as approval to write remotely.",
+      "prompt": "Please create a PR from my clean tracked v0.10.2/service-update branch. It has three commits changing a validator, its tests, and unrelated contributor guidance. The branch already tracks origin/v0.10.2/service-update, but my latest local commits are not pushed yet. Do not treat this as approval to write remotely.",
       "expected_output": "Collects the complete three-dot comparison, maps every changed path to reviewer themes, proposes V0.10.2/service update, and stops after the full CREATE preview before push or PR write.",
       "expectations": ["Title is V0.10.2/service update", "All commits, bodies, final patches, statuses, and paths are inspected", "Validator and contributor guidance remain distinct themes", "Preview names repo, base/head, title, body summary, counts, authenticated assignee, push, and exact writes", "No push or PR write occurs without approval"]
     },
@@ -11,7 +11,7 @@
       "id": 2,
       "prompt": "Create the pull request. I approve the exact plan you just showed. The local HEAD and remote state are unchanged.",
       "expected_output": "Rechecks the approved snapshot, performs only the previewed normal push, create/edit, and assignment, then verifies the persisted PR and full file inventory.",
-      "expectations": ["Approval is applied to the same prepared plan without asking again", "Unpushed branch is pushed normally before PR creation or update", "Remote SHA equals local HEAD before PR metadata write", "No reviewers, labels, milestones, projects, auto-merge, or unrelated writes", "Post-write verification checks base, head, title, body, draft state, assignee, SHA, and all changed files"]
+      "expectations": ["Approval is applied to the same prepared plan without asking again", "Tracked local commits missing from the remote branch are pushed normally before PR creation or update", "Remote SHA equals local HEAD before PR metadata write", "No reviewers, labels, milestones, projects, auto-merge, or unrelated writes", "Post-write verification checks base, head, title, body, draft state, assignee, SHA, and all changed files"]
     },
     {
       "id": 3,
@@ -33,9 +33,9 @@
     },
     {
       "id": 6,
-      "prompt": "Open a pull request from this checkout. Test detached HEAD, then the default branch, then a feature branch with an empty base...head comparison.",
+      "prompt": "Open a pull request from this checkout. Test detached HEAD, then a feature branch with no upstream configured, then the default branch, then a feature branch with an empty base...head comparison.",
       "expected_output": "Each invalid state fails before any remote write with a distinct actionable diagnosis.",
-      "expectations": ["Detached HEAD blocks", "Current default/base branch blocks", "Empty comparison blocks", "No PR is created"]
+      "expectations": ["Detached HEAD blocks", "Missing upstream tracking blocks", "Current default/base branch blocks", "Empty comparison blocks", "No PR is created"]
     },
     {
       "id": 7,
@@ -84,6 +84,12 @@
       "prompt": "Create a PR yolo, but the remote accepted the PR body with altered text and rejected assignment despite preflight. Test each failure separately.",
       "expected_output": "Reports the PR URL and the specific persistence or assignment failure instead of claiming full success.",
       "expectations": ["Complete body persistence is verified", "Authenticated requester assignment is verified", "Partial success identifies the existing PR URL", "No extra metadata is modified to recover silently"]
+    },
+    {
+      "id": 15,
+      "prompt": "Open a pull request after I renamed my local branch from v0.10.2/service-update to v0.11.0/chore-and-git-remote-pr, but its upstream still points at origin/v0.10.2/service-update.",
+      "expected_output": "Fails before evidence collection, names the local/upstream mismatch explicitly, explains that stale tracking would target the wrong remote branch, and tells me how to update the remote branch name and upstream before retrying.",
+      "expectations": ["Local and upstream branch names are both shown", "The mismatch is treated as stale tracking or an incomplete rename", "Guidance includes updating upstream tracking after the remote branch name is corrected", "No push, PR write, or silent recovery is attempted"]
     }
   ]
 }

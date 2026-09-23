@@ -165,20 +165,33 @@ try {
         Test-Git @('remote', 'add', 'origin', $url) | Out-Null
         $fileUrl = 'file:///' + $bare.Replace('\', '/').TrimStart('/')
         Test-Git @('config', "url.$fileUrl.insteadOf", $url) | Out-Null
-        Test-Git @('push', 'origin', 'main') | Out-Null
+        Test-Git @('push', '-u', 'origin', 'main') | Out-Null
         Test-Git @('switch', '-c', 'v0.10.2/service-update') | Out-Null
         [System.IO.File]::WriteAllText((Join-Path $repo 'a.txt'), 'feature', $utf8)
         Test-Git @('add', 'a.txt') | Out-Null
         Test-Git @('commit', '-m', 'Improve feature', '-m', 'Changes actual behavior') | Out-Null
-        [System.IO.File]::WriteAllText((Join-Path $repo 'guide.md'), 'review guide', $utf8)
-        Test-Git @('add', 'guide.md') | Out-Null
-        Test-Git @('commit', '-m', 'Document review flow') | Out-Null
 
         . (Join-Path $PSScriptRoot 'pr-common.ps1')
         Assert ((Get-PrTitle 'v0.10.2/service-update') -ceq 'V0.10.2/service update') 'Title normalization failed.'
         Assert ((Get-PrTitle 'v12.0.2/chore-work') -ceq 'V12.0.2/chore work') 'Title normalization for chore branch failed.'
         Assert ((Get-PrTitle 'v0.10.0/dotnet-nuget-update') -ceq 'V0.10.0/dotnet nuget update') 'Title normalization for NuGet branch failed.'
         Assert ((Get-PrTitle 'v1.0.0/add_CLIContext') -ceq 'V1.0.0/add CLIContext') 'Title normalization lost meaningful internal casing.'
+        Assert (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.11.0/chore_and_git_remote_pr') 'Branch normalization should allow separator-only differences.'
+        Assert (-not (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.10.2/service-update')) 'Branch normalization should not hide real mismatches.'
+        $noUpstream = Run-Prepare (Join-Path $root 'no-upstream')
+        Assert ($noUpstream.code -ne 0 -and $noUpstream.text -match 'no upstream tracking branch' -and $noUpstream.text -match 'set-upstream') 'Missing upstream tracking did not fail closed.'
+        Assert (-not (Test-Git @('ls-remote', '--heads', 'origin', 'refs/heads/v0.10.2/service-update'))) 'Unexpected remote branch before upstream push.'
+        Test-Git @('push', '-u', 'origin', 'HEAD') | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $repo 'guide.md'), 'review guide', $utf8)
+        Test-Git @('add', 'guide.md') | Out-Null
+        Test-Git @('commit', '-m', 'Document review flow') | Out-Null
+        Test-Git @('switch', '-c', 'v0.11.0/chore-and-git-remote-pr') | Out-Null
+        Test-Git @('config', 'branch.v0.11.0/chore-and-git-remote-pr.remote', 'origin') | Out-Null
+        Test-Git @('config', 'branch.v0.11.0/chore-and-git-remote-pr.merge', 'refs/heads/v0.10.2/service-update') | Out-Null
+        $mismatch = Run-Prepare (Join-Path $root 'mismatch')
+        Assert ($mismatch.code -ne 0 -and $mismatch.text.Contains("Local branch 'v0.11.0/chore-and-git-remote-pr'") -and $mismatch.text.Contains('origin/v0.10.2/service-update') -and $mismatch.text.Contains('git branch --set-upstream-to=origin/v0.11.0/chore-and-git-remote-pr')) 'Stale branch tracking mismatch did not fail closed.'
+        Test-Git @('switch', 'v0.10.2/service-update') | Out-Null
+        Test-Git @('branch', '-D', 'v0.11.0/chore-and-git-remote-pr') | Out-Null
         Test-Git @('branch', 'develop', 'main') | Out-Null
         Test-Git @('push', 'origin', 'develop') | Out-Null
         New-Item (Join-Path $state 'default-develop') -ItemType File | Out-Null
@@ -202,12 +215,13 @@ try {
         Assert ($prep.code -eq 0) "Clean preparation failed: $($prep.text)"
         $paths = $prep.text | ConvertFrom-Json
         $evidence = Get-Content $paths.evidence -Raw | ConvertFrom-Json
-        Assert ($evidence.push_required -and $evidence.action -eq 'CREATE') 'Unpushed branch must preview CREATE and push.'
+        Assert ($evidence.push_required -and $evidence.action -eq 'CREATE') 'Tracked branch with local-only commits must preview CREATE and push.'
         Assert ($evidence.commit_count -eq 2 -and $evidence.changed_file_count -eq 2) 'Complete commit or file inventory missing.'
         Assert ($evidence.commits[0].message -match 'Changes actual behavior') 'Commit body missing.'
         Assert ((Get-Content $paths.patch -Raw) -match 'review guide') 'Final patch missing documentation change.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Preparation performed a GH write.'
-        Assert (-not (Test-Git @('ls-remote', '--heads', 'origin', 'refs/heads/v0.10.2/service-update'))) 'Preparation pushed the branch.'
+        $remoteBranchHead = ((Test-Git @('ls-remote', '--heads', 'origin', 'refs/heads/v0.10.2/service-update')) -split "`t")[0]
+        Assert ($remoteBranchHead -and $remoteBranchHead -cne $evidence.head_sha) 'Preparation pushed the local-only commit.'
 
         New-Item (Join-Path $state 'no-auth') -ItemType File | Out-Null
         $noAuth = Run-Prepare (Join-Path $root 'no-auth')
@@ -229,6 +243,7 @@ try {
         $default = Run-Prepare (Join-Path $root 'default')
         Assert ($default.code -ne 0 -and $default.text -match 'base branch') 'Default branch did not block.'
         Test-Git @('switch', '-c', 'empty') | Out-Null
+        Test-Git @('push', '-u', 'origin', 'HEAD') | Out-Null
         $empty = Run-Prepare (Join-Path $root 'empty')
         Assert ($empty.code -ne 0 -and $empty.text -match 'no changed files') 'Empty comparison did not block.'
         Test-Git @('switch', 'v0.10.2/service-update') | Out-Null
