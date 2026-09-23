@@ -6,7 +6,7 @@ For **material** decisions - those that affect correctness, public contracts, ar
 2. **Identify requirements.** Functional and non-functional (latency, availability, throughput, regulatory, security, operability).
 3. **Identify constraints.** Platform, runtime, dependencies, deadlines, team conventions, backward compatibility.
 4. **Separate facts from assumptions.** Mark which inputs are confirmed and which are assumed.
-5. **Inspect existing conventions and precedent.** Apply the operating profile in `SKILL.md`. What does this codebase already do, and what evidence makes a family convention applicable here?
+5. **Inspect existing conventions and precedent.** Apply the operating profile in `SKILL.md`. What does this codebase already do, and which repository instructions, shared configuration, workflows, or supported-host requirements constrain this decision?
 6. **Identify credible alternatives.** At least the obvious options; do not strawman.
 7. **Compare meaningful trade-offs.** Correctness, complexity, performance, compatibility, operability, maintenance cost, and risk - not popularity.
 8. **Recommend one option.** Be decisive.

@@ -41,11 +41,11 @@ Trace artifact identity by immutable version/digest and source commit. Verify it
 - Do not automatically commit or push; treat history-mutating and remote operations as requiring explicit human approval unless repository policy says otherwise.
 - Keep releases traceable: a released artifact maps to a specific commit and version.
 
-## Repository-family scope and supported hosts
+## Repository evidence and supported hosts
 
-Use family conventions only when repository instructions, shared workflows, maintained templates, or documented ownership establish that the repository belongs to that family. Inspect the actual source of the rule; similarity of technology or naming alone is insufficient. Explicit local constraints remain more specific than family defaults.
+Inspect repository-specific instructions, shared configuration, workflows, maintained templates, and supported-host requirements as concrete local evidence. Follow shared tooling and configuration that the repository actually uses. Do not import conventions from another repository without local evidence supporting their use; similarity of technology or naming alone is insufficient.
 
-Preserve required OS and runtime support through build, test, release, and automation choices. If the applicable family workflow promises Windows and Linux, a Linux-only replacement does not establish compliance even when it passes. Restore the required coverage or report the unsupported host and the policy decision needed. Do not invent a universal OS matrix or impose this family's tooling on unrelated repositories.
+Preserve required OS and runtime support through build, test, release, and automation choices. If local repository policy requires Windows and Linux, a Linux-only replacement does not establish compliance even when it passes. Restore the required coverage or report the unsupported host and the policy decision needed. Do not invent a universal OS matrix or import another repository's tooling without local evidence.
 
 For automation runtime decisions, load `automation.md`; use its proportional command, PowerShell 7, and .NET defaults only after checking applicable policy and host constraints.
 

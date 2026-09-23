@@ -55,12 +55,11 @@ Load `references/core-principles.md` on every invocation. The essentials, applie
 Use this decision order when choosing an approach:
 
 1. Explicit task constraints.
-2. Local repository policy and established conventions.
-3. Repository-family conventions, where evidence establishes their applicability.
-4. Engineering operating defaults.
-5. Generic ecosystem convention.
+2. Local repository policy, established conventions, and observed repository evidence.
+3. Engineering operating defaults.
+4. Generic ecosystem convention.
 
-More specific evidence or policy wins. Inspect before inferring a family convention; do not export one repository's tools or OS requirements into unrelated work. Name material conflicts and resolve them rather than silently overriding a constraint.
+More specific evidence or policy wins. Inspect repository-specific instructions, shared configuration, workflows, supported-host requirements, and other concrete repository evidence. Do not import another repository's conventions without local evidence supporting their use. Name material conflicts and resolve them rather than silently overriding a constraint.
 
 - **Consistency:** inspect adjacent implementations and choose a coherent pattern; justify deviations and their migration impact.
 - **Quality:** start Outside-In from the consumer's required capability; expose the smallest useful contract, and require evidence of correct behaviour.
@@ -99,7 +98,7 @@ A task may select **multiple** modes. Load core principles for every invocation,
 | Skill authoring | creating, modifying, reviewing, describing, or evaluating agent skills and their bundled resources | `references/skill-authoring.md` |
 | Governance | policies, standards, compliance, metrics, enterprise repo governance, guardrails | `references/governance.md` |
 
-**Load .NET guidance only when .NET or C# is actually relevant.** For non-.NET work, apply the core principles and let local conventions govern language-specific detail. For automation runtime choices, load `references/automation.md`; its .NET-first defaults apply only where stronger task, repository, family, or host constraints do not decide.
+**Load .NET guidance only when .NET or C# is actually relevant.** For non-.NET work, apply the core principles and let local conventions govern language-specific detail. For automation runtime choices, load `references/automation.md`; its .NET-first defaults apply only where stronger task, repository, or host constraints do not decide.
 
 ### Routing examples
 

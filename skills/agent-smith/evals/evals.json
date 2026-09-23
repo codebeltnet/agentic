@@ -186,7 +186,7 @@
     },
     {
       "id": 14,
-      "prompt": "/agent-smith improve our incident-research skill in this .NET-first repository family. It fetches twelve independent service endpoints sequentially, includes a 900-line reusable Python validator with schema handling, retries and shared mutable state, has a long implementation-focused description, and has never been compared with a baseline. Repository rules prohibit automated model calls and require a separately requested portable eval handoff. This request is for editing and deterministic validation only. Keep the guidance reusable across our repositories and tell future agents how to validate the change.",
+      "prompt": "/agent-smith improve our incident-research skill in this .NET-first repository. It fetches twelve independent service endpoints sequentially, includes a 900-line reusable Python validator with schema handling, retries and shared mutable state, has a long implementation-focused description, and has never been compared with a baseline. Repository rules prohibit automated model calls and require a separately requested portable eval handoff. This request is for editing and deterministic validation only. Keep the guidance reusable across our repositories and tell future agents how to validate the change.",
       "expected_output": "A concise, evidence-driven skill-authoring workflow grounded in real traces and repository constraints. It maps bounded concurrency for independent fetches, preserves dependencies and service limits, justifies .NET for the substantial validator, refines the activation contract, and updates eval specifications with focused deterministic validation. It distinguishes inspected trigger cases from measured behavior and reserves model-backed comparisons for the separately authorized repository handoff.",
       "expectations": [
         "The response requires inspecting the existing skill, repository conventions, real execution traces, and failure evidence before rewriting generic guidance",
@@ -259,13 +259,13 @@
     },
     {
       "id": 20,
-      "prompt": "Review a shared workflow replacement. This repository explicitly adopts its repository-family policy requiring release tooling and tests on Windows and Linux. Local policy has no exception. The proposed workflow runs only on Ubuntu and uses a Bash-only path helper; its one CI job passes. The author says cross-platform .NET code makes the Windows job redundant. Decide whether this meets the contract and how to finish.",
-      "expected_output": "Recognizes applicable family policy, rejects the green Linux-only run as proof of required OS support, and restores or reports the missing Windows verification without inventing a broader matrix.",
+      "prompt": "Review a shared workflow replacement. This repository's AGENTS.md requires release tooling and tests on Windows and Linux, and its shared workflow configuration includes both hosts. Local policy has no exception. The proposed workflow runs only on Ubuntu and uses a Bash-only path helper; its one CI job passes. The author says cross-platform .NET code makes the Windows job redundant. Decide whether this meets the contract and how to finish.",
+      "expected_output": "Recognizes explicit local policy and shared workflow evidence, rejects the green Linux-only run as proof of required OS support, and restores or reports the missing Windows verification without inventing a broader matrix.",
       "expectations": [
-        "Uses the explicit adoption of family policy as the basis for requiring Windows and Linux coverage",
+        "Uses the repository's AGENTS.md and shared workflow configuration as the basis for requiring Windows and Linux coverage",
         "Identifies the unsupported helper and missing Windows validation despite the successful Ubuntu job",
         "Requires compatible automation and validation for both declared hosts or an explicit policy change, not a silent support reduction",
-        "Does not claim cross-platform correctness from .NET alone and does not impose macOS or the same family policy on unrelated repositories"
+        "Does not claim cross-platform correctness from .NET alone and does not impose macOS or import OS requirements from unrelated repositories"
       ]
     },
     {
@@ -376,12 +376,12 @@
     },
     {
       "id": 30,
-      "prompt": "Choose automation for an unrelated TypeScript repository. Its AGENTS.md explicitly requires existing Node scripts on Linux; the host has neither PowerShell nor .NET. A similarly named repository in another organization uses a .NET-first family template with Windows support. The requested change is a small extension to an existing Node validation script. Which policy and tool choice should govern?",
-      "expected_output": "Follows explicit local policy and host evidence, keeps the Node implementation, and refuses to infer family membership from a similar name.",
+      "prompt": "Choose automation for an unrelated TypeScript repository. Its AGENTS.md explicitly requires existing Node scripts on Linux; the host has neither PowerShell nor .NET. A similarly named repository in another organization uses a .NET-first template with Windows support; nothing in the current repository adopts that template or its conventions. The requested change is a small extension to an existing Node validation script. Which policy and tool choice should govern?",
+      "expected_output": "Follows explicit local policy and host evidence, keeps the Node implementation, and rejects importing another repository's conventions without supporting local evidence.",
       "expectations": [
         "Keeps the existing Node implementation under local AGENTS.md and host constraints",
-        "Does not impose .NET, PowerShell, Windows support, or another organization's family conventions",
-        "Explains that family applicability requires evidence and that operating defaults apply only after more specific constraints",
+        "Does not impose .NET, PowerShell, Windows support, or another repository's conventions without local evidence",
+        "Explains that similar naming is not local evidence for adopting external conventions and that operating defaults apply only after explicit task constraints and local repository policy, conventions, and evidence",
         "Retains focused validation and honest reporting without expanding into a language migration"
       ]
     },

@@ -1,6 +1,6 @@
 # Proportional automation
 
-Load for script-runtime choices, reusable tooling, validators, or growing automation. Apply the operating profile from `SKILL.md` first: explicit constraints and established repository or applicable family conventions take precedence over these defaults. This reference does not prescribe the product's implementation language.
+Load for script-runtime choices, reusable tooling, validators, or growing automation. Apply the operating profile from `SKILL.md` first: explicit task constraints, local repository policy, established conventions, and observed repository evidence take precedence over these defaults. This reference does not prescribe the product's implementation language.
 
 ## Default decision order
 
