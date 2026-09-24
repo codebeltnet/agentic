@@ -20,10 +20,20 @@ function Run-Prepare([string]$Output) {
     return [pscustomobject]@{ code = $LASTEXITCODE; text = ($lines | ForEach-Object { [string]$_ }) -join "`n" }
 }
 function Run-Execute([string]$Evidence, [string]$Body, [string]$Title) {
+    # Each deliberate retry in this test harness starts a new transaction.
+    if (Test-Path (Join-Path (Split-Path -Parent $Evidence) 'approval-invalidated.json')) {
+        $retry = Join-Path $root ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory $retry | Out-Null
+        Copy-Item $Evidence (Join-Path $retry 'evidence.json')
+        Copy-Item $Body (Join-Path $retry 'body.md')
+        $Evidence = Join-Path $retry 'evidence.json'
+        $Body = Join-Path $retry 'body.md'
+    }
     $planned = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $Evidence -BodyFile $Body -Title $Title 2>&1)
     if ($LASTEXITCODE -ne 0) { return [pscustomobject]@{ code = $LASTEXITCODE; text = ($planned | ForEach-Object { [string]$_ }) -join "`n" } }
     $plan = Join-Path (Split-Path -Parent $Evidence) 'plan.json'
-    $lines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $plan -Approved 2>&1)
+    $id = (Get-Content $plan -Raw | ConvertFrom-Json).approval_id
+    $lines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $plan -ApprovalId $id 2>&1)
     return [pscustomobject]@{ code = $LASTEXITCODE; text = ($lines | ForEach-Object { [string]$_ }) -join "`n" }
 }
 try {
@@ -90,7 +100,7 @@ try {
             $pr = Read-Pr
             $baseSha = (& git -C $repo rev-parse main).Trim()
             $headSha = (& git -C $repo rev-parse HEAD).Trim()
-            $raw = @(& git -C $repo diff --name-status $baseSha $headSha)
+            $raw = @(& git -C $repo diff --name-status "$baseSha...$headSha")
             $files = @($raw | ForEach-Object {
                 $parts = $_ -split "`t"
                 $status = switch -Regex ($parts[0]) { '^A' {'added';break} '^D' {'removed';break} '^R' {'renamed';break} default {'modified'} }
@@ -267,10 +277,15 @@ try {
         $planText = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $paths.evidence -BodyFile $bodyPath -Title 'V0.10.2/service update' 2>&1)
         Assert ($LASTEXITCODE -eq 0) "Read-only plan failed: $($planText -join ' ')"
         $plan = ($planText -join "`n") | ConvertFrom-Json
+        $reordered = [ordered]@{}
+        foreach ($property in @($plan.PSObject.Properties | Sort-Object Name -Descending)) { $reordered[$property.Name] = $property.Value }
+        Assert ((Get-PlanApprovalId $reordered) -ceq $plan.approval_id) 'Approval ID depends on JSON property order rather than canonical intent.'
         Assert ($plan.push_required -and $plan.metadata_write -eq 'CREATE' -and $plan.assignment_write) 'Plan did not declare exact create writes.'
         $preview = [System.IO.File]::ReadAllText($plan.preview_file, $utf8)
         Assert ($plan.preview_hash -eq (Get-FileHash -LiteralPath $plan.preview_file -Algorithm SHA256).Hash) 'Plan did not bind the complete preview artifact.'
-        Assert ($preview.EndsWith([System.IO.File]::ReadAllText($bodyPath, $utf8), [StringComparison]::Ordinal)) 'Preview omitted or altered the complete proposed body.'
+        Assert ($plan.approval_id -cmatch '^APR-[0-9A-F]{12}$') 'Plan is missing its human-readable approval ID.'
+        Assert ($preview.Contains("Approval ID: $($plan.approval_id)") -and $preview.EndsWith("To approve this exact preview, reply: approve $($plan.approval_id)", [StringComparison]::Ordinal)) 'Preview ID or exact approval instruction differs from the plan.'
+        Assert ($preview.Contains("`n" + [System.IO.File]::ReadAllText($bodyPath, $utf8) + "`n`nTo approve this exact preview")) 'Preview omitted or altered the complete proposed body.'
         Assert ($preview.Contains('V0.10.2/service update') -and $preview.Contains('main <- acme/widget:v0.10.2/service-update') -and $preview.Contains('State: ready') -and $preview.Contains('Normal push') -and $preview.Contains('Assign reviewer')) 'Preview omitted the title, comparison, readiness, push, or assignment.'
         $validEvidence = [System.IO.File]::ReadAllText($paths.evidence, $utf8)
         $validBody = [System.IO.File]::ReadAllText($bodyPath, $utf8)
@@ -300,31 +315,57 @@ try {
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Planning made a GH write.'
         $planPath = Join-Path (Split-Path $paths.evidence) 'plan.json'
         $planRaw = [System.IO.File]::ReadAllText($planPath, $utf8)
+        $approvalId = ($planRaw | ConvertFrom-Json).approval_id
+        $invalidationPath = Get-ApprovalInvalidationPath $planPath
         $noApprovalLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath 2>&1)
         Assert ($LASTEXITCODE -ne 0 -and ($noApprovalLines -join "`n") -match 'approval') 'Execute accepted a plan without approval.'
+        $legacy = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($legacy -join "`n").Contains('-ApprovalId')) 'Legacy boolean approval authorized execution.'
+        $wrongId = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -ApprovalId 'APR-000000000000' 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($wrongId -join "`n").Contains('does not match')) 'Wrong ID authorized execution.'
+        Assert (-not (Test-Path (Join-Path $state 'writes.log')) -and (Get-RemoteSha origin 'v0.10.2/service-update') -ceq $remoteBranchHead) 'Missing/wrong approval performed a write.'
         $titleTamper = $planRaw | ConvertFrom-Json
         $titleTamper.title = 'Unexpected retitle after approval'
         [System.IO.File]::WriteAllText($planPath, ($titleTamper | ConvertTo-Json -Depth 8), $utf8)
-        $titleTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
-        Assert ($LASTEXITCODE -ne 0 -and ($titleTamperedLines -join "`n") -match 'title or draft state changed after the preview') 'Altered title passed the prepared plan integrity check.'
+        $titleTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -ApprovalId $approvalId 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($titleTamperedLines -join "`n") -match 'write intent changed after the preview') 'Altered title passed the prepared plan integrity check.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Changed title made a GH write.'
         [System.IO.File]::WriteAllText($planPath, $planRaw, $utf8)
+        # Reset the isolated tampering fixture between independent negative cases.
+        Remove-Item -LiteralPath $invalidationPath
         $draftTamper = $planRaw | ConvertFrom-Json
         $draftTamper.draft = $true
         [System.IO.File]::WriteAllText($planPath, ($draftTamper | ConvertTo-Json -Depth 8), $utf8)
-        $draftTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
-        Assert ($LASTEXITCODE -ne 0 -and ($draftTamperedLines -join "`n") -match 'title or draft state changed after the preview') 'Altered draft state passed the prepared plan integrity check.'
+        $draftTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -ApprovalId $approvalId 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($draftTamperedLines -join "`n") -match 'write intent changed after the preview') 'Altered draft state passed the prepared plan integrity check.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Changed draft state made a GH write.'
         [System.IO.File]::WriteAllText($planPath, $planRaw, $utf8)
+        Remove-Item -LiteralPath $invalidationPath
+        foreach ($change in @(@{ snapshot_key = 'changed' }, @{ push_required = $false }, @{ metadata_write = 'NONE' }, @{ assignment_write = $false }, @{ repository = 'other/repo' }, @{ base = 'other' }, @{ head = 'other' }, @{ head_repository = 'other/fork' }, @{ assignee = 'other' }, @{ existing_pr_number = 99 }, @{ existing_pr_url = 'https://github.com/acme/widget/pull/99' }, @{ action = 'UPDATE' }, @{ evidence_hash = 'changed' }, @{ body_hash = 'changed' })) {
+            $altered = $planRaw | ConvertFrom-Json
+            foreach ($name in $change.Keys) { $altered.$name = $change[$name] }
+            [System.IO.File]::WriteAllText($planPath, ($altered | ConvertTo-Json -Depth 8), $utf8)
+            $rejected = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -ApprovalId $approvalId 2>&1)
+            Assert ($LASTEXITCODE -ne 0 -and ($rejected -join "`n").Contains('write intent changed')) "Changed $($change.Keys) did not invalidate the old ID."
+            Remove-Item -LiteralPath $invalidationPath
+        }
+        [System.IO.File]::WriteAllText($planPath, $planRaw, $utf8)
         [System.IO.File]::AppendAllText($bodyPath, "`nAltered after preview.", $utf8)
-        $tamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
+        $tamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -ApprovalId $approvalId 2>&1)
         Assert ($LASTEXITCODE -ne 0 -and ($tamperedLines -join "`n") -match 'changed after the preview') 'Altered body passed the prepared plan hash.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Withheld approval or changed body made a GH write.'
         [System.IO.File]::WriteAllText($bodyPath, $validBody, $utf8)
+        Remove-Item -LiteralPath $invalidationPath
+        [System.IO.File]::AppendAllText($paths.evidence, ' ', $utf8)
+        $evidenceTampered = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -ApprovalId $approvalId 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($evidenceTampered -join "`n").Contains('body or evidence changed')) 'Changed evidence bytes passed execution.'
+        [System.IO.File]::WriteAllText($paths.evidence, $validEvidence, $utf8)
+        Remove-Item -LiteralPath $invalidationPath
         [System.IO.File]::AppendAllText($plan.preview_file, "`nTampered preview.", $utf8)
-        $previewTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
+        $previewTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -ApprovalId $approvalId 2>&1)
         Assert ($LASTEXITCODE -ne 0 -and ($previewTamperedLines -join "`n") -match 'preview changed after planning') 'Altered preview passed the prepared preview integrity check.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Changed preview made a GH write.'
+        Assert ((Get-RemoteSha origin 'v0.10.2/service-update') -ceq $remoteBranchHead) 'Tampered plan or artifacts pushed the branch.'
         $wrong = Run-Execute $paths.evidence $bodyPath 'V0.10.2/service update'
         Assert ($wrong.code -eq 0) "Approved create failed: $($wrong.text)"
         $created = $wrong.text | ConvertFrom-Json
@@ -349,7 +390,7 @@ try {
         Test-Git @('add', 'extra.txt') | Out-Null
         Test-Git @('commit', '-m', 'Add extra result') | Out-Null
         $stale = Run-Execute $secondPaths.evidence $secondBody 'V0.10.2/service update'
-        Assert ($stale.code -ne 0 -and $stale.text -match 'Material repository') 'Changed HEAD did not invalidate approval.'
+        Assert ($stale.code -ne 0 -and $stale.text -match 'material state changed') 'Changed HEAD did not invalidate approval.'
         Assert ((Get-Content (Join-Path $state 'writes.log')).Count -eq 2) 'Stale approval made a GH write.'
         $third = Run-Prepare (Join-Path $root 'third')
         Assert ($third.code -eq 0) "New-commit preparation failed: $($third.text)"
@@ -436,6 +477,72 @@ try {
         Assert (@($binaryEvidence.files | Where-Object { $_.path -eq 'image.bin' -and $_.binary }).Count -eq 1) 'Binary file was not marked in evidence.'
         $binaryPatch = Get-Content (($binaryPrep.text | ConvertFrom-Json).patch) -Raw
         Assert ($binaryPatch -match 'Binary files .*image.bin differ' -and $binaryPatch -notmatch 'GIT binary patch|(?m)^literal \d+') 'Review patch must retain binary metadata without encoded payloads.'
+
+        # Reproduce the observed approval lifecycle using real local Git history
+        # and the fake GitHub transport. No real PR or network remote is used.
+        foreach ($i in 1..5) { [System.IO.File]::WriteAllText((Join-Path $repo "approval-$i.txt"), 'A', $utf8) }
+        Test-Git @('add', '.') | Out-Null
+        Test-Git @('commit', '-m', 'Prepare approval A') | Out-Null
+        function New-ApprovalTestPlan([string]$Directory) {
+            $prepared = Run-Prepare $Directory
+            Assert ($prepared.code -eq 0) "Approval preparation failed: $($prepared.text)"
+            $artifacts = $prepared.text | ConvertFrom-Json
+            $facts = Get-Content $artifacts.evidence -Raw | ConvertFrom-Json
+            $facts.files | ForEach-Object { $_.theme = 'Behavior' }
+            $facts | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $artifacts.evidence -Encoding utf8
+            $bodyFile = Join-Path $Directory 'body.md'
+            [System.IO.File]::WriteAllText($bodyFile, "This pull request updates the behavior.`n`n**Behavior:**`n`n- Updates the committed changes.", $utf8)
+            $output = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $artifacts.evidence -BodyFile $bodyFile -Title 'V0.10.2/service update' 2>&1)
+            Assert ($LASTEXITCODE -eq 0) "Approval planning failed: $($output -join ' ')"
+            return ($output -join "`n") | ConvertFrom-Json
+        }
+        function Execute-ApprovalTestPlan([string]$Directory, [string]$Id) {
+            $output = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile (Join-Path $Directory 'plan.json') -ApprovalId $Id 2>&1)
+            return [pscustomobject]@{ code = $LASTEXITCODE; text = $output -join "`n" }
+        }
+        $workspaceA = Join-Path $root 'approval-a'
+        $planA = New-ApprovalTestPlan $workspaceA
+        Assert ($planA.commit_count -eq 5 -and $planA.changed_file_count -eq 9) 'Scenario A must have exactly 5 commits / 9 files.'
+        $sameStateRefresh = New-ApprovalTestPlan (Join-Path $root 'approval-same-state-refresh')
+        Assert ($sameStateRefresh.evidence_hash -ceq $planA.evidence_hash -and $sameStateRefresh.body_hash -ceq $planA.body_hash -and $sameStateRefresh.approval_id -cne $planA.approval_id) 'A new workspace with identical content reused an earlier transaction ID.'
+        $originalHashes = @{}
+        foreach ($file in @('evidence.json', 'body.md', 'plan.json', 'preview.md')) { $originalHashes[$file] = (Get-FileHash (Join-Path $workspaceA $file)).Hash }
+        $plansBefore = @(Get-ChildItem $root -Filter plan.json -Recurse).Count
+        $writesBefore = [System.IO.File]::ReadAllText((Join-Path $state 'writes.log'), $utf8)
+        $remoteBefore = Get-RemoteSha origin 'v0.10.2/service-update'
+        foreach ($i in 6..62) { [System.IO.File]::WriteAllText((Join-Path $repo "approval-$i.txt"), 'B', $utf8) }
+        Test-Git @('add', '.') | Out-Null
+        Test-Git @('commit', '-m', 'Change to approval B') | Out-Null
+        foreach ($i in 1..31) { Test-Git @('commit', '--allow-empty', '-m', "Additional B commit $i") | Out-Null }
+        $failedA = Execute-ApprovalTestPlan $workspaceA $planA.approval_id
+        Assert ($failedA.code -ne 0 -and $failedA.text.Contains('Approved snapshot:') -and $failedA.text.Contains('- Commits: 5') -and $failedA.text.Contains('- Changed files: 9') -and $failedA.text.Contains('Current snapshot:') -and $failedA.text.Contains('- Commits: 37') -and $failedA.text.Contains('- Changed files: 66')) 'Drift diagnostic did not expose the observed 5/9 -> 37/66 change.'
+        Assert ($failedA.text.Contains('No remote writes were performed.')) 'Drift failure omitted the zero-write outcome.'
+        Assert ([System.IO.File]::ReadAllText((Join-Path $state 'writes.log'), $utf8) -ceq $writesBefore -and (Get-RemoteSha origin 'v0.10.2/service-update') -ceq $remoteBefore) 'Approval A wrote remotely after state drift.'
+        Assert (@(Get-ChildItem $root -Filter plan.json -Recurse).Count -eq $plansBefore) 'State drift automatically created Plan B.'
+        foreach ($file in $originalHashes.Keys) { Assert ((Get-FileHash (Join-Path $workspaceA $file)).Hash -ceq $originalHashes[$file]) "Drift modified A's $file." }
+        $retryA = Execute-ApprovalTestPlan $workspaceA $planA.approval_id
+        Assert ($retryA.code -ne 0 -and $retryA.text.Contains('already invalidated')) 'Invalidated approval A could be retried.'
+        $replanA = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $planA.evidence_file -BodyFile $planA.body_file -Title $planA.title 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($replanA -join "`n").Contains('new scratch workspace')) 'Invalidated workspace allowed replacement planning.'
+        foreach ($file in $originalHashes.Keys) { Assert ((Get-FileHash (Join-Path $workspaceA $file)).Hash -ceq $originalHashes[$file]) "Rejected replanning modified A's $file." }
+        Write-Host "DEMO: $($planA.approval_id), 5 commits / 9 files -> 37 commits / 66 files: blocked, zero writes, original artifacts unchanged, no automatic Plan B."
+        Write-Host $failedA.text
+
+        # This explicit preparation models a subsequent user refresh request.
+        $workspaceB = Join-Path $root 'approval-b'
+        $planB = New-ApprovalTestPlan $workspaceB
+        Assert ($planB.commit_count -eq 37 -and $planB.changed_file_count -eq 66 -and $planB.approval_id -cne $planA.approval_id) 'Explicit refresh did not create a distinct approval B for 37/66.'
+        $previewB = [System.IO.File]::ReadAllText($planB.preview_file, $utf8)
+        Assert ($previewB.Contains("Approval ID: $($planB.approval_id)") -and $previewB.EndsWith("To approve this exact preview, reply: approve $($planB.approval_id)")) 'Preview B does not request approval B.'
+        $aOnB = Execute-ApprovalTestPlan $workspaceB $planA.approval_id
+        Assert ($aOnB.code -ne 0 -and $aOnB.text.Contains('does not match')) 'Approval A authorized Plan B.'
+        $noB = Execute-ApprovalTestPlan $workspaceB ''
+        Assert ($noB.code -ne 0 -and $noB.text.Contains('approval ID is required')) 'Plan B executed without approval B.'
+        Assert ([System.IO.File]::ReadAllText((Join-Path $state 'writes.log'), $utf8) -ceq $writesBefore -and (Get-RemoteSha origin 'v0.10.2/service-update') -ceq $remoteBefore) 'Missing or obsolete approval wrote Plan B.'
+        $approvedB = Execute-ApprovalTestPlan $workspaceB $planB.approval_id
+        Assert ($approvedB.code -eq 0) "Correct approval B failed: $($approvedB.text)"
+        foreach ($file in $originalHashes.Keys) { Assert ((Get-FileHash (Join-Path $workspaceA $file)).Hash -ceq $originalHashes[$file]) "Explicit refresh modified A's $file." }
+        Write-Host "DEMO: Explicit refresh created $($planB.approval_id). Approval A and missing approval rejected with zero writes; exact approval B succeeded against the fake PR."
 
         $other = Join-Path $root 'other clone'
         Test-Git @('clone', $bare, $other) | Out-Null
