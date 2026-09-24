@@ -269,6 +269,7 @@ try {
         $plan = ($planText -join "`n") | ConvertFrom-Json
         Assert ($plan.push_required -and $plan.metadata_write -eq 'CREATE' -and $plan.assignment_write) 'Plan did not declare exact create writes.'
         $preview = [System.IO.File]::ReadAllText($plan.preview_file, $utf8)
+        Assert ($plan.preview_hash -eq (Get-FileHash -LiteralPath $plan.preview_file -Algorithm SHA256).Hash) 'Plan did not bind the complete preview artifact.'
         Assert ($preview.EndsWith([System.IO.File]::ReadAllText($bodyPath, $utf8), [StringComparison]::Ordinal)) 'Preview omitted or altered the complete proposed body.'
         Assert ($preview.Contains('V0.10.2/service update') -and $preview.Contains('main <- acme/widget:v0.10.2/service-update') -and $preview.Contains('State: ready') -and $preview.Contains('Normal push') -and $preview.Contains('Assign reviewer')) 'Preview omitted the title, comparison, readiness, push, or assignment.'
         $validEvidence = [System.IO.File]::ReadAllText($paths.evidence, $utf8)
@@ -319,7 +320,11 @@ try {
         $tamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
         Assert ($LASTEXITCODE -ne 0 -and ($tamperedLines -join "`n") -match 'changed after the preview') 'Altered body passed the prepared plan hash.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Withheld approval or changed body made a GH write.'
-        [System.IO.File]::WriteAllText($bodyPath, "This pull request changes behavior and review guidance.`n`n**Behavior:**`n`n- Updates the feature.`n`n**Documentation:**`n`n- Adds review guidance.", $utf8)
+        [System.IO.File]::WriteAllText($bodyPath, $validBody, $utf8)
+        [System.IO.File]::AppendAllText($plan.preview_file, "`nTampered preview.", $utf8)
+        $previewTamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($previewTamperedLines -join "`n") -match 'preview changed after planning') 'Altered preview passed the prepared preview integrity check.'
+        Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Changed preview made a GH write.'
         $wrong = Run-Execute $paths.evidence $bodyPath 'V0.10.2/service update'
         Assert ($wrong.code -eq 0) "Approved create failed: $($wrong.text)"
         $created = $wrong.text | ConvertFrom-Json
