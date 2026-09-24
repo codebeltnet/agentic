@@ -101,11 +101,54 @@ function Test-EquivalentBranchNames { param([string]$LocalBranch, [string]$Remot
     if ([string]::IsNullOrWhiteSpace($LocalBranch) -or [string]::IsNullOrWhiteSpace($RemoteBranch)) { return $false }
     return $LocalBranch -ceq $RemoteBranch
 }
-function Get-PlanApprovalKey {
-    param([string]$Title, [bool]$Draft)
-    $fields = [ordered]@{ title = $Title; draft = $Draft }
-    $bytes = $script:Utf8.GetBytes(($fields | ConvertTo-Json -Depth 4 -Compress))
-    return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes))
+function Get-PlanApprovalId { param($Plan)
+    # Fixed property order and JSON types form the canonical write intent.
+    # Artifact paths scope the transaction to its workspace, including refreshes
+    # with identical content. preview_hash is checked independently to avoid a cycle.
+    $fields = [ordered]@{}
+    foreach ($name in @('schema', 'snapshot_key', 'evidence_file', 'evidence_hash', 'body_file', 'body_hash', 'preview_file', 'repository', 'action', 'base', 'head_repository', 'head', 'title', 'draft', 'assignee', 'push_required', 'metadata_write', 'assignment_write', 'existing_pr_number', 'existing_pr_url', 'commit_count', 'changed_file_count')) {
+        $fields[$name] = $Plan.$name
+    }
+    $bytes = $script:Utf8.GetBytes(($fields | ConvertTo-Json -Depth 8 -Compress))
+    return 'APR-' + [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).Substring(0, 12)
+}
+function Get-ApprovalInvalidationPath { param([string]$PlanFile)
+    return Join-Path (Split-Path -Parent ([System.IO.Path]::GetFullPath($PlanFile))) 'approval-invalidated.json'
+}
+function Stop-PrApproval { param([string]$PlanFile, [string]$ApprovalId, [string]$Reason, [bool]$WritesStarted = $false)
+    $message = "Approval $ApprovalId was invalidated because material state changed after the preview.`n$Reason"
+    $message += if ($WritesStarted) { "`nRemote writes may have occurred; see the partial-state diagnostic." } else { "`nNo remote writes were performed." }
+    $message += "`nExecution left evidence.json, body.md, plan.json, and preview.md unchanged.`nIf this change is intentional, ask me to refresh the PR preview."
+    $marker = [ordered]@{ approval_id = $ApprovalId; reason = $Reason }
+    [System.IO.File]::WriteAllText((Get-ApprovalInvalidationPath $PlanFile), ($marker | ConvertTo-Json -Depth 4), $script:Utf8)
+    throw $message
+}
+function Get-PrDriftDiagnostic { param($Approved, $Current)
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in @(@{ label = 'Approved'; value = $Approved }, @{ label = 'Current'; value = $Current })) {
+        $value = $entry.value
+        $lines.Add("$($entry.label) snapshot:")
+        $lines.Add("- HEAD: $($value.head_sha)")
+        $lines.Add("- Base: $($value.base) ($($value.base_sha))")
+        $lines.Add("- Commits: $($value.commit_count)")
+        $lines.Add("- Changed files: $($value.changed_file_count)")
+    }
+    foreach ($name in @('repository', 'head_repository', 'head', 'head_remote', 'remote_branch', 'remote_sha', 'merge_base', 'assignee', 'template_path')) {
+        $before = ConvertTo-Json -InputObject $Approved.$name -Depth 8 -Compress
+        $after = ConvertTo-Json -InputObject $Current.$name -Depth 8 -Compress
+        if ($before -cne $after) { $lines.Add("- ${name}: $before -> $after") }
+    }
+    if ([bool]$Approved.existing_pr -ne [bool]$Current.existing_pr) {
+        $lines.Add("- Existing PR present: $([bool]$Approved.existing_pr) -> $([bool]$Current.existing_pr)")
+    } elseif ($Approved.existing_pr) {
+        foreach ($name in @('number', 'url', 'state', 'title', 'draft', 'head_sha', 'base_sha', 'assignees')) {
+            $before = ConvertTo-Json -InputObject $Approved.existing_pr.$name -Depth 4 -Compress
+            $after = ConvertTo-Json -InputObject $Current.existing_pr.$name -Depth 4 -Compress
+            if ($before -cne $after) { $lines.Add("- PR ${name}: $before -> $after") }
+        }
+        if ($Approved.existing_pr.body -cne $Current.existing_pr.body) { $lines.Add('- PR body: complete body differs from the approved snapshot.') }
+    }
+    return $lines -join "`n"
 }
 function Assert-ScratchPath { param([string]$Path, [string]$RepoRoot)
     $target = [System.IO.Path]::GetFullPath($Path)

@@ -12,6 +12,9 @@ try {
     $bodyPath = Assert-ScratchPath $BodyFile $root
     $planPath = Join-Path (Split-Path -Parent $evidencePath) 'plan.json'
     $previewPath = Join-Path (Split-Path -Parent $evidencePath) 'preview.md'
+    if (Test-Path -LiteralPath (Get-ApprovalInvalidationPath $planPath)) {
+        throw 'This approval transaction is invalidated. Preserve its artifacts. Only an explicit refresh request may start preparation in a new scratch workspace.'
+    }
     # A failed re-plan must not leave an earlier plan/preview looking current.
     foreach ($stalePath in @($planPath, $previewPath)) {
         if (Test-Path -LiteralPath $stalePath) { Remove-Item -LiteralPath $stalePath -Force }
@@ -45,8 +48,35 @@ try {
     $replaceBody = if ($evidence.existing_pr -and $metadata -eq 'UPDATE') { 'Yes, the entire current body' } else { 'No' }
     $titleChange = -not $evidence.existing_pr -or $evidence.existing_pr.title -cne $Title
     $bodyChange = -not $evidence.existing_pr -or $evidence.existing_pr.body -cne $body
+    $plan = [ordered]@{
+        schema = 'codebeltnet/git-remote-pr/plan/3'
+        evidence_file = $evidencePath
+        evidence_hash = (Get-FileHash -LiteralPath $evidencePath -Algorithm SHA256).Hash
+        snapshot_key = Get-PrSnapshotKey $evidence
+        body_file = $bodyPath
+        body_hash = (Get-FileHash -LiteralPath $bodyPath -Algorithm SHA256).Hash
+        title = $Title
+        draft = $plannedDraft
+        action = $action
+        repository = $repository
+        base = $base
+        head = $head
+        head_repository = $headRepository
+        assignee = $assignee
+        push_required = $pushRequired
+        metadata_write = $metadata
+        assignment_write = $assignmentWrite
+        existing_pr_number = if ($evidence.existing_pr) { $evidence.existing_pr.number } else { $null }
+        existing_pr_url = $existingPrUrl
+        commit_count = $commitCount
+        changed_file_count = $changedFileCount
+        preview_file = $previewPath
+    }
+    $plan.approval_id = Get-PlanApprovalId $plan
     $preview = @(
         "# $action PR preview"
+        ''
+        "Approval ID: $($plan.approval_id)"
         ''
         "- Repository: $repository"
         "- Comparison: $base <- ${headRepository}:$head"
@@ -65,33 +95,8 @@ try {
         '## Proposed body'
         ''
     ) -join "`n"
-    [System.IO.File]::WriteAllText($previewPath, ($preview + "`n" + $body), $script:Utf8)
-    $previewHash = (Get-FileHash -LiteralPath $previewPath -Algorithm SHA256).Hash
-    $plan = [ordered]@{
-        schema = 'codebeltnet/git-remote-pr/plan/2'
-        evidence_file = $evidencePath
-        evidence_hash = (Get-FileHash -LiteralPath $evidencePath -Algorithm SHA256).Hash
-        snapshot_key = Get-PrSnapshotKey $evidence
-        body_file = $bodyPath
-        body_hash = (Get-FileHash -LiteralPath $bodyPath -Algorithm SHA256).Hash
-        title = $Title
-        draft = $plannedDraft
-        approval_key = Get-PlanApprovalKey $Title $plannedDraft
-        action = $action
-        repository = $repository
-        base = $base
-        head = $head
-        head_repository = $headRepository
-        assignee = $assignee
-        push_required = $pushRequired
-        metadata_write = $metadata
-        assignment_write = $assignmentWrite
-        existing_pr_url = $existingPrUrl
-        commit_count = $commitCount
-        changed_file_count = $changedFileCount
-        preview_file = $previewPath
-        preview_hash = $previewHash
-    }
+    [System.IO.File]::WriteAllText($previewPath, ($preview + "`n" + $body + "`n`nTo approve this exact preview, reply: approve $($plan.approval_id)"), $script:Utf8)
+    $plan.preview_hash = (Get-FileHash -LiteralPath $previewPath -Algorithm SHA256).Hash
     [System.IO.File]::WriteAllText($planPath, ($plan | ConvertTo-Json -Depth 8), $script:Utf8)
     $plan | ConvertTo-Json -Depth 8
 } catch {
