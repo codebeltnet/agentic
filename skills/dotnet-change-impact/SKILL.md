@@ -6,7 +6,7 @@ description: >
 
 # .NET Change Impact
 
-![.NET Change Impact](assets/hero.jpg)
+![.NET Change Impact](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-change-impact/assets/hero.jpg)
 
 Classify a proposed change to a .NET library or NuGet package and recommend the correct release bump. This skill exists to stop accidental breaking releases from being shipped as a patch or minor, while staying practical enough not to label every internal refactor as breaking.
 

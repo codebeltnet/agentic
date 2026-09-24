@@ -6,7 +6,7 @@ description: >
 
 # Markdown Illustrator
 
-![Markdown Illustrator](assets/hero.png)
+![Markdown Illustrator](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/markdown-illustrator/assets/hero.png)
 
 This skill reads a markdown file and answers directly in chat with one visualization-focused Visual Brief plus one final prompt compiled to be concrete, readable, and diffusion-ready.
 

@@ -35,7 +35,7 @@ When the user explicitly requests EditorConfig, code-style, informational IDE, n
 
 ## Documentation and examples
 
-- Write **XML documentation** for public members: purpose, parameters, returns, exceptions, and defaults — not a restatement of the signature.
+- Write **XML documentation** for public members: purpose, parameters, returns, exceptions, and defaults - not a restatement of the signature.
 - Examples must use **real APIs** and compile where technically feasible. DO NOT invent members to make an example look nicer.
 
 ## Testing

@@ -2077,6 +2077,7 @@ internal static class DigestScript
         Style rules:
         - Output Markdown only.
         - Include every required heading verbatim.
+        - Keep each prose paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures. Rejoin unnecessary wraps in prose you touch.
         - Use short, neutral, Microsoft Learn-style headings.
         - Do not use em dashes in prose.
         - Do not use "Furthermore" or "In conclusion".

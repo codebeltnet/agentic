@@ -162,6 +162,7 @@ Editing rules:
 
 - Keep headings concise and scan-friendly.
 - Prefer short paragraphs and flat bullets.
+- Keep each prose paragraph and Markdown list item on one physical line regardless of length. Do not hard-wrap at a fixed column width; use soft wrapping and break lines only between Markdown structures. Remove unnecessary hard wraps from any prose you edit.
 - Put installation before deeper reference material.
 - If you include a code example, keep it small and runnable-looking.
 - Use fenced code blocks with language tags.

@@ -6,11 +6,11 @@ description: >
 
 # Git Visual Squash Summary
 
-![Git Visual Squash Summary](assets/hero.jpg)
+![Git Visual Squash Summary](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/git-visual-squash-summary/assets/hero.jpg)
 
 This skill turns a stack of commits into a curated grouped summary without touching the index, the worktree, or git history. It is the wording companion to `git-visual-commits`: same emoji-first language, with conventional prefixes only when the user explicitly asks for that combo, but non-mutating and optimized for the grouped summary shown beneath a PR title or in a squash-and-merge description field.
 
-This skill is non-mutating: it inspects history and diffs, then returns grouped summary lines only.
+This skill is non-mutating: it inspects history and diffs, then returns grouped summary lines only. Keep inspection output in the terminal; never create repo-local scratch files to capture diffs, logs, notes, or intermediate summaries. If persistence is genuinely required, use an absolute path under the operating system's temporary directory or session storage outside the repository.
 
 This skill has one job: produce a ready-to-paste squash-and-merge summary for the full current feature branch unless the user explicitly asked for a narrower range.
 

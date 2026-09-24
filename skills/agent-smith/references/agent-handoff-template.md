@@ -2,6 +2,8 @@
 
 Use to delegate follow-up implementation to another engineering agent or engineer. The prompt must be **self-contained**: executable without any hidden conversational context. Fill in what applies and delete the rest.
 
+Keep each prose paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures.
+
 ```markdown
 # Task: <concise objective>
 
@@ -30,8 +32,7 @@ Use to delegate follow-up implementation to another engineering agent or enginee
 <What must change, at the behaviour level. Be specific about contracts and expected results.>
 
 ## Compatibility expectations
-<Public API / wire / serialization / configuration compatibility to preserve or explicitly change,
-and the required version bump if applicable.>
+<Public API / wire / serialization / configuration compatibility to preserve or explicitly change, and the required version bump if applicable.>
 
 ## Testing requirements
 <Which tests to add or update; the behaviour they must prove; the tier (unit/integration/contract).>
@@ -40,7 +41,7 @@ and the required version bump if applicable.>
 <Docs, README, XML/API docs, or release notes to update; examples that must compile.>
 
 ## Performance requirements
-<Workload, objective, baseline, and how improvement must be measured — if performance is in scope.>
+<Workload, objective, baseline, and how improvement must be measured - if performance is in scope.>
 
 ## Validation commands
 <Exact commands to run: format, lint, build, test, docs build, benchmark, package validation.>

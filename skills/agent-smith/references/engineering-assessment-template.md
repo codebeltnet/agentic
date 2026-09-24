@@ -1,6 +1,8 @@
 # Engineering assessment template
 
-Use for a formal assessment or review. Fill in each section; **delete sections that do not apply** rather than padding them. Keep it proportional — a small review does not need every heading. Never assert validation you did not perform.
+Use for a formal assessment or review. Fill in each section; **delete sections that do not apply** rather than padding them. Keep it proportional - a small review does not need every heading. Never assert validation you did not perform.
+
+Keep each prose paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures.
 
 ```markdown
 ## Assessment
@@ -15,8 +17,7 @@ Use for a formal assessment or review. Fill in each section; **delete sections t
 
 ## Findings
 
-> Each finding: Issue -> Why it matters -> Evidence/reasoning -> Recommended change -> Expected effect ->
-> Compatibility/migration impact. Order by severity (Critical first).
+> Each finding: Issue -> Why it matters -> Evidence/reasoning -> Recommended change -> Expected effect -> Compatibility/migration impact. Order by severity (Critical first).
 
 ### [Critical|High|Medium|Low|Observation] <short finding title>
 

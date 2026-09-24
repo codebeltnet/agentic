@@ -6,7 +6,7 @@ description: >
 
 # Git NuGet Release Notes
 
-![Git NuGet Release Notes](assets/hero.jpg)
+![Git NuGet Release Notes](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/git-nuget-release-notes/assets/hero.jpg)
 
 This skill creates or updates cumulative `.nuget/{ProjectName}/PackageReleaseNotes.txt` files for packable .NET projects by reading git history and the actual project/package metadata. It is intentionally closer to the package-note style used in codebelt repositories than to a repo-wide `CHANGELOG.md`.
 
@@ -207,7 +207,7 @@ Editing rules:
 - If the top block already targets the resolved version, replace that top block in place and leave older history below it intact.
 - If the top block targets an older version, prepend the new block and a blank line before the existing history.
 - Preserve older release blocks below the edited one unless the user explicitly asked for a historical cleanup.
-- Keep bullets concise, concrete, and single-line unless a longer line is genuinely needed for clarity.
+- Keep each bullet on one physical line regardless of length. Do not hard-wrap at a fixed column width; rely on editor soft wrapping instead.
 - Do not add decorative Markdown, tables, or changelog callouts.
 
 ### Step 8: Stop after the edit

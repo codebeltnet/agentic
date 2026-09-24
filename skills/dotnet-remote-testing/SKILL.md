@@ -8,6 +8,8 @@ compatibility: >
 
 # .NET Remote Testing
 
+![.NET Remote Testing](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-remote-testing/assets/hero.jpg)
+
 ## Do this now
 
 **You were invoked. That is the request. Run the tests.**

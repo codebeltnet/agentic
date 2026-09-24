@@ -6,6 +6,8 @@ description: >
 
 # .NET DocFX Digest Steward
 
+![.NET DocFX Digest](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-docfx-digest/assets/hero.jpg)
+
 ## Description
 
 Create and maintain developer-friendly DocFX documentation digests for .NET public APIs. Keep namespace pages, generated API pages, examples, availability notes, and verification aligned with the actual source code and tests.
@@ -408,6 +410,8 @@ Resolve constructors, generic arity, abstractness, constraints, and public membe
 The reason is mandatory. Package requirements, "full example needs X", "shows the framework pattern", or missing assembly/transitive/referenced assembly reasons are all rejected — these are authoring or validator-setup problems, not genuine blockers. Prefer making the example compile. Do not claim an example compiles unless the validator actually ran it successfully.
 
 ## Namespace and Summary Style
+
+Keep each prose paragraph and Markdown list item on one physical line regardless of length. Do not hard-wrap DocFX Markdown to a fixed column width; rely on editor soft wrapping and insert physical line breaks only between Markdown structures. Rejoin unnecessary hard wraps in the prose you touch.
 
 Namespace overview pages must explain what problem the namespace solves, when to use it, and where a newcomer should start. Avoid inventory-only blurbs such as “contains types and extension methods for...”
 

@@ -8,6 +8,8 @@ compatibility: >
 
 # .NET Segregated Static Assets
 
+![.NET Segregated Static Assets](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-segregated-assets/assets/hero.jpg)
+
 Keep `wwwroot` as the conventional, tooling-friendly authoring root while making the deployed web application stop serving and shipping its application-owned files. Deployed static content is delivered by Codebelt Static Content Provider (`codebeltnet/web-cdn-origin:2.0.0`) through a separate asset host, not by the ASP.NET Core business application.
 
 The architecture is:
@@ -149,6 +151,8 @@ COPY --chown=65532:65532 ./wwwroot/ /cdnroot/
 Do not override the base image's `/cdnroot`, port, runtime user (`65532`), or working directory without evidence. If a frontend build generates `wwwroot`, package the generated output, not source inputs, and preserve the existing CI/CD artifact flow.
 
 ## Workflow
+
+When updating Markdown documentation, keep each prose paragraph and list item on one physical line regardless of length. Do not hard-wrap to a fixed column width; rely on editor soft wrapping, break lines only between Markdown structures, and rejoin unnecessary wraps in prose you touch.
 
 1. Run `inspect --repo-root <root> --json` and read `FORMS.md` plus the relevant references. Resolve ambiguous projects and the required CDN-equivalent question.
 2. Stop for `RiskyGeneratedAssets` unless a complete generated-output design and runtime URL behavior can be established. Never bypass the guardrail to make the simple template fit.

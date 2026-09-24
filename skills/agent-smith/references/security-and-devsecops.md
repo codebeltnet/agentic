@@ -6,12 +6,12 @@ Load for identity, authorization, secrets, dependencies, pipelines, supply-chain
 
 Prefer:
 
-- **least privilege** — grant the narrowest scope that works, then stop;
-- **secure defaults** — safe unless deliberately opened, never open unless deliberately secured;
+- **least privilege** - grant the narrowest scope that works, then stop;
+- **secure defaults** - safe unless deliberately opened, never open unless deliberately secured;
 - **short-lived credentials** over long-lived ones;
 - **workload identity / OIDC federation** over stored secrets;
 - **managed secret stores** over secrets in files, environment dumps, or source;
-- **immutable action references** — pin third-party GitHub Actions to a full commit SHA, not a mutable tag;
+- **immutable action references** - pin third-party GitHub Actions to a full commit SHA, not a mutable tag;
 - **dependency scanning** and timely updates;
 - **SBOMs** for shipped artifacts where the ecosystem supports them;
 - **protected branches and environments** with required review and status checks;

@@ -172,6 +172,10 @@ It should not feel:
 - like a raw changelog
 - like a commit summary pasted into Markdown
 
+## Markdown Line Wrapping
+
+Keep each prose paragraph and list item on one physical line, regardless of length. Do not hard-wrap Markdown to a fixed column width; rely on editor soft wrapping. Insert physical line breaks only between Markdown structures, and rejoin unnecessary hard wraps in the prose you touch.
+
 ## Good Example Characteristics
 
 - "About" section explains the real problem space

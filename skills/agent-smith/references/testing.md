@@ -19,12 +19,12 @@ Do not push everything to the slowest tier, and do not unit-test away a risk tha
 
 ## Qualities of a good test
 
-- **Deterministic** — no reliance on timing, ordering, network flakiness, or ambient state.
-- **Diagnostic** — when it fails, the failure message points at the cause.
-- **Readable** — intent is obvious; the test documents the behaviour.
-- **Explicit about intent** — arrange/act/assert (or given/when/then) is clear.
-- **Isolated where appropriate** — independent of other tests' side effects.
-- **Fast enough for its tier** — matched to how often it runs.
+- **Deterministic** - no reliance on timing, ordering, network flakiness, or ambient state.
+- **Diagnostic** - when it fails, the failure message points at the cause.
+- **Readable** - intent is obvious; the test documents the behaviour.
+- **Explicit about intent** - arrange/act/assert (or given/when/then) is clear.
+- **Isolated where appropriate** - independent of other tests' side effects.
+- **Fast enough for its tier** - matched to how often it runs.
 
 ## Do not
 

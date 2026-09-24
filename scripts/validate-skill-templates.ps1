@@ -827,7 +827,26 @@ if ($MetadataOnly) {
     exit 0
 }
 
+Add-ValidationResult -Results $results -Name 'Git remote PR routing and deterministic workflow stay integrated' -Group 'Templates' -Action {
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
+    $prSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-pr/SKILL.md' -GitRef $Ref
+    $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref
+    $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
+    Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle '### PR Skill Routing'
+    Assert-Contains -Name 'README.md' -Content $readme -Needle '| [git-remote-pr](skills/git-remote-pr/SKILL.md) |'
+    Assert-Contains -Name 'git-remote-pr/SKILL.md' -Content $prSkill -Needle '**Body ownership policy:**'
+    Assert-Contains -Name 'git-remote-pr/SKILL.md' -Content $prSkill -Needle 'prepare-pr.ps1'
+    Assert-Contains -Name 'git-remote-pr/SKILL.md' -Content $prSkill -Needle 'make-plan.ps1'
+    Assert-Contains -Name 'git-remote-pr/SKILL.md' -Content $prSkill -Needle 'execute-pr.ps1'
+    & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'skills/git-remote-pr/scripts/test-pr.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'git-remote-pr deterministic regressions failed.' }
+}
+
 Add-ValidationResult -Results $results -Name 'Release evidence collection preserves squash contributors and rejects incomplete sources' -Action {
+    $releaseSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-release/SKILL.md' -GitRef $Ref
+    Assert-Contains -Name 'git-remote-release/SKILL.md' -Content $releaseSkill -Needle 'Do not put temporary evidence or draft release notes in the current repository, including ignored repository-local folders.'
+    Assert-NotContains -Name 'git-remote-release/SKILL.md' -Content $releaseSkill -Needle "or the repository's ignored `.bot/` directory"
+
     if ([string]::IsNullOrWhiteSpace($Ref)) {
         & python -B (Join-Path $repoRoot 'skills/git-remote-release/scripts/test-release-evidence.py')
         if ($LASTEXITCODE -ne 0) { throw "Release evidence regression checks failed with exit code $LASTEXITCODE" }
@@ -2862,41 +2881,19 @@ Add-ValidationResult -Results $results -Name 'dotnet-benchmark enforces valid, p
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Agent Smith protects informational and multi-target EditorConfig remediation' -Action {
-    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/SKILL.md' -GitRef $Ref
-    $reference = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/references/dotnet-editorconfig-conformance.md' -GitRef $Ref
-    $skillAuthoring = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/references/skill-authoring.md' -GitRef $Ref
-    $evals = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/evals/evals.json' -GitRef $Ref
-    $repair = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/scripts/repair-roslyn-multiproject-artifacts.ps1' -GitRef $Ref
-    $repairTests = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/agent-smith/scripts/test-repair-roslyn-multiproject-artifacts.ps1' -GitRef $Ref
-
-    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'every discovery, investigation, retry, and final `dotnet format` command must include both `--severity info` and `--verify-no-changes`'
-    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'scripts/repair-roslyn-multiproject-artifacts.ps1'
-    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle 'Always analyze the task graph for safe parallelism and concurrency.'
-    Assert-Contains -Name 'agent-smith/SKILL.md' -Content $skill -Needle '**Be concise. Sacrifice grammar for the sake of concision.**'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Batch independent retrieval through one multi-call request where the tool supports it.'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Choose C# and .NET by default for non-trivial reusable scripts'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle '## Required authoring feedback'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Microsoft''s official .NET support policy'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Optimizing skill descriptions'
-    Assert-Contains -Name 'skill-authoring.md' -Content $skillAuthoring -Needle 'Evaluating skill output quality'
-    Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle 'dotnet format style "<solution-or-project>"'
-    Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle '`dotnet format` defaults to severity `warn`'
-    Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle 'Directory application is all-or-nothing at preflight'
-    Assert-Contains -Name 'dotnet-editorconfig-conformance.md' -Content $reference -Needle "git grep -n -F 'Unmerged change from project'"
-    Assert-Contains -Name 'agent-smith/evals/evals.json' -Content $evals -Needle 'finish fixing all IDE0161 findings in MultiTargeted.sln'
-    Assert-Contains -Name 'agent-smith/evals/evals.json' -Content $evals -Needle 'fetches twelve independent service endpoints sequentially'
-    Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle 'function Test-LinePrefix'
-    Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle "pattern = 'whole-document-namespace-conversion'"
-    Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle "pattern = 'unrecognized'"
-    Assert-Contains -Name 'repair-roslyn-multiproject-artifacts.ps1' -Content $repair -Needle '$Apply -and -not $hasUnsafeArtifact'
-    Assert-Contains -Name 'test-repair-roslyn-multiproject-artifacts.ps1' -Content $repairTests -Needle 'Directory apply partially repaired a file despite an unsafe sibling artifact.'
-    Assert-Contains -Name 'test-repair-roslyn-multiproject-artifacts.ps1' -Content $repairTests -Needle 'An unsupported localized artifact should fail closed.'
-
-    $repairTestPath = Join-Path $repoRoot 'skills/agent-smith/scripts/test-repair-roslyn-multiproject-artifacts.ps1'
-    & pwsh -NoProfile -NonInteractive -File $repairTestPath
+Add-ValidationResult -Results $results -Name 'Agent Smith preserves its operating model, reference routing, and conformance safeguards' -Action {
+    $testPath = Join-Path $repoRoot 'scripts/tests/test-agent-smith.ps1'
+    $testArguments = @('-NoProfile', '-NonInteractive', '-File', $testPath)
+    if (-not [string]::IsNullOrWhiteSpace($Ref)) { $testArguments += @('-Ref', $Ref) }
+    & pwsh @testArguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Agent Smith Roslyn multi-project artifact repair tests failed with exit code $LASTEXITCODE."
+        throw "Agent Smith focused validation failed with exit code $LASTEXITCODE."
+    }
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/tests/test-agent-smith-ref.ps1')
+        if ($LASTEXITCODE -ne 0) {
+            throw "Agent Smith ref isolation regressions failed with exit code $LASTEXITCODE."
+        }
     }
 }
 
@@ -2983,6 +2980,15 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     $readme = Get-FileText -RepoRoot $repoRoot -RelativePath 'README.md' -GitRef $Ref
 
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'automatic trigger for this skill, not as a casual hint.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '## Working-tree Scratch Isolation'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'This is a pre-write requirement in every mode'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'including symlink/junction targets'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'never fall back to the working directory'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'git diff > git_diff_output.txt'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Never writes git_diff_output.txt or other scratch artifacts anywhere inside the project'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Treat the active repository as the subject of review, never as scratch storage.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'use a unique absolute path under the operating system''s temporary directory'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'never delete a pre-existing or user-authored untracked file merely because its name looks temporary.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '### Invocation Routing Lock'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Interpret `Please do a git bot commit yolo` as `git bot commit` identity plus auto-approval for the full current worktree.'
     Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle '`yolo` is not the commit message, and it does not request a changelog.'
@@ -3103,6 +3109,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats yolo as explicit approval to complete the commit workflow in the same turn after required checks pass'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not ask whether to proceed, wait for another approval, or return a pending commit plan after presenting the status summary'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not replace bot identity with a human-authored commit plus a Co-authored-by trailer'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not redirect git diff or other inspection output to a repo-relative scratch file such as diff.txt or git-diff.txt'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not create or leave repo-local scratch files or directories during the plan-only workflow'
     Assert-Contains -Name 'README.md' -Content $readme -Needle '**Single-category context gate**'
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'Multi-file plans that initially collapse to one category also require a visible full-context quality gate'
     Assert-Contains -Name 'README.md' -Content $readme -Needle '**Authoritative command routing**'
@@ -3125,6 +3133,7 @@ Add-ValidationResult -Results $results -Name 'Git visual squash summary skill st
 
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'This skill turns a stack of commits into a curated grouped summary'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'This skill is non-mutating:'
+    Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'never create repo-local scratch files to capture diffs, logs, notes, or intermediate summaries.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Account for every distinct surviving change in the output.'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'There is no total line limit'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $skill -Needle 'Build an internal coverage inventory from the complete `--name-status` output.'
@@ -3206,7 +3215,8 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '## User Intent vs. Mandatory Gates'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'The Step 3 confirmation gate exists to prevent silent inclusion'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Use the standard Keep a Changelog section order:'
-    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Preserve natural line breaks and readable prose. Do not apply any fixed'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '**Never hard-wrap changelog prose.** Keep every paragraph and bullet item on one physical line'
+    Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'Any hard-wrapped paragraph or bullet means the edit is incomplete.'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'End each bullet with `,` and end the last bullet in each section with'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle '### Step 3: Confirm Pending Worktree Changes (MANDATORY GATE)'
     Assert-Contains -Name 'git-keep-a-changelog/SKILL.md' -Content $skill -Needle 'This is a required checkpoint. Do not proceed to Step 4 until this step is complete.'
@@ -3249,7 +3259,7 @@ Add-ValidationResult -Results $results -Name 'Git keep a changelog skill updates
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Reads full commit subjects and bodies before writing the release entry'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats a leading branch version such as v0.3.0/ as a release hint'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Uses full commit bodies rather than relying on subject lines alone'
-    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Preserves natural prose wrapping instead of forcing any fixed column width'
+    Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Keeps each prose paragraph and bullet item on one physical line regardless of length'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Ends bullets with commas and ends the final bullet in each section with a period'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Creates CHANGELOG.md when it does not already exist'
     Assert-Contains -Name 'git-keep-a-changelog/evals/evals.json' -Content $evals -Needle 'Treats the pending-worktree question as a mandatory gate before Step 4 for a concrete release'

@@ -8,6 +8,8 @@ compatibility: >
 
 # .NET Test
 
+![.NET Test](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-test/assets/hero.jpg)
+
 Bootstrap and refactor xUnit projects using the tested patterns from [Codebelt xUnit](https://github.com/codebeltnet/xunit) and the matching application-host patterns from [Codebelt Bootstrapper](https://github.com/codebeltnet/bootstrapper).
 
 ## This skill has one job
