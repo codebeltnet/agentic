@@ -9,7 +9,7 @@
     },
     {
       "id": 2,
-      "prompt": "Create the pull request. I approve the exact plan you just showed. The local HEAD and remote state are unchanged.",
+      "prompt": "approve APR-4F8C2A91D6B3\n\nThis is the exact phrase displayed in the existing PR preview.md linked in the preceding turn, and plan.json has approval_id APR-4F8C2A91D6B3. The local HEAD and remote state are unchanged.",
       "expected_output": "Rechecks the approved preview artifact and snapshot, performs only the previewed normal push, create/edit, and assignment, then verifies the persisted PR and full file inventory.",
       "expectations": ["Approval is applied to the same prepared plan without asking again", "The approved preview artifact is rechecked before any push or PR metadata write", "Tracked local commits missing from the remote branch are pushed normally before PR creation or update", "Remote SHA equals local HEAD before PR metadata write", "No reviewers, labels, milestones, projects, auto-merge, or unrelated writes", "Post-write verification checks base, head, title, body, draft state, assignee, SHA, and all changed files"]
     },
@@ -58,8 +58,8 @@
     {
       "id": 10,
       "prompt": "I approved the PR preview, but before you execute I made another commit, changed the working tree, and the base branch moved.",
-      "expected_output": "Invalidates the old approval, prepares fresh evidence and a new preview, and asks again in normal mode without pushing or editing the PR.",
-      "expectations": ["Material state is rechecked immediately before writes", "Dirty worktree independently blocks", "Old approval is not reused", "No remote mutation occurs from the invalidated plan"]
+      "expected_output": "Invalidates the old approval and terminates the transaction with available approved-versus-current facts. Preserves the original evidence, body, plan, and preview and returns control without preparing or requesting approval for a replacement.",
+      "expectations": ["Material state is rechecked immediately before writes", "Dirty worktree independently blocks", "Old approval is not reused", "No remote mutation occurs from the invalidated plan", "No recollection, regenerated body, Plan B, Preview B, or new approval request follows invalidation", "Only a subsequent explicit refresh or retry with new state can start a new transaction"]
     },
     {
       "id": 11,
@@ -102,6 +102,24 @@
       "prompt": "Prepare a refresh of the existing PR. The evidence and final patch have already been collected in one temporary workspace. Several files share the theme New git-remote-pr skill, while the proposed body heading is **New git-remote-pr Skill:**. Other files use two themes that are actually missing from the body. Previous attempts took minutes because errors were invisible and preparation restarted after each failure. Show me the exact proposed description as a Markdown link; do not write remotely.",
       "expected_output": "Reuses the captured evidence and workspace, inspects distinct themes before drafting, accepts casing and surrounding heading punctuation, and fixes all genuinely missing themes together from the visible diagnostics. Links preview.md containing the exact proposed title and full body, then waits for approval.",
       "expectations": ["Casing and surrounding heading punctuation do not cause a coverage failure", "All missing themes and affected paths are reported together with a nonzero exit visible in stdout and stderr", "No unnecessary recollection, unchanged patch reread, or second workspace is used for prose corrections", "A failed re-plan cannot leave a stale plan or preview available for approval", "The preview is a clickable absolute-path Markdown link containing the exact title and full body rather than a summary of intended actions", "Every changed path retains meaningful coverage and no remote write occurs"]
+    },
+    {
+      "id": 18,
+      "prompt": "approved\n\nThe preceding turn presented [Preview proposed PR](/tmp/pr-review-a/preview.md), showing Approval ID: APR-4F8C2A91D6B3 and ending with To approve this exact preview, reply: approve APR-4F8C2A91D6B3. No yolo or auto was attached to my PR request.",
+      "expected_output": "Re-presents the existing /tmp/pr-review-a/preview.md link and asks for approve APR-4F8C2A91D6B3. Performs no execution or regeneration.",
+      "expectations": ["Bare approved does not authorize execute-pr.ps1 or any remote write", "The same existing preview link and displayed exact phrase are reused", "No evidence, body, plan, or preview is regenerated", "The agent does not supply an inferred approval ID on the user's behalf"]
+    },
+    {
+      "id": 19,
+      "prompt": "approve APR-4F8C2A91D6B3\n\nI reviewed Preview A at /tmp/pr-review-a/preview.md for 5 commits and 9 files. During execution the snapshot check reports 37 commits and 66 files, changed HEAD/base, and zero remote writes. Continue handling that failure.",
+      "expected_output": "Reports approval A invalidated, displays the known 5/9 versus 37/66 facts, preserves A's four artifacts, and hard-stops with an invitation to explicitly request a refresh. Does not prepare or seek approval for Plan B.",
+      "expectations": ["The 5 commits / 9 files to 37 commits / 66 files change is immediately visible", "No remote write is attempted after the drift failure", "Original evidence.json, body.md, plan.json, and preview.md remain unchanged", "No recollection, new workspace, body generation, Plan B, Preview B, or renewed approval question occurs in this recovery sequence", "The final response returns control and says an explicit refresh request is needed", "A later generic approved cannot revive the invalidated transaction, including after same-request auto execution"]
+    },
+    {
+      "id": 20,
+      "prompt": "Refresh the PR preview; retry with new state. The previous transaction /tmp/pr-review-a was invalidated when the branch changed from 5 commits / 9 files to 37 commits / 66 files. I had approved APR-4F8C2A91D6B3 for A. This request authorizes fresh preparation only.",
+      "expected_output": "Starts a new scratch workspace, collects fresh evidence, writes a fresh body, prepares Preview B and Plan B with a different approval ID, and waits for approval of B's exact displayed phrase.",
+      "expectations": ["The explicit refresh starts a new transaction rather than resuming A", "All original A artifacts remain unchanged", "Fresh evidence, body, plan, and preview are produced in a new workspace", "Approval B differs from A and is shown in B's preview and exact approval phrase", "The response links Preview B and asks for its exact phrase", "Approval A, generic approval, or absence of approval B cannot execute Plan B", "Prior yolo or auto permission is not carried into this refresh"]
     }
   ]
 }
