@@ -8,6 +8,25 @@ $PSNativeCommandUseErrorActionPreference = $false
 $env:GIT_TERMINAL_PROMPT = '0'
 $env:GH_PROMPT_DISABLED = '1'
 
+function Write-PrFailure { param([string]$Message)
+    # Some noninteractive hosts only surface stdout. Keep failure visible there,
+    # preserve stderr for CLI callers, and let the entry point exit nonzero.
+    [Console]::Out.WriteLine("ERROR: $Message")
+    [Console]::Error.WriteLine($Message)
+}
+
+function Assert-PrThemeCoverage { param($Evidence, [string]$Body)
+    $coverageErrors = [System.Collections.Generic.List[string]]::new()
+    $unassigned = @($Evidence.files | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.theme) })
+    if ($unassigned.Count) { $coverageErrors.Add("Unassigned paths: $($unassigned.path -join ', '). Assign a reviewer theme to each path.") }
+    foreach ($group in @($Evidence.files | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.theme) } | Group-Object theme)) {
+        if (-not $Body.Contains($group.Name.Trim(), [System.StringComparison]::OrdinalIgnoreCase)) {
+            $coverageErrors.Add("Missing theme '$($group.Name)' ($($group.Count) paths: $($group.Group.path -join ', ')). Use this phrase in a heading or bullet, or correct the coverage map.")
+        }
+    }
+    if ($coverageErrors.Count) { throw ("Theme coverage failed (case-insensitive literal matching; Markdown heading punctuation may surround the phrase):`n" + ($coverageErrors -join "`n")) }
+}
+
 function Invoke-Tool {
     param([string]$Name, [string[]]$Arguments, [switch]$AllowFailure)
     $command = Get-Command $Name -ErrorAction SilentlyContinue

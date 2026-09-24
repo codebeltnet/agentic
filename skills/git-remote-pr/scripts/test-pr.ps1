@@ -261,11 +261,30 @@ try {
         $evidence.files | ForEach-Object { $_.theme = if ($_.path -eq 'guide.md') { 'Documentation' } else { 'Behavior' } }
         $evidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $paths.evidence -Encoding utf8
         $bodyPath = Join-Path (Split-Path $paths.evidence) 'body.md'
-        [System.IO.File]::WriteAllText($bodyPath, "This pull request changes behavior and review guidance.`n`n**Behavior**`n`n- Updates the feature.`n`n**Documentation**`n`n- Adds review guidance.", $utf8)
+        [System.IO.File]::WriteAllText($bodyPath, "This pull request changes behavior and review guidance.`n`n**BEHAVIOR:**`n`n- Updates the feature.`n`n**documentation:**`n`n- Adds review guidance.", $utf8)
         $planText = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $paths.evidence -BodyFile $bodyPath -Title 'V0.10.2/service update' 2>&1)
         Assert ($LASTEXITCODE -eq 0) "Read-only plan failed: $($planText -join ' ')"
         $plan = ($planText -join "`n") | ConvertFrom-Json
         Assert ($plan.push_required -and $plan.metadata_write -eq 'CREATE' -and $plan.assignment_write) 'Plan did not declare exact create writes.'
+        $preview = [System.IO.File]::ReadAllText($plan.preview_file, $utf8)
+        Assert ($preview.EndsWith([System.IO.File]::ReadAllText($bodyPath, $utf8), [StringComparison]::Ordinal)) 'Preview omitted or altered the complete proposed body.'
+        Assert ($preview.Contains('V0.10.2/service update') -and $preview.Contains('main <- acme/widget:v0.10.2/service-update') -and $preview.Contains('State: ready') -and $preview.Contains('Normal push') -and $preview.Contains('Assign reviewer')) 'Preview omitted the title, comparison, readiness, push, or assignment.'
+        $validEvidence = [System.IO.File]::ReadAllText($paths.evidence, $utf8)
+        $evidence.files[0].theme = 'Missing behavior'
+        $evidence.files[1].theme = 'Missing documentation'
+        $evidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $paths.evidence -Encoding utf8
+        $stderrPath = Join-Path $root 'plan.stderr'
+        $badPlan = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $paths.evidence -BodyFile $bodyPath -Title 'V0.10.2/service update' 2> $stderrPath)
+        Assert ($LASTEXITCODE -ne 0 -and ($badPlan -join "`n").Contains("Missing theme 'Missing behavior'") -and ($badPlan -join "`n").Contains("Missing theme 'Missing documentation'")) 'All missing themes must be visible in stdout on the first failed attempt.'
+        Assert ((Get-Content $stderrPath -Raw).Contains('case-insensitive')) 'CLI stderr lost the actionable matching diagnostic.'
+        Assert (-not (Test-Path $plan.preview_file) -and -not (Test-Path (Join-Path (Split-Path $paths.evidence) 'plan.json'))) 'Rejected re-plan left a stale plan or preview.'
+        $evidence.files[0].theme = ' '
+        $evidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $paths.evidence -Encoding utf8
+        $unassignedPlan = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $paths.evidence -BodyFile $bodyPath -Title 'V0.10.2/service update' 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($unassignedPlan -join "`n").Contains('Unassigned paths:') -and ($unassignedPlan -join "`n").Contains('Missing documentation')) 'Unassigned and absent themes must fail together.'
+        [System.IO.File]::WriteAllText($paths.evidence, $validEvidence, $utf8)
+        $planText = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $paths.evidence -BodyFile $bodyPath -Title 'V0.10.2/service update' 2>&1)
+        Assert ($LASTEXITCODE -eq 0) 'Case-insensitive coverage did not recover in the same workspace.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Planning made a GH write.'
         $planPath = Join-Path (Split-Path $paths.evidence) 'plan.json'
         $planRaw = [System.IO.File]::ReadAllText($planPath, $utf8)
@@ -308,6 +327,8 @@ try {
         $noOp = Run-Execute $secondPaths.evidence $secondBody 'V0.10.2/service update'
         Assert ($noOp.code -eq 0 -and $noOp.text -match 'already up to date') "No-op update failed: $($noOp.text)"
         Assert ((Get-Content (Join-Path $state 'writes.log')).Count -eq 2) 'No-op made a metadata write.'
+        $noOpPreview = Get-Content (Join-Path (Split-Path $secondPaths.evidence) 'preview.md') -Raw
+        Assert ($noOpPreview.Contains('Planned writes: None; verify already up to date') -and $noOpPreview.Contains('Replace body: No')) 'No-op preview incorrectly promises a write.'
         [System.IO.File]::WriteAllText((Join-Path $repo 'extra.txt'), 'more', $utf8)
         Test-Git @('add', 'extra.txt') | Out-Null
         Test-Git @('commit', '-m', 'Add extra result') | Out-Null
@@ -326,6 +347,8 @@ try {
         $update = Run-Execute $thirdPaths.evidence $thirdBody 'V0.10.2/service update'
         Assert ($update.code -eq 0 -and $update.text -match 'updated') "Existing PR refresh failed: $($update.text)"
         Assert ((Get-Content (Join-Path $state 'pr.json') -Raw | ConvertFrom-Json).body -ceq [System.IO.File]::ReadAllText($thirdBody, $utf8)) 'Existing body was not replaced in full.'
+        $updatePreview = Get-Content (Join-Path (Split-Path $thirdPaths.evidence) 'preview.md') -Raw
+        Assert ($updatePreview.Contains('Replace body: Yes, the entire current body') -and $updatePreview.Contains('https://github.com/acme/widget/pull/7') -and $updatePreview.Contains('Edit PR')) 'Update preview omitted whole-body replacement, the PR URL, or the metadata write.'
         New-Item (Join-Path $state 'bad-files') -ItemType File | Out-Null
         $fourth = Run-Prepare (Join-Path $root 'fourth')
         $fourthPaths = $fourth.text | ConvertFrom-Json
@@ -384,6 +407,8 @@ try {
         Assert ($binaryPrep.code -eq 0) "Binary preparation failed: $($binaryPrep.text)"
         $binaryEvidence = Get-Content (($binaryPrep.text | ConvertFrom-Json).evidence) -Raw | ConvertFrom-Json
         Assert (@($binaryEvidence.files | Where-Object { $_.path -eq 'image.bin' -and $_.binary }).Count -eq 1) 'Binary file was not marked in evidence.'
+        $binaryPatch = Get-Content (($binaryPrep.text | ConvertFrom-Json).patch) -Raw
+        Assert ($binaryPatch -match 'Binary files .*image.bin differ' -and $binaryPatch -notmatch 'GIT binary patch|(?m)^literal \d+') 'Review patch must retain binary metadata without encoded payloads.'
 
         $other = Join-Path $root 'other clone'
         Test-Git @('clone', $bare, $other) | Out-Null

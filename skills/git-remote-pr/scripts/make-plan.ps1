@@ -10,13 +10,17 @@ try {
     $root = (Invoke-Git @('rev-parse', '--show-toplevel')).Text.Trim()
     $evidencePath = Assert-ScratchPath $EvidenceFile $root
     $bodyPath = Assert-ScratchPath $BodyFile $root
+    $planPath = Join-Path (Split-Path -Parent $evidencePath) 'plan.json'
+    $previewPath = Join-Path (Split-Path -Parent $evidencePath) 'preview.md'
+    # A failed re-plan must not leave an earlier plan/preview looking current.
+    foreach ($stalePath in @($planPath, $previewPath)) {
+        if (Test-Path -LiteralPath $stalePath) { Remove-Item -LiteralPath $stalePath -Force }
+    }
     $evidence = Get-Content -LiteralPath $evidencePath -Raw -Encoding utf8 | ConvertFrom-Json
     $body = [System.IO.File]::ReadAllText($bodyPath, $script:Utf8)
     if (-not $Title.Trim() -or -not $body.Trim()) { throw 'PR title and body must both be nonempty.' }
     if ($body.Contains('diffhunk://')) { throw 'PR body contains a non-portable diffhunk reference.' }
-    foreach ($file in $evidence.files) {
-        if ([string]::IsNullOrWhiteSpace([string]$file.theme) -or -not $body.Contains([string]$file.theme)) { throw "Changed path '$($file.path)' lacks a theme represented in the body." }
-    }
+    Assert-PrThemeCoverage $evidence $body
     if ($Draft -and $evidence.existing_pr -and -not $evidence.existing_pr.draft) { throw 'An existing ready PR cannot be converted to draft by this workflow.' }
     $assigned = $evidence.existing_pr -and @($evidence.existing_pr.assignees) -contains $evidence.assignee
     $metadata = if (-not $evidence.existing_pr) { 'CREATE' } elseif ($evidence.existing_pr.title -cne $Title -or $evidence.existing_pr.body -cne $body) { 'UPDATE' } else { 'NONE' }
@@ -43,11 +47,40 @@ try {
         existing_pr_url = if ($evidence.existing_pr) { $evidence.existing_pr.url } else { $null }
         commit_count = $evidence.commit_count
         changed_file_count = $evidence.changed_file_count
+        preview_file = $previewPath
     }
-    $planPath = Join-Path (Split-Path -Parent $evidencePath) 'plan.json'
+    $writes = [System.Collections.Generic.List[string]]::new()
+    if ($plan.push_required) { $writes.Add("Normal push to $($evidence.head_remote)/$($plan.head)") }
+    if ($metadata -eq 'CREATE') { $writes.Add('Create PR with the title and complete body below') }
+    if ($metadata -eq 'UPDATE') { $writes.Add('Edit PR with the title and complete body below') }
+    if ($plan.assignment_write) { $writes.Add("Assign $($plan.assignee)") }
+    $replaceBody = if ($evidence.existing_pr -and $metadata -eq 'UPDATE') { 'Yes, the entire current body' } else { 'No' }
+    $titleChange = -not $evidence.existing_pr -or $evidence.existing_pr.title -cne $Title
+    $bodyChange = -not $evidence.existing_pr -or $evidence.existing_pr.body -cne $body
+    $preview = @(
+        "# $($plan.action) PR preview"
+        ''
+        "- Repository: $($plan.repository)"
+        "- Comparison: $($plan.base) <- $($plan.head_repository):$($plan.head)"
+        "- State: $(if ($plannedDraft) { 'draft' } else { 'ready' })"
+        "- Commits: $($plan.commit_count); changed files: $($plan.changed_file_count); assignee: $($plan.assignee)"
+        "- Push required: $($plan.push_required)"
+        "- Existing PR: $(if ($plan.existing_pr_url) { $plan.existing_pr_url } else { 'None' })"
+        "- Replace body: $replaceBody"
+        "- Changes: title=$titleChange; body=$bodyChange; assignment=$($plan.assignment_write)"
+        "- Planned writes: $(if ($writes.Count) { $writes -join '; ' } else { 'None; verify already up to date' })"
+        ''
+        '## Proposed title'
+        ''
+        $Title
+        ''
+        '## Proposed body'
+        ''
+    ) -join "`n"
+    [System.IO.File]::WriteAllText($previewPath, ($preview + "`n" + $body), $script:Utf8)
     [System.IO.File]::WriteAllText($planPath, ($plan | ConvertTo-Json -Depth 8), $script:Utf8)
     $plan | ConvertTo-Json -Depth 8
 } catch {
-    [Console]::Error.WriteLine($_.Exception.Message)
+    Write-PrFailure $_.Exception.Message
     exit 1
 }

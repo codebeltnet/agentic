@@ -59,7 +59,7 @@ try {
     $parentRepo = if ($headMeta.PSObject.Properties.Name -contains 'parent' -and $headMeta.parent) { [string]$headMeta.parent.full_name } else { $null }
     if (-not $Repository -and $headMeta.fork -and -not $parentRepo) { throw "Fork parent for $headRepo is ambiguous. Supply the canonical base repository with -Repository owner/repo." }
     $baseRepo = if ($Repository) { $Repository } elseif ($headMeta.fork) { $parentRepo } else { $headRepo }
-    $baseMeta = Get-GhJson "repos/$baseRepo"
+    $baseMeta = if ($baseRepo -ieq $headRepo) { $headMeta } else { Get-GhJson "repos/$baseRepo" }
     if (-not $baseMeta.full_name) { throw "Cannot resolve GitHub base repository $baseRepo." }
     if ($baseMeta.permissions -and $baseMeta.permissions.pull -eq $false) { throw "Authenticated account $($viewer.login) cannot read $baseRepo or create a PR against it." }
     $baseRepo = [string]$baseMeta.full_name
@@ -108,7 +108,9 @@ try {
             }
         }
     }
-    $patch = (Invoke-Git @('diff', '--binary', '--no-ext-diff', '--full-index', '-M', $mergeBase, $headSha)).Text
+    # Encoded binary payloads add no reviewer-readable evidence. Git retains
+    # binary change markers; the inventory still records every binary path.
+    $patch = (Invoke-Git @('diff', '--no-ext-diff', '--no-textconv', '--full-index', '-M', $mergeBase, $headSha)).Text
     [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'final.patch'), $patch, $script:Utf8)
 
     $remoteSha = Get-RemoteSha $headRemote $remoteBranch
@@ -146,6 +148,6 @@ try {
     [System.IO.File]::WriteAllText($evidencePath, ($evidence | ConvertTo-Json -Depth 20), $script:Utf8)
     [pscustomobject]@{ evidence = $evidencePath; patch = (Join-Path $OutputDirectory 'final.patch'); template = if ($templatePath) { Join-Path $OutputDirectory 'template.md' } else { $null }; action = $evidence.action; title = $evidence.title; commit_count = $evidence.commit_count; changed_file_count = $evidence.changed_file_count } | ConvertTo-Json -Compress
 } catch {
-    [Console]::Error.WriteLine($_.Exception.Message + "`n" + $_.ScriptStackTrace)
+    Write-PrFailure ($_.Exception.Message + "`n" + $_.ScriptStackTrace)
     exit 1
 }

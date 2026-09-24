@@ -4,6 +4,11 @@ param(
 )
 . (Join-Path $PSScriptRoot 'pr-common.ps1')
 
+trap {
+    Write-PrFailure $_.Exception.Message
+    exit 1
+}
+
 if (-not $Approved) { throw 'Remote writes require explicit approval or yolo/auto attached to the same PR request.' }
 if (-not (Test-Path -LiteralPath $PlanFile -PathType Leaf)) { throw 'Prepared plan file is missing.' }
 $plan = Get-Content -LiteralPath $PlanFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -26,10 +31,7 @@ $expected = Get-Content -LiteralPath $EvidenceFile -Raw -Encoding utf8 | Convert
 $body = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $BodyFile).Path, $script:Utf8)
 if (-not $body.Trim()) { throw 'PR description is empty.' }
 if ($body.Contains('diffhunk://')) { throw 'PR description contains non-portable diffhunk references.' }
-foreach ($file in $expected.files) {
-    if ([string]::IsNullOrWhiteSpace([string]$file.theme)) { throw "Changed path '$($file.path)' has no coverage theme in the prepared inventory." }
-    if (-not $body.Contains([string]$file.theme)) { throw "Coverage theme '$($file.theme)' for '$($file.path)' is absent from the PR body." }
-}
+Assert-PrThemeCoverage $expected $body
 $root = (Invoke-Git @('rev-parse', '--show-toplevel')).Text.Trim()
 $null = Assert-ScratchPath $PlanFile $root
 $null = Assert-ScratchPath $EvidenceFile $root
@@ -115,7 +117,7 @@ try {
     [pscustomobject]@{ result = $result; url = $url; title = $Title; base = $fresh.base; head = $fresh.remote_branch; assignee = $fresh.assignee; commit_count = $fresh.commit_count; changed_file_count = $fresh.changed_file_count } | ConvertTo-Json -Compress
 } catch {
     $partial = if ($url) { "PR URL: $url. " } elseif ($pushDone) { 'Branch push succeeded. ' } else { '' }
-    [Console]::Error.WriteLine($partial + $_.Exception.Message + "`n" + $_.ScriptStackTrace)
+    Write-PrFailure ($partial + $_.Exception.Message + "`n" + $_.ScriptStackTrace)
     exit 1
 } finally {
     if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
