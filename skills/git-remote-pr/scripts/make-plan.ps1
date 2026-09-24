@@ -20,6 +20,7 @@ try {
     $body = [System.IO.File]::ReadAllText($bodyPath, $script:Utf8)
     if (-not $Title.Trim() -or -not $body.Trim()) { throw 'PR title and body must both be nonempty.' }
     if ($body.Contains('diffhunk://')) { throw 'PR body contains a non-portable diffhunk reference.' }
+    if (-not $evidence.template_path) { Assert-PrBodyStructure $body }
     Assert-PrThemeCoverage $evidence $body
     if ($Draft -and $evidence.existing_pr -and -not $evidence.existing_pr.draft) { throw 'An existing ready PR cannot be converted to draft by this workflow.' }
     $assigned = $evidence.existing_pr -and @($evidence.existing_pr.assignees) -contains $evidence.assignee

@@ -15,6 +15,42 @@ function Write-PrFailure { param([string]$Message)
     [Console]::Error.WriteLine($Message)
 }
 
+function Assert-PrBodyStructure { param([string]$Body)
+    $hasOpening = $false
+    $openingEnded = $false
+    $theme = $null
+    $hasBullet = $false
+    foreach ($line in ($Body -split '\r?\n')) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            if ($hasOpening) { $openingEnded = $true }
+            continue
+        }
+        if ($line -match '^\*\*(?<theme>[^*]+):\*\*\s*$' -and $Matches.theme.Trim()) {
+            if (-not $hasOpening) { throw 'PR body structure: exactly one opening prose paragraph is required before the first theme.' }
+            if ($theme -and -not $hasBullet) { throw "PR body structure: theme '$theme' needs at least one dash bullet." }
+            $theme = $Matches.theme.Trim()
+            $hasBullet = $false
+            continue
+        }
+        if ($line -match '^\s*(?:#{1,6}\s|\*\*|__)') { throw 'PR body structure: thematic headings must use **<Reviewer theme>:**.' }
+        if ($theme) {
+            if ($line -notmatch '^-\s+\S') { throw "PR body structure: only dash bullets are allowed beneath '$theme'; prose paragraphs are not allowed." }
+            $hasBullet = $true
+        } else {
+            if ($openingEnded -or $line -match '^\s*(?:[-+*]\s|\d+[.)]\s|>|`{3}|~{3}|\|)' -or $line -match '^(?:\t| {4})') {
+                throw 'PR body structure: exactly one opening prose paragraph is required before the first theme.'
+            }
+            $hasOpening = $true
+        }
+    }
+    if (-not $hasOpening) { throw 'PR body structure: an opening prose paragraph is required.' }
+    if (-not $theme) { throw 'PR body structure: at least one thematic heading is required.' }
+    if (-not $hasBullet) { throw "PR body structure: theme '$theme' needs at least one dash bullet." }
+    if ($theme -match '^(?:changes?\s+summary|summary(?:\s+of\s+changes)?|conclusion)$') {
+        throw "PR body structure: redundant final summary section '$theme' is not allowed."
+    }
+}
+
 function Assert-PrThemeCoverage { param($Evidence, [string]$Body)
     $coverageErrors = [System.Collections.Generic.List[string]]::new()
     $unassigned = @($Evidence.files | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.theme) })
