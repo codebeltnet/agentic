@@ -27,6 +27,8 @@ function Run-Execute([string]$Evidence, [string]$Body, [string]$Title) {
     return [pscustomobject]@{ code = $LASTEXITCODE; text = ($lines | ForEach-Object { [string]$_ }) -join "`n" }
 }
 try {
+    & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'test-pr-body.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'PR body structure regressions failed.' }
     New-Item -ItemType Directory -Path $root | Out-Null
     $shim = Join-Path $root 'shim'
     $state = Join-Path $root 'state'
@@ -270,6 +272,15 @@ try {
         Assert ($preview.EndsWith([System.IO.File]::ReadAllText($bodyPath, $utf8), [StringComparison]::Ordinal)) 'Preview omitted or altered the complete proposed body.'
         Assert ($preview.Contains('V0.10.2/service update') -and $preview.Contains('main <- acme/widget:v0.10.2/service-update') -and $preview.Contains('State: ready') -and $preview.Contains('Normal push') -and $preview.Contains('Assign reviewer')) 'Preview omitted the title, comparison, readiness, push, or assignment.'
         $validEvidence = [System.IO.File]::ReadAllText($paths.evidence, $utf8)
+        $validBody = [System.IO.File]::ReadAllText($bodyPath, $utf8)
+        [System.IO.File]::WriteAllText($bodyPath, $validBody.Replace('- Updates the feature.', 'Updates the feature.'), $utf8)
+        $badShape = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $paths.evidence -BodyFile $bodyPath -Title 'V0.10.2/service update' 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($badShape -join "`n").Contains('PR body structure:')) 'Malformed body passed planning.'
+        Assert (-not (Test-Path $plan.preview_file) -and -not (Test-Path (Join-Path (Split-Path $paths.evidence) 'plan.json'))) 'Malformed body left a stale plan or preview.'
+        Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Malformed body made a GH write.'
+        [System.IO.File]::WriteAllText($bodyPath, $validBody, $utf8)
+        $planText = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $paths.evidence -BodyFile $bodyPath -Title 'V0.10.2/service update' 2>&1)
+        Assert ($LASTEXITCODE -eq 0) 'Regenerated body did not recover in the same workspace.'
         $evidence.files[0].theme = 'Missing behavior'
         $evidence.files[1].theme = 'Missing documentation'
         $evidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $paths.evidence -Encoding utf8
@@ -308,7 +319,7 @@ try {
         $tamperedLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)
         Assert ($LASTEXITCODE -ne 0 -and ($tamperedLines -join "`n") -match 'changed after the preview') 'Altered body passed the prepared plan hash.'
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Withheld approval or changed body made a GH write.'
-        [System.IO.File]::WriteAllText($bodyPath, "This pull request changes behavior and review guidance.`n`n**Behavior**`n`n- Updates the feature.`n`n**Documentation**`n`n- Adds review guidance.", $utf8)
+        [System.IO.File]::WriteAllText($bodyPath, "This pull request changes behavior and review guidance.`n`n**Behavior:**`n`n- Updates the feature.`n`n**Documentation:**`n`n- Adds review guidance.", $utf8)
         $wrong = Run-Execute $paths.evidence $bodyPath 'V0.10.2/service update'
         Assert ($wrong.code -eq 0) "Approved create failed: $($wrong.text)"
         $created = $wrong.text | ConvertFrom-Json
@@ -343,7 +354,7 @@ try {
         $thirdEvidence.files | ForEach-Object { $_.theme = if ($_.path -eq 'guide.md') { 'Documentation' } else { 'Behavior' } }
         $thirdEvidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $thirdPaths.evidence -Encoding utf8
         $thirdBody = Join-Path (Split-Path $thirdPaths.evidence) 'body.md'
-        [System.IO.File]::WriteAllText($thirdBody, "This pull request changes behavior and review guidance.`n`n**Behavior**`n`n- Updates the feature and extra result.`n`n**Documentation**`n`n- Adds review guidance.", $utf8)
+        [System.IO.File]::WriteAllText($thirdBody, "This pull request changes behavior and review guidance.`n`n**Behavior:**`n`n- Updates the feature and extra result.`n`n**Documentation:**`n`n- Adds review guidance.", $utf8)
         $update = Run-Execute $thirdPaths.evidence $thirdBody 'V0.10.2/service update'
         Assert ($update.code -eq 0 -and $update.text -match 'updated') "Existing PR refresh failed: $($update.text)"
         Assert ((Get-Content (Join-Path $state 'pr.json') -Raw | ConvertFrom-Json).body -ceq [System.IO.File]::ReadAllText($thirdBody, $utf8)) 'Existing body was not replaced in full.'
@@ -398,6 +409,17 @@ try {
         Assert ($templated.code -eq 0) "Default template preparation failed: $($templated.text)"
         $templatePaths = $templated.text | ConvertFrom-Json
         Assert ($templatePaths.template -and (Get-Content $templatePaths.template -Raw) -match 'Tests passed') 'Repository PR template was not collected.'
+        $templateEvidence = Get-Content $templatePaths.evidence -Raw | ConvertFrom-Json
+        $templateEvidence.files | ForEach-Object { $_.theme = 'Summary' }
+        $templateEvidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $templatePaths.evidence -Encoding utf8
+        $templateBody = Join-Path (Split-Path $templatePaths.evidence) 'body.md'
+        [System.IO.File]::WriteAllText($templateBody, "## Summary`n`nUpdates behavior and guidance.`n`n## Validation`n`n- [ ] Tests passed`n", $utf8)
+        $templatePlan = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $templatePaths.evidence -BodyFile $templateBody -Title 'V0.10.2/service update' 2>&1)
+        Assert ($LASTEXITCODE -eq 0) "Repository template did not override default body structure: $($templatePlan -join ' ')"
+        $templateEvidence.files[0].theme = 'Missing template theme'
+        $templateEvidence | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $templatePaths.evidence -Encoding utf8
+        $templatePlan = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'make-plan.ps1') -EvidenceFile $templatePaths.evidence -BodyFile $templateBody -Title 'V0.10.2/service update' 2>&1)
+        Assert ($LASTEXITCODE -ne 0 -and ($templatePlan -join "`n").Contains('Missing template theme')) 'Template override bypassed theme coverage.'
 
         $binaryPath = Join-Path $repo 'image.bin'
         [System.IO.File]::WriteAllBytes($binaryPath, [byte[]]@(0,1,2,3,4,5))
