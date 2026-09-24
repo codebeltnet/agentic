@@ -23,52 +23,39 @@ try {
     if (-not $evidence.template_path) { Assert-PrBodyStructure $body }
     Assert-PrThemeCoverage $evidence $body
     if ($Draft -and $evidence.existing_pr -and -not $evidence.existing_pr.draft) { throw 'An existing ready PR cannot be converted to draft by this workflow.' }
+    $action = [string]$evidence.action
+    $repository = [string]$evidence.repository
+    $base = [string]$evidence.base
+    $head = [string]$evidence.remote_branch
+    $headRepository = [string]$evidence.head_repository
+    $assignee = [string]$evidence.assignee
+    $pushRequired = [bool]$evidence.push_required
+    $existingPrUrl = if ($evidence.existing_pr) { [string]$evidence.existing_pr.url } else { $null }
+    $commitCount = [int]$evidence.commit_count
+    $changedFileCount = [int]$evidence.changed_file_count
     $assigned = $evidence.existing_pr -and @($evidence.existing_pr.assignees) -contains $evidence.assignee
+    $assignmentWrite = -not $assigned
     $metadata = if (-not $evidence.existing_pr) { 'CREATE' } elseif ($evidence.existing_pr.title -cne $Title -or $evidence.existing_pr.body -cne $body) { 'UPDATE' } else { 'NONE' }
     $plannedDraft = if ($evidence.existing_pr) { [bool]$evidence.existing_pr.draft } else { [bool]$Draft }
-    $plan = [ordered]@{
-        schema = 'codebeltnet/git-remote-pr/plan/1'
-        evidence_file = $evidencePath
-        evidence_hash = (Get-FileHash -LiteralPath $evidencePath -Algorithm SHA256).Hash
-        snapshot_key = Get-PrSnapshotKey $evidence
-        body_file = $bodyPath
-        body_hash = (Get-FileHash -LiteralPath $bodyPath -Algorithm SHA256).Hash
-        title = $Title
-        draft = $plannedDraft
-        approval_key = Get-PlanApprovalKey $Title $plannedDraft
-        action = $evidence.action
-        repository = $evidence.repository
-        base = $evidence.base
-        head = $evidence.remote_branch
-        head_repository = $evidence.head_repository
-        assignee = $evidence.assignee
-        push_required = [bool]$evidence.push_required
-        metadata_write = $metadata
-        assignment_write = -not $assigned
-        existing_pr_url = if ($evidence.existing_pr) { $evidence.existing_pr.url } else { $null }
-        commit_count = $evidence.commit_count
-        changed_file_count = $evidence.changed_file_count
-        preview_file = $previewPath
-    }
     $writes = [System.Collections.Generic.List[string]]::new()
-    if ($plan.push_required) { $writes.Add("Normal push to $($evidence.head_remote)/$($plan.head)") }
+    if ($pushRequired) { $writes.Add("Normal push to $($evidence.head_remote)/$head") }
     if ($metadata -eq 'CREATE') { $writes.Add('Create PR with the title and complete body below') }
     if ($metadata -eq 'UPDATE') { $writes.Add('Edit PR with the title and complete body below') }
-    if ($plan.assignment_write) { $writes.Add("Assign $($plan.assignee)") }
+    if ($assignmentWrite) { $writes.Add("Assign $assignee") }
     $replaceBody = if ($evidence.existing_pr -and $metadata -eq 'UPDATE') { 'Yes, the entire current body' } else { 'No' }
     $titleChange = -not $evidence.existing_pr -or $evidence.existing_pr.title -cne $Title
     $bodyChange = -not $evidence.existing_pr -or $evidence.existing_pr.body -cne $body
     $preview = @(
-        "# $($plan.action) PR preview"
+        "# $action PR preview"
         ''
-        "- Repository: $($plan.repository)"
-        "- Comparison: $($plan.base) <- $($plan.head_repository):$($plan.head)"
+        "- Repository: $repository"
+        "- Comparison: $base <- ${headRepository}:$head"
         "- State: $(if ($plannedDraft) { 'draft' } else { 'ready' })"
-        "- Commits: $($plan.commit_count); changed files: $($plan.changed_file_count); assignee: $($plan.assignee)"
-        "- Push required: $($plan.push_required)"
-        "- Existing PR: $(if ($plan.existing_pr_url) { $plan.existing_pr_url } else { 'None' })"
+        "- Commits: $commitCount; changed files: $changedFileCount; assignee: $assignee"
+        "- Push required: $pushRequired"
+        "- Existing PR: $(if ($existingPrUrl) { $existingPrUrl } else { 'None' })"
         "- Replace body: $replaceBody"
-        "- Changes: title=$titleChange; body=$bodyChange; assignment=$($plan.assignment_write)"
+        "- Changes: title=$titleChange; body=$bodyChange; assignment=$assignmentWrite"
         "- Planned writes: $(if ($writes.Count) { $writes -join '; ' } else { 'None; verify already up to date' })"
         ''
         '## Proposed title'
@@ -79,6 +66,32 @@ try {
         ''
     ) -join "`n"
     [System.IO.File]::WriteAllText($previewPath, ($preview + "`n" + $body), $script:Utf8)
+    $previewHash = (Get-FileHash -LiteralPath $previewPath -Algorithm SHA256).Hash
+    $plan = [ordered]@{
+        schema = 'codebeltnet/git-remote-pr/plan/2'
+        evidence_file = $evidencePath
+        evidence_hash = (Get-FileHash -LiteralPath $evidencePath -Algorithm SHA256).Hash
+        snapshot_key = Get-PrSnapshotKey $evidence
+        body_file = $bodyPath
+        body_hash = (Get-FileHash -LiteralPath $bodyPath -Algorithm SHA256).Hash
+        title = $Title
+        draft = $plannedDraft
+        approval_key = Get-PlanApprovalKey $Title $plannedDraft
+        action = $action
+        repository = $repository
+        base = $base
+        head = $head
+        head_repository = $headRepository
+        assignee = $assignee
+        push_required = $pushRequired
+        metadata_write = $metadata
+        assignment_write = $assignmentWrite
+        existing_pr_url = $existingPrUrl
+        commit_count = $commitCount
+        changed_file_count = $changedFileCount
+        preview_file = $previewPath
+        preview_hash = $previewHash
+    }
     [System.IO.File]::WriteAllText($planPath, ($plan | ConvertTo-Json -Depth 8), $script:Utf8)
     $plan | ConvertTo-Json -Depth 8
 } catch {

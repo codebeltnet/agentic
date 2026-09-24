@@ -25,6 +25,13 @@ if ((Get-PlanApprovalKey $Title $Draft) -cne [string]$approvalKey.Value) {
 }
 $EvidenceFile = [string]$plan.evidence_file
 $BodyFile = [string]$plan.body_file
+$PreviewFile = [string]$plan.preview_file
+$previewHash = $plan.PSObject.Properties['preview_hash']
+if ([string]::IsNullOrWhiteSpace($PreviewFile)) { throw 'Prepared preview file is missing. Rebuild the plan and show a new preview.' }
+if (-not $previewHash -or [string]::IsNullOrWhiteSpace([string]$previewHash.Value)) {
+    throw 'Prepared preview binding is missing. Rebuild the plan and show a new preview.'
+}
+$PreviewHash = [string]$previewHash.Value
 if (-not (Test-Path -LiteralPath $EvidenceFile -PathType Leaf)) { throw 'Prepared evidence file is missing.' }
 if (-not (Test-Path -LiteralPath $BodyFile -PathType Leaf)) { throw 'Prepared body file is missing.' }
 $expected = Get-Content -LiteralPath $EvidenceFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -36,6 +43,11 @@ $root = (Invoke-Git @('rev-parse', '--show-toplevel')).Text.Trim()
 $null = Assert-ScratchPath $PlanFile $root
 $null = Assert-ScratchPath $EvidenceFile $root
 $null = Assert-ScratchPath $BodyFile $root
+$null = Assert-ScratchPath $PreviewFile $root
+if (-not (Test-Path -LiteralPath $PreviewFile -PathType Leaf)) { throw 'Prepared preview file is missing. Rebuild the plan and show a new preview.' }
+if ((Get-FileHash -LiteralPath $PreviewFile -Algorithm SHA256).Hash -cne $PreviewHash) {
+    throw 'Prepared preview changed after planning. Rebuild the plan and show a new preview.'
+}
 if ((Get-FileHash -LiteralPath $EvidenceFile -Algorithm SHA256).Hash -cne $plan.evidence_hash -or (Get-FileHash -LiteralPath $BodyFile -Algorithm SHA256).Hash -cne $plan.body_hash -or (Get-PrSnapshotKey $expected) -cne $plan.snapshot_key) {
     throw 'Prepared body or evidence changed after the preview. Rebuild the plan and show a new preview.'
 }
