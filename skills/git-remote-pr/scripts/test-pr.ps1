@@ -39,6 +39,8 @@ function Run-Execute([string]$Evidence, [string]$Body, [string]$Title) {
 try {
     & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'test-pr-body.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'PR body structure regressions failed.' }
+    $executeSource = ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'execute-pr.ps1'), $utf8) -replace '\s+', ' ')
+    Assert ($executeSource.Contains('try { Stop-PrApproval $PlanFile $ApprovalId $message $writesStarted } catch { $message = $_.Exception.Message }')) 'Late execute-pr failures must preserve write-state when invalidating approval.'
     New-Item -ItemType Directory -Path $root | Out-Null
     $shim = Join-Path $root 'shim'
     $state = Join-Path $root 'state'

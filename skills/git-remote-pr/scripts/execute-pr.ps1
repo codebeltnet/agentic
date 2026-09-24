@@ -10,7 +10,7 @@ $writesStarted = $false
 trap {
     $message = $_.Exception.Message
     if ($approvalMatched -and -not (Test-Path -LiteralPath (Get-ApprovalInvalidationPath $PlanFile))) {
-        try { Stop-PrApproval $PlanFile $ApprovalId $message } catch { $message = $_.Exception.Message }
+        try { Stop-PrApproval $PlanFile $ApprovalId $message $writesStarted } catch { $message = $_.Exception.Message }
     }
     Write-PrFailure $message
     exit 1
