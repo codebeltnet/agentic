@@ -10,8 +10,8 @@
     {
       "id": 2,
       "prompt": "Create the pull request. I approve the exact plan you just showed. The local HEAD and remote state are unchanged.",
-      "expected_output": "Rechecks the approved snapshot, performs only the previewed normal push, create/edit, and assignment, then verifies the persisted PR and full file inventory.",
-      "expectations": ["Approval is applied to the same prepared plan without asking again", "Tracked local commits missing from the remote branch are pushed normally before PR creation or update", "Remote SHA equals local HEAD before PR metadata write", "No reviewers, labels, milestones, projects, auto-merge, or unrelated writes", "Post-write verification checks base, head, title, body, draft state, assignee, SHA, and all changed files"]
+      "expected_output": "Rechecks the approved preview artifact and snapshot, performs only the previewed normal push, create/edit, and assignment, then verifies the persisted PR and full file inventory.",
+      "expectations": ["Approval is applied to the same prepared plan without asking again", "The approved preview artifact is rechecked before any push or PR metadata write", "Tracked local commits missing from the remote branch are pushed normally before PR creation or update", "Remote SHA equals local HEAD before PR metadata write", "No reviewers, labels, milestones, projects, auto-merge, or unrelated writes", "Post-write verification checks base, head, title, body, draft state, assignee, SHA, and all changed files"]
     },
     {
       "id": 3,
