@@ -19,7 +19,39 @@ function Run-Prepare([string]$Output) {
     $lines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'prepare-pr.ps1') -OutputDirectory $Output 2>&1)
     return [pscustomobject]@{ code = $LASTEXITCODE; text = ($lines | ForEach-Object { [string]$_ }) -join "`n" }
 }
-function Run-Execute([string]$Evidence, [string]$Body, [string]$Title) {
+function Invoke-ExecutePlan([string]$Plan, [string]$ApprovalId, [switch]$InjectLateCleanupFailure) {
+    if (-not $InjectLateCleanupFailure) {
+        $lines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $Plan -ApprovalId $ApprovalId 2>&1)
+        return [pscustomobject]@{ code = $LASTEXITCODE; text = ($lines | ForEach-Object { [string]$_ }) -join "`n" }
+    }
+
+    $executePath = (Join-Path $PSScriptRoot 'execute-pr.ps1').Replace("'", "''")
+    $escapedPlan = $Plan.Replace("'", "''")
+    $escapedApprovalId = $ApprovalId.Replace("'", "''")
+    $script = @"
+function Remove-Item {
+    [CmdletBinding(DefaultParameterSetName='Path')]
+    param(
+        [Parameter(ParameterSetName='Path', Position = 0)]
+        [string[]]`$Path,
+        [Parameter(ParameterSetName='Literal')]
+        [string[]]`$LiteralPath,
+        [switch]`$Recurse,
+        [switch]`$Force
+    )
+    Microsoft.PowerShell.Management\Remove-Item @PSBoundParameters
+    `$targets = if (`$PSCmdlet.ParameterSetName -eq 'Literal') { `$LiteralPath } else { `$Path }
+    if (@(`$targets | Where-Object { `$_ -and [System.IO.Path]::GetFileName([System.IO.Path]::GetFullPath(`$_)) -like 'git-remote-pr-recheck-*' }).Count -gt 0) {
+        throw 'Injected late cleanup failure after remote write.'
+    }
+}
+& '$executePath' -PlanFile '$escapedPlan' -ApprovalId '$escapedApprovalId'
+"@
+    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($script))
+    $lines = @(& pwsh -NoProfile -NonInteractive -EncodedCommand $encoded 2>&1)
+    return [pscustomobject]@{ code = $LASTEXITCODE; text = ($lines | ForEach-Object { [string]$_ }) -join "`n" }
+}
+function Run-Execute([string]$Evidence, [string]$Body, [string]$Title, [switch]$InjectLateCleanupFailure) {
     # Each deliberate retry in this test harness starts a new transaction.
     if (Test-Path (Join-Path (Split-Path -Parent $Evidence) 'approval-invalidated.json')) {
         $retry = Join-Path $root ([guid]::NewGuid().ToString('N'))
@@ -33,14 +65,11 @@ function Run-Execute([string]$Evidence, [string]$Body, [string]$Title) {
     if ($LASTEXITCODE -ne 0) { return [pscustomobject]@{ code = $LASTEXITCODE; text = ($planned | ForEach-Object { [string]$_ }) -join "`n" } }
     $plan = Join-Path (Split-Path -Parent $Evidence) 'plan.json'
     $id = (Get-Content $plan -Raw | ConvertFrom-Json).approval_id
-    $lines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $plan -ApprovalId $id 2>&1)
-    return [pscustomobject]@{ code = $LASTEXITCODE; text = ($lines | ForEach-Object { [string]$_ }) -join "`n" }
+    return Invoke-ExecutePlan -Plan $plan -ApprovalId $id -InjectLateCleanupFailure:$InjectLateCleanupFailure
 }
 try {
     & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'test-pr-body.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'PR body structure regressions failed.' }
-    $executeSource = ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'execute-pr.ps1'), $utf8) -replace '\s+', ' ')
-    Assert ($executeSource.Contains('try { Stop-PrApproval $PlanFile $ApprovalId $message $writesStarted } catch { $message = $_.Exception.Message }')) 'Late execute-pr failures must preserve write-state when invalidating approval.'
     New-Item -ItemType Directory -Path $root | Out-Null
     $shim = Join-Path $root 'shim'
     $state = Join-Path $root 'state'
@@ -478,6 +507,20 @@ try {
         $assignFail = Run-Execute $assignPaths.evidence $assignBody 'V0.10.2/service update'
         Assert ($assignFail.code -ne 0 -and $assignFail.text -match 'assignment rejected' -and $assignFail.text -match '/pull/7') 'Assignment failure did not expose partial PR URL.'
         Remove-Item (Join-Path $state 'reject-assignee')
+        $lateTrapPrep = Run-Prepare (Join-Path $root 'late-trap')
+        Assert ($lateTrapPrep.code -eq 0) 'Late trap preparation failed.'
+        $lateTrapPaths = $lateTrapPrep.text | ConvertFrom-Json
+        $lateTrapEvidence = Get-Content $lateTrapPaths.evidence -Raw | ConvertFrom-Json
+        $lateTrapEvidence.files | ForEach-Object { $_.theme = if ($_.path -eq 'guide.md') { 'Documentation' } else { 'Behavior' } }
+        $lateTrapEvidence | ConvertTo-Json -Depth 20 | Set-Content $lateTrapPaths.evidence -Encoding utf8
+        $lateTrapBody = Join-Path (Split-Path $lateTrapPaths.evidence) 'body.md'
+        Copy-Item $thirdBody $lateTrapBody
+        $writesBeforeLateTrap = (Get-Content (Join-Path $state 'writes.log')).Count
+        $lateTrap = Run-Execute $lateTrapPaths.evidence $lateTrapBody 'V0.10.2/service update' -InjectLateCleanupFailure
+        Assert ($lateTrap.code -ne 0 -and $lateTrap.text.Contains('Injected late cleanup failure after remote write.') -and $lateTrap.text.Contains('Remote writes may have occurred; see the partial-state diagnostic.')) 'Late execute-pr trap did not preserve the remote-write diagnostic.'
+        Assert ((Get-Content (Join-Path $state 'writes.log')).Count -eq ($writesBeforeLateTrap + 1)) 'Late execute-pr trap did not happen after a remote write.'
+        Assert ((Get-Content $prStatePath -Raw | ConvertFrom-Json).assignees.login -contains 'reviewer') 'Late execute-pr trap did not preserve the completed remote assignment.'
+        Assert (Test-Path (Join-Path (Split-Path -Parent $lateTrapPaths.evidence) 'approval-invalidated.json')) 'Late execute-pr trap did not invalidate the approval transaction.'
 
         Test-Git @('switch', 'main') | Out-Null
         New-Item -ItemType Directory (Join-Path $repo '.github') | Out-Null
