@@ -317,6 +317,39 @@ try {
         $planRaw = [System.IO.File]::ReadAllText($planPath, $utf8)
         $approvalId = ($planRaw | ConvertFrom-Json).approval_id
         $invalidationPath = Get-ApprovalInvalidationPath $planPath
+        $previewRaw = [System.IO.File]::ReadAllText($plan.preview_file, $utf8)
+        foreach ($attack in @('preview-and-preview-hash', 'review-hash', 'preview-and-both-hashes')) {
+            $altered = $planRaw | ConvertFrom-Json
+            if ($attack -ne 'review-hash') {
+                $tamperedPreview = $previewRaw.Replace('- Updates the feature.', '- Submits a different feature.')
+                Assert ($tamperedPreview -cne $previewRaw) 'Tampering fixture did not change the proposed body.'
+                [System.IO.File]::WriteAllText($plan.preview_file, $tamperedPreview, $utf8)
+                $altered.preview_hash = (Get-FileHash -LiteralPath $plan.preview_file -Algorithm SHA256).Hash
+                if ($attack -eq 'preview-and-both-hashes') {
+                    $normalized = Set-PrPreviewApprovalSlots $tamperedPreview $approvalId '{{APPROVAL_ID}}'
+                    $altered.review_hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($utf8.GetBytes($normalized)))
+                }
+            } else {
+                $altered.review_hash = '0' * 64
+            }
+            [System.IO.File]::WriteAllText($planPath, ($altered | ConvertTo-Json -Depth 8), $utf8)
+            $rejected = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -ApprovalId $approvalId 2>&1)
+            $diagnostic = if ($attack -eq 'preview-and-both-hashes') { 'write intent changed' } else { 'normalized review hash changed' }
+            Assert ($LASTEXITCODE -ne 0 -and ($rejected -join "`n").Contains($diagnostic)) "$attack retained approval for a different review."
+            Assert (-not (Test-Path (Join-Path $state 'writes.log')) -and (Get-RemoteSha origin 'v0.10.2/service-update') -ceq $remoteBranchHead) "$attack performed a remote write."
+            Assert ([System.IO.File]::ReadAllText($bodyPath, $utf8) -ceq $validBody) "$attack changed the original body."
+            Assert ([System.IO.File]::ReadAllText($planPath, $utf8) -ceq ($altered | ConvertTo-Json -Depth 8)) "$attack execution rewrote the plan."
+            Assert (Test-Path -LiteralPath $invalidationPath) "$attack did not hard-stop the transaction."
+            [System.IO.File]::WriteAllText($planPath, $planRaw, $utf8)
+            [System.IO.File]::WriteAllText($plan.preview_file, $previewRaw, $utf8)
+            Remove-Item -LiteralPath $invalidationPath
+        }
+        # Identical-looking fields and literal placeholders in user prose are not slots.
+        $prose = "Title $approvalId {{APPROVAL_ID}}`nApproval ID: $approvalId`r`nTo approve this exact preview, reply: approve $approvalId"
+        $slotPreview = "# CREATE PR preview`n`nApproval ID: $approvalId`n`n$prose`n`nTo approve this exact preview, reply: approve $approvalId"
+        $normalized = Set-PrPreviewApprovalSlots $slotPreview $approvalId '{{APPROVAL_ID}}'
+        Assert ($normalized -ceq "# CREATE PR preview`n`nApproval ID: {{APPROVAL_ID}}`n`n$prose`n`nTo approve this exact preview, reply: approve {{APPROVAL_ID}}") 'Normalization changed proposed prose or its line endings.'
+        Assert ((Set-PrPreviewApprovalSlots $normalized '{{APPROVAL_ID}}' $approvalId) -ceq $slotPreview) 'Rendering replaced literal placeholders in proposed prose.'
         $noApprovalLines = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath 2>&1)
         Assert ($LASTEXITCODE -ne 0 -and ($noApprovalLines -join "`n") -match 'approval') 'Execute accepted a plan without approval.'
         $legacy = @(& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'execute-pr.ps1') -PlanFile $planPath -Approved 2>&1)

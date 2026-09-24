@@ -29,7 +29,6 @@ if (Test-Path -LiteralPath (Get-ApprovalInvalidationPath $PlanFile)) {
     throw "Approval $ApprovalId is already invalidated. No remote writes were performed. Only an explicit refresh request may start a new approval transaction in a new scratch workspace."
 }
 $approvalMatched = $true
-if ((Get-PlanApprovalId $plan) -cne $ApprovalId) { throw 'Prepared write intent changed after the preview; the approval ID no longer matches.' }
 $Title = [string]$plan.title
 if ([string]::IsNullOrWhiteSpace($Title)) { throw 'Prepared title is empty.' }
 if ($plan.draft -isnot [bool]) { throw 'Prepared draft state is invalid.' }
@@ -43,6 +42,22 @@ if (-not $previewHash -or [string]::IsNullOrWhiteSpace([string]$previewHash.Valu
     throw 'Prepared preview binding is missing.'
 }
 $PreviewHash = [string]$previewHash.Value
+$null = Assert-ScratchPath $PreviewFile $root
+if (-not (Test-Path -LiteralPath $PreviewFile -PathType Leaf)) { throw 'Prepared preview file is missing.' }
+$previewBytes = [System.IO.File]::ReadAllBytes($PreviewFile)
+if ([Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($previewBytes)) -cne $PreviewHash) {
+    throw 'Prepared preview changed after planning.'
+}
+# Strict UTF-8 preserves every byte through normalization, including any BOM.
+$preview = [System.Text.UTF8Encoding]::new($false, $true).GetString($previewBytes)
+$normalizedPreview = Set-PrPreviewApprovalSlots $preview $ApprovalId '{{APPROVAL_ID}}'
+$reviewHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($script:Utf8.GetBytes($normalizedPreview)))
+$storedReviewHash = $plan.PSObject.Properties['review_hash']
+if (-not $storedReviewHash -or $reviewHash -cne [string]$storedReviewHash.Value) {
+    throw 'Prepared normalized review hash changed after the preview; the approval ID no longer matches.'
+}
+$recomputedId = Get-PlanApprovalId $plan
+if ($recomputedId -cne [string]$storedId.Value -or $recomputedId -cne $ApprovalId) { throw 'Prepared write intent changed after the preview; the approval ID no longer matches.' }
 if (-not (Test-Path -LiteralPath $EvidenceFile -PathType Leaf)) { throw 'Prepared evidence file is missing.' }
 if (-not (Test-Path -LiteralPath $BodyFile -PathType Leaf)) { throw 'Prepared body file is missing.' }
 $expected = Get-Content -LiteralPath $EvidenceFile -Raw -Encoding utf8 | ConvertFrom-Json
@@ -52,11 +67,6 @@ if ($body.Contains('diffhunk://')) { throw 'PR description contains non-portable
 Assert-PrThemeCoverage $expected $body
 $null = Assert-ScratchPath $EvidenceFile $root
 $null = Assert-ScratchPath $BodyFile $root
-$null = Assert-ScratchPath $PreviewFile $root
-if (-not (Test-Path -LiteralPath $PreviewFile -PathType Leaf)) { throw 'Prepared preview file is missing.' }
-if ((Get-FileHash -LiteralPath $PreviewFile -Algorithm SHA256).Hash -cne $PreviewHash) {
-    throw 'Prepared preview changed after planning.'
-}
 if ((Get-FileHash -LiteralPath $EvidenceFile -Algorithm SHA256).Hash -cne $plan.evidence_hash -or (Get-FileHash -LiteralPath $BodyFile -Algorithm SHA256).Hash -cne $plan.body_hash -or (Get-PrSnapshotKey $expected) -cne $plan.snapshot_key) {
     throw 'Prepared body or evidence changed after the preview.'
 }

@@ -72,11 +72,10 @@ try {
         changed_file_count = $changedFileCount
         preview_file = $previewPath
     }
-    $plan.approval_id = Get-PlanApprovalId $plan
     $preview = @(
         "# $action PR preview"
         ''
-        "Approval ID: $($plan.approval_id)"
+        'Approval ID: {{APPROVAL_ID}}'
         ''
         "- Repository: $repository"
         "- Comparison: $base <- ${headRepository}:$head"
@@ -95,7 +94,11 @@ try {
         '## Proposed body'
         ''
     ) -join "`n"
-    [System.IO.File]::WriteAllText($previewPath, ($preview + "`n" + $body + "`n`nTo approve this exact preview, reply: approve $($plan.approval_id)"), $script:Utf8)
+    $preview += "`n" + $body + "`n`nTo approve this exact preview, reply: approve {{APPROVAL_ID}}"
+    $plan.review_hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($script:Utf8.GetBytes($preview)))
+    $plan.approval_id = Get-PlanApprovalId $plan
+    $preview = Set-PrPreviewApprovalSlots $preview '{{APPROVAL_ID}}' $plan.approval_id
+    [System.IO.File]::WriteAllText($previewPath, $preview, $script:Utf8)
     $plan.preview_hash = (Get-FileHash -LiteralPath $previewPath -Algorithm SHA256).Hash
     [System.IO.File]::WriteAllText($planPath, ($plan | ConvertTo-Json -Depth 8), $script:Utf8)
     $plan | ConvertTo-Json -Depth 8

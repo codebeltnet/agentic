@@ -101,14 +101,27 @@ function Test-EquivalentBranchNames { param([string]$LocalBranch, [string]$Remot
     if ([string]::IsNullOrWhiteSpace($LocalBranch) -or [string]::IsNullOrWhiteSpace($RemoteBranch)) { return $false }
     return $LocalBranch -ceq $RemoteBranch
 }
+function Set-PrPreviewApprovalSlots { param([string]$Preview, [string]$ExpectedId, [string]$ReplacementId)
+    # Only the generated third line and final line are slots. Never normalize
+    # matching text in the proposed title/body, even if it looks like a field.
+    $lines = $Preview.Split("`n")
+    if ($lines.Length -lt 4 -or $lines[2] -cne "Approval ID: $ExpectedId" -or $lines[-1] -cne "To approve this exact preview, reply: approve $ExpectedId") {
+        throw 'Prepared preview approval-ID slots are invalid.'
+    }
+    $lines[2] = "Approval ID: $ReplacementId"
+    $lines[-1] = "To approve this exact preview, reply: approve $ReplacementId"
+    return $lines -join "`n"
+}
 function Get-PlanApprovalId { param($Plan)
     # Fixed property order and JSON types form the canonical write intent.
     # Artifact paths scope the transaction to its workspace, including refreshes
-    # with identical content. preview_hash is checked independently to avoid a cycle.
+    # with identical content. review_hash binds the complete normalized preview;
+    # preview_hash checks the final artifact independently to avoid a cycle.
     $fields = [ordered]@{}
     foreach ($name in @('schema', 'snapshot_key', 'evidence_file', 'evidence_hash', 'body_file', 'body_hash', 'preview_file', 'repository', 'action', 'base', 'head_repository', 'head', 'title', 'draft', 'assignee', 'push_required', 'metadata_write', 'assignment_write', 'existing_pr_number', 'existing_pr_url', 'commit_count', 'changed_file_count')) {
         $fields[$name] = $Plan.$name
     }
+    $fields['review_hash'] = $Plan.review_hash
     $bytes = $script:Utf8.GetBytes(($fields | ConvertTo-Json -Depth 8 -Compress))
     return 'APR-' + [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).Substring(0, 12)
 }
