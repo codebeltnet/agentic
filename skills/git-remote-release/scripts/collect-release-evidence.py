@@ -47,6 +47,10 @@ def source(title, url, authors):
     return f"* {title.splitlines()[0]} by {credit} in {url}"
 
 
+SUPPORTED_ALERT_START = re.compile(r"^> \[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$")
+ANY_ALERT_MARKER = re.compile(r"^> \[!([A-Z]+)\]")
+
+
 def verify_summary(lines):
     errors = []
     source_index = lines.index("Sources:")
@@ -76,31 +80,38 @@ def verify_summary(lines):
         errors.append("Opening summary paragraph must be followed by release-highlight bullets")
 
     bullets = []
-    alerts_started = False
+    within_alert_block = False
     for line in section[first_after_opening:]:
         if not line.strip():
             continue
-        if not alerts_started:
-            if line.startswith("- "):
-                bullets.append(line.rstrip())
-                continue
-            if line.startswith(">"):
-                alerts_started = True
-                continue
-            if line.startswith("**"):
-                errors.append("Bold-leading prose paragraphs are not allowed; use dash bullets for release highlights")
+        if line.startswith("- "):
+            if within_alert_block:
+                errors.append("Release-highlight bullets must appear before any alert blocks")
             else:
-                errors.append("Only release-highlight bullets and optional GitHub alert blocks may follow the opening paragraph")
+                bullets.append(line.rstrip())
+            continue
+
+        if SUPPORTED_ALERT_START.fullmatch(line):
+            within_alert_block = True
             continue
 
         if line.startswith(">"):
+            marker = ANY_ALERT_MARKER.match(line)
+            if within_alert_block:
+                if marker:
+                    errors.append("GitHub alert blocks must use only supported alert markers on standalone marker lines")
+                continue
+            if marker:
+                errors.append("GitHub alert blocks must use only supported alert markers on standalone marker lines")
+            else:
+                errors.append("Plain blockquotes are not allowed after the release highlights; use supported GitHub alert blocks only")
             continue
-        if line.startswith("- "):
-            errors.append("Release-highlight bullets must appear before any alert blocks")
-        elif line.startswith("**"):
+
+        within_alert_block = False
+        if line.startswith("**"):
             errors.append("Bold-leading prose paragraphs are not allowed; use dash bullets for release highlights")
         else:
-            errors.append("Only GitHub alert blocks may appear between the release highlights and Sources")
+            errors.append("Only release-highlight bullets and supported GitHub alert blocks may follow the opening paragraph")
 
     if not bullets:
         errors.append("At least one release-highlight bullet is required before Sources")
@@ -110,8 +121,12 @@ def verify_summary(lines):
         if re.match(r"^- \*\*[^*]+\*\*\s*[:—-]", bullet):
             errors.append("Release-highlight bullets must continue naturally after the bold lead-in, not with label punctuation")
             break
-        if not re.match(r"^- \*\*[^*]+\*\*\s+\S", bullet):
+        match = re.match(r"^- \*\*[^*]+\*\*\s+(.+)$", bullet)
+        if not match:
             errors.append("Release-highlight bullets must use a bold lead-in followed by natural sentence prose")
+            break
+        if not re.search(r"[\w`]", match.group(1)):
+            errors.append("Release-highlight bullets must include explanatory prose after the bold lead-in")
             break
 
     for bullet in bullets[:-1]:
@@ -241,9 +256,13 @@ def verify(evidence, draft):
     errors = []
     if not evidence["complete"]:
         errors.append("Evidence is incomplete: " + "; ".join(evidence["issues"]))
-    if "—" in draft:
-        errors.append("Unicode em dash is not allowed in generated release notes")
     lines = draft.strip().splitlines()
+    if lines.count("Sources:") == 1:
+        authored_lines = lines[:lines.index("Sources:")]
+    else:
+        authored_lines = lines
+    if any("—" in line for line in authored_lines):
+        errors.append("Unicode em dash is not allowed in authored release-note prose")
     if not lines or lines[0] != "## What's Changed":
         errors.append("Missing required opening heading")
     if lines.count("Sources:") != 1:

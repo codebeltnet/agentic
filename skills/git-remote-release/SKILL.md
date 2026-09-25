@@ -254,7 +254,7 @@ Each release-highlight bullet must:
 
 - begin with `- `,
 - use a concise bold lead-in,
-- continue directly into natural sentence prose,
+- continue directly into natural sentence prose with actual explanatory text, not bare punctuation,
 - describe an outcome or effect rather than merely naming implementation work,
 - remain concise enough to scan, and
 - end with `,` except for the final bullet, which ends with `.`.
@@ -263,7 +263,9 @@ The bold lead-in is not a heading. Do not use `**<lead>** — ...`, `**<lead>**:
 
 #### Em dash prohibition
 
-Do not use the Unicode em dash character `—` anywhere in the returned release notes. Prefer natural sentence continuation instead of definition-style punctuation after a bold lead-in. If a verbatim source title already contains `—`, preserve the evidence exactly and report that the draft cannot satisfy the release-note contract cleanly without changing the source title itself.
+Do not use the Unicode em dash character `—` in authored release-note prose, including the opening summary, release-highlight bullets, alert prose, or any generated explanatory text around the sources. Prefer natural sentence continuation instead of definition-style punctuation after a bold lead-in.
+
+The exact `Sources:` entries are an evidence-preservation surface, not rewritten prose. If a verified PR title or commit subject already contains `—`, preserve that source line exactly rather than normalizing the title and breaking source verification.
 
 ### GitHub alert blocks (optional)
 
@@ -284,6 +286,8 @@ Alert blocks appear after the summary and before the `Sources:` section.
 `> [!CAUTION]` — Security-sensitive changes, data loss risks, removal of functionality, operational risks, changes where misuse can lead to negative outcomes.
 
 Do not invent alerts. Do not add a `WARNING` or `CAUTION` unless the release data supports that level of attention. Breaking changes should normally use `WARNING`. Security-sensitive or risk-heavy changes should normally use `CAUTION`.
+
+Only supported GitHub alert blocks may appear here. Do not use ordinary blockquotes, ad hoc `>` callouts, or unsupported markers such as `> [!OTHER]`.
 
 ### The Sources section
 
@@ -345,12 +349,13 @@ Nothing may appear after this line.
 - The summary covers all meaningful changes in the comparison range.
 - The summary is optimized for GitHub release notes, not raw commit history.
 - Alert blocks are included only when they add value and are supported by the release data.
+- Only supported GitHub alert blocks appear after the release highlights; plain blockquotes and unsupported markers are not used there.
 - Alert severity matches the actual impact of the change.
 - The `Sources:` section is always included.
 - Source entries use the `* <title> by <contributors> in <url>` format. Include all verified source authors with exact `@login` values, falling back to recorded names when a GitHub login is unavailable.
 - The final line is the full changelog link in the exact format shown above.
 - Nothing appears after the full changelog link.
-- No Unicode em dash appears anywhere in the returned release notes.
+- No Unicode em dash appears in authored release-note prose; exact source titles remain verbatim evidence.
 - No unsupported claims are invented.
 - Breaking changes, if any, are clearly identified.
 - Vague wording like "various improvements" or "miscellaneous changes" is avoided.
@@ -414,12 +419,12 @@ Before returning the result, verify:
 4. At least one `- ` release-highlight bullet appears after the opening paragraph and before any optional alert blocks or the `Sources:` section.
 5. Release-highlight bullets use bold lead-ins with natural sentence continuation instead of bold-label fragments such as `**<lead>** —` or `**<lead>**:`.
 6. Bold-leading prose paragraphs are not used as a substitute for release-highlight bullets.
-7. No Unicode em dash `—` appears anywhere in the returned release notes.
+7. No Unicode em dash `—` appears in authored release-note prose; exact source titles remain verbatim evidence.
 8. The summary is human-friendly and optimized for GitHub release notes.
 9. The summary covers the meaningful changes in the comparison range.
 10. GitHub alert blocks are included only when they add value.
 11. Alert severity matches the actual impact of the change.
-12. Alert blocks are supported by the release data.
+12. Alert blocks are supported by the release data and use only the supported GitHub alert markers.
 13. A `Sources:` section is included with all contributing PRs and commits.
 14. Source entries use the `* <title> by @<author> in <url>` format, with fallback to author name when no GitHub username is available.
 15. All contributors in the comparison range are represented in the Sources section.

@@ -69,6 +69,13 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(collector.verify(evidence, draft.replace("Sources:", "Sources:\n" + evidence["sources"][0])))
         self.assertTrue(collector.verify(evidence, draft.replace("Sources:", "Sources:\n- Extra source by @someone")))
 
+    def test_source_titles_with_em_dash_still_verify(self):
+        self.pr["title"] = "Service — update"
+        evidence = self.collect()
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertIn("—", evidence["sources"][0])
+        self.assertEqual(collector.verify(evidence, self.draft(evidence)), [])
+
     def test_summary_structure_rejects_bold_paragraph_regression(self):
         evidence = self.collect()
         draft = self.draft(evidence, (
@@ -92,6 +99,55 @@ class EvidenceTests(unittest.TestCase):
             "- **Contributor attribution**: now keeps every verified PR contributor on the shared source line."
         ))
         self.assertTrue(any("label punctuation" in error for error in collector.verify(evidence, label_style)))
+
+    def test_summary_structure_rejects_plain_blockquotes_and_unsupported_alert_markers(self):
+        evidence = self.collect()
+        for summary, expected in (
+            (
+                "This release improves contributor-complete verification.\n\n"
+                "- **Contributor attribution** now keeps every verified PR contributor on the shared source line.\n\n"
+                "> Just a blockquote.",
+                "Plain blockquotes are not allowed",
+            ),
+            (
+                "This release improves contributor-complete verification.\n\n"
+                "- **Contributor attribution** now keeps every verified PR contributor on the shared source line.\n\n"
+                "> [!OTHER]\n"
+                "> Unsupported marker.",
+                "supported alert markers on standalone marker lines",
+            ),
+        ):
+            with self.subTest(expected=expected):
+                errors = collector.verify(evidence, self.draft(evidence, summary))
+                self.assertTrue(any(expected in error for error in errors), errors)
+
+    def test_summary_structure_requires_explanatory_prose_after_bold_lead(self):
+        evidence = self.collect()
+        summary = (
+            "This release improves contributor-complete verification.\n\n"
+            "- **Contributor attribution** ."
+        )
+        errors = collector.verify(evidence, self.draft(evidence, summary))
+        self.assertTrue(any("explanatory prose" in error for error in errors), errors)
+
+    def test_summary_structure_requires_bullet_punctuation(self):
+        evidence = self.collect()
+        for summary, expected in (
+            (
+                "This release improves contributor-complete verification.\n\n"
+                "- **Contributor attribution** now keeps every verified PR contributor on the shared source line.\n"
+                "- **Draft verification** rejects incomplete sources and malformed release-summary structure.",
+                "Each non-final release-highlight bullet must end with a comma",
+            ),
+            (
+                "This release improves contributor-complete verification.\n\n"
+                "- **Contributor attribution** now keeps every verified PR contributor on the shared source line,",
+                "The final release-highlight bullet must end with a period",
+            ),
+        ):
+            with self.subTest(expected=expected):
+                errors = collector.verify(evidence, self.draft(evidence, summary))
+                self.assertTrue(any(expected in error for error in errors), errors)
 
     def test_failed_association_is_not_a_direct_commit(self):
         self.routes["/commits/squash/pulls?per_page=100"] = RuntimeError("HTTP 403")
