@@ -113,6 +113,9 @@ def verify_summary(lines):
         else:
             errors.append("Only release-highlight bullets and supported GitHub alert blocks may follow the opening paragraph")
 
+    if within_alert_block:
+        errors.append("GitHub alert blocks must be followed by at least one content line")
+
     if not bullets:
         errors.append("At least one release-highlight bullet is required before Sources")
         return errors
