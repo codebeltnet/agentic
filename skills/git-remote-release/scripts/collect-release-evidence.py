@@ -81,6 +81,7 @@ def verify_summary(lines):
 
     bullets = []
     within_alert_block = False
+    alert_has_content = False
     for line in section[first_after_opening:]:
         if not line.strip():
             continue
@@ -92,7 +93,10 @@ def verify_summary(lines):
             continue
 
         if SUPPORTED_ALERT_START.fullmatch(line):
+            if within_alert_block and not alert_has_content:
+                errors.append("GitHub alert blocks must be followed by at least one content line")
             within_alert_block = True
+            alert_has_content = False
             continue
 
         if line.startswith(">"):
@@ -100,6 +104,8 @@ def verify_summary(lines):
             if within_alert_block:
                 if marker:
                     errors.append("GitHub alert blocks must use only supported alert markers on standalone marker lines")
+                elif line[1:].strip():
+                    alert_has_content = True
                 continue
             if marker:
                 errors.append("GitHub alert blocks must use only supported alert markers on standalone marker lines")
@@ -113,7 +119,7 @@ def verify_summary(lines):
         else:
             errors.append("Only release-highlight bullets and supported GitHub alert blocks may follow the opening paragraph")
 
-    if within_alert_block:
+    if within_alert_block and not alert_has_content:
         errors.append("GitHub alert blocks must be followed by at least one content line")
 
     if not bullets:
