@@ -32,7 +32,7 @@ Save the draft beside the evidence and check it before returning:
 python <skill-directory>/scripts/collect-release-evidence.py verify <temporary-directory>/release-evidence.json <temporary-directory>/release-notes.md
 ```
 
-Fix source omissions, extra source entries, contributor changes, and format errors until verification succeeds. This checks attribution and format, not whether prose covers every change or correctly describes its impact. Incomplete evidence cannot pass this gate; report that limitation rather than claiming verification passed. If Python/`gh` is unavailable, refs exist only locally, or the user supplies an offline snapshot, follow the manual workflow below with the same count and contributor checks. State the collection limitation; do not quietly skip PR commit expansion. Never call an AI service from either script.
+Fix source omissions, extra source entries, contributor changes, structural summary errors, and format errors until verification succeeds. This checks exact sources plus the release-note structure (`This release ...`, release-highlight bullets, the em dash prohibition, and final changelog positioning), not whether the narrative fully captures every change or weighs the release perfectly. Incomplete evidence cannot pass this gate; report that limitation rather than claiming verification passed. If Python/`gh` is unavailable, refs exist only locally, or the user supplies an offline snapshot, follow the manual workflow below with the same count and contributor checks. State the collection limitation; do not quietly skip PR commit expansion. Never call an AI service from either script.
 
 ## Input
 
@@ -182,6 +182,10 @@ Read through all collected pull requests and commits. Understand what changed, w
 
 Read original PR commit messages and the final comparison's changed-file inventory and relevant patches before drafting. Fetch paginated PR files or individual file/commit diffs when the compare response is capped or omits a needed patch. PR titles, automated PR bodies, and package release notes may describe only the initial change and become stale after later commits. Resolve discrepancies against the final diff; use commit messages for intent, and do not describe reverted intermediate work as shipped. Build a compact evidence inventory connecting each meaningful change to its files and commits, then check that the summary covers it. One source URL can represent many changes by several people. Never reduce an entire service PR to dependency updates solely because its title or opening body says so.
 
+> Evidence completeness and summary completeness are different concerns. Inspect and account for all meaningful evidence, but curate the release summary around the important user-facing and maintainer-facing outcomes rather than reproducing the evidence inventory.
+
+The release summary still needs to account for the full shipped delta, but it should tell the release story instead of giving every evidence item equal narrative weight.
+
 The summary should explain the effect of the changes, not just the implementation. A good release note tells users what they can expect from this version, not just what code was modified.
 
 ### Step 5: Compose the release notes
@@ -193,7 +197,11 @@ Follow the exact output format defined below. Every release note must start with
 ```markdown
 ## What's Changed
 
-<optimized-summary>
+This release <natural evidence-backed release summary>.
+
+- **<Important outcome>** <natural explanation>,
+- **<Important outcome>** <natural explanation>,
+- **<Important outcome>** <natural explanation>.
 
 <optional-alert-blocks>
 
@@ -207,49 +215,57 @@ Sources:
 
 Keep each prose paragraph and Markdown list item on one physical line regardless of length. Do not hard-wrap release notes to a fixed column width; rely on editor soft wrapping and use physical line breaks only between Markdown structures. Rejoin unnecessary hard wraps in any existing prose you edit.
 
-### The summary section
+### The release summary contract
 
-The summary is the heart of the release note. It must be:
+The summary is the heart of the release note. It must always have two parts in this order:
 
-- **Human-friendly** — written for someone scanning the release to understand what changed
-- **Effect-oriented** — explains what users and maintainers can expect, not just what was modified
-- **Evidence-backed** — every claim must be supported by the commits or pull requests collected
-- **Grouped logically** — related changes are discussed together, not listed chronologically
-- **Honest** — no invented impact, no unsupported claims, no vague filler like "various improvements"
+1. one concise release-level opening paragraph;
+2. one or more curated release-highlight bullets.
 
-For small releases (a handful of changes), prefer a concise paragraph or short bullet list.
+#### Opening paragraph
 
-For larger releases, prefer grouped bullets organized by theme: new features, fixes, infrastructure, breaking changes, etc.
+The first non-empty summary line after `## What's Changed` must begin exactly with `This release `. Choose a natural verb or phrase from the evidence, such as `introduces`, `strengthens`, `improves`, `refines`, `fixes`, or `streamlines`, but do not force awkward wording just to match an example.
 
-Avoid simply repeating PR titles or commit messages unless they are already clear and release-note friendly. Rewrite them into prose that explains the effect.
+The opening paragraph must:
 
-### Key capabilities formatting (when included)
+- summarize the release as a whole,
+- emphasize the primary purpose and effect,
+- stay human-friendly for someone scanning a GitHub release,
+- avoid implementation inventories, and
+- avoid changelog-style `Added`, `Changed`, or `Fixed` section framing unless those words are naturally required by the subject matter.
 
-When the release note includes a "Key capabilities" section, each bullet must be written as a natural sentence with a bolded lead-in.
+Keep it to exactly one concise paragraph on one physical line.
 
-Do not use a bold label followed by an em dash, colon, or definition-style fragment.
+#### Release-highlight bullets
 
-Avoid this style:
+The opening paragraph must always be followed by one or more dash bullets before any optional alert blocks or the `Sources:` section.
 
-```markdown
-- **Thematic grouping** — Related changes are discussed together instead of listed chronologically
-```
+These bullets are curated release highlights. They are not a commit log, a changed-file inventory, an exhaustive evidence transcript, or Keep a Changelog sections. Group related implementation details into meaningful outcomes that a maintainer or release reader should care about.
 
-Use this style instead:
-
-```markdown
-- **Thematic grouping** where related changes are discussed together instead of listed chronologically,
-```
-
-The bold text should highlight the capability name, but the full bullet must read as one natural sentence.
-
-Preferred pattern:
+Use this style:
 
 ```markdown
-- **<Capability name>** where/that/so/with <natural sentence continuation>,
+- **Team catalog matching** now compares the exact team component with `spec.name` case-insensitively, preventing descriptions from being borrowed from similarly prefixed teams,
+- **Identity-provider validation** supports configured group prefixes and role suffixes while unmatched teams complete without an incorrect catalog description,
+- **Regression coverage** exercises overlapping team names, organization-name changes, legacy IDP prefixes, and additional role suffixes.
 ```
 
-End each bullet with `,` except the final bullet in a populated section, which must end with `.`.
+Each release-highlight bullet must:
+
+- begin with `- `,
+- use a concise bold lead-in,
+- continue directly into natural sentence prose with actual explanatory text, not bare punctuation,
+- describe an outcome or effect rather than merely naming implementation work,
+- remain concise enough to scan, and
+- end with `,` except for the final bullet, which ends with `.`.
+
+The bold lead-in is not a heading. Do not use `**<lead>** — ...`, `**<lead>**: ...`, or bold-leading prose paragraphs as a substitute for bullets.
+
+#### Em dash prohibition
+
+Do not use the Unicode em dash character `—` in authored release-note prose, including the opening summary, release-highlight bullets, alert prose, or any generated explanatory text around the sources. Prefer natural sentence continuation instead of definition-style punctuation after a bold lead-in.
+
+The exact `Sources:` entries are an evidence-preservation surface, not rewritten prose. If a verified PR title or commit subject already contains `—`, preserve that source line exactly rather than normalizing the title and breaking source verification.
 
 ### GitHub alert blocks (optional)
 
@@ -270,6 +286,8 @@ Alert blocks appear after the summary and before the `Sources:` section.
 `> [!CAUTION]` — Security-sensitive changes, data loss risks, removal of functionality, operational risks, changes where misuse can lead to negative outcomes.
 
 Do not invent alerts. Do not add a `WARNING` or `CAUTION` unless the release data supports that level of attention. Breaking changes should normally use `WARNING`. Security-sensitive or risk-heavy changes should normally use `CAUTION`.
+
+Only supported GitHub alert blocks may appear here. Do not use ordinary blockquotes, ad hoc `>` callouts, or unsupported markers such as `> [!OTHER]`.
 
 ### The Sources section
 
@@ -324,14 +342,20 @@ Nothing may appear after this line.
 ## Non-Negotiable Rules
 
 - The first line of the output is exactly `## What's Changed`.
+- The first non-empty summary line after that heading begins exactly with `This release `.
+- The opening summary is exactly one concise paragraph.
+- The opening summary paragraph is followed by one or more release-highlight bullets before any optional alert blocks or the `Sources:` section.
+- Release-highlight bullets use bold lead-ins with natural sentence continuation; bold-leading prose paragraphs and `**<lead>** —` / `**<lead>**: ` fragments are not allowed.
 - The summary covers all meaningful changes in the comparison range.
 - The summary is optimized for GitHub release notes, not raw commit history.
 - Alert blocks are included only when they add value and are supported by the release data.
+- Only supported GitHub alert blocks appear after the release highlights; plain blockquotes and unsupported markers are not used there.
 - Alert severity matches the actual impact of the change.
 - The `Sources:` section is always included.
 - Source entries use the `* <title> by <contributors> in <url>` format. Include all verified source authors with exact `@login` values, falling back to recorded names when a GitHub login is unavailable.
 - The final line is the full changelog link in the exact format shown above.
 - Nothing appears after the full changelog link.
+- No Unicode em dash appears in authored release-note prose; exact source titles remain verbatim evidence.
 - No unsupported claims are invented.
 - Breaking changes, if any, are clearly identified.
 - Vague wording like "various improvements" or "miscellaneous changes" is avoided.
@@ -390,22 +414,28 @@ For each commit in the compare range, check whether it belongs to a pull request
 Before returning the result, verify:
 
 1. The first line is exactly `## What's Changed`.
-2. The summary is human-friendly and optimized for GitHub release notes.
-3. The summary covers the meaningful changes in the comparison range.
-4. GitHub alert blocks are included only when they add value.
-5. Alert severity matches the actual impact of the change.
-6. Alert blocks are supported by the release data.
-7. A `Sources:` section is included with all contributing PRs and commits.
-8. Source entries use the `* <title> by @<author> in <url>` format, with fallback to author name when no GitHub username is available.
-9. All contributors in the comparison range are represented in the Sources section.
-10. The final line is the full changelog link.
-11. Nothing appears after the full changelog link.
-12. No unsupported claims were invented.
-13. Breaking changes, if any, are clearly identified.
-14. When using default resolution, the comparison range correctly reflects the current branch against the upstream default branch.
-15. Every commit has a completed association lookup; unresolved or capped data is explicitly marked incomplete.
-16. Every qualifying PR appears once, no covered commit is also listed, and no unrelated or unmerged PR is included.
-17. PR titles, URLs, and author logins match REST metadata exactly, including `[bot]`; no normalized app slug replaces a bot login.
-18. Each qualifying PR's original commit inventory is complete, and every verified author/co-author is credited on its source line, even for squash merges and automated release PRs.
-19. The summary covers meaningful final changes across all authors and changed files; stale PR descriptions do not override diff evidence.
-20. Each prose paragraph and Markdown list item occupies one physical line, regardless of length.
+2. The first non-empty summary line after that heading begins exactly with `This release `.
+3. The opening summary is exactly one concise paragraph on one physical line.
+4. At least one `- ` release-highlight bullet appears after the opening paragraph and before any optional alert blocks or the `Sources:` section.
+5. Release-highlight bullets use bold lead-ins with natural sentence continuation instead of bold-label fragments such as `**<lead>** —` or `**<lead>**:`.
+6. Bold-leading prose paragraphs are not used as a substitute for release-highlight bullets.
+7. No Unicode em dash `—` appears in authored release-note prose; exact source titles remain verbatim evidence.
+8. The summary is human-friendly and optimized for GitHub release notes.
+9. The summary covers the meaningful changes in the comparison range.
+10. GitHub alert blocks are included only when they add value.
+11. Alert severity matches the actual impact of the change.
+12. Alert blocks are supported by the release data and use only the supported GitHub alert markers.
+13. A `Sources:` section is included with all contributing PRs and commits.
+14. Source entries use the `* <title> by @<author> in <url>` format, with fallback to author name when no GitHub username is available.
+15. All contributors in the comparison range are represented in the Sources section.
+16. The final line is the full changelog link.
+17. Nothing appears after the full changelog link.
+18. No unsupported claims were invented.
+19. Breaking changes, if any, are clearly identified.
+20. When using default resolution, the comparison range correctly reflects the current branch against the upstream default branch.
+21. Every commit has a completed association lookup; unresolved or capped data is explicitly marked incomplete.
+22. Every qualifying PR appears once, no covered commit is also listed, and no unrelated or unmerged PR is included.
+23. PR titles, URLs, and author logins match REST metadata exactly, including `[bot]`; no normalized app slug replaces a bot login.
+24. Each qualifying PR's original commit inventory is complete, and every verified author/co-author is credited on its source line, even for squash merges and automated release PRs.
+25. The summary covers meaningful final changes across all authors and changed files; stale PR descriptions do not override diff evidence.
+26. Each prose paragraph and Markdown list item occupies one physical line, regardless of length.

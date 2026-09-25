@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-09-25
+
+This is a patch release that strengthens `git-remote-release` with a structured release-note presentation format, deterministic format verification, and enhanced contributor attribution. The release introduces a strict release-note opening contract requiring `This release ...` followed by curated release-highlight bullets with bold lead-ins, enforces em dash prohibition to ensure consistent release-note prose, and expands Python collector verification to detect format violations and missing sources. Documentation is updated to clarify the release-highlight bullet style and the contributor-attribution model for both direct commits and pull requests with original PR commits.
+
+### Changed
+
+- `git-remote-release` release-note format now requires a structured opening: a single concise paragraph beginning exactly with `This release ` immediately followed by one or more dash bullets with bold lead-ins and natural sentence continuation (no `**<lead>** —` or `**<lead>**: ` patterns), with mandatory comma separation between bullets and a period ending the final bullet,
+- `git-remote-release` now prohibits Unicode em dash (`—`) anywhere in release-note prose, preferring natural sentence continuation instead of definition-style punctuation after bold lead-ins,
+- `collect-release-evidence.py` verification gate now rejects malformed `This release ...` openings, missing release-highlight bullets, unsupported `**<lead>** —` and `**<lead>**: ` patterns, bold-leading prose paragraphs, bullet punctuation errors, em dashes in generated prose, and incomplete contributor attribution before granting release-note certification,
+- `git-remote-release` contributor handling now explicitly documents exact REST `user.login` preservation including GitHub App `[bot]` suffixes, never derives logins from app slugs or display names, and preserves distinct accounts such as `codebelt-aicia[bot]` and `aicia-bot` as separate entities,
+- `git-remote-release` SKILL.md restructured with a Non-Negotiable Rules section listing format requirements, enhanced Output Format section documenting the opening paragraph and release-highlight bullet contract, dedicated Em Dash Prohibition section, and expanded Data Collection Strategy explaining when to use bundled collector versus GitHub MCP tools versus `gh` CLI,
+- README.md updated with refined `git-remote-release` description emphasizing structured opening, curated bold-lead bullets, forbidden em dashes, and Sources preservation,
+- `test-release-evidence.py` expanded with comprehensive format validation test coverage including `This release ...` opening detection, release-highlight bullet structure validation, em dash detection, bold-lead pattern validation, comma/period enforcement, and contributor-complete source-line verification.
+
 ## [0.11.0] - 2026-09-24
 
 This is a minor release introducing `git-remote-pr`, a Git and GitHub CLI skill for managing GitHub pull requests from the complete committed branch comparison, establishing working-tree scratch isolation standards for all skills, and applying markdown prose formatting conventions across the skill documentation suite. The new skill brings deterministic evidence collection, safe push and assignment handling, post-write verification, upstream tracking validation with branch-name integrity checking, PR approval integrity validation with SHA256 hash computation, and comprehensive regression tests. Repository guidance clarifies where temporary artifacts belong, and skill documentation now follows consistent markdown formatting standards. The `agent-smith` skill is restructured around an operating model framework with a refined decision precedence from 5 to 4 levels, new capability references for agentic engineering patterns and automation, an enhanced validation test suite with regression isolation support, and visual identification assets for all skills.
@@ -730,6 +744,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.11.1]: https://github.com/codebeltnet/agentic/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/codebeltnet/agentic/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/codebeltnet/agentic/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/codebeltnet/agentic/compare/v0.9.1...v0.10.0
