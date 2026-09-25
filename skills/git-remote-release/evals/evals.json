@@ -17,10 +17,14 @@
     {
       "id": 1,
       "prompt": "Generate release notes for https://github.com/codebeltnet/agentic/compare/v0.4.5...v0.4.6",
-      "expected_output": "Release notes starting with ## What's Changed, a human-friendly summary of changes between v0.4.5 and v0.4.6, a Sources section with PR/commit references, and ending with the full changelog link.",
+      "expected_output": "Release notes starting with ## What's Changed, a concise `This release ...` opening paragraph, curated dash bullets covering the important outcomes between v0.4.5 and v0.4.6, a Sources section with PR/commit references, and ending with the full changelog link.",
       "expectations": [
         "First line is exactly ## What's Changed",
+        "First non-empty summary line after the heading begins with This release ",
         "Parses the compare URL to extract owner, repo, previous tag, and current tag",
+        "Opening summary is one concise release-level paragraph",
+        "At least one curated dash bullet follows the opening paragraph before Sources",
+        "Release-highlight bullets use bold lead-ins with natural sentence continuation",
         "Summary explains the effect of changes rather than listing raw commit messages",
         "Sources section includes all contributing PRs and/or commits with author and URL",
         "Final line is the full changelog compare link in the exact required format",
@@ -117,6 +121,24 @@
         "Includes repository standards configuration and contributing guidelines as well as dependency upgrades",
         "Does not claim unverified runtime signing improvements or merely repeat the dependency-only PR body",
         "Ends with the v10.0.11...v10.0.12 compare link without duplicate covered commit sources"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Generate release notes for codebeltnet/aws-signature-v4 v10.0.11...v10.0.12 using only the attached GitHub API snapshot in aws-signature-v4-v10.0.12.json. A previous attempt produced `## What's Changed` followed by bold-leading prose paragraphs such as `**Dependency and tooling updates** — Updated dependencies ...`. Reject that presentation and produce the required paste-ready release story instead.",
+      "files": [
+        "evals/files/aws-signature-v4-v10.0.12.json"
+      ],
+      "expected_output": "Begins the optimized summary with a concise `This release ...` paragraph, follows it with curated dash bullets using bold lead-ins and natural prose, groups the shipped outcomes instead of reproducing the evidence inventory, contains no em dash, preserves the verified contributor-complete PR #34 source line, and ends with the compare link.",
+      "expectations": [
+        "First non-empty summary line after the heading begins with This release ",
+        "Opening summary is one concise release-level paragraph",
+        "At least one curated dash bullet appears before Sources",
+        "Release-highlight bullets use bold lead-ins with natural sentence continuation instead of bold-leading paragraphs",
+        "Does not use the Unicode em dash character anywhere in the returned release notes",
+        "Groups dependency upgrades, repository standards, test-platform migration, coverage migration, and contributing documentation into release outcomes instead of a source-by-source inventory",
+        "Preserves the single PR #34 source line crediting @codebelt-aicia[bot], @aicia-bot and @gimlichael",
+        "Ends with the exact v10.0.11...v10.0.12 compare link"
       ]
     }
   ]
