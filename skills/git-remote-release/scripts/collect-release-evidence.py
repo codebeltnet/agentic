@@ -47,6 +47,83 @@ def source(title, url, authors):
     return f"* {title.splitlines()[0]} by {credit} in {url}"
 
 
+def verify_summary(lines):
+    errors = []
+    source_index = lines.index("Sources:")
+    section = lines[1:source_index]
+    content_positions = [index for index, line in enumerate(section) if line.strip()]
+
+    if not content_positions:
+        return ["Missing release summary before Sources"]
+
+    opening_index = content_positions[0]
+    opening = section[opening_index]
+    if not opening.startswith("This release "):
+        if opening.startswith("**"):
+            errors.append("Bold-leading prose paragraphs are not allowed; start with 'This release ' and use dash bullets for release highlights")
+        else:
+            errors.append("First non-empty summary line must begin with 'This release '")
+
+    remaining = content_positions[1:]
+    if not remaining:
+        errors.append("Release summary must include at least one dash bullet after the opening paragraph")
+        return errors
+
+    first_after_opening = remaining[0]
+    if section[first_after_opening].startswith("**"):
+        errors.append("Bold-leading prose paragraphs are not allowed; use dash bullets for release highlights")
+    if not section[first_after_opening].startswith("- "):
+        errors.append("Opening summary paragraph must be followed by release-highlight bullets")
+
+    bullets = []
+    alerts_started = False
+    for line in section[first_after_opening:]:
+        if not line.strip():
+            continue
+        if not alerts_started:
+            if line.startswith("- "):
+                bullets.append(line.rstrip())
+                continue
+            if line.startswith(">"):
+                alerts_started = True
+                continue
+            if line.startswith("**"):
+                errors.append("Bold-leading prose paragraphs are not allowed; use dash bullets for release highlights")
+            else:
+                errors.append("Only release-highlight bullets and optional GitHub alert blocks may follow the opening paragraph")
+            continue
+
+        if line.startswith(">"):
+            continue
+        if line.startswith("- "):
+            errors.append("Release-highlight bullets must appear before any alert blocks")
+        elif line.startswith("**"):
+            errors.append("Bold-leading prose paragraphs are not allowed; use dash bullets for release highlights")
+        else:
+            errors.append("Only GitHub alert blocks may appear between the release highlights and Sources")
+
+    if not bullets:
+        errors.append("At least one release-highlight bullet is required before Sources")
+        return errors
+
+    for bullet in bullets:
+        if re.match(r"^- \*\*[^*]+\*\*\s*[:—-]", bullet):
+            errors.append("Release-highlight bullets must continue naturally after the bold lead-in, not with label punctuation")
+            break
+        if not re.match(r"^- \*\*[^*]+\*\*\s+\S", bullet):
+            errors.append("Release-highlight bullets must use a bold lead-in followed by natural sentence prose")
+            break
+
+    for bullet in bullets[:-1]:
+        if not bullet.endswith(","):
+            errors.append("Each non-final release-highlight bullet must end with a comma")
+            break
+    if not bullets[-1].endswith("."):
+        errors.append("The final release-highlight bullet must end with a period")
+
+    return errors
+
+
 def collect(repository, previous, current, api=github):
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
         raise ValueError("Repository must be owner/repo")
@@ -164,12 +241,15 @@ def verify(evidence, draft):
     errors = []
     if not evidence["complete"]:
         errors.append("Evidence is incomplete: " + "; ".join(evidence["issues"]))
+    if "—" in draft:
+        errors.append("Unicode em dash is not allowed in generated release notes")
     lines = draft.strip().splitlines()
     if not lines or lines[0] != "## What's Changed":
         errors.append("Missing required opening heading")
     if lines.count("Sources:") != 1:
         errors.append("Expected exactly one Sources section")
     else:
+        errors.extend(verify_summary(lines))
         actual = [line for line in lines[lines.index("Sources:") + 1:-1] if line.strip()]
         if actual != evidence["sources"]:
             errors.append("Sources must match collected source lines, including all contributors, exactly")

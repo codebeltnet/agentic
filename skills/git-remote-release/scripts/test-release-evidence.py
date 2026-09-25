@@ -46,8 +46,13 @@ class EvidenceTests(unittest.TestCase):
     def collect(self):
         return collector.collect("example/widget", "v1", "v2", self.api)
 
-    def draft(self, evidence):
-        return "## What's Changed\n\nUpdated contributor workflow.\n\nSources:\n\n" + "\n".join(evidence["sources"]) + "\n\n**Full Changelog**: https://github.com/example/widget/compare/v1...v2"
+    def draft(self, evidence, summary=None):
+        summary = summary or (
+            "This release improves contributor-complete verification for automated service updates.\n\n"
+            "- **Contributor attribution** now keeps every verified PR contributor on the shared source line,\n"
+            "- **Draft verification** rejects incomplete sources and malformed release-summary structure."
+        )
+        return "## What's Changed\n\n" + summary + "\n\nSources:\n\n" + "\n".join(evidence["sources"]) + "\n\n**Full Changelog**: https://github.com/example/widget/compare/v1...v2"
 
     def test_squash_expands_all_pages_and_preserves_changes(self):
         evidence = self.collect()
@@ -63,6 +68,30 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(collector.verify(evidence, draft.replace(", @automation and @human", "")))
         self.assertTrue(collector.verify(evidence, draft.replace("Sources:", "Sources:\n" + evidence["sources"][0])))
         self.assertTrue(collector.verify(evidence, draft.replace("Sources:", "Sources:\n- Extra source by @someone")))
+
+    def test_summary_structure_rejects_bold_paragraph_regression(self):
+        evidence = self.collect()
+        draft = self.draft(evidence, (
+            "**Team catalog matching precision** — The API now matches exact team components.\n\n"
+            "**Enhanced test coverage and infrastructure** — Comprehensive test fixtures exercise overlapping names.\n\n"
+            "**Dependency and tooling updates** — Updated dependencies and repository tooling."
+        ))
+        errors = collector.verify(evidence, draft)
+        self.assertTrue(any("This release " in error for error in errors), errors)
+        self.assertTrue(any("Bold-leading prose paragraphs" in error for error in errors), errors)
+        self.assertTrue(any("dash bullet" in error for error in errors), errors)
+        self.assertTrue(any("Unicode em dash" in error for error in errors), errors)
+
+    def test_summary_structure_requires_bullets_and_natural_bold_leads(self):
+        evidence = self.collect()
+        without_bullets = self.draft(evidence, "This release improves contributor-complete verification.")
+        self.assertTrue(any("dash bullet" in error for error in collector.verify(evidence, without_bullets)))
+
+        label_style = self.draft(evidence, (
+            "This release improves contributor-complete verification.\n\n"
+            "- **Contributor attribution**: now keeps every verified PR contributor on the shared source line."
+        ))
+        self.assertTrue(any("label punctuation" in error for error in collector.verify(evidence, label_style)))
 
     def test_failed_association_is_not_a_direct_commit(self):
         self.routes["/commits/squash/pulls?per_page=100"] = RuntimeError("HTTP 403")
