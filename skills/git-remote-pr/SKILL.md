@@ -12,7 +12,7 @@ Open or maintain one GitHub pull request for the entire committed current branch
 
 - Trigger on an explicit request to create, open, make, or refresh a GitHub PR, or `git remote pr`. `/git-remote-pr` may force selection where supported. Bare `yolo` or `auto` never triggers this skill.
 - The explicit PR request authorizes read-only preparation. In normal mode, show the preview below and **stop for the exact `approve APR-...` phrase displayed in that preview before any remote write**. Approval for Preview A can execute only Plan A.
-- `yolo` or `auto` attached to the same explicit PR request authorizes the narrow write phase after displaying the same preview as status. Continue without a second question. Neither mode authorizes force push, rebase, reset, amend, merge, branch deletion, auto-merge, or unrelated writes.
+- `yolo` or `auto` attached to the same explicit PR request still requires the full preview, but it skips the approval requirement itself. Show the same preview as status, do not ask for or wait on `approve APR-...`, and continue immediately with that just-presented plan's ID. Neither mode authorizes force push, rebase, reset, amend, merge, branch deletion, auto-merge, or unrelated writes.
 - A dirty worktree, including untracked files, blocks both modes. Explain that a PR contains committed changes only. Do not stage, commit, stash, discard, or automatically invoke `git-visual-commits`.
 - A missing upstream tracking branch, or a local/upstream branch-name mismatch, also blocks both modes. The skill never guesses a PR head after a rename or silent tracking drift; fix tracking first, then rerun the workflow.
 - Commit requests belong to `git-visual-commits`; squash wording belongs to `git-visual-squash-summary`; release notes belong to `git-remote-release`; changelogs belong to `git-keep-a-changelog`. This skill independently reads the complete PR comparison.
@@ -71,14 +71,14 @@ Before any `git push`, `gh pr create`, `gh pr edit`, assignee change, or equival
 - Exact planned writes: optional normal push to the already-tracked head branch, create or edit the intended PR, and add the authenticated assignee if absent. Include ready/draft state.
 - A prominent `Approval ID: APR-...` and the final instruction `To approve this exact preview, reply: approve APR-...`, using the same ID as `plan.json.approval_id`.
 
-In normal mode give the preview link and its exact approval phrase, then stop. Bare `approved`, `yes`, `go ahead`, or `looks good` does not authorize execution. Re-present the **existing preview link** and ask for the exact displayed phrase; do not regenerate anything or infer, fill in, or manufacture the user's approval ID. With same-request `yolo`/`auto`, give the same preview link and phrase as status, then pass that just-presented plan's ID without waiting for another message. No approval is inferred from a prior unrelated `yolo`/`auto`.
+In normal mode give the preview link and its exact approval phrase, then stop. Bare `approved`, `yes`, `go ahead`, or `looks good` does not authorize execution. Re-present the **existing preview link** and ask for the exact displayed phrase; do not regenerate anything or infer, fill in, or manufacture the user's approval ID. With same-request `yolo`/`auto`, give the same preview link and phrase as status only, do not ask for or wait on that phrase, and pass that just-presented plan's ID immediately. No approval is inferred from a prior unrelated `yolo`/`auto`.
 
 ## Phase 2: execute and verify
 
-After approval (or the same-request auto modifier), run:
+After explicit approval in normal mode, or immediately after the preview in same-request auto mode, run:
 
 ```text
-pwsh -NoProfile -NonInteractive -File <skill>/scripts/execute-pr.ps1 -PlanFile <temp-directory>/plan.json -ApprovalId <exact-approved-APR-ID>
+pwsh -NoProfile -NonInteractive -File <skill>/scripts/execute-pr.ps1 -PlanFile <temp-directory>/plan.json -ApprovalId <exact-APR-ID-for-this-plan>
 ```
 
 The helper matches the supplied approval ID, checks the exact final preview hash, normalizes only the two generated approval-ID slots back to `{{APPROVAL_ID}}`, verifies `review_hash`, and recomputes the approval ID from the complete write intent plus that review hash. It then checks evidence/body hashes and independently rechecks the material snapshot, and fails before a write when any check differs. Changed local `HEAD`, worktree, base, remote head, authenticated user, PR title/body/state, template, changed-file inventory, or approved artifact invalidates approval.
