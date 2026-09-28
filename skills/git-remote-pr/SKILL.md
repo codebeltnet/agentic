@@ -6,6 +6,8 @@ description: >
 
 # Git Remote PR
 
+![Git Remote PR](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/git-remote-pr/assets/hero.jpg)
+
 Open or maintain one GitHub pull request for the entire committed current branch. Use Git, `gh`, and GitHub APIs. Never use GitHub Copilot, `gh copilot`, browser automation, GitHub's generated PR description, or another model-backed GitHub service. The agent reading this skill writes concise reviewer-oriented prose from collected evidence; bundled scripts collect and verify facts only. Use PowerShell 7 (`pwsh`) on Windows, Linux, and macOS.
 
 ## Routing and authorization
