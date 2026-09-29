@@ -4,19 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.11.1] - 2026-09-25
+## [0.11.1] - 2026-09-29
 
-This is a patch release that strengthens `git-remote-release` with a structured release-note presentation format, deterministic format verification, and enhanced contributor attribution. The release introduces a strict release-note opening contract requiring `This release ...` followed by curated release-highlight bullets with bold lead-ins, enforces em dash prohibition to ensure consistent release-note prose, and expands Python collector verification to detect format violations and missing sources. Documentation is updated to clarify the release-highlight bullet style and the contributor-attribution model for both direct commits and pull requests with original PR commits.
+This is a patch release delivering validation hardening for `git-remote-release` with stricter em-dash and alert-block enforcement, comprehensive test coverage for format compliance, Microsoft.Testing.Platform test runner support in `dotnet-remote-testing`, clarified yolo/auto approval behavior in `git-remote-pr`, and visual skill identification with hero images.
 
 ### Changed
 
-- `git-remote-release` release-note format now requires a structured opening: a single concise paragraph beginning exactly with `This release ` immediately followed by one or more dash bullets with bold lead-ins and natural sentence continuation (no `**<lead>** —` or `**<lead>**: ` patterns), with mandatory comma separation between bullets and a period ending the final bullet,
-- `git-remote-release` now prohibits Unicode em dash (`—`) anywhere in release-note prose, preferring natural sentence continuation instead of definition-style punctuation after bold lead-ins,
-- `collect-release-evidence.py` verification gate now rejects malformed `This release ...` openings, missing release-highlight bullets, unsupported `**<lead>** —` and `**<lead>**: ` patterns, bold-leading prose paragraphs, bullet punctuation errors, em dashes in generated prose, and incomplete contributor attribution before granting release-note certification,
-- `git-remote-release` contributor handling now explicitly documents exact REST `user.login` preservation including GitHub App `[bot]` suffixes, never derives logins from app slugs or display names, and preserves distinct accounts such as `codebelt-aicia[bot]` and `aicia-bot` as separate entities,
-- `git-remote-release` SKILL.md restructured with a Non-Negotiable Rules section listing format requirements, enhanced Output Format section documenting the opening paragraph and release-highlight bullet contract, dedicated Em Dash Prohibition section, and expanded Data Collection Strategy explaining when to use bundled collector versus GitHub MCP tools versus `gh` CLI,
-- README.md updated with refined `git-remote-release` description emphasizing structured opening, curated bold-lead bullets, forbidden em dashes, and Sources preservation,
-- `test-release-evidence.py` expanded with comprehensive format validation test coverage including `This release ...` opening detection, release-highlight bullet structure validation, em dash detection, bold-lead pattern validation, comma/period enforcement, and contributor-complete source-line verification.
+- `git-remote-release` em-dash prohibition now scoped to authored prose only, preserving exact source titles and original formatting while rejecting em-dash usage in generated bullets and release highlight text,
+- `git-remote-release` GitHub alert blocks restricted to supported markers (`[!NOTE]`, `[!WARNING]`, `[!IMPORTANT]`, `[!TIP]`, `[!CAUTION]`) with verification rejecting unsupported `[!...]` patterns and loose bracket content,
+- `git-remote-release` validation and test coverage expanded with tighter punctuation-only bullet rejection, refined alert-block content validation, and comprehensive test cases covering format violations, alert-marker restrictions, and em-dash scoping,
+- `collect-release-evidence.py` and `test-release-evidence.py` enhanced with stricter validation for alert-marker support, punctuation-only bullets, and em-dash presence in authored prose while tolerating source titles unchanged,
+- `dotnet-remote-testing` now supports Microsoft.Testing.Platform (MTP) test runner discovered from `global.json` `test.runner` configuration, with MTP-aware command-line argument handling, TRX result collection, filtering support when modules provide it, and extension-capability detection for coverage and diagnostics,
+- `dotnet-remote-testing` SKILL.md updated with new "Microsoft Testing Platform and xUnit versions" section documenting MTP discovery, extension dependencies, command-line argument differences from VSTest, xUnit v3/4.x and Codebelt.Extensions.Xunit v12.x version semantics, and troubleshooting for missing dependencies and zero-test scenarios,
+- `dotnet-remote-testing` `--filter` option documentation clarified for MTP mode, noting that built modules must support `--filter` and xUnit v3 package 4.0+ provides this syntax,
+- `dotnet-remote-testing` failure codes 11 and 12 refined to reflect MTP test-discovery behavior: code 11 now indicates test host failed or discovered zero tests, and code 12 covers missing or unreadable results,
+- `git-remote-pr` yolo/auto approval behavior clarified in SKILL.md, AGENTS.md, and eval cases: same-request `yolo`/`auto` skips the approval wait but still shows the plan as status only, with no approval phrase required or awaited,
+- README.md updated with clarified `git-remote-pr` approval behavior for yolo/auto mode and `dotnet-remote-testing` MTP support, hero images added for `git-remote-pr` and `dotnet-nuget-update` skills for visual identification in documentation and skill catalogs.
 
 ## [0.11.0] - 2026-09-24
 
