@@ -241,6 +241,41 @@
         "evals/files/configured/test/Api.Tests/Api.Tests.csproj",
         "evals/files/configured/test/Api.Tests/HealthTests.cs"
       ]
+    },
+    {
+      "id": 15,
+      "prompt": "Run the ShouldRunOnLinux test in Ubuntu with coverage. This repo uses Codebelt xUnit 12 and xunit.v3 package 4.",
+      "expected_output": "The runner honors global.json MTP mode, executes the selected test in Docker, and reports exactly one passing test from TRX. Filtering and installed Coverlet support are discovered from built-module help.",
+      "expectations": [
+        "Runs through the bundled runner with --test ShouldRunOnLinux and --coverage",
+        "Uses MTP named project selection and supported reporting, filtering, and coverage options",
+        "Reports exactly one passing Linux test and no skipped or failing tests",
+        "Does not modify global.json, packages, or the configured Ubuntu image",
+        "Never substitutes host testing or treats zero tests as success"
+      ],
+      "files": [
+        "evals/files/mtp-xunit/global.json",
+        "evals/files/mtp-xunit/testenvironments.json",
+        "evals/files/mtp-xunit/test/Mtp.Tests/Mtp.Tests.csproj",
+        "evals/files/mtp-xunit/test/Mtp.Tests/PlatformTests.cs"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Remote test this xUnit v3 package 4 repository in Ubuntu and explain any failure.",
+      "expected_output": "The runner executes both tests using MTP and returns test-failure exit code 1, with one passing test and the intentional assertion failure preserved in its TRX summary.",
+      "expectations": [
+        "Reports one passed and one failed test, with the intentional assertion message",
+        "Names Mtp.Tests.PlatformTests.ShouldReportAnAssertionFailure and net10.0",
+        "Distinguishes the assertion failure from a test-host or reporting failure",
+        "Does not edit the failing test or rerun on the host"
+      ],
+      "files": [
+        "evals/files/mtp-xunit/global.json",
+        "evals/files/mtp-xunit/testenvironments.json",
+        "evals/files/mtp-xunit/test/Mtp.Tests/Mtp.Tests.csproj",
+        "evals/files/mtp-xunit/test/Mtp.Tests/PlatformTests.cs"
+      ]
     }
   ]
 }

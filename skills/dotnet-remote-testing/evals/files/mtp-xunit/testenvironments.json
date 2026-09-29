@@ -1,0 +1,10 @@
+{
+  "version": "1",
+  "environments": [
+    {
+      "name": "Docker-Ubuntu",
+      "type": "docker",
+      "dockerImage": "codebeltnet/ubuntu-testrunner:10"
+    }
+  ]
+}
