@@ -1335,6 +1335,7 @@ internal sealed record ContainerMount(string HostPath, string ContainerPath, boo
 
 internal sealed record TestCommandOptions
 {
+    public bool MicrosoftTestingPlatform { get; init; }
     public string? Target { get; init; }
     public string Configuration { get; init; } = "Debug";
     public string? Framework { get; init; }
@@ -1358,6 +1359,25 @@ internal sealed record ContainerPlan
 internal static class ContainerPlanner
 {
     internal const string PhaseMarkerPrefix = "##RT_PHASE_END:";
+
+    // Match the SDK runner selection in the staged workspace; never infer it from package names.
+    public static bool UsesMicrosoftTestingPlatform(string sourceRoot)
+    {
+        var path = Path.Combine(sourceRoot, "global.json");
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        using var json = JsonDocument.Parse(File.ReadAllText(path), new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip,
+        });
+        return json.RootElement.TryGetProperty("test", out var test)
+            && test.TryGetProperty("runner", out var runner)
+            && runner.GetString() == "Microsoft.Testing.Platform";
+    }
 
     // Resolve the dotnet test --filter expression. --test is sugar for a FullyQualifiedName contains match.
     public static string? ResolveFilter(string? filter, string? test)
@@ -1398,9 +1418,39 @@ internal static class ContainerPlanner
         sb.Append("umask 000\n");
         sb.Append($"cd {Shell.Quote(o.WorkDir)} || {{ echo '{PhaseMarkerPrefix}staging:1##'; exit 8; }}\n");
         sb.Append("run_phase() { name=\"$1\"; shift; \"$@\"; code=$?; echo \"" + PhaseMarkerPrefix + "${name}:${code}##\"; return $code; }\n");
-        sb.Append($"run_phase restore dotnet restore{target}{fw} || exit 9\n");
+        var restoreFramework = string.IsNullOrWhiteSpace(o.Framework) ? "" : $" -p:TargetFramework={Shell.Quote(o.Framework)}";
+        sb.Append($"run_phase restore dotnet restore{target}{restoreFramework} || exit 9\n");
         sb.Append($"run_phase build dotnet build{target}{cfg}{fw} --no-restore || exit 10\n");
-        sb.Append($"run_phase test dotnet test{target}{cfg}{fw} --no-build{filter}{coverage} --results-directory {Shell.Quote(o.ResultsDir)} --logger trx\n");
+        if (o.MicrosoftTestingPlatform)
+        {
+            var testTarget = string.IsNullOrWhiteSpace(o.Target) ? ""
+                : $" {(o.Target.EndsWith("proj", StringComparison.OrdinalIgnoreCase) ? "--project" : "--solution")} {Shell.Quote(o.Target)}";
+            var command = $"dotnet test{testTarget}{cfg}{fw} --no-build";
+            // Extension switches belong to the test applications. Ask the built modules which ones
+            // they support instead of installing packages or guessing from an xUnit version number.
+            sb.Append("run_tests() {\n");
+            sb.Append($"  help=$({command} --help 2>&1) || {{ printf '%s\\n' \"$help\"; return 1; }}\n");
+            sb.Append("  supports() { grep -Eq -- \"(^|[[:space:]])$1([[:space:]<]|$)\" <<< \"$help\"; }\n");
+            sb.Append("  args=()\n");
+            sb.Append("  if supports --report-trx; then args+=(--report-trx); elif supports --report-xunit-trx; then args+=(--report-xunit-trx); else printf '%s\\n' \"$help\" 'No supported MTP TRX reporter. Reference an MTP TRX extension or use the xUnit reporter.'; return 1; fi\n");
+            if (!string.IsNullOrWhiteSpace(o.Filter))
+            {
+                sb.Append("  supports --filter || { echo 'The selected MTP modules do not support --filter (xUnit v3 requires package 4.0+).'; return 1; }\n");
+                sb.Append($"  args+=(--filter {Shell.Quote(o.Filter)})\n");
+            }
+
+            if (o.Coverage)
+            {
+                sb.Append("  if supports --coverlet; then args+=(--coverlet --coverlet-output-format cobertura); elif supports --coverage; then args+=(--coverage --coverage-output-format cobertura); else echo 'No supported MTP coverage extension is installed.'; return 1; fi\n");
+            }
+
+            sb.Append($"  {command} --results-directory {Shell.Quote(o.ResultsDir)} \"${{args[@]}}\"\n");
+            sb.Append("}\nrun_phase test run_tests\n");
+        }
+        else
+        {
+            sb.Append($"run_phase test dotnet test{target}{cfg}{fw} --no-build{filter}{coverage} --results-directory {Shell.Quote(o.ResultsDir)} --logger trx\n");
+        }
         sb.Append("exit $?\n");
         return sb.ToString();
     }
@@ -1926,6 +1976,17 @@ internal static class FailureClassifier
         if (results.Failed > 0)
         {
             return new ExecutionOutcome(FailureKind.TestFailure, "test", containerExitCode, $"{results.Failed} test(s) failed.");
+        }
+
+        if (!testRan || results.TrxFilesParsed == 0)
+        {
+            return new ExecutionOutcome(FailureKind.ResultProcessing, "test", containerExitCode,
+                "The test phase did not produce TRX results. A zero process exit is insufficient to establish a passing run.");
+        }
+
+        if (results.Total == 0)
+        {
+            return new ExecutionOutcome(FailureKind.TestHost, "test", containerExitCode, "Zero tests were discovered. Check the selected target and filter.");
         }
 
         return new ExecutionOutcome(FailureKind.None, "test", 0, "All tests passed.");
@@ -3128,6 +3189,7 @@ internal static class Commands
 
     private static TestCommandOptions BuildTestOptions(Options options, string sourceRoot) => new()
     {
+        MicrosoftTestingPlatform = ContainerPlanner.UsesMicrosoftTestingPlatform(sourceRoot),
         Target = TargetResolver.Resolve(sourceRoot, options.Project),
         Configuration = options.Configuration,
         Framework = options.Framework,
@@ -3571,7 +3633,8 @@ internal static class Commands
             // would leave the developer with a verdict and no cause. Prefer the failing phase's own log.
             var phaseLog = FailureClassifier.PhaseOutput(proc.StdOut, outcome.Phase);
             var detail = FirstNonEmpty(
-                ErrorLines(phaseLog, 20), LastLines(phaseLog, 40), LastLines(proc.StdErr, 20), LastLines(proc.StdOut, 40));
+                outcome.Kind == FailureKind.TestHost ? LastLines(phaseLog, 40) : ErrorLines(phaseLog, 20),
+                LastLines(phaseLog, 40), LastLines(proc.StdErr, 20), LastLines(proc.StdOut, 40));
             if (!string.IsNullOrWhiteSpace(detail))
             {
                 Console.Error.WriteLine();
@@ -3585,6 +3648,12 @@ internal static class Commands
             Console.WriteLine();
             Console.WriteLine("--- container log ---");
             Console.WriteLine(proc.StdOut.TrimEnd());
+        }
+
+        if (options.ShowLog && !string.IsNullOrWhiteSpace(proc.StdErr))
+        {
+            Console.Error.WriteLine("--- container stderr ---");
+            Console.Error.WriteLine(proc.StdErr.TrimEnd());
         }
 
         if (cleanup.Leftovers.Count > 0)
@@ -4123,6 +4192,34 @@ internal static class SelfTest
         Check("entrypoint honors configuration/framework/filter/coverage",
             entry.Contains("-c 'Release'") && entry.Contains("--framework 'net10.0'") && entry.Contains("--filter 'Category=Unit'") && entry.Contains("XPlat Code Coverage"));
         Check("entrypoint writes trx to results mount", entry.Contains("--results-directory '/results'") && entry.Contains("--logger trx"));
+        Check("restore uses an MSBuild framework property, not the force switch",
+            entry.Contains("dotnet restore 'test/Foo/Foo.csproj' -p:TargetFramework='net10.0'")
+            && !entry.Contains("dotnet restore 'test/Foo/Foo.csproj' --framework"));
+
+        var mtpOptions = new TestCommandOptions
+        {
+            MicrosoftTestingPlatform = true,
+            Target = "test/Foo's tests/Foo.csproj",
+            Configuration = "Release",
+            Framework = "net10.0",
+            Filter = "FullyQualifiedName~PassingTest",
+            Coverage = true,
+        };
+        var mtp = ContainerPlanner.BuildEntrypoint(mtpOptions);
+        Check("MTP uses explicit project selection with shell quoting",
+            mtp.Contains("dotnet test --project 'test/Foo'\\''s tests/Foo.csproj' -c 'Release' --framework 'net10.0' --no-build"));
+        Check("MTP probes built module capabilities before running",
+            mtp.Contains("--no-build --help 2>&1") && mtp.Contains("supports --report-trx") && mtp.Contains("supports --report-xunit-trx"));
+        Check("MTP passes supported filter and coverage switches",
+            mtp.Contains("args+=(--filter 'FullyQualifiedName~PassingTest')") && mtp.Contains("--coverlet-output-format cobertura") && mtp.Contains("--coverage-output-format cobertura"));
+        Check("MTP never passes VSTest logging or collection arguments",
+            !mtp.Contains("--logger") && !mtp.Contains("--collect") && !mtp.Contains(" -- --report"));
+        Check("MTP solution selection uses --solution",
+            ContainerPlanner.BuildEntrypoint(mtpOptions with { Target = "App.slnx" }).Contains("dotnet test --solution 'App.slnx'"));
+        Check("MTP retains implicit target discovery",
+            ContainerPlanner.BuildEntrypoint(mtpOptions with { Target = null }).Contains("dotnet test -c 'Release'"));
+        Check("MTP does not enable unrequested coverage or filters",
+            !ContainerPlanner.BuildEntrypoint(mtpOptions with { Filter = null, Coverage = false }).Contains("args+=(--coverlet"));
 
         var plan = ContainerPlanner.Build(
             "mcr.microsoft.com/dotnet/sdk:10.0.302",
@@ -4155,6 +4252,14 @@ internal static class SelfTest
             File.WriteAllText(Path.Combine(tempRoot, "App.slnx"), "<Solution/>");
             Check("root solution preferred over project", TargetResolver.Resolve(tempRoot, null) == "App.slnx");
             Check("explicit project overrides discovery", TargetResolver.Resolve(tempRoot, "test/Foo/Foo.csproj") == "test/Foo/Foo.csproj");
+            Check("no global.json retains VSTest commands", !ContainerPlanner.UsesMicrosoftTestingPlatform(tempRoot));
+            var globalJson = Path.Combine(tempRoot, "global.json");
+            File.WriteAllText(globalJson, "{ /* SDK configuration */ \"test\": { \"runner\": \"Microsoft.Testing.Platform\", }, }");
+            Check("global.json selects MTP and permits SDK JSON comments", ContainerPlanner.UsesMicrosoftTestingPlatform(tempRoot));
+            File.WriteAllText(globalJson, "{\"test\":{\"runner\":\"VSTest\"}}");
+            Check("explicit VSTest retains legacy commands", !ContainerPlanner.UsesMicrosoftTestingPlatform(tempRoot));
+            File.WriteAllText(globalJson, "{\"sdk\":{\"version\":\"10.0.100\"}}");
+            Check("SDK pin alone does not select MTP", !ContainerPlanner.UsesMicrosoftTestingPlatform(tempRoot));
         }
         finally
         {
@@ -4373,6 +4478,10 @@ internal static class SelfTest
             FailureClassifier.Classify(new Dictionary<string, int> { ["restore"] = 0, ["build"] = 0, ["test"] = 1 }, 1, false, TestRunResult.Empty).Kind == FailureKind.TestHost);
         Check("all passing classified as None",
             FailureClassifier.Classify(new Dictionary<string, int> { ["restore"] = 0, ["build"] = 0, ["test"] = 0 }, 0, false, passing).Kind == FailureKind.None);
+        Check("zero exit without TRX is not success",
+            FailureClassifier.Classify(new Dictionary<string, int> { ["test"] = 0 }, 0, false, TestRunResult.Empty).Kind == FailureKind.ResultProcessing);
+        Check("zero discovered tests is not success",
+            FailureClassifier.Classify(new Dictionary<string, int> { ["test"] = 0 }, 0, false, new TestRunResult { TrxFilesParsed = 1 }).Kind == FailureKind.TestHost);
         Check("cancellation wins over everything",
             FailureClassifier.Classify(new Dictionary<string, int> { ["restore"] = 0 }, -1, true, passing).Kind == FailureKind.Cancelled);
 
