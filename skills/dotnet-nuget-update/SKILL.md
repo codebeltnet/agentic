@@ -12,6 +12,8 @@ description: >
 
 # .NET NuGet Update
 
+![.NET NuGet Update](https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-nuget-update/assets/hero.jpg)
+
 Use this skill when a .NET repository needs a complete dependency audit or a controlled package update pass.
 
 ## Start with the audit, not intuition

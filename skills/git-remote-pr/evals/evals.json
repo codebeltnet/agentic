@@ -16,8 +16,8 @@
     {
       "id": 3,
       "prompt": "Create a PR yolo from v12.0.2/chore-work. There is a clean branch and no existing PR.",
-      "expected_output": "Displays the CREATE mutation preview, then performs the permitted writes without a second confirmation; the title is V12.0.2/chore work.",
-      "expectations": ["A clickable preview.md link containing the complete exact title and body is provided before remote mutations", "Same-request yolo removes only the approval wait", "No force push or history rewrite", "The PR is ready for review unless draft was explicitly requested", "Authenticated GitHub identity is used for assignment, not git user.name"]
+      "expected_output": "Displays the CREATE mutation preview, then performs the permitted writes without asking for or waiting on `approve APR-...`; the title is V12.0.2/chore work.",
+      "expectations": ["A clickable preview.md link containing the complete exact title and body is provided before remote mutations", "Same-request yolo treats the preview approval phrase as status only and does not ask for or wait on it", "No force push or history rewrite", "The PR is ready for review unless draft was explicitly requested", "Authenticated GitHub identity is used for assignment, not git user.name"]
     },
     {
       "id": 4,

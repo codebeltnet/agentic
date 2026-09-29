@@ -68,7 +68,9 @@ if ($doThisNow -lt 0) {
 if ($commands -ge 0 -and $commands -lt $doThisNow) {
     throw 'SKILL.md lists the command surface before "## Do this now"; the imperative must come first.'
 }
-if ($doThisNow -gt 100) {
+# A decorative hero between the title and the imperative is not an intake or workflow section.
+$opening = [regex]::Replace($body.Substring(0, $doThisNow), '(?m)^!\[[^\r\n]*\]\([^\r\n]*\)\r?\n', '')
+if ($opening.Length -gt 100) {
     throw "SKILL.md places '## Do this now' too late (body offset $doThisNow); it must lead the document body."
 }
 

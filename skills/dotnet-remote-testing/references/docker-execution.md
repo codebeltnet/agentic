@@ -77,7 +77,7 @@ The dependency cache (`/nuget`, via `NUGET_PACKAGES`) is deliberately separated 
 
 ## In-container phases
 
-The entrypoint runs three ordered phases and emits a machine-readable marker with each phase's exit code:
+The entrypoint runs three ordered phases and emits a machine-readable marker with each phase's exit code. For VSTest:
 
 ```
 dotnet restore <target>
@@ -86,6 +86,10 @@ dotnet test    <target> -c <config> --no-build [--filter …] [--framework …] 
 ```
 
 `restore` and `build` stop the run on failure; `test` always runs to completion so a TRX is produced even when tests fail. The runner works with the repository's configured .NET testing infrastructure; it does not install or alter test packages, and it does not assume a single testing framework.
+
+When the source root's `global.json` selects `Microsoft.Testing.Platform`, the test phase uses `dotnet test --project <project>` or `--solution <solution>`. After building, it probes `dotnet test ... --no-build --help` inside the container. It selects `--report-trx` when available, otherwise xUnit's built-in `--report-xunit-trx`; absence of both is a failure. Requested coverage selects the installed `--coverlet` or `--coverage` extension with Cobertura output, and requested filtering requires `--filter` support. These are capability choices, never retries after execution failure. MTP arguments are passed directly without a `--` separator. Mixed modules must support the selected options; the runner never skips incompatible projects or installs packages. A framework restriction uses `-p:TargetFramework=<tfm>` for restore and `--framework <tfm>` for build/test.
+
+Compatibility references: [xUnit v3 package 4.0 release notes](https://xunit.net/releases/v3/4.0.0), [MTP dotnet test command](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-test-mtp), and [MTP troubleshooting](https://learn.microsoft.com/en-us/dotnet/core/testing/microsoft-testing-platform-troubleshooting). xUnit v3 package 4.0 introduced MTP v2 as the default and VSTest-style `--filter` support; its `--report-xunit-trx` option is unchanged.
 
 ## Test scope
 
@@ -102,6 +106,8 @@ The runner parses every TRX in `/results` into a single structured result, at th
 Pull/restore/build noise is suppressed on success. `--show-log` prints the container log in full when the summarized detail is not enough.
 
 Failures are classified into distinct kinds so a container/infrastructure problem is never misreported as a failing unit test: `Configuration`, `UnsupportedEnvironment`, `DockerUnavailable`, `ImageResolution`, `SdkIncompatibility`, `SourceStaging`, `Restore`, `Compilation`, `TestHost`, `TestFailure`, `ResultProcessing`, `Cleanup`, `Cancelled`, `ReleaseMetadataUnavailable`. A non-zero `dotnet test` exit with a TRX containing failures is a `TestFailure`; a non-zero exit with no failing results (crash, no discovered tests, missing adapter) is a `TestHost` failure.
+
+A zero exit without a completed test phase or any TRX is `ResultProcessing`, and a TRX with zero tests is `TestHost`. Neither establishes a successful run. Test-host summaries preserve the output tail (including `Zero tests ran` and the process exit code); `--show-log` includes both captured output streams.
 
 Each phase emits a machine-readable end marker, so the log between two markers is exactly that phase's output. An infrastructure failure is reported with *its own* phase's log rather than a tail of everything — a build failure names the offending file and compiler error instead of trailing test-runner chatter. Any failing tests already recorded in a TRX are reported first even when the phase failed for another reason, so an assertion failure followed by a test-host crash does not disappear behind the crash.
 

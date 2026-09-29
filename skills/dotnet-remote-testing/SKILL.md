@@ -139,7 +139,7 @@ dotnet run --file "<skill-root>/scripts/remote-test.cs" -- run --repo-root "<roo
 Common scoping options (pass through only what the developer asked for):
 
 - `-p, --project <path>` — a specific solution or project (relative to the source root). When omitted, the runner resolves a root solution, a single solution, or a single project automatically.
-- `--filter <expr>` — a `dotnet test --filter` expression (test class, trait, etc.).
+- `--filter <expr>` — a `dotnet test --filter` expression (test class, trait, etc.). In MTP mode the built modules must support `--filter`; xUnit v3 package 4.0+ supports this syntax.
 - `--test <fqn>` — shortcut for a fully-qualified-name filter (a single test or class).
 - `-c, --configuration <Debug|Release>` — build configuration.
 - `-f, --framework <tfm>` — restrict a multi-targeted test project to one TFM. This also narrows environment resolution, so the run lands on that TFM's single-SDK channel instead of a multi-SDK runner.
@@ -147,6 +147,14 @@ Common scoping options (pass through only what the developer asked for):
 - `--timeout <seconds>` — abort the run after N seconds; the runner still cleans up.
 
 The runner establishes an isolated staged workspace (so container builds never leave Linux `bin`/`obj` in the working tree), mounts a persistent NuGet cache outside the repository, pins the image to its digest, runs restore → build → test, collects TRX results, and removes all transient Docker resources afterward. You do not manage any of that.
+
+### Microsoft Testing Platform and xUnit versions
+
+The source root's `global.json` selects the command dialect. With `test.runner` set to `Microsoft.Testing.Platform`, the runner uses named `--project`/`--solution` arguments and probes the built modules' help for TRX, filtering, and coverage support. It uses MTP extension arguments directly, without a VSTest `--logger`, `--collect`, or an extra `--` separator. Without that opt-in, it retains the VSTest command path. It never rewrites `global.json` or installs extensions to force compatibility.
+
+xUnit.net **v3** is the framework family; **4.x** is its package version. Codebelt.Extensions.Xunit **12.x** follows that package generation and MTP v2. The runner selects behavior from configuration and available capabilities, not those version numbers. Missing TRX reporting or requested coverage/filter support fails explicitly. A zero exit with missing TRX results or zero discovered tests is never reported as a passing suite.
+
+For a CI failure with `Zero tests ran`, inspect the exact command and extension options before changing tests or dependencies. MTP exit code 5 indicates invalid command-line arguments; `--show-log` includes stdout and stderr, and the normal failure summary preserves the zero-test message and exit code. For example, CI's `--hangdump` options require the separate `Microsoft.Testing.Extensions.HangDump` package; neither xUnit nor a coverage package implies that extension is installed. Report missing dependencies when only remote execution was requested; change them only under a separate repair request.
 
 Two diagnostic options exist for when a result needs explaining, not for routine runs:
 
@@ -231,8 +239,8 @@ A run is reproducible in terms of environment, requested image, resolved digest,
 | `8` | `SourceStaging` | Workspace could not be staged | Report it as infrastructure |
 | `9` | `Restore` | `dotnet restore` failed in the container | Report the restore error, not "tests failed" |
 | `10` | `Compilation` | Build failed in the container | Report the compiler errors, not "tests failed" |
-| `11` | `TestHost` | Test host crashed | Report as infrastructure with the output tail |
-| `12` | `ResultProcessing` | Results unreadable | Report it; results are unknown, not passing |
+| `11` | `TestHost` | Test host failed or discovered zero tests | Report as infrastructure with the output tail |
+| `12` | `ResultProcessing` | Results missing or unreadable | Report it; results are unknown, not passing |
 | `13` | `Cleanup` | Transient resources left behind | Report the exact identifiers the runner names |
 | `14` | `Cancelled` | Timeout or interrupt | Report how far it got |
 | `15` | `ReleaseMetadataUnavailable` | Release index unreachable, no cache | Report it; suggest `--offline --cache-root` or a named environment |

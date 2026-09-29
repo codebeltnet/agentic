@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-09-29
+
+This is a patch release delivering validation hardening for `git-remote-release` with stricter em-dash and alert-block enforcement, comprehensive test coverage for format compliance, Microsoft.Testing.Platform test runner support in `dotnet-remote-testing`, clarified yolo/auto approval behavior in `git-remote-pr`, and visual skill identification with hero images.
+
+### Changed
+
+- `git-remote-release` em-dash prohibition now scoped to authored prose only, preserving exact source titles and original formatting while rejecting em-dash usage in generated bullets and release highlight text,
+- `git-remote-release` GitHub alert blocks restricted to supported markers (`[!NOTE]`, `[!WARNING]`, `[!IMPORTANT]`, `[!TIP]`, `[!CAUTION]`) with verification rejecting unsupported `[!...]` patterns and loose bracket content,
+- `git-remote-release` validation and test coverage expanded with tighter punctuation-only bullet rejection, refined alert-block content validation, and comprehensive test cases covering format violations, alert-marker restrictions, and em-dash scoping,
+- `collect-release-evidence.py` and `test-release-evidence.py` enhanced with stricter validation for alert-marker support, punctuation-only bullets, and em-dash presence in authored prose while tolerating source titles unchanged,
+- `dotnet-remote-testing` now supports Microsoft.Testing.Platform (MTP) test runner discovered from `global.json` `test.runner` configuration, with MTP-aware command-line argument handling, TRX result collection, filtering support when modules provide it, and extension-capability detection for coverage and diagnostics,
+- `dotnet-remote-testing` SKILL.md updated with new "Microsoft Testing Platform and xUnit versions" section documenting MTP discovery, extension dependencies, command-line argument differences from VSTest, xUnit v3/4.x and Codebelt.Extensions.Xunit v12.x version semantics, and troubleshooting for missing dependencies and zero-test scenarios,
+- `dotnet-remote-testing` `--filter` option documentation clarified for MTP mode, noting that built modules must support `--filter` and xUnit v3 package 4.0+ provides this syntax,
+- `dotnet-remote-testing` failure codes 11 and 12 refined to reflect MTP test-discovery behavior: code 11 now indicates test host failed or discovered zero tests, and code 12 covers missing or unreadable results,
+- `git-remote-pr` yolo/auto approval behavior clarified in SKILL.md, AGENTS.md, and eval cases: same-request `yolo`/`auto` skips the approval wait but still shows the plan as status only, with no approval phrase required or awaited,
+- README.md updated with clarified `git-remote-pr` approval behavior for yolo/auto mode and `dotnet-remote-testing` MTP support, hero images added for `git-remote-pr` and `dotnet-nuget-update` skills for visual identification in documentation and skill catalogs.
+
 ## [0.11.0] - 2026-09-24
 
 This is a minor release introducing `git-remote-pr`, a Git and GitHub CLI skill for managing GitHub pull requests from the complete committed branch comparison, establishing working-tree scratch isolation standards for all skills, and applying markdown prose formatting conventions across the skill documentation suite. The new skill brings deterministic evidence collection, safe push and assignment handling, post-write verification, upstream tracking validation with branch-name integrity checking, PR approval integrity validation with SHA256 hash computation, and comprehensive regression tests. Repository guidance clarifies where temporary artifacts belong, and skill documentation now follows consistent markdown formatting standards. The `agent-smith` skill is restructured around an operating model framework with a refined decision precedence from 5 to 4 levels, new capability references for agentic engineering patterns and automation, an enhanced validation test suite with regression isolation support, and visual identification assets for all skills.
@@ -730,6 +747,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.11.1]: https://github.com/codebeltnet/agentic/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/codebeltnet/agentic/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/codebeltnet/agentic/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/codebeltnet/agentic/compare/v0.9.1...v0.10.0
