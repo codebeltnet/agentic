@@ -118,7 +118,7 @@ function Get-PlanApprovalId { param($Plan)
     # with identical content. review_hash binds the complete normalized preview;
     # preview_hash checks the final artifact independently to avoid a cycle.
     $fields = [ordered]@{}
-    foreach ($name in @('schema', 'snapshot_key', 'evidence_file', 'evidence_hash', 'body_file', 'body_hash', 'preview_file', 'repository', 'action', 'base', 'head_repository', 'head', 'title', 'draft', 'assignee', 'push_required', 'metadata_write', 'assignment_write', 'existing_pr_number', 'existing_pr_url', 'commit_count', 'changed_file_count')) {
+    foreach ($name in @('schema', 'snapshot_key', 'evidence_file', 'evidence_hash', 'body_file', 'body_hash', 'preview_file', 'repository', 'action', 'base', 'head_repository', 'head', 'title', 'draft', 'assignee', 'push_required', 'set_upstream_required', 'metadata_write', 'assignment_write', 'existing_pr_number', 'existing_pr_url', 'commit_count', 'changed_file_count')) {
         $fields[$name] = $Plan.$name
     }
     $fields['review_hash'] = $Plan.review_hash
@@ -146,7 +146,7 @@ function Get-PrDriftDiagnostic { param($Approved, $Current)
         $lines.Add("- Commits: $($value.commit_count)")
         $lines.Add("- Changed files: $($value.changed_file_count)")
     }
-    foreach ($name in @('repository', 'head_repository', 'head', 'head_remote', 'remote_branch', 'remote_sha', 'merge_base', 'assignee', 'template_path')) {
+    foreach ($name in @('repository', 'head_repository', 'head', 'head_remote', 'remote_branch', 'remote_sha', 'set_upstream_required', 'merge_base', 'assignee', 'template_path')) {
         $before = ConvertTo-Json -InputObject $Approved.$name -Depth 8 -Compress
         $after = ConvertTo-Json -InputObject $Current.$name -Depth 8 -Compress
         if ($before -cne $after) { $lines.Add("- ${name}: $before -> $after") }
@@ -195,6 +195,7 @@ function Get-PrSnapshotKey { param($Evidence)
         repo = $Evidence.repository; head_repo = $Evidence.head_repository
         base = $Evidence.base; head = $Evidence.head
         head_remote = $Evidence.head_remote; remote_branch = $Evidence.remote_branch
+        set_upstream_required = $Evidence.set_upstream_required
         assignee = $Evidence.assignee; template_path = $Evidence.template_path
         base_sha = $Evidence.base_sha; head_sha = $Evidence.head_sha
         remote_sha = $Evidence.remote_sha; merge_base = $Evidence.merge_base

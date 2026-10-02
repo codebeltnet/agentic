@@ -85,7 +85,10 @@ try {
     if ($Draft -and $expected.existing_pr -and -not $expected.existing_pr.draft) { throw 'An existing ready PR cannot be converted to draft by this workflow.' }
     if ($fresh.push_required) {
         $writesStarted = $true
-        Invoke-Git @('push', $fresh.head_remote, "HEAD:refs/heads/$($fresh.remote_branch)") | Out-Null
+        $pushArgs = @('push')
+        if ($fresh.set_upstream_required) { $pushArgs += '--set-upstream' }
+        $pushArgs += @($fresh.head_remote, "HEAD:refs/heads/$($fresh.remote_branch)")
+        Invoke-Git $pushArgs | Out-Null
         $pushDone = $true
     }
     $remoteSha = Get-RemoteSha $fresh.head_remote $fresh.remote_branch
@@ -94,6 +97,9 @@ try {
     try {
         $afterResult = Invoke-Tool pwsh @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'prepare-pr.ps1'), '-OutputDirectory', $afterPath, '-Repository', $expected.repository, '-Base', $expected.base)
         $after = Get-Content -LiteralPath ((ConvertFrom-Json -InputObject $afterResult.Text).evidence) -Raw -Encoding utf8 | ConvertFrom-Json
+        if ($after.set_upstream_required -or $after.head_remote -cne $fresh.head_remote -or $after.remote_branch -cne $fresh.remote_branch) {
+            throw 'Upstream tracking verification failed after push. Stop before writing PR metadata.'
+        }
         if ($after.head_sha -cne $fresh.head_sha -or $after.base_sha -cne $fresh.base_sha -or $after.merge_base -cne $fresh.merge_base -or $after.changed_file_count -ne $fresh.changed_file_count) {
             throw 'The effective comparison changed after push. Stop before writing PR metadata.'
         }

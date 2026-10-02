@@ -223,9 +223,53 @@ try {
         Assert (-not (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.11.0/chore_and_git_remote_pr')) 'Branch comparison must reject separator-only differences.'
         Assert (-not (Test-EquivalentBranchNames 'v0.11.0/chore-and-git-remote-pr' 'v0.10.2/service-update')) 'Branch comparison should not hide real mismatches.'
         $noUpstream = Run-Prepare (Join-Path $root 'no-upstream')
-        Assert ($noUpstream.code -ne 0 -and $noUpstream.text -match 'no upstream tracking branch' -and $noUpstream.text -match 'set-upstream') 'Missing upstream tracking did not fail closed.'
+        Assert ($noUpstream.code -eq 0) "First publication must prepare without an upstream: $($noUpstream.text)"
+        $firstPaths = $noUpstream.text | ConvertFrom-Json
+        $firstEvidence = Get-Content $firstPaths.evidence -Raw | ConvertFrom-Json
+        Assert ($firstEvidence.set_upstream_required -and $firstEvidence.push_required -and $firstEvidence.head_remote -ceq 'origin' -and $firstEvidence.remote_branch -ceq 'v0.10.2/service-update') 'First publication did not plan the same-name origin branch and tracking.'
         Assert (-not (Test-Git @('ls-remote', '--heads', 'origin', 'refs/heads/v0.10.2/service-update'))) 'Unexpected remote branch before upstream push.'
-        Test-Git @('push', '-u', 'origin', 'HEAD') | Out-Null
+        Assert ((Invoke-Git @('config', '--get', 'branch.v0.10.2/service-update.remote') -AllowFailure).Code -ne 0) 'Preparation changed branch tracking.'
+        Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'First publication preparation wrote GitHub metadata.'
+        Test-Git @('remote', 'rename', 'origin', 'publish') | Out-Null
+        $singleRemote = Run-Prepare (Join-Path $root 'single-remote')
+        Assert ($singleRemote.code -eq 0 -and (Get-Content (($singleRemote.text | ConvertFrom-Json).evidence) -Raw | ConvertFrom-Json).head_remote -ceq 'publish') 'A sole GitHub remote was not resolved.'
+        Test-Git @('remote', 'add', 'second', $url) | Out-Null
+        $ambiguousRemote = Run-Prepare (Join-Path $root 'ambiguous-remote')
+        Assert ($ambiguousRemote.code -ne 0 -and $ambiguousRemote.text -match 'unambiguous GitHub publication remote') 'Ambiguous untracked publication remote was guessed.'
+        Test-Git @('remote', 'remove', 'second') | Out-Null
+        Test-Git @('remote', 'rename', 'publish', 'origin') | Out-Null
+        Test-Git @('config', 'branch.v0.10.2/service-update.remote', 'origin') | Out-Null
+        $partialTracking = Run-Prepare (Join-Path $root 'partial-tracking')
+        Assert ($partialTracking.code -ne 0 -and $partialTracking.text -match 'incomplete upstream tracking') 'Partial tracking was silently replaced.'
+        Test-Git @('config', 'branch.v0.10.2/service-update.merge', 'refs/heads/v0.10.2/service-update') | Out-Null
+        $unpublishedTracking = Run-Prepare (Join-Path $root 'unpublished-tracking')
+        Assert ($unpublishedTracking.code -eq 0 -and -not (Get-Content (($unpublishedTracking.text | ConvertFrom-Json).evidence) -Raw | ConvertFrom-Json).set_upstream_required) 'Configured tracking to an unpublished branch incorrectly blocked preparation.'
+        Test-Git @('config', '--unset', 'branch.v0.10.2/service-update.remote') | Out-Null
+        Test-Git @('config', '--unset', 'branch.v0.10.2/service-update.merge') | Out-Null
+        $firstEvidence.files | ForEach-Object { $_.theme = 'Behavior' }
+        $firstEvidence | ConvertTo-Json -Depth 20 | Set-Content $firstPaths.evidence -Encoding utf8
+        $firstBody = Join-Path (Split-Path $firstPaths.evidence) 'body.md'
+        [System.IO.File]::WriteAllText($firstBody, "This pull request improves behavior.`n`n**Behavior:**`n`n- Improve feature behavior.", $utf8)
+        $firstCreate = Run-Execute $firstPaths.evidence $firstBody 'V0.10.2/service update'
+        Assert ($firstCreate.code -eq 0 -and ($firstCreate.text | ConvertFrom-Json).result -eq 'created') "First publication execution failed: $($firstCreate.text)"
+        $firstPlan = Get-Content (Join-Path (Split-Path $firstPaths.evidence) 'plan.json') -Raw | ConvertFrom-Json
+        Assert ($firstPlan.set_upstream_required -and (Get-Content $firstPlan.preview_file -Raw).Contains('set upstream tracking to the same branch')) 'Preview omitted the tracking write.'
+        Assert ((Test-Git @('rev-parse', '--abbrev-ref', '@{u}')) -ceq 'origin/v0.10.2/service-update') 'Execution did not establish upstream tracking.'
+        Assert ((Get-RemoteSha origin 'v0.10.2/service-update') -ceq $firstEvidence.head_sha) 'First publication did not persist the approved HEAD.'
+        Test-Git @('branch', '--unset-upstream') | Out-Null
+        $untrackedPublished = Run-Prepare (Join-Path $root 'untracked-published')
+        Assert ($untrackedPublished.code -eq 0) "Untracked published branch failed: $($untrackedPublished.text)"
+        $publishedPaths = $untrackedPublished.text | ConvertFrom-Json
+        $publishedEvidence = Get-Content $publishedPaths.evidence -Raw | ConvertFrom-Json
+        Assert ($publishedEvidence.set_upstream_required -and $publishedEvidence.push_required -and $publishedEvidence.action -eq 'UPDATE') 'Existing remote HEAD did not plan tracking and reuse the PR.'
+        $publishedEvidence.files | ForEach-Object { $_.theme = 'Behavior' }
+        $publishedEvidence | ConvertTo-Json -Depth 20 | Set-Content $publishedPaths.evidence -Encoding utf8
+        $publishedBody = Join-Path (Split-Path $publishedPaths.evidence) 'body.md'
+        Copy-Item $firstBody $publishedBody
+        $publishedExecute = Run-Execute $publishedPaths.evidence $publishedBody 'V0.10.2/service update'
+        Assert ($publishedExecute.code -eq 0 -and (Test-Git @('rev-parse', '--abbrev-ref', '@{u}')) -ceq 'origin/v0.10.2/service-update') "Existing branch tracking failed: $($publishedExecute.text)"
+        Assert ((Get-Content (Join-Path $state 'writes.log')).Count -eq 2) 'Tracking an existing branch unnecessarily rewrote PR metadata.'
+        Remove-Item (Join-Path $state 'pr.json'), (Join-Path $state 'writes.log')
         [System.IO.File]::WriteAllText((Join-Path $repo 'guide.md'), 'review guide', $utf8)
         Test-Git @('add', 'guide.md') | Out-Null
         Test-Git @('commit', '-m', 'Document review flow') | Out-Null
@@ -405,7 +449,7 @@ try {
         Assert (-not (Test-Path (Join-Path $state 'writes.log'))) 'Changed draft state made a GH write.'
         [System.IO.File]::WriteAllText($planPath, $planRaw, $utf8)
         Remove-Item -LiteralPath $invalidationPath
-        foreach ($change in @(@{ snapshot_key = 'changed' }, @{ push_required = $false }, @{ metadata_write = 'NONE' }, @{ assignment_write = $false }, @{ repository = 'other/repo' }, @{ base = 'other' }, @{ head = 'other' }, @{ head_repository = 'other/fork' }, @{ assignee = 'other' }, @{ existing_pr_number = 99 }, @{ existing_pr_url = 'https://github.com/acme/widget/pull/99' }, @{ action = 'UPDATE' }, @{ evidence_hash = 'changed' }, @{ body_hash = 'changed' })) {
+        foreach ($change in @(@{ snapshot_key = 'changed' }, @{ push_required = $false }, @{ set_upstream_required = $true }, @{ metadata_write = 'NONE' }, @{ assignment_write = $false }, @{ repository = 'other/repo' }, @{ base = 'other' }, @{ head = 'other' }, @{ head_repository = 'other/fork' }, @{ assignee = 'other' }, @{ existing_pr_number = 99 }, @{ existing_pr_url = 'https://github.com/acme/widget/pull/99' }, @{ action = 'UPDATE' }, @{ evidence_hash = 'changed' }, @{ body_hash = 'changed' })) {
             $altered = $planRaw | ConvertFrom-Json
             foreach ($name in $change.Keys) { $altered.$name = $change[$name] }
             [System.IO.File]::WriteAllText($planPath, ($altered | ConvertTo-Json -Depth 8), $utf8)
