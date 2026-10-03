@@ -19,7 +19,8 @@ Read `references/package-release-notes-format.md` before writing any release-not
 - Treat a same-named tracking branch as a synchronization target, not the default release-note base. Pushing a branch must not shrink its release-note scope.
 - Discover packable projects under `src/`; ignore `test/`, `tuning/`, `tooling/`, and projects that are explicitly non-packable.
 - Prefer an existing `.nuget/{ProjectName}/` folder when one already exists for the packable project. If none exists, create `.nuget/<MSBuildProjectName>/PackageReleaseNotes.txt`.
-- For repo-wide requests, every packable `src/` project should end up represented by a corresponding `PackageReleaseNotes.txt` file.
+- A version-only invocation covers every packable `src/` project, including unchanged projects. Narrow the package inventory only when the user explicitly selects packages or projects; an explicit git range alone does not narrow it.
+- Every selected package must receive a complete target-version block with `Version:`, resolved `Availability:`, and a non-empty `# ALM` section, even when its file already exists or its semantic delta is empty.
 - Treat the package's base-to-`HEAD` state as truth; chronological history is supporting provenance.
 - Inspect cumulative package, API, manifest, version, and metadata deltas before classifying the package history.
 - Classify each user-facing package capability from whether it existed at the resolved base before considering intermediate commits or individual files.
@@ -30,14 +31,34 @@ Read `references/package-release-notes-format.md` before writing any release-not
 - If the target version already exists at the top of the file, rewrite that block in place instead of duplicating it.
 - If the target version is not present, prepend the new block above the older history.
 - Normalize the block you write to `Version:` and `Availability:`.
-- Always include `# ALM` in the block you write.
+- Always include `# ALM` and at least one ALM bullet in the block you write. Use the required default below when there are no package-specific ALM outcomes.
 - Use only this section order when sections are populated: `ALM`, `Breaking Changes`, `New Features`, `Improvements`, `Bug Fixes`, `References`.
-- Omit empty sections instead of emitting placeholders.
+- Omit empty optional sections instead of emitting placeholders. `# ALM` is mandatory and uses the required default when needed.
 - Start every bullet with an all-caps action verb such as `ADDED`, `CHANGED`, `REMOVED`, `FIXED`, `EXTENDED`, `OPTIMIZED`, `MOVED`, `RENAMED`, `DEPRECATED`, or `REFACTORED`.
 - Keep package/type/member identifiers exact where possible.
 - Do not dump commit subjects verbatim into the release notes.
 - Do not invent unsupported changes, package references, or availability.
 - Ignore odd historical spacing such as non-breaking spaces in older entries; normalize only the block you are writing unless the user asks for a larger cleanup.
+
+## Required Release Block
+
+Package coverage and change classification are separate decisions. An empty semantic delta suppresses change-specific bullets, never the release block. If there are no package-specific ALM outcomes, use this exact default bullet:
+
+```text
+- CHANGED Dependencies have been upgraded to the latest compatible versions for all supported target frameworks (TFMs)
+```
+
+This is the required package-release boilerplate, including for unchanged packages. It is not evidence that a named dependency changed; do not infer additional upgrade bullets from it. When actual ALM outcomes exist, describe them accurately instead of replacing their details with the default. Other sections contain only supported surviving outcomes.
+
+The minimum complete block for an unchanged package is:
+
+```text
+Version: <resolved-version>
+Availability: <resolved-framework-list>
+
+# ALM
+- CHANGED Dependencies have been upgraded to the latest compatible versions for all supported target frameworks (TFMs)
+```
 
 ## Deterministic Package Delta Model
 
@@ -64,8 +85,8 @@ Do not accumulate bullets from individual commits and deduplicate them afterward
 
 Reconciliation rules:
 
-- Base state and `HEAD` state are identical -> no entry.
-- Dependency, API, metadata, or TFM value that returns to the base state -> no entry.
+- Base state and `HEAD` state are identical -> no change-specific bullet; still write the complete target-version block with the default ALM text.
+- Dependency, API, metadata, or TFM value that returns to the base state -> no change-specific bullet; this never suppresses the required release block or default ALM text.
 - Package capability absent at base and present at `HEAD` -> one surviving `ADDED` outcome under `# New Features`. Do not emit `CHANGED`, `EXTENDED`, or `FIXED` outcomes for refinements within that same introduction cycle.
 - Base present and `HEAD` absent -> one surviving removal.
 - Base present and changed `HEAD` state -> one surviving modification, fix, rename, or move derived from the final delta.
@@ -73,7 +94,7 @@ Reconciliation rules:
 
 Examples:
 
-- `Newtonsoft.Json 13.0.3 -> 14.0.0 -> 13.0.3` -> no `# ALM` bullet.
+- `Newtonsoft.Json 13.0.3 -> 14.0.0 -> 13.0.3` -> no dependency-specific `# ALM` bullet; keep the required default ALM block.
 - `Newtonsoft.Json 13.0.3 -> 14.0.0 -> 14.0.2` -> one surviving upgrade from `13.0.3` to `14.0.2`.
 - Public API removed and later restored unchanged -> no `# Breaking Changes` bullet.
 - Feature added, fixed several times, then removed -> no package-note entry for that feature.
@@ -117,7 +138,8 @@ Discover the packable `src/` projects that belong in `.nuget/`.
 - Exclude projects that live outside `src/` or are clearly test, benchmark, sample, or tooling projects.
 - Exclude projects with `IsPackable` explicitly set to `false`.
 - Keep project identity anchored to the packable project name or the existing `.nuget/{ProjectName}/` folder already used by the repo.
-- When the user asked for repo-wide release notes coverage, ensure every packable project is represented. Otherwise, focus on the projects affected by the requested range.
+- By default, select every packable `src/` project. Honor an explicit package/project selection, but never use the changed-path list to exclude unchanged projects from the selected inventory.
+- Maintain that selected inventory through writing and final verification. An existing note file or an empty package diff does not satisfy target-version coverage.
 
 Helpful commands:
 
@@ -145,6 +167,7 @@ Do not infer a version by bumping the previous entry manually unless the user ex
 Derive `Availability:` from the package's target frameworks.
 
 - Read `TargetFramework` or `TargetFrameworks` from the project and any inherited repo-level props when needed.
+- Reuse the prior Availability line when the current target frameworks are verified unchanged. Check the project and inherited framework settings; recompute the line if frameworks or their order changed. Apply this resolution to unchanged packages too.
 - Preserve the project order when rendering frameworks.
 - Convert TFMs to the human-readable style used by the existing files.
 - Join the final list with commas and `and`.
@@ -185,14 +208,14 @@ Use the normalized section order from `references/package-release-notes-format.m
 
 Classification guidance:
 
-- `# ALM`: only surviving dependency upgrades/downgrades, TFM support changes, packaging metadata changes, or other release-engineering/package-management changes. Use the final before -> after versions that remain at `HEAD`.
+- `# ALM`: describe surviving dependency upgrades/downgrades, TFM support changes, packaging metadata changes, or other release-engineering/package-management changes. Use the final before -> after versions that remain at `HEAD`. If none exist for the package, write the exact required default ALM bullet from Required Release Block; never omit the section or leave it empty.
 - `# Breaking Changes`: only incompatible renames, removals, moved APIs, changed contracts, or behavior that still requires consumer action at `HEAD`.
 - `# New Features`: only additive APIs, capabilities, packages, or options that are absent at the base state and present at `HEAD`.
 - `# Improvements`: surviving non-breaking enhancements such as `CHANGED`, `EXTENDED`, `OPTIMIZED`, `DEPRECATED`, or other refinements to existing behavior.
 - `# Bug Fixes`: surviving defect corrections for behavior that remains changed versus the base state.
 - `# References`: package IDs only, and only when the package is an umbrella/meta package or the existing file already carries a references section the current release should preserve.
 
-Prefer a minimal truthful block over an inflated one. ALM-only releases are valid when the real change was only dependency or TFM maintenance.
+Prefer a minimal complete block over an inflated one. ALM-only blocks are required for selected packages with no surviving changes, as well as valid for dependency or TFM maintenance.
 A restored API or reverted dependency upgrade does not earn a section entry. Use history to help group or explain the surviving outcomes, not to manufacture extra bullets.
 Refinement or bug-fix commits made after a capability was first added but before its first release remain part of the `ADDED` new-feature outcome. `# Improvements` and `# Bug Fixes` require the affected capability or behavior to exist at the resolved base.
 
@@ -213,14 +236,18 @@ Availability: .NET 10 and .NET 9
 
 Editing rules:
 
+- Apply these rules to every selected package, including unchanged packages. Do not stop after editing only the packages with source or dependency changes.
 - If the file is missing, create it with the new block only.
 - If the top block already targets the resolved version, replace that top block in place from the full resolved delta and leave older history below it intact. Existing draft bullets are not independent evidence or a reason to narrow the range.
 - If the top block targets an older version, prepend the new block and a blank line before the existing history.
+- An existing target-version block is complete only when its version, availability, non-empty ALM section, and supported change bullets all satisfy this workflow. Repair missing ALM even if its feature text already matches the delta.
 - Preserve older release blocks below the edited one unless the user explicitly asked for a historical cleanup.
 - Keep each bullet on one physical line regardless of length. Do not hard-wrap at a fixed column width; rely on editor soft wrapping instead.
 - Do not add decorative Markdown, tables, or changelog callouts.
 
 ### Step 8: Stop after the edit
+
+Before stopping, reconcile the selected project inventory against the written target-version blocks. Read each selected file and verify exactly one target-version block at the top, resolved availability, and `# ALM` with either accurate package-specific outcomes or the exact default bullet. Verify older blocks remain intact. A file's existence alone is not coverage; no selected package may remain on an older version or lack ALM. Correct missing or incomplete blocks before handing back the result.
 
 After updating the relevant `PackageReleaseNotes.txt` files, stop and let the user review them. Do not commit, tag, push, pack, or publish unless the user asks.
 
@@ -228,6 +255,7 @@ After updating the relevant `PackageReleaseNotes.txt` files, stop and let the us
 
 - Reads like curated package release notes, not a repo-wide changelog.
 - Keeps one truthful release block per package/version.
+- Covers every selected packable package, including unchanged packages, with a complete target-version block and non-empty ALM.
 - Classifies each package from its surviving base-to-`HEAD` delta; reverted churn disappears.
 - Uses concrete package/type/member names and namespaces.
 - Writes the newest release first while preserving older history.
@@ -238,6 +266,7 @@ After updating the relevant `PackageReleaseNotes.txt` files, stop and let the us
 ## Bad Output Characteristics
 
 - Writing one repo-level summary and copying it into every package file.
+- Skipping unchanged selected packages, leaving them on a prior version, or accepting a target-version block without ALM.
 - Using `Unreleased` or omitting the concrete version line.
 - Guessing availability instead of reading project metadata.
 - Dumping commit subjects line by line into the file.
