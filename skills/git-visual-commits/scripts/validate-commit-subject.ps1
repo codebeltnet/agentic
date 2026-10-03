@@ -10,15 +10,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$referencePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'references/commit-language.md'
-if (-not (Test-Path -LiteralPath $referencePath -PathType Leaf)) {
-    throw "Bundled commit-language reference is missing: $referencePath"
-}
-
 $errors = [System.Collections.Generic.List[string]]::new()
 $allowedPrefixes = @('init', 'content', 'style', 'fix', 'refactor', 'docs')
 $maxLength = 70
-$reference = Get-Content -LiteralPath $referencePath -Raw
 
 if ($Subject -match '[\r\n]') {
     $errors.Add('Subject must be exactly one line.')
@@ -43,9 +37,18 @@ else {
     $separator = $subjectMatch.Groups['separator'].Value
     $remainder = $subjectMatch.Groups['remainder'].Value
 
-    $isApprovedEmoji = $reference.Contains("| $emoji |", [System.StringComparison]::Ordinal) -or $emoji -ceq '🎭'
-    if (-not $isApprovedEmoji) {
-        $errors.Add("Emoji '$emoji' is not an approved entry in the bundled commit-language reference.")
+    # Check structure, not membership in a curated table. Unicode symbols cover
+    # emoji bases; one grapheme also permits flags, modifiers, ZWJ and keycaps.
+    $hasSymbol = $false
+    foreach ($rune in $emoji.EnumerateRunes()) {
+        if ([System.Text.Rune]::GetUnicodeCategory($rune) -in @('OtherSymbol', 'MathSymbol', 'ModifierSymbol')) {
+            $hasSymbol = $true
+        }
+    }
+    $isSingleSymbol = [System.Globalization.StringInfo]::ParseCombiningCharacters($emoji).Count -eq 1 -and
+        ($hasSymbol -or $emoji -match '^[0-9#*]\uFE0F?\u20E3$')
+    if (-not $isSingleSymbol) {
+        $errors.Add('Subject must begin with one Unicode emoji or symbol sequence, not text, a shortcode, or multiple emoji.')
     }
 
     if ($separator -cne ' ') {
