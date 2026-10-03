@@ -47,7 +47,7 @@ pwsh -NoProfile -File <skill-root>/scripts/validate-commit-subject.ps1 -Subject 
 
 Only when the user explicitly requested the conventional-prefix combo, add `-PrefixMode Required`. Resolve `<skill-root>` from this skill's installed directory, not from the current repository. The validator must exit successfully. If it fails, correct the subject and rerun it; never show, commit, or preserve the invalid subject. `yolo` and `auto` do not bypass the full-read or subject-validation locks.
 
-The validator checks for one Unicode emoji or symbol sequence without restricting it to the bundled tables, exactly one ASCII space after it, a lowercase first description character, the opt-in prefix contract, and the 70-character maximum. Semantic emoji selection still comes from reading the reference and inspecting the actual diff; the validator checks structure rather than meaning.
+The validator checks for one Unicode emoji sequence without restricting it to the bundled tables, exactly one ASCII space after it, a lowercase first description character, the opt-in prefix contract, and the 70-character maximum. Semantic emoji selection still comes from reading the reference and inspecting the actual diff; the validator checks structure rather than meaning. Emoji bases are recognized using bundled Unicode 17.0 Emoji property data in `references/unicode-emoji-ranges.json`; update that data when adopting a newer Unicode release. Runtime validation is offline.
 
 ### Identity Lock
 
