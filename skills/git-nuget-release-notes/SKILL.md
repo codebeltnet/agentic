@@ -15,6 +15,8 @@ Read `references/package-release-notes-format.md` before writing any release-not
 ## Critical
 
 - Create or update `.nuget/{ProjectName}/PackageReleaseNotes.txt` directly, then stop for user review.
+- A bare invocation with a concrete version is a complete edit request. Resolve the full current branch against its integration branch and continue without asking for range confirmation when that default is safe.
+- Treat a same-named tracking branch as a synchronization target, not the default release-note base. Pushing a branch must not shrink its release-note scope.
 - Discover packable projects under `src/`; ignore `test/`, `tuning/`, `tooling/`, and projects that are explicitly non-packable.
 - Prefer an existing `.nuget/{ProjectName}/` folder when one already exists for the packable project. If none exists, create `.nuget/<MSBuildProjectName>/PackageReleaseNotes.txt`.
 - For repo-wide requests, every packable `src/` project should end up represented by a corresponding `PackageReleaseNotes.txt` file.
@@ -81,20 +83,28 @@ Examples:
 
 ### Step 1: Resolve the source range
 
-Use the most explicit range the user gave you.
+Resolve the range from local, read-only git metadata in this order:
 
-- If the user named a range, branch comparison, base branch, or PR range, use that.
-- Otherwise, compare the current branch to its upstream merge-base.
-- If no upstream is configured, try `main`, then `master`.
-- If no safe comparison point can be established, stop and ask for a base branch or range instead of guessing.
+1. If the user named a range, branch comparison, base branch, or PR range, use that. Preserve explicit range endpoints; for a branch comparison, resolve its merge-base with `HEAD`.
+2. Otherwise, resolve the repository's integration branch. Prefer the locally cached remote default branch, such as `origin/HEAD` resolving to `origin/main`, then try `origin/main`, `origin/master`, local `main`, and local `master`. A differently named upstream may be used when repository metadata or conventions establish it as the integration branch.
+3. Treat a same-named tracking branch such as `origin/v10.8.0/options-enhancement` for `v10.8.0/options-enhancement` as a synchronization target only. Use it as the base only when the user explicitly requested that comparison. Never limit the default scope to unpushed commits.
+4. Resolve `<base>` to the merge-base of the integration branch and `HEAD`, and use `<base>..HEAD` for the full branch delta. Keep the resolved endpoints fixed throughout inspection.
+5. State the resolved range briefly and proceed with the edits. Do not ask the user to choose between the full branch and its latest commits when the default resolves safely.
+6. If no safe integration branch or merge-base can be established, or the current branch is itself the integration branch, stop and ask for a base branch or range instead of guessing. An explicit range remains usable on the integration branch.
+
+A concrete version such as `10.8.0` selects the block to write; it does not select a git range. Do not switch to a previous-release tag merely because a version was supplied. A previous-release tag is a comparison boundary only when explicitly requested, and its own commit is excluded from `<tag>..HEAD`. Already released blocks remain historical output to preserve, not targets to regenerate.
+
+The current target-version block is cached output, not a comparison baseline. Recompute it from the entire resolved delta even when earlier branch commits already wrote part of that block; this keeps surviving features and their later refinements together. Do not preserve obsolete bullets or drop earlier branch outcomes by using the draft's commit as the base.
 
 Helpful commands:
 
 ```bash
 git status --short --branch
 git rev-parse --abbrev-ref HEAD
-git rev-parse --abbrev-ref --symbolic-full-name @{upstream}
-git merge-base HEAD @{upstream}
+git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}'
+git symbolic-ref refs/remotes/origin/HEAD --short
+git merge-base HEAD origin/main
+git merge-base HEAD origin/master
 git merge-base HEAD main
 git merge-base HEAD master
 ```
@@ -204,7 +214,7 @@ Availability: .NET 10 and .NET 9
 Editing rules:
 
 - If the file is missing, create it with the new block only.
-- If the top block already targets the resolved version, replace that top block in place and leave older history below it intact.
+- If the top block already targets the resolved version, replace that top block in place from the full resolved delta and leave older history below it intact. Existing draft bullets are not independent evidence or a reason to narrow the range.
 - If the top block targets an older version, prepend the new block and a blank line before the existing history.
 - Preserve older release blocks below the edited one unless the user explicitly asked for a historical cleanup.
 - Keep each bullet on one physical line regardless of length. Do not hard-wrap at a fixed column width; rely on editor soft wrapping instead.

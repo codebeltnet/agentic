@@ -8,7 +8,7 @@
       "expectations": [
         "Updates .nuget/<ProjectName>/PackageReleaseNotes.txt files directly instead of only drafting release notes in chat",
         "Reads full commit subjects and bodies before writing the package release notes",
-        "Uses the current branch versus merge-base as the default source when no explicit range is given",
+        "Uses the full current branch versus the integration-branch merge-base as the default source when no explicit range is given",
         "Discovers packable src projects instead of treating test or tooling projects as publishable packages",
         "Stops after editing the release-note files for user review"
       ]
@@ -106,6 +106,32 @@
         "Does not place RetryPolicy under Bug Fixes because a defect was fixed during its introduction cycle",
         "Keeps the independent Newtonsoft.Json 13.0.3 to 14.0.2 upgrade under ALM",
         "Classifies separately changed pre-existing package capabilities from their own base states"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Create a temp .NET git repo outside the current repository under `$env:TEMP`. Start main with a packable src/Acme.Core project targeting net10.0, a public Disposable API whose managed-cleanup exception prevents unmanaged cleanup, a Newtonsoft.Json 13.0.3 runtime reference in Directory.Packages.props, an existing 10.7.1 PackageReleaseNotes.txt block, and tag v10.7.1. Add and commit a MaintenanceOnly API on main after that tag, then set origin/main to this main tip. Create v10.8.0/options-enhancement, add a public OptionsBridge capability, and commit a partial 10.8.0 package-note block describing it. Set origin/v10.8.0/options-enhancement as the branch's tracking upstream at that commit, with origin/HEAD pointing at origin/main. Add and commit a fix that ensures unmanaged cleanup runs when managed cleanup throws, and upgrade Newtonsoft.Json to 14.0.2. Now generate the NuGet package release notes for 10.8.0 using the normal default and stop after editing.",
+      "expected_output": "The agent generates the 10.8.0 package notes directly from the integration-branch merge-base through HEAD without a range-confirmation question. The regenerated block includes the already-pushed OptionsBridge feature, the later disposal fix, and the surviving dependency upgrade, while preserving the older 10.7.1 block.",
+      "expectations": [
+        "Uses the integration-branch merge-base instead of the same-named tracking upstream as the default base",
+        "Generates the requested 10.8.0 package notes without asking the user to confirm a safely resolved default range",
+        "Includes the already-pushed OptionsBridge capability once under New Features with ADDED",
+        "Includes the later fix to the pre-existing Disposable API and the surviving runtime dependency upgrade",
+        "Recomputes the existing 10.8.0 block from the full branch delta instead of treating its draft commit as the baseline",
+        "Preserves the older 10.7.1 block unchanged and does not duplicate the 10.8.0 block",
+        "Does not switch to the previous-release tag merely because the user supplied a version",
+        "Omits MaintenanceOnly because it was already present at the integration-branch base even though it was added after v10.7.1"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Create a temp .NET git repo outside the current repository under `$env:TEMP`. Start main with a packable src/Acme.Core project targeting net10.0 and an existing 1.0.0 package-note block. Create v1.1.0/feature, add a public FeatureOne API, and set origin/v1.1.0/feature as the tracking upstream at that commit. Commit a new FeatureTwo API afterward. Generate the 1.1.0 NuGet package release notes using only the explicitly requested range origin/v1.1.0/feature..HEAD, then stop for review.",
+      "expected_output": "The explicit tracking-branch range overrides the full-branch default. The new 1.1.0 block describes FeatureTwo only, preserves the old 1.0.0 block, and requires no range confirmation.",
+      "expectations": [
+        "Honors the explicit origin/v1.1.0/feature..HEAD range even though its base is a same-named tracking branch",
+        "Includes FeatureTwo and omits FeatureOne because it existed at the explicitly selected base",
+        "Does not widen the explicit range to main or a previous-release tag",
+        "Writes the 1.1.0 block directly without requesting range confirmation and preserves the older 1.0.0 block"
       ]
     }
   ]
