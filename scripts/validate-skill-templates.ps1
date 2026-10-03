@@ -2,7 +2,7 @@ param(
     [string]$Ref,
     [switch]$Full,
     [switch]$MetadataOnly,
-    [ValidateSet('All', 'Templates', 'Preparation', 'Runners', 'Conformance', 'Integrity', 'Docfx')]
+    [ValidateSet('All', 'Templates', 'Pr', 'Preparation', 'Runners', 'Conformance', 'Integrity', 'Docfx')]
     [string]$Suite = 'All'
 )
 
@@ -827,7 +827,7 @@ if ($MetadataOnly) {
     exit 0
 }
 
-Add-ValidationResult -Results $results -Name 'Git remote PR routing and deterministic workflow stay integrated' -Group 'Templates' -Action {
+Add-ValidationResult -Results $results -Name 'Git remote PR routing and deterministic workflow stay integrated' -Group 'Pr' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
     $prSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-pr/SKILL.md' -GitRef $Ref
     $agents = Get-FileText -RepoRoot $repoRoot -RelativePath 'AGENTS.md' -GitRef $Ref

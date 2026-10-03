@@ -446,6 +446,7 @@ try {
         Assert-True -Condition ($LASTEXITCODE -eq 0) -Message 'expected suite listing to succeed'
         $entries = @($listed | Where-Object { [string]$_ -match ' -> ' })
         Assert-True -Condition ($entries.Count -ge 1) -Message 'expected at least one CI suite'
+        Assert-True -Condition ($entries -contains 'pr -> scripts/validate-skill-templates.ps1 -Suite Pr') -Message 'expected PR regressions to be independently scheduled locally as in CI'
         foreach ($entry in $entries) {
             $parts = [string]$entry -split ' -> '
             $scriptArguments = $parts[1] -split ' -Suite '
