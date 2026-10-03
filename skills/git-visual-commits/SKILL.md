@@ -36,10 +36,10 @@ Before running any Git command or composing a subject, read this `SKILL.md` comp
 The first visible character after the emoji and its single separator space must be lowercase. This is a blocking requirement, not a style suggestion. Every proposed subject must have this exact default shape:
 
 ```text
-<approved-emoji><one ASCII space><lowercase-beginning description>
+<emoji><one ASCII space><lowercase-beginning description>
 ```
 
-After selecting the emoji from the bundled `references/commit-language.md`, run the bundled deterministic validator before showing the subject in a plan and again immediately before passing it to Git:
+After selecting the emoji using the guidance in the bundled `references/commit-language.md`, run the bundled deterministic validator before showing the subject in a plan and again immediately before passing it to Git:
 
 ```powershell
 pwsh -NoProfile -File <skill-root>/scripts/validate-commit-subject.ps1 -Subject '<subject>'
@@ -47,7 +47,7 @@ pwsh -NoProfile -File <skill-root>/scripts/validate-commit-subject.ps1 -Subject 
 
 Only when the user explicitly requested the conventional-prefix combo, add `-PrefixMode Required`. Resolve `<skill-root>` from this skill's installed directory, not from the current repository. The validator must exit successfully. If it fails, correct the subject and rerun it; never show, commit, or preserve the invalid subject. `yolo` and `auto` do not bypass the full-read or subject-validation locks.
 
-The validator enforces an emoji present in the bundled reference table, exactly one ASCII space after it, a lowercase first description character, the opt-in prefix contract, and the 70-character maximum. Semantic emoji selection still comes from reading the reference and inspecting the actual diff.
+The validator checks for one Unicode emoji or symbol sequence without restricting it to the bundled tables, exactly one ASCII space after it, a lowercase first description character, the opt-in prefix contract, and the 70-character maximum. Semantic emoji selection still comes from reading the reference and inspecting the actual diff; the validator checks structure rather than meaning.
 
 ### Identity Lock
 
@@ -126,7 +126,7 @@ Use the expanded status inventory in Step 1 as the scope of record. `git diff`, 
 - If the current repository has no `references/commit-language.md` file but the bundled skill reference is available, that is **not** a blocker. Read the bundled skill resource and continue.
 - If that reference is unavailable or unreadable, stop and report the blocker instead of guessing.
 - Default to `<emoji> <short description>`. Do not add a prefix after the emoji unless the user explicitly asked for a combo with conventional commits or conventional prefixes.
-- Treat the inspected reference as the source of truth for emoji and prefix meaning. Correct mismatches before presenting the plan instead of waiting for the user to catch them.
+- Treat the inspected reference as the default guide for emoji meaning and the source of truth for allowed prefixes. Its emoji tables are examples, not an allowlist. Honor explicit user emoji choices and repository conventions; use other Unicode emojis when they better express the actual change, including in non-coding repositories. Correct mismatches before presenting the plan instead of waiting for the user to catch them.
 - Treat community health, changelog, and release-status communication as `💬` intent by default. Do not collapse that category back into generic `📝` or `📚` docs wording when the main audience is humans reading repo health or release status.
 
 ### Post-Commit Verification
@@ -208,7 +208,7 @@ Only when the user explicitly asks for an emoji plus conventional-commit combo:
 <body>
 ```
 
-- **Emoji** comes first — picked from `references/commit-language.md`
+- **Emoji** comes first — selected using `references/commit-language.md` as guidance, with other Unicode emojis allowed
 - **Prefix** is omitted by default. Only add one when the user explicitly asked for an emoji plus conventional-commit combo. When combo mode is active, the prefix is lowercase (see `references/commit-language.md`) — **never use `feat:`**
 - **Description** begins with a lowercase letter, uses imperative wording, and keeps the full subject to at most 70 characters (including emoji and any explicit-request prefix)
 - **Body** is included by default — a short paragraph explaining *why* the change was made, not just *what* changed. Separate from the subject with a blank line. Do **not** hard-wrap commit bodies at 72 characters; keep short bodies as normal prose and add line breaks only when they improve readability. Can be suppressed with `no-body` (see below).
