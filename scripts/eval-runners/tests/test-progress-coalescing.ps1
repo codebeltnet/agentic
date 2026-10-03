@@ -109,6 +109,22 @@ function Get-RelayLogEvents {
     return @($Events | Where-Object { [string]$_.origin -eq 'relay' })
 }
 
+function Invoke-CapturedHeartbeatTick {
+    param([Parameter(Mandatory = $true)][object]$Child)
+
+    $operatorErrorWriter = [System.IO.StringWriter]::new([Globalization.CultureInfo]::InvariantCulture)
+    $originalErrorWriter = [Console]::Error
+    try {
+        [Console]::SetError($operatorErrorWriter)
+        Invoke-RunnerChildHeartbeatTick -Child $Child
+    } finally {
+        try { [Console]::Error.Flush() } catch { }
+        [Console]::SetError($originalErrorWriter)
+    }
+
+    return @(($operatorErrorWriter.ToString() -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
 try {
     # ------------------------------------------------------------------
     # Test 1 - Meaningful transitions always visible: start, first activity,
@@ -161,17 +177,56 @@ for ($i = 0; $i -lt 14; $i++) {
     $activeRelay = Invoke-CoalescingChild -ScriptPath $activeRelayScript -WorkerId 'arm-3-active-relay' -HeartbeatSeconds 0.25
     Assert-Equal 0 $activeRelay.ExitCode 'Test 3: active relay child exits cleanly'
     $activeRelayConsoleLines = @(Get-RelayConsoleLines -Lines $activeRelay.OperatorLines)
-    $activeParentPeriodicLines = @(Get-ParentPeriodicLines -Lines $activeRelay.OperatorLines)
     Assert-True ($activeRelayConsoleLines.Count -ge 8) "Test 3: relay events appear on console (got $($activeRelayConsoleLines.Count))"
-    # With relay emitting every 80ms and heartbeat at 250ms, parent heartbeats
-    # during active relay should be sparse: at most 1-2 (possibly 1 at launch
-    # before relay arrives, possibly 1 after relay stops).
-    Assert-True ($activeParentPeriodicLines.Count -le 3) "Test 3: parent periodic heartbeats suppressed during active relay (console count=$($activeParentPeriodicLines.Count), relay count=$($activeRelayConsoleLines.Count))"
-    # JSONL must still have parent periodic events even when console-suppressed.
+    # The async child reader can be delayed by host load. Heartbeats emitted
+    # before its first relay is observed are correct, so test the policy below
+    # with controlled activity timestamps instead of asserting a wall-clock line
+    # count for this subprocess scenario.
     $activeParentLogEvents = @(Get-ParentPeriodicLogEvents -Events $activeRelay.Events)
     $activeRelayLogEvents = @(Get-RelayLogEvents -Events $activeRelay.Events)
-    Assert-True ($activeParentLogEvents.Count -ge 2) "Test 3: parent periodic events still in JSONL even when console-suppressed (got $($activeParentLogEvents.Count))"
+    Assert-True ($activeParentLogEvents.Count -ge 2) "Test 3: parent periodic events are retained in JSONL (got $($activeParentLogEvents.Count))"
     Assert-True ($activeRelayLogEvents.Count -ge 8) "Test 3: relay events in JSONL (got $($activeRelayLogEvents.Count))"
+
+    # Test 3b - Deterministic coalescing policy: a recent relay suppresses only
+    # the console heartbeat while retaining JSONL evidence; once relay activity
+    # is stale, the parent heartbeat is visible again.
+    $policyStartedUtc = [DateTime]::UtcNow.AddSeconds(-5)
+    $policyLogPath = Join-Path $testRoot 'coalescing-policy.jsonl'
+    $policyChild = [pscustomobject]@{
+        Runner = 'relay-test'
+        WorkerId = 'arm-3-policy'
+        EvalId = 1
+        Configuration = 'with_skill'
+        ProcessId = 12345
+        Phase = 'model-cli'
+        Turn = $null
+        ProgressLogPath = $policyLogPath
+        HeartbeatSeconds = 0.25
+        ProgressEnabled = $true
+        StartedUtc = $policyStartedUtc
+        DeadlineUtc = $policyStartedUtc.AddSeconds(30)
+        StdoutActivity = $null
+        StderrActivity = $null
+        LastHeartbeatUtc = [DateTime]::UtcNow.AddSeconds(-1)
+        LastRelayActivityUtc = [DateTime]::UtcNow
+        FirstStdoutSeen = $true
+        FirstStderrSeen = $true
+        LifecycleState = 'running'
+    }
+    $recentRelayConsoleLines = @(Invoke-CapturedHeartbeatTick -Child $policyChild)
+    Assert-Equal 0 $recentRelayConsoleLines.Count 'Test 3b: recent relay activity suppresses the console heartbeat'
+    $recentRelayLogEvents = @(Get-Content -LiteralPath $policyLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $recentRelayParentEvents = @(Get-ParentPeriodicLogEvents -Events $recentRelayLogEvents)
+    Assert-Equal 1 $recentRelayParentEvents.Count 'Test 3b: suppressed heartbeat remains in JSONL'
+
+    $policyChild.LastHeartbeatUtc = [DateTime]::UtcNow.AddSeconds(-1)
+    $policyChild.LastRelayActivityUtc = [DateTime]::UtcNow.AddSeconds(-1)
+    $staleRelayConsoleLines = @(Invoke-CapturedHeartbeatTick -Child $policyChild)
+    $staleRelayParentLines = @(Get-ParentPeriodicLines -Lines $staleRelayConsoleLines)
+    Assert-Equal 1 $staleRelayParentLines.Count 'Test 3b: heartbeat resumes on the console after relay activity goes stale'
+    $allPolicyLogEvents = @(Get-Content -LiteralPath $policyLogPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $allPolicyParentEvents = @(Get-ParentPeriodicLogEvents -Events $allPolicyLogEvents)
+    Assert-Equal 2 $allPolicyParentEvents.Count 'Test 3b: visible heartbeat also remains in JSONL'
 
     # ------------------------------------------------------------------
     # Test 4 - Relay stops, parent resumes: after relay goes quiet, parent
