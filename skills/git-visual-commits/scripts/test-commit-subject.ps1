@@ -54,7 +54,13 @@ Invoke-SubjectCase -Name 'valid default subject' -Subject '💬 update changelog
 Invoke-SubjectCase -Name 'valid description with identifier' -Subject '🐛 handle OAuth callback failure' -ShouldPass $true
 Invoke-SubjectCase -Name 'valid opt-in prefix' -Subject '🐛 fix: handle missing release tag' -PrefixMode 'Required' -ShouldPass $true
 Invoke-SubjectCase -Name 'valid exact maximum' -Subject ("💬 " + ('a' * 68)) -ShouldPass $true
-Invoke-SubjectCase -Name 'reported screenshot regression' -Subject '📋 Update CHANGELOG for v10.0.10 with dependency and tooling updates' -ShouldPass $false -ExpectedError @('not an approved entry', 'lowercase letter')
+foreach ($emoji in @('💰', '🪙', '💴', '💵', '💶', '💷', '💸', '💳', '🧾', '💹', '📋', '🧑🏽‍💻', '🇩🇰', '1️⃣', '⚡')) {
+    Invoke-SubjectCase -Name "extended Unicode emoji $emoji" -Subject "$emoji update finance records" -ShouldPass $true
+}
+Invoke-SubjectCase -Name 'text instead of emoji' -Subject 'money update budget' -ShouldPass $false -ExpectedError 'one Unicode emoji or symbol sequence'
+Invoke-SubjectCase -Name 'shortcode instead of emoji' -Subject ':moneybag: update budget' -ShouldPass $false -ExpectedError 'one Unicode emoji or symbol sequence'
+Invoke-SubjectCase -Name 'multiple emoji' -Subject '💰💸 update budget' -ShouldPass $false -ExpectedError 'one Unicode emoji or symbol sequence'
+Invoke-SubjectCase -Name 'reported screenshot regression' -Subject '📋 Update CHANGELOG for v10.0.10 with dependency and tooling updates' -ShouldPass $false -ExpectedError @('lowercase letter')
 Invoke-SubjectCase -Name 'approved emoji with uppercase description' -Subject '💬 Update changelog' -ShouldPass $false -ExpectedError 'lowercase letter'
 Invoke-SubjectCase -Name 'double separator' -Subject '💬  update changelog' -ShouldPass $false -ExpectedError 'exactly one ASCII space'
 Invoke-SubjectCase -Name 'overlong subject' -Subject ("💬 " + ('a' * 69)) -ShouldPass $false -ExpectedError 'the maximum is 70'

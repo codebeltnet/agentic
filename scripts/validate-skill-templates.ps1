@@ -3065,6 +3065,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '### Emoji Selection'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'Gitmoji First, Fallback Second'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle '#### Fallback: Extended Emoji Reference'
+    Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'These tables are selection guidance, not an allowlist.'
+    Assert-Contains -Name 'git-visual-commits/SKILL.md' -Content $skill -Needle 'Its emoji tables are examples, not an allowlist.'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'Community health, changelog, release-status communication'
     Assert-Contains -Name 'git-visual-commits/references/commit-language.md' -Content $commitLanguage -Needle 'package release-note metadata'
 
@@ -3072,7 +3074,8 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle '[System.Globalization.StringInfo]::ParseCombiningCharacters($Subject).Count'
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'Use exactly one ASCII space between the emoji and the following text.'
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle "elseif (`$description -cnotmatch '^\p{Ll}')"
-    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'is not an approved entry in the bundled commit-language reference.'
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'Subject must begin with one Unicode emoji or symbol sequence'
+    Assert-NotContains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle '$reference.Contains'
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle '$maxLength = 70'
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'the maximum is $maxLength.'
     Assert-Contains -Name 'git-visual-commits/scripts/test-commit-subject.ps1' -Content $subjectTests -Needle 'reported screenshot regression'
@@ -3101,7 +3104,7 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Treats references/commit-language.md as a bundled skill resource rather than a repo-root path by default'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Does not report a blocker solely because the current repository lacks a top-level references directory'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Reads SKILL.md completely through EOF before any staging or commit command'
-    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Rejects the proposed subject because 📋 is absent from the approved commit-language table'
+    Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'not because 📋 is absent from the bundled table'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Runs scripts/validate-commit-subject.ps1 before showing the corrected subject and again immediately before passing it to Git'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Triggers the single-category context quality gate because more than one file is being placed in one category'
     Assert-Contains -Name 'git-visual-commits/evals/evals.json' -Content $evals -Needle 'Recognizes exactly one changed file as the explicit exception and skips the single-category context quality gate'
