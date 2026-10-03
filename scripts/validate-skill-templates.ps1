@@ -3074,7 +3074,7 @@ Add-ValidationResult -Results $results -Name 'Git visual commits skill enforces 
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle '[System.Globalization.StringInfo]::ParseCombiningCharacters($Subject).Count'
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'Use exactly one ASCII space between the emoji and the following text.'
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle "elseif (`$description -cnotmatch '^\p{Ll}')"
-    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'Subject must begin with one Unicode emoji or symbol sequence'
+    Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'Subject must begin with one Unicode emoji sequence'
     Assert-NotContains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle '$reference.Contains'
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle '$maxLength = 70'
     Assert-Contains -Name 'git-visual-commits/scripts/validate-commit-subject.ps1' -Content $subjectValidator -Needle 'the maximum is $maxLength.'

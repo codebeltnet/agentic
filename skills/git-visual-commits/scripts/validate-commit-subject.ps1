@@ -13,6 +13,8 @@ $ErrorActionPreference = 'Stop'
 $errors = [System.Collections.Generic.List[string]]::new()
 $allowedPrefixes = @('init', 'content', 'style', 'fix', 'refactor', 'docs')
 $maxLength = 70
+$emojiDataPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'references/unicode-emoji-ranges.json'
+$emojiRanges = (Get-Content -LiteralPath $emojiDataPath -Raw | ConvertFrom-Json).ranges
 
 if ($Subject -match '[\r\n]') {
     $errors.Add('Subject must be exactly one line.')
@@ -37,18 +39,22 @@ else {
     $separator = $subjectMatch.Groups['separator'].Value
     $remainder = $subjectMatch.Groups['remainder'].Value
 
-    # Check structure, not membership in a curated table. Unicode symbols cover
-    # emoji bases; one grapheme also permits flags, modifiers, ZWJ and keycaps.
-    $hasSymbol = $false
+    # Unicode Emoji property data distinguishes emoji bases from ordinary symbols.
+    # ASCII keycap bases need their enclosing keycap; they are not emoji alone.
+    $hasEmojiBase = $false
     foreach ($rune in $emoji.EnumerateRunes()) {
-        if ([System.Text.Rune]::GetUnicodeCategory($rune) -in @('OtherSymbol', 'MathSymbol', 'ModifierSymbol')) {
-            $hasSymbol = $true
+        if ($rune.Value -le 0x39) { continue }
+        foreach ($range in $emojiRanges) {
+            if ($rune.Value -ge $range[0] -and $rune.Value -le $range[1]) {
+                $hasEmojiBase = $true
+                break
+            }
         }
     }
-    $isSingleSymbol = [System.Globalization.StringInfo]::ParseCombiningCharacters($emoji).Count -eq 1 -and
-        ($hasSymbol -or $emoji -match '^[0-9#*]\uFE0F?\u20E3$')
-    if (-not $isSingleSymbol) {
-        $errors.Add('Subject must begin with one Unicode emoji or symbol sequence, not text, a shortcode, or multiple emoji.')
+    $isSingleEmoji = [System.Globalization.StringInfo]::ParseCombiningCharacters($emoji).Count -eq 1 -and
+        ($hasEmojiBase -or $emoji -match '^[0-9#*]\uFE0F?\u20E3$')
+    if (-not $isSingleEmoji) {
+        $errors.Add('Subject must begin with one Unicode emoji sequence, not text, a shortcode, an ordinary symbol, or multiple emoji.')
     }
 
     if ($separator -cne ' ') {
