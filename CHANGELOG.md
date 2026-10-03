@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2] - 2026-10-03
+
+This is a patch release that extends `git-remote-pr` to publish clean feature branches without upstream tracking, while keeping remote selection, approval binding, and post-push verification explicit.
+
+### Added
+
+- `git-remote-pr` now supports creating a pull request from a clean feature branch with no upstream tracking, previewing publication to `origin` or the sole GitHub remote under the current branch name,
+- The approved plan binds upstream setup and verifies the published branch and tracking before writing PR metadata, while ambiguous remotes and incomplete or mismatched tracking still fail closed.
+
 ## [0.11.1] - 2026-09-29
 
 This is a patch release delivering validation hardening for `git-remote-release` with stricter em-dash and alert-block enforcement, comprehensive test coverage for format compliance, Microsoft.Testing.Platform test runner support in `dotnet-remote-testing`, clarified yolo/auto approval behavior in `git-remote-pr`, and visual skill identification with hero images.
@@ -747,6 +756,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.11.2]: https://github.com/codebeltnet/agentic/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/codebeltnet/agentic/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/codebeltnet/agentic/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/codebeltnet/agentic/compare/v0.10.0...v0.10.1
