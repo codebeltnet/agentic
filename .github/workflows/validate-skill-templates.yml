@@ -14,10 +14,11 @@ jobs:
     timeout-minutes: 5
     strategy:
       fail-fast: false
-      max-parallel: 13
+      max-parallel: 14
       matrix:
         include:
           - { name: templates, script: scripts/validate-skill-templates.ps1, suite: Templates }
+          - { name: pr, script: scripts/validate-skill-templates.ps1, suite: Pr }
           - { name: preparation, script: scripts/validate-skill-templates.ps1, suite: Preparation }
           - { name: runners, script: scripts/validate-skill-templates.ps1, suite: Runners }
           - { name: docfx, script: scripts/validate-skill-templates.ps1, suite: Docfx }
