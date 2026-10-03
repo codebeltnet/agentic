@@ -6,12 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.11.2] - 2026-10-03
 
-This is a patch release that extends `git-remote-pr` to publish clean feature branches without upstream tracking, while keeping remote selection, approval binding, and post-push verification explicit.
+This is a patch release that supports PR publication from branches without upstream tracking, refines changelog and NuGet release-note workflows, and allows Unicode emoji choices beyond the bundled commit-language tables.
 
 ### Added
 
-- `git-remote-pr` now supports creating a pull request from a clean feature branch with no upstream tracking, previewing publication to `origin` or the sole GitHub remote under the current branch name,
-- The approved plan binds upstream setup and verifies the published branch and tracking before writing PR metadata, while ambiguous remotes and incomplete or mismatched tracking still fail closed.
+- `git-remote-pr` supports publishing clean feature branches without tracking to GitHub `origin` or the sole GitHub remote under the exact current branch name; the preview and approval ID bind upstream setup, execution establishes tracking with a normal push, and post-push checks verify the published branch and tracking before PR metadata writes.
+
+### Changed
+
+- `git-keep-a-changelog` yolo/auto mode requires an explicit version or version-prefixed branch and omits the `Unreleased` heading and footer link on creation, updates, and reruns; existing entries must be reconciled into the concrete release, with unresolved content blocking edits,
+- `git-nuget-release-notes` defaults to the full branch delta against the integration-branch merge-base, treats same-named tracking branches as synchronization targets, honors explicit ranges, and regenerates existing target-version drafts without narrowing scope to unpushed commits,
+- `git-nuget-release-notes` covers every packable `src/` project by default, including unchanged packages, requiring a complete version and availability block with non-empty ALM; it uses the prescribed default ALM text when no package-specific ALM outcomes survive and verifies coverage while preserving older blocks,
+- `git-visual-commits` and `git-visual-squash-summary` emoji guidance treats bundled tables as examples and honors user choices and repository conventions; commit-subject validation accepts a single Unicode emoji or symbol sequence beyond those tables while retaining spacing, lowercase, prefix, and length checks,
+- Expanded deterministic repository assertions, commit-subject and PR regression tests, and versioned eval cases for the revised publication, changelog, NuGet coverage, and emoji-selection contracts.
 
 ## [0.11.1] - 2026-09-29
 
