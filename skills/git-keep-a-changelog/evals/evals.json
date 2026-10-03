@@ -175,6 +175,7 @@
         "Keeps every branch-unique commit from every PR contributor regardless of author identity",
         "Treats pending worktree changes as additive to the isolated committed scope",
         "Does not let yolo mode widen committed history or include the v10.0.9 boundary commit",
+        "Omits the Unreleased heading and footer link while preserving concrete-version compare links",
         "Uses the same deterministic bleed guard as non-yolo branch-derived releases",
         "Does not contact or switch to main to invent a broader release narrative"
       ]
@@ -372,6 +373,62 @@
         "Keeps the new MCP headers, request metadata, session lifecycle operations, and incompatible legacy-SSE validation together under Added rather than moving integral validation to Fixed",
         "Classifies the pre-existing CONTRIBUTING.md and DocFX files as Changed rather than Added",
         "Rewrites the stale draft and preserves the complete Added, Changed, and Removed outcomes without duplicates on the second edit"
+      ]
+    },
+    {
+      "id": 31,
+      "prompt": "Use git-keep-a-changelog in two fresh deterministic temp git repos outside the current repository under `$env:TEMP`, one for YOLO and one for Auto. Each starts on main with a tagged v1.0.0 base, a GitHub origin remote, and no CHANGELOG.md. On v1.1.0/new-feature, commit a new public feature. In the first repo invoke 'Create CHANGELOG.md yolo'; in the second invoke 'Create CHANGELOG.md auto'. Run each invocation twice, then stop after the edits. Do not commit or tag the changelogs.",
+      "expected_output": "Both modes create the same concrete 1.1.0 release structure without an Unreleased heading or footer link. The rerun preserves that omission, historical scope, release highlight, and version compare link without duplicating entries.",
+      "expectations": [
+        "Omits both the Unreleased heading and its footer link when creating a changelog in yolo/auto mode",
+        "Recognizes yolo and auto case-insensitively and gives both keywords identical behavior",
+        "Uses the branch version for the concrete release heading with a SemVer-aware highlight",
+        "Maintains the concrete 1.1.0 compare link from v1.0.0 to v1.1.0",
+        "Does not recreate Unreleased or duplicate the concrete release on the second invocation"
+      ]
+    },
+    {
+      "id": 32,
+      "prompt": "Use git-keep-a-changelog in two fresh deterministic temp git repos outside the current repository under `$env:TEMP`, one for yolo and one for auto. Each has a GitHub origin remote and a tagged v1.0.0 base with CHANGELOG.md containing its historical release and compare link. On feature/new-feature, commit a new public feature and an Unreleased section documenting only that feature, with an Unreleased footer link. Invoke 'Update CHANGELOG.md for 1.1.0 yolo' in the first repo and 'Update CHANGELOG.md for 1.1.0 auto' in the second. Repeat each invocation and stop after editing; do not commit or tag.",
+      "expected_output": "Both modes use the explicit version and reconcile the populated Unreleased entry into release 1.1.0, removing its heading and footer link while retaining historical content and concrete-version compare links. Reruns do not duplicate the feature or recreate Unreleased.",
+      "expectations": [
+        "Removes the existing Unreleased heading and footer link without losing supported release outcomes",
+        "Uses explicit version 1.1.0 even though the branch has no version prefix",
+        "Preserves the historical 1.0.0 release and its valid compare link",
+        "Writes and maintains the concrete 1.1.0 compare link",
+        "Keeps the feature outcome exactly once and does not recreate Unreleased on rerun in either mode"
+      ]
+    },
+    {
+      "id": 33,
+      "prompt": "Use git-keep-a-changelog in two fresh deterministic temp git repos outside the current repository under `$env:TEMP`, one for yolo and one for auto. Each has a tagged v1.0.0 base with CHANGELOG.md and a feature/no-version branch with one committed feature. No explicit target version is supplied. Invoke 'Update CHANGELOG.md yolo' in one and 'Update CHANGELOG.md auto' in the other. Inspect the result and stop without changing the fixture source or making commits.",
+      "expected_output": "Both invocations stop without editing and explain that a concrete target version or version-prefixed branch is required. They neither invent a release version nor use Unreleased as a fallback.",
+      "expectations": [
+        "Stops without editing when yolo/auto has no explicit version or branch version prefix",
+        "Reports the missing concrete version as an actionable blocker rather than guessing from the latest tag",
+        "Does not create or update Unreleased as a fallback",
+        "Gives both autonomy keywords identical missing-version behavior"
+      ]
+    },
+    {
+      "id": 34,
+      "prompt": "Create a deterministic temp git repo outside the current repository under `$env:TEMP` with a GitHub origin remote, a tagged v1.0.0 base, and no CHANGELOG.md. On feature/new-feature, commit a new public feature. Invoke git-keep-a-changelog with 'Create CHANGELOG.md in Keep a Changelog style'. No target version, yolo, or auto keyword is supplied. Stop after editing.",
+      "expected_output": "The ordinary invocation creates the standard changelog scaffold and targets Unreleased, including its footer link and the curated feature outcome.",
+      "expectations": [
+        "Retains the standard Unreleased heading and footer link outside yolo/auto mode",
+        "Uses Unreleased as the normal fallback when there is no version hint",
+        "Populates the scaffold with the evidenced feature outcome and release highlight"
+      ]
+    },
+    {
+      "id": 35,
+      "prompt": "Use git-keep-a-changelog in two fresh deterministic temp git repos outside the current repository under `$env:TEMP`, one for yolo and one for auto. Each has a tagged v1.0.0 base with CHANGELOG.md containing a populated Unreleased section describing a separate planned API change that is absent from the source. On v1.1.0/current-feature, commit only a different public feature. Invoke 'Update CHANGELOG.md yolo' in one and 'Update CHANGELOG.md auto' in the other. Stop after inspecting the result, without changing source or making commits.",
+      "expected_output": "Both modes fail safely without editing when the existing Unreleased content cannot be reconciled to the selected release. They report the unresolved content instead of deleting it or attributing unrelated work to 1.1.0.",
+      "expectations": [
+        "Stops without editing when populated Unreleased content cannot be safely accounted for",
+        "Reports the unresolved existing entry without silently deleting it",
+        "Does not invent evidence or assign an unrelated planned change to the concrete release",
+        "Applies the same content-preservation rule to yolo and auto"
       ]
     }
   ]

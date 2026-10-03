@@ -28,9 +28,10 @@ Read `FORMS.md` when pending worktree changes require user confirmation and the 
 
 Only after this skill has been selected by explicit changelog or release-note intent, `yolo` or `auto` in that same request (case-insensitive) enables full-autonomy mode. Bare `yolo` / `auto`, `git bot commit yolo`, and other commit-execution requests do not activate this skill:
 
-- **Skip Step 3's confirmation only.** Do not ask the confirmation question. Do not present the `Yes / No / Custom` gate. Still discover and inspect every pending change in Step 4.
+- **Skip Step 3's confirmation.** Do not ask the confirmation question. Do not present the `Yes / No / Custom` gate. Still discover and inspect every pending change in Step 4.
 - **Include all pending changes automatically.** Staged, unstaged, and untracked files are all treated as part of the release scope without asking.
-- **Keep committed history isolated.** Yolo changes only the pending-worktree decision; use the same resolved branch ranges and bleed guard as every other invocation.
+- **Keep committed history isolated.** Use the same resolved branch ranges and bleed guard as every other invocation.
+- **Omit `[Unreleased]` in yolo/auto mode.** When the request contains `yolo` or `auto` (case-insensitive), write a concrete release entry without a `## [Unreleased]` heading or `[Unreleased]:` footer link. Apply this to new and existing changelogs; do not recreate either on subsequent runs. Both keywords have identical behavior.
 - **Make all scope decisions independently.** The user has explicitly delegated judgment. Do not pause for input at any point in the workflow.
 - All other quality rules remain in force: the release highlight is still required, the SemVer classification is still required, bullet punctuation still applies, and the compare-link footer must still be maintained.
 
@@ -50,7 +51,7 @@ Only after this skill has been selected by explicit changelog or release-note in
 - Include commits from every author/contributor in the selected scope. Do not filter to the current git user, current contributor, bot identity, configured author, or "my changes" unless the user explicitly asks for an author-filtered changelog.
 - If the current branch starts with a version hint such as `v0.3.0/`, use that to target a concrete release heading.
 - If a concrete target heading already exists but its matching `vX.Y.Z` tag does not, treat that heading as an unreleased draft and regenerate it from the resolved git result instead of preserving stale bullets as a second baseline.
-- Otherwise, target `## [Unreleased]`.
+- Otherwise, target `## [Unreleased]` unless yolo/auto mode is active; follow Step 2's concrete-version requirement instead.
 - Always write a release highlight immediately below the target heading.
 - The release highlight must explicitly classify the release as `major`, `minor`, or `patch`.
 - Use the standard Keep a Changelog section order: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
@@ -64,7 +65,7 @@ Only after this skill has been selected by explicit changelog or release-note in
 - **Never hard-wrap changelog prose.** Keep every paragraph and bullet item on one physical line, regardless of length. Do not insert line breaks to satisfy 80, 100, 120, or any other column width; rely on editor soft wrapping. Insert physical line breaks only between Markdown structures, and rejoin unnecessary wraps in prose you touch. Treat any arbitrary line break inside a paragraph or bullet as a formatting failure that must be corrected before completion.
 - End each bullet with `,` and end the last bullet in each section with `.`.
 - If pending worktree changes exist for a concrete release draft, do not silently include or exclude them. Ask the user first with a short `Yes / No / Custom` prompt. **Exception: in yolo/auto mode, include all pending changes automatically without asking.**
-- Yolo/auto changes pending-worktree handling only. It never widens committed history or includes the comparison boundary.
+- Yolo/auto never widens committed history or includes the comparison boundary. Both modes also omit `[Unreleased]`.
 - Do not dump commit subjects verbatim into the changelog.
 - Do not treat the current contents of the target heading as a release-classification baseline; git state is the baseline.
 - Do not invent unsupported changes, risks, or migration guidance.
@@ -222,6 +223,8 @@ The comparison boundary is always excluded from a branch-derived release, even w
 
 Determine whether to write a concrete release section or update `[Unreleased]`.
 
+In yolo/auto mode, use the version explicitly supplied by the user, otherwise the current branch's version prefix. If neither provides a concrete version, stop without editing and report that yolo/auto requires an explicit version or a version-prefixed branch. Do not invent a version or fall back to `[Unreleased]`.
+
 When the user asks to "finalize", "ready to release", "rtr", "release", "publish", or "ship" (or similar release-intent words):
 - Extract the version from the current branch name if it starts with a version prefix such as `v0.3.0/feature-name`.
 - When the target is `## [X.Y.Z]`, check whether `refs/tags/vX.Y.Z` exists locally. If it does not, any existing `## [X.Y.Z]` section is still a branch draft rather than released history.
@@ -230,7 +233,7 @@ When the user asks to "finalize", "ready to release", "rtr", "release", "publish
 Otherwise:
 - If the branch name starts with a version prefix such as `v0.3.0/feature-name`, target `## [0.3.0] - YYYY-MM-DD`.
 - Strip the leading `v` from the visible changelog heading, but keep tag comparisons in `vX.Y.Z` form.
-- If no version hint exists, target `## [Unreleased]`.
+- If no version hint exists, target `## [Unreleased]` only outside yolo/auto mode.
 - If the target heading already exists, update it in place instead of duplicating it.
 - For an existing concrete heading whose matching tag is absent, replace the release highlight and populated sections wholesale from the current resolved git evidence. Do not preserve an older `Added` bullet and then layer later pre-release refinements into `Changed` or `Fixed`.
 
@@ -400,19 +403,22 @@ Read `references/section-validation.md` and validate every path-entity boundary 
 
 Preserve the file's existing structure while editing.
 
-- If `CHANGELOG.md` is missing, create it with the standard title, intro paragraph, `## [Unreleased]`, and compare-link footer before inserting release content.
+- If `CHANGELOG.md` is missing, create it with the standard title, intro paragraph, and compare-link footer before inserting release content. Include `## [Unreleased]` only outside yolo/auto mode.
 - Keep the introduction and existing release history intact.
-- If writing a concrete release section, insert it below `## [Unreleased]` and above older releases.
+- If writing a concrete release section, insert it above older releases and below `## [Unreleased]` when that heading is retained. In yolo/auto mode, place the concrete release immediately after the introduction.
+- In yolo/auto mode, remove an existing `## [Unreleased]` heading and its `[Unreleased]:` footer link. Before removing a populated section, reconcile its entries against the selected release evidence and incorporate supported outcomes into the concrete target without duplication. If any entry belongs to unrelated work or cannot be safely accounted for, stop without editing and report the unresolved content rather than silently deleting it or assigning it to the wrong release.
 - If writing to `## [Unreleased]`, keep the heading and update only its content.
 - When updating an existing target heading, rebuild the release highlight and populated sections from the newly resolved surviving outcomes. Delete or rewrite stale bullets that no longer reflect the final release story instead of incrementally patching around them.
 - On every edit, verify that the compare-link footer exists at the bottom of the file. If it is missing or incomplete, insert or repair it instead of leaving the changelog without diff ranges.
-- When adding or updating a concrete version, `[Unreleased]` should compare from the newest released version to `HEAD`, and that released version should compare from the previous version tag to the new tag.
+- When adding or updating a concrete version, that version should compare from the previous version tag to the new tag. Outside yolo/auto mode, `[Unreleased]` should compare from the newest released version to `HEAD`; in yolo/auto mode, omit that footer link while maintaining concrete-version compare links.
 - Preserve valid historical compare links for older releases. Repair only the links that are missing, incomplete, or wrong.
-- Do not remove existing links or historical entries unless they are demonstrably wrong.
+- Do not remove existing links or historical entries unless they are demonstrably wrong, except for the yolo/auto `[Unreleased]` removal described above.
 
 ### Step 8: Stop after the edit
 
 Reread the target entry from disk, including its highlight and any retained text. For each factual clause, identify its supporting outcome and evidence. Check identity, versions, scope, behavior, and causal explanations independently. A valid section or successful resolver run does not validate these claims. Correct unsupported wording and repeat this review before handing the file back.
+
+In yolo/auto mode, verify that neither a `## [Unreleased]` heading nor an `[Unreleased]:` footer link remains, and that the concrete target, reconciled outcomes, historical releases, and version compare links are intact.
 
 Inspect the entry's physical line layout before completing it. Each prose paragraph and each bullet must occupy one physical line unless the Markdown structure genuinely requires more than one. Rejoin every arbitrary wrap, regardless of line length. Any hard-wrapped paragraph or bullet means the edit is incomplete.
 
