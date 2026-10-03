@@ -6,6 +6,8 @@ This reference captures the normalized `PackageReleaseNotes.txt` shape used acro
 
 Each file is a cumulative history ordered newest first. Each release block uses this normalized structure:
 
+Every selected package receives a release block, even when its semantic delta is empty. The minimum is `Version:`, resolved `Availability:`, and a non-empty `# ALM` section. If no package-specific ALM outcomes survive, use exactly `- CHANGED Dependencies have been upgraded to the latest compatible versions for all supported target frameworks (TFMs)`. This is required release boilerplate, not evidence for an upgrade to any named dependency. Resolve availability from current framework settings, or reuse the prior line when those settings are verified unchanged.
+
 ```text
 Version: 0.3.1
 Availability: .NET 10, .NET 9 and .NET Standard 2.0
@@ -32,7 +34,7 @@ Availability: .NET 10, .NET 9 and .NET Standard 2.0
 
 ## Section Order
 
-Use sections in this order and omit empty ones:
+Use sections in this order and omit empty optional ones. `# ALM` is always present and non-empty:
 
 1. `# ALM`
 2. `# Breaking Changes`
@@ -43,7 +45,7 @@ Use sections in this order and omit empty ones:
 
 ## Section Intent
 
-`# ALM` - Release-engineering and package-maintenance facts. - Typical bullets cover dependency upgrades, supported TFM additions, or TFM removals. - ALM-only releases are normal and should not be padded with weaker sections.
+`# ALM` - Release-engineering and package-maintenance facts when present; otherwise the exact required default bullet above. Typical specific bullets cover dependency upgrades, supported TFM additions, or TFM removals. ALM-only blocks also cover unchanged packages and should not be padded with invented changes.
 
 `# Breaking Changes` - Consumer-visible incompatibilities. - Typical verbs: `REMOVED`, `RENAMED`, `MOVED`, `CHANGED`.
 

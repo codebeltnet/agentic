@@ -81,7 +81,7 @@ feat: add submission endpoint            ← "feat:" is not an allowed prefix
 ✨ Feat: Add Submission Module            ← uppercase, "Feat:" not allowed
 💬 Update CHANGELOG for v10.0.10          ← uppercase description beginning
 💬  update changelog for v10.0.10         ← more than one separator space
-📋 update changelog for v10.0.10          ← emoji is absent from the approved reference table
+:clipboard: update changelog            ← use the Unicode emoji, not a shortcode
 🎉 initial commit with all files         ← vague, bundles everything
 ⚙️ config: setup api                     ← "config:" is not an allowed prefix
 ♻️ refactor: reorganize skill wording    ← bad default if the user did not ask for the combo

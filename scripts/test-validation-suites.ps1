@@ -20,6 +20,8 @@ foreach ($script in @('scripts/validate-skill-templates.ps1', 'scripts/eval-runn
     $attribute = @($parameter.Attributes | Where-Object { $_.TypeName.Name -eq 'ValidateSet' })[0]
     $expected = @($attribute.PositionalArguments | ForEach-Object { $_.SafeGetValue() } | Where-Object { $_ -ne 'All' })
     if ($script -eq 'scripts/validate-skill-templates.ps1') {
+        $prCheck = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Add-ValidationResult' -and $node.Extent.Text.Contains("-Name 'Git remote PR routing and deterministic workflow stay integrated'") }, $true))
+        if ($prCheck.Count -ne 1 -or $prCheck[0].Extent.Text -notmatch "-Group 'Pr'") { throw 'PR workflow regressions must run exactly once in their own Pr suite so template builds can execute concurrently in CI and locally.' }
         # These two aggregate groups are expanded into their own test suites.
         $expected = @($expected | Where-Object { $_ -notin @('Conformance', 'Integrity') })
         $groups = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Add-ValidationResult' }, $true) | ForEach-Object {

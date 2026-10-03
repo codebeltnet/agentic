@@ -33,9 +33,9 @@
     },
     {
       "id": 6,
-      "prompt": "Open a pull request from this checkout. Test detached HEAD, then a feature branch with no upstream configured, then the default branch, then a feature branch with an empty base...head comparison.",
+      "prompt": "Open a pull request from this checkout. Test detached HEAD, then a feature branch with incomplete upstream configuration, then the default branch, then a feature branch with an empty base...head comparison.",
       "expected_output": "Each invalid state fails before any remote write with a distinct actionable diagnosis.",
-      "expectations": ["Detached HEAD blocks", "Missing upstream tracking blocks", "Current default/base branch blocks", "Empty comparison blocks", "No PR is created"]
+      "expectations": ["Detached HEAD blocks", "Incomplete upstream configuration blocks", "Current default/base branch blocks", "Empty comparison blocks", "No PR is created"]
     },
     {
       "id": 7,
@@ -120,6 +120,18 @@
       "prompt": "Refresh the PR preview; retry with new state. The previous transaction /tmp/pr-review-a was invalidated when the branch changed from 5 commits / 9 files to 37 commits / 66 files. I had approved APR-4F8C2A91D6B3 for A. This request authorizes fresh preparation only.",
       "expected_output": "Starts a new scratch workspace, collects fresh evidence, writes a fresh body, prepares Preview B and Plan B with a different approval ID, and waits for approval of B's exact displayed phrase.",
       "expectations": ["The explicit refresh starts a new transaction rather than resuming A", "All original A artifacts remain unchanged", "Fresh evidence, body, plan, and preview are produced in a new workspace", "Approval B differs from A and is shown in B's preview and exact approval phrase", "The response links Preview B and asks for its exact phrase", "Approval A, generic approval, or absence of approval B cannot execute Plan B", "Prior yolo or auto permission is not carried into this refresh"]
+    },
+    {
+      "id": 21,
+      "prompt": "git-remote-pr create yolo in a clean checkout of codebeltnet/cuemon on v10.8.0/options-enhancement. Origin is https://github.com/codebeltnet/cuemon.git. This committed feature branch has no upstream configuration and has never been pushed. Create the PR and push the branch to origin.",
+      "expected_output": "Prepares the complete local comparison and a preview planning normal publication to origin/v10.8.0/options-enhancement with upstream tracking, PR creation, and authenticated assignment. Presents the preview link and immediately executes the same plan without asking for approval, then verifies the published branch and PR.",
+      "expectations": ["Missing upstream tracking is accepted as first publication, with the exact current branch name on origin", "Preparation performs no preliminary push or branch tracking edits", "The preview explicitly includes normal push and upstream tracking", "Same-request yolo continues without waiting for an approval reply", "Execution publishes the approved HEAD and establishes upstream tracking before PR creation", "The verified PR URL and result are returned without claiming success on partial failure"]
+    },
+    {
+      "id": 22,
+      "prompt": "Create a PR from a clean committed feature branch with no tracking configuration. There is no origin remote and two distinct GitHub remotes. Do not guess which repository I intend to publish to.",
+      "expected_output": "Reports ambiguous publication remotes and asks for an explicit tracking target, without pushing or altering configuration. A sole GitHub remote would be usable without clarification.",
+      "expectations": ["Multiple GitHub remotes without origin are not silently selected", "No push, tracking edit, or PR mutation occurs", "The diagnosis identifies the missing publication target rather than requiring an unnecessary preliminary push"]
     }
   ]
 }

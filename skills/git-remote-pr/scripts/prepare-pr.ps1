@@ -27,26 +27,29 @@ try {
         if ($parsed) { $remoteRepos[$name] = $parsed }
     }
     $suggestedHeadRemote = if ($remoteRepos.ContainsKey('origin')) { 'origin' } else { $remoteRepos.Keys | Sort-Object | Select-Object -First 1 }
-    $upstreamRef = Invoke-Git @('rev-parse', '--abbrev-ref', '@{u}') -AllowFailure
     $upstreamRemote = (Invoke-Git @('config', '--get', "branch.$branch.remote") -AllowFailure).Text.Trim()
     $mergeRef = (Invoke-Git @('config', '--get', "branch.$branch.merge") -AllowFailure).Text.Trim()
-    if ($upstreamRef.Code -ne 0 -or -not $upstreamRemote -or -not $mergeRef) {
-        $setUpstreamRemote = if ($suggestedHeadRemote) { $suggestedHeadRemote } else { 'origin' }
-        throw "Current branch '$branch' has no upstream tracking branch. git-remote-pr refuses to guess a PR head branch because stale tracking after a local rename can target the wrong remote branch. Set it explicitly with: git push --set-upstream $setUpstreamRemote HEAD`nor: git branch --set-upstream-to=$setUpstreamRemote/$branch"
+    $setUpstreamRequired = -not $upstreamRemote -and -not $mergeRef
+    if ($setUpstreamRequired) {
+        if ($remoteRepos.ContainsKey('origin')) { $headRemote = 'origin' }
+        elseif ($remoteRepos.Count -eq 1) { $headRemote = @($remoteRepos.Keys)[0] }
+        else { throw 'No unambiguous GitHub publication remote. Configure a GitHub origin or explicit branch tracking before retrying.' }
+        $remoteBranch = $branch
+    } else {
+        if (-not $upstreamRemote -or -not $mergeRef) { throw "Current branch '$branch' has incomplete upstream tracking configuration. Repair tracking before retrying." }
+        if ($mergeRef -notmatch '^refs/heads/(.+)$') {
+            throw "Current branch '$branch' has a configured merge ref '$mergeRef' that is not a GitHub branch under refs/heads/. Update the upstream before retrying."
+        }
+        $remoteBranch = $Matches[1]
+        if (-not $remoteRepos.ContainsKey($upstreamRemote)) {
+            $targetRemote = if ($suggestedHeadRemote) { $suggestedHeadRemote } else { '<remote>' }
+            throw "Current branch '$branch' tracks '$upstreamRemote/$remoteBranch', but remote '$upstreamRemote' is not a GitHub remote the skill can use. Point the branch at the intended GitHub remote with: git branch --set-upstream-to=$targetRemote/$branch"
+        }
+        if (-not (Test-EquivalentBranchNames $branch $remoteBranch)) {
+            throw "Local branch '$branch' does not match upstream tracking branch '$upstreamRemote/$remoteBranch'. This usually means a local rename left tracking stale or the remote branch still uses the old name. Update tracking with: git branch --set-upstream-to=$upstreamRemote/$branch after the remote branch name is corrected. If the remote still needs the renamed branch, publish it first with: git push $upstreamRemote HEAD:refs/heads/$branch"
+        }
+        $headRemote = $upstreamRemote
     }
-    $upstreamRefText = $upstreamRef.Text.Trim()
-    if ($mergeRef -notmatch '^refs/heads/(.+)$') {
-        throw "Current branch '$branch' tracks '$upstreamRefText', but the configured merge ref '$mergeRef' is not a GitHub branch under refs/heads/. Update the upstream before retrying."
-    }
-    $remoteBranch = $Matches[1]
-    if (-not $remoteRepos.ContainsKey($upstreamRemote)) {
-        $targetRemote = if ($suggestedHeadRemote) { $suggestedHeadRemote } else { '<remote>' }
-        throw "Current branch '$branch' tracks '$upstreamRefText', but remote '$upstreamRemote' is not a GitHub remote the skill can use. Point the branch at the intended GitHub remote with: git branch --set-upstream-to=$targetRemote/$branch"
-    }
-    if (-not (Test-EquivalentBranchNames $branch $remoteBranch)) {
-        throw "Local branch '$branch' does not match upstream tracking branch '$upstreamRemote/$remoteBranch'. This usually means a local rename left tracking stale or the remote branch still uses the old name. Update tracking with: git branch --set-upstream-to=$upstreamRemote/$branch after the remote branch name is corrected. If the remote still needs the renamed branch, publish it first with: git push $upstreamRemote HEAD:refs/heads/$branch"
-    }
-    $headRemote = $upstreamRemote
 
     Invoke-Gh @('auth', 'status') | Out-Null
     $viewer = Get-GhJson 'user'
@@ -138,7 +141,7 @@ try {
         schema = 'codebeltnet/git-remote-pr/evidence/1'; repository = $baseRepo; head_repository = $headRepo
         head_remote = $headRemote; remote_branch = $remoteBranch; base = $baseBranch; head = $branch
         base_sha = $baseSha; head_sha = $headSha; remote_sha = $remoteSha; merge_base = $mergeBase
-        push_required = $remoteSha -ne $headSha; assignee = [string]$viewer.login
+        push_required = ($remoteSha -ne $headSha -or $setUpstreamRequired); set_upstream_required = $setUpstreamRequired; assignee = [string]$viewer.login
         title = Get-PrTitle $remoteBranch; action = if ($existing) { 'UPDATE' } else { 'CREATE' }
         existing_pr = if ($existing) { [ordered]@{ number = $existing.number; url = $existing.html_url; state = $existing.state; title = $existing.title; body = $existing.body; draft = $existing.draft; head_sha = $existing.head.sha; base_sha = $existing.base.sha; assignees = @($existing.assignees | ForEach-Object { $_.login }) } } else { $null }
         template_path = $templatePath; commits = $commits; files = $files.ToArray()

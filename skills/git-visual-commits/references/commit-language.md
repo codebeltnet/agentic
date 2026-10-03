@@ -15,7 +15,7 @@ Examples in the emoji tables below use the default no-prefix form. Only switch t
 
 ### Emoji Selection — Gitmoji First, Fallback Second
 
-**Always prefer an official [gitmoji](https://gitmoji.dev) emoji** when the semantic meaning is a good fit. Only use a non-gitmoji emoji when no official entry matches well enough.
+**Prefer an official [gitmoji](https://gitmoji.dev) emoji by default** when the semantic meaning is a good fit. These tables are selection guidance, not an allowlist. Honor explicit user emoji choices and repository conventions. Other Unicode emojis are allowed when they better express the actual change, including in non-coding repositories.
 
 #### Primary: Gitmoji
 
@@ -88,6 +88,8 @@ Examples in the emoji tables below use the default no-prefix form. Only switch t
 #### Fallback: Extended Emoji Reference
 
 When no gitmoji entry fits, consult **[this curated extended reference](https://gist.github.com/marcellodesales/aba1152a91d69f9b39745a08fd73a6f9)** — a multi-source collection covering languages, platforms, cloud infra, and programming strategies that gitmoji doesn't address.
+
+The full linked reference is available for selection, not just the entries copied below. Other Unicode emojis are also allowed; no table membership or special opt-in is required. Use the actual Unicode emoji in the subject rather than its `:shortcode:`. For finance content, examples include 💰 budgets, 🪙 coins, 💴 yen, 💵 dollars, 💶 euros, 💷 pounds, 💸 expenses, 💳 payments, 🧾 receipts, and 💹 currency charts. Choose by the actual change and repository context.
 
 Key entries from that reference, by category:
 

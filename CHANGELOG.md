@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2] - 2026-10-03
+
+This is a patch release that supports PR publication from branches without upstream tracking, refines changelog and NuGet release-note workflows, and allows Unicode emoji choices beyond the bundled commit-language tables.
+
+### Added
+
+- `git-remote-pr` supports publishing clean feature branches without tracking to GitHub `origin` or the sole GitHub remote under the exact current branch name; the preview and approval ID bind upstream setup, execution establishes tracking with a normal push, and post-push checks verify the published branch and tracking before PR metadata writes.
+
+### Changed
+
+- `git-keep-a-changelog` yolo/auto mode requires an explicit version or version-prefixed branch and omits the `Unreleased` heading and footer link on creation, updates, and reruns; existing entries must be reconciled into the concrete release, with unresolved content blocking edits,
+- `git-nuget-release-notes` defaults to the full branch delta against the integration-branch merge-base, treats same-named tracking branches as synchronization targets, honors explicit ranges, and regenerates existing target-version drafts without narrowing scope to unpushed commits,
+- `git-nuget-release-notes` covers every packable `src/` project by default, including unchanged packages, requiring a complete version and availability block with non-empty ALM; it uses the prescribed default ALM text when no package-specific ALM outcomes survive and verifies coverage while preserving older blocks,
+- `git-visual-commits` and `git-visual-squash-summary` emoji guidance treats bundled tables as examples and honors user choices and repository conventions; commit-subject validation accepts a single Unicode emoji or symbol sequence beyond those tables while retaining spacing, lowercase, prefix, and length checks,
+- Expanded deterministic repository assertions, commit-subject and PR regression tests, and versioned eval cases for the revised publication, changelog, NuGet coverage, and emoji-selection contracts.
+
 ## [0.11.1] - 2026-09-29
 
 This is a patch release delivering validation hardening for `git-remote-release` with stricter em-dash and alert-block enforcement, comprehensive test coverage for format compliance, Microsoft.Testing.Platform test runner support in `dotnet-remote-testing`, clarified yolo/auto approval behavior in `git-remote-pr`, and visual skill identification with hero images.
@@ -747,6 +763,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.11.2]: https://github.com/codebeltnet/agentic/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/codebeltnet/agentic/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/codebeltnet/agentic/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/codebeltnet/agentic/compare/v0.10.0...v0.10.1

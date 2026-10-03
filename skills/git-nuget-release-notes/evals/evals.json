@@ -4,12 +4,13 @@
     {
       "id": 1,
       "prompt": "Update the NuGet package release notes for the current branch from git history. Use the default branch comparison, update the relevant .nuget/*/PackageReleaseNotes.txt files directly, and stop for my review.",
-      "expected_output": "The relevant PackageReleaseNotes.txt files are updated in place from git history rather than being drafted only in chat.",
+      "expected_output": "Every packable src project's PackageReleaseNotes.txt is updated in place for the target release, including unchanged packages with resolved availability and the default ALM block, rather than being drafted only in chat.",
       "expectations": [
         "Updates .nuget/<ProjectName>/PackageReleaseNotes.txt files directly instead of only drafting release notes in chat",
         "Reads full commit subjects and bodies before writing the package release notes",
-        "Uses the current branch versus merge-base as the default source when no explicit range is given",
+        "Uses the full current branch versus the integration-branch merge-base as the default source when no explicit range is given",
         "Discovers packable src projects instead of treating test or tooling projects as publishable packages",
+        "Includes unchanged packable projects in a default version-only release pass and writes complete target-version blocks",
         "Stops after editing the release-note files for user review"
       ]
     },
@@ -43,7 +44,7 @@
       "expectations": [
         "Always includes ALM in the written release block",
         "Uses only the established section order ALM, Breaking Changes, New Features, Improvements, Bug Fixes, References",
-        "Omits empty sections instead of inserting placeholders",
+        "Omits empty optional sections while always writing non-empty ALM, using the exact default bullet when no specific ALM outcome exists",
         "Starts bullets with an all-caps action verb such as ADDED, CHANGED, REMOVED, FIXED, EXTENDED, or OPTIMIZED",
         "Does not dump commit subjects verbatim into the release-note file"
       ]
@@ -106,6 +107,59 @@
         "Does not place RetryPolicy under Bug Fixes because a defect was fixed during its introduction cycle",
         "Keeps the independent Newtonsoft.Json 13.0.3 to 14.0.2 upgrade under ALM",
         "Classifies separately changed pre-existing package capabilities from their own base states"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Create a temp .NET git repo outside the current repository under `$env:TEMP`. Start main with a packable src/Acme.Core project targeting net10.0, a public Disposable API whose managed-cleanup exception prevents unmanaged cleanup, a Newtonsoft.Json 13.0.3 runtime reference in Directory.Packages.props, an existing 10.7.1 PackageReleaseNotes.txt block, and tag v10.7.1. Add and commit a MaintenanceOnly API on main after that tag, then set origin/main to this main tip. Create v10.8.0/options-enhancement, add a public OptionsBridge capability, and commit a partial 10.8.0 package-note block describing it. Set origin/v10.8.0/options-enhancement as the branch's tracking upstream at that commit, with origin/HEAD pointing at origin/main. Add and commit a fix that ensures unmanaged cleanup runs when managed cleanup throws, and upgrade Newtonsoft.Json to 14.0.2. Now generate the NuGet package release notes for 10.8.0 using the normal default and stop after editing.",
+      "expected_output": "The agent generates the 10.8.0 package notes directly from the integration-branch merge-base through HEAD without a range-confirmation question. The regenerated block includes the already-pushed OptionsBridge feature, the later disposal fix, and the surviving dependency upgrade, while preserving the older 10.7.1 block.",
+      "expectations": [
+        "Uses the integration-branch merge-base instead of the same-named tracking upstream as the default base",
+        "Generates the requested 10.8.0 package notes without asking the user to confirm a safely resolved default range",
+        "Includes the already-pushed OptionsBridge capability once under New Features with ADDED",
+        "Includes the later fix to the pre-existing Disposable API and the surviving runtime dependency upgrade",
+        "Recomputes the existing 10.8.0 block from the full branch delta instead of treating its draft commit as the baseline",
+        "Preserves the older 10.7.1 block unchanged and does not duplicate the 10.8.0 block",
+        "Does not switch to the previous-release tag merely because the user supplied a version",
+        "Omits MaintenanceOnly because it was already present at the integration-branch base even though it was added after v10.7.1"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Create a temp .NET git repo outside the current repository under `$env:TEMP`. Start main with a packable src/Acme.Core project targeting net10.0 and an existing 1.0.0 package-note block. Create v1.1.0/feature, add a public FeatureOne API, and set origin/v1.1.0/feature as the tracking upstream at that commit. Commit a new FeatureTwo API afterward. Generate the 1.1.0 NuGet package release notes using only the explicitly requested range origin/v1.1.0/feature..HEAD, then stop for review.",
+      "expected_output": "The explicit tracking-branch range overrides the full-branch default. The new 1.1.0 block describes FeatureTwo only, preserves the old 1.0.0 block, and requires no range confirmation.",
+      "expectations": [
+        "Honors the explicit origin/v1.1.0/feature..HEAD range even though its base is a same-named tracking branch",
+        "Includes FeatureTwo and omits FeatureOne because it existed at the explicitly selected base",
+        "Does not widen the explicit range to main or a previous-release tag",
+        "Writes the 1.1.0 block directly without requesting range confirmation and preserves the older 1.0.0 block"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Create a temp .NET git repo outside the current repository under `$env:TEMP`. On main, create three packable src projects: Acme.Changed and Acme.Unchanged targeting net10.0;net9.0 with cumulative 1.0.0 package notes and matching Availability lines, and Acme.Missing targeting netstandard2.0 with no note file. Also create a src project with IsPackable=false and a test project outside src. Branch to v1.1.0/release, add a public FeatureOne API only to Acme.Changed, and commit its partial 1.1.0 note block containing Availability and New Features but no ALM. Do not change any dependency versions or target frameworks. Now run `$git-nuget-release-notes 1.1.0` with no explicit package selection and stop for review.",
+      "expected_output": "All three packable src projects receive exactly one complete 1.1.0 block with correct availability and non-empty ALM. Acme.Changed's incomplete draft is repaired; Acme.Unchanged gets the standard ALM-only block; Acme.Missing gets a new ALM-only file. Older blocks remain intact and excluded projects receive no notes.",
+      "expectations": [
+        "Writes the target version for every packable src project, including unchanged packages with existing or missing note files",
+        "Repairs an existing target-version feature block that lacks ALM instead of accepting its feature text alone as complete",
+        "Uses exactly '- CHANGED Dependencies have been upgraded to the latest compatible versions for all supported target frameworks (TFMs)' when no package-specific ALM outcome exists",
+        "Resolves Availability for all selected projects, reusing verified unchanged prior lines and deriving the missing file's line from netstandard2.0",
+        "Writes FeatureOne only in Acme.Changed and does not invent API changes or named dependency upgrades for unchanged packages",
+        "Preserves the 1.0.0 blocks and avoids duplicate 1.1.0 blocks",
+        "Excludes the explicitly non-packable src project and the test project outside src",
+        "Reconciles the selected project inventory against complete target-version blocks before stopping"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Create a temp .NET git repo outside the current repository under `$env:TEMP`. On main, create two packable src projects targeting net10.0 with existing 1.0.0 package-note blocks and Newtonsoft.Json 13.0.3 runtime references. Branch to v1.0.1/maintenance, temporarily upgrade Newtonsoft.Json to 14.0.0, then commit a reversion to 13.0.3 so all source, package, and framework state matches main again. Generate the 1.0.1 NuGet package notes using the normal default, with no narrower package selection, and stop for review.",
+      "expected_output": "Both packages receive complete 1.0.1 ALM-only blocks even though neither has a surviving semantic delta. The exact default ALM bullet is retained, reverted dependency churn is not reported as a named upgrade, and old history stays intact.",
+      "expectations": [
+        "Completes all selected package blocks even when the entire package delta is empty",
+        "Writes Version: 1.0.1, resolved Availability, and non-empty ALM for both packages",
+        "Uses the exact default ALM bullet without claiming a surviving Newtonsoft.Json upgrade",
+        "Does not omit the release blocks or ALM because the dependency returned to its base state",
+        "Preserves older release blocks and omits empty optional sections"
       ]
     }
   ]

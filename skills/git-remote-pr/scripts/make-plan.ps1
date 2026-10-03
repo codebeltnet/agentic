@@ -41,7 +41,11 @@ try {
     $metadata = if (-not $evidence.existing_pr) { 'CREATE' } elseif ($evidence.existing_pr.title -cne $Title -or $evidence.existing_pr.body -cne $body) { 'UPDATE' } else { 'NONE' }
     $plannedDraft = if ($evidence.existing_pr) { [bool]$evidence.existing_pr.draft } else { [bool]$Draft }
     $writes = [System.Collections.Generic.List[string]]::new()
-    if ($pushRequired) { $writes.Add("Normal push to $($evidence.head_remote)/$head") }
+    if ($pushRequired) {
+        $pushWrite = "Normal push to $($evidence.head_remote)/$head"
+        if ($evidence.set_upstream_required) { $pushWrite += '; set upstream tracking to the same branch' }
+        $writes.Add($pushWrite)
+    }
     if ($metadata -eq 'CREATE') { $writes.Add('Create PR with the title and complete body below') }
     if ($metadata -eq 'UPDATE') { $writes.Add('Edit PR with the title and complete body below') }
     if ($assignmentWrite) { $writes.Add("Assign $assignee") }
@@ -64,6 +68,7 @@ try {
         head_repository = $headRepository
         assignee = $assignee
         push_required = $pushRequired
+        set_upstream_required = [bool]$evidence.set_upstream_required
         metadata_write = $metadata
         assignment_write = $assignmentWrite
         existing_pr_number = if ($evidence.existing_pr) { $evidence.existing_pr.number } else { $null }
