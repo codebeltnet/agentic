@@ -3327,7 +3327,7 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Classify each user-facing package capability from whether it existed at the resolved base'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle '`# Improvements` and `# Bug Fixes` require the affected capability or behavior to exist at the resolved base.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Do not accumulate bullets from individual commits and deduplicate them afterward.'
-    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle '`Newtonsoft.Json 13.0.3 -> 14.0.0 -> 13.0.3` -> no `# ALM` bullet.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle '`Newtonsoft.Json 13.0.3 -> 14.0.0 -> 13.0.3` -> no dependency-specific `# ALM` bullet; keep the required default ALM block.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Read the full commit bodies only after the cumulative delta is clear.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'A restored API or reverted dependency upgrade does not earn a section entry.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Treat a same-named tracking branch as a synchronization target, not the default release-note base.'
@@ -3336,6 +3336,19 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Do not ask the user to choose between the full branch and its latest commits when the default resolves safely.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Do not switch to a previous-release tag merely because a version was supplied.'
     Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'The current target-version block is cached output, not a comparison baseline.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'A version-only invocation covers every packable `src/` project, including unchanged projects.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'An empty semantic delta suppresses change-specific bullets, never the release block.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'If there are no package-specific ALM outcomes, use this exact default bullet:'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Reuse the prior Availability line when the current target frameworks are verified unchanged.'
+    Assert-Contains -Name 'git-nuget-release-notes/SKILL.md' -Content $nugetSkill -Needle 'Before stopping, reconcile the selected project inventory against the written target-version blocks.'
+    $nugetFormat = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-nuget-release-notes/references/package-release-notes-format.md' -GitRef $Ref
+    Assert-Contains -Name 'package-release-notes-format.md' -Content $nugetFormat -Needle 'Every selected package receives a release block, even when its semantic delta is empty.'
+    foreach ($content in @($nugetSkill, $nugetFormat)) {
+        Assert-Contains -Name 'NuGet release-note default' -Content $content -Needle '- CHANGED Dependencies have been upgraded to the latest compatible versions for all supported target frameworks (TFMs)'
+    }
+    if ($nugetSkill.Contains('Base state and `HEAD` state are identical -> no entry.') -or $nugetSkill.Contains('Otherwise, focus on the projects affected by the requested range.')) {
+        throw 'NuGet release notes must not omit unchanged packages from the default release pass.'
+    }
     if ($nugetSkill.Contains('Otherwise, compare the current branch to its upstream merge-base.')) {
         throw 'NuGet release notes must not default to the tracking upstream, which can omit already-pushed release work.'
     }
@@ -3346,6 +3359,9 @@ Add-ValidationResult -Results $results -Name 'Git summary skills reduce ranges t
     Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Generates the requested 10.8.0 package notes without asking the user to confirm a safely resolved default range'
     Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Recomputes the existing 10.8.0 block from the full branch delta instead of treating its draft commit as the baseline'
     Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Honors the explicit origin/v1.1.0/feature..HEAD range even though its base is a same-named tracking branch'
+    Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Writes the target version for every packable src project, including unchanged packages with existing or missing note files'
+    Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Repairs an existing target-version feature block that lacks ALM instead of accepting its feature text alone as complete'
+    Assert-Contains -Name 'git-nuget-release-notes/evals/evals.json' -Content $nugetEvals -Needle 'Completes all selected package blocks even when the entire package delta is empty'
 
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'This skill answers one question: **What would this branch effectively do if it were squashed into one commit now?**'
     Assert-Contains -Name 'git-visual-squash-summary/SKILL.md' -Content $squashSkill -Needle 'History is evidence; the resulting state is truth.'
