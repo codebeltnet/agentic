@@ -11,7 +11,6 @@
     ".gitattributes",
     ".github/CODE_OF_CONDUCT.md",
     ".github/CONTRIBUTING.md",
-    ".github/copilot-instructions.md",
     ".github/dependabot.yml",
     ".github/workflows/ci-pipeline.yml",
     ".gitignore",
