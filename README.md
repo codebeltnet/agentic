@@ -564,6 +564,7 @@ Starting a new .NET solution "from scratch" usually means copying from your last
 > [!NOTE]
 > These scaffolds are not speculative starter kits. They capture conventions already exercised across Codebelt repositories and turn them into a repeatable methodology for new solutions.
 
+- **Vendor-neutral agent guidance** — generated repositories use root `AGENTS.md` as their single agent-instruction contract, preserving the complete coding, testing, coverage, benchmarking, XML documentation, and `.bot/` workspace contract, including code examples, rationale, alternatives, and applicability conditions
 - **Convention over configuration** — opinionated defaults that match real production setups
 - **Focused skills** — library and app concerns are fully separated, no variant confusion
 - **Lower cognitive load** — the library scaffold defaults the main project name from the solution name, pre-fills the repository URL from the repo root folder name, and lets the package website reuse that value unless you override it
