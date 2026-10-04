@@ -19,6 +19,7 @@
     "CHANGELOG.md",
     "Directory.Build.targets",
     "Directory.Packages.props",
+    "global.json",
     "README.md",
     "testenvironments.json"
   ]

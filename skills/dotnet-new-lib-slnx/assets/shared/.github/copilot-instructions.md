@@ -10,7 +10,7 @@ This document provides instructions for writing unit tests for a project/solutio
 
 **Always inherit from the `Test` base class** for all unit test classes. This ensures consistent setup, teardown, and output handling across all tests.
 
-> Important: Do NOT add `using Xunit.Abstractions`. xUnit v3 no longer exposes that namespace; including it is incorrect and will cause compilation errors. Use the `Codebelt.Extensions.Xunit` Test base class and `using Xunit;` as shown in the examples below. If you need access to test output, rely on the Test base class (which accepts the appropriate output helper) rather than importing `Xunit.Abstractions`.
+> Important: Do NOT add `using Xunit.Abstractions`. xUnit v4 (the `xunit.v3` 4.x package line) does not expose that namespace; including it is incorrect and will cause compilation errors. Use the `Codebelt.Extensions.Xunit` Test base class and `using Xunit;` as shown in the examples below. If you need access to test output, rely on the Test base class (which accepts the appropriate output helper) rather than importing `Xunit.Abstractions`.
 
 ```csharp
 using Codebelt.Extensions.Xunit;
