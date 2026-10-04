@@ -15,7 +15,7 @@ This document provides guidance for AI agents working in this repository.
 - **Language version:** Always use the latest C# features (`LangVersion=latest`)
 - **Nullable:** Enable nullable reference types in all new code
 - **XML documentation:** All public APIs must have XML documentation comments
-- **Testing:** Use xUnit v3 with Codebelt.Extensions.Xunit.App base classes
+- **Testing:** Use xUnit v4 (`xunit.v3` 4.x packages) with Codebelt.Extensions.Xunit.App v12 base classes
 
 ## Markdown Prose Formatting
 
@@ -36,7 +36,11 @@ Do not hard-wrap prose to a fixed column width. Keep paragraphs and Markdown lis
 
 - Test project names must end with `Tests` (e.g. `{PROJECT_NAME}.Tests`)
 - Test classes should inherit from the appropriate base class in `Codebelt.Extensions.Xunit`
-- Use `Microsoft.Testing.Platform` as the test runner (`UseMicrosoftTestingPlatformRunner=true`)
+- Use `Microsoft.Testing.Platform` as the test runner (root `global.json` selects `test.runner`; `UseMicrosoftTestingPlatformRunner=true` enables project integration)
+- Use a supported non-preview .NET 10+ SDK even for older target runtimes
+- Test-only shared references supply `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump`; keep versions central and do not duplicate inherited references
+- Run `dotnet test --project <test-project> -c Release --results-directory <results> -- --report-xunit-trx --coverlet --coverlet-output-format opencover`; verify nonzero discovery, TRX and OpenCover output
+- Use managed application fixtures with deferred entrypoint-owned startup, not removed blocking application fixtures
 - All tests are executable (`OutputType=Exe`)
 
 ## Build & CI

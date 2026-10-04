@@ -14,8 +14,10 @@ Thank you for your interest in contributing!
 ```bash
 dotnet restore
 dotnet build
-dotnet test
+dotnet test --project test/{ROOT_NAMESPACE}.{AppType}.FunctionalTests/{ROOT_NAMESPACE}.{AppType}.FunctionalTests.csproj -c Release --results-directory TestResults -- --report-xunit-trx --coverlet --coverlet-output-format opencover
 ```
+
+Use a supported non-preview .NET 10+ SDK with the root `global.json` MTP runner selection. For multiple hosts, run the command once per functional test project. Verify tests were discovered and the TRX/OpenCover files are nonempty.
 
 ## Code Standards
 
