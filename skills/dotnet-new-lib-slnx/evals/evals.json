@@ -38,7 +38,10 @@
       "expectations": [
         "Collects repository_url before package_project_url",
         "Uses COMPANY_OR_PERSON in DocFX metadata instead of a separate COMPANY placeholder",
-        "Copies assets/shared/.bot/README.md into the generated repo"
+        "Copies assets/shared/.bot/README.md into the generated repo",
+        "Generates root AGENTS.md as the only agent-instruction file, preserving test, coverage, benchmark, XML documentation, and bot-workspace guidance without vendor-specific frontmatter",
+        "Preserves all nine complete governance code examples plus namespace/project mappings, the full Public Facade Testing pattern, coverage rationale and alternatives, and benchmark/XML documentation applicability without summarizing them",
+        "Does not emit or recommend a separate vendor-specific instruction file; finalized bot-workspace guidance points only to root AGENTS.md"
       ]
     },
     {

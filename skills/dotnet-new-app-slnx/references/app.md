@@ -6,6 +6,7 @@ Slim guide for runnable applications. All file templates live in `assets/app/`.
 
 ```
 .
+├── AGENTS.md
 ├── src/
 │   └── {ROOT_NAMESPACE}.{AppType}/
 │       ├── {ROOT_NAMESPACE}.{AppType}.csproj
@@ -48,8 +49,10 @@ Do not cherry-pick only the files that feel essential. The shared scaffold contr
 - `.bot/README.md`
 - `.github/CODE_OF_CONDUCT.md`
 - `.github/CONTRIBUTING.md`
-- `.github/copilot-instructions.md`
 - `.github/dependabot.yml`
+- `.github/workflows/ci-pipeline.yml`
+
+Root `AGENTS.md` is the single generated agent-instruction source. It contains coding standards, test conventions, coverage rules, optional benchmarking guidance, XML documentation conventions, and `.bot/` workspace guidance.
 
 Treat missing files from this shared inventory as scaffold defects, not optional omissions.
 

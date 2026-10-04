@@ -2,12 +2,15 @@
 
 Slim guide for scaffolding a NuGet library solution. All file templates live in `assets/library/`.
 
+Copy every shared file listed in `assets/shared.manifest.json` to the generated root. Root `AGENTS.md` is the single generated agent-instruction source for coding standards, test conventions, coverage, benchmarking, XML documentation, and `.bot/` workspace guidance.
+
 ---
 
 ## Folder Structure
 
 ```
 .
+├── AGENTS.md
 ├── .nuget/
 │   └── {PROJECT_NAME}/
 │       ├── PackageReleaseNotes.txt
@@ -31,7 +34,7 @@ Slim guide for scaffolding a NuGet library solution. All file templates live in 
 │       └── (benchmark reports and tuning output)
 ├── Directory.Build.props
 ├── {REPO_SLUG}.slnx
-└── (shared skeleton files — see shared-files.md)
+└── (shared skeleton files — see assets/shared.manifest.json)
 ```
 
 The tree is shown **relative to the current working directory**. Generate these files directly in the folder the user is already in; do not create an extra solution-named wrapper folder unless they explicitly ask for one.

@@ -18,6 +18,8 @@ description: >
 | **Raw base URL** | `https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-new-app-slnx/assets/shared` |
 | **Asset manifest** | `assets/shared.manifest.json` |
 
+Generate root `AGENTS.md` as the single, vendor-neutral agent-instruction source. Preserve its project-specific coding, testing, coverage, benchmarking, XML documentation, and `.bot/` guidance; do not generate a separate vendor-specific instruction file. Preserve the complete governance contract, including examples, rationale, benefits, alternatives, and applicability conditions. Do not summarize it; merge only duplicates that lose no information.
+
 This metadata is the single source of truth for restoring any file the installer may have dropped. Use it immediately — do not spend cycles confirming absence multiple ways first.
 
 Scaffold new .NET standalone application solutions following the codebeltnet engineering conventions — the same pattern used across [codebeltnet](https://github.com/codebeltnet). Produces a fully wired solution with CI pipeline, centralized build config, semantic versioning, code quality tooling, and proper folder structure.
@@ -217,8 +219,7 @@ After generating, verify:
 - [ ] Root governance docs exist: `README.md`, `CHANGELOG.md`, `.github/CODE_OF_CONDUCT.md`, `.github/CONTRIBUTING.md`
 - [ ] Authored Markdown paragraphs and list items have no fixed-width hard wraps
 - [ ] `.editorconfig` is present with file-scoped namespace enforcement
-- [ ] `AGENTS.md` references `.bot/` and coding guidelines
-- [ ] `.github/copilot-instructions.md` has project-specific patterns
+- [ ] Root `AGENTS.md` is the single generated agent-instruction source, covering `.bot/`, coding standards, test conventions, code coverage, benchmarking, and XML documentation
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
 - [ ] `.bot/README.md` exists in the generated repo and came from the shared asset template
 - [ ] `testenvironments.json` uses the major-tag `codebeltnet/ubuntu-testrunner:{major}` convention for the selected target framework
