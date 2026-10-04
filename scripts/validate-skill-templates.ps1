@@ -645,14 +645,14 @@ function Get-AppPlaceholderMap {
         '{TARGET_FRAMEWORK}' = $TargetFramework
         '{AppType}' = $AppType
         '{UBUNTU_TESTRUNNER_TAG}' = $ubuntuTag
-        '{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}' = '11.0.7'
+        '{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}' = '12.0.1'
         '{MICROSOFT_NET_TEST_SDK_VERSION}' = '18.3.0'
         '{MINVER_VERSION}' = '7.0.0'
-        '{COVERLET_COLLECTOR_VERSION}' = '8.0.0'
-        '{COVERLET_MSBUILD_VERSION}' = '8.0.0'
-        '{XUNIT_V3_VERSION}' = '3.2.2'
-        '{XUNIT_V3_RUNNER_CONSOLE_VERSION}' = '3.2.2'
-        '{XUNIT_RUNNER_VISUALSTUDIO_VERSION}' = '3.1.5'
+        '{CODEBELT_COVERLET_MTP_VERSION}' = '10.1.0'
+        '{MICROSOFT_TESTING_EXTENSIONS_HANGDUMP_VERSION}' = '2.4.1'
+        '{XUNIT_V3_VERSION}' = '4.0.1'
+        '{XUNIT_V3_RUNNER_CONSOLE_VERSION}' = '4.0.1'
+        '{XUNIT_RUNNER_VISUALSTUDIO_VERSION}' = '4.0.0'
         '{CODEBELT_BOOTSTRAPPER_CONSOLE_VERSION}' = '5.0.5'
         '{CODEBELT_BOOTSTRAPPER_WEB_VERSION}' = '5.0.5'
         '{CODEBELT_BOOTSTRAPPER_WORKER_VERSION}' = '5.0.5'
@@ -1075,6 +1075,46 @@ Add-ValidationResult -Results $results -Name 'App skill documents web-family App
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle '{AppType} = WebApp'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation'
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Worker.cs'
+}
+
+Add-ValidationResult -Results $results -Name 'Both scaffolds select xUnit 4, Codebelt 12 and native MTP coverage together' -Action {
+    foreach ($variant in @('app', 'lib')) {
+        $skillRoot = "skills/dotnet-new-$variant-slnx"
+        $assetVariant = if ($variant -eq 'app') { 'app' } else { 'library' }
+        $props = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/$assetVariant/Directory.Build.props" -GitRef $Ref
+        $packages = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/Directory.Packages.props" -GitRef $Ref
+        $global = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/global.json" -GitRef $Ref | ConvertFrom-Json
+        $manifest = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared.manifest.json" -GitRef $Ref | ConvertFrom-Json
+        $skill = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/SKILL.md" -GitRef $Ref
+        if ($global.test.runner -ne 'Microsoft.Testing.Platform' -or $manifest.files -notcontains 'global.json') {
+            throw "$skillRoot must ship and inventory the SDK MTP runner opt-in."
+        }
+        $codebeltTestPackage = 'Codebelt.Extensions.Xunit.App'
+        foreach ($id in @('Codebelt.Coverlet.MTP', 'Microsoft.Testing.Extensions.HangDump', $codebeltTestPackage, 'xunit.v3', 'xunit.v3.runner.console')) {
+            Assert-Contains -Name $skillRoot -Content $props -Needle "<PackageReference Include=`"$id`""
+            Assert-Contains -Name $skillRoot -Content $packages -Needle "<PackageVersion Include=`"$id`""
+        }
+        foreach ($id in @('coverlet.collector', 'coverlet.msbuild', 'coverlet.MTP', 'Microsoft.Testing.Extensions.CodeCoverage', 'Microsoft.Testing.Extensions.TrxReport')) {
+            Assert-NotContains -Name $skillRoot -Content $props -Needle "Include=`"$id`""
+            Assert-NotContains -Name $skillRoot -Content $packages -Needle "Include=`"$id`""
+        }
+        Assert-Contains -Name $skillRoot -Content $skill -Needle '12.x'
+        Assert-Contains -Name $skillRoot -Content $skill -Needle '4.x'
+        Assert-Contains -Name $skillRoot -Content $skill -Needle '--report-xunit-trx --coverlet --coverlet-output-format opencover'
+        if ($variant -eq 'lib') {
+            $pipeline = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/.github/workflows/ci-pipeline.yml" -GitRef $Ref
+            Assert-NotContains -Name $skillRoot -Content $pipeline -Needle '--report-trx'
+        }
+        Assert-Contains -Name $skillRoot -Content $props -Needle '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>'
+        Assert-Contains -Name $skillRoot -Content $props -Needle 'MinVer'
+    }
+}
+
+Add-ValidationResult -Results $results -Name 'Generated app and library scaffolds execute Codebelt v12 tests with native MTP artifacts' -Action {
+    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/tests/test-scaffold-mtp.ps1') 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw ($output -join [Environment]::NewLine)
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'App package template uses specific version placeholders' -Action {
