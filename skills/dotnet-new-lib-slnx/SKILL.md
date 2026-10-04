@@ -52,7 +52,7 @@ Read `references/library.md` for the library-specific project structure, templat
 
 ## Step 3: Resolve Dynamic Dependency Versions
 
-Before writing `Directory.Packages.props`, resolve every `*_VERSION` placeholder in that file to the latest stable listed version for its matching package ID on NuGet.org.
+Before writing `Directory.Packages.props`, resolve every `*_VERSION` placeholder in that file to the latest stable listed compatible version for its matching package ID on NuGet.org, respecting the xUnit v4 / Codebelt v12 lines below.
 
 - Use the NuGet V3 service index at `https://api.nuget.org/v3/index.json` to discover the package metadata endpoints
 - Prefer registration metadata so you can ignore unlisted versions and prerelease builds
@@ -65,6 +65,16 @@ This includes the benchmark-related packages:
 - `BenchmarkDotNet`
 - `BenchmarkDotNet.Diagnostics.Windows`
 - `Codebelt.Extensions.BenchmarkDotNet.Console`
+
+### xUnit v4 / Codebelt v12 test stack
+
+Resolve `Codebelt.Extensions.Xunit.App` on the latest stable compatible **12.x** line and `xunit.v3` plus `xunit.v3.runner.console` on the latest stable compatible **4.x** line. xUnit v4 retains the `xunit.v3` package IDs; do not invent an `xunit.v4` ID. Resolve `xunit.runner.visualstudio` independently and check its compatibility. These major lines define the scaffold contract, not fixed patch-version pins. Inspect package assets and nuspec dependency ranges, then restore the combined package set for every selected test TFM; a version-index lookup alone does not prove compatibility. Stop on unresolved metadata or incompatible dependencies rather than reverting to Codebelt v11 or older xUnit.
+
+Copy the shared root `global.json` with `test.runner = Microsoft.Testing.Platform`; `UseMicrosoftTestingPlatformRunner` alone does not select the SDK CLI. Use a generally supported, non-preview .NET SDK **10 or later** even when the library targets older runtimes. Verify `dotnet --version` from the generated root. Keep an existing SDK pin and other `global.json` settings if generating into an existing repo; merge the runner setting and report incompatible SDK pins instead of silently replacing them.
+
+The shared test-only ItemGroup owns the versionless references to live-resolved compatible `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump`; versions belong in `Directory.Packages.props`. Do not add duplicate references to test `.csproj` files. Replace legacy `coverlet.collector`, `coverlet.msbuild` and `coverlet.MTP`; do not install Microsoft's coverage engine alongside Codebelt Coverlet. The coverage assembly and registration hook remain `coverlet.MTP.dll` and `Coverlet.MTP.TestingPlatformBuilderHook`, not the NuGet package ID.
+
+Use the Codebelt v12 `Test` base class with `ITestOutputHelper` from `Xunit`. Preserve the scaffold's `Codebelt.Extensions.Xunit.App` package choice and verify its resolved dependency groups against the selected test runtimes. If a selected runtime is incompatible, report that constraint rather than substituting packages or adding a separate report provider. For host tests use `ManagedApplicationFixture<TEntryPoint>` / `ManagedWebApplicationFixture<TEntryPoint>`; do not generate the removed blocking application fixtures. Generate at least one deterministic public-behavior test per library project. Keep non-executable source TFMs such as `netstandard2.0` out of test/benchmark execution: render the test and benchmark `TargetFrameworks` from selected executable TFMs while preserving the source matrix. If no executable TFM was selected, ask for a consumer test runtime rather than generating an unrunnable test project.
 
 ## Step 4: Apply the Substitution Map
 
@@ -127,7 +137,7 @@ Preserve the template's BOM policy by default. If the source template is UTF-8 w
 
 Exception: generate `testenvironments.json` instead of copying it verbatim. Always include the `WSL-Ubuntu` entry, then add one `Docker-Ubuntu` entry per selected target framework using the Docker image tag `codebeltnet/ubuntu-testrunner:{major}` where `{major}` comes from the TFM.
 
-Exception: do not leave `Directory.Packages.props` with unresolved placeholder tokens. Resolve each package version placeholder to the latest stable listed NuGet.org version for that exact package ID before writing the file.
+Exception: do not leave `Directory.Packages.props` with unresolved placeholder tokens. Resolve each package version placeholder to the latest stable listed compatible NuGet.org release for that exact package ID before writing the file, respecting the test-stack major lines in Step 3.
 
 Before finalizing the Docker entries, validate that each generated tag exists in the Docker Hub tags feed for `codebeltnet/ubuntu-testrunner`. Prefer the machine-readable tags API over manual inspection:
 
@@ -179,7 +189,7 @@ After generating, verify:
 - [ ] Each packable project has a `.nuget/{ProjectName}/` folder with `PackageReleaseNotes.txt`, `icon.png` (placeholder), and `README.md`
 - [ ] `Directory.Packages.props` lists all `<PackageReference>` packages used in the solution
 - [ ] `Directory.Packages.props` contains concrete version numbers with no unresolved `*_VERSION` placeholders
-- [ ] Every `Directory.Packages.props` version was resolved from the latest stable listed NuGet.org package version at generation time
+- [ ] Every `Directory.Packages.props` version was resolved from the latest stable listed compatible NuGet.org release at generation time, respecting Codebelt 12.x / xUnit 4.x test-stack lines
 - [ ] `tuning/{PROJECT_NAME}.Benchmarks/{PROJECT_NAME}.Benchmarks.csproj` references the main source project and relies on central package management
 - [ ] `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/Program.cs` contains one runtime job per selected executable TFM
 - [ ] `tooling/{BENCHMARK_RUNNER_PROJECT_NAME}/{BENCHMARK_RUNNER_PROJECT_NAME}.csproj` references the default tuning benchmark project and relies on central package management
@@ -197,6 +207,11 @@ After generating, verify:
 - [ ] If any manifest entry was absent from the installed skill copy, `pwsh -NoProfile -File "<skill-root>/scripts/restore-missing-shared-assets.ps1"` was run (or files were fetched manually from the upstream raw URL) — not diagnosed iteratively
 - [ ] No manifest entries were silently skipped; if the restore script reported failures, generation was halted rather than continuing with incomplete shared assets
 - [ ] `.github/dependabot.yml` watches the repo root so central NuGet package management stays current after scaffolding
+- [ ] Root `global.json` selects `Microsoft.Testing.Platform` and the selected SDK is generally supported, non-preview .NET 10 or later
+- [ ] Combined test-package restore succeeds for every executable test TFM; source-only TFMs remain supported by source builds, not executable test projects
+- [ ] Each library test project discovers and passes at least one public-behavior test using Codebelt v12 / xUnit v4
+- [ ] Run `dotnet build -c Release` (with `-p:SkipSignAssembly=true` only when the signing key is unavailable), then one `dotnet test --project <test-project> --framework <tfm> -c Release --results-directory <results> -- --report-xunit-trx --coverlet --coverlet-output-format opencover` per project/TFM; verify nonempty TRX and OpenCover artifacts, coverage of the library's executed code, and `--hangdump` options in runner help
+- [ ] Existing CI reusable-workflow/action refs support native MTP, OpenCover output and matching upload globs; preserve platform-specific test/coverage behavior, verify Windows-only targets on Windows, and do not duplicate reporting/coverage/hang-dump arguments supplied by the shared action
 
 Summarize what was generated and note any manual steps (e.g. registering with SonarCloud, populating `.docfx/images/` with logo/favicon).
 

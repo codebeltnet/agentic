@@ -42,6 +42,7 @@ Do not cherry-pick only the files that feel essential. The shared scaffold contr
 - `CHANGELOG.md`
 - `Directory.Build.targets`
 - `Directory.Packages.props`
+- `global.json` (native MTP runner opt-in)
 - `README.md`
 - `testenvironments.json`
 - `.bot/README.md`
@@ -160,6 +161,12 @@ For framework-aligned ASP.NET packages, keep the selected target framework major
 - `Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation` should use the latest stable version whose major matches `{TARGET_FRAMEWORK}`
 - Example: a `net9.0` app should resolve these packages to the latest stable `9.x` version, not `10.x`
 - If the lookup step fails, stop and report the failure instead of guessing with stale package versions from prior runs
+
+## Native MTP Testing
+
+Use the test-stack contract in `SKILL.md`: Codebelt xUnit 12.x, `xunit.v3` framework/console runner 4.x, live-resolved compatible `Codebelt.Coverlet.MTP` and HangDump, and root `global.json` selecting `Microsoft.Testing.Platform`. Use a supported non-preview .NET 10+ SDK independently of the app TFM. Keep coverage/diagnostic references in the shared test-only ItemGroup, not every test project.
+
+Generate a host-behavior functional test using managed v12 fixtures for each host. Build Release and run `dotnet test --project <test-project> --framework <tfm> -c Release --results-directory <results> -- --report-xunit-trx --coverlet --coverlet-output-format opencover`. Verify nonzero tests, nonempty TRX/OpenCover output and hang-dump options in runner help. Preserve the shared CI caller: inspect the actual `jobs-dotnet-test` ref and action it resolves to for MTP support, coverage formats and upload paths; do not duplicate extension arguments already supplied by that action.
 
 ## Test Environments
 

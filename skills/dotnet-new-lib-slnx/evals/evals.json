@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Scaffold a new .NET library solution named MyLibrary with root namespace Acme and the default target frameworks.",
-      "expected_output": "A single-project library scaffold with PROJECT_NAME-based paths, NuGet package metadata, DocFX files, and resolved package versions.",
+      "expected_output": "A single-project library scaffold with PROJECT_NAME-based paths, NuGet package metadata, DocFX files, compatible Codebelt xUnit 12.x / xUnit 4.x packages, native MTP SDK selection, and Codebelt Coverlet coverage.",
       "expectations": [
         "Uses {PROJECT_NAME} as the default packable project name",
         "Offers all active non-preview LTS and STS target framework quick picks before free text",
@@ -12,7 +12,13 @@
         "Creates DocFX config using {DOCFX_TARGET_FRAMEWORK} rather than a hardcoded net10.0",
         "Locks DocFX metadata source to ../src (relative to .docfx/) so ONLY code in the src folder is digested for API documentation, excluding tools/, scripts/, and other root folders",
         "Keeps api/namespaces/**/*.md and api/types/**/*.md under build.overwrite and excludes api/namespaces/** and api/types/** from build.content so API overwrites are not emitted as standalone conceptual pages",
-        "Uses the current working directory as the scaffold root instead of creating a nested MyLibrary folder"
+        "Uses the current working directory as the scaffold root instead of creating a nested MyLibrary folder",
+        "Preserves Codebelt.Extensions.Xunit.App on the 12.x line with xunit.v3 and xunit.v3.runner.console 4.x, retaining the existing package IDs",
+        "Generates root global.json selecting Microsoft.Testing.Platform and verifies a supported non-preview .NET 10+ SDK independently of library target runtimes",
+        "Uses centrally versioned Codebelt.Coverlet.MTP and Microsoft.Testing.Extensions.HangDump through the shared test-only ItemGroup without duplicate project references or legacy coverage engines",
+        "Generates and executes a deterministic public-behavior test with the Codebelt Test base class instead of accepting zero discovery",
+        "Verifies nonempty TRX and OpenCover artifacts using native MTP arguments for each executable test TFM, keeping source-only frameworks out of executable tests",
+        "Uses xUnit's built-in --report-xunit-trx reporting without adding a separate report package or altering existing CI callers to request an alternate reporter"
       ]
     },
     {
