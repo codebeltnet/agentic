@@ -116,9 +116,24 @@ try {
         $map['{REPOSITORY_URL}'] = 'https://example.invalid/scaffold'
         $map['{SNK_FILE}'] = 'fixture.snk'
 
-        foreach ($file in @('Directory.Packages.props', 'Directory.Build.targets', 'global.json')) {
+        $manifest = [System.IO.File]::ReadAllText((Join-Path $repoRoot "$skillRoot/assets/shared.manifest.json")) | ConvertFrom-Json
+        foreach ($file in $manifest.files) {
             Render-Template -Source "$skillRoot/assets/shared/$file" -Destination (Join-Path $caseRoot $file) -Map $map
         }
+        $agentsPath = Join-Path $caseRoot 'AGENTS.md'
+        if (-not (Test-Path -LiteralPath $agentsPath -PathType Leaf)) { throw "$caseName is missing root AGENTS.md." }
+        if (Get-ChildItem -LiteralPath $caseRoot -Recurse -File -Force -Filter 'copilot-instructions.md') {
+            throw "$caseName emitted a Copilot-specific instruction file."
+        }
+        $agents = [System.IO.File]::ReadAllText($agentsPath)
+        foreach ($rule in @('InternalsVisibleTo', 'ExcludeFromCodeCoverage', 'Xunit.Abstractions', 'BenchmarkDotNet', 'RootNamespace', '<summary>')) {
+            if (-not $agents.Contains($rule)) { throw "$caseName root AGENTS.md lost the $rule guidance." }
+        }
+        $bot = [System.IO.File]::ReadAllText((Join-Path $caseRoot '.bot/README.md'))
+        if (-not $bot.Contains('into root `AGENTS.md`.') -or $bot -match '(?i)Copilot') {
+            throw "$caseName .bot guidance must point only to root AGENTS.md."
+        }
+        Write-Host "[PASS] $caseName emits the complete shared inventory with vendor-neutral root AGENTS.md."
         # Select a stable installed SDK only in this isolated regression workspace.
         $globalPath = Join-Path $caseRoot 'global.json'
         $global = [System.IO.File]::ReadAllText($globalPath) | ConvertFrom-Json
