@@ -2,12 +2,15 @@
 
 Slim guide for scaffolding a NuGet library solution. All file templates live in `assets/library/`.
 
+Copy every shared file listed in `assets/shared.manifest.json` to the generated root. Root `AGENTS.md` is the single generated agent-instruction source for coding standards, test conventions, coverage, benchmarking, XML documentation, and `.bot/` workspace guidance.
+
 ---
 
 ## Folder Structure
 
 ```
 .
+├── AGENTS.md
 ├── .nuget/
 │   └── {PROJECT_NAME}/
 │       ├── PackageReleaseNotes.txt
@@ -31,7 +34,7 @@ Slim guide for scaffolding a NuGet library solution. All file templates live in 
 │       └── (benchmark reports and tuning output)
 ├── Directory.Build.props
 ├── {REPO_SLUG}.slnx
-└── (shared skeleton files — see shared-files.md)
+└── (shared skeleton files — see assets/shared.manifest.json)
 ```
 
 The tree is shown **relative to the current working directory**. Generate these files directly in the folder the user is already in; do not create an extra solution-named wrapper folder unless they explicitly ask for one.
@@ -131,7 +134,7 @@ Always resolve `{LATEST_Nx}` from NuGet.org — never hardcode versions.
 
 Hard rule:
 
-1. Resolve every `*_VERSION` placeholder to the latest stable listed version for that exact package ID on NuGet.org at generation time
+1. Resolve every `*_VERSION` placeholder to the latest stable listed compatible release for that exact package ID on NuGet.org at generation time; keep Codebelt xUnit on 12.x and the `xunit.v3` framework/console runner on 4.x as required by `SKILL.md`
 2. Exclude prerelease versions even if they are newer
 3. Exclude unlisted versions when the metadata source exposes listing status
 4. Resolve each package independently; never reuse one generic "latest" token across multiple packages
@@ -155,6 +158,16 @@ Practical guidance:
 - Leave Dependabot enabled after scaffolding so the repo keeps tracking newer stable packages over time
 
 The generated `.github/dependabot.yml` should watch the repo root (`directory: "/"`) because both `Directory.Packages.props` and `Directory.Build.props` live there.
+
+---
+
+## Native MTP Testing
+
+Follow `SKILL.md` for the coupled Codebelt xUnit 12.x / xUnit 4.x package contract. The package IDs remain `xunit.v3` and `xunit.v3.runner.console`. Copy root `global.json` selecting `Microsoft.Testing.Platform`, use a supported non-preview .NET 10+ SDK independently of library TFMs, and retain the test-only shared references to `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump` without duplicate project references or legacy coverage integrations.
+
+In root `Directory.Build.props`, render `{TARGET_FRAMEWORKS}` as the complete source matrix and `{EXECUTABLE_TARGET_FRAMEWORKS}` as the selected executable TFMs in selection order for tests and benchmarks. Exclude source-only TFMs such as `netstandard*` from the executable list; if it is empty, ask for a consumer test runtime. Validate package compatibility for each executable TFM before accepting the scaffold.
+
+Generate at least one public-behavior test per library and use only executable TFMs for tests and benchmarks. Build Release, then run `dotnet test --project <test-project> --framework <tfm> -c Release --results-directory <results> -- --report-xunit-trx --coverlet --coverlet-output-format opencover`; verify nonzero discovery, nonempty TRX/OpenCover output and runner help's hang-dump options. Inspect the actual shared CI workflow/action refs and report consumers before finalizing; preserve platform distinctions and avoid duplicating reporting/coverage/hang-dump arguments already provided by the shared action. Preserve the existing Codebelt app meta-package and report incompatible test-runtime choices rather than introducing compatibility workarounds.
 
 ---
 

@@ -18,6 +18,8 @@ description: >
 | **Raw base URL** | `https://raw.githubusercontent.com/codebeltnet/agentic/main/skills/dotnet-new-app-slnx/assets/shared` |
 | **Asset manifest** | `assets/shared.manifest.json` |
 
+Generate root `AGENTS.md` as the single, vendor-neutral agent-instruction source. Preserve its project-specific coding, testing, coverage, benchmarking, XML documentation, and `.bot/` guidance; do not generate a separate vendor-specific instruction file. Preserve the complete governance contract, including examples, rationale, benefits, alternatives, and applicability conditions. Do not summarize it; merge only duplicates that lose no information.
+
 This metadata is the single source of truth for restoring any file the installer may have dropped. Use it immediately — do not spend cycles confirming absence multiple ways first.
 
 Scaffold new .NET standalone application solutions following the codebeltnet engineering conventions — the same pattern used across [codebeltnet](https://github.com/codebeltnet). Produces a fully wired solution with CI pipeline, centralized build config, semantic versioning, code quality tooling, and proper folder structure.
@@ -42,6 +44,7 @@ The scaffold is incomplete unless it produces all required artifacts for the sel
 - `Directory.Build.props`
 - `Directory.Packages.props`
 - `testenvironments.json`
+- root `global.json` selecting `Microsoft.Testing.Platform`
 - the shared governance/docs assets copied from `assets/shared/`
 
 If you cannot generate any required artifact from the documented templates and rules, halt and report the mismatch instead of improvising, omitting the file, or substituting a weaker fallback.
@@ -89,9 +92,9 @@ Read `references/app.md` for the app-specific project structure, template file m
 
 ## Step 3: Resolve Dynamic Dependency Versions
 
-Before writing `Directory.Packages.props`, resolve every `*_VERSION` placeholder in that file to the latest stable listed version for its matching package ID on NuGet.org.
+Before writing `Directory.Packages.props`, resolve every `*_VERSION` placeholder in that file to the latest stable listed compatible version for its matching package ID on NuGet.org, respecting the xUnit v4 / Codebelt v12 lines below.
 
-When `pwsh` 7+ is available, prefer the deterministic helper in `<skill-root>/scripts/resolve-package-versions.ps1` over manual lookup. Run it as `pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework <TargetFramework>`. By default it resolves placeholders from this skill's own `assets/shared/Directory.Packages.props`, so a normal scaffold run only needs `-TargetFramework`. Treat its JSON output as the source of truth for package placeholders.
+When `pwsh` 7+ is available, prefer the deterministic helper in `<skill-root>/scripts/resolve-package-versions.ps1` over manual lookup. Run it as `pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework <TargetFramework>`. By default it resolves placeholders from this skill's own `assets/shared/Directory.Packages.props`, so a normal scaffold run only needs `-TargetFramework`. Its JSON supplies candidate versions for package placeholders, with `compatibility_status = provisional` and the requested `target_framework` on every entry. The helper filters version lines but does not inspect dependency ranges or framework assets. Inspect those metadata and restore and build the combined scaffold for the selected framework before accepting the candidates as compatible; halt and report any incompatibility.
 
 - Use the NuGet V3 service index at `https://api.nuget.org/v3/index.json` to discover the package metadata endpoints
 - Prefer registration metadata so you can ignore unlisted versions and prerelease builds
@@ -107,8 +110,8 @@ This includes shared and host-specific app packages such as:
 - `Codebelt.Extensions.Xunit.App`
 - `Microsoft.NET.Test.Sdk`
 - `MinVer`
-- `coverlet.collector`
-- `coverlet.msbuild`
+- `Codebelt.Coverlet.MTP`
+- `Microsoft.Testing.Extensions.HangDump`
 - `xunit.v3`
 - `xunit.v3.runner.console`
 - `xunit.runner.visualstudio`
@@ -118,6 +121,16 @@ This includes shared and host-specific app packages such as:
 - `Microsoft.AspNetCore.OpenApi`
 - `Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation`
 - `Microsoft.Extensions.Hosting`
+
+### xUnit v4 / Codebelt v12 test stack
+
+Resolve `Codebelt.Extensions.Xunit.App` on the latest stable compatible **12.x** line and `xunit.v3` plus `xunit.v3.runner.console` on the latest stable compatible **4.x** line. xUnit v4 retains the `xunit.v3` package IDs; do not invent an `xunit.v4` ID. Resolve `xunit.runner.visualstudio` independently and check its compatibility. These major lines define the scaffold contract, not fixed patch-version pins. Inspect package assets and nuspec dependency ranges, then restore the combined package set for every selected test TFM; a version-index lookup alone does not prove compatibility. Stop on unresolved metadata or incompatible dependencies rather than reverting to Codebelt v11 or older xUnit. The verified `Codebelt.Extensions.Xunit.App` 12.0.1 meta-package has only net9.0/net10.0 dependency groups; a net8.0 application request requires an explicitly selected compatible consumer test runtime or a verified alternative host-package layout, not a silent downgrade or a claim that the app meta-package supports net8.0.
+
+Copy the shared root `global.json` with `test.runner = Microsoft.Testing.Platform`; `UseMicrosoftTestingPlatformRunner` alone does not select the SDK CLI. Use a generally supported, non-preview .NET SDK **10 or later** even when the application targets `net8.0` or `net9.0`. Verify the selected SDK with `dotnet --version` from the generated root. Keep an existing SDK pin and other `global.json` settings if generating into an existing repo; merge the runner setting and report incompatible SDK pins instead of silently replacing them.
+
+The shared test-only ItemGroup owns the versionless references to `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump`; versions belong in `Directory.Packages.props`. Do not add duplicate references to test `.csproj` files. Replace legacy `coverlet.collector`, `coverlet.msbuild` and `coverlet.MTP`; do not install Microsoft's coverage engine alongside Codebelt Coverlet. The coverage assembly and registration hook remain `coverlet.MTP.dll` and `Coverlet.MTP.TestingPlatformBuilderHook`, not the NuGet package ID.
+
+Use Codebelt v12 `ManagedApplicationFixture<TEntryPoint>` / `ManagedWebApplicationFixture<TEntryPoint>` with entrypoint-owned deferred startup. Do not generate the removed `BlockingManagedApplicationFixture<TEntryPoint>` or `BlockingManagedWebApplicationFixture<TEntryPoint>` types. Generate a deterministic host startup/response or service-resolution functional test for each selected host, rather than leaving a zero-test project.
 
 ## Step 4: Apply the Substitution Map
 
@@ -165,7 +178,7 @@ Exception: update `testenvironments.json` with the derived `{UBUNTU_TESTRUNNER_T
 
 `testenvironments.json` is a required shared scaffold asset. Do **not** silently omit it. If you cannot generate it from the shared template plus `{UBUNTU_TESTRUNNER_TAG}`, halt and report the mismatch instead of skipping the file.
 
-Exception: if the user selected multiple host types, rewrite the root `README.md` running section to list one `dotnet run --project ...` command per generated host project instead of leaving a single `{AppType}` placeholder example.
+Exception: if the user selected multiple host types, rewrite the root `README.md` running section and `.github/CONTRIBUTING.md` test command examples to list one concrete command per generated host/test project instead of leaving a single `{AppType}` placeholder example.
 
 ### 2. Copy app `Directory.Build.props`
 Copy `assets/app/Directory.Build.props` to the project root, applying placeholder substitution.
@@ -206,8 +219,7 @@ After generating, verify:
 - [ ] Root governance docs exist: `README.md`, `CHANGELOG.md`, `.github/CODE_OF_CONDUCT.md`, `.github/CONTRIBUTING.md`
 - [ ] Authored Markdown paragraphs and list items have no fixed-width hard wraps
 - [ ] `.editorconfig` is present with file-scoped namespace enforcement
-- [ ] `AGENTS.md` references `.bot/` and coding guidelines
-- [ ] `.github/copilot-instructions.md` has project-specific patterns
+- [ ] Root `AGENTS.md` is the single generated agent-instruction source, covering `.bot/`, coding standards, test conventions, code coverage, benchmarking, and XML documentation
 - [ ] `.bot/` folder exists and is listed in `.gitignore`
 - [ ] `.bot/README.md` exists in the generated repo and came from the shared asset template
 - [ ] `testenvironments.json` uses the major-tag `codebeltnet/ubuntu-testrunner:{major}` convention for the selected target framework
@@ -217,6 +229,11 @@ After generating, verify:
 - [ ] `Empty Web` uses the `Web` suffix, `Web API` uses `Api`, `MVC` uses `Mvc`, and `Web App / Razor` uses `WebApp`
 - [ ] MVC and Razor variants include their starter UI assets
 - [ ] Worker projects include `Worker.cs`
+- [ ] `global.json` selects `Microsoft.Testing.Platform` and the selected SDK is generally supported, non-preview .NET 10 or later
+- [ ] Codebelt test packages resolve to 12.x and the `xunit.v3` framework/console runner resolve to 4.x, with combined restore validated for every selected test TFM
+- [ ] Each functional test project discovers and passes at least one actual host-behavior test
+- [ ] Run `dotnet build -c Release`, then one `dotnet test --project <test-project> --framework <tfm> -c Release --results-directory <results> -- --report-xunit-trx --coverlet --coverlet-output-format opencover` per project/TFM; verify nonempty TRX and OpenCover artifacts, coverage of the application's executed code, and `--hangdump` options in runner help
+- [ ] Existing CI reusable-workflow/action refs support native MTP, OpenCover output and matching upload globs; preserve the caller pipeline rather than copying another repository's jobs or duplicating extension arguments supplied by the shared action
 
 If the scaffold is generated outside a git-initialized and tagged repository, expect MinVer to report a placeholder pre-release version such as `0.0.0-alpha.0` until the user initializes git and adds a version tag. Treat that as expected bootstrap state, not as a reason to remove MinVer or change the generated versioning setup.
 

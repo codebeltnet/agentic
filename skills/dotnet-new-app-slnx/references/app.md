@@ -6,6 +6,7 @@ Slim guide for runnable applications. All file templates live in `assets/app/`.
 
 ```
 .
+├── AGENTS.md
 ├── src/
 │   └── {ROOT_NAMESPACE}.{AppType}/
 │       ├── {ROOT_NAMESPACE}.{AppType}.csproj
@@ -42,13 +43,16 @@ Do not cherry-pick only the files that feel essential. The shared scaffold contr
 - `CHANGELOG.md`
 - `Directory.Build.targets`
 - `Directory.Packages.props`
+- `global.json` (native MTP runner opt-in)
 - `README.md`
 - `testenvironments.json`
 - `.bot/README.md`
 - `.github/CODE_OF_CONDUCT.md`
 - `.github/CONTRIBUTING.md`
-- `.github/copilot-instructions.md`
 - `.github/dependabot.yml`
+- `.github/workflows/ci-pipeline.yml`
+
+Root `AGENTS.md` is the single generated agent-instruction source. It contains coding standards, test conventions, coverage rules, optional benchmarking guidance, XML documentation conventions, and `.bot/` workspace guidance.
 
 Treat missing files from this shared inventory as scaffold defects, not optional omissions.
 
@@ -152,7 +156,7 @@ Resolve each package-specific `*_VERSION` placeholder in `Directory.Packages.pro
 
 Keep target-framework selection centralized too: the generated root `Directory.Build.props` owns `<TargetFramework>{TARGET_FRAMEWORK}</TargetFramework>` for source and test projects. Do **not** duplicate `<TargetFramework>` inside the generated app or test `.csproj` files as a workaround.
 
-When `pwsh` 7+ is available, prefer `pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework {TARGET_FRAMEWORK}` to produce the package placeholder map for this skill. The script defaults to this skill's own `assets/shared/Directory.Packages.props`, so the normal path only needs `{TARGET_FRAMEWORK}`. Its output should drive the final substitutions instead of remembered version numbers.
+When `pwsh` 7+ is available, prefer `pwsh -NoProfile -File "<skill-root>/scripts/resolve-package-versions.ps1" -TargetFramework {TARGET_FRAMEWORK}` to produce the package placeholder map for this skill. The script defaults to this skill's own `assets/shared/Directory.Packages.props`, so the normal path only needs `{TARGET_FRAMEWORK}`. Its output supplies candidate substitutions instead of remembered version numbers. Every entry is marked `compatibility_status = provisional`: version-line selection does not verify dependency ranges or target-framework support. Inspect package metadata, then restore and build the combined scaffold for the selected framework before accepting the versions as compatible; stop and report incompatibilities.
 
 For framework-aligned ASP.NET packages, keep the selected target framework major in mind when resolving the final version:
 
@@ -160,6 +164,12 @@ For framework-aligned ASP.NET packages, keep the selected target framework major
 - `Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation` should use the latest stable version whose major matches `{TARGET_FRAMEWORK}`
 - Example: a `net9.0` app should resolve these packages to the latest stable `9.x` version, not `10.x`
 - If the lookup step fails, stop and report the failure instead of guessing with stale package versions from prior runs
+
+## Native MTP Testing
+
+Use the test-stack contract in `SKILL.md`: Codebelt xUnit 12.x, `xunit.v3` framework/console runner 4.x, live-resolved compatible `Codebelt.Coverlet.MTP` and HangDump, and root `global.json` selecting `Microsoft.Testing.Platform`. Use a supported non-preview .NET 10+ SDK independently of the app TFM. Keep coverage/diagnostic references in the shared test-only ItemGroup, not every test project.
+
+Generate a host-behavior functional test using managed v12 fixtures for each host. Build Release and run `dotnet test --project <test-project> --framework <tfm> -c Release --results-directory <results> -- --report-xunit-trx --coverlet --coverlet-output-format opencover`. Verify nonzero tests, nonempty TRX/OpenCover output and hang-dump options in runner help. Preserve the shared CI caller: inspect the actual `jobs-dotnet-test` ref and action it resolves to for MTP support, coverage formats and upload paths; do not duplicate extension arguments already supplied by that action.
 
 ## Test Environments
 

@@ -76,3 +76,29 @@ Write-Output 'CI suite coverage: PASS'
     }
     Write-Output 'Grouping reference layouts: PASS (6 cases)'
 }
+
+# A revision check must never register a regression that reads working-tree scaffolds.
+& {
+    $tokens = $null
+    $parseErrors = $null
+    $validatorAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'scripts/validate-skill-templates.ps1'), [ref]$tokens, [ref]$parseErrors)
+    $command = $validatorAst.Find({ param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Add-ValidationResult' -and $node.Extent.Text.Contains("-Name 'Generated app and library scaffolds execute Codebelt v12 tests with native MTP artifacts'") }, $true)
+    if ($null -eq $command) { throw 'Missing scaffold MTP validation entry.' }
+    $guard = $command.Parent
+    while ($null -ne $guard -and $guard -isnot [Management.Automation.Language.IfStatementAst]) { $guard = $guard.Parent }
+    if ($null -eq $guard) { throw 'Working-tree scaffold execution must be guarded in ref mode.' }
+    $registered = [Collections.Generic.List[string]]::new()
+    function Add-ValidationResult {
+        param($Results, $Name, $Action)
+        $registered.Add($Name)
+    }
+    $results = @()
+    $Suite = 'Templates'
+    foreach ($Ref in @('', ' ', 'HEAD', 'fixture-ref')) {
+        $registered.Clear()
+        & ([scriptblock]::Create($guard.Extent.Text))
+        $expected = if ([string]::IsNullOrWhiteSpace($Ref)) { 1 } else { 0 }
+        if ($registered.Count -ne $expected) { throw "Scaffold MTP ref guard failed for '$Ref'." }
+    }
+    Write-Output 'Scaffold MTP ref scope: PASS (4 cases)'
+}

@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Scaffold a new .NET Worker application solution named DemoApp with root namespace Acme, target framework net10.0, and the Minimal hosting pattern.",
-      "expected_output": "A worker-based scaffold with package versions resolved from NuGet, a generated Worker.cs file, and target-framework-aware test environment settings.",
+      "expected_output": "A worker-based scaffold with compatible Codebelt xUnit 12.x and xUnit 4.x packages resolved from NuGet, native MTP SDK selection, Codebelt Coverlet coverage, a generated Worker.cs file, and target-framework-aware test environment settings.",
       "expectations": [
         "Recognizes the explicit Worker request and does not redundantly ask the user to restate app_host_types",
         "Collects target_framework in addition to solution name, namespace, host type, and hosting pattern",
@@ -16,9 +16,18 @@
         "Keeps package versions centralized in Directory.Packages.props instead of inlining Version attributes into generated project files",
         "Keeps target-framework selection centralized in the generated root Directory.Build.props instead of adding TargetFramework directly to generated project files",
         "Generates testenvironments.json instead of silently omitting the shared test environment asset",
+        "Generates root AGENTS.md as the only agent-instruction file, preserving test, coverage, benchmark, XML documentation, and bot-workspace guidance without vendor-specific frontmatter",
+        "Preserves all nine complete governance code examples plus namespace/project mappings, the full Public Facade Testing pattern, coverage rationale and alternatives, and benchmark/XML documentation applicability without summarizing them",
+        "Does not emit or recommend a separate vendor-specific instruction file; finalized bot-workspace guidance points only to root AGENTS.md",
         "Names the generated solution file DemoApp.slnx instead of lowercasing it to demoapp.slnx",
         "Still generates the solution file and functional test project even for a single-host Worker scaffold",
-        "Resolves worker package versions from NuGet instead of reusing stale remembered version numbers from prior runs"
+        "Resolves worker package versions from NuGet instead of reusing stale remembered version numbers from prior runs",
+        "Treats resolver entries marked compatibility_status = provisional as candidates and inspects dependency ranges and framework assets plus combined restore/build before claiming compatibility",
+        "Uses Codebelt.Extensions.Xunit.App 12.x with xunit.v3 and xunit.v3.runner.console 4.x, retaining the existing package IDs",
+        "Generates root global.json selecting Microsoft.Testing.Platform and verifies a supported non-preview .NET 10+ SDK independently of the target runtime",
+        "Uses centrally versioned Codebelt.Coverlet.MTP and Microsoft.Testing.Extensions.HangDump through the shared test-only ItemGroup without duplicate project references or legacy Coverlet packages",
+        "Generates and runs an actual worker host-behavior test using ManagedApplicationFixture rather than a removed blocking fixture or a zero-test project",
+        "Verifies nonzero discovery plus nonempty TRX and OpenCover output with native MTP arguments rather than VSTest logger/collector switches"
       ]
     },
     {

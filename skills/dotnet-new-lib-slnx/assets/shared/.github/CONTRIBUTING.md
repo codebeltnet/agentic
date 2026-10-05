@@ -16,8 +16,10 @@ git clone {REPOSITORY_URL}
 cd {REPO_SLUG}
 dotnet restore
 dotnet build
-dotnet test
+dotnet test --project test/{PROJECT_NAME}.Tests/{PROJECT_NAME}.Tests.csproj -c Release --results-directory TestResults -- --report-xunit-trx --coverlet --coverlet-output-format opencover
 ```
+
+Use a supported non-preview .NET 10+ SDK with the root `global.json` MTP runner selection. Run each test project and executable TFM separately when validating a multi-target solution; verify nonzero discovery and nonempty TRX/OpenCover files.
 
 ## Code Standards
 
