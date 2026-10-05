@@ -29,6 +29,16 @@ function Invoke-DotNet {
     return ($output -join [Environment]::NewLine)
 }
 
+function Assert-DotNetFailure {
+    param([string[]]$Arguments, [string]$ExpectedError)
+    $output = @(& dotnet @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    $diagnostics = $output -join [Environment]::NewLine
+    if ($exitCode -eq 0 -or $diagnostics -notmatch $ExpectedError) {
+        throw "dotnet $($Arguments -join ' ') must fail with '$ExpectedError' (exit $exitCode):`n$diagnostics"
+    }
+}
+
 try {
     [void][System.IO.Directory]::CreateDirectory($workspace)
     # Test version-line selection with a newer future major, prereleases, and mismatched ASP.NET majors.
@@ -41,7 +51,7 @@ try {
             $versions = switch -Regex ($Uri) {
                 '/codebelt.extensions.xunit.app/' { @('11.2.1', '12.0.0', '12.0.1', '12.1.0-preview.1', '13.0.0'); break }
                 '/xunit.v3(?:.runner.console)?/' { @('3.2.2', '4.0.0', '4.0.1', '4.1.0-preview.1', '5.0.0'); break }
-                '/microsoft.aspnetcore.' { @('9.0.14', '10.0.12', '11.0.0'); break }
+                '/microsoft.aspnetcore.' { @('8.0.31', '9.0.14', '10.0.12', '11.0.0'); break }
                 default { @('1.0.0', '1.0.1', '2.0.0-preview.1') }
             }
             return @{ versions = $versions }
@@ -54,6 +64,16 @@ try {
             @('{MICROSOFT_ASPNETCORE_OPENAPI_VERSION}', '10.0.12')
         )) {
             if ($resolved.($pair[0]).version -ne $pair[1]) { throw "Resolver selected the wrong API line for $($pair[0])." }
+        }
+        foreach ($entry in $resolved.PSObject.Properties.Value) {
+            if ($entry.compatibility_status -ne 'provisional' -or $entry.target_framework -ne 'net10.0') {
+                throw 'Version-index lookup must not claim verified compatibility.'
+            }
+        }
+        $olderRuntime = & (Join-Path $repoRoot 'skills/dotnet-new-app-slnx/scripts/resolve-package-versions.ps1') -TargetFramework net8.0 | ConvertFrom-Json
+        if ($olderRuntime.'{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}'.compatibility_status -ne 'provisional' -or
+            $olderRuntime.'{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}'.target_framework -ne 'net8.0') {
+            throw 'The resolver must preserve provisional status for an unsupported test runtime.'
         }
         Write-Host '[PASS] Resolver preserves authorized test-stack majors and excludes prereleases.'
     }
@@ -85,13 +105,17 @@ try {
         '{BENCHMARKDOTNET_DIAGNOSTICS_WINDOWS_VERSION}' = '0.15.8'
         '{CODEBELT_EXTENSIONS_BENCHMARKDOTNET_CONSOLE_VERSION}' = '1.3.4'
     }
-    # Exercise the app meta-package's net9/net10 runtime groups; do not add older-runtime workarounds.
+    # net8 is an incompatibility regression for the fixed v12 stack, not an older-stack workaround.
+    # Only libraries support multiple source TFMs, including source-only netstandard.
     $cases = @(
         @{ Variant = 'app'; HostType = 'web'; AppType = 'Web'; Tfm = 'net10.0' },
         @{ Variant = 'app'; HostType = 'console'; AppType = 'Console'; Tfm = 'net9.0' },
         @{ Variant = 'app'; HostType = 'worker'; AppType = 'Worker'; Tfm = 'net10.0' },
+        @{ Variant = 'app'; HostType = 'console'; AppType = 'Console'; Tfm = 'net8.0' },
         @{ Variant = 'lib'; Tfm = 'net10.0' },
-        @{ Variant = 'lib'; Tfm = 'net9.0' }
+        @{ Variant = 'lib'; Tfm = 'net9.0' },
+        @{ Variant = 'lib'; Tfm = 'net8.0' },
+        @{ Variant = 'lib'; Tfm = 'netstandard2.0;net9.0;net10.0' }
     )
     foreach ($case in $cases) {
         $variant = $case.Variant
@@ -99,7 +123,8 @@ try {
         $skillRoot = "skills/dotnet-new-$variant-slnx"
         $projectName = if ($variant -eq 'app') { "Acme.$($case.AppType)" } else { 'Acme.Library' }
         $testSuffix = if ($variant -eq 'app') { 'FunctionalTests' } else { 'Tests' }
-        $caseName = "$projectName-$($case.Tfm)"
+        $runtimeTfms = @($case.Tfm.Split(';') | Where-Object { $_ -notlike 'netstandard*' })
+        $caseName = "$projectName-$($case.Tfm.Replace(';', '-'))"
         $caseRoot = Join-Path $workspace $caseName
         $map = $versions.Clone()
         $map['{ROOT_NAMESPACE}'] = if ($variant -eq 'app') { 'Acme' } else { 'Acme.Library' }
@@ -108,6 +133,13 @@ try {
         $map['{AppType}'] = if ($variant -eq 'app') { $case.AppType } else { '' }
         $map['{TARGET_FRAMEWORK}'] = $case.Tfm
         $map['{TARGET_FRAMEWORKS}'] = $case.Tfm
+        $map['{EXECUTABLE_TARGET_FRAMEWORKS}'] = $runtimeTfms -join ';'
+        $map['{BENCHMARK_RUNNER_TARGET_FRAMEWORK}'] = $runtimeTfms[-1]
+        $map['{BENCHMARK_RUNNER_NAMESPACE}'] = 'benchmark_runner'
+        $benchmarkRuntimes = @{ 'net8.0' = 'Core80'; 'net9.0' = 'Core90'; 'net10.0' = 'Core10_0' }
+        $map['{BENCHMARK_RUNTIME_JOBS}'] = ($runtimeTfms | ForEach-Object {
+            "                    .AddJob(slimJob.WithRuntime(CoreRuntime.$($benchmarkRuntimes[$_])))"
+        }) -join [Environment]::NewLine
         $map['{AUTHOR}'] = 'Scaffold Regression'
         $map['{AUTHOR_EMAIL}'] = 'fixture@example.invalid'
         $map['{COMPANY_OR_PERSON}'] = 'Scaffold Regression'
@@ -128,6 +160,9 @@ try {
         $agents = [System.IO.File]::ReadAllText($agentsPath)
         foreach ($rule in @('InternalsVisibleTo', 'ExcludeFromCodeCoverage', 'Xunit.Abstractions', 'BenchmarkDotNet', 'RootNamespace', '<summary>')) {
             if (-not $agents.Contains($rule)) { throw "$caseName root AGENTS.md lost the $rule guidance." }
+        }
+        if ([regex]::Matches($agents, 'Do not append `?\.FunctionalTests`? to test namespaces').Count -ne 1) {
+            throw "$caseName must keep the functional-test namespace rule exactly once."
         }
         $bot = [System.IO.File]::ReadAllText((Join-Path $caseRoot '.bot/README.md'))
         if (-not $bot.Contains('into root `AGENTS.md`.') -or $bot -match '(?i)Copilot') {
@@ -214,30 +249,89 @@ public class BehaviorTest : Test
     }
 }
 "@
-        Write-Text -Path (Join-Path $caseRoot 'MtpScaffold.slnx') -Content "<Solution><Project Path=`"$sourceProject`" /><Project Path=`"$testProject`" /></Solution>"
+        $solutionProjects = @($sourceProject, $testProject)
+        if ($variant -eq 'lib') {
+            $benchmarkProject = "tuning/$projectName.Benchmarks/$projectName.Benchmarks.csproj"
+            $runnerProject = 'tooling/benchmark-runner/benchmark-runner.csproj'
+            Render-Template -Source "$skillRoot/assets/library/benchmark.csproj" -Destination (Join-Path $caseRoot $benchmarkProject) -Map $map
+            Render-Template -Source "$skillRoot/assets/library/benchmark-runner.csproj" -Destination (Join-Path $caseRoot $runnerProject) -Map $map
+            Render-Template -Source "$skillRoot/assets/library/benchmark-program.cs" -Destination (Join-Path $caseRoot 'tooling/benchmark-runner/Program.cs') -Map $map
+            Write-Text -Path (Join-Path $caseRoot "tuning/$projectName.Benchmarks/PriceCalculatorBenchmark.cs") -Content @'
+using BenchmarkDotNet.Attributes;
+
+namespace Acme.Library;
+
+public class PriceCalculatorBenchmark
+{
+    [Benchmark]
+    public decimal AddTax() => PriceCalculator.AddTax(100m, 0.20m);
+}
+'@
+            $solutionProjects += @($benchmarkProject, $runnerProject)
+        }
+        $projectElements = ($solutionProjects | ForEach-Object { "<Project Path=`"$_`" />" }) -join ''
+        Write-Text -Path (Join-Path $caseRoot 'MtpScaffold.slnx') -Content "<Solution>$projectElements</Solution>"
         Push-Location $caseRoot
         try {
+            if ($variant -eq 'lib') {
+                foreach ($pair in @(
+                    @($sourceProject, $case.Tfm),
+                    @($testProject, ($runtimeTfms -join ';')),
+                    @($benchmarkProject, ($runtimeTfms -join ';'))
+                )) {
+                    $actual = Invoke-DotNet -Arguments @('msbuild', $pair[0], '-getProperty:TargetFrameworks', '--nologo')
+                    if ($actual.Trim() -ne $pair[1]) { throw "$caseName rendered incorrect TargetFrameworks for $($pair[0]): $actual" }
+                }
+                $runnerTfm = Invoke-DotNet -Arguments @('msbuild', $runnerProject, '-getProperty:TargetFramework', '--nologo')
+                if ($runnerTfm.Trim() -ne $runtimeTfms[-1]) { throw "$caseName benchmark runner must target the highest executable TFM." }
+                Write-Host "[PASS] ${caseName}: source matrix retained; tests, benchmarks and runner use executable TFMs only."
+            }
+            if ($case.Tfm -eq 'net8.0') {
+                if ($variant -eq 'lib') {
+                    [void](Invoke-DotNet -Arguments @('build', $benchmarkProject, '-c', 'Release', '-p:SkipSignAssembly=true', '--nologo'))
+                    Assert-DotNetFailure -Arguments @('build', $runnerProject, '-c', 'Release', '-p:SkipSignAssembly=true', '--nologo') -ExpectedError 'error NU1202: Package Codebelt.Extensions.BenchmarkDotNet.Console'
+                }
+                $expectedError = if ($variant -eq 'app') { 'error NU1202: Package Codebelt.Bootstrapper.Console' } else { "error CS0246: The type or namespace name 'Codebelt'" }
+                Assert-DotNetFailure -Arguments @('build', $testProject, '-c', 'Release', '-p:SkipSignAssembly=true', '--nologo') -ExpectedError $expectedError
+                $testAssetsPath = Join-Path $caseRoot (Join-Path (Split-Path $testProject) 'obj/project.assets.json')
+                $testAssets = [System.IO.File]::ReadAllText($testAssetsPath) | ConvertFrom-Json
+                $nuspecPaths = @($testAssets.packageFolders.PSObject.Properties.Name | ForEach-Object {
+                    Join-Path $_ 'codebelt.extensions.xunit.app/12.0.1/codebelt.extensions.xunit.app.nuspec'
+                } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+                if ($nuspecPaths.Count -ne 1) { throw "$caseName could not locate the restored Codebelt app meta-package metadata." }
+                [xml]$nuspec = [System.IO.File]::ReadAllText($nuspecPaths[0])
+                $groups = @($nuspec.package.metadata.dependencies.group.targetFramework)
+                if ($groups -contains 'net8.0' -or $groups.Count -ne 2 -or $groups -notcontains 'net9.0' -or $groups -notcontains 'net10.0') {
+                    throw "$caseName expected only net9/net10 dependency groups in the fixed Codebelt app meta-package."
+                }
+                Write-Host "[PASS] ${caseName}: incompatible net8 stack fails explicitly; Codebelt app meta-package has no net8 dependency group."
+                continue
+            }
             [void](Invoke-DotNet -Arguments @('build', 'MtpScaffold.slnx', '-c', 'Release', '-p:SkipSignAssembly=true', '--nologo'))
-            $help = Invoke-DotNet -Arguments @('test', '--project', $testProject, '-c', 'Release', '--no-build', '--help')
-            $reportOption = '--report-xunit-trx'
-            foreach ($option in @($reportOption, '--coverlet', '--coverlet-output-format', '--hangdump', '--hangdump-timeout')) {
-                if (-not $help.Contains($option)) { throw "$caseName runner is missing $option." }
+            foreach ($runtimeTfm in $runtimeTfms) {
+                $help = Invoke-DotNet -Arguments @('test', '--project', $testProject, '--framework', $runtimeTfm, '-c', 'Release', '--no-build', '--help')
+                $reportOption = '--report-xunit-trx'
+                foreach ($option in @($reportOption, '--coverlet', '--coverlet-output-format', '--hangdump', '--hangdump-timeout')) {
+                    if (-not $help.Contains($option)) { throw "$caseName runner is missing $option." }
+                }
+                $resultsDirectory = "TestResults/$runtimeTfm"
+                $run = Invoke-DotNet -Arguments @('test', '--project', $testProject, '--framework', $runtimeTfm, '-c', 'Release', '--no-build', '--results-directory', $resultsDirectory, '--', $reportOption, '--coverlet', '--coverlet-output-format', 'opencover')
+                $trxFiles = @(Get-ChildItem -LiteralPath (Join-Path $caseRoot $resultsDirectory) -Filter '*.trx' -Recurse)
+                $coverageFiles = @(Get-ChildItem -LiteralPath (Join-Path $caseRoot $resultsDirectory) -Filter '*.xml' -Recurse | Where-Object { $_.Length -gt 0 })
+                if ($trxFiles.Count -eq 0) { throw "$caseName emitted no TRX.`n$run" }
+                foreach ($file in $trxFiles) {
+                    [xml]$trx = [System.IO.File]::ReadAllText($file.FullName)
+                    $counts = $trx.TestRun.ResultSummary.Counters
+                    if ([int]$counts.total -ne 1 -or [int]$counts.passed -ne 1 -or [int]$counts.failed -ne 0) { throw "$caseName did not discover and pass its behavior test.`n$run" }
+                }
+                $covered = $false
+                foreach ($file in $coverageFiles) {
+                    [xml]$coverage = [System.IO.File]::ReadAllText($file.FullName)
+                    if ($null -ne $coverage.SelectSingleNode("/CoverageSession/Modules/Module[ModuleName='$projectName']/Classes/Class/Methods/Method/SequencePoints/SequencePoint[number(@vc) > 0]")) { $covered = $true }
+                }
+                if (-not $covered) { throw "$caseName emitted no visited source sequence points in OpenCover.`n$run" }
+                Write-Host "[PASS] ${caseName}/${runtimeTfm}: passing behavior test, xUnit TRX, visited OpenCover points and HangDump options."
             }
-            $run = Invoke-DotNet -Arguments @('test', '--project', $testProject, '--framework', $case.Tfm, '-c', 'Release', '--no-build', '--results-directory', 'TestResults', '--', $reportOption, '--coverlet', '--coverlet-output-format', 'opencover')
-            $trxFiles = @(Get-ChildItem -LiteralPath (Join-Path $caseRoot 'TestResults') -Filter '*.trx' -Recurse)
-            $coverageFiles = @(Get-ChildItem -LiteralPath (Join-Path $caseRoot 'TestResults') -Filter '*.xml' -Recurse | Where-Object { $_.Length -gt 0 })
-            if ($trxFiles.Count -eq 0) { throw "$caseName emitted no TRX.`n$run" }
-            foreach ($file in $trxFiles) {
-                [xml]$trx = [System.IO.File]::ReadAllText($file.FullName)
-                $counts = $trx.TestRun.ResultSummary.Counters
-                if ([int]$counts.total -ne 1 -or [int]$counts.passed -ne 1 -or [int]$counts.failed -ne 0) { throw "$caseName did not discover and pass its behavior test.`n$run" }
-            }
-            $covered = $false
-            foreach ($file in $coverageFiles) {
-                [xml]$coverage = [System.IO.File]::ReadAllText($file.FullName)
-                if ($null -ne $coverage.SelectSingleNode("/CoverageSession/Modules/Module[ModuleName='$projectName']/Classes/Class/Methods/Method/SequencePoints/SequencePoint[number(@vc) > 0]")) { $covered = $true }
-            }
-            if (-not $covered) { throw "$caseName emitted no visited source sequence points in OpenCover.`n$run" }
             $assets = [System.IO.File]::ReadAllText((Join-Path $caseRoot (Join-Path (Split-Path $testProject) 'obj/project.assets.json')))
             foreach ($id in @('Codebelt.Extensions.Xunit.App/12.0.1', 'xunit.v3/4.0.1', 'Codebelt.Coverlet.MTP/10.1.0', 'Microsoft.Testing.Extensions.HangDump/2.4.1')) {
                 if (-not $assets.Contains($id)) { throw "$caseName is missing restored dependency $id." }
@@ -246,7 +340,7 @@ public class BehaviorTest : Test
             if (@($graph.libraries.PSObject.Properties.Name | Where-Object { $_ -like 'Microsoft.Testing.Extensions.TrxReport/*' }).Count -ne 0) {
                 throw "$caseName restored an out-of-scope TRX provider."
             }
-            Write-Host "[PASS] ${caseName}: Release build, managed/public behavior, one passing test, xUnit TRX, visited OpenCover points, HangDump options and no separate TRX provider."
+            Write-Host "[PASS] ${caseName}: Release build with compatible dependencies and no separate TRX provider."
         } finally { Pop-Location }
     }
     Write-Host '[PASS] Scaffold MTP regressions passed.'

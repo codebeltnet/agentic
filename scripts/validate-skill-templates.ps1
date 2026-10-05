@@ -1110,11 +1110,15 @@ Add-ValidationResult -Results $results -Name 'Both scaffolds select xUnit 4, Cod
     }
 }
 
-Add-ValidationResult -Results $results -Name 'Generated app and library scaffolds execute Codebelt v12 tests with native MTP artifacts' -Action {
-    $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/tests/test-scaffold-mtp.ps1') 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw ($output -join [Environment]::NewLine)
+if ([string]::IsNullOrWhiteSpace($Ref)) {
+    Add-ValidationResult -Results $results -Name 'Generated app and library scaffolds execute Codebelt v12 tests with native MTP artifacts' -Action {
+        $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/tests/test-scaffold-mtp.ps1') 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw ($output -join [Environment]::NewLine)
+        }
     }
+} elseif ($Suite -in @('All', 'Templates')) {
+    Write-Host '[SKIP] Scaffold MTP execution reads working-tree assets; ref validation uses revision-aware template checks only.'
 }
 
 Add-ValidationResult -Results $results -Name 'App package template uses specific version placeholders' -Action {
@@ -3811,6 +3815,7 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
         '{REPO_OWNER}' = 'acme'
         '{REPO_SLUG}' = 'mylibrary'
         '{TARGET_FRAMEWORKS}' = 'net10.0;net8.0'
+        '{EXECUTABLE_TARGET_FRAMEWORKS}' = 'net10.0;net8.0'
         '{DOCFX_TARGET_FRAMEWORK}' = 'net10.0'
         '{BENCHMARK_RUNNER_PROJECT_NAME}' = 'benchmark-runner'
         '{BENCHMARK_RUNNER_NAMESPACE}' = 'benchmark_runner'
