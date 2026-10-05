@@ -561,6 +561,8 @@ Starting a new .NET solution "from scratch" usually means copying from your last
 
 **dotnet-new-lib-slnx** and **dotnet-new-app-slnx** encode the full codebeltnet convention into repeatable scaffolds — from `Directory.Build.props` to CI pipelines to DocFX. Each skill is focused on its domain: libraries get multi-target frameworks, signing, and NuGet packaging; apps get host family selection, a conditional web-variant choice when needed, hosting patterns, and functional tests.
 
+Library scaffolds keep the source framework matrix separate from executable test and benchmark targets, excluding source-only frameworks such as `netstandard2.0` from those projects. The app package resolver marks version selections as provisional until package metadata inspection and combined restore/build validation establish compatibility for the selected framework.
+
 > [!NOTE]
 > These scaffolds are not speculative starter kits. They capture conventions already exercised across Codebelt repositories and turn them into a repeatable methodology for new solutions.
 
