@@ -240,8 +240,6 @@ public class SampleTest : Test
 - **Configuration-only code**: Move to configuration files or extract into testable methods.
 - **Generated or third-party code**: These should not be in the primary codebase; use NuGet packages or dedicated vendor folders if necessary.
 
-Do not append .FunctionalTests to test namespaces either; the same SUT namespace equality rule applies.
-
 ## Benchmarking
 
 The following rules apply to benchmark projects (`*.Benchmarks`), code under `tuning/` and `tooling/`, and `*Benchmark*.cs` source files. Namespace rules for benchmark types refer to the production code being measured; the executable benchmark runner host retains its own tooling-derived namespace.

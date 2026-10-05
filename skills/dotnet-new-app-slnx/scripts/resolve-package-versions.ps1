@@ -127,7 +127,10 @@ foreach ($node in $packageNodes) {
     $result[$placeholder] = [ordered]@{
         package_id = $packageId
         version = $resolved
+        target_framework = $TargetFramework
+        compatibility_status = 'provisional'
     }
 }
 
+Write-Warning 'Version-index selection is provisional. Inspect package assets and dependency ranges, then restore and build the combined scaffold for the selected framework before treating these versions as compatible.'
 $result | ConvertTo-Json -Depth 4
