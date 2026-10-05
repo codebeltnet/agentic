@@ -165,6 +165,8 @@ The generated `.github/dependabot.yml` should watch the repo root (`directory: "
 
 Follow `SKILL.md` for the coupled Codebelt xUnit 12.x / xUnit 4.x package contract. The package IDs remain `xunit.v3` and `xunit.v3.runner.console`. Copy root `global.json` selecting `Microsoft.Testing.Platform`, use a supported non-preview .NET 10+ SDK independently of library TFMs, and retain the test-only shared references to `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump` without duplicate project references or legacy coverage integrations.
 
+In root `Directory.Build.props`, render `{TARGET_FRAMEWORKS}` as the complete source matrix and `{EXECUTABLE_TARGET_FRAMEWORKS}` as the selected executable TFMs in selection order for tests and benchmarks. Exclude source-only TFMs such as `netstandard*` from the executable list; if it is empty, ask for a consumer test runtime. Validate package compatibility for each executable TFM before accepting the scaffold.
+
 Generate at least one public-behavior test per library and use only executable TFMs for tests and benchmarks. Build Release, then run `dotnet test --project <test-project> --framework <tfm> -c Release --results-directory <results> -- --report-xunit-trx --coverlet --coverlet-output-format opencover`; verify nonzero discovery, nonempty TRX/OpenCover output and runner help's hang-dump options. Inspect the actual shared CI workflow/action refs and report consumers before finalizing; preserve platform distinctions and avoid duplicating reporting/coverage/hang-dump arguments already provided by the shared action. Preserve the existing Codebelt app meta-package and report incompatible test-runtime choices rather than introducing compatibility workarounds.
 
 ---

@@ -18,6 +18,7 @@
         "Uses centrally versioned Codebelt.Coverlet.MTP and Microsoft.Testing.Extensions.HangDump through the shared test-only ItemGroup without duplicate project references or legacy coverage engines",
         "Generates and executes a deterministic public-behavior test with the Codebelt Test base class instead of accepting zero discovery",
         "Verifies nonempty TRX and OpenCover artifacts using native MTP arguments for each executable test TFM, keeping source-only frameworks out of executable tests",
+        "Renders EXECUTABLE_TARGET_FRAMEWORKS for test and benchmark projects while preserving TARGET_FRAMEWORKS as the complete source matrix",
         "Uses xUnit's built-in --report-xunit-trx reporting without adding a separate report package or altering existing CI callers to request an alternate reporter"
       ]
     },

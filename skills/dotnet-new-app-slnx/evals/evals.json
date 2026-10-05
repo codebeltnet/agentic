@@ -22,6 +22,7 @@
         "Names the generated solution file DemoApp.slnx instead of lowercasing it to demoapp.slnx",
         "Still generates the solution file and functional test project even for a single-host Worker scaffold",
         "Resolves worker package versions from NuGet instead of reusing stale remembered version numbers from prior runs",
+        "Treats resolver entries marked compatibility_status = provisional as candidates and inspects dependency ranges and framework assets plus combined restore/build before claiming compatibility",
         "Uses Codebelt.Extensions.Xunit.App 12.x with xunit.v3 and xunit.v3.runner.console 4.x, retaining the existing package IDs",
         "Generates root global.json selecting Microsoft.Testing.Platform and verifies a supported non-preview .NET 10+ SDK independently of the target runtime",
         "Uses centrally versioned Codebelt.Coverlet.MTP and Microsoft.Testing.Extensions.HangDump through the shared test-only ItemGroup without duplicate project references or legacy Coverlet packages",

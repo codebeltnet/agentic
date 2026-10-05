@@ -96,6 +96,7 @@ When copying template files, replace these placeholders in file contents:
 | `{REPO_OWNER}` | GitHub org/user (from URL) |
 | `{REPO_SLUG}` | Repo name (last URL segment, lowercased) |
 | `{TARGET_FRAMEWORKS}` | Computed from the official .NET releases index; offer the newest generally supported LTS, every other supported LTS or STS single-target choice, or all generally supported non-preview channels for broader scope |
+| `{EXECUTABLE_TARGET_FRAMEWORKS}` | Selected executable TFMs in selection order for test and benchmark projects, excluding source-only TFMs such as `netstandard*`; ask for a consumer test runtime if none remain, and validate the combined test package set for every runtime |
 | `{DOCFX_TARGET_FRAMEWORK}` | Highest selected generally supported non-preview TFM used for DocFX metadata generation |
 | `{BENCHMARK_RUNNER_PROJECT_NAME}` | Tooling project name for the benchmark host (default `benchmark-runner`) |
 | `{BENCHMARK_RUNNER_NAMESPACE}` | Benchmark runner namespace derived from the tooling project name, replacing invalid identifier characters such as `-` with `_` |
