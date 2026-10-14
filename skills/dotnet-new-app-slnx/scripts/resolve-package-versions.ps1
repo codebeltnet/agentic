@@ -83,6 +83,13 @@ $frameworkAlignedPackages = @(
     'Microsoft.AspNetCore.Mvc.Razor.RuntimeCompilation'
 )
 
+# These are authorized API lines, not frozen package-version pins.
+$testStackMajors = @{
+    'Codebelt.Extensions.Xunit.App' = 12
+    'xunit.v3' = 4
+    'xunit.v3.runner.console' = 4
+}
+
 [xml]$template = Get-Content -Path $TemplatePath -Raw
 $packageNodes = @($template.Project.ItemGroup.PackageVersion)
 if ($packageNodes.Count -eq 0) {
@@ -108,13 +115,22 @@ foreach ($node in $packageNodes) {
         throw "No versions returned for $packageId from $indexUrl"
     }
 
-    $requiredMajor = if ($frameworkAlignedPackages -contains $packageId) { $targetMajor } else { -1 }
+    $requiredMajor = if ($testStackMajors.ContainsKey($packageId)) {
+        $testStackMajors[$packageId]
+    } elseif ($frameworkAlignedPackages -contains $packageId) {
+        $targetMajor
+    } else {
+        -1
+    }
     $resolved = Select-LatestStableVersion -Versions $index.versions -RequiredMajor $requiredMajor
 
     $result[$placeholder] = [ordered]@{
         package_id = $packageId
         version = $resolved
+        target_framework = $TargetFramework
+        compatibility_status = 'provisional'
     }
 }
 
+Write-Warning 'Version-index selection is provisional. Inspect package assets and dependency ranges, then restore and build the combined scaffold for the selected framework before treating these versions as compatible.'
 $result | ConvertTo-Json -Depth 4

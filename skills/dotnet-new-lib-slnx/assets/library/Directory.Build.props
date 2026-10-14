@@ -51,7 +51,7 @@
   </ItemGroup>
 
   <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
-    <TargetFrameworks>{TARGET_FRAMEWORKS}</TargetFrameworks>
+    <TargetFrameworks>{EXECUTABLE_TARGET_FRAMEWORKS}</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <RunAnalyzers>false</RunAnalyzers>
@@ -67,25 +67,19 @@
 
   <ItemGroup Condition="'$(IsTestProject)' == 'true'">
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Microsoft.Testing.Extensions.HangDump" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.v3.runner.console" />
     <PackageReference Include="xunit.runner.visualstudio">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <PackageReference Include="coverlet.msbuild">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
-    <PackageReference Include="coverlet.collector">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
+    <PackageReference Include="Codebelt.Coverlet.MTP" />
     <PackageReference Include="Codebelt.Extensions.Xunit.App" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(IsBenchmarkProject)' == 'true'">
-    <TargetFrameworks>{TARGET_FRAMEWORKS}</TargetFrameworks>
+    <TargetFrameworks>{EXECUTABLE_TARGET_FRAMEWORKS}</TargetFrameworks>
     <IsPackable>false</IsPackable>
     <RunAnalyzers>false</RunAnalyzers>
     <RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild>

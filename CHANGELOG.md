@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-10-14
+
+This is a minor release that moves the scaffolded .NET test stack to the native Microsoft.Testing.Platform setup with Codebelt coverage and a root `global.json`, makes root `AGENTS.md` the single agent-instruction source for generated projects, and tightens package version resolution for the `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` skills.
+
+### Added
+
+- `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` scaffolds add `Codebelt.Coverlet.MTP` and `Microsoft.Testing.Extensions.HangDump` to generated test projects, with scaffold regression checks in `scripts/tests/test-scaffold-mtp.ps1`,
+- `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` generate a root `global.json` that selects `Microsoft.Testing.Platform` as the test runner.
+
+### Changed
+
+- `dotnet-new-app-slnx` generates root `AGENTS.md` as the single vendor-neutral agent-instruction source, preserving project-specific guidance instead of a separate vendor-specific file,
+- `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` resolve `Codebelt.Extensions.Xunit.App` on the Codebelt v12 line and `xunit.v3` with `xunit.v3.runner.console` on the xUnit v4 line,
+- `resolve-package-versions.ps1` in `dotnet-new-app-slnx` reports candidate versions as provisional and requires restore and build verification before acceptance,
+- `dotnet-new-lib-slnx` test and benchmark projects target the executable target-framework placeholder `{EXECUTABLE_TARGET_FRAMEWORKS}`,
+- the `dotnet-new-app-slnx` console template adds an XML summary comment to the generated `Program` class.
+
+### Removed
+
+- Both dotnet-new scaffolds stop generating `.github/copilot-instructions.md`, because its guidance now lives in root `AGENTS.md`,
+- Both dotnet-new scaffolds drop the direct `coverlet.collector` and `coverlet.msbuild` package declarations from generated test projects and `Directory.Packages.props`, replacing them with `Codebelt.Coverlet.MTP`.
+
 ## [0.11.2] - 2026-10-03
 
 This is a patch release that supports PR publication from branches without upstream tracking, refines changelog and NuGet release-note workflows, and allows Unicode emoji choices beyond the bundled commit-language tables.
@@ -763,6 +785,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.12.0]: https://github.com/codebeltnet/agentic/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/codebeltnet/agentic/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/codebeltnet/agentic/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/codebeltnet/agentic/compare/v0.10.1...v0.11.0

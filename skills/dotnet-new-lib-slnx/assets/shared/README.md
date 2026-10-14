@@ -29,6 +29,10 @@ dotnet add package {PROJECT_NAME}
 
 Full documentation is available at [{PACKAGE_PROJECT_URL}]({PACKAGE_PROJECT_URL}).
 
+## Testing
+
+Use a supported non-preview .NET 10+ SDK; root `global.json` selects Microsoft.Testing.Platform. Tests use xUnit v4 (`xunit.v3` 4.x), Codebelt xUnit v12, and `Codebelt.Coverlet.MTP`. Run `dotnet test --project test/{PROJECT_NAME}.Tests/{PROJECT_NAME}.Tests.csproj -c Release --results-directory TestResults -- --report-xunit-trx --coverlet --coverlet-output-format opencover`. Validate each executable TFM and verify nonzero discovery plus nonempty TRX/OpenCover files.
+
 ## Contributing
 
 Contributions are welcome! Please read [CONTRIBUTING.md](.github/CONTRIBUTING.md).

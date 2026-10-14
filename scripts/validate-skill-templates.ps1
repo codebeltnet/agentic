@@ -645,14 +645,14 @@ function Get-AppPlaceholderMap {
         '{TARGET_FRAMEWORK}' = $TargetFramework
         '{AppType}' = $AppType
         '{UBUNTU_TESTRUNNER_TAG}' = $ubuntuTag
-        '{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}' = '11.0.7'
+        '{CODEBELT_EXTENSIONS_XUNIT_APP_VERSION}' = '12.0.1'
         '{MICROSOFT_NET_TEST_SDK_VERSION}' = '18.3.0'
         '{MINVER_VERSION}' = '7.0.0'
-        '{COVERLET_COLLECTOR_VERSION}' = '8.0.0'
-        '{COVERLET_MSBUILD_VERSION}' = '8.0.0'
-        '{XUNIT_V3_VERSION}' = '3.2.2'
-        '{XUNIT_V3_RUNNER_CONSOLE_VERSION}' = '3.2.2'
-        '{XUNIT_RUNNER_VISUALSTUDIO_VERSION}' = '3.1.5'
+        '{CODEBELT_COVERLET_MTP_VERSION}' = '10.1.0'
+        '{MICROSOFT_TESTING_EXTENSIONS_HANGDUMP_VERSION}' = '2.4.1'
+        '{XUNIT_V3_VERSION}' = '4.0.1'
+        '{XUNIT_V3_RUNNER_CONSOLE_VERSION}' = '4.0.1'
+        '{XUNIT_RUNNER_VISUALSTUDIO_VERSION}' = '4.0.0'
         '{CODEBELT_BOOTSTRAPPER_CONSOLE_VERSION}' = '5.0.5'
         '{CODEBELT_BOOTSTRAPPER_WEB_VERSION}' = '5.0.5'
         '{CODEBELT_BOOTSTRAPPER_WORKER_VERSION}' = '5.0.5'
@@ -1077,6 +1077,50 @@ Add-ValidationResult -Results $results -Name 'App skill documents web-family App
     Assert-Contains -Name 'dotnet-new-app-slnx/SKILL.md' -Content $skill -Needle 'Worker.cs'
 }
 
+Add-ValidationResult -Results $results -Name 'Both scaffolds select xUnit 4, Codebelt 12 and native MTP coverage together' -Action {
+    foreach ($variant in @('app', 'lib')) {
+        $skillRoot = "skills/dotnet-new-$variant-slnx"
+        $assetVariant = if ($variant -eq 'app') { 'app' } else { 'library' }
+        $props = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/$assetVariant/Directory.Build.props" -GitRef $Ref
+        $packages = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/Directory.Packages.props" -GitRef $Ref
+        $global = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/global.json" -GitRef $Ref | ConvertFrom-Json
+        $manifest = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared.manifest.json" -GitRef $Ref | ConvertFrom-Json
+        $skill = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/SKILL.md" -GitRef $Ref
+        if ($global.test.runner -ne 'Microsoft.Testing.Platform' -or $manifest.files -notcontains 'global.json') {
+            throw "$skillRoot must ship and inventory the SDK MTP runner opt-in."
+        }
+        $codebeltTestPackage = 'Codebelt.Extensions.Xunit.App'
+        foreach ($id in @('Codebelt.Coverlet.MTP', 'Microsoft.Testing.Extensions.HangDump', $codebeltTestPackage, 'xunit.v3', 'xunit.v3.runner.console')) {
+            Assert-Contains -Name $skillRoot -Content $props -Needle "<PackageReference Include=`"$id`""
+            Assert-Contains -Name $skillRoot -Content $packages -Needle "<PackageVersion Include=`"$id`""
+        }
+        foreach ($id in @('coverlet.collector', 'coverlet.msbuild', 'coverlet.MTP', 'Microsoft.Testing.Extensions.CodeCoverage', 'Microsoft.Testing.Extensions.TrxReport')) {
+            Assert-NotContains -Name $skillRoot -Content $props -Needle "Include=`"$id`""
+            Assert-NotContains -Name $skillRoot -Content $packages -Needle "Include=`"$id`""
+        }
+        Assert-Contains -Name $skillRoot -Content $skill -Needle '12.x'
+        Assert-Contains -Name $skillRoot -Content $skill -Needle '4.x'
+        Assert-Contains -Name $skillRoot -Content $skill -Needle '--report-xunit-trx --coverlet --coverlet-output-format opencover'
+        if ($variant -eq 'lib') {
+            $pipeline = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/.github/workflows/ci-pipeline.yml" -GitRef $Ref
+            Assert-NotContains -Name $skillRoot -Content $pipeline -Needle '--report-trx'
+        }
+        Assert-Contains -Name $skillRoot -Content $props -Needle '<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>'
+        Assert-Contains -Name $skillRoot -Content $props -Needle 'MinVer'
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($Ref)) {
+    Add-ValidationResult -Results $results -Name 'Generated app and library scaffolds execute Codebelt v12 tests with native MTP artifacts' -Action {
+        $output = & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'scripts/tests/test-scaffold-mtp.ps1') 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw ($output -join [Environment]::NewLine)
+        }
+    }
+} elseif ($Suite -in @('All', 'Templates')) {
+    Write-Host '[SKIP] Scaffold MTP execution reads working-tree assets; ref validation uses revision-aware template checks only.'
+}
+
 Add-ValidationResult -Results $results -Name 'App package template uses specific version placeholders' -Action {
     $packages = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-new-app-slnx/assets/shared/Directory.Packages.props' -GitRef $Ref
     Assert-NotContains -Name 'app Directory.Packages.props' -Content $packages -Needle '{LATEST}'
@@ -1154,7 +1198,7 @@ Add-ValidationResult -Results $results -Name 'App reference guide uses ROOT_NAME
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Treat the files shown in this tree as required output, not aspirational examples.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle '## Required Shared Asset Inventory'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Do not cherry-pick only the files that feel essential.'
-    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle '.github/copilot-instructions.md'
+    Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Root `AGENTS.md` is the single generated agent-instruction source.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Even when there is only one host type, still generate the `.slnx` file'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Directory.Packages.props` is the authoritative version source for app scaffolds.'
     Assert-Contains -Name 'dotnet-new-app-slnx/references/app.md' -Content $guide -Needle 'Do **not** duplicate `<TargetFramework>` inside the generated app or test `.csproj` files as a workaround.'
@@ -1253,6 +1297,139 @@ Add-ValidationResult -Results $results -Name 'App dependabot and test environmen
     Assert-NotContains -Name 'app dependabot' -Content $dependabot -Needle 'directory: "/test"'
     Assert-Contains -Name 'app testenvironments' -Content $testEnvironments -Needle '{UBUNTU_TESTRUNNER_TAG}'
     Assert-NotContains -Name 'app testenvironments' -Content $testEnvironments -Needle 'net8.0.418-9.0.311-10.0.103'
+}
+
+Add-ValidationResult -Results $results -Name 'Scaffolds use root AGENTS.md as the sole agent-instruction contract' -Action {
+    foreach ($variant in @('app', 'lib')) {
+        $skillRoot = "skills/dotnet-new-$variant-slnx"
+        $manifest = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared.manifest.json" -GitRef $Ref | ConvertFrom-Json
+        $sharedFiles = @(Get-RepoFileList -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared" -GitRef $Ref | ForEach-Object { $_ -replace '\\', '/' })
+        if (@($manifest.files | Where-Object { $_ -ceq 'AGENTS.md' }).Count -ne 1) {
+            throw "$skillRoot must inventory exactly one root AGENTS.md."
+        }
+        $inventoryDrift = @(Compare-Object -ReferenceObject @($manifest.files) -DifferenceObject $sharedFiles -CaseSensitive)
+        if ($inventoryDrift.Count -gt 0) {
+            throw "$skillRoot shared manifest and assets disagree: $($inventoryDrift | Out-String)"
+        }
+        foreach ($path in @($manifest.files) + $sharedFiles) {
+            if ($path -match '(?i)copilot-instructions\.md$') {
+                throw "$skillRoot must not emit a Copilot-specific instruction file: $path"
+            }
+        }
+        $agents = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/AGENTS.md" -GitRef $Ref
+        $renderedAgents = Apply-Replacements -Content $agents -Map @{
+            '{SOLUTION_NAME}' = 'GovernanceFixture'
+            '{PROJECT_NAME}' = 'GovernanceFixture.Library'
+            '{ROOT_NAMESPACE}' = 'GovernanceFixture'
+            '{TARGET_FRAMEWORK}' = 'net10.0'
+            '{TARGET_FRAMEWORKS}' = 'net10.0'
+        }
+        # Generic XML cref syntax in the full documentation example is not a scaffold placeholder.
+        Assert-NoUnexpectedPlaceholders -Name "$skillRoot rendered AGENTS.md" -Content $renderedAgents -Allowed @('{TOptions}')
+        Assert-Match -Name "$skillRoot AGENTS.md" -Content $agents -Pattern '^# Agent Instructions'
+        if ($agents -match '(?im)^(?:---\s*$|applyTo\s*:|description\s*:)' -or $agents -match '(?i)Copilot') {
+            throw "$skillRoot AGENTS.md must be ordinary, vendor-neutral Markdown without instruction frontmatter."
+        }
+        $headings = @([regex]::Matches($agents, '(?m)^#{1,6} .+$') | ForEach-Object { $_.Value.Trim() })
+        if (@($headings | Group-Object | Where-Object Count -gt 1).Count -gt 0) {
+            throw "$skillRoot AGENTS.md contains duplicate sections."
+        }
+        # Check small semantic anchors and prohibitions, rather than duplicating entire prose sections.
+        foreach ($needle in @(
+            'xunit.v3', 'Codebelt.Extensions.Xunit.App v12', 'Codebelt.Extensions.Xunit',
+            'ITestOutputHelper', 'base(output)', 'TestOutput.WriteLine', '[Fact]', '[Theory]', '[InlineData]',
+            'ShouldReturnTrue_WhenConditionIsMet', 'Assert.Equal', 'System Under Test (SUT)', 'RootNamespace',
+            'dummies, fakes, stubs and spies', 'Moq', 'virtual or abstract', 'JsonMarshaller',
+            'public APIs', 'observable behavior', 'BenchmarkDotNet', '*.Benchmarks', '*Benchmark*.cs',
+            'tuning/', '[MemoryDiagnoser]', 'BenchmarkLogicalGroupRule.ByCategory', '[Params]',
+            '[GlobalSetup]', '[IterationSetup]', 'Baseline = true', 'Description', 'allocations',
+            'All public APIs must have XML documentation comments', 'public and protected classes', '<summary>', '<param>', '<returns>', '<typeparam>', '<value>',
+            '<remarks>', '<list type="table">', '<seealso cref=', '<see cref=', '<paramref name=', '<exception cref='
+        )) {
+            Assert-Contains -Name "$skillRoot AGENTS.md" -Content $agents -Needle $needle
+        }
+        foreach ($pattern in @(
+            'Always inherit from the `Test` base class',
+            'Do NOT add `using Xunit\.Abstractions`',
+            'namespace of a test file MUST match the namespace of the System Under Test',
+            '\*\*Do not\*\* use `InternalsVisibleTo`',
+            'Do not use `ExcludeFromCodeCoverage` attribute on any code',
+            'Never mock IMarshaller; always use a new instance of JsonMarshaller'
+        )) {
+            Assert-Match -Name "$skillRoot AGENTS.md" -Content $agents -Pattern $pattern
+        }
+        # Complete retained examples are governance, not optional illustrations. Fingerprints avoid
+        # a second copy of the examples and ignore indentation/blank lines, retaining code and strings.
+        # Update these only when an intentional, reviewed example change updates the contract.
+        $exampleFingerprints = [ordered]@{
+            'Test base class' = '012d43cf12061e11b6fb48e9d5ea626c74cae88ef6135004a2a385987b03a521'
+            'SUT namespace' = 'a24a677782f828334f2db99675b00d38e3dc90889708c569321a6940f507eb73'
+            'Test namespace' = '29b6b2b7df834abcb11e041c22d782ee28c73b822a1e1249d57db3f98eda230b'
+            'Prohibited namespace suffixes' = 'cabca654e9537279a41a44ed2ddac898df452c23b7275058ba0472629030bf80'
+            'Test RootNamespace' = '738f4c243659999de5eae5097c2bdbc59a517bfc52bbe1b3fc89742857cef2b1'
+            'Representative xUnit test' = '952f35063bbca4591295470d69295f6f7ca91acc37334a1b88e1abfe0fe5e3a9'
+            'Benchmark namespace' = '03c3ab7c997a7161be2a6197c200006b8b53107bcc6aa857e2ed37a6c0b6893d'
+            'Representative BenchmarkDotNet benchmark' = 'c97ab4eeb269f5fc9763e8f6c29fa53b8db491e00b6dec5adfaa5dc88cb6423e'
+            'Representative XML documentation' = '74048eafb0581dccfb6505e87bb5aa738d749c3f45bad45627718845c637b434'
+        }
+        $actualFingerprints = @(
+            foreach ($block in [regex]::Matches($agents, '(?ms)^```[^\r\n]*\r?\n(?<code>.*?)^```\s*$')) {
+                $code = (($block.Groups['code'].Value -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 }) -join "`n")
+                [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($utf8NoBom.GetBytes($code))).ToLowerInvariant()
+            }
+        )
+        foreach ($example in $exampleFingerprints.Keys) {
+            if ($actualFingerprints -notcontains $exampleFingerprints[$example]) {
+                throw "$skillRoot AGENTS.md lost or altered the complete '$example' example."
+            }
+        }
+        $detailContracts = [ordered]@{
+            '### File and Namespace Organization' = @('YourProject.Foo.Tests assembly', 'YourProject.Foo.FunctionalTests assembly', 'BooTest', 'automatically', 'type discovery and XML doc links', 'SUT <-> test pairs')
+            '#### Preferred Pattern' = @('Public Facade Testing', 'Public API Proxy Testing', '**Description:**')
+            '#### Example Mapping' = @('**Internal helper:**', '**Public API:**', '**Test strategy:**', 'DelimitedString.Create()')
+            '#### Benefits' = @('Avoids exposing internal types', 'real-world usage patterns', 'strong encapsulation', 'resilient to internal refactoring')
+            '#### When to Apply' = @('fully exercised', 'sufficient coverage', 'solely as a helper')
+            '## Code Coverage' = @('Test classes or test methods', 'Production code', 'Configuration code', 'Any other code path')
+            '### Coverage Rationale' = @('false confidence', 'refactor the code', 'Every executable line')
+            '### Coverage Alternatives' = @('**Untestable code paths**', '**External dependencies**', '**Configuration-only code**', '**Generated or third-party code**', 'dedicated vendor folders')
+            '### Structure and Best Practices' = @('micro, mid and macro', 'network, disk, DB', 'do not include them in CI', 'custom counters')
+            '### Additional XML Documentation Guidelines' = @('Gets or sets', 'Initializes a new instance of', 'Provides', 'Represents', 'options/settings classes', 'table format')
+        }
+        foreach ($heading in $detailContracts.Keys) {
+            $section = [regex]::Match($agents, '(?ms)^' + [regex]::Escape($heading) + '\r?\n(?<body>.*?)(?=^#{1,4} |\z)')
+            if (-not $section.Success) { throw "$skillRoot AGENTS.md is missing '$heading'." }
+            foreach ($detail in $detailContracts[$heading]) {
+                Assert-Contains -Name "$skillRoot AGENTS.md $heading" -Content $section.Groups['body'].Value -Needle $detail
+            }
+        }
+        if ($variant -eq 'app') {
+            Assert-Contains -Name "$skillRoot AGENTS.md" -Content $agents -Needle 'FunctionalTests'
+            Assert-Contains -Name "$skillRoot AGENTS.md" -Content $agents -Needle 'Benchmarking is optional'
+        } else {
+            foreach ($needle in @('tooling/', 'reports/', '.docfx/api/namespaces/')) {
+                Assert-Contains -Name "$skillRoot AGENTS.md" -Content $agents -Needle $needle
+            }
+        }
+        $skill = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/SKILL.md" -GitRef $Ref
+        Assert-Contains -Name "$skillRoot SKILL.md" -Content $skill -Needle 'single generated agent-instruction source'
+        $referenceName = if ($variant -eq 'app') { 'app' } else { 'library' }
+        $guide = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/references/$referenceName.md" -GitRef $Ref
+        Assert-Contains -Name "$skillRoot reference" -Content $guide -Needle 'single generated agent-instruction source'
+        if ($variant -eq 'app') {
+            foreach ($file in $manifest.files) {
+                Assert-Contains -Name "$skillRoot shared inventory reference" -Content $guide -Needle $file
+            }
+        }
+        $bot = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/assets/shared/.bot/README.md" -GitRef $Ref
+        Assert-Contains -Name "$skillRoot .bot README" -Content $bot -Needle 'into root `AGENTS.md`.'
+        foreach ($path in (Get-RepoFileList -RepoRoot $repoRoot -RelativePath $skillRoot -GitRef $Ref)) {
+            if ([System.IO.Path]::GetExtension($path) -notin @('.md', '.json', '.ps1')) { continue }
+            $content = Get-FileText -RepoRoot $repoRoot -RelativePath "$skillRoot/$path" -GitRef $Ref
+            if ($content -match '(?i)copilot-instructions\.md|Copilot instructions|^\s*applyTo\s*:') {
+                throw "$skillRoot/$path still contains vendor-specific scaffold instruction semantics."
+            }
+        }
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Shared .bot assets are tracked and not ignored away' -Action {
@@ -3638,6 +3815,7 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
         '{REPO_OWNER}' = 'acme'
         '{REPO_SLUG}' = 'mylibrary'
         '{TARGET_FRAMEWORKS}' = 'net10.0;net8.0'
+        '{EXECUTABLE_TARGET_FRAMEWORKS}' = 'net10.0;net8.0'
         '{DOCFX_TARGET_FRAMEWORK}' = 'net10.0'
         '{BENCHMARK_RUNNER_PROJECT_NAME}' = 'benchmark-runner'
         '{BENCHMARK_RUNNER_NAMESPACE}' = 'benchmark_runner'
@@ -3650,7 +3828,10 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
 
     foreach ($file in $files) {
         $rendered = Apply-Replacements -Content (Get-FileText -RepoRoot $repoRoot -RelativePath $file -GitRef $Ref) -Map $map
-        Assert-NoUnexpectedPlaceholders -Name $file -Content $rendered
+        # The retained XML documentation example uses {TOptions} in generic cref syntax.
+        # It is literal example code, not a scaffold substitution; other templates/tokens stay strict.
+        $allowed = if ($file -eq 'skills/dotnet-new-lib-slnx/assets/shared/AGENTS.md') { @('{TOptions}') } else { @() }
+        Assert-NoUnexpectedPlaceholders -Name $file -Content $rendered -Allowed $allowed
     }
 }
 

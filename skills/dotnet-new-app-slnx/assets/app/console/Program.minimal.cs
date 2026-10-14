@@ -3,7 +3,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace {ROOT_NAMESPACE}.{AppType};
 
-public class Program : MinimalConsoleProgram
+public class Program : MinimalConsoleProgram<Program>
 {
     static Task Main(string[] args)
     {
