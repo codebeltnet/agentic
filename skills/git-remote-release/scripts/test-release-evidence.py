@@ -1,7 +1,11 @@
 """Offline regression checks. No GitHub or model calls."""
 
 import importlib.util
+import contextlib
+import io
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -52,7 +56,8 @@ class EvidenceTests(unittest.TestCase):
             "- **Contributor attribution** now keeps every verified PR contributor on the shared source line,\n"
             "- **Draft verification** rejects incomplete sources and malformed release-summary structure."
         )
-        return "## What's Changed\n\n" + summary + "\n\nSources:\n\n" + "\n".join(evidence["sources"]) + "\n\n**Full Changelog**: https://github.com/example/widget/compare/v1...v2"
+        target = "commits/v2" if evidence["previous"] is None else "compare/v1...v2"
+        return "## What's Changed\n\n" + summary + "\n\nSources:\n\n" + "\n".join(evidence["sources"]) + "\n\n**Full Changelog**: https://github.com/example/widget/" + target
 
     def test_squash_expands_all_pages_and_preserves_changes(self):
         evidence = self.collect()
@@ -68,6 +73,136 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(collector.verify(evidence, draft.replace(", @automation and @human", "")))
         self.assertTrue(collector.verify(evidence, draft.replace("Sources:", "Sources:\n" + evidence["sources"][0])))
         self.assertTrue(collector.verify(evidence, draft.replace("Sources:", "Sources:\n- Extra source by @someone")))
+
+    def generated_notes(self, entries=None):
+        if entries is None:
+            entries = "* @service[bot] made their first contribution in https://github.com/example/widget/pull/22"
+        return {"body": "## What's Changed\n\n* Service update\n\n## New Contributors\n" + entries +
+                        "\n\n**Full Changelog**: https://github.com/example/widget/compare/v1...v2"}
+
+    def with_newcomers(self, evidence):
+        return self.draft(evidence).replace("\n\n**Full Changelog**:",
+            "\n\n## New Contributors\n\n" + "\n".join(evidence["new_contributors"]) + "\n\n**Full Changelog**:")
+
+    def test_new_contributors_render_before_changelog_and_preserve_sources(self):
+        evidence = collector.collect("example/widget", "v1", "v2", self.api, self.generated_notes())
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertEqual(evidence["new_contributors"], [
+            "* **@service[bot]** made their first contribution in [#22](https://github.com/example/widget/pull/22)."])
+        self.assertEqual(collector.verify(evidence, self.with_newcomers(evidence)), [])
+        self.assertTrue(collector.verify(evidence, self.draft(evidence)))
+
+    def test_new_contributors_deduplicate_case_and_keep_rest_identity(self):
+        notes = self.generated_notes()
+        notes["body"] = notes["body"].replace("\n\n**Full Changelog**:",
+            "\n* @SERVICE[bot] made their first contribution in https://github.com/example/widget/pull/22\n\n**Full Changelog**:")
+        evidence = collector.collect("example/widget", "v1", "v2", self.api, notes)
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertEqual(len(evidence["new_contributors"]), 1)
+        self.assertIn("@service[bot]", evidence["new_contributors"][0])
+
+    def test_unknown_author_out_of_range_pr_and_malformed_notes_fail_closed(self):
+        for notes in (self.generated_notes("* @human made their first contribution in https://github.com/example/widget/pull/22"),
+                      self.generated_notes("* @service[bot] made their first contribution in https://github.com/other/widget/pull/22"),
+                      self.generated_notes("* @service[bot] made their first contribution in https://github.com/example/widget/pull/99"),
+                      self.generated_notes("* Unrecognized contributor format"), {"body": None}, {}):
+            with self.subTest(notes=notes):
+                evidence = collector.collect("example/widget", "v1", "v2", self.api, notes)
+                self.assertFalse(evidence["complete"])
+                self.assertTrue(collector.verify(evidence, self.draft(evidence)))
+
+    def test_no_newcomers_or_unavailable_metadata_omits_section(self):
+        for notes in (None, {"body": "## What's Changed\n* Update"}, self.generated_notes("")):
+            evidence = collector.collect("example/widget", "v1", "v2", self.api, notes)
+            self.assertTrue(evidence["complete"], evidence["issues"])
+            self.assertFalse(evidence.get("new_contributors"))
+            self.assertEqual(collector.verify(evidence, self.draft(evidence)), [])
+            empty = self.draft(evidence).replace("\n\n**Full Changelog**:", "\n\n## New Contributors\n\n**Full Changelog**:")
+            self.assertTrue(collector.verify(evidence, empty))
+
+    def test_new_contributor_section_rejects_duplicates_wrong_position_and_fabrication(self):
+        evidence = collector.collect("example/widget", "v1", "v2", self.api, self.generated_notes())
+        draft = self.with_newcomers(evidence)
+        section = "## New Contributors\n\n" + "\n".join(evidence["new_contributors"])
+        for invalid in (draft.replace(section, section + "\n" + section),
+                        draft.replace(section + "\n\n", "").replace("Sources:", section + "\n\nSources:"),
+                        draft.replace("@service[bot]**", "@invented**"),
+                        draft.replace("[#22]", "[#99]"),
+                        draft.replace("made their", "made — their"),
+                        draft + "\n" + section):
+            self.assertTrue(collector.verify(evidence, invalid), invalid)
+
+    def initial_routes(self):
+        self.routes["/commits/v2"] = [{"sha": "squash", "commit": {"tree": {"sha": "tree"}}}]
+        self.routes["/commits?sha=squash&per_page=100"] = [[commit("squash")], [commit("root", "founder")]]
+        self.routes["/git/trees/tree?recursive=1"] = [{"truncated": False, "tree": [
+            {"path": "src", "type": "tree"}, {"path": "src/app.py", "type": "blob"},
+            {"path": "vendor", "type": "commit"}]}]
+        self.routes["/commits/root/pulls?per_page=100"] = [[]]
+
+    def test_initial_release_collects_all_history_and_uses_commits_link(self):
+        self.initial_routes()
+        evidence = collector.collect("example/widget", None, "v2", self.api, self.generated_notes())
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertEqual([c["sha"] for c in evidence["commits"]], ["root", "squash"])
+        self.assertEqual(evidence["files_without_patch"], ["src/app.py", "vendor"])
+        self.assertFalse(any("/compare/" in call for call in self.calls))
+        self.assertIn("/commit/root", evidence["sources"][0])
+        draft = self.with_newcomers(evidence)
+        self.assertTrue(draft.endswith("**Full Changelog**: https://github.com/example/widget/commits/v2"))
+        self.assertEqual(collector.verify(evidence, draft), [])
+        self.assertTrue(collector.verify(evidence, draft.replace("commits/v2", "compare/v1...v2")))
+
+    def test_initial_release_missing_or_truncated_tree_fails_closed(self):
+        self.initial_routes()
+        self.routes["/git/trees/tree?recursive=1"][0]["truncated"] = True
+        self.assertFalse(collector.collect("example/widget", None, "v2", self.api)["complete"])
+        self.routes["/git/trees/tree?recursive=1"] = RuntimeError("HTTP 403")
+        self.assertFalse(collector.collect("example/widget", None, "v2", self.api)["complete"])
+
+    def test_compare_release_rejects_initial_history_link(self):
+        evidence = self.collect()
+        self.assertTrue(collector.verify(evidence, self.draft(evidence).replace("compare/v1...v2", "commits/v2")))
+
+    def test_initial_release_empty_history_cannot_pass(self):
+        self.initial_routes()
+        self.routes["/commits?sha=squash&per_page=100"] = [[]]
+        evidence = collector.collect("example/widget", None, "v2", self.api)
+        self.assertFalse(evidence["complete"])
+        self.assertTrue(any("resolved current commit" in issue for issue in evidence["issues"]))
+
+    def test_cli_initial_release_with_saved_generation_response(self):
+        self.initial_routes()
+        evidence = collector.collect("example/widget", None, "v2", self.api, self.generated_notes())
+        with tempfile.TemporaryDirectory(prefix="release-evidence-") as directory:
+            notes = Path(directory) / "generated-notes.json"
+            output = Path(directory) / "evidence.json"
+            notes.write_text(json.dumps(self.generated_notes()), encoding="utf-8-sig")
+            args = ["collector", "collect", "example/widget", "v2", "--initial-release",
+                    "--generated-notes", str(notes), "--output", str(output)]
+            with patch.object(sys, "argv", args), patch.object(collector, "collect", return_value=evidence) as gather, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(collector.main(), 0)
+            gather.assert_called_once_with("example/widget", None, "v2", generated_notes=self.generated_notes())
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), evidence)
+
+    def test_cli_rejects_missing_compare_ref_and_initial_release_with_two_refs(self):
+        for args in (["collect", "example/widget", "v2", "--output", "unused"],
+                     ["collect", "example/widget", "v1", "v2", "--initial-release", "--output", "unused"]):
+            with self.subTest(args=args), patch.object(sys, "argv", ["collector"] + args), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    collector.main()
+                self.assertEqual(error.exception.code, 2)
+
+    def test_multiple_new_contributors_preserve_first_appearance_order(self):
+        evidence = self.collect()
+        other = dict(self.pr, number=23, user={"login": "Human"}, html_url="https://github.com/example/widget/pull/23")
+        evidence["pull_requests"].append({"metadata": other})
+        notes = self.generated_notes("* @Human made their first contribution in https://github.com/example/widget/pull/23\n"
+                                     "* @service[bot] made their first contribution in https://github.com/example/widget/pull/22")
+        collector.add_new_contributors(evidence, notes)
+        self.assertTrue(evidence["new_contributors"][0].startswith("* **@Human**"))
+        self.assertTrue(evidence["new_contributors"][1].startswith("* **@service[bot]**"))
+        self.assertEqual(collector.verify(evidence, self.with_newcomers(evidence)), [])
 
     def test_source_titles_with_em_dash_still_verify(self):
         self.pr["title"] = "Service — update"
