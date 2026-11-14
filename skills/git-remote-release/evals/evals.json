@@ -2,6 +2,58 @@
   "skill_name": "git-remote-release",
   "evals": [
     {
+      "id": 14,
+      "prompt": "Generate release notes for example/widget v1...v2 using only this complete offline evidence: merged PR #7, Fix CLI output, by returning contributor maintainer at https://github.com/example/widget/pull/7, fixes the trailing newline. All original commits and final files are accounted for, and there are no new contributors. My console displays plain text. Give me just a link to the Markdown file in your working directory and keep generated files out of the repository.",
+      "expected_output": "Writes complete UTF-8 release-notes.md in a task-specific temporary working directory outside the repository, checks its contents, and returns only an absolute Markdown link to that existing file. The file itself contains the rich paste-ready release notes with no delivery wrapper.",
+      "expectations": [
+        "Creates an actual .md file outside the repository and never places it in ignored repository-local folders",
+        "Reads back the saved file and applies the available release-note checks before delivery",
+        "File begins with ## What's Changed and contains the required This release opening, highlights, and PR #7 Sources entry",
+        "File ends with **Full Changelog**: https://github.com/example/widget/compare/v1...v2",
+        "File contains no surrounding code fences, console output, or delivery link",
+        "Successful final response contains only a Markdown link using the real absolute path to the generated file",
+        "Does not duplicate the release notes inline or leave generated artifacts in the repository",
+        "Keeps the linked file available after delivery instead of deleting its temporary working directory"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Write release notes for example/widget v1...v2 from this offline evidence only. The complete range has merged PR #22, Add widget export, authored by REST user.login Alice, URL https://github.com/example/widget/pull/22. The final diff adds CSV export. GitHub generated release notes for this exact range identify @alice as making their first contribution in that PR, repeated once as @Alice. PR #23, Fix export encoding, by returning contributor Bob, URL https://github.com/example/widget/pull/23, fixes UTF-8 output. All association, original commit and file inventories are complete, with no additional authors or sources. Keep our rich release format and recognize first-time contributors.",
+      "expected_output": "Preserves the release story and both Sources entries, then includes ## New Contributors with one rich bullet for @Alice linking PR #22 immediately before the normal v1...v2 Full Changelog link. Bob is credited in Sources without a first-contribution claim.",
+      "expectations": [
+        "Uses the required This release opening and bold-lead release-highlight bullets",
+        "Preserves both PR source entries with exact REST author spelling",
+        "Includes ## New Contributors after Sources and immediately before Full Changelog",
+        "Uses * **@Alice** made their first contribution in [#22](https://github.com/example/widget/pull/22). exactly once",
+        "Does not identify Bob as a new contributor",
+        "Ends with **Full Changelog**: https://github.com/example/widget/compare/v1...v2"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Generate release notes from this offline snapshot for the first release of example/widget, v1.0.0, from our trunk-based repository. There is no previous release tag. Complete reachable history includes the root commit adding the CLI and the squash integration of merged PR #1, Add JSON output, authored by REST user.login new-dev at https://github.com/example/widget/pull/1. All original PR commits are by new-dev, and no other PRs exist. The root commit is a verified direct source at https://github.com/example/widget/commit/abc by founder. Final files ship the CLI with JSON output. GitHub's generated notes for this initial release mark new-dev as making their first contribution in PR #1. All commit, association, and final-file inventories are complete. Produce our rich paste-ready notes.",
+      "expected_output": "An initial release story covering the CLI and JSON output, with root commit and PR sources, verified New Contributors recognition, and GitHub's /commits/v1.0.0 Full Changelog link rather than an invented compare base.",
+      "expectations": [
+        "Includes the root commit's CLI functionality and PR #1 JSON output in the release story",
+        "Preserves the root direct-commit source and the single PR source",
+        "Recognizes @new-dev in ## New Contributors immediately before Full Changelog",
+        "Does not infer first-contribution status for founder solely from initial-release membership",
+        "Ends with **Full Changelog**: https://github.com/example/widget/commits/v1.0.0",
+        "Does not invent a previous tag or exclude the root commit"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Write release notes for example/widget v1...v2 from this complete offline evidence only: merged PR #7, Fix CLI output, by returning contributor maintainer at https://github.com/example/widget/pull/7, fixes the trailing newline. All original commits and final files are accounted for. GitHub's generated notes for this exact range contain no New Contributors section. Do not fetch additional data.",
+      "expected_output": "Normal rich release notes with one source and the compare link, omitting New Contributors entirely.",
+      "expectations": [
+        "Omits ## New Contributors and any empty placeholder for it",
+        "Does not infer a newcomer merely because only one author appears in this range",
+        "Preserves the PR #7 source and normal summary format",
+        "Ends with **Full Changelog**: https://github.com/example/widget/compare/v1...v2"
+      ]
+    },
+    {
       "id": 9,
       "prompt": "Generate release notes for https://github.com/codebeltnet/benchmarkdotnet/compare/v1.3.3...v1.3.4. Python and authenticated gh are available. Include the contributors and all meaningful changes, even though the release is a single squash commit.",
       "expected_output": "Uses the bundled deterministic collector and draft verifier. PR #22 appears once with codebelt-aicia[bot], aicia-bot and gimlichael. Notes cover final configuration, test/build, and documentation changes as well as the initial service update.",

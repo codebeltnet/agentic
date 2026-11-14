@@ -10,7 +10,7 @@ description: >
 
 This skill generates polished GitHub release notes from the commits and pull requests between two tags, two branches, or the current branch and the upstream default branch. It produces a human-friendly summary optimized for release notes, not a raw commit log.
 
-When explicit tags or a compare URL are provided, the skill works entirely through GitHub's API — no local clone is needed. When no input is provided, the skill detects the current Git working repository and resolves the comparison range from local branch and remote state.
+When explicit tags or a compare URL are provided, the skill works entirely through GitHub's API — no local clone is needed. An initial release with no previous release tag includes all history reachable from the current ref. When no input is provided, the skill detects the current Git working repository and resolves the comparison range from local branch and remote state.
 
 ## Evidence collection gate
 
@@ -24,9 +24,11 @@ Use an absolute skill path and an output directory under the operating system's 
 
 Read the resulting `commits`, every `pull_requests[].commits`, and final `files` before writing the summary. Use `sources` verbatim in the Sources section. The opening PR body is context, not the change inventory. Check each meaningful final file change against the summary. Inspect `files_without_patch` through another read-only route when needed; binary files and omitted patches still require consideration. Distinguish repository test/build tooling changes from changes to dependencies shipped to package consumers before claiming a breaking change.
 
+For tag ranges, collect GitHub's first-contribution metadata as described in Step 3b and pass the saved JSON with `--generated-notes <temporary-directory>/generated-notes.json`. The collector cross-checks every newcomer against a verified in-range PR author and emits `new_contributors` lines to use verbatim after Sources. This supplements the source inventory; it never replaces commit expansion or final-diff inspection. Existing collection without that option remains supported when first-contribution metadata is unavailable; disclose that limitation rather than claiming there are no new contributors.
+
 Exit code 1 or `complete: false` means collection is incomplete. Read `issues` and resolve the missing evidence through another read-only route, or explicitly report incomplete sources. The collector deliberately leaves ambiguous rebase/partial integrations and comparison file inventories at the API cap for review. Never silently remove an issue, use an older output after a failed invocation, or treat an unverified commit as a direct source.
 
-Save the draft beside the evidence and check it before returning:
+Save the draft as UTF-8 `release-notes.md` beside the evidence in a task-specific working directory under the operating system's temporary directory, outside the repository, and check it before returning:
 
 ```text
 python <skill-directory>/scripts/collect-release-evidence.py verify <temporary-directory>/release-evidence.json <temporary-directory>/release-notes.md
@@ -51,6 +53,8 @@ When the user provides a GitHub compare URL like `https://github.com/codebeltnet
 **3. Default resolution (no input provided):**
 
 When the user does not provide an explicit repository, tag range, compare URL, or branch name, the skill operates on the current Git working repository. See **Default Resolution Behavior** below.
+
+**Initial release:** Accept a repository and current ref without a previous ref when the user explicitly requests the first release or repository tag/history evidence establishes that no earlier release tag exists on the target's ancestry. Do not mistake a missing parameter, an empty comparison, or an unpublished release for proof of an initial release. If that distinction cannot be resolved, ask. This mode also applies to a first release from a trunk-based repository; ordinary current-branch requests retain Default Resolution Behavior.
 
 If any required value is missing and cannot be inferred or resolved, ask the user for it before proceeding.
 
@@ -144,9 +148,13 @@ Determine which input path applies:
 
 Validate that the repository exists and both refs are reachable before continuing.
 
+For an initial release, validate only the current ref and record the previous ref as absent, never as an invented tag or the root commit. Use `python <skill-directory>/scripts/collect-release-evidence.py collect <owner/repo> <current-ref> --initial-release --output <temporary-directory>/release-evidence.json`. The collector paginates the entire reachable history and reads the final recursive Git tree. Its `files_without_patch` entries must be inspected at the resolved current SHA through read-only file/blob retrieval before summarizing; intermediate commit patches do not prove the initial release's final contents. A truncated tree or failed history request is incomplete evidence.
+
 ### Step 2: Collect commits in the comparison range
 
-Fetch all commits included in the range `previousRef...currentRef` using the GitHub API or local Git commands. For each commit, collect:
+Fetch all commits included in the range `previousRef...currentRef` using the GitHub API or local Git commands.
+
+For an initial release, collect all commits reachable from `currentRef` instead of comparing against a previous ref. Never compare the root commit to the current ref, which would omit the root commit's contribution. For each commit, collect:
 
 - Commit SHA
 - Commit message (subject and body)
@@ -176,6 +184,23 @@ Use a commit source only after a successful, fully paginated lookup and relevanc
 
 Authentication errors, rate limits, missing tool capabilities, truncated responses, and failed PR-detail requests mean unresolved metadata, not "no PR". Try another available read-only GitHub route or retry as appropriate. If still unresolved, clearly mark the Sources section incomplete before the final changelog link and identify affected SHAs. Do not silently emit commit substitutes or claim complete resolution.
 
+### Step 3b: Identify new contributors
+
+For a tag range, request GitHub's generated release-note content for the exact repository and range, saving the JSON beside the evidence:
+
+```bash
+gh api --method POST "repos/{owner}/{repo}/releases/generate-notes" -f "tag_name={currentRef}" -f "previous_tag_name={previousRef}" > <temporary-directory>/generated-notes.json
+python <skill-directory>/scripts/collect-release-evidence.py collect <owner/repo> <previous-ref> <current-ref> --generated-notes <temporary-directory>/generated-notes.json --output <temporary-directory>/release-evidence.json
+```
+
+The [generate-notes endpoint](https://docs.github.com/en/rest/releases/releases#generate-release-notes-content-for-a-release) generates content without saving a release or creating a tag. It uses POST and can require Contents write permission even though it does not mutate repository state. Never call the create-release endpoint or publish anything to discover contributors. Check the command succeeded before using its output; an authentication failure, unsupported range, or malformed response is not evidence of zero newcomers.
+
+For an initial tagged release, omit `previous_tag_name` from the generate-notes request and use `--initial-release` with only the current ref in the collector command; `--generated-notes` works in this mode too. If the target tag does not yet exist, pass the verified current SHA as `target_commitish` to generation. Do not invent a previous release tag.
+
+Use only GitHub's `## New Contributors` entries, cross-checked against the collected in-range PR and its exact REST author login. Deduplicate accounts case-insensitively while preserving REST spelling and first appearance order. A person appearing once in this release is not necessarily new to the repository. Do not infer first-contribution status from a display name, a contributor list, or `author_association` alone. Preserve their normal Sources credit as well.
+
+For branch comparisons, offline snapshots, or unavailable generation permissions, use authoritative first-contribution evidence supplied for the same range or verified repository history instead. If that evidence is unavailable, omit the section and disclose that first-contribution status could not be checked outside the paste-ready release note. Never invent newcomers or an empty section. For manual collection, apply the same identity and range checks; the bundled `--generated-notes` option accepts GitHub's JSON response (including a supplied offline response) and rejects mismatched PRs or authors.
+
 ### Step 4: Analyze and summarize
 
 Read through all collected pull requests and commits. Understand what changed, why it matters, and how it affects users and maintainers. Group related changes together. Identify breaking changes, new features, bug fixes, dependency updates, CI/CD changes, documentation updates, and infrastructure work.
@@ -190,9 +215,19 @@ The summary should explain the effect of the changes, not just the implementatio
 
 ### Step 5: Compose the release notes
 
-Follow the exact output format defined below. Every release note must start with `## What's Changed` and end with the full changelog link. Nothing may appear after the changelog link.
+Follow the exact output format defined below in the saved Markdown file. Every release note must start with `## What's Changed` and end with the full changelog link. Nothing may appear after the changelog link inside that file.
+
+### Step 6: Deliver the Markdown file
+
+Always write the complete release notes to a UTF-8 `.md` file in the task's temporary working directory outside the repository, including when using manual collection or an offline snapshot. Reuse the verified `release-notes.md` rather than creating a second copy. Do not write the deliverable, evidence, or drafts into the repository or change tracked files to deliver release notes.
+
+Read the saved file back and confirm it contains the final release-note Markdown, without surrounding code fences, console transcripts, delivery links, or explanatory wrappers. Verify that this exact file exists and has passed the applicable checks before linking it. Keep the linked file available after the response; do not delete its working directory during cleanup.
+
+On successful completion, return only a Markdown link to the generated file in that working directory: `[release-notes.md](<absolute-path-to-release-notes.md>)`. Use the real absolute file path, with forward slashes where supported and angle brackets around paths containing spaces. Do not use a bare filename, a repository-relative target, a directory-only link, an invented download URL, or an inline copy of the release notes. The file is the Markdown deliverable even when the console displays response text without rendering it. If the environment cannot save or link a file, report that limitation instead of claiming delivery; any required warning about incomplete evidence must also remain visible outside the paste-ready file.
 
 ## Output Format
+
+This format defines the file contents. The final response is the file link described in Step 6; its placement does not change the file's opening heading or final changelog line.
 
 ```markdown
 ## What's Changed
@@ -210,8 +245,14 @@ Sources:
 * <title> by @<author> in <url>
 * <title> by @<author> in <url>
 
+## New Contributors
+
+* **@<new-contributor>** made their first contribution in [#<pr-number>](<pr-url>).
+
 **Full Changelog**: https://github.com/{owner}/{repo}/compare/{previousRef}...{currentRef}
 ```
+
+Include `## New Contributors` only when at least one first contribution is verified. Place it after the complete Sources section and immediately before the final changelog link, with one star bullet per account. Use a bold exact `@login` and a linked PR number as shown; adapt all identities, numbers, and URLs to the release evidence. For example: `* **@gimlichael** made their first contribution in [#1](https://github.com/gimlichael/claude-autoupdate/pull/1).` This recognition does not change the existing summary, alerts, Sources format, or changelog URL rules.
 
 Keep each prose paragraph and Markdown list item on one physical line regardless of length. Do not hard-wrap release notes to a fixed column width; rely on editor soft wrapping and use physical line breaks only between Markdown structures. Rejoin unnecessary hard wraps in any existing prose you edit.
 
@@ -329,7 +370,7 @@ List every pull request and direct commit that contributed to the release. Do no
 
 ### The changelog link
 
-The final line of the release note must always be:
+For a release between two refs, the final line must be:
 
 ```
 **Full Changelog**: https://github.com/{owner}/{repo}/compare/{previousRef}...{currentRef}
@@ -337,11 +378,19 @@ The final line of the release note must always be:
 
 When comparing tags, use the tag names (e.g. `v1.0.0...v1.0.1`). When comparing branches from default resolution, use the branch names (e.g. `main...feature/my-branch`).
 
+For an initial release with no previous release tag, use GitHub's history link instead:
+
+```markdown
+**Full Changelog**: https://github.com/{owner}/{repo}/commits/{currentRef}
+```
+
+For example: `**Full Changelog**: https://github.com/gimlichael/claude-autoupdate/commits/v1.0.0`. Use the actual repository and current ref. Never fabricate a compare base for an initial release. New Contributors, when present, immediately precedes this link just as it does the compare link.
+
 Nothing may appear after this line.
 
 ## Non-Negotiable Rules
 
-- The first line of the output is exactly `## What's Changed`.
+- The first line of the release-note file is exactly `## What's Changed`.
 - The first non-empty summary line after that heading begins exactly with `This release `.
 - The opening summary is exactly one concise paragraph.
 - The opening summary paragraph is followed by one or more release-highlight bullets before any optional alert blocks or the `Sources:` section.
@@ -353,7 +402,7 @@ Nothing may appear after this line.
 - Alert severity matches the actual impact of the change.
 - The `Sources:` section is always included.
 - Source entries use the `* <title> by <contributors> in <url>` format. Include all verified source authors with exact `@login` values, falling back to recorded names when a GitHub login is unavailable.
-- The final line is the full changelog link in the exact format shown above.
+- The final line is the full changelog link: `/compare/{previousRef}...{currentRef}` for two refs, or `/commits/{currentRef}` for an initial release without a previous tag.
 - Nothing appears after the full changelog link.
 - No Unicode em dash appears in authored release-note prose; exact source titles remain verbatim evidence.
 - No unsupported claims are invented.
@@ -368,6 +417,8 @@ Nothing may appear after this line.
 - The skill does not mutate any repository state — it is entirely read-only.
 - When no explicit input is provided, the skill follows the Default Resolution Behavior instead of asking the user for a repository or tag range.
 - All contributors in the comparison range are represented in the Sources section.
+- Verified first-time contributors also appear once in `## New Contributors`, after Sources and immediately before Full Changelog; omit the section when none are verified.
+- Always save the final release notes as a Markdown file outside the repository and return a Markdown link to that exact file; a console-only response is not delivery.
 
 ## Data Collection Strategy
 
@@ -439,3 +490,6 @@ Before returning the result, verify:
 24. Each qualifying PR's original commit inventory is complete, and every verified author/co-author is credited on its source line, even for squash merges and automated release PRs.
 25. The summary covers meaningful final changes across all authors and changed files; stale PR descriptions do not override diff evidence.
 26. Each prose paragraph and Markdown list item occupies one physical line, regardless of length.
+27. When first-contribution evidence exists, New Contributors lists each verified account once with its first PR link immediately before Full Changelog; unavailable metadata is disclosed and never treated as proof that nobody is new.
+28. Initial releases include the root commit and all reachable history, inspect final tree contents, and end with `/commits/{currentRef}`; normal comparisons retain `/compare/{previousRef}...{currentRef}`.
+29. The final UTF-8 `.md` file exists in the task's temporary working directory outside the repository, contains only the release-note Markdown, and is the exact file verified and linked in the response; successful delivery returns only that absolute Markdown file link.
