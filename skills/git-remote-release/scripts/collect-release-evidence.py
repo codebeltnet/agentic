@@ -148,7 +148,40 @@ def verify_summary(lines):
     return errors
 
 
-def collect(repository, previous, current, api=github):
+def add_new_contributors(evidence, generated_notes):
+    """Use GitHub's first-contribution evidence only for verified in-range PR authors."""
+    evidence["generated_notes"] = generated_notes
+    body = generated_notes["body"]
+    if not isinstance(body, str):
+        raise ValueError("Generated release notes body must be text")
+    lines = body.splitlines()
+    headings = [i for i, line in enumerate(lines) if line.strip() == "## New Contributors"]
+    if len(headings) > 1:
+        raise ValueError("Duplicate New Contributors sections in generated notes")
+    result = []
+    seen = set()
+    if headings:
+        for line in lines[headings[0] + 1:]:
+            if line.startswith("## ") or line.startswith("**Full Changelog**:"):
+                break
+            if not line.strip():
+                continue
+            match = re.fullmatch(r"[*-] @([\w\[\]-]+) made their first contribution in (https://github\.com/[^\s]+/pull/\d+)\s*", line)
+            if not match:
+                raise ValueError("Unrecognized first-contribution entry: " + line)
+            login, url = match.groups()
+            pr = next((item["metadata"] for item in evidence["pull_requests"]
+                       if item["metadata"]["html_url"].casefold() == url.casefold()
+                       and item["metadata"]["user"]["login"].casefold() == login.casefold()), None)
+            if pr is None:
+                raise ValueError("First contribution is not a verified in-range PR by that author: " + line)
+            if login.casefold() not in seen:
+                seen.add(login.casefold())
+                result.append(f"* **@{pr['user']['login']}** made their first contribution in [#{pr['number']}]({pr['html_url']}).")
+    evidence["new_contributors"] = result
+
+
+def collect(repository, previous, current, api=github, generated_notes=None):
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
         raise ValueError("Repository must be owner/repo")
     root = f"repos/{repository}"
@@ -166,23 +199,40 @@ def collect(repository, previous, current, api=github):
 
     # Resolve once so moving branches cannot change the range during collection.
     refs = []
-    for ref in (previous, current):
+    for ref in ((previous, current) if previous is not None else (current,)):
         pages = read(f"{root}/commits/{quote(ref, safe='')}")
         if pages is None:
             return evidence
         refs.append(pages[0]["sha"])
     evidence["resolved_refs"] = refs
-    pages = read(f"{root}/compare/{refs[0]}...{refs[1]}?per_page=100")
-    if pages is None:
-        return evidence
-    commits = [commit for page in pages for commit in page["commits"]]
+    if previous is None:
+        # Initial releases include the whole reachable history, oldest first.
+        tree_sha = pages[0]["commit"]["tree"]["sha"]
+        history = read(f"{root}/commits?sha={refs[0]}&per_page=100")
+        tree = read(f"{root}/git/trees/{tree_sha}?recursive=1")
+        if history is None or tree is None:
+            return evidence
+        commits = list(reversed([commit for page in history for commit in page]))
+        evidence["files"] = [{"filename": item["path"], "status": "added"}
+                             for item in tree[0]["tree"] if item["type"] in ("blob", "commit")]
+        if tree[0].get("truncated"):
+            issues.append("Initial release tree is truncated; collect the complete final tree through another route")
+    else:
+        pages = read(f"{root}/compare/{refs[0]}...{refs[1]}?per_page=100")
+        if pages is None:
+            return evidence
+        commits = [commit for page in pages for commit in page["commits"]]
+        if len(commits) != pages[0]["total_commits"]:
+            issues.append("Comparison commit count mismatch")
+        evidence["files"] = pages[0]["files"]
+        if len(evidence["files"]) >= 300:
+            issues.append("Comparison files may be capped at 300; collect the final diff through another route")
     evidence["commits"] = commits
     shas = {commit["sha"] for commit in commits}
-    if len(commits) != pages[0]["total_commits"] or len(shas) != len(commits):
-        issues.append("Comparison commit count mismatch or duplicate SHAs")
-    evidence["files"] = pages[0]["files"]
-    if len(evidence["files"]) >= 300:
-        issues.append("Comparison files may be capped at 300; collect the final diff through another route")
+    if previous is None and refs[0] not in shas:
+        issues.append("Initial release history does not include the resolved current commit")
+    if len(shas) != len(commits):
+        issues.append("Duplicate commit SHAs")
     evidence["files_without_patch"] = [f["filename"] for f in evidence["files"] if "patch" not in f]
     details = {}
     covered = set()
@@ -257,6 +307,11 @@ def collect(repository, previous, current, api=github):
             evidence["sources"].append(line)
             source_order[line] = (position, 0)
     evidence["sources"].sort(key=source_order.__getitem__)
+    if generated_notes is not None:
+        try:
+            add_new_contributors(evidence, generated_notes)
+        except (KeyError, TypeError, ValueError) as error:
+            issues.append("New contributor evidence: " + str(error))
     evidence["complete"] = not issues
     return evidence
 
@@ -268,6 +323,8 @@ def verify(evidence, draft):
     lines = draft.strip().splitlines()
     if lines.count("Sources:") == 1:
         authored_lines = lines[:lines.index("Sources:")]
+        if "## New Contributors" in lines:
+            authored_lines += lines[lines.index("## New Contributors"):]
     else:
         authored_lines = lines
     if any("—" in line for line in authored_lines):
@@ -278,11 +335,17 @@ def verify(evidence, draft):
         errors.append("Expected exactly one Sources section")
     else:
         errors.extend(verify_summary(lines))
-        actual = [line for line in lines[lines.index("Sources:") + 1:-1] if line.strip()]
+        tail = [line for line in lines[lines.index("Sources:") + 1:-1] if line.strip()]
+        newcomers = evidence.get("new_contributors", [])
+        expected_tail = evidence["sources"] + (["## New Contributors"] + newcomers if newcomers else [])
+        actual = tail[:len(evidence["sources"])]
         if actual != evidence["sources"]:
             errors.append("Sources must match collected source lines, including all contributors, exactly")
-    expected = (f"**Full Changelog**: https://github.com/{evidence['repository']}/compare/"
-                f"{evidence['previous']}...{evidence['current']}")
+        if tail != expected_tail:
+            errors.append("Sources and verified New Contributors must appear exactly once in order before Full Changelog; omit empty or unverified contributor sections")
+    target = (f"compare/{evidence['previous']}...{evidence['current']}" if evidence['previous'] is not None
+              else f"commits/{evidence['current']}")
+    expected = f"**Full Changelog**: https://github.com/{evidence['repository']}/{target}"
     if not lines or lines[-1] != expected:
         errors.append("Missing final changelog link or content follows it")
     return errors
@@ -294,14 +357,26 @@ def main():
     gather = commands.add_parser("collect")
     gather.add_argument("repository")
     gather.add_argument("previous")
-    gather.add_argument("current")
+    gather.add_argument("current", nargs="?")
+    gather.add_argument("--initial-release", action="store_true",
+                        help="Collect all history: supply only repository and current ref, with no previous ref")
     gather.add_argument("--output", type=Path, required=True)
+    gather.add_argument("--generated-notes", type=Path,
+                        help="Saved GitHub generate-notes JSON for this exact tag range")
     check = commands.add_parser("verify")
     check.add_argument("evidence", type=Path)
     check.add_argument("draft", type=Path)
     args = parser.parse_args()
     if args.command == "collect":
-        evidence = collect(args.repository, args.previous, args.current)
+        if args.initial_release:
+            if args.current is not None:
+                parser.error("--initial-release accepts only repository and current ref, without a previous ref")
+            args.current, args.previous = args.previous, None
+        elif args.current is None:
+            parser.error("Supply previous and current refs, or use --initial-release")
+        generated_notes = (json.loads(args.generated_notes.read_text(encoding="utf-8-sig"))
+                           if args.generated_notes else None)
+        evidence = collect(args.repository, args.previous, args.current, generated_notes=generated_notes)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({"complete": evidence["complete"], "issues": evidence["issues"],
