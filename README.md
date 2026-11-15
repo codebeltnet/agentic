@@ -650,7 +650,7 @@ Its bundled Python collector uses authenticated `gh` GET requests to expand squa
 - **GitHub alert blocks** that use only supported `NOTE`, `TIP`, `IMPORTANT`, `WARNING`, and `CAUTION` markers sparingly and only when the release data supports the attention level,
 - **Source preservation** where verified merged PRs replace their covered commits, all verified PR commit contributors share the source line with exact GitHub logins, and unresolved lookups are reported as incomplete,
 - **Markdown file delivery** that saves and checks `release-notes.md` in a temporary working directory outside the repository, retains the file, and returns only an absolute Markdown link without duplicating the notes in console output,
-- **New contributor recognition** that uses verified first-contribution metadata, bold GitHub handles, and linked PR numbers immediately before Full Changelog, omitting the section when none are verified,
+- **New contributor recognition** that uses verified first-contribution metadata bound to the exact release range, bold GitHub handles, and linked PR numbers immediately before Full Changelog, omitting the section when none are verified,
 - **Initial release support** that includes the root commit and all reachable history when no previous release tag exists, with `/commits/{currentRef}` as the final changelog link,
 - **Strict format** that always starts with `## What's Changed`, forbids em dashes in the authored release-note prose while preserving verbatim source titles, and always ends with the appropriate full changelog link,
 - **No invented claims** so every statement in the summary is backed by the commits and pull requests collected,
