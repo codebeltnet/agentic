@@ -26,7 +26,6 @@ jobs:
           - { name: codex-cli, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: CodexCli }
           - { name: codex-app-server, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: CodexAppServer }
           - { name: opencode, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: OpenCode }
-          - { name: copilot, script: scripts/eval-runners/tests/test-runner-conformance.ps1, suite: Copilot }
           - { name: integrity-bridge, script: scripts/eval-runners/tests/test-integrity-finalization.ps1, suite: Bridge }
           - { name: integrity-grading, script: scripts/eval-runners/tests/test-integrity-finalization.ps1, suite: Grading }
           - { name: integrity-application, script: scripts/eval-runners/tests/test-integrity-finalization.ps1, suite: Application }

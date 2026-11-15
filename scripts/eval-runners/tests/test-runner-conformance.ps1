@@ -10,7 +10,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Protocol', 'CodexCli', 'CodexAppServer', 'OpenCode', 'Copilot')]
+    [ValidateSet('All', 'Protocol', 'CodexCli', 'CodexAppServer', 'OpenCode')]
     [string]$Suite = 'All'
 )
 
@@ -106,7 +106,8 @@ function Invoke-AdapterJson {
         [Parameter(Mandatory = $true)][string]$ProfilePath
     )
 
-    $output = & pwsh -NoProfile -NonInteractive -File $RunnerPath $Command -Run $RunPath -Profile $ProfilePath
+    $launcherPath = Join-Path $PSScriptRoot 'fixtures/invoke-recorded-adapter.ps1'
+    $output = & pwsh -NoProfile -NonInteractive -File $launcherPath -RunnerPath $RunnerPath -Command $Command -Run $RunPath -Profile $ProfilePath
     if ($LASTEXITCODE -ne 0) { throw "Recorded runner '$Command' failed for '$RunnerPath': $([string]::Join(' ', @($output)))" }
     $json = [string]::Join([Environment]::NewLine, @($output))
     if ([string]::IsNullOrWhiteSpace($json)) { throw "Recorded runner '$Command' returned no JSON for '$RunnerPath'." }
@@ -120,11 +121,6 @@ $recordedOldOpenAi = $env:OPENAI_API_KEY
 $recordedOldCodexHome = $env:CODEX_HOME
 $recordedOldGlobalSecret = $env:AGENTIC_GLOBAL_SECRET
 $recordedOldProjectDisable = $env:OPENCODE_DISABLE_PROJECT_CONFIG
-$recordedOldCopilotToken = $env:COPILOT_GITHUB_TOKEN
-$recordedOldGhToken = $env:GH_TOKEN
-$recordedOldGithubToken = $env:GITHUB_TOKEN
-$recordedOldCopilotHome = $env:COPILOT_HOME
-$recordedOldGhConfigDir = $env:GH_CONFIG_DIR
 $recordedOldFixtures = $env:AGENTIC_RECORDED_FIXTURES
 try {
     $fakeBin = Join-Path $recordedRoot 'bin'
@@ -151,7 +147,6 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $recordedRoot 'skills\dotnet-strong-name-signing\SKILL.md'), 'CODEBELT_BASELINE_LEAK_CANARY_7C9E4AF2', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $recordedRoot 'skills\dotnet-strong-name-signing\FORMS.md'), 'CODEBELT_BASELINE_FORMS_CANARY_7C9E4AF2', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $recordedRoot 'AGENTS.md'), 'CODEBELT_SOURCE_ANCESTOR_AGENTS_CANARY_7C9E4AF2', [System.Text.UTF8Encoding]::new($false))
-    [System.IO.File]::WriteAllText((Join-Path $recordedRoot '.github\copilot-instructions.md'), 'CODEBELT_SOURCE_ANCESTOR_COPILOT_CANARY_7C9E4AF2', [System.Text.UTF8Encoding]::new($false))
     Assert-True (Test-Path -LiteralPath (Join-Path $recordedRoot 'skills\dotnet-strong-name-signing\SKILL.md') -PathType Leaf) 'OpenCode baseline canary source skill fixture exists'
     Assert-True (Test-Path -LiteralPath (Join-Path $recordedRoot 'skills\dotnet-strong-name-signing\FORMS.md') -PathType Leaf) 'OpenCode baseline canary FORMS.md fixture exists'
     $recordedFixtureRoot = (Resolve-Path (Join-Path $PSScriptRoot 'fixtures')).Path
@@ -179,7 +174,6 @@ function Test-FixtureMarker {
     return Test-Path -LiteralPath (Join-Path $fixtureHome $Name) -PathType Leaf
 }
 $scriptedFixture = Test-FixtureMarker -Name 'scripted-session-fixture'
-$exactSessionHelpFixture = Test-FixtureMarker -Name ("{0}-exact-session-help" -f $harness)
 $noExactSessionHelpFixture = Test-FixtureMarker -Name ("{0}-no-exact-session-help" -f $harness)
 $timingFixture = Test-FixtureMarker -Name ("{0}-timing-fixture" -f $harness)
 $fakeHomeFixture = Test-FixtureMarker -Name 'opencode-fake-home'
@@ -187,7 +181,7 @@ $noSessionFirstFixture = Test-FixtureMarker -Name 'scripted-no-session-first'
 $noTerminalFirstFixture = Test-FixtureMarker -Name 'scripted-no-terminal-first'
 $mismatchSessionFixture = Test-FixtureMarker -Name 'scripted-session-mismatch'
 if ($arguments -contains '--version') {
-    $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-unknown 9.3' } }
+    $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' }  default { 'recorded-unknown 9.3' } }
     if ($timingFixture) { Start-Sleep -Milliseconds 20 }
     [IO.File]::AppendAllText($logPath, (([ordered]@{ invocation_kind = 'version_probe'; args = $arguments } | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     Write-Output $version
@@ -200,11 +194,7 @@ if ($arguments -contains '--help' -and -not ($harness -eq 'codex' -and $argument
             if ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { "--format json`n--dir <dir>`n--model <model>`n--auto`n--variant <variant>`n--continue" }
             else { "--format json`n--dir <dir>`n--model <model>`n--auto`n--variant <variant>`n--session <session-id> continue by session id" }
         }
-        'copilot' {
-            if ($exactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
-            elseif ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-no-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
-            else { '--prompt --output-format --model --allow-all --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all-paths --allow-all-urls' }
-        }
+
         default { '--json --auto-approve --cwd --config --data-dir --hooks-dir --provider --model --thinking --timeout --retries --id' }
     }
     if ($timingFixture) { Start-Sleep -Milliseconds 30 }
@@ -231,16 +221,11 @@ if (-not [string]::IsNullOrWhiteSpace([string]$continuationFlag)) {
 }
 $authNames = @('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY')
 $authPresent = @($authNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
-$copilotAuthNames = @('COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN')
-$copilotAuthPresent = @($copilotAuthNames | Where-Object { -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
-$copilotHome = [Environment]::GetEnvironmentVariable('COPILOT_HOME')
 $repositoryAgentsPath = Join-Path (Get-Location).Path 'AGENTS.md'
-$repositoryCopilotInstructionsPath = Join-Path (Get-Location).Path '.github\copilot-instructions.md'
 $candidateSkillPath = if ($harness -eq 'opencode') { Join-Path (Get-Location).Path '.opencode\skills\candidate' } else { Join-Path (Split-Path -Parent (Get-Location).Path) 'skill' }
 $sourceAncestorCanaryVisible = $false
 $sourceFormsCanaryVisible = $false
 $sourceAncestorAgentsVisible = $false
-$sourceAncestorCopilotVisible = $false
 $stagedCandidateSkillVisible = Test-Path -LiteralPath $candidateSkillPath -PathType Container
 $stagedCandidateSkillHash = $null
 $candidatePathInArguments = $false
@@ -277,8 +262,6 @@ while ($true) {
     }
     $ancestorAgentsPath = Join-Path $ancestor 'AGENTS.md'
     if ((Test-Path -LiteralPath $ancestorAgentsPath -PathType Leaf) -and ([IO.File]::ReadAllText($ancestorAgentsPath, [Text.UTF8Encoding]::new($false)) -match 'CODEBELT_SOURCE_ANCESTOR_AGENTS_CANARY_')) { $sourceAncestorAgentsVisible = $true }
-    $ancestorCopilotPath = Join-Path $ancestor '.github\copilot-instructions.md'
-    if ((Test-Path -LiteralPath $ancestorCopilotPath -PathType Leaf) -and ([IO.File]::ReadAllText($ancestorCopilotPath, [Text.UTF8Encoding]::new($false)) -match 'CODEBELT_SOURCE_ANCESTOR_COPILOT_CANARY_')) { $sourceAncestorCopilotVisible = $true }
     $parent = Split-Path -Parent $ancestor
     if ([string]::IsNullOrWhiteSpace($parent) -or [string]::Equals($parent, $ancestor, [StringComparison]::OrdinalIgnoreCase)) { break }
     $ancestor = $parent
@@ -292,19 +275,6 @@ $candidatePathInEnvironment = @(Get-ChildItem Env: | Where-Object { [string]$_.V
 $candidateCanaryInEnvironment = @(Get-ChildItem Env: | Where-Object { [string]$_.Value -match '(?i)CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_' }).Count -gt 0
 $invocationKind = if ($arguments -contains 'debug' -and $arguments -contains 'config') { 'debug_config_probe' } elseif ($arguments -contains 'debug' -and $arguments -contains 'paths') { 'debug_paths_probe' } elseif ($arguments -contains 'debug' -and $arguments -contains '--help') { 'debug_help_probe' } elseif ($arguments -contains '--version') { 'version_probe' } elseif ($arguments -contains '--help') { 'help_probe' } elseif ($scriptedFixture -and -not [string]::IsNullOrWhiteSpace([string]$continuationSessionId)) { 'explicit_session_resume' } else { 'native_execution' }
 $fakeDelayMilliseconds = if (-not $timingFixture) { 0 } else { switch ($invocationKind) { 'version_probe' { 20 } 'help_probe' { 30 } 'explicit_session_resume' { 50 } default { 40 } } }
-$repositoryInstructionMarkerVisible = $false
-if (Test-Path -LiteralPath $repositoryCopilotInstructionsPath -PathType Leaf) {
-    $repositoryInstructionMarkerVisible = [IO.File]::ReadAllText($repositoryCopilotInstructionsPath, [Text.UTF8Encoding]::new($false)).Contains('repo-owned-copilot-instruction')
-}
-$copilotAuthenticationSource = if ($copilotAuthPresent.Count -gt 0) {
-    'explicit_environment'
-} elseif (-not [string]::IsNullOrWhiteSpace($copilotHome) -and (Test-Path -LiteralPath (Join-Path $copilotHome 'fixture-os-keychain-available') -PathType Leaf)) {
-    'os_keychain'
-} elseif (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')) -and (Test-Path -LiteralPath ([Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')) -PathType Container)) {
-    'github_cli'
-} else {
-    'unavailable'
-}
 $record = [ordered]@{
     args = $arguments
     working_directory = (Get-Location).Path
@@ -323,30 +293,18 @@ $record = [ordered]@{
     node_homedir = $null
     skill_permission = $null
     auth_names_present = $authPresent
-    copilot_auth_names_present = $copilotAuthPresent
-    copilot_authentication_source = $copilotAuthenticationSource
     unrelated_present = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('AGENTIC_GLOBAL_SECRET'))
     disable_project_config_present = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('OPENCODE_DISABLE_PROJECT_CONFIG'))
     project_config_visible = Test-Path -LiteralPath (Join-Path (Get-Location).Path 'opencode.json') -PathType Leaf
     stdin_received = $false
     prompt_via_arg = @($arguments | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count -gt 0
     prompt_arg_count = @($arguments | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count
-    copilot_home = $copilotHome
-    copilot_cache_home = [Environment]::GetEnvironmentVariable('COPILOT_CACHE_HOME')
-    gh_config_dir = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
     fixture_mode = if ($scriptedFixture) { 'scripted' } else { 'single_turn' }
     continuation_flag = $continuationFlag
     continuation_session_id = $continuationSessionId
-    custom_instructions_disabled = ($arguments -contains '--no-custom-instructions')
-    builtin_mcps_disabled = ($arguments -contains '--disable-builtin-mcps')
-    repository_agents_visible = Test-Path -LiteralPath $repositoryAgentsPath -PathType Leaf
-    repository_copilot_instructions_visible = Test-Path -LiteralPath $repositoryCopilotInstructionsPath -PathType Leaf
-    repository_instruction_marker_visible = $repositoryInstructionMarkerVisible
-    candidate_skill_staged = Test-Path -LiteralPath $candidateSkillPath -PathType Container
     source_ancestor_candidate_skill_visible = $sourceAncestorCanaryVisible
     source_ancestor_forms_visible = $sourceFormsCanaryVisible
     source_ancestor_agents_visible = $sourceAncestorAgentsVisible
-    source_ancestor_copilot_visible = $sourceAncestorCopilotVisible
     staged_repo_canary_visible = $stagedRepoCanaryVisible
     home_canary_visible = $homeCanaryVisible
     config_canary_visible = $configCanaryVisible
@@ -362,8 +320,6 @@ $record = [ordered]@{
     candidate_skill_exposure = if ($stagedCandidateSkillVisible) { 'included' } else { 'excluded' }
     invocation_kind = $invocationKind
     fake_delay_milliseconds = $fakeDelayMilliseconds
-    ambient_copilot_instructions_visible = if ([string]::IsNullOrWhiteSpace($copilotHome)) { $false } else { Test-Path -LiteralPath (Join-Path $copilotHome 'copilot-instructions.md') -PathType Leaf }
-    secret_env_vars_arg = @($arguments | Where-Object { $_ -like '--secret-env-vars=*' })
 }
 if ($harness -eq 'opencode') {
     try {
@@ -684,7 +640,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
         approvalPolicy = 'never'
         approvalsReviewer = 'user'
         cwd = (Get-Location).Path
-        model = 'gpt-5.6-luna'
+        model = 'gpt-6-luna'
         modelProvider = 'recorded-provider'
         sandbox = [ordered]@{ type = 'readOnly' }
         instructionSources = $instructionSources
@@ -697,7 +653,7 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
         # This notification deliberately arrives before turn/start's response
         # so the recorded transport proves reroute capture while waiting for a
         # JSON-RPC response, not only in the terminal event loop.
-        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'model/rerouted'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; fromModel = 'gpt-5.6-luna'; toModel = 'gpt-5.6-other'; reason = 'highRiskCyberActivity' } })
+        Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; method = 'model/rerouted'; params = [ordered]@{ threadId = 'recorded-subscription-thread'; turnId = 'recorded-subscription-turn'; fromModel = 'gpt-6-luna'; toModel = 'gpt-5.6-other'; reason = 'highRiskCyberActivity' } })
     }
     Write-AppServerMessage ([ordered]@{ jsonrpc = '2.0'; id = $turnStart.id; result = [ordered]@{ turn = [ordered]@{ id = 'recorded-subscription-turn'; status = 'inProgress'; items = @() } } })
 
@@ -713,9 +669,6 @@ if ($harness -eq 'codex' -and $arguments -contains 'app-server') {
     $record.stdin_exact = $record.stdin_sha256 -eq $expectedPromptHash
     $record.stdin_utf8_round_trip = $record.stdin_exact
     $record.worker_provider_visible = $false
-    $record.worker_copilot_token_visible = $false
-    $record.worker_gh_token_visible = $false
-    $record.worker_github_token_visible = $false
     $record.worker_auth_file_visible = $false
     $record.worker_global_secret_visible = $false
     $record.worker_project_disable_visible = $false
@@ -808,7 +761,7 @@ if ($harness -eq 'opencode' -and $arguments -contains 'debug' -and $arguments -c
     exit 0
 }
 if ($arguments -contains '--version') {
-    $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-unknown 9.3' } }
+    $version = switch ($harness) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' }  default { 'recorded-unknown 9.3' } }
     if ($fakeDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $fakeDelayMilliseconds }
     [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     Write-Output $version
@@ -821,11 +774,7 @@ if ($arguments -contains '--help') {
             if ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { "--format json`n--dir <dir>`n--model <model>`n--auto`n--variant <variant>`n--continue" }
             else { "--format json`n--dir <dir>`n--model <model>`n--auto`n--variant <variant>`n--session <session-id> continue by session id" }
         }
-        'copilot' {
-            if ($exactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
-            elseif ($noExactSessionHelpFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot)) { [IO.File]::ReadAllText((Join-Path $fixtureRoot 'copilot-help-no-exact-session.txt'), [Text.UTF8Encoding]::new($false)) }
-            else { '--prompt --output-format --model --allow-all --allow-all-tools --no-ask-user --no-custom-instructions --disable-builtin-mcps --no-color --log-level --secret-env-vars --no-auto-update -C --resume --continue --session-id --connect --yolo --allow-all-paths --allow-all-urls' }
-        }
+
         default { '--json --auto-approve --cwd --config --data-dir --hooks-dir --provider --model --thinking --timeout --retries --id' }
     }
     if ($fakeDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $fakeDelayMilliseconds }
@@ -847,7 +796,7 @@ $record.stdin_exact = $stdinHash -eq $expectedPromptHash
 $record.stdin_expected_sha256 = $expectedPromptHash
 $record.stdin_utf8_round_trip = $record.stdin_sha256 -eq $expectedPromptHash
 $record.candidate_canary_in_stdin = ([Text.Encoding]::UTF8.GetString($stdinBytes) -match 'CODEBELT_BASELINE_LEAK_CANARY_|CODEBELT_BASELINE_FORMS_CANARY_|CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_')
-$probeCommand = '$result = [ordered]@{ provider_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENAI_API_KEY'')); copilot_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''COPILOT_GITHUB_TOKEN'')); gh_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''GH_TOKEN'')); github_token_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''GITHUB_TOKEN'')); auth_file_visible = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable(''HOME'')) ''.codex/auth.json''); global_secret_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''AGENTIC_GLOBAL_SECRET'')); project_disable_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENCODE_DISABLE_PROJECT_CONFIG'')) }; $result | ConvertTo-Json -Compress'
+$probeCommand = '$result = [ordered]@{ provider_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENAI_API_KEY'')); auth_file_visible = Test-Path -LiteralPath (Join-Path ([Environment]::GetEnvironmentVariable(''HOME'')) ''.codex/auth.json''); global_secret_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''AGENTIC_GLOBAL_SECRET'')); project_disable_visible = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(''OPENCODE_DISABLE_PROJECT_CONFIG'')) }; $result | ConvertTo-Json -Compress'
 $probeInfo = [Diagnostics.ProcessStartInfo]::new()
 $probeInfo.FileName = (Get-Command pwsh).Source
 $probeInfo.UseShellExecute = $false
@@ -873,9 +822,6 @@ try {
     if ($probe.ExitCode -ne 0) { throw "worker credential probe failed: $probeError" }
     $probeResult = $probeOutput | ConvertFrom-Json
     $record.worker_provider_visible = [bool]$probeResult.provider_visible
-    $record.worker_copilot_token_visible = [bool]$probeResult.copilot_token_visible
-    $record.worker_gh_token_visible = [bool]$probeResult.gh_token_visible
-    $record.worker_github_token_visible = [bool]$probeResult.github_token_visible
     $record.worker_auth_file_visible = [bool]$probeResult.auth_file_visible
     $record.worker_global_secret_visible = [bool]$probeResult.global_secret_visible
     $record.worker_project_disable_visible = [bool]$probeResult.project_disable_visible
@@ -884,11 +830,8 @@ try {
 }
 if ($fakeDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $fakeDelayMilliseconds }
 [IO.File]::AppendAllText($logPath, (($record | ConvertTo-Json -Compress) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-if ($harness -eq 'copilot' -and $copilotAuthenticationSource -eq 'unavailable') {
-    [Console]::Error.WriteLine('deterministic fixture: no Copilot authentication mechanism is available')
-    exit 17
-}
-if ($scriptedFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot) -and $harness -in @('copilot', 'opencode')) {
+
+if ($scriptedFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot) -and $harness -eq 'opencode') {
     $turnNumber = if ([string]::IsNullOrWhiteSpace([string]$continuationSessionId)) { 1 } else { 2 }
     $fixturePath = Join-Path $fixtureRoot ("{0}-scripted-turn-{1}-events.jsonl" -f $harness, $turnNumber)
     if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
@@ -903,18 +846,18 @@ if ($scriptedFixture -and -not [string]::IsNullOrWhiteSpace($fixtureRoot) -and $
     }
     $fixtureText = [IO.File]::ReadAllText($fixturePath, [Text.UTF8Encoding]::new($false))
     if ($turnNumber -eq 1 -and $noSessionFirstFixture) {
-        if ($harness -eq 'copilot') { $fixtureText = $fixtureText.Replace('"sessionId":"fixture-copilot-session"', '"sessionId":null') }
+
         if ($harness -eq 'opencode') { $fixtureText = $fixtureText.Replace('"sessionID":"fixture-opencode-session"', '"sessionID":null') }
     }
     if ($turnNumber -eq 1 -and $noTerminalFirstFixture) {
-        $terminalEventPattern = if ($harness -eq 'copilot') { 'session.task_complete' } else { 'step_finish' }
+        $terminalEventPattern = 'step_finish'
         $fixtureText = [string]::Join("`n", @($fixtureText -split "`r?`n" | Where-Object { $_ -notmatch [regex]::Escape($terminalEventPattern) }))
     }
     if ($turnNumber -gt 1 -and $mismatchSessionFixture) {
-        if ($harness -eq 'copilot') { $fixtureText = $fixtureText.Replace('fixture-copilot-session', 'fixture-copilot-mismatch') }
+
         if ($harness -eq 'opencode') { $fixtureText = $fixtureText.Replace('fixture-opencode-session', 'fixture-opencode-mismatch') }
     }
-    if ($harness -eq 'opencode' -and ($sourceAncestorCanaryVisible -or $sourceFormsCanaryVisible -or $sourceAncestorAgentsVisible -or $sourceAncestorCopilotVisible -or $ambientAgentsSkillVisible -or $ambientClaudeSkillVisible -or $ambientOpenCodeSkillVisible)) {
+    if ($harness -eq 'opencode' -and ($sourceAncestorCanaryVisible -or $sourceFormsCanaryVisible -or $sourceAncestorAgentsVisible -or $ambientAgentsSkillVisible -or $ambientClaudeSkillVisible -or $ambientOpenCodeSkillVisible)) {
         $leakMarker = if ($ambientAgentsSkillVisible -or $ambientClaudeSkillVisible -or $ambientOpenCodeSkillVisible) { 'CODEBELT_OPENCODE_GLOBAL_SKILL_LEAK_CANARY_8F43D1A7' } else { 'CODEBELT_BASELINE_LEAK_CANARY_7C9E4AF2' }
         Write-Output ('{"type":"text","text":"' + $leakMarker + '"}')
         Write-Output '{"type":"step_finish"}'
@@ -945,64 +888,34 @@ if ($harness -eq 'codex') {
     Write-Output '{"type":"text","timestamp":"2026-01-01T00:00:02.000Z","sessionID":"recorded-opencode-session","modelID":"opencode/muse-spark-1.2-contributor-free","text":"recorded OpenCode final response"}'
     Write-Output '{"type":"step_finish","timestamp":"2026-01-01T00:00:03.000Z","sessionID":"recorded-opencode-session","modelID":"opencode/muse-spark-1.2-contributor-free","part":{"tokens":{"input":2,"output":3},"cost":0.01}}'
     Write-Output '{"type":"future.event.v99","payload":"fixture"}'
-} elseif ($harness -eq 'copilot') {
-    Write-Output '{"type":"session.start","id":"e1","parentId":null,"data":{"sessionId":"recorded"}}'
-    Write-Output '{"type":"assistant.message","id":"e2","parentId":"e1","data":{"messageId":"m1","model":"claude-haiku-4.5","content":"recorded Copilot progress"}}'
-    Write-Output '{"type":"tool.execution_start","id":"e3","parentId":"e2","data":{"callId":"t1","toolName":"str_replace_editor"}}'
-    Write-Output '{"type":"tool.execution_complete","id":"e4","parentId":"e3","data":{"callId":"t1","status":"success"}}'
-    Write-Output '{"type":"assistant.message","id":"e5","parentId":"e4","data":{"messageId":"m2","model":"claude-haiku-4.5","content":"recorded Copilot final response"}}'
-    Write-Output '{"type":"assistant.usage","id":"e6","parentId":"e5","ephemeral":true,"data":{"model":"claude-haiku-4.5","inputTokens":2,"outputTokens":3,"cacheReadTokens":1,"numToolCalls":1,"cost":0.2}}'
-    Write-Output '{"type":"session.task_complete","id":"e7","parentId":"e6","data":{}}'
-    Write-Output '{"type":"future.event.v99","payload":"fixture"}'
 }
 '@
-    foreach ($harness in @('codex', 'opencode', 'copilot')) {
+    foreach ($harness in @('codex', 'opencode')) {
         [System.IO.File]::WriteAllText((Join-Path $fakeBin "$harness.ps1"), $fakeCli, [System.Text.UTF8Encoding]::new($false))
         [System.IO.File]::WriteAllText((Join-Path $fakeBin "$harness.cmd"), "@echo off`r`npwsh -NoProfile -NonInteractive -File ""%~dp0$harness.ps1"" %*`r`n", [System.Text.UTF8Encoding]::new($false))
     }
-    $fakeGh = @'
-[CmdletBinding()]
-param([Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArguments)
-if ($RemainingArguments.Count -eq 2 -and $RemainingArguments[0] -eq 'auth' -and $RemainingArguments[1] -eq 'token') {
-    $config = [Environment]::GetEnvironmentVariable('GH_CONFIG_DIR')
-    if (-not [string]::IsNullOrWhiteSpace($config) -and (Test-Path -LiteralPath (Join-Path $config 'auth-marker.txt') -PathType Leaf)) {
-        Write-Output 'recorded-gh-fallback-token-not-logged'
-        exit 0
+    # Make sandbox discovery available on every host so a missing launcher
+    # filter reproduces the strict-vs-pragmatic regression on Linux/macOS.
+    foreach ($sandboxName in @('bwrap', 'sandbox-exec')) {
+        [IO.File]::WriteAllText((Join-Path $fakeBin "$sandboxName.ps1"), "throw 'Recorded fixtures must not invoke an OS sandbox.'", [Text.UTF8Encoding]::new($false))
     }
-    [Console]::Error.WriteLine('not logged in')
-    exit 1
-}
-[Console]::Error.WriteLine('unsupported gh fixture command')
-exit 2
-'@
-    [System.IO.File]::WriteAllText((Join-Path $fakeBin 'gh.ps1'), $fakeGh, [System.Text.UTF8Encoding]::new($false))
     $env:PATH = "$fakeBin$([System.IO.Path]::PathSeparator)$recordedOldPath"
+    foreach ($sandboxName in @('bwrap', 'sandbox-exec')) {
+        Assert-Equal (Join-Path $fakeBin "$sandboxName.ps1") (Resolve-ExternalCommand -Name $sandboxName).Source "recorded $sandboxName fixture is discoverable outside the launcher"
+    }
     $env:OPENAI_API_KEY = 'recorded-canary-not-logged'
     $env:AGENTIC_GLOBAL_SECRET = 'recorded-unrelated-canary-not-logged'
     $env:OPENCODE_DISABLE_PROJECT_CONFIG = '1'
-    $env:COPILOT_GITHUB_TOKEN = 'recorded-copilot-canary-not-logged'
-    $env:GH_TOKEN = 'recorded-gh-canary-not-logged'
-    $env:GITHUB_TOKEN = 'recorded-github-canary-not-logged'
-    $recordedGhConfig = Join-Path $recordedRoot 'github-cli-auth'
-    New-Item -ItemType Directory -Path $recordedGhConfig -Force | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $recordedGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [System.Text.UTF8Encoding]::new($false))
-    $env:GH_CONFIG_DIR = $recordedGhConfig
-    $ambientCopilotHome = Join-Path $recordedRoot 'ambient-copilot-home'
-    New-Item -ItemType Directory -Path $ambientCopilotHome -Force | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $ambientCopilotHome 'copilot-instructions.md'), '# ambient-personal-instruction-not-logged', [System.Text.UTF8Encoding]::new($false))
-    [System.IO.File]::WriteAllText((Join-Path $ambientCopilotHome 'config.json'), '{"loggedInUsers":[{"login":"ambient-profile-not-logged"}]}', [System.Text.UTF8Encoding]::new($false))
-    $env:COPILOT_HOME = $ambientCopilotHome
     $recordedProfiles = [ordered]@{}
-    foreach ($runnerName in @('codex', 'opencode', 'copilot')) {
+    foreach ($runnerName in @('codex', 'opencode')) {
         $profilePath = Join-Path $recordedRoot "$runnerName-profile.json"
         $profileModel = switch ($runnerName) {
-            'copilot' { 'claude-haiku-4.5' }
-            'codex' { 'gpt-5.6-luna' }
+            'codex' { 'gpt-6-luna' }
             'opencode' { 'opencode/muse-spark-1.2-contributor-free' }
         }
         Write-TestJson -Path $profilePath -Value ([ordered]@{
             schema = (Get-RunnerSchemaNames).Profile
-            runner = if ($runnerName -eq 'copilot') { 'github-copilot' } else { $runnerName }
+            runner = $runnerName
             model = $profileModel
             reasoning_effort = 'medium'
             configuration_profile = 'isolated-default'
@@ -1018,8 +931,6 @@ exit 2
     if (-not $recordedVersion.Available) { throw "recorded Codex --version is not observable (exit=$($recordedVersion.Process.ExitCode), timed_out=$($recordedVersion.Process.TimedOut), stdout='$($recordedVersion.Process.Stdout)', stderr='$($recordedVersion.Process.Stderr)')" }
     Assert-Equal 'recorded-codex 9.1' $recordedVersion.Version 'recorded Codex exact version helper'
     foreach ($fixtureName in @(
-            'copilot-scripted-turn-1-events.jsonl',
-            'copilot-scripted-turn-2-events.jsonl',
             'opencode-scripted-turn-1-events.jsonl',
             'opencode-scripted-turn-2-events.jsonl'
         )) {
@@ -1037,9 +948,9 @@ exit 2
     $debugConfigFixturePath = Join-Path $recordedFixtureRoot 'opencode-debug-config.json'
     $debugConfigFixture = [IO.File]::ReadAllText($debugConfigFixturePath, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json -Depth 50
     Assert-Equal 'deny' ([string]$debugConfigFixture.permission.skill) 'Recorded OpenCode debug config fixture preserves deny-all skill policy syntax'
-    foreach ($runnerName in @('codex', 'opencode', 'copilot')) {
-        if ($Suite -ne 'All' -and $Suite -ne @{ codex = 'CodexCli'; opencode = 'OpenCode'; copilot = 'Copilot' }[$runnerName]) { continue }
-        $runnerDir = if ($runnerName -eq 'copilot') { 'github-copilot' } else { $runnerName }
+    foreach ($runnerName in @('codex', 'opencode')) {
+        if ($Suite -ne 'All' -and $Suite -ne @{ codex = 'CodexCli'; opencode = 'OpenCode' }[$runnerName]) { continue }
+        $runnerDir = $runnerName
         $runnerPath = Join-Path $runnerRoot "$runnerDir\runner.ps1"
         $description = Invoke-AdapterJson -RunnerPath $runnerPath -Command describe -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         [void](Assert-RunnerDescriptor -Descriptor $description)
@@ -1050,10 +961,10 @@ exit 2
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$description.delegation.mechanism)) "$runnerName descriptor records its native delegation mechanism"
         Assert-Equal 'conditional' $description.capabilities.native_worker_delegation "$runnerName descriptor does not present native delegation as terminal proof"
         Assert-Equal 'conditional' $description.delegation.model_lock "$runnerName descriptor leaves child model resolution conditional"
-        if ($runnerName -in @('copilot', 'opencode')) {
+        if ($runnerName -eq 'opencode') {
             Assert-Equal 'conditional' $description.capabilities.scripted_multi_turn_same_session "$runnerName descriptor gates scripted continuation on installed capability proof"
         }
-        $expectedVersion = switch ($runnerName) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' } 'copilot' { 'GitHub Copilot CLI recorded-1.0.80' } default { 'recorded-unknown 9.3' } }
+        $expectedVersion = switch ($runnerName) { 'codex' { 'recorded-codex 9.1' } 'opencode' { 'recorded-opencode 9.2' }  default { 'recorded-unknown 9.3' } }
         Assert-Equal $expectedVersion $description.harness.version "$runnerName exact describe version"
         $preflightWith = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles[$runnerName]
         $preflightWithout = Invoke-AdapterJson -RunnerPath $runnerPath -Command preflight -RunPath $without.Path -ProfilePath $recordedProfiles[$runnerName]
@@ -1064,13 +975,10 @@ exit 2
         Assert-Equal 'conditional' $preflightWith.delegation.status "$runnerName native delegation preflight requires terminal evidence"
         Assert-Equal $expectedDispatchOwner $preflightWith.delegation.dispatch_owner "$runnerName preflight preserves native dispatch ownership"
         Assert-True ([bool]$preflightWith.delegation.terminal_evidence_required) "$runnerName preflight requires terminal delegation evidence"
-        if ($runnerName -in @('copilot', 'opencode')) {
+        if ($runnerName -eq 'opencode') {
             Assert-Equal 'conditional' $preflightWith.resolved_capabilities.scripted_multi_turn_same_session "$runnerName single-turn preflight leaves scripted capability conditional"
         }
-        if ($runnerName -eq 'copilot') {
-            Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'passed' }).Count -eq 1) 'Copilot preflight accepts explicit environment authentication'
-            Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq '--allow-all full programmatic permission' }).Count -eq 1) 'Copilot preflight describes --allow-all as full programmatic permission'
-        }
+
         if ($runnerName -eq 'opencode') {
             Assert-True (@($preflightWith.checks | Where-Object { $_.name -eq 'parallel_dispatch' -and $_.status -eq 'passed' }).Count -eq 1) 'OpenCode preflight requires bounded concurrent dispatch'
             Assert-True (@($preflightWith.mechanisms | Where-Object { $_ -eq 'deterministic runner-owned concurrent fan-out' }).Count -eq 1) 'OpenCode preflight records the runner-owned concurrent fan-out'
@@ -1175,13 +1083,13 @@ exit 2
                 Assert-True ($artifact.path -notmatch '(^|/|\\)\.\.(/|\\|$)') "$runnerName artifact path remains relative"
                 Assert-True (Test-Path -LiteralPath (Join-Path $resultRoot ($artifact.path -replace '/', [System.IO.Path]::DirectorySeparatorChar)) -PathType Leaf) "$runnerName artifact exists inside its run"
             }
-            # Runner-owned convergence: Copilot and OpenCode behavioral transport
+            # Runner-owned convergence: OpenCode behavioral transport
             # now emits transport-owned terminal evidence for its own fresh
             # session, with no orchestrator-authored reconstruction. Codex's
             # runner-owned app-server evidence is validated in its dedicated
             # subscription block below; its API-key `codex exec` compatibility
             # path is intentionally not the runner-owned behavioral transport.
-            if ($runnerName -in @('copilot', 'opencode')) {
+            if ($runnerName -eq 'opencode') {
                 Assert-Equal 'runner' ([string]$result.evidence.delegation.dispatch_owner) "$runnerName execution evidence is runner-owned"
                 Assert-Equal 'harness_native_transport' ([string]$result.evidence.capture.source) "$runnerName capture provenance is transport-owned"
                 Assert-True (-not [bool]$result.evidence.capture.worker_authored) "$runnerName capture is not orchestrator/worker-authored"
@@ -1210,10 +1118,6 @@ exit 2
         Assert-True (-not $execution.worker_project_disable_visible) "$runnerName worker probe cannot read the parent project-disable variable"
         if ($runnerName -eq 'codex') {
             Assert-True (-not $execution.worker_provider_visible) 'Codex shell policy hides the provider API-key variable from the worker probe'
-        } elseif ($runnerName -eq 'copilot') {
-            Assert-True (-not $execution.worker_copilot_token_visible) 'Copilot secret COPILOT_GITHUB_TOKEN is unavailable to the worker probe'
-            Assert-True (-not $execution.worker_gh_token_visible) 'Copilot secret GH_TOKEN is unavailable to the worker probe'
-            Assert-True (-not $execution.worker_github_token_visible) 'Copilot secret GITHUB_TOKEN is unavailable to the worker probe'
         } else {
             Assert-True (-not $execution.worker_provider_visible) "$runnerName free-model fixture does not require a provider API key"
         }
@@ -1233,7 +1137,7 @@ exit 2
             Assert-True (([string]$codexSkillConfigArg[0]).Contains((Join-Path $fakeBin '.fake-user/.agents/skills/a/SKILL.md').Replace('\', '\\'))) 'Codex CLI suppresses ambient skill A by path'
             Assert-True (([string]$codexSkillConfigArg[0]).Contains((Join-Path $fakeBin '.fake-user/.agents/skills/b/SKILL.md').Replace('\', '\\'))) 'Codex CLI suppresses ambient skill B by path'
             $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
-            Assert-Equal 'gpt-5.6-luna' $args[$modelIndex + 1] 'Codex opaque model selector propagates to the CLI invocation'
+            Assert-Equal 'gpt-6-luna' $args[$modelIndex + 1] 'Codex opaque model selector propagates to the CLI invocation'
             $outputIndex = [Array]::IndexOf([string[]]$args, '--output-last-message')
             Assert-Equal (Join-Path $resultWith.evidence.execution_paths.physical_run_root 'evidence\codex-final.txt') $args[$outputIndex + 1] 'Codex output path uses the runner-declared physical projection'
             Assert-Equal 'candidate' $resultWith.evidence.native_skill_isolation.candidate_skill_name 'Codex CLI evidence records candidate identity'
@@ -1267,7 +1171,6 @@ exit 2
             Assert-True (-not [bool]$execution.source_ancestor_candidate_skill_visible) 'OpenCode execution cannot discover the source-repository candidate skill canary through projected ancestry'
             Assert-True (-not [bool]$execution.source_ancestor_forms_visible) 'OpenCode execution cannot discover the source-repository FORMS.md canary through projected ancestry'
             Assert-True (-not [bool]$execution.source_ancestor_agents_visible) 'OpenCode execution cannot discover source-repository ancestor AGENTS.md through projected ancestry'
-            Assert-True (-not [bool]$execution.source_ancestor_copilot_visible) 'OpenCode execution cannot discover source-repository ancestor copilot instructions through projected ancestry'
             Assert-True (-not [bool]$execution.staged_repo_canary_visible) 'OpenCode staged repository contains no source candidate canary'
             Assert-True (-not [bool]$execution.home_canary_visible) 'OpenCode isolated HOME contains no source candidate canary'
             Assert-True (-not [bool]$execution.config_canary_visible) 'OpenCode isolated config contains no source candidate canary'
@@ -1302,49 +1205,10 @@ exit 2
             $variantIndex = [Array]::IndexOf([string[]]$args, '--variant')
             Assert-True ($variantIndex -ge 0) 'OpenCode includes --variant only because the execution profile requested reasoning_effort and preflight proved support'
             Assert-Equal 'medium' $args[$variantIndex + 1] 'OpenCode reasoning effort propagates to the --variant argument'
-        } elseif ($runnerName -eq 'copilot') {
-            Assert-True (@($args | Where-Object { $_ -eq '--prompt' -or $_ -eq '-p' -or $_ -like '--prompt=*' }).Count -eq 0) 'Copilot does not place the prompt in argv'
-            Assert-Equal 0 $execution.prompt_arg_count 'Copilot has no prompt argument'
-            Assert-True $execution.stdin_received 'Copilot reads the prompt from stdin'
-            Assert-True ($args -contains '--output-format' -and $args -contains 'json') 'Copilot uses structured JSONL output'
-            $modelIndex = [Array]::IndexOf([string[]]$args, '--model')
-            Assert-Equal 'claude-haiku-4.5' $args[$modelIndex + 1] 'Copilot reference model claude-haiku-4.5 propagates to the CLI invocation'
-            Assert-True ($args -contains '--allow-all') 'Copilot grants full programmatic permission for noninteractive execution'
-            Assert-True ($args -notcontains '--allow-all-tools') 'Copilot does not leave path and URL prompts active by using only --allow-all-tools'
-            Assert-True ($args -contains '--no-ask-user') 'Copilot does not pause for interactive questions'
-            Assert-True ($args -notcontains '--no-custom-instructions') 'Copilot preserves repository-owned custom instructions'
-            Assert-True ($args -contains '--disable-builtin-mcps') 'Copilot disables ambient built-in MCP servers'
-            foreach ($broad in @('--yolo', '--allow-all-paths', '--allow-all-urls', '--session-id', '--connect', '-r')) { Assert-True ($args -notcontains $broad) "Copilot avoids the redundant permission or session option '$broad'" }
-            Assert-Equal 1 (@($args | Where-Object { $_ -like '--secret-env-vars=*' }).Count) 'Copilot filters protected variables with --secret-env-vars'
-            Assert-Equal 'COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN' ([string]($args | Where-Object { $_ -like '--secret-env-vars=*' }) -replace '^--secret-env-vars=', '') 'Copilot protects every forwarded token variable'
-            Assert-True (-not $execution.custom_instructions_disabled -and $execution.builtin_mcps_disabled) 'Copilot preserves repository instructions while disabling built-in MCPs'
-            Assert-True ($execution.repository_agents_visible -and $execution.repository_copilot_instructions_visible -and $execution.repository_instruction_marker_visible) 'Copilot sees staged repository-owned instructions'
-            Assert-True $execution.candidate_skill_staged 'Copilot with_skill arm retains the staged candidate skill independently of repository instructions'
-            Assert-True (-not $execution.ambient_copilot_instructions_visible) 'Copilot does not see the ambient personal instruction file'
-            Assert-Equal 'explicit_environment' $execution.copilot_authentication_source 'Copilot uses explicit environment authentication in the token fixture'
-            Assert-Equal 3 @($execution.copilot_auth_names_present).Count 'Copilot process receives all protected token variables without logging values'
-            Assert-True ([string]::IsNullOrWhiteSpace([string]$execution.gh_config_dir)) 'Copilot explicit-token path does not forward host GH_CONFIG_DIR'
-            Assert-True (Test-PathInside -BasePath (Join-Path $with.Root 'home') -CandidatePath ([string]$execution.copilot_cache_home)) 'Copilot cache is run-local'
-            Assert-True (Test-PathInside -BasePath (Join-Path $with.Root 'home') -CandidatePath ([string]$execution.copilot_home)) 'Copilot COPILOT_HOME is the run''s isolated home'
-            Assert-Equal 'stdin' $resultWith.evidence.prompt_delivery 'Copilot result records stdin prompt delivery'
-            Assert-Equal 'COPILOT_GITHUB_TOKEN' $resultWith.evidence.credential.github_token_variable 'Copilot follows explicit token precedence'
-            Assert-True (-not $resultWith.evidence.credential.github_cli_config_forwarded) 'Copilot result records that GH_CONFIG_DIR was not forwarded with an explicit token'
-            Assert-Equal 'supported' $resultWith.isolation.capabilities.credential_child_filtering 'Copilot documents protected child-environment filtering'
-            Assert-Equal 'shell,mcp' ([string]::Join(',', @($resultWith.evidence.credential.secret_env_var_scope))) 'Copilot evidence names the documented filtering scope'
-            Assert-Equal 'recorded Copilot final response' $resultWith.final_response.text 'Copilot final response is the last assistant message, not an intermediate one'
-            Assert-Equal 'claude-haiku-4.5' $resultWith.requested.model 'Copilot requested model is preserved as the Codebelt reference model'
-            Assert-True ($null -eq $resultWith.resolved.model) 'Copilot does not claim a distinct backend model resolution'
-            Assert-Equal 'claude-haiku-4.5' $resultWith.evidence.observed_model 'Copilot observed model is captured separately from the requested model'
-            Assert-Equal 'available' $resultWith.telemetry.tokens.status 'Copilot reports available token telemetry'
-            Assert-Equal 2 ([int]$resultWith.telemetry.tokens.value.input_tokens) 'Copilot input tokens are parsed from assistant.usage'
-            Assert-Equal 3 ([int]$resultWith.telemetry.tokens.value.output_tokens) 'Copilot output tokens are parsed from assistant.usage'
-            Assert-Equal 'available' $resultWith.telemetry.tool_calls.status 'Copilot reports available tool-call telemetry'
-            Assert-True ([int]$resultWith.telemetry.tool_calls.value -ge 1) 'Copilot parses documented tool.execution events'
-            Assert-Equal 'unavailable' $resultWith.telemetry.cost.status 'Copilot does not estimate a currency cost'
         }
         $logText = [System.IO.File]::ReadAllText($logPath, [System.Text.UTF8Encoding]::new($false))
-        Assert-True ($logText -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary|recorded-gh-fallback-token') "$runnerName logs do not contain credential values"
-        Assert-True (($resultWith | ConvertTo-Json -Depth 100) -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary|recorded-gh-fallback-token') "$runnerName result evidence does not contain credential values"
+        Assert-True ($logText -notmatch 'recorded-canary|recorded-unrelated-canary') "$runnerName logs do not contain credential values"
+        Assert-True (($resultWith | ConvertTo-Json -Depth 100) -notmatch 'recorded-canary|recorded-unrelated-canary') "$runnerName result evidence does not contain credential values"
         $withoutLogPath = Join-Path $without.Root "repo\$runnerName-fake-cli-log.jsonl"
         Assert-True (Test-Path -LiteralPath $withoutLogPath -PathType Leaf) "$runnerName baseline process log exists"
         $withoutRecords = @(Get-Content -LiteralPath $withoutLogPath | ForEach-Object { $_ | ConvertFrom-Json })
@@ -1376,7 +1240,6 @@ exit 2
             Assert-True (-not [bool]$withoutExecution[0].source_ancestor_candidate_skill_visible) 'OpenCode without_skill cannot discover the source candidate skill canary through projected ancestors'
             Assert-True (-not [bool]$withoutExecution[0].source_ancestor_forms_visible) 'OpenCode without_skill cannot discover the FORMS.md canary through projected ancestors'
             Assert-True (-not [bool]$withoutExecution[0].source_ancestor_agents_visible) 'OpenCode without_skill cannot discover source ancestor AGENTS.md through projected ancestors'
-            Assert-True (-not [bool]$withoutExecution[0].source_ancestor_copilot_visible) 'OpenCode without_skill cannot discover source ancestor copilot instructions through projected ancestors'
             Assert-True (-not [bool]$withoutExecution[0].staged_repo_canary_visible) 'OpenCode without_skill staged repo contains no source candidate canary'
             Assert-True (-not [bool]$withoutExecution[0].home_canary_visible) 'OpenCode without_skill HOME contains no source candidate canary'
             Assert-True (-not [bool]$withoutExecution[0].config_canary_visible) 'OpenCode without_skill config contains no source candidate canary'
@@ -1399,15 +1262,9 @@ exit 2
             Assert-True (-not (Test-PathInside -BasePath $recordedRoot -CandidatePath ([string]$resultWithout.evidence.execution_paths.physical_config_file))) 'OpenCode without_skill result records a physical config file outside the source-repository ancestry'
         }
         $withoutLogText = [System.IO.File]::ReadAllText($withoutLogPath, [System.Text.UTF8Encoding]::new($false))
-        Assert-True ($withoutLogText -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary|recorded-gh-fallback-token') "$runnerName baseline log does not contain credential values"
+        Assert-True ($withoutLogText -notmatch 'recorded-canary|recorded-unrelated-canary') "$runnerName baseline log does not contain credential values"
         Assert-True $withoutExecution[0].stdin_exact "$runnerName baseline receives exact prompt bytes"
-        if ($runnerName -eq 'copilot') {
-            Assert-True $withoutExecution[0].repository_agents_visible 'Copilot baseline sees the same staged AGENTS.md instruction'
-            Assert-True $withoutExecution[0].repository_copilot_instructions_visible 'Copilot baseline sees the same staged repository instruction'
-            Assert-True (-not $withoutExecution[0].candidate_skill_staged) 'Copilot baseline does not receive the candidate skill directory'
-            Assert-True (-not $withoutExecution[0].ambient_copilot_instructions_visible) 'Copilot baseline excludes the ambient personal instruction'
-            Assert-True (($resultWithout | ConvertTo-Json -Depth 100) -notmatch 'recorded-canary|recorded-unrelated-canary|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary|recorded-gh-fallback-token') 'Copilot baseline result evidence does not contain credential values'
-        }
+
     }
     $scriptedInteraction = [ordered]@{
         schema = (Get-RunnerSchemaNames).Interaction
@@ -1417,15 +1274,15 @@ exit 2
             [ordered]@{ role = 'user'; source = 'future-turn/turn-2.txt' }
         )
     }
-    foreach ($runnerName in @('copilot', 'opencode')) {
-        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode'; copilot = 'Copilot' }[$runnerName]) { continue }
+    foreach ($runnerName in @('opencode')) {
+        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode' }[$runnerName]) { continue }
         $scriptedIteration = Join-Path $recordedRoot ("scripted-{0}" -f $runnerName)
         New-Item -ItemType Directory -Path $scriptedIteration -Force | Out-Null
         $scriptedWith = New-TestRun -IterationDirectory $scriptedIteration -Configuration with_skill -EvalName 'scripted-conformance' -Interaction $scriptedInteraction
         $scriptedWithout = New-TestRun -IterationDirectory $scriptedIteration -Configuration without_skill -EvalName 'scripted-conformance' -Interaction $scriptedInteraction
         foreach ($scriptedRun in @($scriptedWith, $scriptedWithout)) {
             [IO.File]::WriteAllText((Join-Path $scriptedRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
-            if ($runnerName -eq 'copilot') { [IO.File]::WriteAllText((Join-Path $scriptedRun.Root 'home\copilot-exact-session-help'), 'fixture', [Text.UTF8Encoding]::new($false)) }
+
             if ($runnerName -eq 'opencode') { [IO.File]::WriteAllText((Join-Path $scriptedRun.Root 'home\opencode-timing-fixture'), 'fixture', [Text.UTF8Encoding]::new($false)) }
             Add-TestInteractionSources -TestRun $scriptedRun
         }
@@ -1434,7 +1291,7 @@ exit 2
             New-Item -ItemType Directory -Path (Split-Path -Parent $preexistingOpenCodeIgnore) -Force | Out-Null
             [IO.File]::WriteAllText($preexistingOpenCodeIgnore, 'fixture-existing', [Text.UTF8Encoding]::new($false))
         }
-        $scriptedRunnerRelativePath = if ($runnerName -eq 'copilot') { 'github-copilot\runner.ps1' } else { 'opencode\runner.ps1' }
+        $scriptedRunnerRelativePath = 'opencode\runner.ps1'
         $scriptedRunnerPath = Join-Path $runnerRoot $scriptedRunnerRelativePath
         $scriptedPreflight = Invoke-AdapterJson -RunnerPath $scriptedRunnerPath -Command preflight -RunPath $scriptedWith.Path -ProfilePath $recordedProfiles[$runnerName]
         Assert-Equal 'compatible' $scriptedPreflight.status "$runnerName scripted preflight: $([string]::Join('; ', @($scriptedPreflight.reasons)))"
@@ -1521,12 +1378,6 @@ exit 2
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $scriptedWithout.Root 'repo\.opencode\node_modules') -PathType Container)) 'OpenCode baseline runtime node_modules does not leak into the logical fixture'
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $scriptedWithout.Root 'repo\.opencode\.gitignore') -PathType Leaf)) 'OpenCode baseline generated .opencode/.gitignore is excluded from copy-back'
             Assert-True (Test-Path -LiteralPath (Join-Path $scriptedWithout.Root 'repo\normal-task-output.snk') -PathType Leaf) 'OpenCode baseline normal task output synchronizes into the logical fixture'
-        } else {
-            Assert-Equal ([string]$firstNativeTurn.copilot_home) ([string]$secondNativeTurn.copilot_home) "$runnerName preserves the isolated COPILOT_HOME across turns"
-            Assert-True ($firstArgs -notcontains '--resume') "$runnerName fresh turn does not carry a continuation flag"
-            Assert-True ($secondArgs -contains '--resume') "$runnerName resumed turn carries its explicit continuation flag"
-            $continuationIndex = [Array]::IndexOf([string[]]$secondArgs, '--resume')
-            Assert-Equal ([string]$firstNativeTurn.session_id) ([string]$secondArgs[$continuationIndex + 1]) "$runnerName resumed invocation passes the exact captured session id"
         }
         $scriptedLogPath = Join-Path $scriptedWith.Root ("repo\{0}-fake-cli-log.jsonl" -f $runnerName)
         $scriptedRecords = @(Get-Content -LiteralPath $scriptedLogPath | ForEach-Object { $_ | ConvertFrom-Json })
@@ -1584,15 +1435,15 @@ exit 2
         Remove-Item -LiteralPath $nodeShim -Force
     }
     }
-    foreach ($runnerName in @('copilot', 'opencode')) {
-        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode'; copilot = 'Copilot' }[$runnerName]) { continue }
+    foreach ($runnerName in @('opencode')) {
+        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode' }[$runnerName]) { continue }
         $unsupportedIteration = Join-Path $recordedRoot ("unsupported-scripted-{0}" -f $runnerName)
         New-Item -ItemType Directory -Path $unsupportedIteration -Force | Out-Null
         $unsupportedRun = New-TestRun -IterationDirectory $unsupportedIteration -Configuration with_skill -EvalName 'unsupported-scripted' -Interaction $scriptedInteraction
         Add-TestInteractionSources -TestRun $unsupportedRun
         [IO.File]::WriteAllText((Join-Path $unsupportedRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
         [IO.File]::WriteAllText((Join-Path $unsupportedRun.Root ("home\{0}-no-exact-session-help" -f $runnerName)), 'fixture', [Text.UTF8Encoding]::new($false))
-        $unsupportedRunnerRelativePath = if ($runnerName -eq 'copilot') { 'github-copilot\runner.ps1' } else { 'opencode\runner.ps1' }
+        $unsupportedRunnerRelativePath = 'opencode\runner.ps1'
         $unsupportedRunnerPath = Join-Path $runnerRoot $unsupportedRunnerRelativePath
         $unsupportedPreflight = Invoke-AdapterJson -RunnerPath $unsupportedRunnerPath -Command preflight -RunPath $unsupportedRun.Path -ProfilePath $recordedProfiles[$runnerName]
         Assert-Equal 'incompatible' $unsupportedPreflight.status "$runnerName unsupported exact-session help fails preflight"
@@ -1613,17 +1464,17 @@ exit 2
             Assert-Equal 'compatible' $singleTurnPreflight.status 'OpenCode single-turn preflight remains compatible when --session capability is absent'
         }
     }
-    foreach ($runnerName in @('copilot', 'opencode')) {
-        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode'; copilot = 'Copilot' }[$runnerName]) { continue }
+    foreach ($runnerName in @('opencode')) {
+        if ($Suite -ne 'All' -and $Suite -ne @{ opencode = 'OpenCode' }[$runnerName]) { continue }
         foreach ($failureMarker in @('scripted-no-session-first', 'scripted-session-mismatch', 'scripted-no-terminal-first')) {
             $failureIteration = Join-Path $recordedRoot ("scripted-failure-{0}-{1}" -f $runnerName, ($failureMarker -replace '^scripted-', ''))
             New-Item -ItemType Directory -Path $failureIteration -Force | Out-Null
             $failureRun = New-TestRun -IterationDirectory $failureIteration -Configuration with_skill -EvalName 'scripted-failure' -Interaction $scriptedInteraction
             Add-TestInteractionSources -TestRun $failureRun
             [IO.File]::WriteAllText((Join-Path $failureRun.Root 'home\scripted-session-fixture'), 'fixture', [Text.UTF8Encoding]::new($false))
-            if ($runnerName -eq 'copilot') { [IO.File]::WriteAllText((Join-Path $failureRun.Root 'home\copilot-exact-session-help'), 'fixture', [Text.UTF8Encoding]::new($false)) }
+
             [IO.File]::WriteAllText((Join-Path $failureRun.Root ("home\{0}" -f $failureMarker)), 'fixture', [Text.UTF8Encoding]::new($false))
-            $failureRunnerRelativePath = if ($runnerName -eq 'copilot') { 'github-copilot\runner.ps1' } else { 'opencode\runner.ps1' }
+            $failureRunnerRelativePath = 'opencode\runner.ps1'
             $failureRunnerPath = Join-Path $runnerRoot $failureRunnerRelativePath
             $failureResult = Invoke-AdapterJson -RunnerPath $failureRunnerPath -Command execute -RunPath $failureRun.Path -ProfilePath $recordedProfiles[$runnerName]
             [void](Assert-ExecutionResult -Result $failureResult)
@@ -1709,7 +1560,7 @@ exit 2
     Assert-Equal 1 @($fileAuthResult.evidence.commands).Count 'Codex app-server preserves command evidence'
     Assert-Equal 1 @($fileAuthResult.evidence.files).Count 'Codex app-server preserves file-change evidence'
     Assert-Equal 'runner' $fileAuthResult.evidence.delegation.dispatch_owner 'Codex native evidence identifies runner-owned dispatch'
-    Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.delegation.observed_model 'Codex native evidence uses observed thread/start model'
+    Assert-Equal 'gpt-6-luna' $fileAuthResult.evidence.delegation.observed_model 'Codex native evidence uses observed thread/start model'
     Assert-True (Test-ExactObservedPath -Expected $fileAuthResult.evidence.execution_paths.physical_working_directory -Observed $fileAuthResult.evidence.delegation.observed_working_directory) 'Codex native evidence uses the runner-declared physical cwd'
     Assert-Equal (Join-Path $with.Root 'repo') $fileAuthResult.evidence.execution_paths.logical_working_directory 'Codex evidence preserves the logical package cwd'
     Assert-True ([bool]$fileAuthResult.evidence.delegation.fresh_worker) 'Codex native evidence proves ephemeral fresh worker'
@@ -1721,9 +1572,9 @@ exit 2
     Assert-True ([bool]$fileAuthResult.evidence.delegation.thread_read_observed) 'Codex native evidence records thread/read observation'
     Assert-Equal 'thread/start' $fileAuthResult.evidence.app_server.thread_start_request.method 'Codex evidence retains the exact thread/start request'
     Assert-Equal 'turn/start' $fileAuthResult.evidence.app_server.turn_start_request.method 'Codex evidence retains the exact turn/start request'
-    Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.app_server.thread_start_request.params.model 'Codex exact thread/start request preserves model'
+    Assert-Equal 'gpt-6-luna' $fileAuthResult.evidence.app_server.thread_start_request.params.model 'Codex exact thread/start request preserves model'
     Assert-Equal $fileAuthResult.evidence.execution_paths.physical_working_directory $fileAuthResult.evidence.app_server.turn_start_request.params.cwd 'Codex exact turn/start request preserves the physical cwd'
-    Assert-Equal 'gpt-5.6-luna' $fileAuthResult.evidence.app_server.thread_start_response.result.model 'Codex evidence retains observed thread/start model'
+    Assert-Equal 'gpt-6-luna' $fileAuthResult.evidence.app_server.thread_start_response.result.model 'Codex evidence retains observed thread/start model'
     Assert-Equal 'recorded-subscription-thread' $fileAuthResult.evidence.app_server.thread_start_response.result.thread.id 'Codex parses the installed thread/start.result.thread shape'
     Assert-Equal 'recorded-subscription-turn' $fileAuthResult.evidence.app_server.turn_start_response.result.turn.id 'Codex parses the installed turn/start.result.turn shape'
     Assert-Equal 'completed' $fileAuthResult.evidence.app_server.terminal_turn.status 'Codex evidence retains terminal turn/completed status'
@@ -1746,9 +1597,9 @@ exit 2
         Assert-True ($evidenceText.Contains($unicodeCanary)) "Codex $evidenceName preserves exact Unicode"
         Assert-True (-not $evidenceText.Contains([string][char]0xfffd)) "Codex $evidenceName contains no Unicode replacement characters"
     }
-    $codexNativeValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $fileAuthResult -Run (Resolve-RunContract -RunPath $with.Path) -RequestedModel 'gpt-5.6-luna' -ExpectedRunner 'codex' -ExpectedMechanism $fileAuthResult.evidence.delegation.mechanism
+    $codexNativeValidation = Test-NativeWorkerTerminalEvidence -ExecutionEvidence $fileAuthResult -Run (Resolve-RunContract -RunPath $with.Path) -RequestedModel 'gpt-6-luna' -ExpectedRunner 'codex' -ExpectedMechanism $fileAuthResult.evidence.delegation.mechanism
     Assert-True ([bool]$codexNativeValidation.Valid) 'Codex app-server result satisfies the common native terminal evidence contract'
-    [void](Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $fileAuthResult -Run (Resolve-RunContract -RunPath $with.Path) -RequestedModel 'gpt-5.6-luna' -ExpectedRunner 'codex' -ExpectedMechanism $fileAuthResult.evidence.delegation.mechanism)
+    [void](Assert-NativeWorkerTerminalEvidence -ExecutionEvidence $fileAuthResult -Run (Resolve-RunContract -RunPath $with.Path) -RequestedModel 'gpt-6-luna' -ExpectedRunner 'codex' -ExpectedMechanism $fileAuthResult.evidence.delegation.mechanism)
     [void](Assert-NativeTerminalCaptureArtifact -ExecutionResult $fileAuthResult)
     $authHomePath = [string]$subscriptionRecord.parent_codex_home
     Assert-True (-not (Test-Path -LiteralPath $authHomePath)) 'Codex temporary auth-only home is removed after the arm completes'
@@ -1944,10 +1795,10 @@ exit 2
     Assert-Equal 'skills/list' $fileAuthResult.evidence.app_server.skills_list_request.method 'Codex evidence retains skills/list request'
     Assert-True ([bool]$fileAuthResult.evidence.app_server.skills_list_request.params.forceReload) 'Codex skills/list verification uses forceReload=true'
     Assert-True ($null -eq $fileAuthResult.evidence.app_server.config_read_response) 'Codex evidence does not require config/read response for native-skill isolation'
-    Assert-Equal 'gpt-5.6-luna' $subscriptionRecord.thread_params.model 'Codex app-server thread receives the requested model'
+    Assert-Equal 'gpt-6-luna' $subscriptionRecord.thread_params.model 'Codex app-server thread receives the requested model'
     Assert-True ([bool]$subscriptionRecord.thread_params.ephemeral) 'Codex app-server thread is ephemeral'
     Assert-Equal 'read-only' $subscriptionRecord.thread_params.sandbox 'Codex app-server thread uses the installed request enum'
-    Assert-Equal 'gpt-5.6-luna' $subscriptionRecord.turn_params.model 'Codex app-server turn receives the requested model'
+    Assert-Equal 'gpt-6-luna' $subscriptionRecord.turn_params.model 'Codex app-server turn receives the requested model'
     Assert-Equal 'medium' $subscriptionRecord.turn_params.effort 'Codex app-server turn receives the requested reasoning effort'
     Assert-Equal $fileAuthResult.evidence.execution_paths.physical_working_directory $subscriptionRecord.turn_params.cwd 'Codex app-server turn receives the physical working directory'
     Assert-Equal 'never' $subscriptionRecord.turn_params.approvalPolicy 'Codex app-server turn rejects interactive approvals'
@@ -1969,61 +1820,7 @@ exit 2
     $env:OPENAI_API_KEY = 'recorded-canary-not-logged'
     $env:CODEX_HOME = $recordedOldCodexHome
     }
-    if ($Suite -in @('All', 'Copilot')) {
-    # GitHub Copilot authentication: explicit env, OS-keychain, GitHub CLI, and
-    # no-auth fixtures are all deterministic and contain no credential values.
-    $env:COPILOT_GITHUB_TOKEN = $null
-    $env:GH_TOKEN = $null
-    $env:GITHUB_TOKEN = $null
-    $missingGhConfig = Join-Path $recordedRoot 'missing-github-cli-auth'
 
-    # The fixture marker is fake-CLI input only; it models a positive OS
-    # keychain lookup without naming or reading a real credential-store file.
-    $copilotKeychainHome = Join-Path $recordedRoot 'copilot-keychain-home'
-    New-Item -ItemType Directory -Path $copilotKeychainHome -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $with.Root 'home\.copilot') -Force | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $with.Root 'home\.copilot\fixture-os-keychain-available'), 'fixture marker only', [Text.UTF8Encoding]::new($false))
-    $env:COPILOT_HOME = $copilotKeychainHome
-    $env:GH_CONFIG_DIR = $missingGhConfig
-    $copilotKeychainPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'compatible' $copilotKeychainPreflight.status 'Copilot tokenless OS-keychain authentication remains compatible'
-    Assert-True (@($copilotKeychainPreflight.checks | Where-Object { $_.name -eq 'authentication' -and $_.status -eq 'unavailable' }).Count -eq 1) 'Copilot preflight leaves native keychain readiness conditional'
-    Assert-True (@($copilotKeychainPreflight.warnings | Where-Object { $_ -match 'cannot be proven' }).Count -gt 0) 'Copilot preflight explains the unverified keychain/service boundary'
-    $copilotKeychainResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'completed' $copilotKeychainResult.status 'Copilot keychain fixture executes without an exported token'
-    $keychainRecords = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [string](Get-JsonProperty -Object $_ -Name 'copilot_authentication_source' -Default '') -eq 'os_keychain' })
-    Assert-Equal 1 $keychainRecords.Count 'Copilot fake observes the simulated OS-keychain path'
-    Remove-Item -LiteralPath (Join-Path $with.Root 'home\.copilot\fixture-os-keychain-available') -Force
-
-    $copilotGhFallbackHome = Join-Path $recordedRoot 'copilot-gh-fallback-home'
-    New-Item -ItemType Directory -Path $copilotGhFallbackHome -Force | Out-Null
-    $copilotGhConfig = Join-Path $recordedRoot 'copilot-gh-config'
-    New-Item -ItemType Directory -Path $copilotGhConfig -Force | Out-Null
-    [System.IO.File]::WriteAllText((Join-Path $copilotGhConfig 'auth-marker.txt'), 'fixture auth state without a credential value', [Text.UTF8Encoding]::new($false))
-    $env:COPILOT_HOME = $copilotGhFallbackHome
-    $env:GH_CONFIG_DIR = $copilotGhConfig
-    $copilotGhPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'compatible' $copilotGhPreflight.status 'Copilot GitHub CLI fallback remains compatible'
-    $copilotGhResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'completed' $copilotGhResult.status 'Copilot GitHub CLI fallback fixture executes without an exported token'
-    Assert-True $copilotGhResult.evidence.credential.github_cli_token_resolved 'Copilot records GitHub CLI token fallback without storing the token value'
-    Assert-True (-not $copilotGhResult.evidence.credential.github_cli_config_forwarded) 'Copilot GitHub CLI fallback does not forward host GH_CONFIG_DIR'
-    $ghRecords = @(Get-Content -LiteralPath (Join-Path $with.Root 'repo\copilot-fake-cli-log.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { [bool](Get-JsonProperty -Object $_ -Name 'stdin_received' -Default $false) -and @($_.copilot_auth_names_present).Count -eq 1 -and @($_.copilot_auth_names_present) -contains 'GH_TOKEN' -and [string]::IsNullOrWhiteSpace([string]$_.gh_config_dir) })
-    Assert-Equal 1 $ghRecords.Count 'Copilot fake observes only the protected GH_TOKEN produced by trusted GitHub CLI fallback'
-
-    $copilotNoAuthHome = Join-Path $recordedRoot 'copilot-no-auth-home'
-    New-Item -ItemType Directory -Path $copilotNoAuthHome -Force | Out-Null
-    $env:COPILOT_HOME = $copilotNoAuthHome
-    $env:GH_CONFIG_DIR = $missingGhConfig
-    $copilotNoAuthPreflight = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command preflight -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'compatible' $copilotNoAuthPreflight.status 'Copilot preflight does not require an exported token when native auth is not observable'
-    Assert-True (@($copilotNoAuthPreflight.warnings | Where-Object { $_ -match 'conditional' }).Count -gt 0) 'Copilot no-auth preflight is explicitly conditional'
-    $copilotNoAuthResult = Invoke-AdapterJson -RunnerPath (Join-Path $runnerRoot 'github-copilot\runner.ps1') -Command execute -RunPath $with.Path -ProfilePath $recordedProfiles['copilot']
-    Assert-Equal 'failed' $copilotNoAuthResult.status 'Copilot no-auth execution failure is captured without a model request'
-    Assert-Equal 'copilot_os_keychain_or_github_cli_unverified' $copilotNoAuthResult.evidence.credential.source 'Copilot no-auth evidence does not claim authentication'
-    Assert-True (($copilotNoAuthResult | ConvertTo-Json -Depth 100) -notmatch 'ambient-profile-not-logged|recorded-copilot-canary|recorded-gh-canary|recorded-github-canary') 'Copilot authentication fixtures never expose credential values'
-    $env:COPILOT_HOME = $recordedOldCopilotHome
-    }
     Write-Output "Real runner deterministic adapter conformance ($Suite): PASS"
 } finally {
     $env:PATH = $recordedOldPath
@@ -2031,11 +1828,6 @@ exit 2
     $env:CODEX_HOME = $recordedOldCodexHome
     $env:AGENTIC_GLOBAL_SECRET = $recordedOldGlobalSecret
     $env:OPENCODE_DISABLE_PROJECT_CONFIG = $recordedOldProjectDisable
-    $env:COPILOT_GITHUB_TOKEN = $recordedOldCopilotToken
-    $env:GH_TOKEN = $recordedOldGhToken
-    $env:GITHUB_TOKEN = $recordedOldGithubToken
-    $env:COPILOT_HOME = $recordedOldCopilotHome
-    $env:GH_CONFIG_DIR = $recordedOldGhConfigDir
     $env:AGENTIC_RECORDED_FIXTURES = $recordedOldFixtures
     if (Test-Path -LiteralPath $recordedRoot) { Remove-Item -LiteralPath $recordedRoot -Recurse -Force }
 }
@@ -2104,7 +1896,6 @@ function New-TestRun {
     [System.IO.File]::WriteAllText((Join-Path $homeDirectory 'README.txt'), 'isolated home', [System.Text.UTF8Encoding]::new($false))
     New-Item -ItemType Directory -Path (Join-Path $repo '.github') -Force | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $repo 'AGENTS.md'), '# repo-owned-agent-instruction', [System.Text.UTF8Encoding]::new($false))
-    [System.IO.File]::WriteAllText((Join-Path $repo '.github\copilot-instructions.md'), '# repo-owned-copilot-instruction', [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText((Join-Path $repo 'opencode.json'), '{"fixture_project_config":true}', [System.Text.UTF8Encoding]::new($false))
     $prompt = "# task`r`n`r`nByte fidelity: Δ and emoji 🚀. I’m testing Microsoft’s guidance. ÆØÅ`r`n" + ("large-prompt-line-0123456789`r`n" * 4096)
     [System.IO.File]::WriteAllBytes((Join-Path $runRoot 'prompt.md'), [System.Text.UTF8Encoding]::new($false).GetBytes($prompt))
@@ -2394,7 +2185,7 @@ try {
     Assert-Equal 'recorded-cli 1.2.3' (Get-ObservableVersionFromText "`nrecorded-cli 1.2.3`n") 'observable version capture keeps the exact line'
     Assert-True ($null -eq (Get-ObservableVersionFromText "`n `n")) 'empty version output has no observable value'
 
-    foreach ($fixture in @('codex-events.jsonl', 'opencode-events.jsonl', 'copilot-events.jsonl')) {
+    foreach ($fixture in @('codex-events.jsonl', 'opencode-events.jsonl')) {
         $fixturePath = Join-Path $PSScriptRoot "fixtures\$fixture"
         $parsed = ConvertFrom-JsonLines -Text ([System.IO.File]::ReadAllText($fixturePath, [System.Text.UTF8Encoding]::new($false)))
         Assert-Equal 0 $parsed.Errors.Count "recorded $fixture has valid JSONL"
@@ -2406,10 +2197,6 @@ try {
     $threadStartError = @($threadStartRejection.Events | Where-Object { [int](Get-JsonProperty -Object (Get-JsonProperty -Object $_ -Name 'error' -Default $null) -Name 'code' -Default 0) -eq -32600 })[0]
     Assert-Equal -32600 $threadStartError.error.code 'recorded Codex thread/start rejection preserves JSON-RPC error code'
     Assert-True ($threadStartError.error.message -match 'read-only.*workspace-write.*danger-full-access') 'recorded Codex thread/start rejection preserves the installed sandbox enum'
-    $copilotFixture = ConvertFrom-JsonLines -Text ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'fixtures\copilot-events.jsonl'), [System.Text.UTF8Encoding]::new($false)))
-    Assert-True (@($copilotFixture.Events | Where-Object { $_.type -eq 'assistant.message' }).Count -ge 1) 'recorded copilot fixture includes documented assistant.message output'
-    Assert-True (@($copilotFixture.Events | Where-Object { $_.type -eq 'assistant.usage' }).Count -eq 1) 'recorded copilot fixture includes documented assistant.usage output'
-    Assert-True (@($copilotFixture.Events | Where-Object { $_.type -eq 'tool.execution_start' }).Count -eq 1) 'recorded copilot fixture includes documented tool.execution output'
     $prepareText = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'scripts\prepare-skill-evals.ps1'), [System.Text.UTF8Encoding]::new($false))
     $reportText = [System.IO.File]::ReadAllText((Join-Path $repoRoot 'scripts\generate-eval-report.ps1'), [System.Text.UTF8Encoding]::new($false))
     $bridgeText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'bridge-execution-result.ps1'), [System.Text.UTF8Encoding]::new($false))
@@ -2419,10 +2206,10 @@ try {
     $commonText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'runner-common.ps1'), [System.Text.UTF8Encoding]::new($false))
     $orchestrationText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'orchestration.ps1'), [System.Text.UTF8Encoding]::new($false))
     $opencodeRunnerText = [System.IO.File]::ReadAllText((Join-Path $runnerRoot 'opencode/runner.ps1'), [System.Text.UTF8Encoding]::new($false))
-    Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
+    Assert-True ($prepareText -notmatch '(?i)codex\s+exec|opencode\s+run|Profile\.Provider') 'portable preparation must not contain harness-specific CLI invocations or provider-field branches'
     Assert-True ($orchestrationText -notmatch '(?i)capture-native-results\.ps1|synthesize|worker_authored') 'generic orchestration must not manufacture native terminal envelopes'
-    Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
-    Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|copilot\s+-p|copilot\s+--prompt|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
+    Assert-True ($reportText -notmatch '(?i)codex\s+exec|opencode\s+run|Profile\.Provider') 'reporting must not contain harness-specific or provider-field branches'
+    Assert-True ($bridgeText -notmatch '(?i)codex\s+exec|opencode\s+run|Profile\.Provider') 'the raw-to-portable bridge must remain runner-neutral'
     Assert-True ($prepareText.Contains('execution-freeze.json') -and $prepareText.Contains('grading.json') -and $prepareText.Contains('validate-eval-grading.ps1') -and $prepareText.Contains('apply-eval-grading.ps1') -and $prepareText.Contains('finalize-eval-package.ps1')) 'handoff preparation must expose the shared freeze, grading validation, grading application, and finalization boundaries'
     Assert-True ($prepareText.Contains('Read the selected runner descriptor and its `delegation.dispatch_owner`.') -and $prepareText.Contains('invoke-runner-owned-arms.ps1') -and $prepareText.Contains('package-computed Phase 1 allowance') -and $prepareText.Contains('must be started exactly once')) 'handoff preparation must expose one foreground Phase 1 invocation with a computed caller timeout'
     Assert-True ($prepareText.Contains('Do not create outer workers') -and $prepareText.Contains('edit raw result/evidence files')) 'handoff preparation must forbid outer runner-owned workers and raw evidence edits'
@@ -2887,8 +2674,3 @@ try {
 
 }
 if ($Suite -ne 'Protocol') { Invoke-RecordedRunnerTests }
-
-if ($Suite -in @('All', 'Copilot')) {
-& pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'test-copilot-boundaries.ps1')
-if ($LASTEXITCODE -ne 0) { throw 'Copilot boundary regressions failed.' }
-}

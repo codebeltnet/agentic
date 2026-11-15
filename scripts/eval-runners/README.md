@@ -63,7 +63,7 @@ appears on Windows, and a freed slot is refilled as soon as ANY child completes
 (not only the oldest), so a slow eval execution never blocks a faster sibling.
 The foreground helper is not called by preparation, validation, CI, hooks, or
 automatic completion gates.
-Behavioral evaluation for GitHub Copilot, Codex, and OpenCode is runner-owned:
+Behavioral evaluation for Codex and OpenCode is runner-owned:
 each declares `delegation.dispatch_owner=runner`, is driven by
 the one foreground Phase 1 fan-out, and produces its own terminal
 `execution-result.json`. The orchestrator-owned envelope and
@@ -139,17 +139,6 @@ Operational permission, native skill isolation, and filesystem isolation are dis
 
 Native delegation mechanisms:
 
-- GitHub Copilot: runner-owned behavioral transport. The runner starts one
-  fresh Copilot CLI session per eval execution (`copilot -C <working-directory>
-  --model <model> --output-format json`, prompt on stdin) and captures that
-  session's own JSONL events as terminal evidence for its model, cwd, isolated
-  `COPILOT_HOME`, fresh session, prompt hash, and transcript. Copilot's native
-  `task` tool with a full-capability `general-purpose` child remains an
-  advertised harness capability but is not the benchmark transport. When an
-  `interaction.json` sidecar is present, the runner first proves from the
-  installed help that an explicit session-id continuation flag is available,
-  captures the first session id from structured events, and adds only that
-  exact id on later turns; it never resumes the most recent session.
 - Codex: the installed CLI's runner-owned app-server child-session surface,
   `config/read` and `skills/list(forceReload=true)` before `thread/start`,
   then `thread/start` followed by `turn/start`, with supplemental
@@ -262,18 +251,10 @@ proven reports `strict` isolation when hard confinement is proven and
 boundary, prompt fidelity, result capture, or other mandatory control remains
 incompatible.
 
-The fake runner is deterministic and is the conformance reference. It has no
-harness-native delegation surface and its compatibility output is never proof
-for a real harness. GitHub
-Copilot, Codex, and OpenCode are thin harness-specific adapters. Their
-native CLI flags, environment setup, event parsing, authentication injection,
-and isolation checks stay inside their own directories. Windows is supported in
-pragmatic mode when the native CLI satisfies the mandatory controls.
+The fake runner is deterministic and is the conformance reference. It has no harness-native delegation surface and its compatibility output is never proof for a real harness. Codex and OpenCode are thin harness-specific adapters. Their native CLI flags, environment setup, event parsing, authentication injection, and isolation checks stay inside their own directories. Windows is supported in pragmatic mode when the native CLI satisfies the mandatory controls.
 
-`github-copilot` with `claude-haiku-4.5` is the Codebelt Reference evaluation
-configuration: a stable, economical pairing for routine skill comparison. It is
-a repository convention, not an Anthropic default, and preparation verifies that
-the model still appears in the current Copilot catalog before selecting it.
+`codex` with `gpt-6-luna` and high reasoning is the Codebelt Reference evaluation configuration and the Codex preparation default. Preparation verifies that the model still appears in the current Codex catalog before selecting it.
+
 Cross-runner and cross-model numbers are never blended into one score; a paired
 `with_skill` versus `without_skill` comparison is only meaningful within one
 identical runner, model, and configuration stratum.
@@ -285,43 +266,14 @@ authoritative for the external handoff. A runner-owned runner may use its
 `execute` command as that native surface; an orchestrator-owned runner must
 keep `execute` out of the native subagent.
 
-For a single-turn run, GitHub Copilot uses `copilot -C <working-directory> --model <model>
---output-format json --allow-all --no-ask-user --disable-builtin-mcps
---no-color --log-level none --no-auto-update
---secret-env-vars=COPILOT_GITHUB_TOKEN,GH_TOKEN,GITHUB_TOKEN` with the exact
-prepared prompt bytes delivered once through stdin. It passes no `--prompt`/`-p`,
-`--resume`, `--continue`, `--session-id`, or `--connect` on this fresh
-single-turn invocation, and it does not use
-the blanket `--yolo` switch. `--allow-all` is the documented noninteractive
-programmatic grant that approves tools, paths, and URLs inside the isolated eval
-boundary.
-Repository-owned custom instructions remain enabled and are staged identically
-in both paired arms. Personal Copilot configuration is excluded by run-local
-`COPILOT_HOME`, `COPILOT_CACHE_HOME`, `HOME`, `USERPROFILE`, and XDG roots;
-the runner does not copy the normal `.copilot` directory. Authentication prefers
-explicit `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; when none is
-present, the trusted runner may resolve `gh auth token` outside the worker and
-inject only that token as a protected environment variable. Host `GH_CONFIG_DIR`
-is never forwarded into the evaluated worker. `--secret-env-vars` removes every
-listed token variable from shell and MCP child environments. Preflight does not
-make a model request and therefore reports native keychain/service readiness as
-conditional rather than claiming successful remote authentication. Codex's
-compatibility API-key path uses `--ask-for-approval never` with `exec --sandbox
-danger-full-access`; subscription eval arms use the runner-owned app-server path
-described above. It does not combine explicit sandbox selection with
-`--approve-for-me`. OpenCode single-turn execution uses `run --format json --auto --model
-<runner-native-model>` with isolated global/config roots and preserves
-repository-owned project configuration; it does not depend on
-`OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. For a scripted interaction,
-turn 1 uses those same arguments and later turns add the exact captured session
-id using the installed-help-proven `--session` form; `--continue` is rejected.
+Codex's compatibility API-key path uses `--ask-for-approval never` with `exec --sandbox danger-full-access`; subscription eval arms use the runner-owned app-server path described above. It does not combine explicit sandbox selection with `--approve-for-me`. OpenCode single-turn execution uses `run --format json --auto --model <runner-native-model>` with isolated global/config roots and preserves repository-owned project configuration; it does not depend on `OPENCODE_DISABLE_PROJECT_CONFIG` or use `--pure`. For a scripted interaction, turn 1 uses those same arguments and later turns add the exact captured session id using the installed-help-proven `--session` form; `--continue` is rejected.
 
 Each captures an exact observable
 CLI version and passes only documented environment credentials when the selected
 runner supports them. None copies a global skill directory, memory store, plugin
 set, or normal agent profile into a run.
 
-Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Copilot through the installed CLI SDK help-visible model list or the installed `copilot help config` model list, Codex through `codex debug models`, and OpenCode through `opencode models --verbose`, which lists all configured providers. OpenCode preserves exact `provider/model` selectors and retains free, paid, or unknown availability as metadata without filtering the selectable catalog. Interactive preparation must normalize explicit harness intent before invoking repository scripts: `Codex` maps to `codex`; `GitHub Copilot`, `GitHub Copilot CLI`, and `Copilot` map to `github-copilot`; `OpenCode` maps to `opencode`. Codex defaults to `gpt-5.6-luna` with low reasoning, GitHub Copilot defaults to the Codebelt Reference model `claude-haiku-4.5`, and both defaults are validated by package preparation. OpenCode still requires a discovered `provider/model` selector from the user when none was supplied; an explicit selector is preserved verbatim and is never silently replaced.
+Model discovery lives in `scripts/Get-HarnessModels.ps1`. It uses the current local harness catalog where available: Codex through `codex debug models`, and OpenCode through `opencode models --verbose`, which lists all configured providers. OpenCode preserves exact `provider/model` selectors and retains free, paid, or unknown availability as metadata without filtering the selectable catalog. Interactive preparation must normalize explicit harness intent before invoking repository scripts: `Codex` maps to `codex`; `OpenCode` maps to `opencode`. Codex and Codebelt Reference default to `gpt-6-luna` with high reasoning, validated by package preparation. OpenCode still requires a discovered `provider/model` selector from the user when none was supplied; an explicit selector is preserved verbatim and is never silently replaced.
 
 ## Live observability
 

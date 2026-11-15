@@ -9,7 +9,7 @@
     never fall back to stale hardcoded catalogs.
 
 .PARAMETER Runner
-    Internal Eval Runner id: github-copilot, codex, or opencode.
+    Internal Eval Runner id: codex or opencode.
 
 .PARAMETER CatalogPath
     Optional deterministic catalog fixture used by tests. When supplied, no harness command is invoked.
@@ -35,7 +35,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$supportedRunnerIds = @('github-copilot', 'codex', 'opencode')
+$supportedRunnerIds = @('codex', 'opencode')
 if ([string]::IsNullOrWhiteSpace($Runner)) {
     [Console]::Error.WriteLine("Runner is required. Supported runner IDs: $($supportedRunnerIds -join ', ').")
     exit 2
@@ -56,7 +56,6 @@ function Get-HarnessDisplayName {
     param([Parameter(Mandatory = $true)][string]$RunnerName)
 
     switch ($RunnerName) {
-        'github-copilot' { return 'GitHub Copilot CLI' }
         'codex' { return 'Codex CLI' }
         'opencode' { return 'OpenCode' }
         default { return $RunnerName }
@@ -261,7 +260,7 @@ function Invoke-JsonCommand {
     New-Item -ItemType Directory -Path $work -Force | Out-Null
     try {
         $environment = New-RunnerProbeEnvironment
-        foreach ($name in @('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'CODEX_HOME', 'COPILOT_HOME', 'COPILOT_CACHE_HOME', 'GH_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG')) {
+        foreach ($name in @('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'CODEX_HOME', 'GH_CONFIG_DIR', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG')) {
             $value = [Environment]::GetEnvironmentVariable($name)
             if (-not [string]::IsNullOrWhiteSpace($value)) {
                 $environment[$name] = $value
@@ -318,37 +317,6 @@ function ConvertFrom-OpenCodeTextCatalog {
     return @($models)
 }
 
-function Resolve-CopilotSdkPath {
-    $command = Resolve-ExternalCommand -Name 'copilot'
-    if ($null -eq $command) {
-        throw 'GitHub Copilot CLI executable is not available on PATH.'
-    }
-
-    $source = [string]$command.Source
-    $directory = Split-Path -Parent $source
-    $candidates = [System.Collections.Generic.List[string]]::new()
-    $optionalRoot = Join-Path $directory 'node_modules/@github/copilot/node_modules/@github'
-    if (Test-Path -LiteralPath $optionalRoot -PathType Container) {
-        foreach ($package in @(Get-ChildItem -LiteralPath $optionalRoot -Directory -Filter 'copilot-*' -Force)) {
-            $candidates.Add((Join-Path $package.FullName 'sdk/index.js'))
-        }
-    }
-    $candidates.Add((Join-Path $directory 'node_modules/@github/copilot/node_modules/@github/copilot-win32-x64/sdk/index.js'))
-    $candidates.Add((Join-Path $directory 'node_modules/@github/copilot/node_modules/@github/copilot-win32-arm64/sdk/index.js'))
-    $candidates.Add((Join-Path $directory 'node_modules/@github/copilot/node_modules/@github/copilot-linux-x64/sdk/index.js'))
-    $candidates.Add((Join-Path $directory 'node_modules/@github/copilot/node_modules/@github/copilot-linux-arm64/sdk/index.js'))
-    $candidates.Add((Join-Path $directory 'node_modules/@github/copilot/node_modules/@github/copilot-darwin-x64/sdk/index.js'))
-    $candidates.Add((Join-Path $directory 'node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/sdk/index.js'))
-    foreach ($candidate in $candidates) {
-        $full = [System.IO.Path]::GetFullPath($candidate)
-        if (Test-Path -LiteralPath $full -PathType Leaf) {
-            return $full
-        }
-    }
-
-    throw 'GitHub Copilot CLI does not expose a package-local SDK model listing surface in this installation.'
-}
-
 function Get-CodexModels {
     $command = Resolve-ExternalCommand -Name 'codex'
     if ($null -eq $command) {
@@ -370,94 +338,11 @@ function Get-OpenCodeModels {
     return ConvertFrom-OpenCodeTextCatalog -Text $result.Stdout
 }
 
-function Get-CopilotModelsFromSdk {
-    $sdkPath = Resolve-CopilotSdkPath
-    $node = Resolve-ExternalCommand -Name 'node'
-    if ($null -eq $node) {
-        throw 'Node.js is required to read the GitHub Copilot CLI model registry.'
-    }
-
-    $script = @'
-import { pathToFileURL } from "node:url";
-const sdkPath = process.argv[1];
-const mod = await import(pathToFileURL(sdkPath).href);
-const ids = Array.isArray(mod.HELP_VISIBLE_MODELS)
-  ? mod.HELP_VISIBLE_MODELS
-  : Object.keys(mod.SUPPORTED_MODELS || {});
-console.log(JSON.stringify({ models: ids.map((id) => ({ id, name: id, operation: "language" })) }));
-'@
-    $result = Invoke-JsonCommand -CommandInfo $node -Arguments @('--input-type=module', '-e', $script, $sdkPath) -TimeoutSeconds 90
-    $catalog = $result.Stdout | ConvertFrom-Json
-    return ConvertTo-ModelChoices -Catalog $catalog -RunnerName 'github-copilot' -Source 'GitHub Copilot CLI help-visible model catalog'
-}
-
-function ConvertFrom-CopilotHelpConfigModels {
-    param([Parameter(Mandatory = $true)][string]$Text)
-
-    $models = [System.Collections.Generic.List[object]]::new()
-    $insideModelSetting = $false
-    foreach ($line in ($Text -split "`r?`n")) {
-        if ($line -match '^\s*`model`:\s*') {
-            $insideModelSetting = $true
-            continue
-        }
-        if ($insideModelSetting -and $line -match '^\s*`[^`]+`:\s*') {
-            break
-        }
-        if (-not $insideModelSetting) {
-            continue
-        }
-
-        $match = [regex]::Match($line, '^\s*-\s+"(?<id>[^"]+)"')
-        if (-not $match.Success) {
-            continue
-        }
-        $id = $match.Groups['id'].Value
-        $models.Add([pscustomobject]@{
-            id = $id
-            name = $id
-            operation = 'language'
-        })
-    }
-
-    return ConvertTo-ModelChoices -Catalog ([pscustomobject]@{ models = @($models.ToArray()) }) -RunnerName 'github-copilot' -Source 'GitHub Copilot CLI help config model list'
-}
-
-function Get-CopilotModelsFromHelpConfig {
-    $command = Resolve-ExternalCommand -Name 'copilot'
-    if ($null -eq $command) {
-        throw 'GitHub Copilot CLI executable is not available on PATH.'
-    }
-
-    $result = Invoke-JsonCommand -CommandInfo $command -Arguments @('help', 'config') -TimeoutSeconds 60
-    $models = @(ConvertFrom-CopilotHelpConfigModels -Text ([string]::Join("`n", @($result.Stdout, $result.Stderr))))
-    if ($models.Count -eq 0) {
-        throw 'GitHub Copilot CLI help config did not expose a parseable model list.'
-    }
-    return @($models)
-}
-
-function Get-CopilotModels {
-    $sdkFailure = $null
-    try {
-        return @(Get-CopilotModelsFromSdk)
-    } catch {
-        $sdkFailure = $_.Exception.Message
-    }
-
-    try {
-        return @(Get-CopilotModelsFromHelpConfig)
-    } catch {
-        throw "GitHub Copilot CLI model discovery failed. Package-local SDK discovery failed: $sdkFailure Help-config discovery failed: $($_.Exception.Message)"
-    }
-}
-
 try {
     $rawModels = if (-not [string]::IsNullOrWhiteSpace($CatalogPath)) {
         ConvertTo-ModelChoices -Catalog (Read-CatalogJson -Path $CatalogPath) -RunnerName $Runner -Source $CatalogPath
     } else {
         switch ($Runner) {
-            'github-copilot' { Get-CopilotModels }
             'codex' { Get-CodexModels }
             'opencode' { Get-OpenCodeModels }
         }
