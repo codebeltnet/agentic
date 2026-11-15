@@ -281,7 +281,7 @@ def supplement_new_contributors(evidence, api, author_api):
     if evidence["previous"] is not None:
         # Expand prior squash PRs too: a compare-base commit author alone loses contributors.
         history = collect(evidence["repository"], None, evidence["resolved_refs"][0], api,
-                          author_api=author_api, identify_new=False)
+                          author_api=author_api, identify_new=False, _history_only=True)
         evidence["contributor_history"] = history
         if not history["complete"]:
             raise ValueError("Prior contributor history is incomplete: " + "; ".join(history["issues"]))
@@ -298,13 +298,17 @@ def supplement_new_contributors(evidence, api, author_api):
 
 
 def collect(repository, previous, current, api=github, generated_notes=None,
-            author_api=github_authors, identify_new=True):
+            author_api=github_authors, identify_new=True, _history_only=False):
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
         raise ValueError("Repository must be owner/repo")
     root = f"repos/{repository}"
     evidence = {"repository": repository, "previous": previous, "current": current,
                 "complete": False, "issues": [], "commits": [], "pull_requests": [],
                 "files": [], "sources": [], "associations": {}, "direct_commits": []}
+    if _history_only:
+        if previous is not None or identify_new:
+            raise ValueError("Contributor history requires whole-history collection without newcomer discovery")
+        evidence["history_only"] = True
     issues = evidence["issues"]
 
     def read(endpoint):
@@ -340,16 +344,20 @@ def collect(repository, previous, current, api=github, generated_notes=None,
     evidence["resolved_refs"] = refs
     if previous is None:
         # Initial releases include the whole reachable history, oldest first.
-        tree_sha = pages[0]["commit"]["tree"]["sha"]
+        resolved_commit = pages[0]
         history = read(f"{root}/commits?sha={refs[0]}&per_page=100")
-        tree = read(f"{root}/git/trees/{tree_sha}?recursive=1")
-        if history is None or tree is None:
+        if history is None:
             return evidence
         commits = list(reversed([commit for page in history for commit in page]))
-        evidence["files"] = [{"filename": item["path"], "status": "added"}
-                             for item in tree[0]["tree"] if item["type"] in ("blob", "commit")]
-        if tree[0].get("truncated"):
-            issues.append("Initial release tree is truncated; collect the complete final tree through another route")
+        if not _history_only:
+            tree_sha = resolved_commit["commit"]["tree"]["sha"]
+            tree = read(f"{root}/git/trees/{tree_sha}?recursive=1")
+            if tree is None:
+                return evidence
+            evidence["files"] = [{"filename": item["path"], "status": "added"}
+                                 for item in tree[0]["tree"] if item["type"] in ("blob", "commit")]
+            if tree[0].get("truncated"):
+                issues.append("Initial release tree is truncated; collect the complete final tree through another route")
     else:
         pages = read(f"{root}/compare/{refs[0]}...{refs[1]}?per_page=100")
         if pages is None:
@@ -406,14 +414,14 @@ def collect(repository, previous, current, api=github, generated_notes=None,
             if any(item["number"] == number for item in evidence["pull_requests"]):
                 continue
             commit_pages = read(f"{root}/pulls/{number}/commits?per_page=100")
-            file_pages = read(f"{root}/pulls/{number}/files?per_page=100")
+            file_pages = [] if _history_only else read(f"{root}/pulls/{number}/files?per_page=100")
             original = [c for page in (commit_pages or []) for c in page]
             enrich_authors(original)
             files = [f for page in (file_pages or []) for f in page]
             covered.update(c["sha"] for c in original if c["sha"] in shas)
             if len(original) != pr["commits"] or len({c["sha"] for c in original}) != len(original):
                 issues.append(f"PR #{number}: expected {pr['commits']} commits, collected {len(original)}")
-            if len(files) != pr["changed_files"] or len({f["filename"] for f in files}) != len(files):
+            if not _history_only and (len(files) != pr["changed_files"] or len({f["filename"] for f in files}) != len(files)):
                 issues.append(f"PR #{number}: changed-file count mismatch")
             authors = contributors(original, pr["user"]["login"])
             evidence["pull_requests"].append({"number": number, "metadata": pr,
@@ -459,6 +467,8 @@ def collect(repository, previous, current, api=github, generated_notes=None,
 
 def verify(evidence, draft):
     errors = []
+    if evidence.get("history_only"):
+        errors.append("Contributor history alone cannot verify current release notes; collect full release evidence")
     if not evidence["complete"]:
         errors.append("Evidence is incomplete: " + "; ".join(evidence["issues"]))
     lines = draft.strip().splitlines()

@@ -193,6 +193,87 @@ class EvidenceTests(unittest.TestCase):
         self.assertFalse(evidence.get("new_contributors"))
         self.assertIn(self.prefix + "/pulls/9/commits?per_page=100", self.calls)
 
+    def prior_squash_routes(self):
+        self.prior_routes()
+        self.routes["/commits/base/pulls?per_page=100"] = [[{"number": 9}]]
+        self.routes["/pulls/9"] = [dict(self.pr, number=9, merge_commit_sha="base", commits=1,
+            html_url="https://github.com/example/widget/pull/9")]
+        self.routes["/pulls/9/commits?per_page=100"] = [[self.user_commit("old-original", "returning")]]
+        self.routes["/pulls/9/files?per_page=100"] = [[{"filename": "old.py"}]]
+        self.routes["/pulls/22/commits?per_page=100"][0][0] = self.user_commit("a", "returning")
+        self.routes["/pulls/22/commits?per_page=100"][1][0] = self.user_commit("b", "new-user")
+
+    def test_prior_files_and_trees_are_not_newcomer_prerequisites(self):
+        for failure in ("truncated tree", "denied tree", "missing tree metadata", "denied PR files", "capped PR files"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self.prior_squash_routes()
+                if failure == "truncated tree":
+                    self.routes["/git/trees/old-tree?recursive=1"][0]["truncated"] = True
+                elif failure == "denied tree":
+                    self.routes["/git/trees/old-tree?recursive=1"] = RuntimeError("HTTP 403 old tree")
+                elif failure == "missing tree metadata":
+                    self.routes["/commits/base"] = [{"sha": "base"}]
+                elif failure == "denied PR files":
+                    self.routes["/pulls/9/files?per_page=100"] = RuntimeError("HTTP 403 old files")
+                else:
+                    self.routes["/pulls/9"][0]["changed_files"] = 3001
+                evidence = self.collect()
+                self.assertTrue(evidence["complete"], evidence["issues"])
+                self.assertEqual(evidence["new_contributors"], [
+                    "* **@new-user** made their first contribution in [#22](https://github.com/example/widget/pull/22)."])
+                self.assertEqual(collector.verify(evidence, self.with_newcomers(evidence)), [])
+                self.assertFalse(any("/git/trees/" in call for call in self.calls))
+                self.assertNotIn(self.prefix + "/pulls/9/files?per_page=100", self.calls)
+                self.assertIn(self.prefix + "/pulls/22/files?per_page=100", self.calls)
+                history = evidence["contributor_history"]
+                self.assertTrue(history["history_only"])
+                self.assertTrue(any("Contributor history alone" in error
+                                    for error in collector.verify(history, self.draft(history))))
+
+    def test_prior_coauthors_are_checked_in_history_only_mode(self):
+        for fail_mapping in (False, True):
+            with self.subTest(fail_mapping=fail_mapping):
+                self.setUp()
+                self.prior_squash_routes()
+                self.routes["/pulls/9/commits?per_page=100"] = [[commit(
+                    "old-original", "helper", "Improve runner\n\nCo-authored-by: Returning <returning@example.com>")]]
+                def authors(repository, sha):
+                    if fail_mapping:
+                        raise RuntimeError("HTTP 403 historical co-author mapping")
+                    return [{"name": "Returning", "user": {"login": "returning", "type": "User"}}]
+                evidence = collector.collect("example/widget", "v1", "v2", self.api, author_api=authors)
+                self.assertEqual(evidence["complete"], not fail_mapping, evidence["issues"])
+                if fail_mapping:
+                    self.assertFalse(evidence.get("new_contributors"))
+                    self.assertIn("historical co-author mapping", ";".join(evidence["issues"]))
+                else:
+                    self.assertEqual(len(evidence["new_contributors"]), 1)
+                    self.assertIn("@new-user", evidence["new_contributors"][0])
+
+    def test_prior_commit_and_membership_failures_still_fail_closed(self):
+        for failure in ("missing original commit", "failed association", "ambiguous membership"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self.prior_squash_routes()
+                if failure == "missing original commit":
+                    self.routes["/pulls/9"][0]["commits"] = 2
+                elif failure == "failed association":
+                    self.routes["/commits/base/pulls?per_page=100"] = RuntimeError("HTTP 403 associations")
+                else:
+                    self.routes["/pulls/9"][0]["merge_commit_sha"] = "unreachable"
+                evidence = self.collect()
+                self.assertFalse(evidence["complete"])
+                self.assertFalse(evidence.get("new_contributors"))
+                self.assertIn("Prior contributor history is incomplete", ";".join(evidence["issues"]))
+
+    def test_current_release_file_inventory_is_still_required(self):
+        self.prior_squash_routes()
+        self.routes["/pulls/22/files?per_page=100"] = RuntimeError("HTTP 403 current files")
+        evidence = self.collect()
+        self.assertFalse(evidence["complete"])
+        self.assertTrue(collector.verify(evidence, self.draft(evidence)))
+
     def test_failed_history_does_not_prove_newcomer_status(self):
         self.pr["user"]["type"] = "User"
         self.prior_routes()
