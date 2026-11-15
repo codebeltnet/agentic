@@ -1894,7 +1894,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
     Assert-Contains -Name 'README.md' -Content $readme -Needle 'Hard filesystem confinement is a separate optional outer capability'
     Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'full harness operational permission inside each isolated eval boundary'
     Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle 'sandboxPolicy.type=dangerFullAccess'
-    Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle '`--allow-all` is the documented noninteractive'
+    Assert-Contains -Name 'scripts/eval-runners/README.md' -Content $runnerReadme -Needle '`codex` with `gpt-6-luna` and high reasoning'
     Assert-Contains -Name 'CONTRIBUTING.md' -Content $contributing -Needle 'Normalize explicit harness wording immediately'
     Assert-Contains -Name 'AGENTS.md' -Content $agents -Needle 'Normalize explicit user intent immediately'
     foreach ($document in @(
@@ -1995,8 +1995,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         [System.IO.File]::WriteAllText($catalogPath, (@'
 {
   "models": [
-    { "id": "claude-haiku-4.5", "display_name": "Claude Haiku 4.5", "availability": "paid", "operation": "language" },
-    { "id": "gpt-5.6-luna", "display_name": "GPT-5.6 Luna", "availability": "paid", "operation": "language" },
+    { "id": "gpt-6-luna", "display_name": "GPT-6 Luna", "availability": "paid", "operation": "language" },
     { "id": "provider-free/free-model", "display_name": "Free Provider Model", "availability": "free", "operation": "language" },
     { "id": "provider-paid/Paid.Model", "display_name": "Paid Provider Model", "availability": "paid", "operation": "language" },
     { "id": "provider-unknown/Unknown_Model", "display_name": "Unknown Provider Model", "availability": "unknown", "operation": "language" },
@@ -2007,8 +2006,7 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
 '@), $utf8NoBom)
 
         $expectedSelectors = @(
-            'claude-haiku-4.5',
-            'gpt-5.6-luna',
+            'gpt-6-luna',
             'provider-free/free-model',
             'provider-paid/Paid.Model',
             'provider-unknown/Unknown_Model',
@@ -2017,16 +2015,13 @@ Add-ValidationResult -Results $results -Name 'Skill evaluation prepares portable
         )
 
         $missingRunnerDiscovery = (& pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath 2>&1)
-        if ($LASTEXITCODE -eq 0 -or ($missingRunnerDiscovery -join ' ') -notmatch 'Runner is required\. Supported runner IDs: github-copilot, codex, opencode' -or ($missingRunnerDiscovery -join ' ') -match 'Cannot process command because of one or more missing mandatory parameters') {
+        if ($LASTEXITCODE -eq 0 -or ($missingRunnerDiscovery -join ' ') -notmatch 'Runner is required\. Supported runner IDs: codex, opencode' -or ($missingRunnerDiscovery -join ' ') -match 'Cannot process command because of one or more missing mandatory parameters') {
             throw 'Get-HarnessModels.ps1 without -Runner must fail immediately with the supported runner IDs and no PowerShell mandatory-parameter prompt.'
         }
 
-        $copilotDiscovery = (& pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw "Get-HarnessModels.ps1 failed for Copilot fixture: $($copilotDiscovery -join [Environment]::NewLine)" }
-        $copilotModels = ($copilotDiscovery -join [Environment]::NewLine) | ConvertFrom-Json
-        $copilotIds = @($copilotModels.models | ForEach-Object { [string]$_.id })
-        if ([string]$copilotModels.policy -ne 'all' -or $copilotIds.Count -ne $expectedSelectors.Count -or @($expectedSelectors | Where-Object { $copilotIds -notcontains $_ }).Count -gt 0) {
-            throw 'Copilot discovery must retain its all-model behavior and return every fixture selector.'
+        $retiredRunnerDiscovery = (& pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath 2>&1)
+        if ($LASTEXITCODE -eq 0 -or ($retiredRunnerDiscovery -join ' ') -notmatch "Unsupported runner 'github-copilot'\. Supported runner IDs: codex, opencode") {
+            throw 'Model discovery must reject the removed Copilot runner without falling back to another harness.'
         }
 
         $codexDiscovery = (& pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'codex' -CatalogPath $catalogPath 2>&1)
@@ -2126,9 +2121,9 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'Discovery failures must remain local and must not invent fallback models.'
         }
 
-        $referenceOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $catalogPath -RequireModel 'claude-haiku-4.5' 2>&1
+        $referenceOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'codex' -CatalogPath $catalogPath -RequireModel 'gpt-6-luna' 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Codebelt Reference fixture should resolve: $($referenceOutput -join [Environment]::NewLine)" }
-        $missingReferenceOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'github-copilot' -CatalogPath $paidCatalogPath -RequireModel 'claude-haiku-4.5' 2>&1
+        $missingReferenceOutput = & pwsh -NoProfile -NonInteractive -File $modelDiscoveryPath -Runner 'codex' -CatalogPath $paidCatalogPath -RequireModel 'gpt-6-luna' 2>&1
         if ($LASTEXITCODE -eq 0 -or ($missingReferenceOutput -join ' ') -notmatch 'Required model') {
             throw 'Codebelt Reference discovery must fail instead of silently substituting a model.'
         }
@@ -2141,47 +2136,53 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         $codexPackageRoot = Join-Path $packageRoot 'codex-package'
         $missingCodexModelRoot = Join-Path $packageRoot 'missing-codex-model-package'
         $opencodePackageRoot = Join-Path $packageRoot 'opencode-package'
-        $explicitGithubPackageRoot = Join-Path $packageRoot 'github-explicit-runner-package'
+        $explicitCodexPackageRoot = Join-Path $packageRoot 'codex-explicit-runner-package'
         $explicitOpenCodePackageRoot = Join-Path $packageRoot 'opencode-explicit-concurrency-package'
         $missingSelectionRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-selection-' + [Guid]::NewGuid().ToString('N'))
         $missingRunnerRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-runner-' + [Guid]::NewGuid().ToString('N'))
         $missingOpenCodeModelRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('agentic-eval-missing-opencode-model-' + [Guid]::NewGuid().ToString('N'))
+        $retiredRunnerRoot = Join-Path $packageRoot 'retired-runner-package'
 
         $prepareBatch = Invoke-PrepareEvalPackageBatch -ScriptPath $scriptPath -Requests @(
             [pscustomobject]@{ Name = 'reference'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $referencePackageRoot, '-CodebeltReference', '-ModelCatalogPath', $catalogPath) }
             [pscustomobject]@{ Name = 'codex'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $codexPackageRoot, '-Runner', 'codex', '-ModelCatalogPath', $catalogPath) }
-            [pscustomobject]@{ Name = 'missingCodexModel'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $missingCodexModelRoot, '-Runner', 'codex', '-Model', 'gpt-5.6-luna', '-ModelCatalogPath', $paidCatalogPath) }
+            [pscustomobject]@{ Name = 'missingCodexModel'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $missingCodexModelRoot, '-Runner', 'codex', '-Model', 'gpt-6-luna', '-ModelCatalogPath', $paidCatalogPath) }
             [pscustomobject]@{ Name = 'opencode'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $opencodePackageRoot, '-Runner', 'opencode', '-Model', 'provider-paid/Paid.Model', '-ModelCatalogPath', $catalogPath) }
-            [pscustomobject]@{ Name = 'explicitGithub'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $explicitGithubPackageRoot, '-Runner', 'github-copilot', '-Model', 'gpt-5.6-luna', '-ModelCatalogPath', $catalogPath) }
+            [pscustomobject]@{ Name = 'explicitCodex'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $explicitCodexPackageRoot, '-Runner', 'codex', '-Model', 'gpt-6-luna', '-ReasoningEffort', 'low', '-ModelCatalogPath', $catalogPath) }
             [pscustomobject]@{ Name = 'explicitOpenCode'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Eval', '1', '-OutputRoot', $explicitOpenCodePackageRoot, '-Runner', 'opencode', '-Model', 'provider-paid/Paid.Model', '-ModelCatalogPath', $catalogPath, '-Concurrency', '16') }
             [pscustomobject]@{ Name = 'missingSelection'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-OutputRoot', $missingSelectionRoot) }
             [pscustomobject]@{ Name = 'missingRunner'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-OutputRoot', $missingRunnerRoot, '-Runner', 'missing-runner', '-Model', 'fixture-model') }
             [pscustomobject]@{ Name = 'missingOpenCodeModel'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Runner', 'opencode', '-OutputRoot', $missingOpenCodeModelRoot) }
+            [pscustomobject]@{ Name = 'retiredRunner'; Arguments = @('-Skill', 'dotnet-strong-name-signing', '-Runner', 'github-copilot', '-Model', 'gpt-6-luna', '-OutputRoot', $retiredRunnerRoot, '-ModelCatalogPath', $catalogPath) }
         )
+
+        if ($prepareBatch['retiredRunner'].ExitCode -eq 0 -or ($prepareBatch['retiredRunner'].Output -join ' ') -notmatch "Unsupported runner 'github-copilot'" -or (Test-Path -LiteralPath $retiredRunnerRoot)) {
+            throw 'Preparation must reject the removed Copilot runner before creating a package.'
+        }
 
         $referencePrepareOutput = $prepareBatch['reference'].Output
         if ($prepareBatch['reference'].ExitCode -ne 0) {
             throw "prepare-skill-evals.ps1 -CodebeltReference failed against the fake current catalog: $($referencePrepareOutput -join [Environment]::NewLine)"
         }
         $referenceProfile = [System.IO.File]::ReadAllText((Join-Path $referencePackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
-        if ([string]$referenceProfile.runner -ne 'github-copilot' -or [string]$referenceProfile.model -ne 'claude-haiku-4.5' -or [int]$referenceProfile.concurrency -ne 16) {
-            throw 'Codebelt Reference preparation must write github-copilot + claude-haiku-4.5 atomically and preserve default concurrency 16.'
+        if ([string]$referenceProfile.runner -ne 'codex' -or [string]$referenceProfile.model -ne 'gpt-6-luna' -or [int]$referenceProfile.concurrency -ne 16 -or [string]$referenceProfile.reasoning_effort -ne 'high') {
+            throw 'Codebelt Reference preparation must write codex + gpt-6-luna with high reasoning atomically and preserve default concurrency 16.'
         }
-        Assert-PreparedRunnerIdentity -Name 'GitHub Copilot Codebelt Reference package' -IterationDirectory (Join-Path $referencePackageRoot 'iteration-1') -ExpectedRunner 'github-copilot' -ExpectedModel 'claude-haiku-4.5'
+        Assert-PreparedRunnerIdentity -Name 'Codex Codebelt Reference package' -IterationDirectory (Join-Path $referencePackageRoot 'iteration-1') -ExpectedRunner 'codex' -ExpectedModel 'gpt-6-luna'
 
         $codexPrepareOutput = $prepareBatch['codex'].Output
         if ($prepareBatch['codex'].ExitCode -ne 0) {
             throw "prepare-skill-evals.ps1 failed for the Codex default fixture: $($codexPrepareOutput -join [Environment]::NewLine)"
         }
         $codexProfile = [System.IO.File]::ReadAllText((Join-Path $codexPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
-        if ([string]$codexProfile.runner -ne 'codex' -or [string]$codexProfile.model -ne 'gpt-5.6-luna' -or [string]$codexProfile.reasoning_effort -ne 'low') {
-            throw 'Codex preparation must preserve gpt-5.6-luna and default omitted reasoning effort to low.'
+        if ([string]$codexProfile.runner -ne 'codex' -or [string]$codexProfile.model -ne 'gpt-6-luna' -or [string]$codexProfile.reasoning_effort -ne 'high') {
+            throw 'Codex preparation must preserve gpt-6-luna and default omitted reasoning effort to high.'
         }
         if ([int]$codexProfile.concurrency -ne 16) { throw 'Codex omitted -Concurrency must preserve the repository default of 16.' }
-        Assert-PreparedRunnerIdentity -Name 'Codex package' -IterationDirectory (Join-Path $codexPackageRoot 'iteration-1') -ExpectedRunner 'codex' -ExpectedModel 'gpt-5.6-luna'
+        Assert-PreparedRunnerIdentity -Name 'Codex package' -IterationDirectory (Join-Path $codexPackageRoot 'iteration-1') -ExpectedRunner 'codex' -ExpectedModel 'gpt-6-luna'
 
         $missingCodexModelOutput = $prepareBatch['missingCodexModel'].Output
-        if ($prepareBatch['missingCodexModel'].ExitCode -eq 0 -or ($missingCodexModelOutput -join ' ') -notmatch "model 'gpt-5\.6-luna' could not be verified") {
+        if ($prepareBatch['missingCodexModel'].ExitCode -eq 0 -or ($missingCodexModelOutput -join ' ') -notmatch "model 'gpt-6-luna' could not be verified") {
             throw 'prepare-skill-evals.ps1 must validate explicit Codex models through current model discovery before writing a package.'
         }
         if (Test-Path -LiteralPath $missingCodexModelRoot) {
@@ -2200,23 +2201,23 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         if (($opencodePrepareOutput -join [Environment]::NewLine) -notmatch 'Concurrency:\s+2 \(OpenCode safe default\)') { throw 'OpenCode preparation output must identify the safe default concurrency source.' }
         Assert-PreparedRunnerIdentity -Name 'OpenCode package' -IterationDirectory (Join-Path $opencodePackageRoot 'iteration-1') -ExpectedRunner 'opencode' -ExpectedModel 'provider-paid/Paid.Model'
 
-        $explicitGithubOutput = $prepareBatch['explicitGithub'].Output
-        if ($prepareBatch['explicitGithub'].ExitCode -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit GitHub Copilot selection: $($explicitGithubOutput -join [Environment]::NewLine)" }
-        $explicitGithubProfile = [System.IO.File]::ReadAllText((Join-Path $explicitGithubPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
-        if ([string]$explicitGithubProfile.runner -ne 'github-copilot' -or [string]$explicitGithubProfile.model -ne 'gpt-5.6-luna' -or $null -ne $explicitGithubProfile.reasoning_effort) {
-            throw 'An explicit GitHub Copilot runner selection must not be overwritten by Codex defaults.'
+        $explicitCodexOutput = $prepareBatch['explicitCodex'].Output
+        if ($prepareBatch['explicitCodex'].ExitCode -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit Codex selection: $($explicitCodexOutput -join [Environment]::NewLine)" }
+        $explicitCodexProfile = [System.IO.File]::ReadAllText((Join-Path $explicitCodexPackageRoot 'iteration-1\execution-profile.json'), $utf8NoBom) | ConvertFrom-Json
+        if ([string]$explicitCodexProfile.runner -ne 'codex' -or [string]$explicitCodexProfile.model -ne 'gpt-6-luna' -or [string]$explicitCodexProfile.reasoning_effort -ne 'low') {
+            throw 'An explicit Codex reasoning selection must not be overwritten by the high default.'
         }
-        Assert-PreparedRunnerIdentity -Name 'Explicit GitHub Copilot package' -IterationDirectory (Join-Path $explicitGithubPackageRoot 'iteration-1') -ExpectedRunner 'github-copilot' -ExpectedModel 'gpt-5.6-luna'
+        Assert-PreparedRunnerIdentity -Name 'Explicit Codex package' -IterationDirectory (Join-Path $explicitCodexPackageRoot 'iteration-1') -ExpectedRunner 'codex' -ExpectedModel 'gpt-6-luna'
 
         $mismatchIteration = Join-Path $packageRoot 'mismatched-profile-package'
         Copy-Item -LiteralPath (Join-Path $referencePackageRoot 'iteration-1') -Destination $mismatchIteration -Recurse
         $mismatchProfilePath = Join-Path $mismatchIteration 'execution-profile.json'
         $mismatchProfile = [System.IO.File]::ReadAllText($mismatchProfilePath, $utf8NoBom) | ConvertFrom-Json
-        $mismatchProfile.runner = 'codex'
-        $mismatchProfile.model = 'gpt-5.6-luna'
-        $mismatchProfile.reasoning_effort = 'low'
+        $mismatchProfile.runner = 'opencode'
+        $mismatchProfile.model = 'provider-paid/Paid.Model'
+        $mismatchProfile.reasoning_effort = $null
         [System.IO.File]::WriteAllText($mismatchProfilePath, (($mismatchProfile | ConvertTo-Json -Depth 100) + [Environment]::NewLine), $utf8NoBom)
-        Assert-PackageIdentityValidationFails -Name 'mismatched runner package' -IterationDirectory $mismatchIteration -ExpectedRunner 'github-copilot' -ExpectedMessagePattern 'execution-profile\.json runner .+ does not match manifest\.execution_selection\.runner'
+        Assert-PackageIdentityValidationFails -Name 'mismatched runner package' -IterationDirectory $mismatchIteration -ExpectedRunner 'codex' -ExpectedMessagePattern 'execution-profile\.json runner .+ does not match manifest\.execution_selection\.runner'
 
         $explicitOpenCodeOutput = $prepareBatch['explicitOpenCode'].Output
         if ($prepareBatch['explicitOpenCode'].ExitCode -ne 0) { throw "prepare-skill-evals.ps1 failed for explicit OpenCode concurrency: $($explicitOpenCodeOutput -join [Environment]::NewLine)" }
@@ -2254,14 +2255,14 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw 'OpenCode preparation must not create a package without an explicit model choice.'
         }
 
-        $prepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
+        $prepareOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $packageRoot -CodebeltReference -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 failed: $($prepareOutput -join [Environment]::NewLine)"
         }
 
         $iterationDirectory = Join-Path $packageRoot 'iteration-1'
         $manifest = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'manifest.json'), $utf8NoBom) | ConvertFrom-Json
-        Assert-PreparedRunnerIdentity -Name 'GitHub Copilot package' -IterationDirectory $iterationDirectory -ExpectedRunner 'github-copilot' -ExpectedModel 'claude-haiku-4.5'
+        Assert-PreparedRunnerIdentity -Name 'Codex package' -IterationDirectory $iterationDirectory -ExpectedRunner 'codex' -ExpectedModel 'gpt-6-luna'
         if (@($manifest.evals).Count -lt 1) {
             throw 'The prepared package must contain at least one eval case.'
         }
@@ -2360,7 +2361,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
 
         $generatedHandoffs = @(
-            [pscustomobject]@{ Name = 'GitHub Copilot generated handoff'; Iteration = $iterationDirectory },
+            [pscustomobject]@{ Name = 'Codebelt Reference generated handoff'; Iteration = $iterationDirectory },
             [pscustomobject]@{ Name = 'Codex generated handoff'; Iteration = (Join-Path $codexPackageRoot 'iteration-1') },
             [pscustomobject]@{ Name = 'OpenCode generated handoff'; Iteration = (Join-Path $opencodePackageRoot 'iteration-1') }
         )
@@ -2424,9 +2425,9 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             Assert-NotContains -Name 'OpenCode generated handoff' -Content $opencodePrompt -Needle $forbidden
         }
 
-        $copilotPrompt = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'RUN-THIS.prompt.md'), $utf8NoBom)
+        $referencePrompt = [System.IO.File]::ReadAllText((Join-Path $iterationDirectory 'RUN-THIS.prompt.md'), $utf8NoBom)
         foreach ($forbidden in @('general-purpose', 'fleet', 'native `Task` tool', 'sibling `Task` tool calls')) {
-            Assert-NotContains -Name 'GitHub Copilot generated handoff' -Content $copilotPrompt -Needle $forbidden
+            Assert-NotContains -Name 'Codex generated handoff' -Content $referencePrompt -Needle $forbidden
         }
 
         foreach ($entry in @($manifest.evals)) {
@@ -2822,7 +2823,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             throw "benchmark.json must preserve recorded token metrics through the upstream skill-creator aggregation (with_skill=$($benchmark.run_summary.with_skill.tokens.mean), without_skill=$($benchmark.run_summary.without_skill.tokens.mean))."
         }
 
-        $changedOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
+        $changedOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Changed -Base 'HEAD' -OutputRoot $packageRoot -CodebeltReference -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "prepare-skill-evals.ps1 -Changed failed: $($changedOutput -join [Environment]::NewLine)"
         }
@@ -2831,7 +2832,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         }
 
         $insideRepo = Join-Path $repoRoot 'agentic-eval-isolation-check'
-        $isolationOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
+        $isolationOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $insideRepo -Runner 'codex' -ModelCatalogPath $catalogPath 2>&1
         if ($LASTEXITCODE -eq 0) {
             throw 'prepare-skill-evals.ps1 must refuse an output root inside this repository but outside .bot/.'
         }
@@ -2846,7 +2847,7 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
         # .bot/ is the sanctioned in-repository home, and it only works while git ignores it.
         $botRoot = Join-Path (Join-Path $repoRoot '.bot') 'agentic-eval-bot-check'
         try {
-            $botOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot -Runner 'github-copilot' -ModelCatalogPath $catalogPath 2>&1
+            $botOutput = & pwsh -NoProfile -NonInteractive -File $scriptPath -Skill 'dotnet-strong-name-signing' -OutputRoot $botRoot -Runner 'codex' -ModelCatalogPath $catalogPath 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "prepare-skill-evals.ps1 must accept an output root under .bot/: $($botOutput -join [Environment]::NewLine)"
             }
