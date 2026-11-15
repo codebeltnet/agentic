@@ -2,6 +2,30 @@
   "skill_name": "git-remote-release",
   "evals": [
     {
+      "id": 15,
+      "prompt": "Generate release notes using only this complete offline evidence for codebeltnet/csrun's first release v0.1.0. The root commit is a verified direct source by REST author.login gimlichael, type User, at https://github.com/codebeltnet/csrun/commit/cf4a1422aa3f6c88da383a8faa28776f8e947462. Merged PR #1, V0.1.0/init, at https://github.com/codebeltnet/csrun/pull/1, was opened by gimlichael (User). Its original commits are authored by aicia-bot (REST author.login aicia-bot, type User). PR #2, V0.1.0/ci fix, at https://github.com/codebeltnet/csrun/pull/2, was opened by gimlichael and also contains original commits by aicia-bot. Complete final files introduce the standalone PowerShell C# runner and CI. All reachable history, original PR commit inventories, association checks and final files are complete. GitHub's generated New Contributors section lists only gimlichael in PR #1. No other contributors exist. Keep our rich release format and deliver the Markdown file.",
+      "expected_output": "Initial-release notes credit both users on the PR sources and recognize gimlichael and aicia-bot once each in New Contributors with PR #1 links, despite GitHub omitting the original commit author from its generated section.",
+      "expectations": [
+        "Includes @aicia-bot as a new contributor because REST type is User despite bot in the username",
+        "Includes @gimlichael and @aicia-bot exactly once each in New Contributors, linked to PR #1",
+        "Does not treat omission from GitHub generated notes as proof that aicia-bot is ineligible",
+        "Preserves both contributors on the PR Sources entries and keeps the root source",
+        "Ends the saved notes with **Full Changelog**: https://github.com/codebeltnet/csrun/commits/v0.1.0"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Write notes using only this complete offline evidence for example/widget v1...v2. In-range merged PR #22, Improve export, https://github.com/example/widget/pull/22, is opened by maintainer, type User; original commits are by returning-bot (User) and co-authored by Fresh Person. GitHub's authoritative commit authors mapping resolves Fresh Person to REST account fresh-bot, type User. A separate original commit is by exporter[bot], type Bot. GitHub generated notes contain no New Contributors section. The complete history reachable from v1 includes maintainer's commits and merged PR #9; original PR #9 commits were authored by returning-bot even though its squash author was maintainer. fresh-bot has no contribution anywhere in that complete prior history. All inventories and mappings are complete. The final diff improves CSV export. No other sources or contributors exist.",
+      "expected_output": "Credits all original contributors in Sources and recognizes only fresh-bot as new, with PR #22, using original historical squash commits to exclude returning-bot.",
+      "expectations": [
+        "Recognizes @fresh-bot in New Contributors using the authoritative co-author mapping",
+        "Does not label returning-bot or maintainer as new",
+        "Does not synthesize a New Contributors entry for exporter[bot] with REST type Bot",
+        "Credits all verified accounts in the single PR #22 source without substituting the co-author display name",
+        "Ends with **Full Changelog**: https://github.com/example/widget/compare/v1...v2"
+      ]
+    },
+    {
       "id": 14,
       "prompt": "Generate release notes for example/widget v1...v2 using only this complete offline evidence: merged PR #7, Fix CLI output, by returning contributor maintainer at https://github.com/example/widget/pull/7, fixes the trailing newline. All original commits and final files are accounted for, and there are no new contributors. My console displays plain text. Give me just a link to the Markdown file in your working directory and keep generated files out of the repository.",
       "expected_output": "Writes complete UTF-8 release-notes.md in a task-specific temporary working directory outside the repository, checks its contents, and returns only an absolute Markdown link to that existing file. The file itself contains the rich paste-ready release notes with no delivery wrapper.",
@@ -37,7 +61,7 @@
         "Includes the root commit's CLI functionality and PR #1 JSON output in the release story",
         "Preserves the root direct-commit source and the single PR source",
         "Recognizes @new-dev in ## New Contributors immediately before Full Changelog",
-        "Does not infer first-contribution status for founder solely from initial-release membership",
+        "Does not invent a GitHub handle or account type for founder from the recorded name alone",
         "Ends with **Full Changelog**: https://github.com/example/widget/commits/v1.0.0",
         "Does not invent a previous tag or exclude the root commit"
       ]
