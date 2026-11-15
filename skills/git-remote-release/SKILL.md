@@ -186,20 +186,22 @@ Authentication errors, rate limits, missing tool capabilities, truncated respons
 
 ### Step 3b: Identify new contributors
 
-For a tag range, request GitHub's generated release-note content for the exact repository and range, saving the JSON beside the evidence:
+For a tag range, request GitHub's generated release-note content for the exact repository and range, saving the request inputs together with the response beside the evidence:
 
 ```bash
-gh api --method POST "repos/{owner}/{repo}/releases/generate-notes" -f "tag_name={currentRef}" -f "previous_tag_name={previousRef}" > <temporary-directory>/generated-notes.json
+gh api --method POST "repos/{owner}/{repo}/releases/generate-notes" -f "tag_name={currentRef}" -f "previous_tag_name={previousRef}" --jq '{request: {repository: "{owner}/{repo}", tag_name: "{currentRef}", previous_tag_name: "{previousRef}"}, response: .}' > <temporary-directory>/generated-notes.json
 python <skill-directory>/scripts/collect-release-evidence.py collect <owner/repo> <previous-ref> <current-ref> --generated-notes <temporary-directory>/generated-notes.json --output <temporary-directory>/release-evidence.json
 ```
 
 The [generate-notes endpoint](https://docs.github.com/en/rest/releases/releases#generate-release-notes-content-for-a-release) generates content without saving a release or creating a tag. It uses POST and can require Contents write permission even though it does not mutate repository state. Never call the create-release endpoint or publish anything to discover contributors. Check the command succeeded before using its output; an authentication failure, unsupported range, or malformed response is not evidence of zero newcomers.
 
-For an initial tagged release, omit `previous_tag_name` from the generate-notes request and use `--initial-release` with only the current ref in the collector command; `--generated-notes` works in this mode too. If the target tag does not yet exist, pass the verified current SHA as `target_commitish` to generation. Do not invent a previous release tag.
+For an initial tagged release, omit `previous_tag_name` from both the generate-notes request and the recorded `request` object, and use `--initial-release` with only the current ref in the collector command; `--generated-notes` works in this mode too. If the target tag does not yet exist, pass the verified current SHA as `target_commitish` to generation, record the same `target_commitish` in the `request` object, and collect with that SHA as the current ref. Do not invent a previous release tag.
+
+The collector rejects a saved response unless its recorded repository, `previous_tag_name`, and `tag_name` (or `target_commitish`) match the collected range and the response's own `**Full Changelog**` link describes that same range. A response for a narrower or different range can silently omit this release's newcomers, so a mismatch leaves the evidence incomplete rather than proving there are none.
 
 Use only GitHub's `## New Contributors` entries, cross-checked against the collected in-range PR and its exact REST author login. Deduplicate accounts case-insensitively while preserving REST spelling and first appearance order. A person appearing once in this release is not necessarily new to the repository. Do not infer first-contribution status from a display name, a contributor list, or `author_association` alone. Preserve their normal Sources credit as well.
 
-For branch comparisons, offline snapshots, or unavailable generation permissions, use authoritative first-contribution evidence supplied for the same range or verified repository history instead. If that evidence is unavailable, omit the section and disclose that first-contribution status could not be checked outside the paste-ready release note. Never invent newcomers or an empty section. For manual collection, apply the same identity and range checks; the bundled `--generated-notes` option accepts GitHub's JSON response (including a supplied offline response) and rejects mismatched PRs or authors.
+For branch comparisons, offline snapshots, or unavailable generation permissions, use authoritative first-contribution evidence supplied for the same range or verified repository history instead. If that evidence is unavailable, omit the section and disclose that first-contribution status could not be checked outside the paste-ready release note. Never invent newcomers or an empty section. For manual collection, apply the same identity and range checks; the bundled `--generated-notes` option accepts GitHub's JSON response wrapped as `{"request": {...}, "response": {...}}` with the generation inputs (including a supplied offline response) and rejects mismatched ranges, PRs, or authors.
 
 ### Step 4: Analyze and summarize
 
