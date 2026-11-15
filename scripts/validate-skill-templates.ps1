@@ -2537,6 +2537,13 @@ $argumentsPath = Join-Path $PSScriptRoot 'arguments.txt'
             if (-not $withSkill.Contains('# Response contract') -or -not $withoutSkill.Contains('# Response contract')) {
                 throw "$($entry.eval_name) must give both configurations a response contract."
             }
+            $fileOnlyDelivery = 'When they do ask for one, follow that delivery and do not copy file contents into the reply.'
+            if (-not $withSkill.Contains($fileOnlyDelivery) -or -not $withoutSkill.Contains($fileOnlyDelivery)) {
+                throw "$($entry.eval_name) response contract must defer to task-specified delivery such as link-only file replies."
+            }
+            if ($withSkill.Contains('include every file path with its final content in fenced code blocks, and also') -or $withoutSkill.Contains('include every file path with its final content in fenced code blocks, and also')) {
+                throw "$($entry.eval_name) response contract must not require inline file contents unconditionally."
+            }
 
             $withSkillTaskIndex = $withSkill.IndexOf($taskMarker, [System.StringComparison]::Ordinal)
             $withoutSkillTaskIndex = $withoutSkill.IndexOf($taskMarker, [System.StringComparison]::Ordinal)

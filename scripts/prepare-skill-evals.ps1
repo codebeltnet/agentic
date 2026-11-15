@@ -229,7 +229,7 @@ $responseContract = @'
 
 Respond in a single message.
 
-- Do the work in that message. If the task produces or changes files, include every file path with its final content in fenced code blocks, and also write them to disk when the environment allows it.
+- Do the work in that message. If the task produces or changes files, write them to disk when the environment allows it. Unless the task or the operating instructions ask for a specific delivery, such as returning only a link or path to a file, also include every file path with its final content in fenced code blocks. When they do ask for one, follow that delivery and do not copy file contents into the reply.
 - If you would normally pause and ask before acting, say what you would ask and why, then stop there. That pause is a valid response.
 - State any assumption you had to make instead of waiting for an answer.
 '@
