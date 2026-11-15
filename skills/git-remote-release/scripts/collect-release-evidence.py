@@ -21,6 +21,43 @@ def github(endpoint):
     return pages
 
 
+def github_authors(repository, sha):
+    """Resolve trailer identities through GitHub, never through name/email guesses."""
+    owner, name = repository.split("/")
+    query = """query($owner:String!, $name:String!, $sha:String!, $endCursor:String) {
+      repository(owner:$owner, name:$name) { object(expression:$sha) { ... on Commit {
+        authors(first:100, after:$endCursor) {
+          totalCount nodes { name user { login } }
+          pageInfo { hasNextPage endCursor }
+        }
+      } } }
+    }"""
+    result = subprocess.run(
+        ["gh", "api", "graphql", "--paginate", "--slurp", "-f", "query=" + query,
+         "-f", "owner=" + owner, "-f", "name=" + name, "-f", "sha=" + sha],
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
+    )
+    if result.returncode:
+        raise RuntimeError(f"Commit {sha} authors: {result.stderr.strip()}")
+    pages = json.loads(result.stdout)
+    authors = []
+    for page in pages:
+        if page.get("errors"):
+            raise ValueError(f"Commit {sha} authors: {page['errors']}")
+        connection = page["data"]["repository"]["object"]["authors"]
+        authors.extend(connection["nodes"])
+    if not pages or connection["pageInfo"]["hasNextPage"] or len(authors) != connection["totalCount"]:
+        raise ValueError(f"Commit {sha}: incomplete author inventory")
+    accounts = {}
+    for actor in authors:
+        if actor.get("user"):
+            login = actor["user"]["login"]
+            if login.casefold() not in accounts:
+                accounts[login.casefold()] = github("users/" + quote(login, safe=""))[0]
+            actor["user"] = accounts[login.casefold()]
+    return authors
+
+
 def contributors(commits, opener=None):
     result = []
     seen = set()
@@ -35,10 +72,15 @@ def contributors(commits, opener=None):
     for commit in commits:
         login = (commit.get("author") or {}).get("login")
         add("@" + login if login else commit["commit"]["author"]["name"])
-        # A trailer records authorship, but does not prove a GitHub account mapping.
-        for name in re.findall(r"^Co-authored-by:\s*(.*?)\s*<[^>]+>\s*$",
-                               commit["commit"]["message"], re.I | re.M):
-            add(name)
+        if "github_authors" in commit:
+            for actor in commit["github_authors"]:
+                user = actor.get("user") or {}
+                add("@" + user["login"] if user.get("login") else actor["name"])
+        else:
+            # A trailer alone does not prove a GitHub account mapping.
+            for name in re.findall(r"^Co-authored-by:\s*(.*?)\s*<[^>]+>\s*$",
+                                   commit["commit"]["message"], re.I | re.M):
+                add(name)
     return result
 
 
@@ -171,7 +213,7 @@ def check_generation_range(evidence, request, body):
 
 
 def add_new_contributors(evidence, generated_notes):
-    """Use GitHub's first-contribution evidence only for verified in-range PR authors."""
+    """Validate generated first-contribution claims against in-range source identities."""
     evidence["generated_notes"] = generated_notes
     if not isinstance(generated_notes, dict):
         raise ValueError("Saved generation must be a request and response envelope")
@@ -195,24 +237,74 @@ def add_new_contributors(evidence, generated_notes):
             if not match:
                 raise ValueError("Unrecognized first-contribution entry: " + line)
             login, url = match.groups()
-            pr = next((item["metadata"] for item in evidence["pull_requests"]
-                       if item["metadata"]["html_url"].casefold() == url.casefold()
-                       and item["metadata"]["user"]["login"].casefold() == login.casefold()), None)
-            if pr is None:
+            item = next((item for item in evidence["pull_requests"]
+                         if item["metadata"]["html_url"].casefold() == url.casefold()), None)
+            identities = ([item["metadata"]["user"]] + list(commit_accounts(item.get("commits", [])))) if item else []
+            account = next((user for user in identities if user["login"].casefold() == login.casefold()), None)
+            if account is None:
                 raise ValueError("First contribution is not a verified in-range PR by that author: " + line)
             if login.casefold() not in seen:
                 seen.add(login.casefold())
-                result.append(f"* **@{pr['user']['login']}** made their first contribution in [#{pr['number']}]({pr['html_url']}).")
+                pr = item["metadata"]
+                result.append(f"* **@{account['login']}** made their first contribution in [#{pr['number']}]({pr['html_url']}).")
     evidence["new_contributors"] = result
 
 
-def collect(repository, previous, current, api=github, generated_notes=None):
+def commit_accounts(commits):
+    for commit in commits:
+        if commit.get("author"):
+            yield commit["author"]
+        for actor in commit.get("github_authors", []):
+            if actor.get("user"):
+                yield actor["user"]
+
+
+def contribution_accounts(evidence):
+    """Original PR authorship, plus direct commits; never merge-only attribution."""
+    for item in evidence["pull_requests"]:
+        pr = item["metadata"]
+        for user in [pr["user"], *commit_accounts(item["commits"])]:
+            yield user, f"[#{pr['number']}]({pr['html_url']})"
+    for commit in evidence["direct_commits"]:
+        for user in commit_accounts([commit]):
+            yield user, f"[{commit['sha'][:7]}]({commit['html_url']})"
+
+
+def supplement_new_contributors(evidence, api, author_api):
+    candidates = {}
+    for user, link in contribution_accounts(evidence):
+        if user.get("type") == "User":
+            candidates.setdefault(user["login"].casefold(), (user["login"], link))
+    if not candidates:
+        return
+    previous_accounts = set()
+    if evidence["previous"] is not None:
+        # Expand prior squash PRs too: a compare-base commit author alone loses contributors.
+        history = collect(evidence["repository"], None, evidence["resolved_refs"][0], api,
+                          author_api=author_api, identify_new=False)
+        evidence["contributor_history"] = history
+        if not history["complete"]:
+            raise ValueError("Prior contributor history is incomplete: " + "; ".join(history["issues"]))
+        previous_accounts = {user["login"].casefold() for user, _ in contribution_accounts(history)}
+    result = list(evidence.get("new_contributors", []))
+    seen = {re.match(r"\* \*\*@([^*]+)\*\*", line).group(1).casefold() for line in result}
+    if seen & previous_accounts:
+        raise ValueError("Generated newcomer claims conflict with verified prior contributor history")
+    for key, (login, link) in candidates.items():
+        if key not in previous_accounts and key not in seen:
+            result.append(f"* **@{login}** made their first contribution in {link}.")
+            seen.add(key)
+    evidence["new_contributors"] = result
+
+
+def collect(repository, previous, current, api=github, generated_notes=None,
+            author_api=github_authors, identify_new=True):
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository):
         raise ValueError("Repository must be owner/repo")
     root = f"repos/{repository}"
     evidence = {"repository": repository, "previous": previous, "current": current,
                 "complete": False, "issues": [], "commits": [], "pull_requests": [],
-                "files": [], "sources": [], "associations": {}}
+                "files": [], "sources": [], "associations": {}, "direct_commits": []}
     issues = evidence["issues"]
 
     def read(endpoint):
@@ -221,6 +313,22 @@ def collect(repository, previous, current, api=github, generated_notes=None):
         except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
             issues.append(str(error))
             return None
+
+    author_cache = {}
+
+    def enrich_authors(commits):
+        for commit in commits:
+            if not re.search(r"^Co-authored-by:", commit["commit"]["message"], re.I | re.M):
+                continue
+            sha = commit["sha"]
+            if sha not in author_cache:
+                try:
+                    author_cache[sha] = author_api(repository, sha)
+                except (RuntimeError, ValueError, OSError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+                    issues.append(f"Commit {sha} co-author identities: {error}")
+                    author_cache[sha] = None
+            if author_cache[sha] is not None:
+                commit["github_authors"] = author_cache[sha]
 
     # Resolve once so moving branches cannot change the range during collection.
     refs = []
@@ -253,6 +361,7 @@ def collect(repository, previous, current, api=github, generated_notes=None):
         if len(evidence["files"]) >= 300:
             issues.append("Comparison files may be capped at 300; collect the final diff through another route")
     evidence["commits"] = commits
+    enrich_authors(commits)
     shas = {commit["sha"] for commit in commits}
     if previous is None and refs[0] not in shas:
         issues.append("Initial release history does not include the resolved current commit")
@@ -299,6 +408,7 @@ def collect(repository, previous, current, api=github, generated_notes=None):
             commit_pages = read(f"{root}/pulls/{number}/commits?per_page=100")
             file_pages = read(f"{root}/pulls/{number}/files?per_page=100")
             original = [c for page in (commit_pages or []) for c in page]
+            enrich_authors(original)
             files = [f for page in (file_pages or []) for f in page]
             covered.update(c["sha"] for c in original if c["sha"] in shas)
             if len(original) != pr["commits"] or len({c["sha"] for c in original}) != len(original):
@@ -328,6 +438,7 @@ def collect(repository, previous, current, api=github, generated_notes=None):
             unresolved.add(sha)
     for position, commit in enumerate(commits):
         if commit["sha"] not in covered | unresolved:
+            evidence["direct_commits"].append(commit)
             line = source(commit["commit"]["message"], commit["html_url"], contributors([commit]))
             evidence["sources"].append(line)
             source_order[line] = (position, 0)
@@ -335,6 +446,11 @@ def collect(repository, previous, current, api=github, generated_notes=None):
     if generated_notes is not None:
         try:
             add_new_contributors(evidence, generated_notes)
+        except (KeyError, TypeError, ValueError) as error:
+            issues.append("New contributor evidence: " + str(error))
+    if identify_new and not issues:
+        try:
+            supplement_new_contributors(evidence, api, author_api)
         except (KeyError, TypeError, ValueError) as error:
             issues.append("New contributor evidence: " + str(error))
     evidence["complete"] = not issues

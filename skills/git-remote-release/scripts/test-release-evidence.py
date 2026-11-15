@@ -112,7 +112,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("@service[bot]", evidence["new_contributors"][0])
 
     def test_unknown_author_out_of_range_pr_and_malformed_notes_fail_closed(self):
-        for notes in (self.generated_notes("* @human made their first contribution in https://github.com/example/widget/pull/22"),
+        for notes in (self.generated_notes("* @unknown made their first contribution in https://github.com/example/widget/pull/22"),
                       self.generated_notes("* @service[bot] made their first contribution in https://github.com/other/widget/pull/22"),
                       self.generated_notes("* @service[bot] made their first contribution in https://github.com/example/widget/pull/99"),
                       self.generated_notes("* Unrecognized contributor format"), self.with_body(None),
@@ -130,6 +130,129 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(collector.verify(evidence, self.draft(evidence)), [])
             empty = self.draft(evidence).replace("\n\n**Full Changelog**:", "\n\n## New Contributors\n\n**Full Changelog**:")
             self.assertTrue(collector.verify(evidence, empty))
+
+    def user_commit(self, sha, login, message="Improve runner"):
+        value = commit(sha, login, message)
+        value["author"]["type"] = "User"
+        return value
+
+    def prior_routes(self, commits=None):
+        commits = commits if commits is not None else [commit("base", "maintainer")]
+        self.routes["/commits/base"] = [{"sha": "base", "commit": {"tree": {"sha": "old-tree"}}}]
+        self.routes["/commits?sha=base&per_page=100"] = [list(reversed(commits))]
+        self.routes["/git/trees/old-tree?recursive=1"] = [{"truncated": False, "tree": []}]
+        for value in commits:
+            self.routes[f"/commits/{value['sha']}/pulls?per_page=100"] = [[]]
+
+    def test_initial_release_includes_user_commit_author_despite_bot_in_name(self):
+        self.initial_routes()
+        self.pr["user"]["type"] = "User"
+        self.routes["/pulls/22/commits?per_page=100"][0][0] = self.user_commit("a", "aicia-bot")
+        self.routes["/pulls/22/commits?per_page=100"][1][1]["author"]["type"] = "Bot"
+        evidence = collector.collect("example/widget", None, "v2", self.api,
+                                     self.generated_notes(previous=None))
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertEqual(evidence["new_contributors"], [
+            "* **@service[bot]** made their first contribution in [#22](https://github.com/example/widget/pull/22).",
+            "* **@aicia-bot** made their first contribution in [#22](https://github.com/example/widget/pull/22)."])
+        self.assertIn("@human", evidence["sources"][-1])  # Bot still retains Sources credit.
+        self.assertEqual(collector.verify(evidence, self.with_newcomers(evidence)), [])
+
+    def test_generated_newcomer_can_be_verified_original_commit_author(self):
+        evidence = collector.collect("example/widget", "v1", "v2", self.api,
+            self.generated_notes("* @HUMAN made their first contribution in https://github.com/example/widget/pull/22"))
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertIn("@human", evidence["new_contributors"][0])
+
+    def test_empty_generated_section_does_not_hide_new_user(self):
+        self.pr["user"]["type"] = "User"
+        self.pr["user"]["login"] = "new-user"
+        self.prior_routes()
+        evidence = collector.collect("example/widget", "v1", "v2", self.api, self.generated_notes(""))
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertEqual(len(evidence["new_contributors"]), 1)
+        self.assertIn("@new-user", evidence["new_contributors"][0])
+
+    def test_returning_commit_author_is_not_new(self):
+        self.prior_routes([self.user_commit("base", "AICIA-BOT")])
+        self.routes["/pulls/22/commits?per_page=100"][0][0] = self.user_commit("a", "aicia-bot")
+        evidence = self.collect()
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertFalse(evidence.get("new_contributors"))
+
+    def test_returning_author_behind_prior_squash_is_not_new(self):
+        self.prior_routes()
+        self.routes["/commits/base/pulls?per_page=100"] = [[{"number": 9}]]
+        self.routes["/pulls/9"] = [dict(self.pr, number=9, merge_commit_sha="base", commits=1,
+            html_url="https://github.com/example/widget/pull/9")]
+        self.routes["/pulls/9/commits?per_page=100"] = [[self.user_commit("old-original", "aicia-bot")]]
+        self.routes["/pulls/9/files?per_page=100"] = [[{"filename": "old.py"}]]
+        self.routes["/pulls/22/commits?per_page=100"][0][0] = self.user_commit("a", "aicia-bot")
+        evidence = self.collect()
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertFalse(evidence.get("new_contributors"))
+        self.assertIn(self.prefix + "/pulls/9/commits?per_page=100", self.calls)
+
+    def test_failed_history_does_not_prove_newcomer_status(self):
+        self.pr["user"]["type"] = "User"
+        self.prior_routes()
+        self.routes["/commits?sha=base&per_page=100"] = RuntimeError("HTTP 403")
+        evidence = self.collect()
+        self.assertFalse(evidence["complete"])
+        self.assertFalse(evidence.get("new_contributors"))
+        self.assertIn("Prior contributor history is incomplete", ";".join(evidence["issues"]))
+
+    def test_direct_commit_newcomer_gets_commit_link(self):
+        self.initial_routes()
+        self.routes["/commits?sha=squash&per_page=100"][1][0] = self.user_commit("root", "founder")
+        evidence = collector.collect("example/widget", None, "v2", self.api)
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertEqual(evidence["new_contributors"], [
+            "* **@founder** made their first contribution in [root](https://github.com/example/widget/commit/root)."])
+        self.assertEqual(collector.verify(evidence, self.with_newcomers(evidence)), [])
+
+    def test_coauthors_use_github_mapping_and_unknown_names_stay_unlinked(self):
+        self.initial_routes()
+        self.routes["/pulls/22/commits?per_page=100"][0][0]["commit"]["message"] += (
+            "\n\nCo-authored-by: Misleading Name <co@example.com>\nCo-authored-by: Unmapped <unknown@example.com>")
+        actors = [{"name": "Misleading Name", "user": {"login": "coauthor-bot", "type": "User"}},
+                  {"name": "Unmapped", "user": None}]
+        calls = []
+        def authors(repository, sha):
+            calls.append((repository, sha))
+            return actors
+        evidence = collector.collect("example/widget", None, "v2", self.api, author_api=authors)
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertEqual(calls, [("example/widget", "a")])
+        self.assertIn("@coauthor-bot", evidence["sources"][-1])
+        self.assertIn("Unmapped", evidence["sources"][-1])
+        self.assertEqual(len(evidence["new_contributors"]), 1)
+        self.assertIn("@coauthor-bot", evidence["new_contributors"][0])
+
+    def test_failed_coauthor_mapping_fails_closed(self):
+        self.initial_routes()
+        self.routes["/pulls/22/commits?per_page=100"][0][0]["commit"]["message"] += "\nCo-authored-by: X <x@example.com>"
+        def authors(repository, sha):
+            raise RuntimeError("HTTP 403")
+        evidence = collector.collect("example/widget", None, "v2", self.api, author_api=authors)
+        self.assertFalse(evidence["complete"])
+        self.assertFalse(evidence.get("new_contributors"))
+
+    def test_returning_coauthor_is_found_in_prior_direct_history(self):
+        self.prior_routes([self.user_commit("base", "coauthor")])
+        self.routes["/pulls/22/commits?per_page=100"][0][0]["commit"]["message"] += "\nCo-authored-by: Co Author <co@example.com>"
+        actors = [{"name": "Co Author", "user": {"login": "coauthor", "type": "User"}}]
+        evidence = collector.collect("example/widget", "v1", "v2", self.api,
+                                     author_api=lambda repository, sha: actors)
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertFalse(evidence.get("new_contributors"))
+
+    def test_generated_newcomer_conflicting_with_history_fails_closed(self):
+        self.pr["user"]["type"] = "User"
+        self.prior_routes([self.user_commit("base", self.pr["user"]["login"])])
+        evidence = collector.collect("example/widget", "v1", "v2", self.api, self.generated_notes())
+        self.assertFalse(evidence["complete"])
+        self.assertIn("conflict", ";".join(evidence["issues"]))
 
     def test_generation_for_another_range_or_repository_fails_closed(self):
         # A narrower range can omit this release's newcomers; that must not read as "none".
@@ -393,6 +516,29 @@ class EvidenceTests(unittest.TestCase):
             run.return_value.stderr = "rate limited"
             with self.assertRaises(RuntimeError):
                 collector.github("repos/example/widget/pulls")
+
+    def test_graphql_authors_transport_paginates_and_resolves_rest_account_types(self):
+        def page(nodes, more):
+            return {"data": {"repository": {"object": {"authors": {
+                "nodes": nodes, "totalCount": 2, "pageInfo": {"hasNextPage": more, "endCursor": "next"}}}}}}
+        pages = [page([{"name": "Author", "user": {"login": "author-bot"}}], True),
+                 page([{"name": "Co Author", "user": {"login": "app[bot]"}}], False)]
+        with patch.object(collector.subprocess, "run") as run, patch.object(collector, "github") as rest:
+            run.return_value.returncode = 0
+            run.return_value.stdout = json.dumps(pages)
+            rest.side_effect = lambda endpoint: [{"login": "author-bot", "type": "User"} if endpoint == "users/author-bot"
+                                                else {"login": "app[bot]", "type": "Bot"}]
+            actors = collector.github_authors("example/widget", "abc")
+            self.assertEqual([actor["user"]["type"] for actor in actors], ["User", "Bot"])
+            command = run.call_args.args[0]
+            self.assertEqual(command[:5], ["gh", "api", "graphql", "--paginate", "--slurp"])
+            self.assertTrue(command[6].startswith("query=query("))
+            self.assertNotIn("mutation", command[6])
+            self.assertEqual(rest.call_count, 2)
+            for invalid in (pages[:1], [{"errors": [{"message": "denied"}]}], []):
+                run.return_value.stdout = json.dumps(invalid)
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    collector.github_authors("example/widget", "abc")
 
 
 if __name__ == "__main__":
