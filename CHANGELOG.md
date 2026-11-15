@@ -11,7 +11,7 @@ This is a minor release that adds initial-release support, verified new-contribu
 ### Added
 
 - `git-remote-release` supports initial releases without a previous release tag, collecting all history reachable from the current ref and linking the full history with `/commits/{currentRef}` instead of inventing a compare base,
-- `git-remote-release` adds a `## New Contributors` section for first contributions verified against in-range pull request authors, placed immediately before the Full Changelog link and omitted when none are verified,
+- `git-remote-release` adds a `## New Contributors` section for verified first-time GitHub users who authored pull requests, original pull request commits, co-authored commits, or direct commits in the release range, excluding returning contributors by checking complete prior history and never claiming `Bot` accounts, placed immediately before the Full Changelog link and omitted when none are verified,
 - `git-remote-release` saves the release notes as `release-notes.md` in a temporary working directory outside the repository and returns a Markdown file link instead of console-only output,
 - `collect-release-evidence.py` accepts saved GitHub generate-notes responses through `--generated-notes` and rejects responses whose recorded range or Full Changelog link does not match the collected release.
 
