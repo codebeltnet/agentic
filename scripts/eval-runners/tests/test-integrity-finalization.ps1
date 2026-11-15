@@ -5,7 +5,7 @@
 .DESCRIPTION
     Builds a package around the repository's model-free runner fixture. The
     fixture produces six native terminal results, including one scripted
-    interaction case. This suite deliberately simulates the latest Copilot
+    interaction case. This suite deliberately simulates the raw-result grading
     failure by writing grading into a raw execution result after Phase 1 and
     verifies that no later bridge or finalizer can bless or repair it.
 #>
@@ -663,19 +663,19 @@ for ($index = 0; $index -lt $count; $index++) {
         Assert-ToolFails -Invocation $canonicalApplyTamperResult -Description 'grading application rejects canonical non-grading mutation before applying' -ExpectedText 'Execution integrity failure'
         [System.IO.File]::WriteAllBytes($canonicalPath, $canonicalApplyTamperBytes)
 
-        # Exact reproduction of the latest Copilot mistake: grading is written to
+        # Exact reproduction of the raw-result grading mistake: grading is written to
         # execution-result.json after a valid bridge. The finalizer must fail closed
         # and must not repair the bytes or create report artifacts.
-        $copilotMistakeBytes = [System.IO.File]::ReadAllBytes($selectedRecord.ExecutionResultPath)
-        $copilotMistakeRaw = Read-TestJson -Path $selectedRecord.ExecutionResultPath
-        $copilotMistakeRaw | Add-Member -NotePropertyName grading -NotePropertyValue @([ordered]@{ text = 'wrong location' })
-        Write-TestJson -Path $selectedRecord.ExecutionResultPath -Value $copilotMistakeRaw
+        $rawGradingMistakeBytes = [System.IO.File]::ReadAllBytes($selectedRecord.ExecutionResultPath)
+        $rawGradingMistakeRaw = Read-TestJson -Path $selectedRecord.ExecutionResultPath
+        $rawGradingMistakeRaw | Add-Member -NotePropertyName grading -NotePropertyValue @([ordered]@{ text = 'wrong location' })
+        Write-TestJson -Path $selectedRecord.ExecutionResultPath -Value $rawGradingMistakeRaw
         Remove-TestReportArtifacts -IterationDirectory $iteration
-        $copilotMistakeFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
-        Assert-ToolFails -Invocation $copilotMistakeFinalizer -Description 'finalizer rejects Copilot raw-result grading mistake' -ExpectedText 'Execution integrity failure'
+        $rawGradingMistakeFinalizer = Invoke-TestTool -Path $finalizerScript -Arguments $finalizerArguments
+        Assert-ToolFails -Invocation $rawGradingMistakeFinalizer -Description 'finalizer rejects raw-result grading mistake' -ExpectedText 'Execution integrity failure'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $iteration 'report.html') -PathType Leaf)) 'corrupted package produces no report'
-        [System.IO.File]::WriteAllBytes($selectedRecord.ExecutionResultPath, $copilotMistakeBytes)
-        Assert-Equal $selectedRawHash (Get-Sha256HexFromFile -Path $selectedRecord.ExecutionResultPath) 'Copilot mistake restoration returns exact frozen bytes'
+        [System.IO.File]::WriteAllBytes($selectedRecord.ExecutionResultPath, $rawGradingMistakeBytes)
+        Assert-Equal $selectedRawHash (Get-Sha256HexFromFile -Path $selectedRecord.ExecutionResultPath) 'Raw-result restoration returns exact frozen bytes'
 
         [Environment]::SetEnvironmentVariable('AGENTIC_TEST_REPORT_MODE', 'missing')
         Remove-TestReportArtifacts -IterationDirectory $iteration

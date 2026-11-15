@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-11-15
+
+This is a minor release that adds initial-release support, verified new-contributor recognition, and Markdown file delivery to `git-remote-release`, and makes Codex CLI with `gpt-6-luna` the Codebelt Reference evaluation configuration after removing the GitHub Copilot CLI eval runner.
+
+### Added
+
+- `git-remote-release` supports initial releases without a previous release tag, collecting all history reachable from the current ref and linking the full history with `/commits/{currentRef}` instead of inventing a compare base,
+- `git-remote-release` adds a `## New Contributors` section for verified first-time GitHub users who authored pull requests, original pull request commits, co-authored commits, or direct commits in the release range, excluding returning contributors by checking complete prior history and never claiming `Bot` accounts, placed immediately before the Full Changelog link and omitted when none are verified,
+- `git-remote-release` saves the release notes as `release-notes.md` in a temporary working directory outside the repository and returns a Markdown file link instead of console-only output,
+- `collect-release-evidence.py` accepts saved GitHub generate-notes responses through `--generated-notes` and rejects responses whose recorded range or Full Changelog link does not match the collected release.
+
+### Changed
+
+- The Codebelt Reference evaluation configuration moves from GitHub Copilot CLI with `claude-haiku-4.5` to Codex CLI with `gpt-6-luna` at high reasoning,
+- Codex eval preparation defaults to `gpt-6-luna` with high reasoning, replacing `gpt-5.6-luna` with low reasoning,
+- `AGENTS.md`, `README.md`, and `CONTRIBUTING.md` describe Codex as the Codebelt Reference and Codex default and no longer list GitHub Copilot as a supported eval runner.
+
+### Removed
+
+- The GitHub Copilot CLI eval runner, its fixtures, and its boundary tests are removed, so `-Runner github-copilot` no longer resolves, while Codex and OpenCode remain the supported real runners.
+
+### Fixed
+
+- The eval response contract defers to task-specified delivery, so tasks that ask for only a link or path no longer require inline file contents.
+
 ## [0.12.0] - 2026-10-14
 
 This is a minor release that moves the scaffolded .NET test stack to the native Microsoft.Testing.Platform setup with Codebelt coverage and a root `global.json`, makes root `AGENTS.md` the single agent-instruction source for generated projects, and tightens package version resolution for the `dotnet-new-app-slnx` and `dotnet-new-lib-slnx` skills.
@@ -785,6 +810,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.12.1]: https://github.com/codebeltnet/agentic/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/codebeltnet/agentic/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/codebeltnet/agentic/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/codebeltnet/agentic/compare/v0.11.0...v0.11.1

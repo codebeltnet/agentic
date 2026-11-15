@@ -679,7 +679,7 @@ exit 0
     Write-TestJson -Path $profilePath -Value ([ordered]@{
         schema = (Get-RunnerSchemaNames).Profile
         runner = 'codex'
-        model = 'gpt-5.6-luna'
+        model = 'gpt-6-luna'
         reasoning_effort = 'medium'
         configuration_profile = 'isolated-default'
         tool_profile = 'default'

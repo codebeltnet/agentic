@@ -731,24 +731,24 @@ try {
     $compatibilityTransportResult.evidence.PSObject.Properties.Remove('delegation')
     Invoke-TerminalEvidenceCase -Name 'compatibility transport result' -Evidence $compatibilityTransportResult -ExpectedFailure 'delegation_terminal_evidence'
 
-    # Regression (Copilot forensic iteration-4): an orchestrator-authored /
+    # Regression (synthetic result recovery): an orchestrator-authored /
     # synthetic execution-result must be rejected by the schema gate with no
-    # fallback to a manual "success". This mirrors the real invalid Copilot run
+    # fallback to a manual "success". This mirrors the invalid recorded run
     # -- capture provenance "agent_output", a textual terminal_status instead of
     # a numeric exit code, a non-fresh session, and no runner terminal
     # delegation evidence -- proving the outer orchestrator cannot hand-build a
     # passing result.
-    $syntheticCopilotResult = [ordered]@{
+    $syntheticInvalidResult = [ordered]@{
         schema = (Get-RunnerSchemaNames).Result
         protocol_version = (Get-RunnerSchemaNames).Protocol
         run_id = '1_with_skill'
         session = [ordered]@{ id = ''; fresh = $false; resumed = $true }
         status = 'completed'
         run = [ordered]@{ eval_id = 1; eval_name = 'strong-name'; configuration = 'with_skill' }
-        runner = [ordered]@{ name = 'github-copilot'; version = '0.9.1' }
-        harness = [ordered]@{ name = 'GitHub Copilot CLI'; version = 'unavailable' }
-        requested = [ordered]@{ model = 'claude-haiku-4.5'; reasoning_effort = $null; configuration_profile = 'isolated-default'; tool_profile = 'default'; timeout_seconds = 900 }
-        resolved = [ordered]@{ status = 'accepted_request'; accepted = [ordered]@{ model = 'claude-haiku-4.5' } }
+        runner = [ordered]@{ name = 'fake'; version = '0.9.1' }
+        harness = [ordered]@{ name = 'Deterministic fake runner'; version = 'unavailable' }
+        requested = [ordered]@{ model = 'fixture-model'; reasoning_effort = $null; configuration_profile = 'isolated-default'; tool_profile = 'default'; timeout_seconds = 900 }
+        resolved = [ordered]@{ status = 'accepted_request'; accepted = [ordered]@{ model = 'fixture-model' } }
         started_utc = '2026-08-25T20:00:00.000Z'
         finished_utc = '2026-08-25T20:00:10.000Z'
         duration_seconds = 10
@@ -765,12 +765,12 @@ try {
         compatibility_deviations = @()
         attempt_count = 1
     }
-    $syntheticResultObject = ($syntheticCopilotResult | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $syntheticResultObject = ($syntheticInvalidResult | ConvertTo-Json -Depth 100) | ConvertFrom-Json
     $syntheticRejected = $false
     $syntheticReason = ''
     try { [void](Assert-ExecutionResult -Result $syntheticResultObject) } catch { $syntheticRejected = $true; $syntheticReason = $_.Exception.Message }
-    Assert-True $syntheticRejected 'orchestrator-authored synthetic Copilot execution-result is rejected by the schema gate'
-    Assert-True ($syntheticReason -match 'fresh, non-resumed session|exit.status must be a JSON number') "synthetic Copilot result is rejected for its non-fresh session or textual exit status: $syntheticReason"
+    Assert-True $syntheticRejected 'orchestrator-authored synthetic execution-result is rejected by the schema gate'
+    Assert-True ($syntheticReason -match 'fresh, non-resumed session|exit.status must be a JSON number') "synthetic result is rejected for its non-fresh session or textual exit status: $syntheticReason"
     # A synthetic result that is schema-shaped but carries agent_output capture
     # with no runner delegation evidence is still incompatible at the terminal
     # gate, so it can never be graded as a real eval execution.

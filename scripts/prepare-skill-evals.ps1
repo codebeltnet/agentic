@@ -45,23 +45,23 @@
     Overwrite an existing iteration directory.
 
 .PARAMETER Runner
-    Package-local Eval Runner id written to execution-profile.json when -CodebeltReference is not used. GitHub Copilot
-    and Codex can resolve repository-defined default models; OpenCode requires an explicit model selector.
+    Package-local Eval Runner id written to execution-profile.json when -CodebeltReference is not used. Codex resolves
+    the repository-defined default model; OpenCode requires an explicit model selector.
 
 .PARAMETER Model
     Runner-native model selector written to execution-profile.json when -CodebeltReference is not used. When omitted for
-    Codex, preparation selects gpt-5.6-luna with low reasoning. When omitted for GitHub Copilot, preparation selects the
-    Codebelt Reference model claude-haiku-4.5. Preparation validates the resolved model against current harness discovery.
+    Codex, preparation selects gpt-6-luna with high reasoning. Preparation validates the resolved model against current
+    harness discovery.
 
 .PARAMETER CodebeltReference
-    Resolve the Codebelt reference configuration by discovering current GitHub Copilot CLI models and selecting
-    claude-haiku-4.5 only when it is still available.
+    Resolve the Codebelt reference configuration by discovering current Codex CLI models and selecting gpt-6-luna
+    with high reasoning only when the model is still available.
 
 .PARAMETER ModelCatalogPath
     Optional deterministic catalog JSON used by the model discovery helper. Intended for tests and offline validation.
 
 .PARAMETER ReasoningEffort
-    Optional runner-supported reasoning/effort setting written to execution-profile.json. Codex defaults to low
+    Optional runner-supported reasoning/effort setting written to execution-profile.json. Codex defaults to high
     when this is omitted.
 
 .PARAMETER ConfigurationProfile
@@ -74,7 +74,7 @@
     Per-arm runner timeout. Defaults to 900 seconds.
 
 .PARAMETER Concurrency
-    Requested concurrency. Defaults to 16 for Codex and GitHub Copilot. OpenCode defaults to 2 when this parameter is
+    Requested concurrency. Defaults to 16 for Codex. OpenCode defaults to 2 when this parameter is
     omitted; an explicitly bound value is always honored. It does not change paired-arm semantics.
 
 .PARAMETER Changed
@@ -92,7 +92,7 @@
     cannot repair missing, malformed, or unproven runner-produced execution evidence.
 
 .EXAMPLE
-    pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing -Runner github-copilot
+    pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Skill dotnet-strong-name-signing -Runner codex
 
 .EXAMPLE
     pwsh -NoProfile -NonInteractive -File ./scripts/prepare-skill-evals.ps1 -Changed -CodebeltReference
@@ -229,7 +229,7 @@ $responseContract = @'
 
 Respond in a single message.
 
-- Do the work in that message. If the task produces or changes files, include every file path with its final content in fenced code blocks, and also write them to disk when the environment allows it.
+- Do the work in that message. If the task produces or changes files, write them to disk when the environment allows it. Unless the task or the operating instructions ask for a specific delivery, such as returning only a link or path to a file, also include every file path with its final content in fenced code blocks. When they do ask for one, follow that delivery and do not copy file contents into the reply.
 - If you would normally pause and ask before acting, say what you would ask and why, then stop there. That pause is a valid response.
 - State any assumption you had to make instead of waiting for an answer.
 '@
@@ -401,7 +401,6 @@ function Get-HarnessName {
     param([Parameter(Mandatory = $true)][string]$RunnerName)
 
     switch ($RunnerName) {
-        'github-copilot' { return 'GitHub Copilot CLI' }
         'codex' { return 'Codex CLI' }
         'opencode' { return 'OpenCode' }
         'fake' { return 'Deterministic fake runner' }
@@ -450,9 +449,9 @@ function Get-SupportedRunnerIds {
 function Resolve-ExecutionSelection {
     param([Parameter(Mandatory = $true)][string]$RepoRoot)
 
-    $referenceRunner = 'github-copilot'
-    $referenceModel = 'claude-haiku-4.5'
-    $codexDefaultModel = 'gpt-5.6-luna'
+    $referenceRunner = 'codex'
+    $referenceModel = 'gpt-6-luna'
+    $codexDefaultModel = $referenceModel
     $supportedRunners = @(Get-SupportedRunnerIds -RepoRoot $RepoRoot)
     $supportedText = if ($supportedRunners.Count -gt 0) { $supportedRunners -join ', ' } else { '(none found)' }
 
@@ -494,10 +493,6 @@ function Resolve-ExecutionSelection {
             'codex' {
                 $resolvedModel = $codexDefaultModel
                 $preset = 'Codex default'
-            }
-            'github-copilot' {
-                $resolvedModel = $referenceModel
-                $preset = 'Codebelt Reference'
             }
             'opencode' {
                 throw 'OpenCode requires an explicit -Model selector from the discovered provider/model catalog.'
@@ -757,7 +752,7 @@ function New-ExecutionProfile {
         schema = $executionProfileSchema
         runner = $ExecutionSelection.Runner
         model = $ExecutionSelection.Model
-        reasoning_effort = if (-not [string]::IsNullOrWhiteSpace($ReasoningEffort)) { $ReasoningEffort } elseif ($ExecutionSelection.Runner -eq 'codex') { 'low' } else { $null }
+        reasoning_effort = if (-not [string]::IsNullOrWhiteSpace($ReasoningEffort)) { $ReasoningEffort } elseif ($ExecutionSelection.Runner -eq 'codex') { 'high' } else { $null }
         configuration_profile = $ConfigurationProfile
         tool_profile = $ToolProfile
         timeout_seconds = $TimeoutSeconds
