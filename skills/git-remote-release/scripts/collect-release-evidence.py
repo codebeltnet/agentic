@@ -148,12 +148,37 @@ def verify_summary(lines):
     return errors
 
 
+def check_generation_range(evidence, request, body):
+    """Bind a saved generate-notes response to the exact repository and range being collected."""
+    if not isinstance(request, dict):
+        raise ValueError("Saved generation must record its request inputs")
+    repository, previous, current = evidence["repository"], evidence["previous"], evidence["current"]
+    if str(request.get("repository", "")).casefold() != repository.casefold():
+        raise ValueError("Generation request repository does not match the collected repository")
+    if request.get("previous_tag_name") != previous:
+        raise ValueError("Generation request previous_tag_name does not match the collected previous ref")
+    tag = request.get("tag_name")
+    if not isinstance(tag, str) or not tag:
+        raise ValueError("Generation request must name tag_name")
+    target = request.get("target_commitish")
+    if tag != current and (target is None or target not in (current, evidence["resolved_refs"][-1])):
+        raise ValueError("Generation request tag_name or target_commitish does not match the collected current ref")
+    link = f"commits/{tag}" if previous is None else f"compare/{previous}...{tag}"
+    expected = f"**Full Changelog**: https://github.com/{repository}/{link}"
+    changelog = [line.strip() for line in body.splitlines() if line.startswith("**Full Changelog**:")]
+    if len(changelog) != 1 or changelog[0].casefold() != expected.casefold():
+        raise ValueError("Generated notes do not describe the requested range: expected " + expected)
+
+
 def add_new_contributors(evidence, generated_notes):
     """Use GitHub's first-contribution evidence only for verified in-range PR authors."""
     evidence["generated_notes"] = generated_notes
-    body = generated_notes["body"]
+    if not isinstance(generated_notes, dict):
+        raise ValueError("Saved generation must be a request and response envelope")
+    body = generated_notes["response"]["body"]
     if not isinstance(body, str):
         raise ValueError("Generated release notes body must be text")
+    check_generation_range(evidence, generated_notes.get("request"), body)
     lines = body.splitlines()
     headings = [i for i, line in enumerate(lines) if line.strip() == "## New Contributors"]
     if len(headings) > 1:
@@ -362,7 +387,7 @@ def main():
                         help="Collect all history: supply only repository and current ref, with no previous ref")
     gather.add_argument("--output", type=Path, required=True)
     gather.add_argument("--generated-notes", type=Path,
-                        help="Saved GitHub generate-notes JSON for this exact tag range")
+                        help="Saved {request, response} envelope from GitHub generate-notes for this exact range")
     check = commands.add_parser("verify")
     check.add_argument("evidence", type=Path)
     check.add_argument("draft", type=Path)

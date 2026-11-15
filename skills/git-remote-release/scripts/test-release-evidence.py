@@ -74,11 +74,21 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(collector.verify(evidence, draft.replace("Sources:", "Sources:\n" + evidence["sources"][0])))
         self.assertTrue(collector.verify(evidence, draft.replace("Sources:", "Sources:\n- Extra source by @someone")))
 
-    def generated_notes(self, entries=None):
+    def generated_notes(self, entries=None, previous="v1", tag="v2"):
         if entries is None:
             entries = "* @service[bot] made their first contribution in https://github.com/example/widget/pull/22"
-        return {"body": "## What's Changed\n\n* Service update\n\n## New Contributors\n" + entries +
-                        "\n\n**Full Changelog**: https://github.com/example/widget/compare/v1...v2"}
+        request = {"repository": "example/widget", "tag_name": tag}
+        if previous is not None:
+            request["previous_tag_name"] = previous
+        target = f"commits/{tag}" if previous is None else f"compare/{previous}...{tag}"
+        section = "\n\n## New Contributors\n" + entries if entries else ""
+        return {"request": request, "response": {"body": "## What's Changed\n\n* Service update" + section +
+                "\n\n**Full Changelog**: https://github.com/example/widget/" + target}}
+
+    def with_body(self, body):
+        notes = self.generated_notes()
+        notes["response"]["body"] = body
+        return notes
 
     def with_newcomers(self, evidence):
         return self.draft(evidence).replace("\n\n**Full Changelog**:",
@@ -94,7 +104,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_new_contributors_deduplicate_case_and_keep_rest_identity(self):
         notes = self.generated_notes()
-        notes["body"] = notes["body"].replace("\n\n**Full Changelog**:",
+        notes["response"]["body"] = notes["response"]["body"].replace("\n\n**Full Changelog**:",
             "\n* @SERVICE[bot] made their first contribution in https://github.com/example/widget/pull/22\n\n**Full Changelog**:")
         evidence = collector.collect("example/widget", "v1", "v2", self.api, notes)
         self.assertTrue(evidence["complete"], evidence["issues"])
@@ -105,20 +115,52 @@ class EvidenceTests(unittest.TestCase):
         for notes in (self.generated_notes("* @human made their first contribution in https://github.com/example/widget/pull/22"),
                       self.generated_notes("* @service[bot] made their first contribution in https://github.com/other/widget/pull/22"),
                       self.generated_notes("* @service[bot] made their first contribution in https://github.com/example/widget/pull/99"),
-                      self.generated_notes("* Unrecognized contributor format"), {"body": None}, {}):
+                      self.generated_notes("* Unrecognized contributor format"), self.with_body(None),
+                      {"response": {"body": "x"}}, {}, self.generated_notes()["response"]):
             with self.subTest(notes=notes):
                 evidence = collector.collect("example/widget", "v1", "v2", self.api, notes)
                 self.assertFalse(evidence["complete"])
                 self.assertTrue(collector.verify(evidence, self.draft(evidence)))
 
     def test_no_newcomers_or_unavailable_metadata_omits_section(self):
-        for notes in (None, {"body": "## What's Changed\n* Update"}, self.generated_notes("")):
+        for notes in (None, self.generated_notes("")):
             evidence = collector.collect("example/widget", "v1", "v2", self.api, notes)
             self.assertTrue(evidence["complete"], evidence["issues"])
             self.assertFalse(evidence.get("new_contributors"))
             self.assertEqual(collector.verify(evidence, self.draft(evidence)), [])
             empty = self.draft(evidence).replace("\n\n**Full Changelog**:", "\n\n## New Contributors\n\n**Full Changelog**:")
             self.assertTrue(collector.verify(evidence, empty))
+
+    def test_generation_for_another_range_or_repository_fails_closed(self):
+        # A narrower range can omit this release's newcomers; that must not read as "none".
+        narrower = self.generated_notes("", previous="v1.5")
+        narrower["request"]["previous_tag_name"] = "v1"
+        other_repository = self.generated_notes("")
+        other_repository["request"]["repository"] = "other/widget"
+        mismatches = {
+            "narrower response, matching request": narrower,
+            "narrower request and response": self.generated_notes("", previous="v1.5"),
+            "other current tag": self.generated_notes("", tag="v3"),
+            "initial generation for compare range": self.generated_notes("", previous=None),
+            "missing changelog link": self.with_body("## What's Changed\n* Update"),
+            "other repository": other_repository,
+            "bare response without request": self.generated_notes("")["response"],
+        }
+        for name, notes in mismatches.items():
+            with self.subTest(name):
+                evidence = collector.collect("example/widget", "v1", "v2", self.api, notes)
+                self.assertFalse(evidence["complete"])
+                self.assertFalse(evidence.get("new_contributors"))
+                self.assertTrue(any("New contributor evidence" in issue for issue in evidence["issues"]))
+                self.assertTrue(collector.verify(evidence, self.draft(evidence)))
+
+    def test_generation_for_unreleased_tag_matches_target_commitish(self):
+        self.routes["/commits/head"] = [{"sha": "head"}]
+        notes = self.generated_notes()
+        notes["request"]["target_commitish"] = "head"
+        evidence = collector.collect("example/widget", "v1", "head", self.api, notes)
+        self.assertTrue(evidence["complete"], evidence["issues"])
+        self.assertEqual(len(evidence["new_contributors"]), 1)
 
     def test_new_contributor_section_rejects_duplicates_wrong_position_and_fabrication(self):
         evidence = collector.collect("example/widget", "v1", "v2", self.api, self.generated_notes())
@@ -142,7 +184,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_initial_release_collects_all_history_and_uses_commits_link(self):
         self.initial_routes()
-        evidence = collector.collect("example/widget", None, "v2", self.api, self.generated_notes())
+        evidence = collector.collect("example/widget", None, "v2", self.api, self.generated_notes(previous=None))
         self.assertTrue(evidence["complete"], evidence["issues"])
         self.assertEqual([c["sha"] for c in evidence["commits"]], ["root", "squash"])
         self.assertEqual(evidence["files_without_patch"], ["src/app.py", "vendor"])
@@ -173,16 +215,16 @@ class EvidenceTests(unittest.TestCase):
 
     def test_cli_initial_release_with_saved_generation_response(self):
         self.initial_routes()
-        evidence = collector.collect("example/widget", None, "v2", self.api, self.generated_notes())
+        evidence = collector.collect("example/widget", None, "v2", self.api, self.generated_notes(previous=None))
         with tempfile.TemporaryDirectory(prefix="release-evidence-") as directory:
             notes = Path(directory) / "generated-notes.json"
             output = Path(directory) / "evidence.json"
-            notes.write_text(json.dumps(self.generated_notes()), encoding="utf-8-sig")
+            notes.write_text(json.dumps(self.generated_notes(previous=None)), encoding="utf-8-sig")
             args = ["collector", "collect", "example/widget", "v2", "--initial-release",
                     "--generated-notes", str(notes), "--output", str(output)]
             with patch.object(sys, "argv", args), patch.object(collector, "collect", return_value=evidence) as gather, contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(collector.main(), 0)
-            gather.assert_called_once_with("example/widget", None, "v2", generated_notes=self.generated_notes())
+            gather.assert_called_once_with("example/widget", None, "v2", generated_notes=self.generated_notes(previous=None))
             self.assertEqual(json.loads(output.read_text(encoding="utf-8")), evidence)
 
     def test_cli_rejects_missing_compare_ref_and_initial_release_with_two_refs(self):
