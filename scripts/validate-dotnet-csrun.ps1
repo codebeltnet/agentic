@@ -17,6 +17,7 @@ if ($EnginePath) { $EnginePath = (Resolve-Path $EnginePath).Path }
 $evidence = Join-Path ([IO.Path]::GetTempPath()) ('dotnet-csrun-evidence-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $evidence | Out-Null
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $OutputEncoding
 $cases = @(
     @('console', 0, '(?m)^42\s*$'),
     @('passing', 0, '(?is)total:\s*1.*failed:\s*0.*succeeded:\s*1.*skipped:\s*0'),
