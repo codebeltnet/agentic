@@ -76,7 +76,7 @@
       "prompt": "Run my net11.0 example in codebeltnet/csrun:10. Do not change the framework.",
       "id": 6,
       "files": [
-        "evals/files/console.json"
+        "evals/files/console-net11.json"
       ]
     },
     {
