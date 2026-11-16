@@ -25,7 +25,11 @@ $cases = @(
     @('empty', 8, '(?i)(zero tests|no tests|total:\s*0)'),
     @('invalid', -1, 'CS0103'),
     @('package', 0, '(?m)^273\s*$'),
-    @('unicode', 0, 'Hello "C#" — æøå 世界\r?\nsecond line')
+    @('unicode', 0, 'Hello "C#" — æøå 世界\r?\nsecond line'),
+    @('standalone-host', 0, '(?is)total:\s*1.*failed:\s*0.*succeeded:\s*1.*skipped:\s*0'),
+    @('safe-adaptation', 0, '(?is)total:\s*1.*failed:\s*0.*succeeded:\s*1.*skipped:\s*0'),
+    @('inventory-worker', -1, 'CS0017'),
+    @('multiple-entrypoints', -1, 'CS0017')
 )
 Write-Host "Evidence directory: $evidence"
 foreach ($case in $cases) {
@@ -44,7 +48,8 @@ foreach ($case in $cases) {
     if (($expectedExit -eq -1 -and $code -eq 0) -or ($expectedExit -ne -1 -and $code -ne $expectedExit) -or $plain -notmatch $pattern) {
         throw "$name did not match expected exit/observation (exit $code). See $evidence/$name.log"
     }
-    Write-Host "PASS $name (exit $code; expected observation matched)"
+    $observation = if ($name -in @('inventory-worker', 'multiple-entrypoints')) { 'expected compiler failure; no xUnit test executed' } else { 'expected observation matched' }
+    Write-Host "PASS $name (exit $code; $observation)"
 }
-Write-Host 'dotnet-csrun execution checks passed: 7'
+Write-Host "dotnet-csrun execution checks passed: $($cases.Count)"
 
