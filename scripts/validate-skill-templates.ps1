@@ -827,6 +827,19 @@ if ($MetadataOnly) {
     exit 0
 }
 
+Add-ValidationResult -Results $results -Name 'dotnet-csrun source fixtures and published example stay coherent' -Group 'Templates' -Action {
+    $skill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-csrun/SKILL.md' -GitRef $Ref
+    Assert-Contains -Name 'dotnet-csrun' -Content $skill -Needle 'Compiled only'
+    Assert-Contains -Name 'dotnet-csrun' -Content $skill -Needle 'Unverified'
+    $fixture = (Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/dotnet-csrun/evals/files/console.json' -GitRef $Ref) | ConvertFrom-Json
+    $published = [regex]::Match($skill, "(?s)source = @'\r?\n(.*?)\r?\n'@").Groups[1].Value
+    if ($published.Replace("`r`n", "`n") -cne $fixture.source.Replace("`r`n", "`n")) { throw 'dotnet-csrun published source differs from its console fixture.' }
+    foreach ($link in [regex]::Matches($skill, '\]\(([^)]+)\)')) {
+        $path = $link.Groups[1].Value
+        if ($path -notmatch '://') { [void](Get-FileText -RepoRoot $repoRoot -RelativePath "skills/dotnet-csrun/$path" -GitRef $Ref) }
+    }
+}
+
 Add-ValidationResult -Results $results -Name 'Git remote PR routing and deterministic workflow stay integrated' -Group 'Pr' -Action {
     if (-not [string]::IsNullOrWhiteSpace($Ref)) { return }
     $prSkill = Get-FileText -RepoRoot $repoRoot -RelativePath 'skills/git-remote-pr/SKILL.md' -GitRef $Ref
