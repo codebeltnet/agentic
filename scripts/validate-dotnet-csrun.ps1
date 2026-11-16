@@ -42,10 +42,11 @@ $environment = if ($Docker) {
     $images = @{}
     foreach ($tag in @('10', '11')) {
         $image = "codebeltnet/csrun:$tag"
-        $inspect = docker image inspect $image --format '{{json .}}' | ConvertFrom-Json
-        if ($LASTEXITCODE -ne 0) { throw "Inspect failed: $image" }
+        # Inventory first so docker run can pull an image that is not cached locally.
         $sdks = docker run --rm --entrypoint dotnet $image --list-sdks
         if ($LASTEXITCODE -ne 0) { throw "SDK inventory failed: $image" }
+        $inspect = docker image inspect $image --format '{{json .}}' | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0) { throw "Inspect failed: $image" }
         $runtimes = docker run --rm --entrypoint dotnet $image --list-runtimes
         if ($LASTEXITCODE -ne 0) { throw "Runtime inventory failed: $image" }
         $images[$image] = @{ imageId=$inspect.Id; digests=$inspect.RepoDigests; labels=$inspect.Config.Labels; os=$inspect.Os; architecture=$inspect.Architecture; sdks=$sdks; runtimes=$runtimes }
