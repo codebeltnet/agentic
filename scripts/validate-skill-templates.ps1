@@ -838,6 +838,10 @@ Add-ValidationResult -Results $results -Name 'dotnet-csrun source fixtures and p
         $path = $link.Groups[1].Value
         if ($path -notmatch '://') { [void](Get-FileText -RepoRoot $repoRoot -RelativePath "skills/dotnet-csrun/$path" -GitRef $Ref) }
     }
+    if ([string]::IsNullOrWhiteSpace($Ref)) {
+        & pwsh -NoProfile -NonInteractive -File (Join-Path $repoRoot 'skills/dotnet-csrun/scripts/test-sample-tools.ps1')
+        if ($LASTEXITCODE -ne 0) { throw 'dotnet-csrun sample tool regressions failed.' }
+    }
 }
 
 Add-ValidationResult -Results $results -Name 'Git remote PR routing and deterministic workflow stay integrated' -Group 'Pr' -Action {

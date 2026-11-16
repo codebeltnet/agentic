@@ -22,8 +22,16 @@ var expectedSources = new Dictionary<string, string>
     ["inventory-worker"] = "ApplicationTest<WorkerProgram, ManagedApplicationFixture<WorkerProgram>>",
     ["standalone-host"] = "StandaloneHostResolvesRegisteredIdentity",
     ["multiple-entrypoints"] = "public static void Main(string[] args)",
-    ["safe-adaptation"] = "Assert.Equal(42, await Task.FromResult(42))"
+    ["safe-adaptation"] = "Assert.Equal(42, await Task.FromResult(42))",
+    ["safe-adaptation-corrected"] = "Assert.Equal(42, await Task.FromResult(42))"
 };
+// The eval input must stay uncorrected (missing Xunit import); the corrected twin is for execution checks.
+foreach (var (name, hasImport) in new[] { ("safe-adaptation", false), ("safe-adaptation-corrected", true) })
+{
+    using var f = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "evals", "files", name + ".json")));
+    if (f.RootElement.GetProperty("source").GetString()!.Contains("using Xunit;", StringComparison.Ordinal) != hasImport)
+        throw new InvalidDataException($"Xunit import state drift: {name}");
+}
 foreach (var (name, fragment) in expectedSources)
 {
     using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "evals", "files", name + ".json")));
@@ -32,6 +40,34 @@ foreach (var (name, fragment) in expectedSources)
     var options = new JsonSerializerOptions { TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver() };
     var roundTrip = JsonSerializer.Deserialize<string>(JsonSerializer.Serialize(source, options), options);
     if (source != roundTrip) throw new InvalidDataException($"Source round-trip failed: {name}");
+}
+// These repairs change only the diagnosed defect, never the assertion or observable operation.
+string Source(string name)
+{
+    using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "evals", "files", name + ".json")));
+    return document.RootElement.GetProperty("source").GetString()!;
+}
+if (Source("safe-adaptation").Replace("using System.Threading.Tasks; ", "using System.Threading.Tasks; using Xunit; ", StringComparison.Ordinal) != Source("safe-adaptation-corrected"))
+    throw new InvalidDataException("Import repair changed the tested behavior.");
+if (Source("incorrect-package") != Source("package"))
+    throw new InvalidDataException("Package repair changed the demonstrated operation.");
+foreach (var (name, pin) in new[] { ("incorrect-package", "Cuemon.Kernell@11.0.0"), ("package", "Cuemon.Kernel@11.0.0") })
+{
+    using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "evals", "files", name + ".json")));
+    var item = fixture.RootElement;
+    if (item.GetProperty("schemaVersion").GetInt32() != 1 || item.GetProperty("mode").GetString() != "console" ||
+        item.GetProperty("framework").GetString() != "net11.0" ||
+        !item.GetProperty("dependsOn").EnumerateArray().Select(p => p.GetString()).SequenceEqual(new[] { pin }))
+        throw new InvalidDataException($"Package repair fixture semantics drifted: {name}");
+}
+foreach (var reference in Directory.EnumerateFiles(Path.Combine(root, "references"), "*.md"))
+{
+    foreach (Match link in Regex.Matches(File.ReadAllText(reference), @"\]\(([^)]+)\)"))
+    {
+        var path = link.Groups[1].Value;
+        if (!path.Contains("://") && !File.Exists(Path.Combine(Path.GetDirectoryName(reference)!, path)))
+            throw new InvalidDataException($"Broken reference link: {reference}: {path}");
+    }
 }
 // Ensure the published journey and the executable fixture describe the same program.
 using var console = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "evals", "files", "console.json")));
@@ -43,7 +79,7 @@ using var inventory = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "ev
 var original = inventory.RootElement.GetProperty("source").GetString()!;
 var originalHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(original.Replace("\r\n", "\n"))));
 if (originalHash != "6B54B2CA6E2D3EDF8EC3ED4B7CB1E1CFA7E28265F41B228E3EE9465DD9B7D9A4") throw new InvalidDataException("Original InventoryWorker source changed; do not remove the behavior under test.");
-foreach (var name in new[] { "inventory-worker", "standalone-host", "multiple-entrypoints", "safe-adaptation" })
+foreach (var name in new[] { "inventory-worker", "standalone-host", "multiple-entrypoints", "safe-adaptation", "safe-adaptation-corrected" })
 {
     using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "evals", "files", name + ".json")));
     var item = fixture.RootElement;
