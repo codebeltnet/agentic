@@ -3,7 +3,7 @@
   "dependsOn": [
     "xunit.v3@4.0.3"
   ],
-  "source": "using System.Threading.Tasks; using Xunit; public class AdaptedTests { [Fact] public async Task PreservesAwaitedValue() { Assert.Equal(42, await Task.FromResult(42)); } }",
+  "source": "using System.Threading.Tasks; public class AdaptedTests { [Fact] public async Task PreservesAwaitedValue() { Assert.Equal(42, await Task.FromResult(42)); } }",
   "mode": "test",
   "schemaVersion": 1
 }
