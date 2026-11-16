@@ -4,6 +4,8 @@ Use this reference when you need the full step-by-step workflow, example invento
 
 ## Example inventory shape
 
+For optional standalone runtime evidence, follow [csrun composition](csrun-composition.md) and extend this inventory with source/manifest identity and transport-specific outcomes. Keep reference-aware compilation and documentation completion authoritative for their established scope.
+
 Build a small example inventory from validator output and source evidence before writing examples. Treat it as a work queue, not as final-response prose.
 
 ```markdown

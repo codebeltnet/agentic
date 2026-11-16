@@ -1193,6 +1193,16 @@
         "Interprets CS1061 extension-method failures as likely missing using directives when source/API evidence supports it",
         "Adds `using System.Linq;` for the LINQ `Select` failure and reruns sample validation instead of trial-and-error editing"
       ]
+    },
+    {
+      "prompt": "During a DocFX audit, add runtime evidence for an existing standalone published-package example and assess an ApplicationTest example that depends on an unpublished local application entry point. Preserve current docs structure and completion gates.",
+      "id": 114,
+      "expected_output": "Uses dotnet-csrun verify or authorized repair for the compatible standalone case, emits paired execution deliverables without forcing full blocks onto every type page, keeps application-owned startup on project-backed validation, and completes the existing DocFX gates.",
+      "expectations": [
+        "Uses one canonical source for standalone runtime evidence, records per-transport outcomes and does not claim published package execution verifies unpublished code.",
+        "Preserves application Main and assembly separation and retains docfx.cs --build-api-model --validate-samples --verify-docfx-build as authoritative documentation gates.",
+        "Keeps concise primary C# fences and existing UID placement; no deterministic validator launches an AI agent and no duplicate compiler or unrequested project scaffolding is added."
+      ]
     }
   ]
 }
