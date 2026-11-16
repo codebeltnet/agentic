@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-11-17
+
+This is a minor release that adds the `dotnet-csrun` skill for executable C# evidence and connects `dotnet-docfx-digest` to it for standalone runtime examples.
+
+### Added
+
+- `dotnet-csrun` skill for creating small complete C# examples, verifying and repairing existing standalone source, and auditing examples, with paired native and Docker commands and honest verified, compiled-only, or unverified statuses,
+- `dotnet-csrun` assesses standalone feasibility before choosing a manifest and classifies failures before any repair, and runs isolated xUnit v3 tests through `csrun`,
+- `dotnet-csrun` deterministic validators and eval fixtures covering its lifecycle and feasibility contracts, plus a README entry and install example.
+
+### Changed
+
+- `dotnet-docfx-digest` example verification composes with `dotnet-csrun` for compatible standalone runtime examples, keeping its source discovery, placement, project-aware compilation, and DocFX build gates authoritative and leaving project-dependent examples in the existing workflow.
+
 ## [0.12.1] - 2026-11-15
 
 This is a minor release that adds initial-release support, verified new-contributor recognition, and Markdown file delivery to `git-remote-release`, and makes Codex CLI with `gpt-6-luna` the Codebelt Reference evaluation configuration after removing the GitHub Copilot CLI eval runner.
@@ -810,6 +824,7 @@ This is a minor release that introduces two complementary git workflow skills, e
 
 - Improved scaffold fidelity with hidden `.bot` asset preservation, explicit UTF-8 and BOM handling, and checks aimed at preventing mojibake or incomplete generated output.
 
+[0.13.0]: https://github.com/codebeltnet/agentic/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/codebeltnet/agentic/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/codebeltnet/agentic/compare/v0.11.2...v0.12.0
 [0.11.2]: https://github.com/codebeltnet/agentic/compare/v0.11.1...v0.11.2
