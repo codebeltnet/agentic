@@ -17,3 +17,5 @@ Unknown fields fail. There are no project references or arbitrary MSBuild settin
 Test mode currently defaults to `xunit.v3@4.0.3`, using Microsoft.Testing.Platform. For reproducible examples explicitly pin that version; supported overrides are stable 4.0 patch versions >= 4.0.3. Do not introduce xUnit v2 or another runner. csrun creates and cleans its own temporary test project; developers create none.
 
 Resolve requested API versions from the source repository and published NuGet metadata. An exact direct pin does not freeze all transitive resolution. If unpublished local code or unsupported build customization is essential, report the source-model gap and use an appropriate project workflow separately; do not disguise it with a different package version.
+
+Before manifest construction, apply [feasibility](feasibility.md). Test mode compiles all source into one executable alongside the generated xUnit runner; explicit application entry points and application-owned assembly identity cannot be repaired with invented project-reference or startup-object fields.

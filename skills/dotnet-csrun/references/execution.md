@@ -28,3 +28,5 @@ if ($code -ne 0) { throw "csrun execution failed with exit code $code." }
 ```
 
 This replaces only the transport line in a complete manifest block. Do not use `irm | iex` to pass parameters. Latest is mutable; retain a trusted release asset/hash for stronger reproduction. No global tool, template, or new CLI is required.
+
+A compatible SDK/container cannot fix a source topology that needs separate application and test assemblies. Distinguish this execution-model limitation from environment prerequisites using [feasibility and recovery](feasibility.md); preserve source and framework in either diagnosis.
