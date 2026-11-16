@@ -17,7 +17,15 @@ Record `docker image inspect codebeltnet/csrun:10 --format '{{json .Config.Label
 
 For justified tighter isolation, retain executable temporary storage: `docker run --rm -i --read-only --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g,mode=1777 --cap-drop=ALL --security-opt=no-new-privileges --cpus=2 --memory=2g --pids-limit=256 codebeltnet/csrun:10`. Adjust resource bounds transparently. Do not add `noexec` to build storage. Docker is not a hardened hostile-code service: dependencies/build assets, outbound access, resource exhaustion, and daemon vulnerabilities remain trust concerns. Decline ordinary execution of high-risk unknown source when isolation is inadequate. Never automatically forward credentials/environment, mount the Docker socket or arbitrary host directories, add privileges, or run third-party setup scripts.
 
-## Native alternative
+## Independent environment selection
+
+Probe native SDK/runtime and a trusted engine separately from Docker daemon/Linux-container/image availability. A missing native prerequisite must not block Docker; an unavailable Docker daemon must not block native. Use either available compatible path. If both are available, verify both where practical and compare the same expected behavior, especially when source quoting or transport parity is material. If neither is available, generate both complete templates and report each as Unverified with its concrete prerequisites. Never claim that shared manifests prove an unexecuted transport.
+
+Keep four versions distinct: manifest `schemaVersion`, target TFM, SDK environment, and engine release/hash. Check the publisher's current tags before delivery. Prefer an existing explicit engine-versioned image tag when suitable; confirm it actually exists (for example with `docker manifest inspect`) and record the selected digest/labels. If only an SDK convenience tag is available, say it is mutable and record the observed image identity. Never synthesize a versioned tag or digest from a release number.
+
+Registry inspection on 2026-11-17 found SDK selectors `10`, `10.0`, `10.0.404`, `11`, `11.0`, `11.0.100`, `10-11`, `10.0-11.0`, and `10.0.404-11.0.100`, with no engine-versioned tag. The SDK patch selectors still do not pin the engine. This is an observation, not a substitute for checking current tags.
+
+## Native execution
 
 Prefer a previously obtained, reviewed local engine: `& ./csrun.ps1 -ManifestJson $manifest`. Native execution requires PowerShell 7 and the appropriate installed SDK/runtime; applicable `global.json` can influence SDK selection. When a remote option is useful, explain that downloading and running the publisher's script and C#/NuGet build inputs grants them the developer's permissions. It is not sandboxed.
 
@@ -27,6 +35,6 @@ $code = $LASTEXITCODE
 if ($code -ne 0) { throw "csrun execution failed with exit code $code." }
 ```
 
-This replaces only the transport line in a complete manifest block. Do not use `irm | iex` to pass parameters. Latest is mutable; retain a trusted release asset/hash for stronger reproduction. No global tool, template, or new CLI is required.
+The delivered native block must include its own complete manifest, not merely this transport line. Use the paired generator in [presentation](presentation.md). Do not use `irm | iex` to pass parameters. Latest is mutable; retain a trusted release asset/hash for stronger reproduction. No global tool, template, or new CLI is required.
 
 A compatible SDK/container cannot fix a source topology that needs separate application and test assemblies. Distinguish this execution-model limitation from environment prerequisites using [feasibility and recovery](feasibility.md); preserve source and framework in either diagnosis.
