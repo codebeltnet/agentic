@@ -1,0 +1,9 @@
+{
+  "mode": "test",
+  "dependsOn": [
+    "xunit.v3@4.0.3"
+  ],
+  "schemaVersion": 1,
+  "source": "public class NoTests { }",
+  "framework": "net10.0"
+}

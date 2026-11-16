@@ -1,0 +1,6 @@
+{
+  "mode": "console",
+  "schemaVersion": 1,
+  "source": "using System;\nConsole.WriteLine(\"\"\"\nHello \"C#\" — æøå 世界\nsecond line\n\"\"\");",
+  "framework": "net10.0"
+}

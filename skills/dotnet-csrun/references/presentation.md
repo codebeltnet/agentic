@@ -1,0 +1,11 @@
+# Readable examples and honest evidence
+
+Prefer a single PowerShell block: a hashtable with schemaVersion, mode, explicit framework, optional exact dependencies, and a literal single-quoted here-string for source; serialize with `ConvertTo-Json -Depth 8`, invoke csrun, then capture `$LASTEXITCODE` immediately. Single-quoted here-strings preserve C# quotes, dollars, Unicode, and raw multiline strings. If C# contains a line that collides with the PowerShell terminator, choose another faithful construction and verify source round-tripping; do not manually escape large JSON programs.
+
+Lead with the behavior, then Copy & Run, Verification, and only necessary requirements/caveats. Combine behavior and wrapper for small examples. Do not require helper scripts or fixture downloads in the developer-facing command. Show expected output explicitly as expected until observed. Derive separately displayed C# from the same source string used for execution.
+
+Record source/manifest identity, transport, framework, actual SDK/runtime, engine release/hash or container digest when available, exact pins, expected observations, actual stdout/stderr, exit status, discovered/executed/passed/failed counts, and classification. Preserve raw diagnostics in evidence; summarize only relevant lines to the user. Do not estimate unavailable metrics.
+
+Current engine outcomes: success 0; validation/prerequisite failure 1; assertion failure MTP 2; no discovered tests MTP 8. Compiler/runtime failures preserve child status, so do not assume every non-test failure is 1. Compare diagnostics as well as status. Skips do not prove assertions executed. An intentional failing assertion can be **Verified expected failure**, while clearly stating that the test failed; an unexpected failure is **Failed**. Never classify zero tests as passing.
+
+For nondeterministic behavior verify stable invariants instead of incidental timestamps/order. When runtime is missing, state **Unverified**, name the missing SDK/runtime or unavailable Docker daemon/image, and offer a compatible environment without retargeting. Do not claim complete determinism with mutable tags, transitive dependencies, platform differences, or external services.

@@ -1,0 +1,122 @@
+{
+  "skill_name": "dotnet-csrun",
+  "evals": [
+    {
+      "expectations": [
+        "Output 42 and exit 0 observed; complete manifest wrapper; no fabricated evidence.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Output 42 and exit 0 observed; complete manifest wrapper; no fabricated evidence.",
+      "prompt": "Show me a complete runnable C# example that prints 42 on .NET 10. Execute it and give me one command I can paste.",
+      "id": 1,
+      "files": [
+        "evals/files/console.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Discover and execute a real async Fact through csrun/MTP; assert a result and report positive counts.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Discover and execute a real async Fact through csrun/MTP; assert a result and report positive counts.",
+      "prompt": "Turn addition after an asynchronous operation into a genuine xUnit v3 test on .NET 10 and run it.",
+      "id": 2,
+      "files": [
+        "evals/files/passing.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Keep the exact pin; observe 273 days; do not claim verification of local checkout changes.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Keep the exact pin; observe 273 days; do not claim verification of local checkout changes.",
+      "prompt": "Demonstrate Cuemon.Kernel 11.0.0 DateSpan from January 1 to October 1, 2018 on .NET 11. Verify the published API and run it.",
+      "id": 3,
+      "files": [
+        "evals/files/package.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Require assertion diagnostic and MTP exit 2; label verified expected failure, never passing test.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Require assertion diagnostic and MTP exit 2; label verified expected failure, never passing test.",
+      "prompt": "Make an intentionally failing xUnit assertion of 42 versus 41. Execute it and explain the outcome.",
+      "id": 4,
+      "files": [
+        "evals/files/failing.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Preserve compiler diagnostic and nonzero exit; classify Failed without inventing repair evidence.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Preserve compiler diagnostic and nonzero exit; classify Failed without inventing repair evidence.",
+      "prompt": "Execute this invalid sample and tell me honestly whether it works: Console.WriteLine(missingValue);",
+      "id": 5,
+      "files": [
+        "evals/files/invalid.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Identify missing .NET 11 environment, propose :11 or :10-11; preserve target and disclose any environment change.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Identify missing .NET 11 environment, propose :11 or :10-11; preserve target and disclose any environment change.",
+      "prompt": "Run my net11.0 example in codebeltnet/csrun:10. Do not change the framework.",
+      "id": 6,
+      "files": [
+        "evals/files/console.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Use faithful here-string/JSON/UTF-8 transport; compare Unicode and multiline observations with the displayed source.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Use faithful here-string/JSON/UTF-8 transport; compare Unicode and multiline observations with the displayed source.",
+      "prompt": "Publish a runnable documentation example printing quotes, two lines, and æøå 世界. Execute the same source shown in the docs.",
+      "id": 7,
+      "files": [
+        "evals/files/unicode.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Classify Unverified, explain concrete prerequisites, provide a self-contained wrapper and no invented output.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Classify Unverified, explain concrete prerequisites, provide a self-contained wrapper and no invented output.",
+      "prompt": "There is no Docker daemon and no .NET SDK on this machine. Give me a runnable C# demonstration and its verification status.",
+      "id": 8,
+      "files": [
+        "evals/files/console.json"
+      ]
+    },
+    {
+      "expectations": [
+        "Observe zero discovery and MTP exit 8; never report passing assertions.",
+        "Uses the existing csrun manifest/engine and distinguishes actual observations from expectations.",
+        "Provides a readable complete copy/paste command without project scaffolding or floating package versions."
+      ],
+      "expected_output": "Observe zero discovery and MTP exit 8; never report passing assertions.",
+      "prompt": "Run this class in test mode: public class NoTests { }. Does a successful build prove the test passed?",
+      "id": 9,
+      "files": [
+        "evals/files/empty.json"
+      ]
+    }
+  ]
+}
