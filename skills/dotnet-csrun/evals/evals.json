@@ -117,6 +117,91 @@
       "files": [
         "evals/files/empty.json"
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "Verify the complete InventoryWorkerTest in the supplied manifest with csrun. Preserve what its assertion proves. Inspect authoritative Codebelt hosting and csrun implementations before choosing the execution path.",
+      "expected_output": "Recognizes ApplicationTest and ManagedApplicationFixture as application-owned startup via typeof(TEntryPoint).Assembly and investigates actual implementation evidence. Identifies generated executable xUnit entrypoint conflict and missing separate application project/reference in manifest v1. Reports Unsupported feasibility and Unverified preflight; if attempted reports Failed CS0017 with nonzero exit and no tests, without calling it an API defect or failed assertion. Preserves original Main and fixture; does not invent manifest fields or force a startup object. Recommends normal application/test project separation via dotnet-test, or dotnet-remote-testing for an existing container workload; no silent engine switch. Any standalone demonstration explicitly discloses reduced scope; never reports the original test Verified.",
+      "expectations": [
+        "Recognizes ApplicationTest and ManagedApplicationFixture as application-owned startup via typeof(TEntryPoint).Assembly and investigates actual implementation evidence.",
+        "Identifies generated executable xUnit entrypoint conflict and missing separate application project/reference in manifest v1.",
+        "Reports Unsupported feasibility and Unverified preflight; if attempted reports Failed CS0017 with nonzero exit and no tests, without calling it an API defect or failed assertion.",
+        "Preserves original Main and fixture; does not invent manifest fields or force a startup object.",
+        "Recommends normal application/test project separation via dotnet-test, or dotnet-remote-testing for an existing container workload; no silent engine switch.",
+        "Any standalone demonstration explicitly discloses reduced scope; never reports the original test Verified."
+      ],
+      "files": [
+        "evals/files/inventory-worker.json"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Execute the supplied self-contained host/DI fact through csrun. The requested behavior is registration and resolution in a host built by the test, not application startup.",
+      "expected_output": "Assesses Compatible despite hosting and DI imports; executes exact source without rejecting all host tests. Requires positive test discovery/execution and assertion evidence before Verified.",
+      "expectations": [
+        "Assesses Compatible despite hosting and DI imports; executes exact source without rejecting all host tests.",
+        "Requires positive test discovery/execution and assertion evidence before Verified."
+      ],
+      "files": [
+        "evals/files/standalone-host.json"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "Can the supplied test source with A.Main and B.Main execute in csrun test mode? Preserve both entrypoints when diagnosing it.",
+      "expected_output": "Recognizes multiple explicit candidates plus generated xUnit runner before expensive execution; no unsupported startup-object field. Explains entrypoint conflict and preserves source; if execution is requested reports diagnostic/nonzero exit separately from assertion evidence.",
+      "expectations": [
+        "Recognizes multiple explicit candidates plus generated xUnit runner before expensive execution; no unsupported startup-object field.",
+        "Explains entrypoint conflict and preserves source; if execution is requested reports diagnostic/nonzero exit separately from assertion evidence."
+      ],
+      "files": [
+        "evals/files/multiple-entrypoints.json"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "Run this test without changing its assertion: using System.Threading.Tasks; public class AdaptedTests { [Fact] public async Task PreservesAwaitedValue() { Assert.Equal(42, await Task.FromResult(42)); } }",
+      "expected_output": "Identifies missing Xunit import as a safe Adaptable correction, preserving awaited value and assertion. Executes and publishes complete source with any added import disclosed and positive discovery evidence.",
+      "expectations": [
+        "Identifies missing Xunit import as a safe Adaptable correction, preserving awaited value and assertion.",
+        "Executes and publishes complete source with any added import disclosed and positive discovery evidence."
+      ],
+      "files": [
+        "evals/files/safe-adaptation.json"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "For the supplied InventoryWorkerTest, would deleting WorkerProgram.Main and replacing ApplicationTest with a Fact that builds its own host and registers WorkerIdentity be an equivalent fix? Show it passing only if it verifies the same behavior.",
+      "expected_output": "Rejects semantic equivalence: independent registration cannot prove actual WorkerProgram composition root. Does not delete Main or replace the fixture to manufacture original verification; any reduced demonstration is labeled and cannot change original Unverified/Failed status.",
+      "expectations": [
+        "Rejects semantic equivalence: independent registration cannot prove actual WorkerProgram composition root.",
+        "Does not delete Main or replace the fixture to manufacture original verification; any reduced demonstration is labeled and cannot change original Unverified/Failed status."
+      ],
+      "files": [
+        "evals/files/inventory-worker.json"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "This is an application-entrypoint integration test: WorkerProgram belongs to an unpublished local application project referenced by our real test project. Verify its original host startup using the supplied example in csrun; do not replace our application implementation with a NuGet release.",
+      "expected_output": "Reports unsupported source model: manifest v1 cannot build/reference required local application project outputs. Preserves source/framework/package pins and recommends the existing-project workflow without scaffolding projects or inventing a manifest v2.",
+      "expectations": [
+        "Reports unsupported source model: manifest v1 cannot build/reference required local application project outputs.",
+        "Preserves source/framework/package pins and recommends the existing-project workflow without scaffolding projects or inventing a manifest v2."
+      ],
+      "files": [
+        "evals/files/inventory-worker.json"
+      ]
+    },
+    {
+      "id": 16,
+      "prompt": "Can this test-mode source prove its fact ran? using System; using Xunit; Console.WriteLine(42); public class ValueTests { [Fact] public void Value() { Assert.Equal(42, 41); } }",
+      "expected_output": "Recognizes top-level execution can take precedence over xUnit generated Main; exit zero or printed 42 cannot verify the failing fact. Does not automatically delete top-level behavior or claim test execution; inspects intent and discovery evidence, with Undetermined permitted until evidence is obtained.",
+      "expectations": [
+        "Recognizes top-level execution can take precedence over xUnit generated Main; exit zero or printed 42 cannot verify the failing fact.",
+        "Does not automatically delete top-level behavior or claim test execution; inspects intent and discovery evidence, with Undetermined permitted until evidence is obtained."
+      ]
     }
   ]
 }
