@@ -40,7 +40,8 @@ function New-CsrunExecutionPair {
         [Parameter(Mandatory)][string] $ManifestJson,
         # Caller verifies the published image/tag, compatibility, and provenance before delivery.
         [Parameter(Mandatory)][string] $Image,
-        [string] $EnginePath
+        [string] $EnginePath,
+        [switch] $RequirePassingTests
     )
     $identity = Get-CsrunSampleIdentity $ManifestJson
     function Quote-Literal([string] $Value) { "'" + $Value.Replace("'", "''") + "'" }
@@ -61,6 +62,25 @@ $engine = Invoke-RestMethod 'https://github.com/codebeltnet/csrun/releases/lates
 '@
     }
     $dockerCommand = '$manifest | docker run --rm -i ' + (Quote-Literal $Image)
+    if ($RequirePassingTests -and (ConvertFrom-Json -InputObject $identity.ManifestJson).mode -eq 'test') {
+        $capture = @'
+ | ForEach-Object {
+    $testOutput.Add([string]$_)
+    $_
+}
+'@
+        $suffix += "`n" + @'
+# csrun forwards the MTP summary. Missing or ambiguous evidence fails verification.
+$summaries = [regex]::Matches(($testOutput -join "`n"), '(?m)^Test run summary: Passed! - [^\r\n]+\r?\n[ \t]+total: (?<total>[0-9]+)\r?\n[ \t]+failed: 0\r?\n[ \t]+succeeded: (?<passed>[0-9]+)\r?\n[ \t]+skipped: 0\r?$')
+if ($summaries.Count -ne 1 -or $summaries[0].Groups['passed'].Value -eq '0' -or
+    $summaries[0].Groups['total'].Value -ne $summaries[0].Groups['passed'].Value) {
+    throw 'Expected a test summary showing at least one executed test, all passing and none skipped.'
+}
+'@
+        $initialize = '$testOutput = [Collections.Generic.List[string]]::new()' + "`n"
+        $nativeCommand = $initialize + $nativeCommand + $capture
+        $dockerCommand = $initialize + $dockerCommand + $capture
+    }
     $encoding = '$OutputEncoding = [Text.UTF8Encoding]::new($false)' + "`n" + '[Console]::OutputEncoding = $OutputEncoding' + "`n"
     [pscustomobject]@{
         SourceSha256 = $identity.SourceSha256

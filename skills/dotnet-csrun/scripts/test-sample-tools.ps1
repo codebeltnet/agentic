@@ -106,6 +106,27 @@ Assert-Throws {
         & ([scriptblock]::Create($pair.Docker))
     }
 } 'Generated block silently swallowed an engine failure.'
+
+# csrun can return zero even when every test was skipped.
+$testManifest = @{ schemaVersion = 1; mode = 'test'; source = 'using Xunit;' } | ConvertTo-Json
+$testPair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10' -EnginePath '/reviewed/csrun.ps1' -RequirePassingTests
+$summary = @('Test run summary: Passed! - Sample.dll (net10.0|x64)', '  total: 1', '  failed: 0', '  succeeded: 1', '  skipped: 0')
+foreach ($transport in @('Native', 'Docker')) {
+    $wrapper = [scriptblock]::Create($testPair.$transport)
+    function pwsh { $global:LASTEXITCODE = 0; $runnerOutput }
+    function docker { $input | Out-Null; $global:LASTEXITCODE = 0; $runnerOutput }
+    $runnerOutput = $summary
+    Assert-True ((@(& $wrapper) -join "`n") -ceq ($summary -join "`n")) "$transport did not accept and forward a passing summary."
+    $runnerOutput = $summary[0..2] + @('  succeeded: 0', '  skipped: 1')
+    Assert-Throws { & $wrapper } "$transport accepted an entirely skipped run."
+    $runnerOutput = @($summary[0], '  total: 2', $summary[2], $summary[3], '  skipped: 1')
+    Assert-Throws { & $wrapper } "$transport accepted a partially skipped run."
+    $runnerOutput = @($summary[0], '  total: 0', $summary[2], '  succeeded: 0', $summary[4])
+    Assert-Throws { & $wrapper } "$transport accepted a zero-test run."
+    $runnerOutput = @()
+    Assert-Throws { & $wrapper } "$transport accepted missing test evidence."
+    Remove-Item Function:\pwsh, Function:\docker
+}
 # No prerequisites: generation/extraction still works; no engine is contacted or status fabricated.
 Assert-True ((Get-CsrunWrapperManifest (New-CsrunExecutionPair $console -Image 'codebeltnet/csrun:10').Native) -eq $pair.ManifestJson) 'Template generation requires an execution environment.'
 
