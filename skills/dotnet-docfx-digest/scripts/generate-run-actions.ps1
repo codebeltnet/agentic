@@ -164,7 +164,7 @@ foreach ($example in $inventory.examples) {
             $manifest = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
             if ($manifest.PSObject.Properties['source'] -and (Normalize $manifest.source) -cne $source) { throw 'Manifest source differs from displayed C#.' }
             $manifest | Add-Member -NotePropertyName source -NotePropertyValue $executionSource -Force
-            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $image -RequirePassingTests
+            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $image -RequirePassingTests:($manifest.mode -eq 'test')
         }
         $changed = $false
         foreach ($transport in $transports) {

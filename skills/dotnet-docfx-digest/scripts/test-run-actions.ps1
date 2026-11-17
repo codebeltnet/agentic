@@ -129,7 +129,11 @@ $first = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 2 -or @($first | Where-Object coverage -eq 'Paired').Count -ne 5 -or @($first | Where-Object coverage -eq 'Unresolved').Count -ne 1) { throw "Unexpected generation: $($first | ConvertTo-Json -Depth 10)" }
 $resolved = $first | Where-Object uid -ceq $packageUid
 $manifests = @(foreach ($transport in @('native','docker')) {
-    Get-CsrunWrapperManifest (Get-Content "$work/run-actions/$($resolved.id)/$transport.ps1" -Raw)
+    $scriptText = Get-Content "$work/run-actions/$($resolved.id)/$transport.ps1" -Raw
+    if (-not $scriptText.Contains('-RequirePassingTests') -or $scriptText -cmatch '\$testOutput|Test run summary') {
+        throw "The generated $transport test script must delegate strict verification to csrun."
+    }
+    Get-CsrunWrapperManifest $scriptText
 })
 $resolvedManifest = $manifests[0] | ConvertFrom-Json
 if ($manifests[0] -cne $manifests[1] -or $resolved.sourceSha256 -cne $packageExample.sourceSha256 -or
