@@ -361,6 +361,17 @@
         "Executes original standalone xUnit source unchanged with exact pins and meaningful original assertion; requires positive discovery and counts before Verified.",
         "Both full wrappers decode to the original canonical manifest and evidence names the transport actually executed; no fabricated success for the other transport."
       ]
+    },
+    {
+      "id": 30,
+      "prompt": "Make this documentation example one-shot: ManagedApplicationFixture needs a distinct real application assembly. The maintained Codebelt xunit BootstrapperMinimalWorkerApplicationTestTest references its actual worker project. Also provide an ordinary standalone Fact via native and Docker. Keep csrun schema v1 unchanged.",
+      "expected_output": "Uses existing csrun native/Docker wrappers with identical canonical standalone source and dependencies. Recognizes the worker test as a separate repository-backed integration strategy owned by DocFX, follows its pinned-snapshot one-shot guidance, verifies the actual targeted test, and never collapses assembly identity or substitutes a host.",
+      "expectations": [
+        "Preserves the original application implementation, project references, fixture lifecycle and assertions; no multi-project csrun schema or engine changes.",
+        "Requires exact intended test identity, positive execution and pass counts plus process status; rejects wrong filters, zero tests and skipped tests.",
+        "Both commands include all setup and cleanup and state prerequisites; unavailable environments or dependencies are explicitly unverified with diagnostics.",
+        "Fallback source links are used only when faithful execution is unavailable, without a verified runnable label."
+      ]
     }
   ]
 }

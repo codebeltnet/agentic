@@ -8,6 +8,8 @@ description: >
 
 Make the smallest complete example, execute it through `csrun`, and share the exact program that ran. Use .NET/C# for substantive supporting logic and PowerShell 7 for orchestration. Never substitute another execution engine or create a competing manifest format.
 
+Assess standalone suitability first. Repository-backed integration examples are a separate execution strategy, outside csrun manifest v1: preserve the original application/test graph and direct documentation work to `dotnet-docfx-digest`'s one-shot repository guidance. Do not stop at source links when a maintained targeted test can be executed in one pinned-snapshot block. Do not manufacture a csrun-compatible approximation, add multi-project fields, or claim repository execution is isolated csrun execution. Standalone native and Docker blocks remain independent and use identical source/dependencies.
+
 ## Choose the intention
 
 | Logical command | Authorized behavior |
@@ -60,3 +62,5 @@ Console.WriteLine(42);
 ```
 
 For tests, use the [passing fixture](evals/files/passing.json) as a small source reference, not a replacement test engine. The fixtures also cover deliberate failures, no discovered tests, invalid source, exact packages, and Unicode/raw strings. Repository maintainers can run `scripts/validate-dotnet-csrun.ps1` for deterministic artifact checks; optional engine execution is documented in [verification](references/verification.md).
+
+See the [standalone host example](references/standalone-example.md) for a complete genuine xUnit test and both ready-to-paste execution blocks. It tests its own host's registration/resolution, not application-entrypoint integration.
