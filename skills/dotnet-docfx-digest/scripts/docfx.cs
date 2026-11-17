@@ -99,6 +99,38 @@ internal static class DocfxValidator
 
         try
         {
+            if (options.RunActionInventory)
+            {
+                var root = Path.GetFullPath(string.IsNullOrWhiteSpace(options.RepoRoot) ? "." : options.RepoRoot);
+                var config = ResolveDocfxPath(root, options.DocfxPath) ?? throw new IOException("DocFX configuration not found.");
+                var report = new Report();
+                var platformReferences = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
+                    .Where(p => Path.GetFileName(p).StartsWith("System.", StringComparison.Ordinal) || Path.GetFileName(p) is "netstandard.dll" or "mscorlib.dll")
+                    .Select(p => MetadataReference.CreateFromFile(p)).ToArray();
+                var examples = DiscoverMarkdown(root, config, Path.GetDirectoryName(config)!, report)
+                    .SelectMany(file => ExtractFences(file).Select(sample =>
+                    {
+                        var owner = ResolveSampleOwner(ExtractOverwriteSections(file), sample);
+                        var error = ResolveSampleContext(sample, root, out var context);
+                        var code = context is null ? sample.Code : string.Join("\n", sample.Code.Split('\n').Skip(2));
+                        var tree = CSharpSyntaxTree.ParseText(code);
+                        var syntax = tree.GetCompilationUnitRoot();
+                        var standalone = !tree.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error) &&
+                            (syntax.Members.OfType<GlobalStatementSyntax>().Any() || syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(m => m.Identifier.ValueText == "Main"));
+                        var isTest = syntax.DescendantNodes().OfType<AttributeSyntax>().Any(a => a.Name.ToString() is "Fact" or "Theory");
+                        var compilation = CSharpCompilation.Create("DocfxRunActionEligibility", [tree], platformReferences,
+                            new CSharpCompilationOptions(isTest ? OutputKind.DynamicallyLinkedLibrary : OutputKind.ConsoleApplication));
+                        var eligible = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).All(d =>
+                            isTest && d.Location.IsInSource && d.Id is "CS0246" or "CS0103" &&
+                            tree.GetText().ToString(d.Location.SourceSpan) is "Xunit" or "Fact" or "Theory" or "Assert");
+                        return new { sample.File, sample.StartLine, sample.Code, owner.Uid,
+                            Source = context?.Source, ContextError = error, Standalone = standalone,
+                            Eligible = eligible,
+                            Imports = syntax.DescendantNodes().OfType<UsingDirectiveSyntax>().Select(u => u.Name?.ToString()).ToArray() };
+                    })).ToArray();
+                Console.WriteLine(JsonSerializer.Serialize(new { config, examples, warnings = report.Warnings }, JsonOptions));
+                return 0;
+            }
             if (options.WriteOverwriteRequestPath is not null)
             {
                 _quietProgress = options.QuietProgress;
@@ -6757,6 +6789,20 @@ internal static class DocfxValidator
             return true;
         }
 
+        // Only repositories enriched by the explicit run-action command have these deliverables.
+        // This is a path check, never generation or runtime verification on the fast path.
+        if (File.Exists(Path.Combine(docfxWorkspace, "run-actions", "index.json")))
+        {
+            var relative = Path.GetRelativePath(docfxWorkspace, candidate).Replace('\\', '/');
+            if (relative is "run-actions/index.json" or "run-actions.settings.json" ||
+                Regex.IsMatch(relative, @"^run-actions/[a-f0-9]{24}/(?:native|docker)\.ps1$")) { return true; }
+            using var config = JsonDocument.Parse(File.ReadAllText(docfxPath));
+            if (config.RootElement.TryGetProperty("build", out var build) && build.TryGetProperty("template", out var templates) &&
+                templates.ValueKind == JsonValueKind.Array && templates.EnumerateArray().Any(t => t.ValueKind == JsonValueKind.String &&
+                    (PathsEqual(candidate, Path.Combine(docfxWorkspace, t.GetString()!, "public", "run-actions.js")) ||
+                     (t.GetString() == "run-actions-template" && PathsEqual(candidate, Path.Combine(docfxWorkspace, "run-actions-template", "public", "main.js")))))) { return true; }
+        }
+
         return IsKnownNamespaceMarkdown(candidate, docfxWorkspace, ws, knownNamespaces) ||
                IsKnownTypeMarkdown(candidate, docfxWorkspace, ws, knownTypePageStems, knownTypeSectionUids);
     }
@@ -8922,6 +8968,9 @@ internal static class DocfxValidator
                     if (!Next(args, ref i, out var rr)) { error = "--repo-root requires a path."; return false; }
                     options.RepoRoot = rr;
                     break;
+                case "--run-action-inventory":
+                    options.RunActionInventory = true;
+                    break;
                 case "--docfx":
                     if (!Next(args, ref i, out var dx)) { error = "--docfx requires a path."; return false; }
                     options.DocfxPath = dx;
@@ -9152,6 +9201,7 @@ internal static class DocfxValidator
               --build-api-model        Reflection-backed API discovery from compiled assemblies. Builds
                                       only the documented project graph (dotnet). Alias: --strict-api-discovery.
               --verify-docfx-build     Run DocFX against a temp copy of the repository (docfx).
+              --run-action-inventory   Export source-bound example inventory only; no builds or execution.
               --search-examples        Run GitHub code search per documented package (gh). Use with --assessment-queue.
 
             Options:
@@ -9189,6 +9239,7 @@ internal static class DocfxValidator
               --verify-docfx-build     Run DocFX against a temp copy of the repository (opt-in).
               --assessment-queue <path>
                                       Write a deterministic Markdown assessment work queue from validation diagnostics.
+              --run-action-inventory   Export source-bound example inventory only; no builds or execution.
               --search-examples        Run GitHub code search for each documented package and embed real usage snippets in the
                                       assessment work queue. Requires the gh CLI to be authenticated. Use together with --assessment-queue.
               --clean-generated-metadata
@@ -9250,6 +9301,7 @@ internal static class DocfxValidator
 
     private sealed class Options
     {
+        public bool RunActionInventory { get; set; }
         public string? RepoRoot { get; set; }
         public string? DocfxPath { get; set; }
         public string Configuration { get; set; } = "Release";
