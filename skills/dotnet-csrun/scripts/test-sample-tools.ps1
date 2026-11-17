@@ -107,24 +107,34 @@ Assert-Throws {
     }
 } 'Generated block silently swallowed an engine failure.'
 
-# csrun can return zero even when every test was skipped.
+# The engine owns test verification and the wrappers pass its output through.
 $testManifest = @{ schemaVersion = 1; mode = 'test'; source = 'using Xunit;' } | ConvertTo-Json
 $testPair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10' -EnginePath '/reviewed/csrun.ps1' -RequirePassingTests
-$summary = @('Test run summary: Passed! - Sample.dll (net10.0|x64)', '  total: 1', '  failed: 0', '  succeeded: 1', '  skipped: 0')
+$remotePair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10' -RequirePassingTests
+Assert-True ($remotePair.Native.Contains('-ManifestJson $manifest -RequirePassingTests')) 'Downloaded engine was not asked to verify tests.'
+$ordinaryPair = New-CsrunExecutionPair $testManifest -Image 'codebeltnet/csrun:10'
 foreach ($transport in @('Native', 'Docker')) {
+    Assert-True (-not $ordinaryPair.$transport.Contains('-RequirePassingTests')) "$transport opted ordinary callers into strict verification."
+    Assert-True ($testPair.$transport -cnotmatch '\$testOutput|\[regex\]|Test run summary') "$transport still interprets console output."
+    Assert-True ((Get-CsrunWrapperManifest $testPair.$transport) -ceq $testPair.ManifestJson) "$transport changed the manifest for strict verification."
     $wrapper = [scriptblock]::Create($testPair.$transport)
-    function pwsh { $global:LASTEXITCODE = 0; $runnerOutput }
-    function docker { $input | Out-Null; $global:LASTEXITCODE = 0; $runnerOutput }
-    $runnerOutput = $summary
-    Assert-True ((@(& $wrapper) -join "`n") -ceq ($summary -join "`n")) "$transport did not accept and forward a passing summary."
-    $runnerOutput = $summary[0..2] + @('  succeeded: 0', '  skipped: 1')
-    Assert-Throws { & $wrapper } "$transport accepted an entirely skipped run."
-    $runnerOutput = @($summary[0], '  total: 2', $summary[2], $summary[3], '  skipped: 1')
-    Assert-Throws { & $wrapper } "$transport accepted a partially skipped run."
-    $runnerOutput = @($summary[0], '  total: 0', $summary[2], '  succeeded: 0', $summary[4])
-    Assert-Throws { & $wrapper } "$transport accepted a zero-test run."
-    $runnerOutput = @()
-    Assert-Throws { & $wrapper } "$transport accepted missing test evidence."
+    function pwsh {
+        if ($args[-1] -cne '-RequirePassingTests') { throw 'Missing native strict verification option.' }
+        $global:LASTEXITCODE = $runnerCode
+        'Runner output in any format'
+    }
+    function docker {
+        $input | Out-Null
+        if (($args -join ' ') -cne 'run --rm -i --entrypoint pwsh codebeltnet/csrun:10 -NoProfile -NonInteractive -File /opt/csrun/csrun.ps1 -ManifestStdin -RequirePassingTests') {
+            throw 'Unexpected strict Docker command.'
+        }
+        $global:LASTEXITCODE = $runnerCode
+        'Runner output in any format'
+    }
+    $runnerCode = 0
+    Assert-True ((& $wrapper) -ceq 'Runner output in any format') "$transport did not preserve arbitrary runner output."
+    $runnerCode = 23
+    Assert-Throws { & $wrapper } "$transport swallowed a nonzero engine status."
     Remove-Item Function:\pwsh, Function:\docker
 }
 # No prerequisites: generation/extraction still works; no engine is contacted or status fabricated.
