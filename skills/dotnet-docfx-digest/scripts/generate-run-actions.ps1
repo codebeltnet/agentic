@@ -9,6 +9,7 @@ param(
     [ValidateSet('None','Native','Docker','Both')][string] $Verify = 'None'
 )
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 . (Join-Path $PSScriptRoot 'integration-example.ps1')
 $helpers = Join-Path $PSScriptRoot '../../dotnet-csrun/scripts/sample-tools.ps1'
 if (-not (Test-Path $helpers)) { throw "Install dotnet-csrun beside this skill: $helpers" }
@@ -48,6 +49,7 @@ function Assert-RepositoryPath([string] $Path) {
 }
 $arguments = @('--repo-root', $root, '--run-action-inventory')
 if ($Docfx) { $arguments += @('--docfx', $Docfx) }
+if ($Settings) { $arguments += @('--run-action-settings', [IO.Path]::GetFullPath($Settings)) }
 # One inventory process per repository, never one model/process per document.
 $inventoryText = & dotnet run --file (Join-Path $PSScriptRoot 'docfx.cs') -- @arguments
 if ($LASTEXITCODE -ne 0) { throw 'DocFX example inventory failed.' }
@@ -63,18 +65,25 @@ if (Test-Path $indexPath) { $old = @((Get-Content $indexPath -Raw | ConvertFrom-
 $recipes = @()
 if (-not $Settings) { $Settings = Join-Path $workspace 'run-actions.settings.json' }
 if (Test-Path $Settings) { $recipes = @((Get-Content $Settings -Raw | ConvertFrom-Json).examples) }
-$toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $PSScriptRoot 'integration-example.ps1') -Raw) + (Get-Content $helpers -Raw))
+$toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $PSScriptRoot 'docfx.cs') -Raw) + (Get-Content (Join-Path $PSScriptRoot 'integration-example.ps1') -Raw) + (Get-Content $helpers -Raw))
 $results = [Collections.Generic.List[object]]::new()
 $associations = [hashtable]::new([StringComparer]::Ordinal)
-$pages = @(@($inventory.examples.file) + @($old.file) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
+$previousPages = foreach ($entry in $old) {
+    if (-not $entry.file) { continue }
+    $path = [IO.Path]::GetFullPath($entry.file, $root)
+    # Legacy indexes stored absolute paths. After moving the checkout, only current
+    # inventory paths and prior paths inside this checkout can own associations.
+    if ($path.StartsWith($rootPrefix, [StringComparison]::Ordinal)) { $path }
+}
+$pages = @(@($inventory.examples.file) + @($previousPages) | Where-Object { $_ } | Sort-Object -CaseSensitive -Unique)
 foreach ($page in $pages) { Assert-RepositoryPath $page }
 $oldByFingerprint = @{}
 foreach ($entry in $old) {
     if ($entry.fingerprint) { $oldByFingerprint["$($entry.id)|$($entry.fingerprint)"] = $entry }
 }
-$recipeBySource = @{}
+$recipeBySource = [hashtable]::new([StringComparer]::Ordinal)
 foreach ($recipe in $recipes) {
-    $key = "$($recipe.uid)|$($recipe.sourceSha256)"
+    $key = "$($recipe.uid)|$($recipe.sourceSha256.ToUpperInvariant())"
     if ($recipeBySource.ContainsKey($key)) { throw "Duplicate recipe for $key" }
     $recipeBySource[$key] = $recipe
 }
@@ -84,10 +93,11 @@ foreach ($example in $inventory.examples) {
     $sourceHash = Hash $source
     $identity = if ($example.source) { [IO.Path]::GetRelativePath($root, $example.source).Replace('\','/') + '|' + $sourceHash } else { $sourceHash }
     $id = (Hash ("$($example.uid)|$([IO.Path]::GetRelativePath($root, $example.file).Replace('\','/'))|$identity")).Substring(0,24).ToLowerInvariant()
-    $result = [ordered]@{ id=$id; file=$example.file; uid=$example.uid; sourceSha256=$sourceHash; status='unsupported'; reason=$null; native='Unverified'; docker='Unverified' }
+    $result = [ordered]@{ id=$id; file=$example.file; uid=$example.uid; sourceSha256=$sourceHash; status='unresolved'; coverage='Unresolved'; reason=$null; native='Unverified'; docker='Unverified' }
     try {
-        if ($example.contextError) { throw $example.contextError }
-
+        if ($example.contextError) { $result.reason = $example.contextError; continue }
+        if ($example.harnessError) { throw $example.harnessError }
+        if ($example.sourceSha256 -and $example.sourceSha256 -cne $sourceHash) { throw 'The inventory and generator disagree on the displayed source hash.' }
 
         $recipe = $recipeBySource["$($example.uid)|$sourceHash"]
         $strategy = 'standalone'
@@ -95,16 +105,27 @@ foreach ($example in $inventory.examples) {
         if (-not $recipe -and $sourceHash -ceq '47B0C1FBA94E7B43C8753D0A8242801B328E6B463B6EEDAEB640D4F8A262633E') {
             $recipe = [pscustomobject]@{ repository='codebeltnet/xunit'; commit='84b13767cb9484f8f3a36a71875662edfdb3e511'; project='test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/Codebelt.Extensions.Xunit.Hosting.FunctionalTests.csproj'; test='Codebelt.Extensions.Xunit.Hosting.BootstrapperMinimalWorkerApplicationTestTest.ShouldBootstrapMinimalWorkerProgram'; framework='net11.0'; image='mcr.microsoft.com/dotnet/sdk:11.0' }
         }
-        $isTest = $source -match '\[(?:Fact|Theory)(?:Attribute)?(?:\(|\])'
+        $isTest = $example.isTest
+        if ($recipe.intrinsicLimitation) {
+            if ($recipe.manifest -or $recipe.repository -or $recipe.harness) { throw 'An intrinsic limitation cannot also supply an execution recipe.' }
+            $result.status = 'unsupported'; $result.coverage = 'Intrinsically non-executable'; $result.reason = $recipe.intrinsicLimitation
+            $result.native = 'Unsupported'; $result.docker = 'Unsupported'
+            continue
+        }
         if ($recipe -and $recipe.PSObject.Properties['repository']) { $strategy = 'repository' }
         elseif ($example.source -and -not ($recipe -and $recipe.PSObject.Properties['manifest'])) {
-            $result.reason = 'Maintained project context needs a pinned repository recipe; no replacement host was generated.'
+            $result.reason = 'Inspect the maintained project and source for exact published dependencies or a pinned repository test.'
             continue
         }
-        elseif (-not $recipe -and ((-not $example.eligible -or -not ($example.standalone -or $isTest)) -or @($example.imports | Where-Object { $_ -notmatch '^(System(?:\.|$)|Xunit$)' }).Count -or $source -match '(?m)^#:')) {
-            $result.reason = 'Partial source or unresolved dependencies. Supply an exact source-bound standalone manifest or pinned repository recipe; retain maintained implementation/usage/test links.'
+        elseif (-not $recipe -and (-not $example.eligible -or $example.standalone -eq $isTest -or $source -match '(?m)^#:')) {
+            $result.reason = 'Resolve the dependencies and entry point from the source project, published assets, and maintained tests.'
             continue
         }
+        if ($recipe -and -not $recipe.manifest -and $strategy -ne 'repository') { throw 'A recipe must supply a standalone manifest or a pinned repository test.' }
+        if ($recipe.harness -and ($strategy -eq 'repository' -or -not $example.executionSource -or -not $recipe.explanation)) {
+            throw 'A standalone harness requires composed C# and an explanation of the added execution context.'
+        }
+        if ($recipe.harness.entryPointStatements -and $recipe.manifest.mode -ne 'console') { throw 'An existing entry point harness requires console mode.' }
         $transports = @('native','docker')
         foreach ($transport in @('native','docker')) {
             if ($recipe -and $recipe.unsupportedTransports.$transport) {
@@ -113,8 +134,16 @@ foreach ($example in $inventory.examples) {
                 $transports = @($transports | Where-Object { $_ -ne $transport })
             }
         }
-        if (-not $transports.Count) { $result.reason = 'Both transports are explicitly unsupported.'; continue }
-        $fingerprint = Hash ("$toolHash|$sourceHash|$strategy|$Framework|$CsrunImage|" + ($recipe | ConvertTo-Json -Depth 30 -Compress))
+        if (-not $transports.Count) {
+            $result.status = 'unsupported'; $result.coverage = 'Intrinsically non-executable'
+            $result.reason = "Native: $($result.nativeReason) Docker: $($result.dockerReason)"
+            continue
+        }
+        $executionSource = if ($recipe.harness) { $example.executionSource } else { $source }
+        $result.strategy = $strategy
+        if ($strategy -eq 'standalone') { $result.executionSourceSha256 = Hash $executionSource }
+        $image = if ($recipe.csrunImage) { $recipe.csrunImage } else { $CsrunImage }
+        $fingerprint = Hash ("$toolHash|$sourceHash|$strategy|$Framework|$image|$($result.executionSourceSha256)|" + ($recipe | ConvertTo-Json -Depth 30 -Compress))
         $prior = @($oldByFingerprint["$id|$fingerprint"] | Where-Object { $null -ne $_ })
         $dir = Join-Path $assetRoot $id
         $reusable = $prior.Count -eq 1
@@ -132,10 +161,10 @@ foreach ($example in $inventory.examples) {
         } elseif ($strategy -eq 'repository') {
             $pair = New-RepositoryExamplePair -Repository $recipe.repository -Commit $recipe.commit -Project $recipe.project -Test $recipe.test -Framework $recipe.framework -Image $recipe.image
         } else {
-            $manifest = if ($recipe) { $recipe.manifest } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
+            $manifest = if ($recipe) { $recipe.manifest | Select-Object * } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
             if ($manifest.PSObject.Properties['source'] -and (Normalize $manifest.source) -cne $source) { throw 'Manifest source differs from displayed C#.' }
-            $manifest | Add-Member -NotePropertyName source -NotePropertyValue $source -Force
-            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $CsrunImage -RequirePassingTests
+            $manifest | Add-Member -NotePropertyName source -NotePropertyValue $executionSource -Force
+            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $image -RequirePassingTests
         }
         $changed = $false
         foreach ($transport in $transports) {
@@ -154,12 +183,15 @@ foreach ($example in $inventory.examples) {
             }
         }
         $result.status = if ($changed) { 'generated' } else { 'unchanged' }
+        $result.coverage = if ($transports.Count -eq 2) { 'Paired' } else { 'Partially supported' }
+        if ($recipe.explanation) { $result.explanation = $recipe.explanation }
         $result.fingerprint = $fingerprint
         $links = @($transports | ForEach-Object {
             $label = if ($_ -eq 'native') { 'Native' } else { 'Docker' }
             '<a href="~/run-actions/' + $id + '/' + $_ + '.ps1" data-transport="' + $_ + '">View ' + $label + ' Script</a>'
         })
-        $link = '<div class="docfx-run-actions" data-example-id="' + $id + '">' + ($links -join ' · ') + '</div>'
+        $note = if ($recipe.explanation) { '<p>' + [Net.WebUtility]::HtmlEncode($recipe.explanation) + '</p>' } else { '' }
+        $link = '<div class="docfx-run-actions" data-example-id="' + $id + '">' + ($links -join ' · ') + $note + '</div>'
         if (-not $associations.ContainsKey($example.file)) { $associations[$example.file] = @{} }
         $associations[$example.file][[int]$example.startLine] = "<!-- docfx-run-actions:start -->`n$link`n<!-- docfx-run-actions:end -->"
     } catch { $result.status='failed'; $result.reason=$_.Exception.Message }
@@ -241,9 +273,11 @@ $null = Write-Changed (Join-Path (Split-Path $main -Parent) 'run-actions.js') ([
 $null = Write-Changed $configPath (($config | ConvertTo-Json -Depth 100) + "`n")
 $persisted = @($results | ForEach-Object {
     $entry = $_ | Select-Object *
+    $entry.file = [IO.Path]::GetRelativePath($root, $entry.file).Replace('\','/')
     if ($entry.status -in @('generated','unchanged')) { $entry.status = 'ready' }
     $entry
 })
 $null = Write-Changed $indexPath (([ordered]@{ examples=$persisted } | ConvertTo-Json -Depth 30) + "`n")
-$results | ConvertTo-Json -Depth 30
+if ($results.Count) { $results | ConvertTo-Json -Depth 30 } else { '[]' }
 if (@($results | Where-Object { $_.status -eq 'failed' -or $_.native -eq 'Failed' -or $_.docker -eq 'Failed' }).Count) { exit 1 }
+if (@($results | Where-Object coverage -eq 'Unresolved').Count) { exit 2 }

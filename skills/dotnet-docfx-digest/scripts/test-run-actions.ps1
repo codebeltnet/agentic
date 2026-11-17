@@ -2,6 +2,8 @@
 param([string] $OutputRoot)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../../../scripts/file-based-app.ps1')
+. (Join-Path $PSScriptRoot '../../dotnet-csrun/scripts/sample-tools.ps1')
+Set-StrictMode -Off
 $app = Get-FileBasedAppCommand -SourcePath (Join-Path $PSScriptRoot 'docfx.cs')
 function dotnet {
     if ($inventoryOverride) { $global:LASTEXITCODE = 0; return $inventoryOverride }
@@ -46,7 +48,53 @@ $partial = "# Partial`r`n`n``````csharp`nvar fixture = new ManagedApplicationFix
 $null = New-Item -ItemType Directory "$work/template/public" -Force
 [IO.File]::WriteAllText("$work/template/public/main.js", "// Context7 customization`nexport default { start() { window.context7 = true; } };`n")
 [IO.File]::WriteAllText("$work/docfx.json", '{"build":{"content":[{"files":["docs/*.md"]}],"template":["default","modern","template"],"dest":"_site"}}')
-[IO.File]::WriteAllText("$work/docs/test.md", "# Test`n`n``````csharp`nusing Xunit;`npublic class ExampleTest { [Fact] public void ShouldPass() { Assert.Equal(42, 42); } }`n```````n")
+[IO.File]::WriteAllText("$work/docs/test.md", "# Test`n`n``````csharp`nusing Xunit;`npublic class ExampleTest { [Fact] public void ParsesInventoryCount() { Assert.Equal(42, int.Parse(`"42`")); } }`n```````n")
+$packageSource = @'
+using Codebelt.Extensions.Xunit;
+using Cuemon.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Samples;
+
+public class CorrelationStore
+{
+    public string Resolve()
+    {
+        var services = new ServiceCollection();
+        var store = new InMemoryTestStore<CorrelationToken>();
+        store.Add(new CorrelationToken("inventory"));
+        services.AddSingleton(store);
+        using var provider = services.BuildServiceProvider();
+        return System.Linq.Enumerable.Single(provider.GetRequiredService<InMemoryTestStore<CorrelationToken>>().Query()).CorrelationId;
+    }
+}
+'@
+$packageUid = 'Samples.CorrelationStore'
+[IO.File]::WriteAllText("$work/docs/packages.md", "---`nuid: $packageUid`n---`n# Correlation store`n`n``````csharp`n$packageSource`n```````n")
+$null = New-Item -ItemType Directory "$work/src" -Force
+[IO.File]::WriteAllText("$work/src/Samples.csproj", @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Codebelt.Extensions.Xunit" />
+    <PackageReference Include="Cuemon.Core" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="xunit.v3.assert" />
+  </ItemGroup>
+</Project>
+'@)
+[IO.File]::WriteAllText("$work/Directory.Packages.props", @'
+<Project>
+  <PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Codebelt.Extensions.Xunit" Version="13.0.0" />
+    <PackageVersion Include="Cuemon.Core" Version="11.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.15" />
+    <PackageVersion Include="xunit.v3.assert" Version="4.0.3" />
+  </ItemGroup>
+</Project>
+'@)
+[IO.File]::WriteAllText("$work/src/CorrelationStore.cs", $packageSource)
 $null = New-Item -ItemType Directory -Path "$work/api/types" -Force
 $uid = 'Codebelt.Extensions.Xunit.Hosting.ManagedApplicationFixture`1'
 $overwrite = "---`nuid: $uid`nexample:`n  - *content`n---`n`n``````csharp`n$source`n```````n`nRead the maintained functional test and application sources."
@@ -54,12 +102,40 @@ $overwrite = "---`nuid: $uid`nexample:`n  - *content`n---`n`n``````csharp`n$sour
 [IO.File]::WriteAllText("$work/api/types/ManagedApplicationFixture-1.md", $overwrite.Replace("`r`n", "`n").Replace("`n", "`r`n"), [Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText("$work/api/fixture.yml", "### YamlMime:ManagedReference`nitems:`n- uid: $uid`n  id: ManagedApplicationFixture``1`n  name: ManagedApplicationFixture<TEntryPoint>`n  fullName: $uid`n  type: Class`n  langs:`n  - csharp`n  syntax:`n    content: public class ManagedApplicationFixture<TEntryPoint>`n")
 $config = Get-Content "$work/docfx.json" -Raw | ConvertFrom-Json -AsHashtable
+$config.metadata = @(@{src=@(@{files=@('src/Samples.csproj')});properties=@{TargetFramework='net10.0'}})
 $config.build.content += @{ files=@('api/*.yml') }
 $config.build.overwrite = @(@{ files=@('api/types/*.md') })
 [IO.File]::WriteAllText("$work/docfx.json", ($config | ConvertTo-Json -Depth 20))
 $generator = Join-Path $PSScriptRoot 'generate-run-actions.ps1'
+$inventory = (dotnet --repo-root $work --run-action-inventory) | ConvertFrom-Json
+$packageExample = $inventory.examples | Where-Object uid -ceq $packageUid
+if ($packageExample.ownerProjects -cnotcontains 'src/Samples.csproj' -or $inventory.projects[0].buildInputs -cnotcontains 'Directory.Packages.props') {
+    throw 'The dependency investigation must expose the source-owning project and central version file.'
+}
+$discovery = (& $generator -RepoRoot $work) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 2 -or @($discovery | Where-Object coverage -eq 'Unresolved').Count -ne 2) { throw 'Unresolved examples must keep generation incomplete.' }
+$projectReferences = ([xml](Get-Content "$work/src/Samples.csproj" -Raw)).Project.ItemGroup.PackageReference.Include
+$packagePins = @(([xml](Get-Content "$work/Directory.Packages.props" -Raw)).Project.ItemGroup.PackageVersion |
+    Where-Object { $_.Include -in $projectReferences -and $_.Include -ne 'xunit.v3.assert' } | ForEach-Object { "$($_.Include)@$($_.Version)" })
+$packageRecipe = [ordered]@{
+    uid=$packageUid; sourceSha256=$packageExample.sourceSha256
+    manifest=@{schemaVersion=1; mode='test'; framework='net10.0'; dependsOn=$packagePins + 'xunit.v3@4.0.3'}
+    harness=@{members='public sealed class RunExample { [Xunit.Fact] public void ResolvesTaggedInventory() { Xunit.Assert.Equal("inventory", new CorrelationStore().Resolve()); } }'}
+    explanation='The test runs the displayed method and checks the correlation identifier returned from the DI container.'
+}
+$settingsPath = "$work/run-actions.settings.json"
+[IO.File]::WriteAllText($settingsPath, (@{examples=@($packageRecipe)} | ConvertTo-Json -Depth 20))
 $first = (& $generator -RepoRoot $work) | ConvertFrom-Json
-if (@($first | Where-Object status -eq 'generated').Count -ne 4 -or @($first | Where-Object status -eq 'unsupported').Count -ne 1) { throw "Unexpected generation: $($first | ConvertTo-Json -Depth 10)" }
+if ($LASTEXITCODE -ne 2 -or @($first | Where-Object coverage -eq 'Paired').Count -ne 5 -or @($first | Where-Object coverage -eq 'Unresolved').Count -ne 1) { throw "Unexpected generation: $($first | ConvertTo-Json -Depth 10)" }
+$resolved = $first | Where-Object uid -ceq $packageUid
+$manifests = @(foreach ($transport in @('native','docker')) {
+    Get-CsrunWrapperManifest (Get-Content "$work/run-actions/$($resolved.id)/$transport.ps1" -Raw)
+})
+$resolvedManifest = $manifests[0] | ConvertFrom-Json
+if ($manifests[0] -cne $manifests[1] -or $resolved.sourceSha256 -cne $packageExample.sourceSha256 -or
+    $resolved.executionSourceSha256 -ceq $resolved.sourceSha256 -or -not $resolvedManifest.source.StartsWith($packageSource.Replace("`r`n", "`n"), [StringComparison]::Ordinal) -or
+    -not $resolvedManifest.source.Contains('Xunit.Assert.Equal("inventory", new CorrelationStore().Resolve())') -or
+    ($resolvedManifest.dependsOn -join '|') -cne (($packagePins + 'xunit.v3@4.0.3') -join '|')) { throw 'The harness changed the displayed operation or lost exact source, pins or transport parity.' }
 if ([IO.File]::ReadAllText("$work/docs/partial.md") -cne $partial) { throw 'An unsupported page with mixed line endings changed.' }
 $consoleWithAssociation = [IO.File]::ReadAllText("$work/docs/console.md")
 if (-not $consoleWithAssociation.StartsWith($console + "`n`n<!-- docfx-run-actions:start -->", [StringComparison]::Ordinal)) {
@@ -83,7 +159,7 @@ $files = @(Get-ChildItem $work -Recurse -File)
 $before = @{}
 foreach ($file in $files) { $before[$file.FullName] = @((Get-FileHash $file.FullName).Hash, $file.LastWriteTimeUtc.Ticks) }
 $second = (& $generator -RepoRoot $work) | ConvertFrom-Json
-if (@($second | Where-Object status -eq 'unchanged').Count -ne 4) { throw 'Incremental generation failed.' }
+if (@($second | Where-Object status -eq 'unchanged').Count -ne 5) { throw 'Incremental generation failed.' }
 foreach ($file in Get-ChildItem $work -Recurse -File) {
     if ($before[$file.FullName][0] -cne (Get-FileHash $file.FullName).Hash -or $before[$file.FullName][1] -ne $file.LastWriteTimeUtc.Ticks) { throw "Second run changed $($file.FullName)" }
 }
@@ -117,7 +193,7 @@ if ([Convert]::ToHexString($overwriteBytes[0..2]) -ne 'EFBBBF') { throw 'Overwri
 $overwriteText = [IO.File]::ReadAllText("$work/api/types/ManagedApplicationFixture-1.md")
 if ($overwriteText.Replace("`r`n", '').Contains("`n") -or -not $overwriteText.Contains("example:`r`n  - *content")) { throw 'Overwrite mapping/line endings changed.' }
 # A real platform limitation may suppress only Docker, without suppressing valid native generation.
-$settings = [ordered]@{ examples=@([ordered]@{
+$settings = [ordered]@{ examples=@($packageRecipe, [ordered]@{
     uid=$entry.uid; sourceSha256=$entry.sourceSha256; repository='codebeltnet/xunit'; commit='84b13767cb9484f8f3a36a71875662edfdb3e511'
     project='test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/Codebelt.Extensions.Xunit.Hosting.FunctionalTests.csproj'
     test='Codebelt.Extensions.Xunit.Hosting.BootstrapperMinimalWorkerApplicationTestTest.ShouldBootstrapMinimalWorkerProgram'
@@ -127,7 +203,7 @@ $settings = [ordered]@{ examples=@([ordered]@{
 [IO.File]::WriteAllText("$work/run-actions.settings.json", ($settings | ConvertTo-Json -Depth 20))
 $limited = (& $generator -RepoRoot $work) | ConvertFrom-Json
 $limitedEntry = $limited | Where-Object id -eq $entry.id
-if ($limitedEntry.docker -ne 'Unsupported' -or -not (Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Test-Path "$work/run-actions/$($entry.id)/docker.ps1")) { throw 'Single-transport limitation was misrepresented.' }
+if ($limitedEntry.coverage -ne 'Partially supported' -or $limitedEntry.docker -ne 'Unsupported' -or -not (Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Test-Path "$work/run-actions/$($entry.id)/docker.ps1")) { throw 'Single-transport limitation was misrepresented.' }
 if ((Get-Content "$work/docs/integration.md" -Raw).Contains('View Docker Script')) { throw 'Unsupported Docker still has a control.' }
 $limitedAgain = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if (($limitedAgain | Where-Object id -eq $entry.id).status -ne 'unchanged') { throw 'Single-transport cache requires the unsupported script.' }
@@ -135,6 +211,22 @@ if (($limitedAgain | Where-Object id -eq $entry.id).status -ne 'unchanged') { th
 [IO.File]::WriteAllText("$work/docs/integration.md", $updated.Replace('Bootstrapper Minimal Worker', 'Changed assertion'))
 $third = (& $generator -RepoRoot $work) | ConvertFrom-Json
 if ((Test-Path "$work/run-actions/$($entry.id)/native.ps1") -or (Get-Content "$work/docs/integration.md" -Raw).Contains('data-example-id')) { throw 'Stale recipe/assets survived source change.' }
+
+# An invalid harness is a failed recipe, while a recorded intrinsic limitation has no assets.
+$invalidRecipe = $packageRecipe | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$invalidRecipe.harness = @{members=42}
+$partialResult = $discovery | Where-Object { $_.file -match '[\\/]partial\.md$' }
+$intrinsic = @{uid=$partialResult.uid; sourceSha256=$partialResult.sourceSha256; intrinsicLimitation='Synthetic limitation for coverage classification.'}
+$customSettings = "$work/custom-settings.json"
+[IO.File]::WriteAllText($customSettings, (@{examples=@($invalidRecipe,$intrinsic)} | ConvertTo-Json -Depth 20))
+$classified = (& $generator -RepoRoot $work -Settings $customSettings) | ConvertFrom-Json
+$invalid = $classified | Where-Object id -eq $resolved.id
+$limitedPartial = $classified | Where-Object id -eq $partialResult.id
+if ($LASTEXITCODE -ne 1 -or $invalid.coverage -ne 'Unresolved' -or $invalid.reason -notlike '*C# must be a string*' -or
+    $limitedPartial.coverage -ne 'Intrinsically non-executable' -or $limitedPartial.native -ne 'Unsupported' -or
+    $limitedPartial.docker -ne 'Unsupported' -or (Test-Path "$work/run-actions/$($limitedPartial.id)/native.ps1")) {
+    throw 'A malformed recipe or demonstrated intrinsic limitation was misclassified.'
+}
 
 # Model discovery through an external DocFX source mapping, with a case-only sibling path.
 $guardRoot = Join-Path $work 'repo'
@@ -158,4 +250,4 @@ try {
     }
     if ([IO.File]::ReadAllText($externalPage) -cne $console) { throw 'Rejected inventory changed the external page.' }
 } finally { $inventoryOverride = $null }
-Write-Host "Run-action delivery passed: direct paired-script contract, same-sample Native/Docker association, independent verification state, unsupported handling, incremental bytes/timestamps, stale cleanup, DocFX render, resources and template composition. Fixture: $work"
+Write-Host "Run-action delivery passed: paired console, test, dependency-backed harness and repository test; exact pins and source, coverage classifications, independent verification state, incremental assets, stale cleanup and modern DocFX render. Fixture: $work"

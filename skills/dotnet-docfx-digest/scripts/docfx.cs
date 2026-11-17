@@ -104,31 +104,64 @@ internal static class DocfxValidator
                 var root = Path.GetFullPath(string.IsNullOrWhiteSpace(options.RepoRoot) ? "." : options.RepoRoot);
                 var config = ResolveDocfxPath(root, options.DocfxPath) ?? throw new IOException("DocFX configuration not found.");
                 var report = new Report();
+                var directory = Path.GetDirectoryName(config)!;
+                var projects = DiscoverProjects(config, directory, report, out var groups);
+                var files = DiscoverMarkdown(root, config, directory, report);
+                var workspace = new ValidationWorkspace
+                {
+                    RepoRoot = root, DocfxPath = config, DocfxWorkspace = directory, Projects = projects,
+                    LibraryProjects = projects.Where(p => !p.IsTest).ToList(), MarkdownFiles = files,
+                    MarkdownTextByPath = new(StringComparer.OrdinalIgnoreCase), OverwriteSections = [], SkipAllowlistEntries = []
+                };
+                EnsureNamespaceProjectMap(workspace);
+                var settings = options.RunActionSettings ?? Path.Combine(directory, "run-actions.settings.json");
+                var harnesses = ReadRunActionHarnesses(settings);
                 var platformReferences = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
                     .Where(p => Path.GetFileName(p).StartsWith("System.", StringComparison.Ordinal) || Path.GetFileName(p) is "netstandard.dll" or "mscorlib.dll")
                     .Select(p => MetadataReference.CreateFromFile(p)).ToArray();
-                var examples = DiscoverMarkdown(root, config, Path.GetDirectoryName(config)!, report)
-                    .SelectMany(file => ExtractFences(file).Select(sample =>
+                var examples = files.SelectMany(file =>
+                {
+                    var sections = ExtractOverwriteSections(file);
+                    return ExtractFences(file).Select(sample =>
                     {
-                        var owner = ResolveSampleOwner(ExtractOverwriteSections(file), sample);
+                        var owner = ResolveSampleOwner(sections, sample);
                         var error = ResolveSampleContext(sample, root, out var context);
                         var code = context is null ? sample.Code : string.Join("\n", sample.Code.Split('\n').Skip(2));
                         var tree = CSharpSyntaxTree.ParseText(code);
                         var syntax = tree.GetCompilationUnitRoot();
+                        var sourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(code.Replace("\r\n", "\n").TrimEnd('\r', '\n'))));
+                        string? executionSource = null;
+                        string? harnessError = null;
+                        if (harnesses.TryGetValue((owner.Uid ?? "", sourceHash), out var harness))
+                        {
+                            try { executionSource = ComposeRunActionHarness(syntax, harness); }
+                            catch (InvalidDataException ex) { harnessError = ex.Message; }
+                        }
+                        var ns = LongestNamespacePrefix(owner.Uid ?? Path.GetFileNameWithoutExtension(file), workspace);
                         var standalone = !tree.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error) &&
                             (syntax.Members.OfType<GlobalStatementSyntax>().Any() || syntax.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(m => m.Identifier.ValueText == "Main"));
-                        var isTest = syntax.DescendantNodes().OfType<AttributeSyntax>().Any(a => a.Name.ToString() is "Fact" or "Theory");
+                        var isTest = syntax.DescendantNodes().OfType<AttributeSyntax>().Any(a =>
+                            a.Name.GetLastToken().ValueText is "Fact" or "Theory" or "FactAttribute" or "TheoryAttribute");
                         var compilation = CSharpCompilation.Create("DocfxRunActionEligibility", [tree], platformReferences,
                             new CSharpCompilationOptions(isTest ? OutputKind.DynamicallyLinkedLibrary : OutputKind.ConsoleApplication));
                         var eligible = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).All(d =>
                             isTest && d.Location.IsInSource && d.Id is "CS0246" or "CS0103" &&
                             tree.GetText().ToString(d.Location.SourceSpan) is "Xunit" or "Fact" or "Theory" or "Assert");
                         return new { sample.File, sample.StartLine, sample.Code, owner.Uid,
-                            Source = context?.Source, ContextError = error, Standalone = standalone,
-                            Eligible = eligible,
+                            Source = context?.Source, Project = context?.Project, ContextError = error, Standalone = standalone,
+                            Eligible = eligible, IsTest = isTest, SourceSha256 = sourceHash, ExecutionSource = executionSource, HarnessError = harnessError,
+                            OwnerProjects = ns is null ? [] : workspace.NamespaceProjects[ns].Select(p => Rel(root, p.Path)).ToArray(),
                             Imports = syntax.DescendantNodes().OfType<UsingDirectiveSyntax>().Select(u => u.Name?.ToString()).ToArray() };
-                    })).ToArray();
-                Console.WriteLine(JsonSerializer.Serialize(new { config, examples, warnings = report.Warnings }, JsonOptions));
+                    });
+                }).ToArray();
+                var projectEvidence = projects.Select(p => new
+                {
+                    Path = Rel(root, p.Path), p.PackageId, p.AssemblyName, p.TargetFrameworks,
+                    MetadataFrameworks = groups.Where(g => g.ProjectPaths.Any(path => PathsEqual(path, p.Path)))
+                        .Select(g => g.Properties.GetValueOrDefault("TargetFramework")).Where(f => f is not null).Distinct(),
+                    BuildInputs = RunActionProjectInputs(root, p.Path)
+                });
+                Console.WriteLine(JsonSerializer.Serialize(new { config, examples, projects = projectEvidence, warnings = report.Warnings }, JsonOptions));
                 return 0;
             }
             if (options.WriteOverwriteRequestPath is not null)
@@ -156,6 +189,95 @@ internal static class DocfxValidator
 
             return (int)ExitCode.InternalError;
         }
+    }
+
+    private static Dictionary<(string Uid, string Hash), JsonElement> ReadRunActionHarnesses(string settings)
+    {
+        var harnesses = new Dictionary<(string, string), JsonElement>();
+        if (!File.Exists(settings)) { return harnesses; }
+        using var document = JsonDocument.Parse(File.ReadAllText(settings));
+        foreach (var recipe in document.RootElement.GetProperty("examples").EnumerateArray())
+        {
+            if (recipe.TryGetProperty("harness", out var harness))
+            {
+                var uid = recipe.GetProperty("uid").GetString() ?? "";
+                var hash = recipe.GetProperty("sourceSha256").GetString() ?? "";
+                harnesses.Add((uid, hash.ToUpperInvariant()), harness.Clone());
+            }
+        }
+        return harnesses;
+    }
+
+    private static IEnumerable<string> RunActionProjectInputs(string root, string project)
+    {
+        // These are inspection inputs. Imports and conditions still require MSBuild evaluation
+        // for the chosen TFM before a package/framework pin can be authored.
+        for (var directory = Path.GetDirectoryName(project); directory is not null && (PathsEqual(directory, root) || IsPathUnderDirectory(directory, root));
+            directory = Path.GetDirectoryName(directory))
+        {
+            foreach (var name in new[] { "Directory.Packages.props", "Directory.Build.props", "Directory.Build.targets" })
+            {
+                var path = Path.Combine(directory, name);
+                if (File.Exists(path)) { yield return Rel(root, path); }
+            }
+        }
+    }
+
+    private static string ComposeRunActionHarness(CompilationUnitSyntax source, JsonElement harness)
+    {
+        if (harness.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidDataException("A harness must be a JSON object.");
+        }
+        if (source.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error) ||
+            source.Members.Count == 0 || source.Members.Any(m => m is GlobalStatementSyntax))
+        {
+            throw new InvalidDataException("A harness requires a complete C# declaration excerpt without top-level statements.");
+        }
+
+        var hasMembers = harness.TryGetProperty("members", out var members);
+        var hasStatements = harness.TryGetProperty("entryPointStatements", out var statements);
+        if (hasMembers == hasStatements)
+        {
+            throw new InvalidDataException("A harness must supply either namespace-level members or statements for an existing entry point.");
+        }
+
+        var fragmentValue = hasMembers ? members : statements;
+        if (fragmentValue.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidDataException("The harness C# must be a string.");
+        }
+        var addition = fragmentValue.GetString()!;
+        var fragment = CSharpSyntaxTree.ParseText(addition).GetCompilationUnitRoot();
+        if (fragment.Members.Count == 0 || fragment.Usings.Count != 0 || fragment.Externs.Count != 0 ||
+            fragment.AttributeLists.Count != 0 || fragment.Members.Any(m => (m is GlobalStatementSyntax) != hasStatements) ||
+            fragment.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error))
+        {
+            throw new InvalidDataException("The harness contains invalid C# or members of the wrong kind.");
+        }
+
+        var text = source.ToFullString().Replace("\r\n", "\n").TrimEnd('\r', '\n');
+        const string marker = "// Execution context supplied by the DocFX run action.";
+        var complete = text + "\n\n" + marker + "\n" + addition;
+        if (hasStatements)
+        {
+            var entryPoints = source.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                .Where(m => m.Identifier.ValueText == "Main" && m.Modifiers.Any(SyntaxKind.StaticKeyword)).ToArray();
+            if (entryPoints is not [{ Body: { } body }])
+            {
+                throw new InvalidDataException("Entry point context requires one static Main with a block body.");
+            }
+            // Retain the actual entry point type for APIs that discover its static host builder.
+            var replacement = SyntaxFactory.ParseStatement("{\n" + marker + "\n" + addition + "\n}").WithTriviaFrom(body);
+            complete = source.ReplaceNode(body, replacement).ToFullString();
+        }
+
+        var combined = CSharpSyntaxTree.ParseText(complete).GetCompilationUnitRoot();
+        if (combined.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error))
+        {
+            throw new InvalidDataException("The excerpt and harness do not form a valid C# compilation unit.");
+        }
+        return complete.Replace("\r\n", "\n").TrimEnd('\r', '\n');
     }
 
     private static int Validate(Options options)
@@ -1952,7 +2074,10 @@ internal static class DocfxValidator
                     case "PackageReference":
                         var include = el.Attribute("Include")?.Value ?? string.Empty;
                         if (include.Contains("Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase) ||
-                            include.Contains("xunit", StringComparison.OrdinalIgnoreCase) ||
+                            include.Equals("xunit", StringComparison.OrdinalIgnoreCase) ||
+                            include.Equals("xunit.v3", StringComparison.OrdinalIgnoreCase) ||
+                            include.StartsWith("xunit.runner.", StringComparison.OrdinalIgnoreCase) ||
+                            include.StartsWith("xunit.v3.runner.", StringComparison.OrdinalIgnoreCase) ||
                             include.StartsWith("NUnit", StringComparison.OrdinalIgnoreCase) ||
                             include.Contains("MSTest", StringComparison.OrdinalIgnoreCase))
                         {
@@ -8971,6 +9096,10 @@ internal static class DocfxValidator
                 case "--run-action-inventory":
                     options.RunActionInventory = true;
                     break;
+                case "--run-action-settings":
+                    if (!Next(args, ref i, out var runActionSettings)) { error = "--run-action-settings requires a path."; return false; }
+                    options.RunActionSettings = runActionSettings;
+                    break;
                 case "--docfx":
                     if (!Next(args, ref i, out var dx)) { error = "--docfx requires a path."; return false; }
                     options.DocfxPath = dx;
@@ -9202,6 +9331,7 @@ internal static class DocfxValidator
                                       only the documented project graph (dotnet). Alias: --strict-api-discovery.
               --verify-docfx-build     Run DocFX against a temp copy of the repository (docfx).
               --run-action-inventory   Export source-bound example inventory only; no builds or execution.
+              --run-action-settings    Read harness recipes from a custom settings JSON path.
               --search-examples        Run GitHub code search per documented package (gh). Use with --assessment-queue.
 
             Options:
@@ -9240,6 +9370,7 @@ internal static class DocfxValidator
               --assessment-queue <path>
                                       Write a deterministic Markdown assessment work queue from validation diagnostics.
               --run-action-inventory   Export source-bound example inventory only; no builds or execution.
+              --run-action-settings    Read harness recipes from a custom settings JSON path.
               --search-examples        Run GitHub code search for each documented package and embed real usage snippets in the
                                       assessment work queue. Requires the gh CLI to be authenticated. Use together with --assessment-queue.
               --clean-generated-metadata
@@ -9302,6 +9433,7 @@ internal static class DocfxValidator
     private sealed class Options
     {
         public bool RunActionInventory { get; set; }
+        public string? RunActionSettings { get; set; }
         public string? RepoRoot { get; set; }
         public string? DocfxPath { get; set; }
         public string Configuration { get; set; } = "Release";
