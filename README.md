@@ -690,7 +690,7 @@ Dependency updates look simple until a repository encodes compatibility in its p
 
 ### Why dotnet-docfx-digest?
 
-Opt in with `dotnet-docfx-digest generate-run-actions` to discover documentation examples repository-wide and generate reusable native/Docker PowerShell assets, compact source-bound associations, accessible copy controls and fallback script links. Generation stays separate from execution and fast validation; see [run actions](skills/dotnet-docfx-digest/references/run-actions.md). Existing template startup code, including Context7, is retained.
+Opt in with `dotnet-docfx-digest generate-run-actions` to inventory documentation examples, resolve their published dependencies or maintained integration tests, and generate paired Native and Docker PowerShell assets. Class-library excerpts can use source-bound harnesses that exercise the displayed code. The coverage report identifies examples that still need investigation, and verification remains independent for each transport. Generated copy controls and fallback links compose with existing template startup code, including Context7. See [run actions](skills/dotnet-docfx-digest/references/run-actions.md).
 
 API documentation rots the moment code changes. A new public type ships without a namespace page, an extension method never makes it into the `Extension Members` table, a copy/paste example silently stops compiling, and "availability" drifts away from the real target frameworks. The usual fix — telling an agent to "remember to update the docs" — relies on AI memory, which is exactly the thing that fails on the next change.
 
