@@ -695,6 +695,26 @@ public static class WidgetCapacity
         Assert-NoDiagnostic -Report $final -Code 'REVIEW_REPORT_INCOMPLETE'
         Assert-NoDiagnostic -Report $final -Code 'EXAMPLE_MISSING'
         Assert-NoDiagnostic -Report $final -Code 'SAMPLE_COMPILE_FAILED'
+
+        # The ordinary full completion boundary also accepts a maintained project-bound example.
+        # Keep the consumer internal so it does not add a synthetic public documentation target.
+        $typePage = Join-Path $ws '.docfx/api/types/Acme.Core.Widget.md'
+        $pageText = [IO.File]::ReadAllText($typePage)
+        $codeMatch = [regex]::Match($pageText, '(?s)```csharp\r?\n(?<code>.*?)```')
+        $consumer = $codeMatch.Groups['code'].Value.Replace('public static class WidgetCapacity', 'internal static class WidgetCapacity')
+        Write-Utf8File (Join-Path $ws 'src/Core/WidgetCapacity.cs') $consumer
+        $binding = "// docfx-context: src/Core/Acme.Core.csproj`n// docfx-source: src/Core/WidgetCapacity.cs`n"
+        Write-Utf8File $typePage ($pageText.Replace($codeMatch.Groups['code'].Value, $binding + $consumer))
+        $agentsApp = Get-FileBasedAppCommand -SourcePath (Join-Path $PSScriptRoot 'agents.cs')
+        & $agentsApp.Executable @($agentsApp.ArgumentPrefix + @('--repo-root', $ws)) | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'agents.cs failed at the documentation completion boundary.' }
+        $complete = Invoke-Validator $ws @('--build-api-model', '--validate-samples', '--verify-docfx-build')
+        if (-not $complete.summary.fullVerificationRan -or -not $complete.summary.canClaimCompletion -or
+            $complete.summary.remainingWorkItems -ne 0 -or @($complete.summary.remainingGates).Count -ne 0 -or
+            @($complete.summary.remainingDiagnosticsByCode.PSObject.Properties).Count -ne 0 -or
+            $complete.summary.newlyIntroducedSkipMarkers -ne 0 -or $complete.summary.interimArtifacts -ne 0) {
+            throw "Project-bound full completion contract failed: $($complete | ConvertTo-Json -Depth 8)"
+        }
     } finally {
         if (Test-Path $artifactRoot) {
             Remove-Item $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
