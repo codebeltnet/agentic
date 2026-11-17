@@ -1,0 +1,235 @@
+#requires -Version 7.0
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string] $RepoRoot,
+    [string] $Docfx,
+    [string] $Settings,
+    [string] $Framework = 'net10.0',
+    [string] $CsrunImage = 'codebeltnet/csrun:10',
+    [ValidateSet('None','Native','Docker','Both')][string] $Verify = 'None'
+)
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'integration-example.ps1')
+$helpers = Join-Path $PSScriptRoot '../../dotnet-csrun/scripts/sample-tools.ps1'
+if (-not (Test-Path $helpers)) { throw "Install dotnet-csrun beside this skill: $helpers" }
+. $helpers
+Set-StrictMode -Off
+function Hash([string] $Text) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Text))) }
+function Normalize([string] $Text) { $Text.Replace("`r`n", "`n").TrimEnd("`n", "`r") }
+function Write-Changed([string] $Path, [string] $Text) {
+    Assert-RepositoryPath $Path
+    if ((Test-Path -LiteralPath $Path) -and [IO.File]::ReadAllText($Path) -ceq $Text) { return $false }
+    $null = [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Path))
+    [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
+    return $true
+}
+# Preserve the original encoding/BOM and line endings when adding/removing owned HTML.
+function Write-Page([string] $Path, [string] $Original, [string] $Updated) {
+    if ($Original -ceq $Updated) { return }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $reader = [IO.StreamReader]::new($Path, [Text.UTF8Encoding]::new($false, $true), $true)
+    try { $null = $reader.ReadToEnd(); $encoding = $reader.CurrentEncoding } finally { $reader.Dispose() }
+    $output = $encoding.GetBytes($Updated)
+    $preamble = $encoding.GetPreamble()
+    if ($preamble.Length -and $bytes.Length -ge $preamble.Length -and
+        [Convert]::ToBase64String($bytes[0..($preamble.Length-1)]) -ceq [Convert]::ToBase64String($preamble)) { $output = [byte[]]($preamble + $output) }
+    [IO.File]::WriteAllBytes($Path, $output)
+}
+$root = [IO.Path]::GetFullPath($RepoRoot)
+function Assert-RepositoryPath([string] $Path) {
+    $full = [IO.Path]::GetFullPath($Path)
+    if (-not $full.StartsWith($root.TrimEnd('/','\') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw "Path outside requested repository: $Path" }
+    for ($current = $full; $current.Length -gt $root.Length; $current = Split-Path $current -Parent) {
+        if ((Test-Path -LiteralPath $current) -and ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Linked output path: $current" }
+    }
+}
+$arguments = @('--repo-root', $root, '--run-action-inventory')
+if ($Docfx) { $arguments += @('--docfx', $Docfx) }
+# One inventory process per repository, never one model/process per document.
+$inventoryText = & dotnet run --file (Join-Path $PSScriptRoot 'docfx.cs') -- @arguments
+if ($LASTEXITCODE -ne 0) { throw 'DocFX example inventory failed.' }
+$inventory = ($inventoryText -join "`n") | ConvertFrom-Json
+$configPath = $inventory.config
+$workspace = Split-Path $configPath -Parent
+Assert-RepositoryPath $configPath
+$assetRoot = Join-Path $workspace 'run-actions'
+Assert-RepositoryPath $assetRoot
+$indexPath = Join-Path $assetRoot 'index.json'
+$old = @()
+if (Test-Path $indexPath) { $old = @((Get-Content $indexPath -Raw | ConvertFrom-Json).examples) }
+$recipes = @()
+if (-not $Settings) { $Settings = Join-Path $workspace 'run-actions.settings.json' }
+if (Test-Path $Settings) { $recipes = @((Get-Content $Settings -Raw | ConvertFrom-Json).examples) }
+$toolHash = Hash ((Get-Content $PSCommandPath -Raw) + (Get-Content (Join-Path $PSScriptRoot 'integration-example.ps1') -Raw) + (Get-Content $helpers -Raw))
+$results = [Collections.Generic.List[object]]::new()
+$associations = @{}
+$oldByFingerprint = @{}
+foreach ($entry in $old) {
+    if ($entry.fingerprint) { $oldByFingerprint["$($entry.id)|$($entry.fingerprint)"] = $entry }
+}
+$recipeBySource = @{}
+foreach ($recipe in $recipes) {
+    $key = "$($recipe.uid)|$($recipe.sourceSha256)"
+    if ($recipeBySource.ContainsKey($key)) { throw "Duplicate recipe for $key" }
+    $recipeBySource[$key] = $recipe
+}
+foreach ($example in $inventory.examples) {
+    $source = Normalize $example.code
+    if ($example.source) { $source = Normalize (($source -split "`n" | Select-Object -Skip 2) -join "`n") }
+    $sourceHash = Hash $source
+    $identity = if ($example.source) { [IO.Path]::GetRelativePath($root, $example.source).Replace('\','/') + '|' + $sourceHash } else { $sourceHash }
+    $id = (Hash ("$($example.uid)|$([IO.Path]::GetRelativePath($root, $example.file).Replace('\','/'))|$identity")).Substring(0,24).ToLowerInvariant()
+    $result = [ordered]@{ id=$id; file=$example.file; uid=$example.uid; sourceSha256=$sourceHash; status='unsupported'; reason=$null; native='Unverified'; docker='Unverified' }
+    try {
+        if ($example.contextError) { throw $example.contextError }
+
+
+        $recipe = $recipeBySource["$($example.uid)|$sourceHash"]
+        $strategy = 'standalone'
+        # Known, inspected integration source. No API-name heuristic may substitute a different test.
+        if (-not $recipe -and $sourceHash -ceq '47B0C1FBA94E7B43C8753D0A8242801B328E6B463B6EEDAEB640D4F8A262633E') {
+            $recipe = [pscustomobject]@{ repository='codebeltnet/xunit'; commit='84b13767cb9484f8f3a36a71875662edfdb3e511'; project='test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/Codebelt.Extensions.Xunit.Hosting.FunctionalTests.csproj'; test='Codebelt.Extensions.Xunit.Hosting.BootstrapperMinimalWorkerApplicationTestTest.ShouldBootstrapMinimalWorkerProgram'; framework='net11.0'; image='mcr.microsoft.com/dotnet/sdk:11.0' }
+        }
+        $isTest = $source -match '\[(?:Fact|Theory)(?:Attribute)?(?:\(|\])'
+        if ($recipe -and $recipe.PSObject.Properties['repository']) { $strategy = 'repository' }
+        elseif ($example.source -and -not ($recipe -and $recipe.PSObject.Properties['manifest'])) {
+            $result.reason = 'Maintained project context needs a pinned repository recipe; no replacement host was generated.'
+            continue
+        }
+        elseif (-not $recipe -and ((-not $example.eligible -or -not ($example.standalone -or $isTest)) -or @($example.imports | Where-Object { $_ -notmatch '^(System(?:\.|$)|Xunit$)' }).Count -or $source -match '(?m)^#:')) {
+            $result.reason = 'Partial source or unresolved dependencies. Supply an exact source-bound standalone manifest or pinned repository recipe; retain maintained implementation/usage/test links.'
+            continue
+        }
+        $transports = @('native','docker')
+        foreach ($transport in @('native','docker')) {
+            if ($recipe -and $recipe.unsupportedTransports.$transport) {
+                $result[$transport] = 'Unsupported'
+                $result["${transport}Reason"] = $recipe.unsupportedTransports.$transport
+                $transports = @($transports | Where-Object { $_ -ne $transport })
+            }
+        }
+        if (-not $transports.Count) { $result.reason = 'Both transports are explicitly unsupported.'; continue }
+        $fingerprint = Hash ("$toolHash|$sourceHash|$strategy|$Framework|$CsrunImage|" + ($recipe | ConvertTo-Json -Depth 30 -Compress))
+        $prior = @($oldByFingerprint["$id|$fingerprint"] | Where-Object { $null -ne $_ })
+        $dir = Join-Path $assetRoot $id
+        $reusable = $prior.Count -eq 1
+        foreach ($transport in $transports) {
+            $path = Join-Path $dir "$transport.ps1"
+            if (-not (Test-Path $path) -or -not $reusable -or (Hash ([IO.File]::ReadAllText($path))) -cne $prior[0]."${transport}Sha256") { $reusable = $false }
+        }
+        if ($reusable) {
+            $pair = @{}
+            foreach ($transport in $transports) {
+                $pair[$transport] = [IO.File]::ReadAllText((Join-Path $dir "$transport.ps1"))
+                if ($prior[0]."${transport}Evidence") { $result["${transport}Evidence"] = $prior[0]."${transport}Evidence" }
+            }
+            $result.native = $prior[0].native; $result.docker = $prior[0].docker
+        } elseif ($strategy -eq 'repository') {
+            $pair = New-RepositoryExamplePair -Repository $recipe.repository -Commit $recipe.commit -Project $recipe.project -Test $recipe.test -Framework $recipe.framework -Image $recipe.image
+        } else {
+            $manifest = if ($recipe) { $recipe.manifest } else { [pscustomobject]@{ schemaVersion=1; mode=$(if ($isTest) {'test'} else {'console'}); framework=$Framework; dependsOn=@($(if ($isTest) {'xunit.v3@4.0.3'})) } }
+            if ($manifest.PSObject.Properties['source'] -and (Normalize $manifest.source) -cne $source) { throw 'Manifest source differs from displayed C#.' }
+            $manifest | Add-Member -NotePropertyName source -NotePropertyValue $source -Force
+            $pair = New-CsrunExecutionPair -ManifestJson ($manifest | ConvertTo-Json -Depth 30) -Image $CsrunImage
+        }
+        $changed = $false
+        foreach ($transport in $transports) {
+            $script = Normalize $pair.$transport
+            $tokens=$null; $errors=$null
+            $null = [Management.Automation.Language.Parser]::ParseInput($script,[ref]$tokens,[ref]$errors)
+            if ($errors.Count) { throw "Generated $transport script has syntax errors: $errors" }
+            $path = Join-Path $dir "$transport.ps1"
+            $changed = (Write-Changed $path $script) -or $changed
+            $result["${transport}Sha256"] = Hash $script
+            if ($Verify -eq 'Both' -or $Verify -eq $transport) {
+                $log = Join-Path ([IO.Path]::GetTempPath()) ("docfx-run-$id-$transport-" + [guid]::NewGuid().ToString('N') + '.log')
+                & pwsh -NoProfile -NonInteractive -File $path *> $log
+                $result[$transport] = if ($LASTEXITCODE -eq 0) { 'Verified' } else { 'Failed' }
+                $result["${transport}Evidence"] = $log
+            }
+        }
+        $result.status = if ($changed) { 'generated' } else { 'unchanged' }
+        $result.fingerprint = $fingerprint
+        $links = @($transports | ForEach-Object {
+            $label = if ($_ -eq 'native') { 'Native' } else { 'Docker' }
+            '<a href="~/run-actions/' + $id + '/' + $_ + '.ps1" data-transport="' + $_ + '">View ' + $label + ' Script</a>'
+        })
+        $link = '<div class="docfx-run-actions" data-example-id="' + $id + '">' + ($links -join ' · ') + '</div>'
+        if (-not $associations.ContainsKey($example.file)) { $associations[$example.file] = @{} }
+        $associations[$example.file][[int]$example.startLine] = "<!-- docfx-run-actions:new -->`n$link`n<!-- docfx-run-actions:new-end -->"
+    } catch { $result.status='failed'; $result.reason=$_.Exception.Message }
+    finally { $results.Add([pscustomobject]$result) }
+}
+# Apply localized insertions after fences. Existing associations are removed first; C# bytes are untouched.
+$pages = @(@($inventory.examples.file) + @($old.file) | Sort-Object -Unique)
+foreach ($page in $pages) {
+    if (-not (Test-Path -LiteralPath $page)) { continue }
+    Assert-RepositoryPath $page
+    $original = [IO.File]::ReadAllText($page)
+    $newline = if ($original.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $lines = $original -split '\r?\n'
+    # Work backwards using original inventory line numbers, so inserted lines do not shift later fences.
+    if ($associations.ContainsKey($page)) {
+        foreach ($line in @($associations[$page].Keys | Sort-Object -Descending)) {
+            $end = $line
+            while ($end -lt $lines.Length -and $lines[$end] -notmatch '^\s*```') { $end++ }
+            if ($end -ge $lines.Length) { throw "Unclosed fence in $page" }
+            $lines[$end] += $newline + $newline + $associations[$page][$line].Replace("`n", $newline)
+        }
+    }
+    $updated = $lines -join $newline
+    $updated = [regex]::Replace($updated, '(?:\r?\n){2}<!-- docfx-run-actions:start -->.*?<!-- docfx-run-actions:end -->', '', 'Singleline')
+    $updated = $updated.Replace('<!-- docfx-run-actions:new -->','<!-- docfx-run-actions:start -->').Replace('<!-- docfx-run-actions:new-end -->','<!-- docfx-run-actions:end -->')
+    Write-Page $page $original $updated
+}
+# Remove only assets owned by the previous index. Never recursively delete user directories.
+foreach ($entry in $results) {
+    foreach ($transport in @('native','docker')) {
+        if ($entry.$transport -eq 'Unsupported' -and $entry.id -match '^[a-f0-9]{24}$') {
+            $path = Join-Path $assetRoot "$($entry.id)/$transport.ps1"
+            Assert-RepositoryPath $path
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
+        }
+    }
+}
+$active = @($results | Where-Object { $_.status -in @('generated','unchanged') } | ForEach-Object id)
+foreach ($previous in $old) {
+    if ($previous.id -match '^[a-f0-9]{24}$' -and $previous.id -notin $active) {
+        foreach ($name in @('native.ps1','docker.ps1')) {
+            $path = Join-Path $assetRoot "$($previous.id)/$name"
+            Assert-RepositoryPath $path
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
+        }
+    }
+}
+$config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable
+if (-not $config.build) { throw 'docfx.json requires build configuration.' }
+$resources = @($config.build.resource)
+if (-not @($resources | Where-Object { ($_ | ConvertTo-Json -Compress) -match 'run-actions/\*\*' }).Count) {
+    $config.build.resource = @($resources | Where-Object { $null -ne $_ }) + @(@{ files=@('run-actions/**') })
+}
+# Compose with an existing modern main.js rather than overriding its default export/start hook (e.g. Context7).
+$templates = @($config.build.template)
+$main = $null
+foreach ($template in $templates) {
+    $candidate = Join-Path $workspace "$template/public/main.js"
+    if (Test-Path $candidate) { $main=$candidate }
+}
+if (-not $main) {
+    $main = Join-Path $workspace 'run-actions-template/public/main.js'
+    $null = Write-Changed $main "export default {};`n"
+    if ('run-actions-template' -notin $templates) { $config.build.template = $templates + @('run-actions-template') }
+}
+Assert-RepositoryPath $main
+$mainText = [IO.File]::ReadAllText($main)
+if (-not $mainText.Contains("import './run-actions.js';")) { $null = Write-Changed $main ($mainText + "`nimport './run-actions.js';`n") }
+$null = Write-Changed (Join-Path (Split-Path $main -Parent) 'run-actions.js') ([IO.File]::ReadAllText((Join-Path $PSScriptRoot '../assets/run-actions.js')))
+$null = Write-Changed $configPath (($config | ConvertTo-Json -Depth 100) + "`n")
+$persisted = @($results | ForEach-Object {
+    $entry = $_ | Select-Object *
+    if ($entry.status -in @('generated','unchanged')) { $entry.status = 'ready' }
+    $entry
+})
+$null = Write-Changed $indexPath (([ordered]@{ examples=$persisted } | ConvertTo-Json -Depth 30) + "`n")
+$results | ConvertTo-Json -Depth 30
+if (@($results | Where-Object { $_.status -eq 'failed' -or $_.native -eq 'Failed' -or $_.docker -eq 'Failed' }).Count) { exit 1 }
