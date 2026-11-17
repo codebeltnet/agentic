@@ -12,6 +12,10 @@ description: >
 
 Create and maintain developer-friendly DocFX documentation digests for .NET public APIs. Keep namespace pages, generated API pages, examples, availability notes, and verification aligned with the actual source code and tests.
 
+## Opt-in run actions
+
+For the explicit logical command `dotnet-docfx-digest generate-run-actions`, read [run actions](references/run-actions.md) and invoke its deterministic repository-wide generator. This command generates assets and lightweight associations without executing examples by default. It is separate from normal authoring/auditing and their completion gates. Preserve readable C#, existing source links and template customizations; report unsupported examples honestly. No per-file agent sessions, engine/schema changes or Python. Runtime verification requires its explicit verification option; generation alone is Unverified.
+
 ## Critical
 
 - Prefer complete standalone programs and genuine xUnit v3 tests, delivered through existing `dotnet-csrun` native and Docker one-shot blocks with identical source/dependencies. For APIs requiring an actual application, runner or distinct assembly identity, inspect the maintained example, test and project graph, then provide a pinned repository-backed one-shot test instead. Read [one-shot examples](references/one-shot-examples.md) before publishing execution instructions. Do not expand csrun manifest v1 or manufacture a substitute host.

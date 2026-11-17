@@ -1325,6 +1325,18 @@
         "C# target usage, one-shot reproduction, source-bound compilation and full DocFX completion checks remain required",
         "Does not implement a second repository search subsystem, fast-path network checks or subjective keyword heuristics"
       ]
+    },
+    {
+      "id": 123,
+      "prompt": "Use dotnet-docfx-digest generate-run-actions on a DocFX repository containing the original ManagedApplicationFixture worker functional test, a complete console example and a partial integration excerpt. Generate assets and modern-template controls, then repeat generation unchanged. Preserve Context7 and source links. Do not execute the generated scripts.",
+      "expected_output": "Invokes the deterministic opt-in generator once for the repository, produces both independent execution scripts for faithful examples with pinned original repository/test integration, retains the original C# and explanatory links, supplies fallback script links plus reusable copy controls, records Unverified outcomes and reports unsupported excerpts. Second generation preserves unchanged bytes and timestamps. No per-file agents, csrun engine/schema changes or runtime execution.",
+      "expectations": [
+        "Uses the shared DocFX inventory and existing csrun generation helpers without per-file model calls",
+        "Principal integration scripts retain the original pinned repository, project and exact test",
+        "Both copy controls fetch and copy the entire corresponding script without executing it",
+        "Source, overwrite UIDs, template customizations and no-JavaScript fallback remain intact",
+        "Repeated generation is incremental, source changes invalidate assets and generation does not claim Verified"
+      ]
     }
   ]
 }
