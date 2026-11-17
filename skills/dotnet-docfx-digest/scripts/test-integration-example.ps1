@@ -84,3 +84,5 @@ foreach ($transport in @('Native', 'Docker')) {
     }
 }
 Write-Host "One-shot integration artifacts passed: $checks offline cases, published parity and PowerShell syntax (not live verification)."
+# Expected negative controls leave LASTEXITCODE nonzero; only assertion failures fail this suite.
+exit 0
