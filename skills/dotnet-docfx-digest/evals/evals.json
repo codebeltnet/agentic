@@ -1203,6 +1203,62 @@
         "Preserves application Main and assembly separation and retains docfx.cs --build-api-model --validate-samples --verify-docfx-build as authoritative documentation gates.",
         "Keeps concise primary C# fences and existing UID placement; no deterministic validator launches an AI agent and no duplicate compiler or unrequested project scaffolding is added."
       ]
+    },
+    {
+      "id": 115,
+      "prompt": "Improve the ManagedApplicationFixture<TEntryPoint> API-reference example using the attached InventoryWorker application and xUnit v3 test projects. The old page displays InventoryWorkerTest and WorkerProgram.Main together as one independently runnable file. Explain and preserve what the test proves, keep the API page concise, and validate the real application/test graph. Do not edit codebeltnet/xunit or use stub fixtures.",
+      "files": [
+        "scripts/fixtures/example-architecture/app/InventoryWorker/InventoryWorker.csproj",
+        "scripts/fixtures/example-architecture/app/InventoryWorker/Program.cs",
+        "scripts/fixtures/example-architecture/test/InventoryWorker.Tests/InventoryWorker.Tests.csproj",
+        "scripts/fixtures/example-architecture/test/InventoryWorker.Tests/InventoryWorkerTest.cs",
+        "scripts/fixtures/example-architecture/evidence.md"
+      ],
+      "expected_output": "Establishes the developer task and assembly-selection contract from the pinned implementation and functional tests. Presents labelled application/test files with actual project/package prerequisites, binds them to the maintained source/project context, preserves Main, fixture injection, Fact and assertions, and distinguishes build evidence from real runner execution. Recommends the upstream documentation correction separately without modifying that repository.",
+      "expectations": [
+        "Explains typeof(TEntryPoint).Assembly and the separate executable xUnit runner entry point; never claims the merged source is standalone",
+        "Keeps application-owned registration and startup in the application project and the real fixture assertion in the referencing test project",
+        "Does not remove Main, choose a startup object, replace the host, or register WorkerIdentity inside the test as a compilation repair",
+        "Uses labelled files and exact maintained project/source bindings or a concise essential example with a direct maintained integration link; does not merely concatenate fences",
+        "Reports compilation and actual execution evidence separately, including unexecuted runtime behavior",
+        "Keeps the existing full DocFX completion contract and csrun execution boundary"
+      ]
+    },
+    {
+      "id": 116,
+      "prompt": "Review proposed repairs to an entrypoint-owned ApplicationTest example: A deletes WorkerProgram.Main, B overrides ConfigureHost to register WorkerIdentity inside the test while claiming the application registered it, C substitutes a manually built Host, and D keeps two projects but says the assertion ran successfully based only on dotnet build. All variants compile. Decide which claims are justified and describe the smallest correct documentation repair.",
+      "expected_output": "Rejects all four as evidence of the original application registration. Explains the changed contract for each, preserves real application Main and registration, requires actual test execution for runtime claims, and treats semantic review as evidence-backed judgment rather than an invented universal regex diagnostic.",
+      "expectations": [
+        "Removing Main leaves the marker in the wrong assembly or removes required startup; compilation cannot establish the original contract",
+        "A test-owned registration or alternative host may be valid for a different scenario but cannot prove original application-owned registration",
+        "Successful compilation alone is labelled compilation only; no claimed successful test execution",
+        "Missing or invented dependencies remain unresolved failures and are repaired against actual project/package evidence",
+        "Does not weaken assertions or introduce skip markers to manufacture success"
+      ]
+    },
+    {
+      "id": 117,
+      "prompt": "Design concise DocFX examples for: a library method returning parsed inventory quantities; a complete single-file console program; a standalone xUnit v3 Fact; and ASP.NET Core middleware that adds a response header before the next delegate. The middleware has a maintained application and HTTP integration test. Use the smallest realistic representation, preserve lifecycle/pipeline semantics, and state what can actually be verified.",
+      "expected_output": "Classifies each execution model before authoring, keeps the ordinary library snippet concise and the console Program.cs executable, preserves real assertions for the testing API, and uses the middleware's actual registration, pipeline, request/response and host lifecycle. Uses csrun only for compatible standalone cases and project-aware validation for integration.",
+      "expectations": [
+        "Establishes intention, real dependencies/framework, intended observation and reproducibility before source generation",
+        "Does not force the library method into a console application or require every fence to independently execute",
+        "Preserves genuine xUnit Fact/fixture structure where it is the testing API's consumer contract",
+        "Middleware setup and ordering support the claimed HTTP behavior, with async/disposal lifecycles preserved",
+        "No runtime success is inferred from compilation and no implementation metadata substitutes for behavior"
+      ]
+    },
+    {
+      "id": 118,
+      "prompt": "An API page needs a short fixture example linking to its maintained multi-project integration test, plus an intentionally partial assertion excerpt from that test. The existing context file has valid DocFX UID ownership, conditional target-framework examples, a pre-existing approved sample waiver, and UTF-8 BOM/CRLF. Extend the page without rewriting unrelated content. Another proposal labels a missing project dependency as a successful standalone example.",
+      "expected_output": "Keeps essential target usage and prerequisites concise, labels the excerpt and binds it to its real source/project, links the working integration graph, and rejects the missing dependency/standalone claim. Preserves existing UID structure, conditional asset selection, strict waiver rules, encoding, line endings and completion gates.",
+      "expectations": [
+        "A maintained link supplements rather than replaces local target API usage and compilation",
+        "The excerpt is explicitly partial, has accurate containing context, and is never represented as an independently runnable file",
+        "Source identity and evaluated Compile membership must hold; an unrelated compiling project or unavailable dependency is not accepted",
+        "Existing multiple-class files, ordinary library snippets and Program.cs examples retain their validation behavior",
+        "Preserves exact overwrite UID ownership, conditional TFM requirements, strict existing waiver approval and Markdown encoding/line endings"
+      ]
     }
   ]
 }
