@@ -1,4 +1,6 @@
-# Standalone runtime evidence with dotnet-csrun
+# Standalone and repository-backed runtime evidence
+
+Choose the easiest faithful reproduction before authoring. Prefer standalone csrun. For an intrinsic application/test assembly boundary, DocFX owns a separate pinned repository-backed one-shot command: download to OS temp, run the maintained targeted test, verify positive execution of that exact test, and clean source/build artifacts. Offer an independent official SDK Docker equivalent where practical, without requiring a host SDK. See [one-shot examples](one-shot-examples.md) for the verified ManagedApplicationFixture regression and artifact generator. This is execution of trusted repository code and its original project graph, not isolated manifest execution. csrun owns only standalone execution; neither engine nor schema v1 changes.
 
 Keep the existing DocFX inventory and source discovery. This skill owns public API discovery, namespace/type pages, UID/overwrite placement, source-backed explanation, project-aware sample compilation and documentation completion. `dotnet-csrun` owns compatible standalone construction, real xUnit v3 execution, native/Docker deliverables, behavioral verification, localized corrections and execution evidence. Apply both skills in the parent context when authorized; deterministic validators never launch another skill, agent, or authenticated model.
 

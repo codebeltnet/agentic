@@ -1259,6 +1259,17 @@
         "Existing multiple-class files, ordinary library snippets and Program.cs examples retain their validation behavior",
         "Preserves exact overwrite UID ownership, conditional TFM requirements, strict existing waiver approval and Markdown encoding/line endings"
       ]
+    },
+    {
+      "id": 118,
+      "prompt": "Refine the ManagedApplicationFixture API example at https://xunit.codebelt.net/api/Codebelt.Extensions.Xunit.Hosting.ManagedApplicationFixture-1.html. Use codebeltnet/xunit test/Codebelt.Extensions.Xunit.Hosting.FunctionalTests/BootstrapperMinimalWorkerApplicationTestTest.cs. Give one-shot native and Docker commands that execute the original maintained test; do not modify that repository or invent a host.",
+      "expected_output": "Classifies repository-backed integration, inspects the actual project graph and pinned source, and delivers two independent pinned-snapshot PowerShell blocks with positive exact-test execution verification and cleanup. Shows a concise meaningful excerpt and direct implementation/application/test/project links. Reports actual evidence separately per environment and preserves diagnostics if unavailable.",
+      "expectations": [
+        "Preserves the original application implementation, project references, fixture lifecycle and assertions; no multi-project csrun schema or engine changes.",
+        "Requires exact intended test identity, positive execution and pass counts plus process status; rejects wrong filters, zero tests and skipped tests.",
+        "Both commands include all setup and cleanup and state prerequisites; unavailable environments or dependencies are explicitly unverified with diagnostics.",
+        "Fallback source links are used only when faithful execution is unavailable, without a verified runnable label."
+      ]
     }
   ]
 }
