@@ -1328,11 +1328,13 @@
     },
     {
       "id": 124,
-      "prompt": "Use dotnet-docfx-digest generate-run-actions on a DocFX repository containing the original ManagedApplicationFixture worker functional test, a complete console example and a partial integration excerpt. Generate assets and modern-template controls, then repeat generation unchanged. Preserve Context7 and source links. Do not execute the generated scripts.",
-      "expected_output": "Invokes the deterministic opt-in generator once for the repository, produces both independent execution scripts for faithful examples with pinned original repository/test integration, retains the original C# and explanatory links, supplies fallback script links plus reusable copy controls, records Unverified outcomes and reports unsupported excerpts. Second generation preserves unchanged bytes and timestamps. No per-file agents, csrun engine/schema changes or runtime execution.",
+      "prompt": "Use dotnet-docfx-digest generate-run-actions on a DocFX repository containing the original ManagedApplicationFixture worker test, a complete console example, a class-library example using Codebelt, Cuemon and Microsoft.Extensions with centrally versioned package references, and a partial integration excerpt. Resolve dependencies and add execution actions across the repository in this invocation. Preserve Context7 and source links. Do not execute the scripts.",
+      "expected_output": "Uses repository-wide discovery and reports every example. Inspects the source project, central pins and published assets, then saves a source-bound recipe with a meaningful harness for the library example. Generates both transports for faithful cases, keeps all generated scripts unverified, and accounts for any unresolved excerpt. Preserves the original C# and source references, modern template controls and static fallback links. Identical reruns preserve bytes and timestamps.",
       "expectations": [
         "Uses the shared DocFX inventory and existing csrun generation helpers without per-file model calls",
         "Principal integration scripts retain the original pinned repository, project and exact test",
+        "The library recipe uses exact dependency pins from project and package evidence, retains the displayed C#, and calls that code with a meaningful observable result or assertion in both transports",
+        "Unexplored dependencies or missing context remain Unresolved, so the report cannot imply full paired coverage",
         "Both copy controls fetch and copy the entire corresponding script without executing it",
         "Source, overwrite UIDs, template customizations and no-JavaScript fallback remain intact",
         "Repeated generation is incremental, source changes invalidate assets and generation does not claim Verified"

@@ -14,7 +14,7 @@ Create and maintain developer-friendly DocFX documentation digests for .NET publ
 
 ## Opt-in run actions
 
-For the explicit logical command `dotnet-docfx-digest generate-run-actions`, read [run actions](references/run-actions.md) and invoke its deterministic repository-wide generator. This command generates assets and lightweight associations without executing examples by default. It is separate from normal authoring/auditing and their completion gates. Preserve readable C#, existing source links and template customizations; report unsupported examples honestly. No per-file agent sessions, engine/schema changes or Python. Runtime verification requires its explicit verification option; generation alone is Unverified.
+For `dotnet-docfx-digest generate-run-actions`, read [run actions](references/run-actions.md). Run the deterministic generator across the active DocFX repository, then resolve its outstanding examples in bounded project batches within the same skill invocation. Inspect source projects, evaluated references, published package assets and maintained tests, persist source-bound recipes, and regenerate until every example is paired or has a demonstrated technical limitation. Keep C#, source links and template customizations readable. Runtime verification is opt-in and independent for each transport. The generator uses the existing csrun contract and runs without model calls.
 
 ## Critical
 
