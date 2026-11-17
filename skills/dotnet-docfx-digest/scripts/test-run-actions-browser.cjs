@@ -1,80 +1,220 @@
 // Run against the OS-temp fixture produced by test-run-actions.ps1.
-// Requires Playwright; set PLAYWRIGHT_MODULE to its installed module when not on NODE_PATH.
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+// Set PLAYWRIGHT_MODULE if Playwright is not on NODE_PATH.
+const { chromium, devices } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+
+const mimeTypes = {
+  '.js': 'text/javascript', '.html': 'text/html', '.css': 'text/css',
+  '.woff2': 'font/woff2', '.woff': 'font/woff', '.json': 'application/json',
+};
+const permissions = ['clipboard-read', 'clipboard-write'];
+const normalizeNewlines = text => text.replace(/\r\n/g, '\n');
+
+async function openExample(context, url, marker) {
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    const clipboard = navigator.clipboard;
+    const writeText = clipboard.writeText.bind(clipboard);
+    clipboard.writeText = text => {
+      window.copiedText = Promise.resolve(text);
+      return writeText(text);
+    };
+    const write = clipboard.write.bind(clipboard);
+    clipboard.write = items => {
+      window.copiedText = items[0].getType('text/plain').then(blob => blob.text()).catch(() => null);
+      return write(items);
+    };
+  });
+  await page.goto(url);
+  await page.waitForFunction(() => window.docfx?.ready);
+  const sample = page.locator('pre.docfx-runnable').filter({ hasText: marker });
+  const toolbar = sample.locator('.docfx-run-toolbar');
+  const original = sample.locator(':scope > a.code-action');
+  const status = sample.getByRole('status');
+  await sample.waitFor();
+  assert.equal(await original.count(), 1);
+  assert.equal(await toolbar.locator('button').count(), 2);
+  assert.equal(await sample.locator('code.hljs').count(), 1);
+  assert.equal(await page.getByRole('link', { name: /View (Native|Docker) Script/ }).count(), 0);
+  const association = sample.locator('xpath=following-sibling::*[1]');
+  assert.equal(await association.getAttribute('hidden'), '');
+  const actions = await Promise.all(['Native', 'Docker'].map(async label => {
+    const name = 'Copy ' + label + ' run script';
+    const button = toolbar.getByRole('button', { name, exact: true });
+    assert.ok((await button.getAttribute('title')).startsWith(name));
+    assert.equal(await button.locator('svg[aria-hidden=true]').count(), 1);
+    const href = await association.locator('a[data-transport=' + label.toLowerCase() + ']').getAttribute('href');
+    const asset = new URL(href, url).href;
+    const response = await page.request.get(asset);
+    assert.ok(response.ok());
+    const script = await response.text();
+    assert.ok(script.startsWith('#requires -Version 7.0'));
+    return { label, button, asset, script };
+  }));
+  const navigations = [];
+  const downloads = [];
+  const popups = [];
+  page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+  page.on('download', download => downloads.push(download.suggestedFilename()));
+  page.on('popup', popup => popups.push(popup));
+  const checkPageUnchanged = () => {
+    assert.equal(page.url(), url);
+    assert.deepEqual(navigations, []);
+    assert.deepEqual(downloads, []);
+    assert.deepEqual(popups, []);
+  };
+  return { page, sample, original, toolbar, status, actions, checkPageUnchanged };
+}
+
+async function checkGeometry({ sample, original, actions }) {
+  const block = await sample.boundingBox();
+  const controls = [...actions.map(action => action.button), original];
+  const boxes = await Promise.all(controls.map(control => control.boundingBox()));
+  for (const box of boxes) {
+    assert.ok(box.y >= block.y && box.y - block.y < 10, 'actions must start in the top row');
+    assert.ok(Math.abs(box.y - boxes[2].y) < 1, 'all three actions must share a row');
+  }
+  for (let index = 1; index < boxes.length; index++) {
+    const previous = boxes[index - 1];
+    assert.ok(Math.abs(boxes[index].x - previous.x - previous.width) < 5, 'controls must be adjacent');
+  }
+  assert.ok(Math.abs(block.x + block.width - boxes[2].x - boxes[2].width) < 8, 'copy stays at the top right');
+}
+
+async function checkClipboard(page, expected) {
+  assert.equal(await page.evaluate(() => window.copiedText), expected);
+  assert.equal(normalizeNewlines(await page.evaluate(() => navigator.clipboard.readText())), normalizeNewlines(expected));
+}
+
+async function checkCopy(example, index, activate) {
+  const { page, actions, status, sample, checkPageUnchanged } = example;
+  const { label, button, asset, script } = actions[index];
+  const block = await sample.boundingBox();
+  await Promise.all([
+    page.waitForResponse(response => response.url() === asset && response.ok()),
+    activate(button),
+  ]);
+  await status.filter({ hasText: label + ' script copied.' }).waitFor();
+  await checkClipboard(page, script);
+  assert.deepEqual(await sample.boundingBox(), block, 'copy feedback must not move or resize the code block');
+  checkPageUnchanged();
+}
+
 (async () => {
   const site = path.resolve(process.argv[2]);
+  const representative = process.argv[3] && path.resolve(process.argv[3]);
   const server = http.createServer((req, res) => {
-    const file = path.resolve(site, '.' + decodeURIComponent(new URL(req.url, 'http://localhost').pathname));
-    if (!file.startsWith(site + path.sep)) { res.writeHead(403).end(); return; }
+    let pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+    let root = site;
+    if (representative && pathname.startsWith('/representative/')) {
+      root = representative;
+      pathname = pathname.slice('/representative'.length);
+    }
+    const file = path.resolve(root, '.' + pathname);
+    if (!file.startsWith(root + path.sep)) { res.writeHead(403).end(); return; }
     try {
       const content = fs.readFileSync(file);
-      res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.html') ? 'text/html' : 'text/plain');
+      res.setHeader('Content-Type', mimeTypes[path.extname(file)] || 'text/plain');
+      if (file.endsWith('.ps1')) res.setHeader('Content-Disposition', 'attachment');
       res.end(content);
     } catch { res.writeHead(404).end(); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
+  const base = 'http://127.0.0.1:' + server.address().port;
   const browser = await chromium.launch({ headless: false });
   try {
-    const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
-    const page = await context.newPage();
-    await page.addInitScript(() => {
-      const write = navigator.clipboard.writeText.bind(navigator.clipboard);
-      navigator.clipboard.writeText = async text => { window.copiedScript = text; return write(text); };
-    });
-    await page.goto(base + '/docs/integration.html');
-    await page.waitForFunction(() => window.context7 === true);
-    const sample = page.locator('pre.docfx-runnable').filter({hasText: 'ShouldBootstrapMinimalWorkerProgram'});
-    assert.equal(await sample.count(), 1);
-    const toolbar = sample.locator('.docfx-run-toolbar');
-    assert.equal(await toolbar.getByRole('button').count(), 2, 'both copy controls must belong to the same C# sample');
-    for (const label of ['Native', 'Docker']) {
-      const button = toolbar.getByRole('button', {name: `Copy ${label}`, exact: true});
-      await button.focus();
-      assert.equal(await button.evaluate(b => getComputedStyle(b.parentElement).opacity), '1');
-      const href = await page.locator('.docfx-run-actions').getByRole('link', {name: `View ${label} Script`}).getAttribute('href');
-      const expected = await (await page.request.get(new URL(href, page.url()).href)).text();
-      assert.ok(expected.includes('ShouldBootstrapMinimalWorkerProgram'));
-      await button.press('Enter');
-      await page.getByRole('status').filter({hasText: `${label} script copied`}).waitFor();
-      assert.equal(await page.evaluate(() => window.copiedScript), expected);
-      assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), expected.replace(/\r\n/g, '\n'));
-      assert.ok(expected.includes('84b13767cb9484f8f3a36a71875662edfdb3e511'));
-    }
-    // Reapplying the component never duplicates controls or the existing DocFX copy button.
+    const context = await browser.newContext({ permissions, viewport: { width: 1280, height: 900 } });
+    const marker = 'ShouldBootstrapMinimalWorkerProgram';
+    const desktop = await openExample(context, base + '/docs/integration.html', marker);
+    const { page, sample, original, toolbar, actions, status, checkPageUnchanged } = desktop;
+    assert.ok(await page.evaluate(() => window.context7 === true));
+    const opacity = () => toolbar.evaluate(node => getComputedStyle(node).opacity);
+    assert.equal(await opacity(), '0');
+    await sample.hover();
+    assert.equal(await opacity(), '1');
+    await checkGeometry(desktop);
+
+    const code = await sample.locator('code').innerText();
+    await original.click();
+    await sample.locator('a.code-action .bi-check-lg').waitFor();
+    await checkClipboard(page, code);
     await page.evaluate(async () => (await import('../public/run-actions.js')).enhanceRunActions());
-    assert.equal(await page.getByRole('button', {name: 'Copy Native', exact: true}).count(), 1);
-    assert.ok(await page.locator('pre code').innerText());
-    const originalCode = await page.locator('pre code').innerText();
-    await page.locator('pre a.code-action').press('Enter');
-    await page.waitForFunction(code => window.copiedScript === code, originalCode);
-    assert.equal(await page.getByRole('button', {name: 'Copy Native', exact: true}).count(), 1);
-    const apiPage = await context.newPage();
-    await apiPage.goto(base + '/api/fixture.html');
-    const apiSample = apiPage.locator('pre.docfx-runnable').filter({hasText: 'ShouldBootstrapMinimalWorkerProgram'});
-    assert.equal(await apiSample.count(), 1);
-    const apiToolbar = apiSample.locator('.docfx-run-toolbar');
-    assert.equal(await apiToolbar.getByRole('button').count(), 2, 'overwrite sample must expose both copy controls together');
-    for (const label of ['Native', 'Docker']) {
-      const button = apiToolbar.getByRole('button', {name: `Copy ${label}`, exact: true});
-      await button.waitFor();
-      await button.press('Enter');
-      await apiPage.getByRole('status').filter({hasText: `${label} script copied`}).waitFor();
-    }
+    await sample.locator('a.code-action .bi-clipboard').waitFor({ state: 'attached' });
+    assert.equal(await toolbar.locator('button').count(), 2);
+
+    await page.mouse.move(0, 0);
+    await sample.locator('xpath=preceding-sibling::*[1]').locator('a').last().focus();
+    assert.equal(await opacity(), '0');
+    await page.keyboard.press('Tab');
+    assert.ok(await actions[0].button.evaluate(button => button === document.activeElement && button.matches(':focus-visible')));
+    assert.equal(await opacity(), '1');
+    await checkCopy(desktop, 0, button => button.press('Enter'));
+    await checkCopy(desktop, 1, button => button.click());
+    await status.filter({ hasText: 'Docker script copied.' }).waitFor({ state: 'hidden' });
+
+    await actions[0].button.press('Shift+Enter');
+    const preview = page.getByRole('dialog', { name: 'Native run script' });
+    await preview.waitFor();
+    assert.equal(await preview.locator('pre').textContent(), actions[0].script);
+    await checkClipboard(page, actions[1].script);
+    await page.keyboard.press('Escape');
+    await preview.waitFor({ state: 'detached' });
+    assert.ok(await actions[0].button.evaluate(button => button === document.activeElement));
+    checkPageUnchanged();
+
+    const api = await openExample(context, base + '/api/fixture.html', marker);
+    await checkCopy(api, 0, button => button.press('Enter'));
+    await checkCopy(api, 1, button => button.press('Enter'));
+    await api.page.close();
+
+    const mobile = await browser.newContext({ ...devices['iPhone 13'], permissions });
+    const touch = await openExample(mobile, base + '/docs/integration.html', marker);
+    assert.ok(await touch.page.evaluate(() => matchMedia('(hover: none)').matches));
+    assert.equal(await touch.toolbar.evaluate(node => getComputedStyle(node).opacity), '1');
+    await touch.sample.scrollIntoViewIfNeeded();
+    await checkGeometry(touch);
+    assert.ok(await touch.sample.locator('code').evaluate(code => {
+      code.scrollLeft = code.scrollWidth;
+      return code.scrollLeft > 0;
+    }), 'wide C# still scrolls horizontally');
+    await checkGeometry(touch);
+    await checkCopy(touch, 0, button => button.tap());
+    await checkCopy(touch, 1, button => button.tap());
+    await mobile.close();
+
     const noJs = await browser.newContext({ javaScriptEnabled: false });
     const fallback = await noJs.newPage();
     await fallback.goto(page.url());
-    assert.equal(await fallback.getByRole('link', {name: 'View Native Script'}).count(), 1);
-    assert.equal(await fallback.getByRole('link', {name: 'View Docker Script'}).count(), 1);
+    assert.equal(await fallback.getByRole('link', { name: 'View Native Script' }).count(), 1);
+    assert.equal(await fallback.getByRole('link', { name: 'View Docker Script' }).count(), 1);
     assert.ok((await fallback.locator('pre code').innerText()).includes('Assert.Equal'));
-    // Failure remains inspectable via the same ordinary links.
-    await page.route('**/native.ps1', route => route.fulfill({status: 404, body: 'missing'}));
-    await page.getByRole('button', {name: 'Copy Native', exact: true}).press('Enter');
-    await page.getByRole('status').filter({hasText: 'Could not copy Native'}).waitFor();
-    console.log('Browser checks passed: both complete clipboard payloads, keyboard focus/activation, Context7, idempotent enhancement, no-JS fallback and fetch failure.');
-  } finally { await browser.close(); server.close(); }
+    await noJs.close();
+
+    await page.bringToFront();
+    await page.route('**/native.ps1', route => route.fulfill({ status: 404, body: 'missing' }));
+    const block = await sample.boundingBox();
+    await actions[0].button.press('Enter');
+    await status.filter({ hasText: 'Could not copy Native script.' }).waitFor();
+    assert.deepEqual(await sample.boundingBox(), block);
+    assert.equal(normalizeNewlines(await page.evaluate(() => navigator.clipboard.readText())), normalizeNewlines(actions[1].script));
+    checkPageUnchanged();
+
+    if (representative) {
+      await context.route('https://context7.com/widget.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
+      const visual = await openExample(context, base + '/representative/api/Codebelt.Extensions.Xunit.TestOutputHelperAccessor.html', 'ShouldExposeCurrentOutput');
+      await visual.page.locator('script[src="https://context7.com/widget.js"][data-library="/codebeltnet/xunit"]').waitFor({ state: 'attached' });
+      await visual.sample.hover();
+      await checkGeometry(visual);
+      if (process.env.DOCFX_ACTIONS_SCREENSHOT) await visual.sample.screenshot({ path: process.env.DOCFX_ACTIONS_SCREENSHOT });
+      await checkCopy(visual, 0, button => button.click());
+      await checkCopy(visual, 1, button => button.click());
+    }
+    console.log('Browser checks passed: aligned controls, full clipboard payloads, keyboard and touch, preview and feedback, no navigation or downloads, Context7 and DocFX rendering.');
+  } finally {
+    await browser.close();
+    server.close();
+  }
 })().catch(error => { console.error(error); process.exitCode = 1; });
