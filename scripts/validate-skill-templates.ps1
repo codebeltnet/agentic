@@ -3863,6 +3863,10 @@ Add-ValidationResult -Results $results -Name 'Rendered library templates leave n
 if ($Full -and $Suite -in @('All', 'Docfx')) {
     $docfxScriptResults = Invoke-ValidationScriptJobs -Scripts @(
         [pscustomobject]@{
+            Name = 'DocFX one-shot integration examples enforce exact test execution'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-integration-example.ps1'
+        }
+        [pscustomobject]@{
             Name = 'DocFX digest rejects metadata scaffolds and accepts scenario-led documentation'
             Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-quality.ps1'
         }
