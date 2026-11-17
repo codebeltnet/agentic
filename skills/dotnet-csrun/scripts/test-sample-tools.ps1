@@ -13,6 +13,21 @@ function Assert-Throws([scriptblock] $Action, [string] $Message) {
     Assert-True $threw $Message
 }
 
+$published = Get-Content (Join-Path $root 'references/standalone-example.md') -Raw
+$publishedBlocks = [regex]::Matches($published, '(?s)```powershell\r?\n(.*?)\r?\n```')
+$hostJson = Get-Content (Join-Path $root 'evals/files/standalone-host.json') -Raw
+$hostIdentity = Get-CsrunSampleIdentity $hostJson
+$hostPair = New-CsrunExecutionPair $hostJson -Image 'codebeltnet/csrun:10'
+Assert-True ($publishedBlocks.Count -eq 2) 'Standalone example must offer two independent blocks.'
+for ($index = 0; $index -lt 2; $index++) {
+    $block = $publishedBlocks[$index].Groups[1].Value
+    $expected = @($hostPair.Native, $hostPair.Docker)[$index]
+    Assert-True ($block.Replace("`r`n", "`n") -ceq $expected.Replace("`r`n", "`n")) 'Published standalone block drifted.'
+    Assert-True ((Get-CsrunSampleIdentity (Get-CsrunWrapperManifest $block)).ManifestSha256 -ceq $hostIdentity.ManifestSha256) 'Published standalone dependency/source parity failed.'
+}
+$publishedSource = [regex]::Match($published, '(?s)```csharp\r?\n(.*?)\r?\n```').Groups[1].Value
+Assert-True ($publishedSource.Replace("`r`n", "`n") -ceq $hostIdentity.Source.Replace("`r`n", "`n")) 'Displayed C# differs from executed standalone source.'
+
 foreach ($file in Get-ChildItem (Join-Path $root 'evals/files') -Filter '*.json') {
     $json = [IO.File]::ReadAllText($file.FullName)
     $item = ConvertFrom-Json $json -AsHashtable
