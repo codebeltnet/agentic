@@ -2438,6 +2438,133 @@ Namespace overview.
     }
 }
 
+# Bound-context review regressions use small SDK projects; no network or external test runner is
+# needed to exercise compiler activity, changed-only selection and per-project batch attribution.
+$contextReview = Join-Path ([IO.Path]::GetTempPath()) ('dotnet-docfx-context-review-' + [guid]::NewGuid().ToString('N'))
+try {
+    Write-Utf8File (Join-Path $contextReview 'AGENTS.md') "<!-- dotnet-docfx-digest:start -->`nManaged DocFX guidance.`n<!-- dotnet-docfx-digest:end -->"
+    Write-Utf8File (Join-Path $contextReview 'src/Library/Library.csproj') $projectCsproj
+    Write-Utf8File (Join-Path $contextReview 'src/Library/Library.cs') 'namespace Acme.Context; public sealed class InventoryTotal { public int Quantity => 42; }'
+    Write-Utf8File (Join-Path $contextReview '.docfx/docfx.json') (New-DocfxJson @('src/Library/Library.csproj'))
+    $goodProject = Join-Path $contextReview 'samples/Good/Good.csproj'
+    $goodSource = Join-Path $contextReview 'samples/Good/Good.cs'
+    $contextPage = Join-Path $contextReview '.docfx/contexts.md'
+    $goodCode = 'namespace Samples; internal static class Inventory { public static int Total() => 42; }'
+    Write-Utf8File $goodProject $projectCsproj
+    Write-Utf8File $goodSource $goodCode
+    $fence = '```'
+    $bound = "${fence}csharp`n// docfx-context: samples/Good/Good.csproj`n// docfx-source: samples/Good/Good.cs`n$goodCode`n$fence`n"
+    Write-Utf8File $contextPage $bound
+    Initialize-GitRepo $contextReview
+
+    # The Markdown remains byte-identical while its source changes, disappears or moves.
+    Write-Utf8File $goodSource ($goodCode.Replace('42', '99'))
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only')) 'SAMPLE_CONTEXT_INVALID'
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only', '--validate-samples')) 'SAMPLE_CONTEXT_INVALID'
+    Remove-Item -LiteralPath $goodSource
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only')) 'SAMPLE_CONTEXT_INVALID'
+    Write-Utf8File $goodSource $goodCode
+    # Project-only changes select the unchanged page for sample extraction as well as fast checks.
+    Write-Utf8File $goodProject ($projectCsproj.Replace('</Project>', '<ItemGroup><Compile Remove="Good.cs" /></ItemGroup></Project>'))
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only', '--validate-samples')) 'SAMPLE_CONTEXT_INVALID'
+    Remove-Item -LiteralPath $goodProject
+    Assert-Diagnostic (Invoke-Validator -Workspace $contextReview -ExtraArgs @('--changed-only')) 'SAMPLE_CONTEXT_INVALID'
+    Write-Utf8File $goodProject $projectCsproj
+    Write-Host 'DocFX bound source/project changed-only regressions passed.'
+
+    $conditionalSource = Join-Path $contextReview 'samples/Good/Conditional.cs'
+    $conditional = @'
+namespace Samples;
+internal static class ConditionalInventory
+{
+#if DEBUG
+    public static int DebugQuantity() => UndefinedQuantity;
+#endif
+#if NET10_0 && !DEBUG
+    public static int ReleaseQuantity() => 42;
+#endif
+}
+'@
+    Write-Utf8File $conditionalSource $conditional
+    $conditionalBinding = "${fence}csharp`n// docfx-context: samples/Good/Good.csproj`n// docfx-source: samples/Good/Conditional.cs`n"
+    Write-Utf8File $contextPage ($conditionalBinding + '    public static int DebugQuantity() => UndefinedQuantity;' + "`n$fence")
+    $inactive = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-DiagnosticMessageContains $inactive 'SAMPLE_CONTEXT_INVALID' 'excluded by conditional compilation'
+    Assert-NoDiagnostic $inactive 'SAMPLE_COMPILE_FAILED'
+    if ($inactive.summary.samplesCompiled -ne 0) { throw 'Release counted an inactive broken DEBUG excerpt as compiled.' }
+    $debugBroken = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples', '--configuration', 'Debug')
+    Assert-DiagnosticMessageContains $debugBroken 'SAMPLE_COMPILE_FAILED' 'CS0103'
+    # The SDK-defined TFM symbol comes from the actual Csc command, not evaluation-only properties.
+    Write-Utf8File $contextPage ($conditionalBinding + '    public static int ReleaseQuantity() => 42;' + "`n$fence")
+    $active = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $active 'SAMPLE_CONTEXT_INVALID'
+    Assert-NoDiagnostic $active 'SAMPLE_COMPILE_FAILED'
+    if ($active.summary.samplesCompiled -ne 1) { throw 'Active TFM/configuration excerpt was not compiled.' }
+    Write-Utf8File $conditionalSource ($conditional.Replace('UndefinedQuantity', '42'))
+    Write-Utf8File $contextPage ($conditionalBinding + '    public static int DebugQuantity() => 42;' + "`n$fence")
+    $debugActive = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples', '--configuration', 'Debug')
+    Assert-NoDiagnostic $debugActive 'SAMPLE_CONTEXT_INVALID'
+    Assert-NoDiagnostic $debugActive 'SAMPLE_COMPILE_FAILED'
+    if ($debugActive.summary.samplesCompiled -ne 1) { throw 'Active DEBUG excerpt was not compiled.' }
+    # Nested directives, local define/undef, repeated excerpts and symbols added by build targets.
+    $customCode = @'
+#define LOCAL
+#undef DISABLED
+namespace Samples;
+internal static class ConditionalInventory
+{
+#if DEBUG
+    public static int Quantity() => 42;
+#elif NET10_0 && REVIEW_SYMBOL
+#if LOCAL && !DISABLED
+    public static int Quantity() => 42;
+#endif
+#endif
+}
+'@
+    Write-Utf8File $conditionalSource $customCode
+    Write-Utf8File $goodProject ($projectCsproj.Replace('</Project>', '<Target Name="ReviewSymbols" BeforeTargets="CoreCompile"><PropertyGroup><DefineConstants>$(DefineConstants);REVIEW_SYMBOL</DefineConstants></PropertyGroup></Target></Project>'))
+    Write-Utf8File $contextPage ($conditionalBinding + '    public static int Quantity() => 42;' + "`n$fence")
+    $customActive = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $customActive 'SAMPLE_CONTEXT_INVALID'
+    Assert-NoDiagnostic $customActive 'SAMPLE_COMPILE_FAILED'
+    if ($customActive.summary.samplesCompiled -ne 1) { throw 'Actual late compiler symbol or second active occurrence was missed.' }
+    Write-Utf8File $goodProject $projectCsproj
+    Remove-Item -LiteralPath $conditionalSource
+    Write-Host 'DocFX bound conditional region activity regressions passed.'
+
+    # The unrelated broken console must not turn either copy of the good bound sample into a failure.
+    $brokenConsole = "${fence}csharp`n// Program.cs`nusing System;`nConsole.WriteLine(UnrelatedBrokenConsole);`n$fence`n"
+    Write-Utf8File $contextPage ($bound + "`n" + $bound + "`n" + $brokenConsole)
+    $mixed = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $mixed 'SAMPLE_CONTEXT_INVALID'
+    $failures = @($mixed.errors | Where-Object code -eq 'SAMPLE_COMPILE_FAILED')
+    if ($mixed.summary.samplesCompiled -ne 2 -or $failures.Count -ne 1 -or $failures[0].message -notmatch 'fence #3') {
+        throw "Mixed batch misattributed a failure: $($mixed | ConvertTo-Json -Depth 8)"
+    }
+    # Two distinct bound failures retain their own diagnostics; the good root still passes.
+    $badFences = ''
+    foreach ($name in @('BadOne', 'BadTwo')) {
+        Write-Utf8File (Join-Path $contextReview "samples/$name/$name.csproj") $projectCsproj
+        $code = "namespace Samples; internal static class $name { public static int Total() => Missing$name; }"
+        Write-Utf8File (Join-Path $contextReview "samples/$name/$name.cs") $code
+        $badFences += "`n${fence}csharp`n// docfx-context: samples/$name/$name.csproj`n// docfx-source: samples/$name/$name.cs`n$code`n$fence`n"
+    }
+    Write-Utf8File $contextPage ($bound + $badFences)
+    $scopedFailures = Invoke-Validator -Workspace $contextReview -ExtraArgs @('--validate-samples')
+    Assert-NoDiagnostic $scopedFailures 'SAMPLE_CONTEXT_INVALID'
+    $failures = @($scopedFailures.errors | Where-Object code -eq 'SAMPLE_COMPILE_FAILED')
+    if ($scopedFailures.summary.samplesCompiled -ne 1 -or $failures.Count -ne 2) { throw 'Bound project results were not recorded individually.' }
+    foreach ($failure in $failures) {
+        if ($failure.message.Contains('MissingBadOne') -eq $failure.message.Contains('MissingBadTwo')) {
+            throw "Bound diagnostics contain an unrelated project's errors: $($failure.message)"
+        }
+    }
+    Write-Host 'DocFX mixed-batch per-project result and diagnostic regressions passed.'
+} finally {
+    if (Test-Path $contextReview) { Remove-Item -LiteralPath $contextReview -Recurse -Force }
+}
+
 # Architecture fixtures use the real published fixture and xUnit runner, never a substitute host.
 # Build only the temp copy; the source fixture tree must remain free of bin/obj artifacts.
 $architecture = Join-Path ([System.IO.Path]::GetTempPath()) ('dotnet-docfx-architecture-' + [guid]::NewGuid().ToString('N'))
