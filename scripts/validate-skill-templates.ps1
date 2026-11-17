@@ -3871,6 +3871,10 @@ if ($Full -and $Suite -in @('All', 'Docfx')) {
             Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-integration-example.ps1'
         }
         [pscustomobject]@{
+            Name = 'DocFX run actions report coverage and deliver paired source-bound recipes'
+            Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-run-actions.ps1'
+        }
+        [pscustomobject]@{
             Name = 'DocFX digest rejects metadata scaffolds and accepts scenario-led documentation'
             Path = Join-Path $repoRoot 'skills/dotnet-docfx-digest/scripts/test-quality.ps1'
         }
