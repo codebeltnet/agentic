@@ -80,6 +80,7 @@ foreach ($transport in @('Native', 'Docker', 'DockerLinux')) {
                     $valueIndex = [array]::IndexOf($options, $value)
                     if ($valueIndex -le 0 -or $options[$valueIndex - 1] -cne '--env') { throw "Missing writable container home: $value" }
                 }
+                if ('--init' -notin $options -or 'MSBUILDDISABLENODEREUSE=1' -notin $options -or '--disable-build-servers' -notin $args) { throw 'A disposable SDK run must reap orphaned processes and avoid persistent build servers.' }
                 Invoke-TestDouble
             }
             $failed = $false

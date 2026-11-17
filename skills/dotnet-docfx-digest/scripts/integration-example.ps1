@@ -80,7 +80,8 @@ $dockerUser = @()
             if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve host GID.' }
             $dockerUser = @('--user', "${hostUid}:${hostGid}")
         }
-        docker run --rm @dockerUser --env HOME=/tmp --env DOTNET_CLI_HOME=/tmp --mount "type=bind,source=$work,target=/work" --workdir /work/repo __IMAGE__ dotnet run --project $project --framework __FRAMEWORK__ -p:SkipSignAssembly=true -- --filter-method $test --report-xunit-xml --report-xunit-xml-filename result.xml --results-directory /work/results 2>&1 | Tee-Object -FilePath "$work/run.log"
+        # Let Docker's init reap orphaned build processes and keep build servers disposable.
+        docker run --rm --init @dockerUser --env HOME=/tmp --env DOTNET_CLI_HOME=/tmp --env MSBUILDDISABLENODEREUSE=1 --mount "type=bind,source=$work,target=/work" --workdir /work/repo __IMAGE__ dotnet run --disable-build-servers --project $project --framework __FRAMEWORK__ -p:SkipSignAssembly=true -- --filter-method $test --report-xunit-xml --report-xunit-xml-filename result.xml --results-directory /work/results 2>&1 | Tee-Object -FilePath "$work/run.log"
 '@
     $template = $template.Replace('__COMMIT__', $Commit).Replace('__REPOSITORY__', $Repository).Replace('__ARCHIVE__', $Repository.Split('/')[1]).Replace('__PROJECT__', $Project).Replace('__TEST__', $Test)
     $native = $native.Replace('__FRAMEWORK__', $Framework)
